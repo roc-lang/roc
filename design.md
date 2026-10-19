@@ -2457,6 +2457,134 @@ A build reports the compile-time failures of the roots it evaluates. A
 failure in a root no build demands is reported by `roc check`, which
 evaluates every root, including those a cache entry left unevaluated.
 
+### Compile-Time Value Reuse Across Edits
+
+A checked module cache entry is keyed by the module's whole source, so an
+edit anywhere in a module misses its entry. The compile-time values stored in
+the module's previous entry are reused anyway, root by root, whenever a root's
+value identity is unchanged: the edited module evaluates only the roots the
+edit can affect. Reuse is a cache optimization with no observable effect. A
+reused value is the value evaluation computes, its root reads are the reads
+evaluation records, and its `dbg` observations are the observations
+evaluation makes, so a compilation reports, stores and runs exactly what it
+would without the previous entry.
+
+**Value identity.** Each compile-time root carries a value identity
+(`CompileTimeRootIdentity.value`), a digest computed when the checked module
+is published, before evaluation, from explicit checked data. Two roots with
+equal value identities compute equal values, read the same roots and make the
+same observations, because evaluation is a function of the checked program
+alone ("Compile-Time Evaluation And Static Storage"). The value identity
+covers:
+
+- The module context: the compiler build, the module's checking context
+  identity (its imports' names and checked module keys, the platform
+  requirement context, explicit root requests and validation mode), its direct
+  imports' checked module keys, its name and kind, and its file-import inputs
+  (each file's path, read state and content hash). Every other module's
+  content enters only through these keys, which cover the module's imports
+  transitively.
+- The module's type world: the source bytes of every top-level type, alias,
+  where-alias and import statement, and the definition identity of every
+  method the module registers (its `method_defs`, which include receiver
+  extensions of imported types). Static dispatch selects a method of an own
+  type, or an own method of an imported type, only from these, so every
+  dispatch target and every `to_inspect` override a root's evaluation can
+  select is covered by name.
+- The root's own computation. For a top-level value or callable binding, its
+  definition identity. For a hoisted root, the definition identity of the
+  definition that encloses it, its ordinal among that definition's hoisted
+  roots, its expression's source bytes, and the definition identities of the
+  definitions that expression names. For a literal conversion root, the
+  literal's source bytes alone: the literal is closed, and the conversion it
+  runs is selected by its checked type. For a top-level `expect`, its
+  statement's source bytes and the definition identities of the definitions
+  its body names.
+- The root's checked type, digested with the module's own nominal types named
+  by declaration. A top-level declaration is named by its name, which the type
+  world resolves; a block-local declaration and a field default declared in
+  the module are named by version-specific data (the module's content identity
+  and the declaration's node), so a root whose type mentions one is never
+  reused. Imported, builtin and structural types are named by their checked
+  identity and structure.
+
+A definition identity (`value_identity.zig`) is the per-definition analogue
+of a module's content identity: a Merkle digest over the module's
+name-reference graph (`DependencyGraph.collectNameReferences`), computed per
+strongly connected component in dependency order. Each definition contributes
+its source bytes (pattern, annotation and body) and the type digest of its
+published scheme, which captures a type that a use elsewhere pinned. A
+component's identity folds its members' contributions and the identities of
+the components they reference; references are by name, which the source
+bytes spell, so the identity is independent of node ids and source positions.
+Whitespace inside a definition is part of its source bytes and changes its
+identity; that is a missed reuse, never a wrong one.
+
+**Site.** Each root also carries a site (`CompileTimeRootIdentity.site`), the
+position-stable name of the root within its module: a top-level root's
+definition name, or the enclosing definition's name and the root's ordinal
+among that definition's hoisted or literal roots. A reused root's reads of its
+own module's roots are translated by site: a reader's value identity covers
+every definition its evaluation reaches, so the root it read exists in the new
+version at the same site with the same value identity. A failure to find it is
+a compiler invariant.
+
+**Portability.** A stored value can move into a new version of its module
+only when nothing in it points back into the version that stored it. After
+finalization, each completed root's stored data is classified
+(`CompileTimeRootPortability`). A root is portable when its payload is a
+completed constant, a passed `expect` or a discarded validation and its value
+graph and stored type contain no function value, no function, erased or
+generated named type, no named type or field default declared in the module
+itself, and nothing else carrying a module-version id. A `runtime` payload (a
+guarded root whose evaluation failed) is never reused. A named type's
+`named_type.ty` is checked provenance, not value identity: which checked
+occurrence a Monotype type carries already depends on how it was produced
+("SpecConstr compares types ... by the representation digest"), restore takes
+its shape from the requested type, and the only reader that re-enters a
+checked store with it reads the declaring module's, which an edit of this
+module leaves unchanged. Portability therefore follows the declaring module.
+A literal conversion stores no type, so its value is portable when its checked
+type mentions one of the module's own types only where the value holds nothing
+of it (a phantom parameter of an imported nominal); its value identity still
+covers that type's declaration and methods through the type world. A stored
+constant's type names every nominal it mentions, so a constant whose type
+mentions one of the module's own types is not portable.
+
+**Transplant.** On a checked module cache miss, before evaluation, the
+coordinator locates the module's previous entry through a pointer filed under
+the module's placement (its package's URL or root directory, and its path
+within the package) in the `mod-latest` cache family, which every checked
+module store overwrites with the stored key. A missing, swept, corrupt or
+version-mismatched entry reuses nothing. Otherwise, for each root of the new
+version that is pending, the previous version's completed portable root with
+the same kind and value identity (preferring the same site) is copied into the
+new version (`compile_time_reuse.zig`): its value graph is cloned into the new
+const store with names rebased by text and blobs re-added by content, a stored
+constant's type is cloned the same way (`cloneTypeFromTranslated`) and its
+const templates are filled, its read rows are translated (own reads by site,
+other modules' reads unchanged) and merged, and its `dbg` rows are copied under
+the new root id. Finalization then treats the root as a reopened entry's
+evaluated root: it requests only pending roots, restores the copied value for
+every reader, demands what the copy's reads name, and replays its `dbg` rows
+for the roots the compilation demands. Obsolete roots of the previous version
+are never copied, and the previous entry is left to the cache's sweep.
+
+Compilers with runtime safety verify every transplant: the transplanted roots
+stay pending, finalization evaluates them, and after finalization each
+evaluated root's fresh value graph, read rows and `dbg` messages must equal the
+copy's structurally (`ConstStore.graphEql`, comparing named types by declaring
+module). A difference is a compiler invariant: the value identity missed an
+input. The copy is then installed in place of the fresh value, so the entry a
+compiler with runtime safety writes holds the transplanted data a release
+compiler writes. A root the compilation did not demand is installed from the
+copy directly. Optimized compilers perform no evaluation or comparison for a
+transplanted root.
+
+`ROC_CTFE_REUSE_TRACE` (a developer diagnostic) prints, for each module that
+found a previous entry, how many roots were transplanted, and one line per
+transplanted root.
+
 ## Builtins Build Their Own Tag Unions
 
 If a builtin function's type contains a structural tag union anywhere—in its
@@ -4408,7 +4536,10 @@ relation; specialization keys and object-cache entries use that identity while
 local checked references retain their immutable module owner. Any additional checked tables
 stored in the checked module cache must be deterministic output of those
 checked inputs and the checked modules they name. Such tables are serialized
-data, not new cache-id inputs.
+data, not new cache-id inputs. Compile-time values transplanted from a
+module's previous entry ("Compile-Time Value Reuse Across Edits") are such
+output: each is the value evaluation computes for the entry's own checked
+module, and the previous entry is consulted only after the cache id missed.
 
 `module_identity` includes the module's name. Canonicalization output is not
 a function of source bytes alone—a type module's main type takes its name
@@ -23709,7 +23840,7 @@ each phase's report.
 
 The compiler's developer-only environment variables (`ROC_LIR_DUMP`,
 `ROC_SPEC_CENSUS`, `ROC_PACK_TRACE`, `ROC_PACK_STATS`, `ROC_CTFE_DEMAND_TRACE`,
-`ROC_DEV_PACK_OBJECTS`, `ROC_DEV_PACK_HITS`, the object-compile round-trip
+`ROC_CTFE_REUSE_TRACE`, `ROC_DEV_PACK_OBJECTS`, `ROC_DEV_PACK_HITS`, the object-compile round-trip
 variable and `ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE`) are honored only by a
 compiler for which `build_options.dev_diagnostics` is true: every Debug compiler, and any
 other build made with `-Ddev-diagnostics`. Every site tests that constant at
