@@ -9022,6 +9022,104 @@ fn objectPackBytes(
     return try backend.dev.PackFile.writeObject(ctx.gpa, object, identities.items, specs.items);
 }
 
+test "a Windows object pack defines its shared entries and constants in any-COMDATs and references the host strongly" {
+    const allocator = std.testing.allocator;
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u64);
+    defer layouts.deinit();
+    const proc = try store.addProcSpec(.{
+        .name = .fromRaw(1),
+        .identity = lir.LIR.ProcIdentity.forTest(1),
+        .args = .empty(),
+        .ret_layout = .i64,
+        .hosted = .{ .symbol = try store.insertString("hosted_monotonic_now"), .dispatch_index = 0 },
+    }, .none);
+    const target: RocTarget = .x64win;
+    const std_target = try std.zig.system.resolveTargetQuery(std.testing.io, target.llvmTargetQuery());
+    var codegen = llvm_codegen.MonoLlvmCodeGen.initForLinkedObject(allocator, &store, &.{}, &.{}, &.{}, std_target);
+    defer codegen.deinit();
+    codegen.layout_store = &layouts;
+    codegen.object_cache_pack = true;
+    var exports = [_]lir.Program.StaticDataExport{
+        .{ .symbol_name = "roc__d0", .bytes = &(@as([16]u8, @splat(3))), .alignment = 8, .is_exported = false },
+    };
+    const names = [_][]const u8{"roc__hshared"};
+    codegen.pack_data_names = &names;
+    try codegen.setStaticDataExports(&exports);
+    var generated = try codegen.generateEntrypointModule("roc_pack", &.{.{
+        .symbol_name = "roc__cshared",
+        .proc = proc,
+        .arg_layouts = &.{},
+        .ret_layout = .i64,
+    }});
+    defer generated.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const object_path = try std.fs.path.joinZ(allocator, &.{ ".zig-cache", "tmp", &tmp.sub_path, "pack.o" });
+    defer allocator.free(object_path);
+    const triple = try allocator.dupeSentinel(u8, target.toTriple(), 0);
+    defer allocator.free(triple);
+    if (@import("llvm_compile").bindings.compileBitcodeToObject(
+        std.mem.sliceAsBytes(generated.bitcode),
+        triple,
+        null,
+        null,
+        object_path,
+        .O3,
+        false,
+    )) |message| {
+        std.debug.print("LLVM failed to compile the pack: {s}\n", .{message});
+        return error.TestUnexpectedResult;
+    }
+    const object = try tmp.dir.readFileAlloc(std.testing.io, "pack.o", allocator, .limited(64 * 1024 * 1024));
+    defer allocator.free(object);
+
+    const symtab = std.mem.readInt(u32, object[8..12], .little);
+    const symbol_count = std.mem.readInt(u32, object[12..16], .little);
+    const strtab = object[symtab + symbol_count * 18 ..];
+    // Each COMDAT section's selection, from its section symbol's
+    // section-definition auxiliary record.
+    var selections: std.AutoHashMapUnmanaged(i16, u8) = .empty;
+    defer selections.deinit(allocator);
+    const Symbol = struct { section: i16, storage_class: u8 };
+    var symbols: std.StringHashMapUnmanaged(Symbol) = .empty;
+    defer symbols.deinit(allocator);
+    const image_sym_class_external = 2;
+    const image_sym_class_static = 3;
+    const image_comdat_select_any = 2;
+    var index: usize = 0;
+    while (index < symbol_count) {
+        const record = object[symtab + index * 18 ..][0..18];
+        const name = if (std.mem.readInt(u32, record[0..4], .little) == 0)
+            std.mem.sliceTo(strtab[std.mem.readInt(u32, record[4..8], .little)..], 0)
+        else
+            std.mem.sliceTo(record[0..8], 0);
+        const section = std.mem.readInt(i16, record[12..14], .little);
+        const storage_class = record[16];
+        const aux_count = record[17];
+        // A weak definition without a COMDAT lowers to a strong `.weak.*`
+        // default that every pack defining it would also define.
+        try std.testing.expect(!std.mem.startsWith(u8, name, ".weak."));
+        if (storage_class == image_sym_class_static and aux_count > 0 and section > 0 and std.mem.readInt(u32, record[8..12], .little) == 0) {
+            try selections.put(allocator, section, object[symtab + (index + 1) * 18 + 14]);
+        }
+        try symbols.put(allocator, name, .{ .section = section, .storage_class = storage_class });
+        index += 1 + aux_count;
+    }
+
+    for ([_][]const u8{ "roc__cshared", "roc__hshared" }) |shared| {
+        const symbol = symbols.get(shared) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(image_sym_class_external, symbol.storage_class);
+        try std.testing.expect(symbol.section > 0);
+        try std.testing.expectEqual(image_comdat_select_any, selections.get(symbol.section) orelse return error.TestUnexpectedResult);
+    }
+    const host = symbols.get("hosted_monotonic_now") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(image_sym_class_external, host.storage_class);
+    try std.testing.expectEqual(0, host.section);
+}
+
 /// Publish the code compile-time evaluation compiled for this program, so a
 /// later compatible evaluation splices it instead of compiling it again
 /// (design.md "Compile-Time Object Packs"). The pack holds the keyed closed

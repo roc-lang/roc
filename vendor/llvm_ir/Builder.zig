@@ -50,6 +50,7 @@ next_unique_global_id: std.AutoHashMapUnmanaged(StrtabString, u32),
 aliases: std.ArrayList(Alias),
 variables: std.ArrayList(Variable),
 functions: std.ArrayList(Function),
+comdats: std.ArrayList(Comdat),
 
 strtab_string_map: std.array_hash_map.Auto(void, void),
 strtab_string_indices: std.ArrayList(u32),
@@ -3136,6 +3137,7 @@ pub const Variable = struct {
     mutability: Mutability = .global,
     init: Constant = .no_init,
     section: String = .none,
+    comdat: Comdat.Index = .none,
     alignment: Alignment = .default,
 
     pub const Index = enum(u32) {
@@ -3178,6 +3180,34 @@ pub const Variable = struct {
 
         pub fn setAlignment(self: Index, alignment: Alignment, builder: *Builder) void {
             self.ptr(builder).alignment = alignment;
+        }
+
+        pub fn setComdat(self: Index, comdat: Comdat.Index, builder: *Builder) void {
+            self.ptr(builder).comdat = comdat;
+        }
+    };
+};
+
+/// A COMDAT group: the linker keeps one group per name across all objects and
+/// discards the sections of every other group with that name.
+pub const Comdat = struct {
+    name: StrtabString,
+    selection_kind: SelectionKind,
+
+    pub const SelectionKind = enum(u3) {
+        any = 1,
+        exactmatch = 2,
+        largest = 3,
+        nodeduplicate = 4,
+        samesize = 5,
+    };
+
+    pub const Index = enum(u32) {
+        none = maxInt(u32),
+        _,
+
+        pub fn ptrConst(self: Index, builder: *const Builder) *const Comdat {
+            return &builder.comdats.items[@backingInt(self)];
         }
     };
 };
@@ -4762,6 +4792,7 @@ pub const Function = struct {
     call_conv: CallConv = CallConv.default,
     attributes: FunctionAttributes = .none,
     section: String = .none,
+    comdat: Comdat.Index = .none,
     alignment: Alignment = .default,
     blocks: []const Block = &.{},
     instructions: std.MultiArrayList(Instruction) = .empty,
@@ -4806,6 +4837,10 @@ pub const Function = struct {
 
         pub fn setCallConv(self: Index, call_conv: CallConv, builder: *Builder) void {
             self.ptr(builder).call_conv = call_conv;
+        }
+
+        pub fn setComdat(self: Index, comdat: Comdat.Index, builder: *Builder) void {
+            self.ptr(builder).comdat = comdat;
         }
 
         pub fn setAttributes(
@@ -9238,6 +9273,7 @@ pub fn init(options: Options) Allocator.Error!Builder {
         .aliases = .empty,
         .variables = .empty,
         .functions = .empty,
+        .comdats = .empty,
 
         .strtab_string_map = .empty,
         .strtab_string_indices = .empty,
@@ -9353,6 +9389,7 @@ pub fn deinit(self: *Builder) void {
     self.variables.deinit(gpa);
     for (self.functions.items) |*function| function.deinit(gpa);
     self.functions.deinit(gpa);
+    self.comdats.deinit(gpa);
 
     self.strtab_string_map.deinit(gpa);
     self.strtab_string_indices.deinit(gpa);
@@ -9622,6 +9659,18 @@ pub fn addFunctionAssumeCapacity(
         .strip = undefined,
     });
     return function_index;
+}
+
+/// Adds a COMDAT group to the module.
+pub fn addComdat(
+    self: *Builder,
+    name: StrtabString,
+    selection_kind: Comdat.SelectionKind,
+) Allocator.Error!Comdat.Index {
+    assert(!name.isAnon());
+    const comdat_index: Comdat.Index = @fromBackingInt(@intCast(self.comdats.items.len));
+    try self.comdats.append(self.gpa, .{ .name = name, .selection_kind = selection_kind });
+    return comdat_index;
 }
 
 /// Gets or creates an LLVM intrinsic function with the given overloaded types.
@@ -9945,6 +9994,14 @@ pub fn print(self: *Builder, w: *Writer) (Writer.Error || Allocator.Error)!void 
         , .{ id.fmt(self), ty.fmt(self, .default) });
     }
 
+    if (self.comdats.items.len > 0) {
+        if (need_newline) try w.writeByte('\n') else need_newline = true;
+        for (self.comdats.items) |comdat| try w.print(
+            \\${f} = comdat {s}
+            \\
+        , .{ comdat.name.fmt(self, .quote_unless_valid_identifier), @tagName(comdat.selection_kind) });
+    }
+
     if (self.variables.items.len > 0) {
         if (need_newline) try w.writeByte('\n') else need_newline = true;
         for (self.variables.items, 0..) |variable, variable_i| {
@@ -9977,6 +10034,7 @@ pub fn print(self: *Builder, w: *Writer) (Writer.Error || Allocator.Error)!void 
             if (variable.section != .none) {
                 try w.print(", section {f}", .{variable.section.fmtQ(self)});
             }
+            try self.printComdat(variable.comdat, variable.global, ", ", w);
             try w.print(
                 \\{f}{f}
                 \\
@@ -10077,6 +10135,7 @@ pub fn print(self: *Builder, w: *Writer) (Writer.Error || Allocator.Error)!void 
             if (function.section != .none) {
                 try w.print(" section {f}", .{function.section.fmtQ(self)});
             }
+            try self.printComdat(function.comdat, function.global, " ", w);
             try w.print("{f}{f}", .{
                 function.alignment.fmt(" "),
                 try metadata_formatter.fmt(" !dbg ", global.dbg, null),
@@ -10976,6 +11035,15 @@ fn isValidIdentifier(id: []const u8) bool {
         else => return false,
     };
     return true;
+}
+
+fn printComdat(self: *const Builder, comdat: Comdat.Index, global: Global.Index, prefix: []const u8, w: *Writer) Writer.Error!void {
+    if (comdat == .none) return;
+    const comdat_name = comdat.ptrConst(self).name;
+    try w.print("{s}comdat", .{prefix});
+    if (comdat_name != global.name(self)) {
+        try w.print("(${f})", .{comdat_name.fmt(self, .quote_unless_valid_identifier)});
+    }
 }
 
 const QuoteBehavior = enum { always_quote, quote_unless_valid_identifier };
@@ -12926,6 +12994,11 @@ pub const Producer = struct {
 };
 
 /// Serializes the LLVM IR to bitcode format.
+/// A global's bitcode COMDAT field: the group's 1-based id, or 0 for none.
+fn comdatId(comdat: Comdat.Index) u32 {
+    return if (comdat == .none) 0 else @backingInt(comdat) + 1;
+}
+
 pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitcode_writer.Error![]const u32 {
     const BitcodeWriter = bitcode_writer.BitcodeWriter(&.{ Type, FunctionAttributes });
     var bitcode = BitcodeWriter.init(allocator, .{
@@ -13417,6 +13490,17 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
         };
         const constant_adapter: ConstantAdapter = .{ .builder = self, .globals = &globals };
 
+        // Comdats
+        for (self.comdats.items) |comdat| {
+            const name_index = comdat.name.toIndex().?;
+            try module_block.writeAbbrev(ModuleBlock.Comdat{
+                .strtab_offset = self.strtab_string_indices.items[name_index],
+                .strtab_size = self.strtab_string_indices.items[name_index + 1] -
+                    self.strtab_string_indices.items[name_index],
+                .selection_kind = comdat.selection_kind,
+            });
+        }
+
         // Globals
         {
             var section_map: std.array_hash_map.Auto(String, void) = .empty;
@@ -13470,6 +13554,7 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                     .unnamed_addr = global.unnamed_addr,
                     .externally_initialized = global.externally_initialized,
                     .dllstorageclass = global.dll_storage_class,
+                    .comdat = comdatId(variable.comdat),
                     .preemption = global.preemption,
                 });
             }
@@ -13514,6 +13599,7 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                     .visibility = global.visibility,
                     .unnamed_addr = global.unnamed_addr,
                     .dllstorageclass = global.dll_storage_class,
+                    .comdat = comdatId(func.comdat),
                     .preemption = global.preemption,
                     .addr_space = global.addr_space,
                 });

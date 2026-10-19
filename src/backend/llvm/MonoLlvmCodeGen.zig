@@ -818,7 +818,7 @@ pub const MonoLlvmCodeGen = struct {
             }
             const fn_name = builder.strtabString(symbol) catch return error.OutOfMemory;
             const func = builder.addFunction(dummy_fn_ty, fn_name, .default) catch return error.OutOfMemory;
-            func.setLinkage(.extern_weak, &builder);
+            func.setLinkage(self.hostReferenceLinkage(), &builder);
             try fn_consts.append(self.allocator, func.toConst(&builder));
             // The shim reads each name as a NUL-terminated string.
             const symbol_z = self.allocator.dupeSentinel(u8, symbol, 0) catch return error.OutOfMemory;
@@ -2859,7 +2859,12 @@ pub const MonoLlvmCodeGen = struct {
         const wrapper_ty = builder.fnType(ret_ty, param_types.items, .normal) catch return error.OutOfMemory;
         const wrapper_name = try self.exportedFunctionName(builder, symbol_name);
         const wrapper = builder.addFunction(wrapper_ty, wrapper_name, .default) catch return error.OutOfMemory;
-        wrapper.setLinkage(if (self.object_cache_pack) .weak_odr else .external, builder);
+        if (self.object_cache_pack) {
+            wrapper.setLinkage(.weak_odr, builder);
+            wrapper.setComdat(try self.packComdat(builder, wrapper.name(builder)), builder);
+        } else {
+            wrapper.setLinkage(.external, builder);
+        }
         try self.addGeneratedFunctionStackProbeAttrs(&attrs_wip);
         wrapper.setAttributes(attrs_wip.finish(builder) catch return error.OutOfMemory, builder);
         self.configureExportCallConv(wrapper, builder);
@@ -9324,7 +9329,12 @@ pub const MonoLlvmCodeGen = struct {
                 else
                     builder.strtabString(content_name) catch return error.OutOfMemory;
                 const variable = builder.addVariable(name, image.ty, .default) catch return error.OutOfMemory;
-                variable.ptrConst(builder).global.setLinkage(if (data_export.is_exported) .internal else .weak_odr, builder);
+                if (data_export.is_exported) {
+                    variable.ptrConst(builder).global.setLinkage(.internal, builder);
+                } else {
+                    variable.ptrConst(builder).global.setLinkage(.weak_odr, builder);
+                    variable.setComdat(try self.packComdat(builder, variable.ptrConst(builder).global.name(builder)), builder);
+                }
                 variable.setMutability(.constant, builder);
                 variable.setAlignment(LlvmBuilder.Alignment.fromByteUnits(@max(data_export.alignment, 1)), builder);
                 if (shared) |entry| entry.value_ptr.* = variable;
@@ -13623,16 +13633,32 @@ pub const MonoLlvmCodeGen = struct {
         return func;
     }
 
+    /// The COMDAT for a weak definition an object-cache pack shares with other
+    /// packs: one `any` group under the definition's own name, so the link
+    /// keeps one copy and discards the others whole. Mach-O has no COMDATs; its
+    /// linker coalesces weak definitions without one.
+    fn packComdat(self: *const MonoLlvmCodeGen, builder: *LlvmBuilder, name: LlvmBuilder.StrtabString) Error!LlvmBuilder.Comdat.Index {
+        if (self.target.ofmt == .macho) return .none;
+        return builder.addComdat(name, .any) catch return error.OutOfMemory;
+    }
+
+    /// The linkage of a reference to a host-provided function. Weak linkage
+    /// breaks the app/host reference cycle: the symbol resolves at the end of
+    /// the link against whichever host object defines it. COFF has no
+    /// equivalent weak external and needs none, since one link pass resolves
+    /// references in both directions.
+    fn hostReferenceLinkage(self: *const MonoLlvmCodeGen) LlvmBuilder.Linkage {
+        return if (self.target.ofmt == .coff) .external else .extern_weak;
+    }
+
     /// Declare (once) a host-provided function under its literal linker symbol.
-    /// Weak linkage breaks the app/host reference cycle: the symbol resolves at
-    /// the end of the link against whichever host object defines it.
     fn declareHostSymbol(self: *MonoLlvmCodeGen, name: []const u8, fn_ty: LlvmBuilder.Type) Error!LlvmBuilder.Function.Index {
         const builder = self.builder orelse return error.CompilationFailed;
         std.debug.assert(BuiltinSymbol.fromSymbolName(name) == null);
         if (self.symbol_functions.get(name)) |func| return func;
         const fn_name = builder.strtabString(name) catch return error.OutOfMemory;
         const func = builder.addFunction(fn_ty, fn_name, .default) catch return error.OutOfMemory;
-        func.setLinkage(.extern_weak, builder);
+        func.setLinkage(self.hostReferenceLinkage(), builder);
         try self.symbol_functions.put(name, func);
         return func;
     }
@@ -14177,6 +14203,8 @@ test "object-cache pack constants are weak data under their content names and po
         const global = variable.ptrConst(&builder).global;
         if (!data_export.is_exported) try std.testing.expectEqualStrings(name, global.name(&builder).slice(&builder).?);
         try std.testing.expectEqual(if (data_export.is_exported) LlvmBuilder.Linkage.internal else .weak_odr, global.ptrConst(&builder).linkage);
+        // Mach-O has no COMDATs; its linker coalesces the weak definitions.
+        try std.testing.expectEqual(LlvmBuilder.Comdat.Index.none, variable.ptrConst(&builder).comdat);
         try std.testing.expectEqual(.constant, variable.ptrConst(&builder).mutability);
         try std.testing.expect(variable.ptrConst(&builder).init != .no_init);
     }
@@ -14190,6 +14218,70 @@ test "object-cache pack constants are weak data under their content names and po
     _ = try codegen.staticDataGlobal(@fromBackingInt(2), 16);
     _ = try codegen.staticDataGlobal(@fromBackingInt(1), 16);
     try std.testing.expectEqual(variable_count, builder.variables.items.len);
+}
+
+// repro for https://github.com/roc-lang/roc/issues/12433
+// Distinct packs legitimately define the same entry, and on COFF only a
+// COMDAT with `any` selection lets lld-link keep one copy. COFF also needs no
+// weak externals for host references, and a weak external there lowers to a
+// strong default symbol that collides across packs.
+test "issue 12433: Windows pack entries are COMDAT any and host references are not weak externals" {
+    const allocator = std.testing.allocator;
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u64);
+    defer layouts.deinit();
+    const ret = try store.addLocal(.{ .layout_idx = .i64 });
+    const body = try store.addCFStmt(.{ .assign_literal = .{
+        .target = ret,
+        .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .i64 } },
+        .next = try store.addCFStmt(.{ .ret = .{ .value = ret } }, .test_fixture),
+    } }, .test_fixture);
+    const proc = try store.addProcSpec(.{
+        .name = .fromRaw(1),
+        .identity = lir.LIR.ProcIdentity.forTest(1),
+        .args = .empty(),
+        .frame_locals = try store.addLocalSpan(&.{ret}),
+        .body = body,
+        .ret_layout = .i64,
+    }, .none);
+    const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .msvc });
+    var codegen = MonoLlvmCodeGen.initForLinkedObject(allocator, &store, &.{}, &.{}, &.{}, target);
+    defer codegen.deinit();
+    codegen.layout_store = &layouts;
+    codegen.object_cache_pack = true;
+    var builder = try codegen.createBuilder("windows_pack");
+    defer builder.deinit();
+    codegen.builder = &builder;
+    defer codegen.builder = null;
+
+    try codegen.compileAllProcSpecs(store.getProcSpecs());
+    try codegen.generateCAbiEntrypointWrapper("roc__cshared", proc, &.{}, .i64, null);
+    _ = try codegen.declareHostSymbol("hosted_monotonic_now", try builder.fnType(.void, &.{}, .normal));
+
+    var ir: std.Io.Writer.Allocating = .init(allocator);
+    defer ir.deinit();
+    try builder.print(&ir.writer);
+    const text = ir.written();
+
+    var found_entry = false;
+    var found_host = false;
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.startsWith(u8, line, "define ") and std.mem.find(u8, line, "@roc__cshared(") != null) {
+            found_entry = true;
+            if (std.mem.find(u8, line, " comdat") == null) std.debug.print("pack entry is not in a COMDAT: {s}\n", .{line});
+            try std.testing.expect(std.mem.find(u8, line, " comdat") != null);
+        }
+        if (std.mem.startsWith(u8, line, "declare ") and std.mem.find(u8, line, "@hosted_monotonic_now(") != null) {
+            found_host = true;
+            if (std.mem.find(u8, line, "extern_weak") != null) std.debug.print("host reference is a weak external: {s}\n", .{line});
+            try std.testing.expect(std.mem.find(u8, line, "extern_weak") == null);
+        }
+    }
+    try std.testing.expect(found_entry);
+    try std.testing.expect(found_host);
+    try std.testing.expect(std.mem.find(u8, text, "$roc__cshared = comdat any") != null);
 }
 
 test "frozen relocation offsets are bounded before host indexing for either target width" {

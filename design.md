@@ -623,7 +623,13 @@ each constant as weak readonly data under its `roc__h` content name, so two
 objects carrying one constant share a single copy in the link. It exports,
 for each entry it offers, a weak C-ABI entry `roc__c{hash}`, the procedure's
 arguments and result classified by `layout.abi` exactly as for a hosted
-call. Two such objects may export one entry; the link keeps one. Not every
+call. Two such objects may export one entry; the link keeps one. Each weak
+definition sits in an `any` COMDAT of its own name on every object format
+that has COMDATs, so the link keeps one copy and discards the others whole;
+COFF can express a coalescing definition only this way, since a weak
+definition without one lowers to a strong `.weak.*` default that every
+object defining it also defines. Mach-O has no COMDATs, and its linker
+coalesces weak definitions without one. Not every
 object format can place a weak symbol inside a datum, so a constant's symbol
 in an object pack marks its first byte: a constant whose symbol sits some
 bytes into its data is named as the datum anchored at its first byte, with
@@ -23131,7 +23137,8 @@ functions; object symbol discovery must never enlarge that set.
 
 Compiled Roc code references each hosted symbol (and the fixed runtime set:
 roc_alloc, roc_dealloc, roc_realloc, roc_dbg, roc_expect_failed, roc_crashed)
-as a weak extern and calls it directly with the natural C ABI for its types.
+as a weak extern (a plain extern on COFF, below) and calls it directly with
+the natural C ABI for its types.
 Entrypoints are exported under their `provides` strings with natural C ABI
 signatures. No context pointer is threaded through compiled code: hosts that
 need per-call context (for example an arena) own its delivery out of band
