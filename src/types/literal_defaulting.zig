@@ -202,12 +202,14 @@ const test_literal_idents = LiteralMethodIdents{
 };
 
 test "dominant kind precedence is numeral > quote > interpolation" {
+    var numeral_infos: types.NumeralInfo.SafeList = .{};
+    defer numeral_infos.deinit(std.testing.allocator);
+    const numeral_row = try numeral_infos.append(std.testing.allocator, types.NumeralInfo.testOnlyInt(1, false, base.Region.zero()));
     const numeral_constraint = StaticDispatchConstraint{
         .fn_name = Ident.Idx.NONE,
         .fn_var = undefined,
         .origin = .{ .from_literal = .numeral },
-        // Only the kind is read here, so the facts row is never looked up.
-        .numeral = .from(@fromBackingInt(0)),
+        .numeral = .from(numeral_row),
     };
     const quote_constraint = StaticDispatchConstraint{
         .fn_name = Ident.Idx.NONE,
