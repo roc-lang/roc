@@ -5662,7 +5662,8 @@ fn completeRoot(
     state.markDone(root_id);
 }
 
-fn finishConstRoot(
+/// Record a completed constant root's stored value in its const templates.
+pub fn finishConstRoot(
     module: *checked.CheckedModuleArtifact,
     root: checked.CompileTimeRoot,
     payload: checked.CompileTimeRootPayload,

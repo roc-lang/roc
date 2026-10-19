@@ -321,6 +321,67 @@ pub const CacheManager = struct {
         return CacheModule.CacheData{ .allocated = buffer };
     }
 
+    const placement_pointer_magic = "roc-mod-latest-v1";
+    const placement_pointer_len = placement_pointer_magic.len + 32;
+
+    /// Record `key` as the most recently stored checked entry of the module
+    /// filed under `placement`, replacing the previous pointer. A failure
+    /// leaves no pointer and only costs a later edit its reuse.
+    pub fn storePlacementPointer(self: *Self, placement: [32]u8, key: [32]u8) void {
+        if (!self.config.enabled) return;
+        const allocator = self.allocator;
+        const dir = self.config.getCheckedPlacementDir(allocator) catch return;
+        defer allocator.free(dir);
+        self.ensureCacheSubdirWith(allocator, placement, dir) catch return;
+        const path = computeCacheFilePathIn(allocator, placement, dir) catch return;
+        defer allocator.free(path);
+        var contents: [placement_pointer_len]u8 = undefined;
+        @memcpy(contents[0..placement_pointer_magic.len], placement_pointer_magic);
+        @memcpy(contents[placement_pointer_magic.len..], &key);
+        var suffix: [16]u8 = undefined;
+        self.roc_ctx.std_io.random(&suffix);
+        const temp_path = std.fmt.allocPrint(allocator, "{s}.{s}.tmp", .{ path, std.fmt.bytesToHex(suffix, .lower) }) catch return;
+        defer allocator.free(temp_path);
+        self.roc_ctx.writeFile(temp_path, &contents) catch {
+            self.removeFailedTempFile(allocator, temp_path);
+            return;
+        };
+        self.roc_ctx.rename(temp_path, path) catch self.removeFailedTempFile(allocator, temp_path);
+    }
+
+    /// The key `storePlacementPointer` last recorded for `placement`, or
+    /// null when there is none or it is unreadable.
+    pub fn loadPlacementPointer(self: *Self, placement: [32]u8) ?[32]u8 {
+        if (!self.config.enabled) return null;
+        const allocator = self.allocator;
+        const dir = self.config.getCheckedPlacementDir(allocator) catch return null;
+        defer allocator.free(dir);
+        const path = computeCacheFilePathIn(allocator, placement, dir) catch return null;
+        defer allocator.free(path);
+        var contents: [placement_pointer_len]u8 = undefined;
+        const len = self.roc_ctx.readFileInto(path, &contents) catch return null;
+        if (len != placement_pointer_len or !std.mem.eql(u8, contents[0..placement_pointer_magic.len], placement_pointer_magic)) return null;
+        return contents[placement_pointer_magic.len..].*;
+    }
+
+    /// Load a checked entry without counting it as a cache lookup: reading a
+    /// module's previous entry for value reuse is not a probe of its key.
+    pub fn loadCheckedEntryUncounted(self: *Self, cache_key: [32]u8) ?CacheModule.CacheData {
+        if (!self.config.enabled) return null;
+        const allocator = self.allocator;
+        const entries_dir = self.config.getCheckedArtifactCacheDir(allocator) catch return null;
+        defer allocator.free(entries_dir);
+        const cache_path = computeCacheFilePathIn(allocator, cache_key, entries_dir) catch return null;
+        defer allocator.free(cache_path);
+        if (!self.roc_ctx.fileExists(cache_path)) return null;
+        if (CacheModule.tryMapCacheFile(self.roc_ctx, cache_path)) |mapped| return mapped;
+        const data = self.roc_ctx.readFile(cache_path, allocator) catch return null;
+        defer allocator.free(data);
+        const buffer = allocator.alignedAlloc(u8, CacheModule.SERIALIZATION_ALIGNMENT, data.len) catch return null;
+        @memcpy(buffer, data);
+        return CacheModule.CacheData{ .allocated = buffer };
+    }
+
     pub fn getStats(self: *const Self) CacheStats {
         return self.stats;
     }

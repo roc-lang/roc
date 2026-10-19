@@ -241,6 +241,7 @@ fn cleanupPersistentCache(std_io: Io, cache_base: []const u8, now_ns: i128, mayb
 /// number of directory levels between a family's root and its files.
 const persistent_families = [_]struct { name: []const u8, nested_directory_depth: u8 }{
     .{ .name = "mod", .nested_directory_depth = 1 },
+    .{ .name = "mod-latest", .nested_directory_depth = 1 },
     .{ .name = "pair", .nested_directory_depth = 1 },
     .{ .name = "exe", .nested_directory_depth = 1 },
     .{ .name = "test", .nested_directory_depth = 1 },

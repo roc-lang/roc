@@ -234,6 +234,49 @@ const checked_module_cache_magic = "roc-mod-cache-v11";
 // cache does not justify hashing the whole blob on every read and write.
 const checked_module_cache_header_len: usize = checked_module_cache_magic.len + 32 + 32 + 8 + 8 + 32;
 
+/// Counts of compile-time value reuse across module edits in one compilation.
+pub const CtfeReuseStats = struct {
+    /// Freshly checked modules whose previous cache entry was found.
+    previous_entries: u32 = 0,
+    /// Roots of those modules awaiting evaluation when they were checked.
+    pending_roots: u32 = 0,
+    /// Roots copied from those entries instead of evaluated.
+    transplanted_roots: u32 = 0,
+};
+
+/// A transplant a compiler with runtime safety verifies after finalization,
+/// with the previous entry's artifact body its columns borrow.
+const PendingTransplant = struct {
+    module: *CheckedArtifact.CheckedModuleArtifact,
+    buffer: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
+    previous: eval.CompileTimeReuse.Previous,
+    transplant: eval.CompileTimeReuse.Transplant,
+
+    fn deinit(self: *PendingTransplant, gpa: Allocator) void {
+        self.transplant.deinit();
+        self.previous.deinit();
+        gpa.free(self.buffer);
+    }
+};
+
+/// Where a module's latest checked entry is recorded: what stays the same
+/// across edits of it, the package's URL or root directory and the module's
+/// path within it.
+fn checkedPlacement(pkg: *const PackageState, mod: *const ModuleState) [32]u8 {
+    var hasher = base.Sha256.init(.{});
+    hasher.update("roc-checked-placement\x00");
+    if (pkg.url) |url| {
+        hasher.update("pkg\x00");
+        hasher.update(url.url);
+    } else {
+        hasher.update("local\x00");
+        hasher.update(pkg.root_dir);
+    }
+    hasher.update("\x00");
+    hasher.update(mod.path);
+    return hasher.finalResult();
+}
+
 /// The cache entry kinds written in the checked-module envelope.
 const CheckedEnvelopeEntry = enum {
     checked_module,
@@ -1301,6 +1344,15 @@ pub const Coordinator = struct {
 
     /// Optional cache manager for transparent checked-module disk caching.
     cache_manager: ?*CacheManager,
+    /// What reuse of compile-time values from modules' previous cache
+    /// entries did in this compilation (design.md "Compile-Time Value Reuse
+    /// Across Edits").
+    ctfe_reuse_stats: CtfeReuseStats = .{},
+    /// Whether transplanted roots are evaluated anyway and compared with
+    /// their copies before the copies are installed. Compilers with runtime
+    /// safety verify; a test turns it off to exercise the installation an
+    /// optimized compiler performs.
+    verify_transplants: bool = std.debug.runtime_safety,
 
     /// Cross-package dependents: when module (pkg, id) completes, notify these modules
     /// Key is "pkg_name:module_id", value is list of dependent ModuleRefs
@@ -2062,7 +2114,7 @@ pub const Coordinator = struct {
                 if (platform.root_requests.compile_time_requests.len == 0) {
                     // No evaluator is needed to finish this parametric module.
                     // App checking and runtime roots still share one program.
-                    try self.commitPreparedModule(platform_root.mod);
+                    try self.commitPreparedModule(platform_root.pkg, platform_root.mod);
                 } else {
                     const runtime = self.runtime_lowering;
                     self.runtime_lowering = null;
@@ -2753,6 +2805,14 @@ pub const Coordinator = struct {
         var indices = std.AutoHashMap([32]u8, usize).init(self.gpa);
         defer indices.deinit();
         for (entries.items, 0..) |entry, index| try indices.put(entry.mod.checkedArtifact().?.key.bytes, index);
+        // A freshly checked module copies the values its previous entry
+        // stored for roots whose value identity is unchanged.
+        var transplants = std.ArrayList(PendingTransplant).empty;
+        defer {
+            for (transplants.items) |*pending| pending.deinit(self.gpa);
+            transplants.deinit(self.gpa);
+        }
+        for (entries.items) |entry| try self.transplantPreviousValues(entry.pkg, entry.mod, &transplants);
         const Visit = enum { unseen, visiting, complete };
         const visits = try self.gpa.alloc(Visit, entries.items.len);
         defer self.gpa.free(visits);
@@ -2899,8 +2959,104 @@ pub const Coordinator = struct {
             runtime_target,
             options,
         );
-        for (entries.items) |entry| try self.commitPreparedModule(entry.mod);
+        for (transplants.items) |*pending| try eval.CompileTimeReuse.verifyAndInstall(pending.module, &pending.previous, &pending.transplant);
+        for (entries.items) |entry| try self.commitPreparedModule(entry.pkg, entry.mod);
         try unfinalized.commit();
+    }
+
+    fn cacheEnabled(self: *const Coordinator) bool {
+        const manager = self.cache_manager orelse return false;
+        return manager.config.enabled;
+    }
+
+    /// Copy into a freshly checked module the roots its previous cache entry
+    /// stored whose value identity is unchanged (design.md "Compile-Time
+    /// Value Reuse Across Edits"). A missing, swept or unreadable entry
+    /// copies nothing. Compilers with runtime safety keep the copies for
+    /// `CompileTimeReuse.verifyAndInstall` after finalization; others install
+    /// them now.
+    fn transplantPreviousValues(
+        self: *Coordinator,
+        pkg: *const PackageState,
+        mod: *ModuleState,
+        pending: *std.ArrayList(PendingTransplant),
+    ) CoordinatorError!void {
+        const manager = self.cache_manager orelse return;
+        if (!manager.config.enabled or mod.reopened_unevaluated != null) return;
+        const artifact = mod.checkedArtifact().?;
+        if (artifact.evaluation_state != .prepared or artifact.pairing_arena != null) return;
+        if (artifact.compile_time_root_identities.rows.len == 0) return;
+        const previous_key = manager.loadPlacementPointer(checkedPlacement(pkg, mod)) orelse return;
+        if (std.mem.eql(u8, &previous_key, &artifact.key.bytes)) return;
+        const data = manager.loadCheckedEntryUncounted(previous_key) orelse return;
+        defer data.deinit(manager.allocator);
+        const bodies = decodeCheckedModuleCacheEntry(.{ .bytes = previous_key }, data.data()) orelse return;
+        const buffer = try self.gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bodies.artifact_body.len);
+        var buffer_owned = true;
+        defer if (buffer_owned) self.gpa.free(buffer);
+        @memcpy(buffer, bodies.artifact_body);
+        const serialized: *const CheckedArtifact.CheckedModuleArtifact.Serialized = @ptrCast(@alignCast(buffer.ptr));
+        serialized.validate(buffer.len) catch return;
+        if (!std.mem.eql(u8, &serialized.key.bytes, &previous_key)) return;
+        var previous = eval.CompileTimeReuse.Previous.fromSerialized(serialized, self.gpa);
+        var previous_owned = true;
+        defer if (previous_owned) previous.deinit();
+        var transplant = try eval.CompileTimeReuse.plan(self.gpa, artifact, &previous);
+        var transplant_owned = true;
+        defer if (transplant_owned) transplant.deinit();
+
+        self.ctfe_reuse_stats.previous_entries += 1;
+        self.ctfe_reuse_stats.pending_roots += transplant.pending_roots;
+        self.ctfe_reuse_stats.transplanted_roots += @intCast(transplant.count());
+        if (eval.CompileTimeReuse.traceEnabled()) self.traceTransplant(mod.qualified_name, artifact, &previous_key, &transplant);
+        if (transplant.count() == 0) return;
+        if (self.verify_transplants) {
+            try pending.append(self.gpa, .{ .module = artifact, .buffer = buffer, .previous = previous, .transplant = transplant });
+            buffer_owned = false;
+            previous_owned = false;
+            transplant_owned = false;
+            return;
+        }
+        try eval.CompileTimeReuse.install(artifact, &previous, &transplant);
+    }
+
+    /// `ROC_CTFE_REUSE_TRACE`: one line per module that found its previous
+    /// entry, and one per root copied from it.
+    fn traceTransplant(
+        self: *Coordinator,
+        module_name: []const u8,
+        artifact: *const CheckedArtifact.CheckedModuleArtifact,
+        previous_key: *const [32]u8,
+        transplant: *const eval.CompileTimeReuse.Transplant,
+    ) void {
+        var out = std.Io.Writer.Allocating.init(self.gpa);
+        defer out.deinit();
+        const writer = &out.writer;
+        writer.print("ctfe-reuse {s}: {d} of {d} pending roots from previous entry {x}\n", .{
+            module_name,
+            transplant.count(),
+            transplant.pending_roots,
+            previous_key[0..4],
+        }) catch return;
+        const env = artifact.moduleEnvConst();
+        for (0..transplant.count()) |index| {
+            const root = artifact.compile_time_roots.root(transplant.rootAt(index));
+            const region = switch (root.source) {
+                .def => |def| env.store.getPatternRegion(env.store.getDef(def).pattern),
+                .expr => |expr| env.store.getExprRegion(expr),
+                .hoisted => |hoisted| env.store.getExprRegion(hoisted.expr),
+                .statement => |statement| env.store.getStatementRegion(statement),
+                .required_binding => base.Region.zero(),
+            };
+            const text = env.getSourceAll()[region.start.offset..region.end.offset];
+            writer.print("ctfe-reuse {s}:   root {d} {s} {s}\n", .{
+                module_name,
+                @backingInt(root.id),
+                @tagName(root.kind),
+                text[0..@min(text.len, 72)],
+            }) catch return;
+        }
+        self.roc_ctx.writeStderr(out.written()) catch {};
     }
 
     fn unevaluatedRequestCount(artifact: *const CheckedArtifact.CheckedModuleArtifact) usize {
@@ -3021,7 +3177,7 @@ pub const Coordinator = struct {
         }
     };
 
-    fn commitPreparedModule(self: *Coordinator, mod: *ModuleState) CoordinatorError!void {
+    fn commitPreparedModule(self: *Coordinator, pkg: *const PackageState, mod: *ModuleState) CoordinatorError!void {
         const state = mod.pending_evaluation.?;
         const artifact = mod.checkedArtifact().?;
         try eval.CompileTimeFinalization.finishPendingExhaustiveness(artifact, &state.problems);
@@ -3054,7 +3210,13 @@ pub const Coordinator = struct {
         const evaluated_more = if (mod.reopened_unevaluated) |before| unevaluatedRequestCount(artifact) < before else true;
         mod.reopened_unevaluated = null;
         if (mod.reports.items.len == 0 and evaluated_more) {
-            if (artifact.pairing_arena == null) self.storeCheckedModuleInCache(artifact, mod.has_source_version_pin) else self.storePlatformPairingInCache(artifact);
+            if (artifact.pairing_arena == null) {
+                if (self.cacheEnabled()) try eval.CompileTimeReuse.publishPortability(artifact);
+                self.storeCheckedModuleInCache(artifact, mod.has_source_version_pin);
+                if (artifact.compile_time_roots.roots.len != 0) {
+                    if (self.cache_manager) |manager| manager.storePlacementPointer(checkedPlacement(pkg, mod), artifact.key.bytes);
+                }
+            } else self.storePlatformPairingInCache(artifact);
         }
         state.deinit();
         mod.pending_evaluation = null;
@@ -7136,6 +7298,295 @@ test "issue 11389 cached platform evaluates app-dependent constants for each bin
     defer again.deinit(allocator);
     try std.testing.expectEqualSlices(u8, first.executable_root_bytes, again.executable_root_bytes);
     try std.testing.expectEqual(@as(u32, 0), again.platform_pairing_count);
+}
+
+/// What one compilation of an app reports about compile-time value reuse.
+const ReuseRun = struct {
+    stats: CtfeReuseStats,
+    stderr: []u8,
+    /// The app module's top-level root names and their value identities.
+    names: [][]u8,
+    identities: [][32]u8,
+    /// The app module's stored `I64` constants, by name, as evaluated or
+    /// transplanted.
+    values: []?i64,
+
+    fn deinit(self: *ReuseRun, allocator: Allocator) void {
+        for (self.names) |name| allocator.free(name);
+        allocator.free(self.names);
+        allocator.free(self.identities);
+        allocator.free(self.values);
+        allocator.free(self.stderr);
+        self.* = undefined;
+    }
+
+    fn index(self: *const ReuseRun, name: []const u8) usize {
+        for (self.names, 0..) |candidate, i| {
+            if (std.mem.eql(u8, candidate, name)) return i;
+        }
+        std.debug.panic("no compile-time root named {s}", .{name});
+    }
+
+    fn identity(self: *const ReuseRun, name: []const u8) [32]u8 {
+        return self.identities[self.index(name)];
+    }
+
+    fn value(self: *const ReuseRun, name: []const u8) ?i64 {
+        return self.values[self.index(name)];
+    }
+};
+
+fn compileForReuse(allocator: Allocator, cache_dir: []const u8, app_path: []const u8) CheckedModuleCacheRunError!ReuseRun {
+    return compileForReuseVerifying(allocator, cache_dir, app_path, std.debug.runtime_safety);
+}
+
+fn compileForReuseVerifying(allocator: Allocator, cache_dir: []const u8, app_path: []const u8, verify: bool) CheckedModuleCacheRunError!ReuseRun {
+    var stderr_capture: StderrCapture = .{ .allocator = allocator };
+    defer stderr_capture.bytes.deinit(allocator);
+    var roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io);
+    roc_ctx.ctx = &stderr_capture;
+    roc_ctx.vtable.writeStderr = StderrCapture.write;
+    var cache_manager = CacheManager.init(allocator, .{ .enabled = true, .cache_dir = cache_dir }, roc_ctx);
+    var coord = try Coordinator.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        try sharedBuiltinModules(),
+        build_options.compiler_compatibility_id,
+        &cache_manager,
+        roc_ctx,
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+    coord.verify_transplants = verify;
+    var arena_impl = base.SingleThreadArena.init(allocator);
+    defer arena_impl.deinit();
+    try coord.start();
+    try coord.discoverAppFromPath(arena_impl.allocator(), .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+    try coord.finishCheckedProgram(.executable_artifacts);
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const app = coord.appRootCheckedArtifact();
+    const env = app.moduleEnvConst();
+    var names = std.ArrayList([]u8).empty;
+    errdefer {
+        for (names.items) |name| allocator.free(name);
+        names.deinit(allocator);
+    }
+    var identities = std.ArrayList([32]u8).empty;
+    errdefer identities.deinit(allocator);
+    var values = std.ArrayList(?i64).empty;
+    errdefer values.deinit(allocator);
+    for (app.compile_time_roots.roots) |root| {
+        const def = switch (root.source) {
+            .def => |def| def,
+            .expr, .statement, .required_binding, .hoisted => continue,
+        };
+        const pattern = env.store.getPattern(env.store.getDef(def).pattern);
+        if (pattern != .assign) continue;
+        try names.append(allocator, try allocator.dupe(u8, env.getIdent(pattern.assign.ident)));
+        try identities.append(allocator, app.compile_time_root_identities.rows[@backingInt(root.id)].value);
+        var stored: ?i64 = null;
+        if (root.payload == .const_node) {
+            var node = app.const_store.get(root.payload.const_node);
+            while (node == .nominal) node = app.const_store.get(node.nominal.backing);
+            if (node == .scalar and node.scalar == .i64) stored = node.scalar.i64;
+        }
+        try values.append(allocator, stored);
+    }
+    const stderr = try stderr_capture.bytes.toOwnedSlice(allocator);
+    errdefer allocator.free(stderr);
+    return .{
+        .stats = coord.ctfe_reuse_stats,
+        .stderr = stderr,
+        .names = try names.toOwnedSlice(allocator),
+        .identities = try identities.toOwnedSlice(allocator),
+        .values = try values.toOwnedSlice(allocator),
+    };
+}
+
+const reuse_platform =
+    \\platform ""
+    \\    requires {} { answer : I64 }
+    \\    exposes []
+    \\    packages {}
+    \\    provides { "roc_entry": entry }
+    \\entry : {} -> I64
+    \\entry = |_| answer
+;
+
+fn writeReuseFixture(tmp: *std.testing.TmpDir, app: []const u8) (std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError)!void {
+    try tmp.dir.createDirPath(std.testing.io, "cache");
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "platform.roc", .data = reuse_platform });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = app });
+}
+
+const reuse_app =
+    \\app [answer] { pf: platform "./platform.roc" }
+    \\
+    \\import "data.txt" as data : Str
+    \\
+    \\Wrap := [W(I64)].{
+    \\    get = |Wrap.W(n)| n
+    \\}
+    \\
+    \\base = 40.I64
+    \\answer = {
+    \\    dbg base
+    \\    base + 2.I64
+    \\}
+    \\unrelated = 7.I64
+    \\wrapped = Wrap.W(5.I64).get()
+    \\size = Str.count_utf8_bytes(data).to_i64_wrap()
+    \\empty = []
+    \\use_empty = |{}| List.append(empty, 1.U8)
+    \\
+;
+
+test "compile-time value identity changes exactly with what a root reads" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try writeReuseFixture(&tmp, reuse_app);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "data.txt", .data = "abc" });
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+    const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+    defer allocator.free(app);
+
+    var original = try compileForReuse(allocator, cache, app);
+    defer original.deinit(allocator);
+
+    const Edit = struct { from: []const u8, to: []const u8, changed: []const []const u8, unchanged: []const []const u8 };
+    const edits = [_]Edit{
+        // An unrelated definition changes no other root's identity.
+        .{ .from = "unrelated = 7.I64", .to = "unrelated = 8.I64", .changed = &.{"unrelated"}, .unchanged = &.{ "base", "answer", "wrapped", "size", "empty" } },
+        // A root it reads changes a root's identity.
+        .{ .from = "base = 40.I64", .to = "base = 41.I64", .changed = &.{ "base", "answer" }, .unchanged = &.{ "unrelated", "wrapped", "size", "empty" } },
+        // A use elsewhere that pins its type changes a root's identity.
+        .{ .from = "List.append(empty, 1.U8)", .to = "List.append(empty, 1.I8)", .changed = &.{"empty"}, .unchanged = &.{ "base", "answer", "unrelated", "size" } },
+        // The method its dispatch selects changes a root's identity.
+        .{ .from = "get = |Wrap.W(n)| n", .to = "get = |Wrap.W(n)| n + 1.I64", .changed = &.{"wrapped"}, .unchanged = &.{} },
+        // Whitespace and comments outside every definition change nothing.
+        .{ .from = "unrelated = 7.I64\n", .to = "unrelated = 7.I64\n\n# a comment\n", .changed = &.{}, .unchanged = &.{ "base", "answer", "unrelated", "wrapped", "size", "empty" } },
+    };
+    for (edits) |edit| {
+        const edited = try std.mem.replaceOwned(u8, allocator, reuse_app, edit.from, edit.to);
+        defer allocator.free(edited);
+        try std.testing.expect(!std.mem.eql(u8, edited, reuse_app));
+        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = edited });
+        var run = try compileForReuse(allocator, cache, app);
+        defer run.deinit(allocator);
+        for (edit.changed) |name| try std.testing.expect(!std.mem.eql(u8, &original.identity(name), &run.identity(name)));
+        for (edit.unchanged) |name| try std.testing.expectEqualSlices(u8, &original.identity(name), &run.identity(name));
+    }
+
+    // The bytes of an imported file change the identity of what reads it.
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = reuse_app });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "data.txt", .data = "abcd" });
+    var file_edit = try compileForReuse(allocator, cache, app);
+    defer file_edit.deinit(allocator);
+    try std.testing.expect(!std.mem.eql(u8, &original.identity("size"), &file_edit.identity("size")));
+    try std.testing.expectEqual(@as(?i64, 4), file_edit.value("size"));
+}
+
+test "an edited module reuses the compile-time values its edit leaves unchanged" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try writeReuseFixture(&tmp, reuse_app);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "data.txt", .data = "abc" });
+    try tmp.dir.createDirPath(std.testing.io, "cold");
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+    const cold_cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cold", allocator);
+    defer allocator.free(cold_cache);
+    const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+    defer allocator.free(app);
+
+    var first = try compileForReuse(allocator, cache, app);
+    defer first.deinit(allocator);
+    try std.testing.expectEqual(@as(u32, 0), first.stats.previous_entries);
+    try std.testing.expectEqualStrings("[dbg] 40\n", first.stderr);
+
+    // A comment changes the module's cache key and no root's identity:
+    // every evaluated value is transplanted, and the build reports and
+    // stores exactly what a cold build of the edited source does.
+    const commented = reuse_app ++ "# a trailing comment\n";
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = commented });
+    var warm = try compileForReuse(allocator, cache, app);
+    defer warm.deinit(allocator);
+    try std.testing.expectEqual(@as(u32, 1), warm.stats.previous_entries);
+    try std.testing.expect(warm.stats.pending_roots >= 6);
+    try std.testing.expectEqual(warm.stats.pending_roots, warm.stats.transplanted_roots);
+    var cold = try compileForReuse(allocator, cold_cache, app);
+    defer cold.deinit(allocator);
+    try std.testing.expectEqual(@as(u32, 0), cold.stats.previous_entries);
+    try std.testing.expectEqualStrings(cold.stderr, warm.stderr);
+    for (cold.names, 0..) |name, i| try std.testing.expectEqual(cold.values[i], warm.value(name));
+    try std.testing.expectEqual(@as(?i64, 42), warm.value("answer"));
+
+    // A cache hit of the transplanted entry replays its observation.
+    var hit = try compileForReuse(allocator, cache, app);
+    defer hit.deinit(allocator);
+    try std.testing.expectEqual(@as(u32, 0), hit.stats.previous_entries);
+    try std.testing.expectEqualStrings("[dbg] 40\n", hit.stderr);
+
+    // Editing a root another reads re-evaluates both and reuses the rest.
+    const edited = try std.mem.replaceOwned(u8, allocator, commented, "base = 40.I64", "base = 50.I64");
+    defer allocator.free(edited);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = edited });
+    var partial = try compileForReuse(allocator, cache, app);
+    defer partial.deinit(allocator);
+    try std.testing.expectEqual(@as(u32, 1), partial.stats.previous_entries);
+    try std.testing.expectEqual(warm.stats.pending_roots, partial.stats.pending_roots);
+    try std.testing.expectEqual(partial.stats.pending_roots - 2, partial.stats.transplanted_roots);
+    try std.testing.expectEqualStrings("[dbg] 50\n", partial.stderr);
+    try std.testing.expectEqual(@as(?i64, 52), partial.value("answer"));
+    try std.testing.expectEqual(@as(?i64, 5), partial.value("wrapped"));
+}
+
+test "compile-time values installed before evaluation read, store and replay like evaluated ones" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try writeReuseFixture(&tmp, reuse_app);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "data.txt", .data = "abc" });
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+    const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+    defer allocator.free(app);
+
+    var first = try compileForReuseVerifying(allocator, cache, app, false);
+    defer first.deinit(allocator);
+    // Unverified transplants are installed before evaluation, so the
+    // finalization that follows restores them as stored values, replays
+    // their observations, and evaluates only the edited root and its reader.
+    const edited = try std.mem.replaceOwned(u8, allocator, reuse_app, "unrelated = 7.I64", "unrelated = 9.I64");
+    defer allocator.free(edited);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = edited });
+    var installed = try compileForReuseVerifying(allocator, cache, app, false);
+    defer installed.deinit(allocator);
+    try std.testing.expectEqual(installed.stats.pending_roots - 1, installed.stats.transplanted_roots);
+    try std.testing.expectEqualStrings(first.stderr, installed.stderr);
+    for (first.names, 0..) |name, i| {
+        if (std.mem.eql(u8, name, "unrelated")) continue;
+        try std.testing.expectEqual(first.values[i], installed.value(name));
+    }
+    try std.testing.expectEqual(@as(?i64, 9), installed.value("unrelated"));
+
+    // The installed entry is itself a complete previous entry: a verifying
+    // compilation of a further edit agrees with every value it reuses.
+    const further = try std.mem.replaceOwned(u8, allocator, reuse_app, "unrelated = 7.I64", "unrelated = 10.I64");
+    defer allocator.free(further);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = further });
+    var verified = try compileForReuseVerifying(allocator, cache, app, true);
+    defer verified.deinit(allocator);
+    try std.testing.expectEqual(verified.stats.pending_roots - 1, verified.stats.transplanted_roots);
+    try std.testing.expectEqualStrings(first.stderr, verified.stderr);
 }
 
 test "issue 11389 pairing cache retains exported constants and debug observations" {

@@ -433,6 +433,16 @@ pub const CacheConfig = struct {
         return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "mod" });
     }
 
+    /// Pointers from a module's placement to the key of its most recently
+    /// stored checked entry (design.md "Compile-Time Value Reuse Across
+    /// Edits").
+    pub fn getCheckedPlacementDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
+        const version_dir = try self.getVersionCacheDir(allocator);
+        defer allocator.free(version_dir);
+
+        return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "mod-latest" });
+    }
+
     /// Exact platform/app composition results, separate from reusable modules.
     pub fn getPlatformPairingCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
         const version_dir = try self.getVersionCacheDir(allocator);
