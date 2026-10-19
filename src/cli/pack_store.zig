@@ -243,7 +243,7 @@ test "object cache accepts new offers after indexing without moving served artif
         }});
         defer allocator.free(bytes);
         try packs.offerPack(bytes);
-        const hit = packs.specCacheLookup().lookup(key, false) orelse return error.TestUnexpectedResult;
+        const hit = packs.specCacheLookup().lookup(key, .dev_code) orelse return error.TestUnexpectedResult;
         try std.testing.expectEqualSlices(u8, &identity.bytes, &hit.identity);
         const splice = packs.spliceSource();
         const located = splice.find(splice.context, key) orelse return error.TestUnexpectedResult;
