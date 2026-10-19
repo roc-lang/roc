@@ -123,8 +123,8 @@ const TaskContext = struct {
 
     fn execute(self: *TaskContext, output_allocator: Allocator, scratch_allocator: Allocator, lane: *TaskExecutor.LaneState) Allocator.Error!void {
         const analysis = switch (self.phase) {
-            .tag_fusion, .loop_append, .range, .box_reuse => try laneScratch(BodyClone.AnalysisScratch, lane),
-            .branch_expectation, .trmc, .forwarding_join, .prune_join_params, .scalarize => null,
+            .forwarding_join, .tag_fusion, .loop_append, .range, .box_reuse => try laneScratch(BodyClone.AnalysisScratch, lane),
+            .branch_expectation, .trmc, .prune_join_params, .scalarize => null,
         };
         var shard = try self.source.cloneForProcRewriteWithMarks(output_allocator, self.proc, try laneScratch(LirStore.RewriteMarks, lane));
         errdefer shard.deinit();
@@ -136,7 +136,7 @@ const TaskContext = struct {
                 defer joins.deinit();
                 joins.next_join_point = self.first_fresh_join;
                 if (self.phase == .forwarding_join) {
-                    try ForwardingJoinInline.runProc(&shard, self.layouts, self.proc, scratch_allocator, &joins);
+                    try ForwardingJoinInline.runProcWithScratch(&shard, self.layouts, self.proc, scratch_allocator, &joins, analysis.?);
                 } else {
                     try TagCaseFusion.runProcWithScratch(&shard, self.layouts, self.proc, scratch_allocator, &joins, analysis.?);
                     try KnownTagJump.runProc(&shard, self.proc, scratch_allocator, &joins);

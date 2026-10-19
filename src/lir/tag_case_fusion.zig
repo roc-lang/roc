@@ -509,6 +509,12 @@ fn findCandidate(
             if (stmt.* == .assign_tag) try tag_targets.put(stmt.assign_tag.target, {});
         }
     }
+    // Every candidate join's inventory reuses one predecessor map and
+    // successor buffer.
+    var predecessors = collections.DenseMap(LIR.CFStmtId, u32).init(allocator);
+    defer predecessors.deinit();
+    var successors = std.ArrayList(LIR.CFStmtId).empty;
+    defer successors.deinit(allocator);
     var walk = try body_clone.ReachableStmts.initWithScratch(store, body, analysis);
     defer walk.deinit();
     while (try walk.next()) |join_stmt| {
@@ -605,10 +611,8 @@ fn findCandidate(
         defer if (!keep_variants) variants.deinit();
         var consistent_payloads = true;
         var jump_count: usize = 0;
-        var predecessors = collections.DenseMap(LIR.CFStmtId, u32).init(allocator);
-        defer predecessors.deinit();
-        var successors = std.ArrayList(LIR.CFStmtId).empty;
-        defer successors.deinit(allocator);
+        predecessors.clearRetainingCapacity();
+        successors.clearRetainingCapacity();
         var remainder_walk = try body_clone.ReachableStmts.initWithScratch(store, join.remainder, analysis);
         defer remainder_walk.deinit();
         stats.inventory_walks += 1;

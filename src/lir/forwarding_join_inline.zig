@@ -82,9 +82,23 @@ pub fn runProc(
     scratch_allocator: Allocator,
     join_params: *body_clone.JoinParamIndex,
 ) ResourceError!void {
+    var analysis = body_clone.AnalysisScratch.init(scratch_allocator);
+    defer analysis.deinit();
+    try runProcWithScratch(store, layouts, proc, scratch_allocator, join_params, &analysis);
+}
+
+/// `runProc` with lane-retained walk storage.
+pub fn runProcWithScratch(
+    store: *LirStore,
+    layouts: *const layout_mod.Store,
+    proc: LIR.LirProcSpecId,
+    scratch_allocator: Allocator,
+    join_params: *body_clone.JoinParamIndex,
+    analysis: *body_clone.AnalysisScratch,
+) ResourceError!void {
     const body = rewritableProcBody(store, proc) orelse return;
     var indexed = false;
-    while (try findCandidate(store, layouts, proc, scratch_allocator)) |found| {
+    while (try findCandidate(store, layouts, proc, scratch_allocator, analysis)) |found| {
         var candidate = found;
         defer candidate.moved.deinit();
         if (!indexed) {
@@ -95,15 +109,15 @@ pub fn runProc(
     }
 }
 
-fn findCandidate(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, allocator: Allocator) ResourceError!?Candidate {
+fn findCandidate(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, allocator: Allocator, analysis: *body_clone.AnalysisScratch) ResourceError!?Candidate {
     const proc = store.getProcSpecImmediate(proc_id);
     const proc_body = proc.body orelse return null;
-    var incoming_edges = try reachableIncomingEdgeCounts(store, proc_body, allocator);
+    var incoming_edges = try reachableIncomingEdgeCounts(store, proc_body, allocator, analysis);
     defer incoming_edges.deinit();
-    var forwarded = try forwardedJoins(store, proc_body, allocator);
+    var forwarded = try forwardedJoins(store, proc_body, allocator, analysis);
     defer forwarded.deinit();
 
-    var walk = try body_clone.ReachableStmts.initWithAllocator(store, proc_body, allocator);
+    var walk = try body_clone.ReachableStmts.initWithScratch(store, proc_body, analysis);
     defer walk.deinit();
     while (try walk.next()) |outer_stmt| {
         const outer_node = store.getCFStmtImmediate(outer_stmt);
@@ -130,11 +144,11 @@ fn findCandidate(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LI
         // the declaration that edge targets. Recursive joins are loop
         // headers, not one-shot continuations, even when their initial entry
         // happens to pass through a single forwarding join.
-        if (try subtreeJumpsTo(store, outer.body, outer.id, allocator)) continue;
+        if (try subtreeJumpsTo(store, outer.body, outer.id, analysis)) continue;
 
         var incoming_count: usize = 0;
         var selected: ?Candidate = null;
-        var remainder_walk = try body_clone.ReachableStmts.initWithAllocator(store, outer.remainder, allocator);
+        var remainder_walk = try body_clone.ReachableStmts.initWithScratch(store, outer.remainder, analysis);
         defer remainder_walk.deinit();
         while (try remainder_walk.next()) |inner_stmt| {
             const inner_node = store.getCFStmtImmediate(inner_stmt);
@@ -179,7 +193,7 @@ fn findCandidate(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LI
         // or bypass that source.
         if (incoming_count == 1) {
             if (selected) |*candidate| {
-                candidate.moved = try collectMovedBody(store, outer.body, &incoming_edges, allocator);
+                candidate.moved = try collectMovedBody(store, outer.body, &incoming_edges, allocator, analysis);
                 return candidate.*;
             }
         }
@@ -230,10 +244,10 @@ const ForwardTargets = struct {
 
 /// Each join parameter that a reachable one-parameter join's body forwards
 /// its own parameter into (`forwardsToJoin`).
-fn forwardedJoins(store: *LirStore, body: LIR.CFStmtId, allocator: Allocator) ResourceError!ForwardTargets {
+fn forwardedJoins(store: *LirStore, body: LIR.CFStmtId, allocator: Allocator, analysis: *body_clone.AnalysisScratch) ResourceError!ForwardTargets {
     var targets = ForwardTargets.init(allocator);
     errdefer targets.deinit();
-    var walk = try body_clone.ReachableStmts.initWithAllocator(store, body, allocator);
+    var walk = try body_clone.ReachableStmts.initWithScratch(store, body, analysis);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
         const node = store.getCFStmtImmediate(stmt_id);
@@ -258,12 +272,12 @@ fn forwardedJoins(store: *LirStore, body: LIR.CFStmtId, allocator: Allocator) Re
     return targets;
 }
 
-fn reachableIncomingEdgeCounts(store: *LirStore, body: LIR.CFStmtId, allocator: Allocator) ResourceError!IncomingEdges {
+fn reachableIncomingEdgeCounts(store: *LirStore, body: LIR.CFStmtId, allocator: Allocator, analysis: *body_clone.AnalysisScratch) ResourceError!IncomingEdges {
     var counts = IncomingEdges.init(allocator);
     errdefer counts.deinit();
     var successors = std.ArrayList(LIR.CFStmtId).empty;
     defer successors.deinit(allocator);
-    var walk = try body_clone.ReachableStmts.initWithAllocator(store, body, allocator);
+    var walk = try body_clone.ReachableStmts.initWithScratch(store, body, analysis);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
         successors.clearRetainingCapacity();
@@ -277,8 +291,8 @@ fn reachableIncomingEdgeCounts(store: *LirStore, body: LIR.CFStmtId, allocator: 
     return counts;
 }
 
-fn subtreeJumpsTo(store: *LirStore, body: LIR.CFStmtId, target: LIR.JoinPointId, allocator: Allocator) ResourceError!bool {
-    var walk = try body_clone.ReachableStmts.initWithAllocator(store, body, allocator);
+fn subtreeJumpsTo(store: *LirStore, body: LIR.CFStmtId, target: LIR.JoinPointId, analysis: *body_clone.AnalysisScratch) ResourceError!bool {
+    var walk = try body_clone.ReachableStmts.initWithScratch(store, body, analysis);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
         const stmt = store.getCFStmtImmediate(stmt_id);
@@ -292,6 +306,7 @@ fn collectMovedBody(
     root: LIR.CFStmtId,
     proc_incoming_edges: *const IncomingEdges,
     allocator: Allocator,
+    analysis: *body_clone.AnalysisScratch,
 ) ResourceError!MovedBody {
     var internal_incoming = IncomingEdges.init(allocator);
     defer internal_incoming.deinit();
@@ -300,7 +315,7 @@ fn collectMovedBody(
     defer nodes.deinit(allocator);
     var successors = std.ArrayList(LIR.CFStmtId).empty;
     defer successors.deinit(allocator);
-    var walk = try body_clone.ReachableStmts.initWithAllocator(store, root, allocator);
+    var walk = try body_clone.ReachableStmts.initWithScratch(store, root, analysis);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
         try nodes.append(allocator, stmt_id);
