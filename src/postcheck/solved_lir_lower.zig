@@ -3081,6 +3081,13 @@ const Lowerer = struct {
                 if (plain_spec and keyed_offer and (kept or !self.keep_specialization_procs)) {
                     try self.result.spec_procs.append(self.allocator, .{ .key = key.bytes, .proc = proc });
                     if (kept) try self.kept_spec_fns.append(self.allocator, fn_id);
+                } else if (pack_trace_available and packTraceEnabled()) {
+                    // A keyed specialization the pack will not offer.
+                    std.debug.print("skip-spec key={x} reason={s} name={s}\n", .{
+                        key.bytes[0..8],
+                        if (!plain_spec) "not-plain" else if (!keyed_offer) "not-offered" else @tagName(self.inline_plan.kind(spec.source)),
+                        self.result.store.procDebugName(proc) orelse "",
+                    });
                 }
             }
         }

@@ -67,7 +67,31 @@ pub const Store = struct {
         std.crypto.hash.sha2.Sha256.hash(bytes, &name, .{});
         const path = try self.filePath(origin, identity, name, discovery_extension);
         defer self.allocator.free(path);
-        try self.writeAt(origin, identity, path, bytes);
+        try self.writePath(path, bytes);
+    }
+
+    fn programPath(self: *const Store, key: [32]u8) Allocator.Error![]u8 {
+        const name = std.fmt.bytesToHex(key, .lower) ++ ".rpo".*;
+        return std.fs.path.join(self.allocator, &.{ self.root, "programs", &name });
+    }
+
+    /// The runtime output recorded for the program `key` names, or null.
+    /// An unreadable record is a miss.
+    pub fn readProgram(self: *const Store, key: [32]u8, allocator: Allocator) Allocator.Error!?[]u8 {
+        const path = try self.programPath(key);
+        defer self.allocator.free(path);
+        return self.roc_ctx.readFile(path, allocator) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => null,
+        };
+    }
+
+    /// Record the runtime output of the program `key` names. A record
+    /// already present holds the same output, and is left alone.
+    pub fn writeProgram(self: *const Store, key: [32]u8, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!void {
+        const path = try self.programPath(key);
+        defer self.allocator.free(path);
+        try self.writePath(path, bytes);
     }
 
     /// Whether the pack for `key` is already in the store.
@@ -83,12 +107,14 @@ pub const Store = struct {
     pub fn write(self: *const Store, origin: compile.BuildEnv.PackOrigin, identity: [32]u8, key: [32]u8, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!void {
         const path = try self.packPath(origin, identity, key);
         defer self.allocator.free(path);
-        try self.writeAt(origin, identity, path, bytes);
+        try self.writePath(path, bytes);
     }
 
-    fn writeAt(self: *const Store, origin: compile.BuildEnv.PackOrigin, identity: [32]u8, path: []const u8, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!void {
-        const dir = try self.identityDir(origin, identity);
-        defer self.allocator.free(dir);
+    /// Stage `bytes` in a file only this writer owns, beside `path`, and
+    /// rename it into place, so a reader or another writer never sees a
+    /// partly written file.
+    fn writePath(self: *const Store, path: []const u8, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!void {
+        const dir = std.fs.path.dirname(path).?;
         self.roc_ctx.makePath(dir) catch |err| {
             self.reportWriteFailure("create directory", dir, bytes.len, err);
             return error.PackWriteFailed;
@@ -97,12 +123,17 @@ pub const Store = struct {
             if (std.debug.runtime_safety) try self.verifyCollision(path, bytes);
             return;
         }
-        const temp_path = try std.fmt.allocPrint(self.allocator, "{s}.tmp", .{path});
-        defer self.allocator.free(temp_path);
-        self.roc_ctx.writeFile(temp_path, bytes) catch |err| {
-            self.reportWriteFailure("write staging file", temp_path, bytes.len, err);
-            return error.PackWriteFailed;
+        const temp_path = self.roc_ctx.writeTempFile(self.allocator, path, bytes) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => |write_err| {
+                self.reportWriteFailure("write staging file", path, bytes.len, write_err);
+                return error.PackWriteFailed;
+            },
         };
+        defer self.allocator.free(temp_path);
+        errdefer self.roc_ctx.deleteFile(temp_path) catch {};
+        // A concurrent writer that published first wrote the same bytes, so
+        // replacing its file is harmless.
         self.roc_ctx.rename(temp_path, path) catch |err| {
             self.reportWriteFailure("publish staging file", temp_path, bytes.len, err);
             return error.PackWriteFailed;
@@ -135,6 +166,13 @@ pub const Store = struct {
         const dir = try self.identityDir(origin, identity);
         defer self.allocator.free(dir);
         try packs.loadDirInto(io, dir, .cache_offers);
+    }
+
+    /// Read the discovery summary files filed under a module identity.
+    pub fn loadIdentityDiscovery(self: *const Store, io: std.Io, packs: *LoadedPacks, origin: compile.BuildEnv.PackOrigin, identity: [32]u8) LoadedPacks.LoadError!void {
+        const dir = try self.identityDir(origin, identity);
+        defer self.allocator.free(dir);
+        try packs.loadDirFiles(io, dir, .cache_offers, .discovery);
     }
 };
 
@@ -213,7 +251,10 @@ test "object cache loading owns decoded packs and commits both indexes atomicall
         try tmp.dir.writeFile(io, .{ .sub_path = old_path, .data = incompatible });
         const dir_path = try tmp.dir.realPathFileAlloc(io, dir_name, allocator);
         defer allocator.free(dir_path);
-        try std.testing.checkAllAllocationFailures(allocator, Attempt.run, .{ dir_path, key, identity });
+        // In-place growth under the testing allocator depends on the heap's
+        // layout, so the failure check runs over an allocator that refuses it.
+        var deterministic = @import("base").DeterministicAllocator.init(allocator);
+        try std.testing.checkAllAllocationFailures(deterministic.allocator(), Attempt.run, .{ dir_path, key, identity });
         try std.testing.expectError(error.UnsupportedPackVersion, LoadedPacks.loadDir(allocator, io, dir_path));
     }
     try tmp.dir.createDirPath(io, "malformed");
@@ -232,6 +273,7 @@ test "object cache write failures preserve quiet behavior and report verbose cau
     const Capture = struct {
         stderr: std.ArrayList(u8) = .empty,
         stage: enum { directory, write, rename },
+        deleted: usize = 0,
 
         fn makePath(context: ?*anyopaque, _: std.Io, _: []const u8) CoreCtx.MakePathError!void {
             const self: *@This() = @ptrCast(@alignCast(context.?));
@@ -242,9 +284,16 @@ test "object cache write failures preserve quiet behavior and report verbose cau
             return false;
         }
 
-        fn writeFile(context: ?*anyopaque, _: std.Io, _: []const u8, _: []const u8) CoreCtx.WriteError!void {
+        fn writeTempFile(context: ?*anyopaque, _: std.Io, allocator: Allocator, path: []const u8, _: []const u8) (Allocator.Error || CoreCtx.WriteError)![]u8 {
             const self: *@This() = @ptrCast(@alignCast(context.?));
             if (self.stage == .write) return error.NoSpaceLeft;
+            return std.fmt.allocPrint(allocator, "{s}.owned.tmp", .{path});
+        }
+
+        fn deleteFile(context: ?*anyopaque, _: std.Io, path: []const u8) CoreCtx.DeleteError!void {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            std.debug.assert(std.mem.endsWith(u8, path, ".owned.tmp"));
+            self.deleted += 1;
         }
 
         fn rename(context: ?*anyopaque, _: std.Io, _: []const u8, _: []const u8) CoreCtx.RenameError!void {
@@ -266,7 +315,8 @@ test "object cache write failures preserve quiet behavior and report verbose cau
             filesystem.ctx = &capture;
             filesystem.vtable.makePath = &Capture.makePath;
             filesystem.vtable.fileExists = &Capture.fileExists;
-            filesystem.vtable.writeFile = &Capture.writeFile;
+            filesystem.vtable.writeTempFile = &Capture.writeTempFile;
+            filesystem.vtable.deleteFile = &Capture.deleteFile;
             filesystem.vtable.rename = &Capture.rename;
             filesystem.vtable.writeStderr = &Capture.writeStderr;
             var store = try Store.init(allocator, .{
@@ -278,6 +328,7 @@ test "object cache write failures preserve quiet behavior and report verbose cau
             for (0..2) |_| {
                 try std.testing.expectError(error.PackWriteFailed, store.write(.local, @as([32]u8, @splat(1)), @as([32]u8, @splat(2)), "pack"));
             }
+            try std.testing.expectEqual(@as(usize, if (stage == .rename) 2 else 0), capture.deleted);
             if (verbose) {
                 const cause = switch (stage) {
                     .directory => "error.ReadOnlyFileSystem",
@@ -292,6 +343,71 @@ test "object cache write failures preserve quiet behavior and report verbose cau
             }
         }
     }
+}
+
+test "object cache interleaved writers expose only complete final bytes" {
+    const Hook = struct {
+        store: *Store,
+        base: CoreCtx,
+        pending: ?[]const u8 = null,
+        distinct: bool = false,
+        observed_complete: bool = false,
+
+        fn writeTempFile(context: ?*anyopaque, _: std.Io, allocator: Allocator, path: []const u8, bytes: []const u8) (Allocator.Error || CoreCtx.WriteError)![]u8 {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            if (self.pending) |pending| {
+                const staging = try self.base.writeTempFile(allocator, path, bytes);
+                self.distinct = !std.mem.eql(u8, pending, staging);
+                return staging;
+            }
+            // Suspend writer A after a partial write. Writer B finishes and
+            // publishes before A resumes, without threads or timing thresholds.
+            const staging = try self.base.writeTempFile(allocator, path, bytes[0..1]);
+            errdefer {
+                self.base.deleteFile(staging) catch {};
+                allocator.free(staging);
+            }
+            self.pending = staging;
+            defer self.pending = null;
+            std.debug.assert(!self.base.fileExists(path));
+            self.store.writePath(path, bytes) catch return error.IoError;
+            const visible = self.base.readFile(path, allocator) catch return error.IoError;
+            defer allocator.free(visible);
+            self.observed_complete = std.mem.eql(u8, visible, bytes);
+            try self.base.writeFile(staging, bytes);
+            const after = self.base.readFile(path, allocator) catch return error.IoError;
+            defer allocator.free(after);
+            self.observed_complete = self.observed_complete and std.mem.eql(u8, after, bytes);
+            return staging;
+        }
+    };
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(root);
+    const base = CoreCtx.default(allocator, allocator, io);
+    var store = Store{ .allocator = allocator, .roc_ctx = base, .root = try allocator.dupe(u8, root), .verbose = false };
+    defer store.deinit();
+    var hook = Hook{ .store = &store, .base = base };
+    store.roc_ctx.ctx = &hook;
+    store.roc_ctx.vtable.writeTempFile = &Hook.writeTempFile;
+    const identity = @as([32]u8, @splat(1));
+    try store.write(.local, identity, @as([32]u8, @splat(2)), "whole completed pack");
+    try std.testing.expect(hook.distinct);
+    try std.testing.expect(hook.observed_complete);
+    const dir_path = try store.identityDir(.local, identity);
+    defer allocator.free(dir_path);
+    var dir = try std.Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true });
+    defer dir.close(io);
+    var iterator = dir.iterate();
+    var count: usize = 0;
+    while (try iterator.next(io)) |entry| {
+        try std.testing.expect(!std.mem.endsWith(u8, entry.name, ".tmp"));
+        count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 1), count);
 }
 
 test "the cache sweep finds and ages the packs the store writes" {
@@ -362,13 +478,25 @@ pub const Pending = struct {
     build_env: *compile.BuildEnv,
 };
 
+/// The command whose compile-time evaluation filed a compile-time pack, and
+/// the optimization level its program is specialized for. Each evaluates its
+/// own roots of the program under its own Solved policy, so each files its
+/// own pack.
+pub const CompileTimePublisher = struct {
+    command: enum { check, build, test_run },
+    opt: []const u8,
+};
+
 /// The file name a program's compile-time pack is filed under, beside the
 /// root module's runtime packs. It is distinct from every runtime pack key, so
 /// the two never replace each other; their code is a dev build's alike.
-pub fn compileTimePackKey(code_generation_key: [32]u8) [32]u8 {
+pub fn compileTimePackKey(code_generation_key: [32]u8, publisher: CompileTimePublisher) [32]u8 {
     var hasher = @import("base").Sha256.init(.{});
-    hasher.update("roc.compile-time-pack.v1");
+    hasher.update("roc.compile-time-pack.v2");
     hasher.update(&code_generation_key);
+    hasher.update(@tagName(publisher.command));
+    hasher.update(&.{0});
+    hasher.update(publisher.opt);
     return hasher.finalResult();
 }
 
@@ -435,6 +563,10 @@ pub const LoadedPacks = struct {
     /// specialization key; their module lists live in `discovery_arena`.
     discovery: std.AutoHashMapUnmanaged([32]u8, std.ArrayList(Common.DiscoverySettlement)) = .empty,
     discovery_arena: std.heap.ArenaAllocator,
+    /// Discovery summaries load at the first discovery lookup, apart from
+    /// the code packs, so a program whose every discovery request is settled
+    /// reads no code.
+    discovery_state: enum { pending, ready, unavailable } = .pending,
     /// Neither lookup may expose a partial index or retry a failed collection.
     state: enum { pending, ready, unavailable } = .pending,
     failure: ?LoadError = null,
@@ -477,7 +609,26 @@ pub const LoadedPacks = struct {
         };
     }
 
+    /// Which files of a pack directory a load reads.
+    const Files = enum {
+        /// Code packs.
+        code,
+        /// Discovery summaries.
+        discovery,
+
+        fn extension(self: Files) []const u8 {
+            return switch (self) {
+                .code => ".rpk",
+                .discovery => discovery_extension,
+            };
+        }
+    };
+
     fn loadDirIntoUnrecorded(self: *LoadedPacks, io: std.Io, dir_path: []const u8, input: Input) LoadError!void {
+        try self.loadDirFiles(io, dir_path, input, .code);
+    }
+
+    fn loadDirFiles(self: *LoadedPacks, io: std.Io, dir_path: []const u8, input: Input, files: Files) LoadError!void {
         const allocator = self.allocator;
         var names = std.ArrayList([]u8).empty;
         defer {
@@ -494,7 +645,7 @@ pub const LoadedPacks = struct {
             while (true) {
                 const entry = (entries.next(io) catch return error.PackDirectoryUnreadable) orelse break;
                 if (entry.kind != .file) continue;
-                if (!std.mem.endsWith(u8, entry.name, ".rpk") and !std.mem.endsWith(u8, entry.name, discovery_extension)) continue;
+                if (!std.mem.endsWith(u8, entry.name, files.extension())) continue;
                 try names.ensureUnusedCapacity(allocator, 1);
                 names.appendAssumeCapacity(try allocator.dupe(u8, entry.name));
             }
@@ -509,9 +660,12 @@ pub const LoadedPacks = struct {
                 else => return error.PackDirectoryUnreadable,
             };
             defer allocator.free(bytes);
-            if (std.mem.endsWith(u8, name, discovery_extension)) {
-                try self.appendDiscovery(bytes);
-                continue;
+            switch (files) {
+                .discovery => {
+                    try self.appendDiscovery(bytes);
+                    continue;
+                },
+                .code => {},
             }
             self.appendPack(bytes) catch |err| {
                 switch (err) {
@@ -724,6 +878,35 @@ pub const LoadedPacks = struct {
         };
     }
 
+    /// Load the discovery summaries filed for the root module and every
+    /// module it lowers against. Runs once, at the first discovery lookup
+    /// after checking has produced the module set.
+    fn ensureDiscoveryLoaded(self: *LoadedPacks) void {
+        if (self.discovery_state != .pending) return;
+        const pending = self.pending orelse return;
+        const root_semantic = pending.build_env.getExecutableRootSemanticData() orelse return;
+        const root_artifact = root_semantic.checked_artifact orelse return;
+        self.loadPendingDiscovery(pending, root_artifact) catch |err| {
+            self.discovery_state = .unavailable;
+            std.log.warn("object cache discovery summaries unavailable for this build: {}", .{err});
+            return;
+        };
+        self.discovery_state = .ready;
+    }
+
+    fn loadPendingDiscovery(self: *LoadedPacks, pending: Pending, root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact) LoadError!void {
+        const store = pending.store;
+        if (pending.build_env.packPlacementForArtifactKey(root_artifact.key)) |placement| {
+            try store.loadIdentityDiscovery(pending.io, self, placement.origin, placement.identity);
+        }
+        const artifacts = try pending.build_env.collectVisibleArtifacts(self.allocator, root_artifact);
+        defer self.allocator.free(artifacts);
+        for (artifacts) |artifact| {
+            const placement = pending.build_env.packPlacementForArtifactKey(artifact.key) orelse continue;
+            try store.loadIdentityDiscovery(pending.io, self, placement.origin, placement.identity);
+        }
+    }
+
     fn unavailable(self: *LoadedPacks, err: LoadError) void {
         self.state = .unavailable;
         self.failure = err;
@@ -820,8 +1003,8 @@ pub const LoadedPacks = struct {
 
     fn findDiscovery(context: *anyopaque, key: [32]u8) []const Common.DiscoverySettlement {
         const self: *LoadedPacks = @ptrCast(@alignCast(context));
-        self.ensureLoaded();
-        if (self.state != .ready) return &.{};
+        self.ensureDiscoveryLoaded();
+        if (self.discovery_state != .ready) return &.{};
         const list = self.discovery.get(key) orelse return &.{};
         return list.items;
     }
@@ -855,7 +1038,7 @@ test "discovery summaries round-trip and a file of another version is no offer" 
     var packs = LoadedPacks.init(allocator);
     defer packs.deinit();
     try packs.appendDiscovery(bytes);
-    packs.state = .ready;
+    packs.discovery_state = .ready;
     const seven = LoadedPacks.findDiscovery(@ptrCast(&packs), @splat(7));
     try std.testing.expectEqual(@as(usize, 2), seven.len);
     try std.testing.expectEqualSlices([32]u8, &modules_a, seven[0].modules);
