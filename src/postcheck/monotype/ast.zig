@@ -2377,12 +2377,15 @@ pub const ProgramBuilder = struct {
         return id;
     }
 
-    /// A view of `owner`'s bytes, retaining it for as long as the literal
-    /// lives. Many literals sharing one backing cost one allocation.
-    pub fn addSharedStringView(self: *ProgramBuilder, owner: *SharedLiteralBacking, offset: u32, len: u32) std.mem.Allocator.Error!StringLiteralId {
-        if (@as(u64, offset) + len > owner.bytes.len) Common.invariant("string literal view exceeded its shared backing");
+    /// A literal whose backing is the `backing_len` bytes of `owner` at
+    /// `backing_start`, retaining `owner` for as long as the literal lives.
+    /// Many literals sharing one allocation cost one allocation while each
+    /// keeps its own backing.
+    pub fn addSharedStringView(self: *ProgramBuilder, owner: *SharedLiteralBacking, backing_start: u32, backing_len: u32, offset: u32, len: u32) std.mem.Allocator.Error!StringLiteralId {
+        if (@as(u64, backing_start) + backing_len > owner.bytes.len) Common.invariant("string literal backing exceeded its shared allocation");
+        if (@as(u64, offset) + len > backing_len) Common.invariant("string literal view exceeded its backing");
         const id: StringLiteralId = @fromBackingInt(@intCast(@as(u32, @intCast(self.string_literals.len()))));
-        try self.string_literals.append(self.allocator, .{ .backing = owner.bytes, .shared = owner, .offset = offset, .len = len });
+        try self.string_literals.append(self.allocator, .{ .backing = owner.bytes[backing_start..][0..backing_len], .shared = owner, .offset = offset, .len = len });
         owner.retain();
         return id;
     }

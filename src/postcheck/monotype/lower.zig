@@ -20384,13 +20384,16 @@ const BodyDraftStore = struct {
         var comptime_roots = collections.DenseMap(DraftComptimeValueRootId, Common.ComptimeValueRootId).init(program.allocator);
         defer comptime_roots.deinit();
 
-        // Every retained draft literal's text goes into one shared backing.
-        // Views stay at distinct offsets, an empty one included, so no two
-        // literals alias each other's position.
+        // Every retained draft literal's backing goes into one shared
+        // allocation. Each view keeps its own backing extent within it, since
+        // code generation reads a literal's backing (a small string, or a
+        // seamless slice of a larger static backing). Extents stay at
+        // distinct offsets, an empty one included, so no two literals alias
+        // each other's position.
         var literal_bytes_len: usize = 0;
         for (self.string_literals.items, 0..) |literal, index| {
             if (!ids.retained(.string_literals, index) or literal.const_blob != null) continue;
-            literal_bytes_len += @max(literal.len, 1);
+            literal_bytes_len += @max(literal.backing.len, 1);
         }
         const literal_backing = if (literal_bytes_len == 0) null else try Ast.SharedLiteralBacking.initUnfilled(program.allocator, literal_bytes_len);
         defer if (literal_backing) |backing| backing.owner.release();
@@ -20401,12 +20404,12 @@ const BodyDraftStore = struct {
             const id = if (literal.const_blob) |blob|
                 try program.addConstBlobView(blob.module_bytes, blob.data, blob.bytes, literal.offset, literal.len)
             else blk: {
-                const text = self.stringBytes(literal.backing)[literal.offset..][0..literal.len];
+                const draft_backing = self.stringBytes(literal.backing);
                 const backing = literal_backing.?;
-                @memcpy(backing.bytes[literal_cursor..][0..text.len], text);
-                if (text.len == 0) backing.bytes[literal_cursor] = 0;
-                const view = try program.addSharedStringView(backing.owner, literal_cursor, literal.len);
-                literal_cursor += @max(literal.len, 1);
+                @memcpy(backing.bytes[literal_cursor..][0..draft_backing.len], draft_backing);
+                if (draft_backing.len == 0) backing.bytes[literal_cursor] = 0;
+                const view = try program.addSharedStringView(backing.owner, literal_cursor, @intCast(draft_backing.len), literal.offset, literal.len);
+                literal_cursor += @intCast(@max(draft_backing.len, 1));
                 break :blk view;
             };
             if (@backingInt(id) != ids.core(.string_literals, @intCast(index), ids.string_literal_start)) {

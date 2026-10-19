@@ -730,8 +730,12 @@ const NamedRepresentationKeyContext = struct {
     }
 };
 
+/// Identity of a packed literal's bytes. A literal viewing a shared
+/// allocation is named by its own backing's position in that allocation, so
+/// views with distinct backings stay distinct and views of one backing share
+/// a conversion; any other literal is named by its id.
 const PackedLiteralKey = struct {
-    owner: ?*Mono.SharedLiteralBacking,
+    shared_backing: ?[*]const u8,
     literal: ?Mono.StringLiteralId,
     offset: u32,
     byte_len: u32,
@@ -1306,7 +1310,7 @@ const Lowerer = struct {
     fn packedListLiteral(self: *Lowerer, literal: Mono.PackedListLiteral, element: layout.Idx) Common.LowerError!LIR.ListLiteral {
         const source = self.stringLiteral(literal.literal);
         const key = PackedLiteralKey{
-            .owner = source.shared,
+            .shared_backing = if (source.shared != null) source.backing.ptr else null,
             .literal = if (source.shared == null) literal.literal else null,
             .offset = source.offset,
             .byte_len = source.len,
