@@ -72,6 +72,7 @@ const NotAWhereAlias = problem_mod.NotAWhereAlias;
 const WhereAliasInTypePosition = problem_mod.WhereAliasInTypePosition;
 const RecursiveWhereAlias = problem_mod.RecursiveWhereAlias;
 const WhereClauseReceiverNotIntroduced = problem_mod.WhereClauseReceiverNotIntroduced;
+const WhereRequirementNotFunction = problem_mod.WhereRequirementNotFunction;
 const InvalidNominalDeclRecursion = problem_mod.InvalidNominalDeclRecursion;
 
 // Nominal type errors
@@ -1049,6 +1050,9 @@ pub const ReportBuilder = struct {
             },
             .where_clause_receiver_not_introduced => |data| {
                 return self.buildWhereClauseReceiverNotIntroducedReport(data);
+            },
+            .where_requirement_not_function => |data| {
+                return self.buildWhereRequirementNotFunctionReport(data);
             },
             .invalid_nominal_decl_recursion => |data| {
                 return self.buildInvalidNominalDeclRecursionReport(data);
@@ -2586,6 +2590,34 @@ pub const ReportBuilder = struct {
             D.bytes("A where clause receiver must be introduced by the annotation's type, or by the method type of a receiver that is already connected to the annotation. Connect"),
             D.ident(data.type_var_name).withAnnotation(.inline_code),
             D.bytes("to the annotation, or remove this constraint."),
+        }, self, &report);
+
+        return report;
+    }
+
+    fn buildWhereRequirementNotFunctionReport(
+        self: *Self,
+        data: WhereRequirementNotFunction,
+    ) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Where Requirement Not A Function", "", .runtime_error);
+        errdefer report.deinit();
+        try D.renderSliceInto(&.{
+            D.bytes("This"),
+            D.bytes("where").withAnnotation(.inline_code),
+            D.bytes("clause requires a"),
+            D.ident(data.method_name).withAnnotation(.inline_code),
+            D.bytes("method whose type is not a function."),
+        }, self, &report, &report.headline);
+
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{
+            D.bytes("A"),
+            D.bytes("where").withAnnotation(.inline_code),
+            D.bytes("clause can only require methods, and a method is a function. To require a method that takes no arguments, give it a type like"),
+            D.bytes("() -> a").withAnnotation(.inline_code),
+            D.bytes("instead."),
         }, self, &report);
 
         return report;

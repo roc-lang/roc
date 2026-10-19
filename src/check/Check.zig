@@ -23322,6 +23322,7 @@ fn stepRigidAnnoGen(self: *Self, frame: *AnnoGenFrame, rigid: std.meta.fieldInfo
                 return annoGenChild(method.anno, whereMethodCtx(ctx), .pos);
             },
             else => {
+                try self.reportNonFunctionWhereRequirement(scratch_constraint, method);
                 self.scratch_static_dispatch_constraints.items.items[scratch_index].state = .completed;
                 state.method_stage = 0;
                 state.completing += 1;
@@ -23329,6 +23330,50 @@ fn stepRigidAnnoGen(self: *Self, frame: *AnnoGenFrame, rigid: std.meta.fieldInfo
         }
     }
     return anno_gen_done;
+}
+
+/// A where clause requires methods, so a written requirement's type must be
+/// a function, directly or through aliases. A hole (`_`) becomes a function
+/// through the body's uses, a type variable never is one, and an erroneous
+/// type was already reported. Other type variables in the signature may not
+/// be resolved yet, so a variable is judged by how it was written.
+fn reportNonFunctionWhereRequirement(
+    self: *Self,
+    scratch_constraint: ScratchStaticDispatchConstraint,
+    method: std.meta.fieldInfo(CIR.WhereClause, .w_method).type,
+) std.mem.Allocator.Error!void {
+    var anno_idx = method.anno;
+    const written_variable = while (true) switch (self.cir.store.getTypeAnno(anno_idx)) {
+        .parens => |parens| anno_idx = parens.anno,
+        .underscore => return,
+        .rigid_var, .rigid_var_lookup => break true,
+        .apply, .lookup, .tag_union, .tag, .tuple, .record, .@"fn", .malformed => break false,
+    };
+    if (!written_variable) {
+        var content = self.types.resolveVar(scratch_constraint.constraint.fn_var).desc.content;
+        while (content == .alias) {
+            content = self.types.resolveVar(self.types.getAliasBackingVar(content.alias)).desc.content;
+        }
+        switch (content) {
+            .structure => |flat_type| switch (flat_type) {
+                .fn_pure, .fn_effectful, .fn_unbound => return,
+                .record,
+                .tuple,
+                .nominal_type,
+                .empty_record,
+                .tag_union,
+                .empty_tag_union,
+                => {},
+            },
+            .err => return,
+            .flex, .rigid, .field_presence => {},
+            .alias => unreachable,
+        }
+    }
+    _ = try self.problems.appendProblem(.{ .where_requirement_not_function = .{
+        .method_name = method.method_name,
+        .region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(scratch_constraint.where_clause)),
+    } });
 }
 
 /// A where-method signature is a SCHEME the constrained body instantiates
@@ -47108,7 +47153,8 @@ inline fn processDeferredDispatchEntry(
                     failure_expr,
                 )) orelse continue;
 
-                // Unwrap the constraint type
+                // A requirement whose type is not a function was reported
+                // at its where clause (`reportNonFunctionWhereRequirement`).
                 if (constraint_fn_resolved.unwrapFunc() == null) {
                     _ = try self.unifyInContext(method_var, constraint.fn_var, env, .{
                         .method_type = .{
@@ -47351,6 +47397,8 @@ inline fn processDeferredDispatchEntry(
                     failure_expr,
                 )) orelse continue;
 
+                // A requirement whose type is not a function was reported
+                // at its where clause (`reportNonFunctionWhereRequirement`).
                 if (constraint_fn_resolved.unwrapFunc() == null) {
                     _ = try self.unifyInContext(method_var, constraint.fn_var, env, .{
                         .method_type = .{
