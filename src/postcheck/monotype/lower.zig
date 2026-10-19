@@ -67157,7 +67157,6 @@ test "frozen codec format index resolves equivalent TypeIds only for agreeing ro
     try std.testing.expect(try type_store.typeEql(&name_store, first_shape, second_shape));
 
     var view_data: ModuleViewData = undefined;
-    view_data.lowering_module = @fromBackingInt(0);
     const view = &view_data;
     view.key = .{};
     // These opaque ids are deliberate synthetic identities: this unit only
@@ -67298,7 +67297,6 @@ test "issue 11288: root substitutions share lexical cells and isolate separate i
     ctx.graph = graph;
     ctx.owner_template = std.mem.zeroes(names.ProcTemplate);
     var ctx_view: ModuleViewData = undefined;
-    ctx_view.lowering_module = @fromBackingInt(0);
     ctx.view = &ctx_view;
     ctx_view.key = .{ .bytes = @splat(0) };
     ctx_view.types = checked_types.view();
@@ -67383,7 +67381,6 @@ test "issue 11265: forwarded evidence compares methods in their owning name stor
     const decode_ty = try checked_types.appendSyntheticFunctionRoot(gpa, .pure, &.{receiver_ty}, receiver_ty);
 
     var frame_view_data: ModuleViewData = undefined;
-    frame_view_data.lowering_module = @fromBackingInt(0);
     const frame_view = &frame_view_data;
     frame_view.names = &frame_names;
     frame_view.types = checked_types.view();
@@ -67423,7 +67420,6 @@ test "issue 11265: forwarded evidence compares methods in their owning name stor
     const inner_method = try inner_names.internMethodName(Ident.IS_EQ_METHOD_NAME);
     try std.testing.expectEqual(caller_decode, inner_method);
     var inner_view_data: ModuleViewData = undefined;
-    inner_view_data.lowering_module = @fromBackingInt(0);
     const inner_view = &inner_view_data;
     inner_view.names = &inner_names;
     inner_view.types = checked_types.view();
@@ -67454,25 +67450,21 @@ test "specialization evidence equality includes exact target instantiation" {
     roots[10].key = roots[8].key;
 
     var target_view_data: ModuleViewData = undefined;
-    target_view_data.lowering_module = @fromBackingInt(0);
     const target_view = &target_view_data;
     target_view.key = .{};
     target_view.key.bytes[0] = 1;
     target_view.types = .{ .roots = &roots };
     var other_target_view_data: ModuleViewData = undefined;
-    other_target_view_data.lowering_module = @fromBackingInt(0);
     const other_target_view = &other_target_view_data;
     other_target_view.key = .{};
     other_target_view.key.bytes[0] = 2;
     other_target_view.types = .{ .roots = &roots };
     var instantiation_view_data: ModuleViewData = undefined;
-    instantiation_view_data.lowering_module = @fromBackingInt(0);
     const instantiation_view = &instantiation_view_data;
     instantiation_view.key = .{};
     instantiation_view.key.bytes[0] = 3;
     instantiation_view.types = .{ .roots = &roots };
     var other_instantiation_view_data: ModuleViewData = undefined;
-    other_instantiation_view_data.lowering_module = @fromBackingInt(0);
     const other_instantiation_view = &other_instantiation_view_data;
     other_instantiation_view.key = .{};
     other_instantiation_view.key.bytes[0] = 4;
@@ -71076,7 +71068,6 @@ test "issue 11362: checked instantiation reserves only recursive node identities
     ctx.builder = &builder;
     ctx.graph = graph;
     var ctx_view: ModuleViewData = undefined;
-    ctx_view.lowering_module = @fromBackingInt(0);
     ctx.view = &ctx_view;
     ctx_view.key = .{ .bytes = @splat(0) };
     ctx_view.types = checked_types.view();
@@ -71159,7 +71150,6 @@ test "issue 11362: allocation failure removes active checked instantiation marke
             ctx.builder = &builder;
             ctx.graph = graph;
             var ctx_view: ModuleViewData = undefined;
-            ctx_view.lowering_module = @fromBackingInt(0);
             ctx.view = &ctx_view;
             ctx_view.key = .{ .bytes = @splat(0) };
             ctx_view.types = checked_types.view();
@@ -71314,7 +71304,6 @@ fn testLazyCheckedInstantiationAliases(gpa: Allocator) (Allocator.Error || error
     ctx.builder = &builder;
     ctx.graph = graph;
     var ctx_view: ModuleViewData = undefined;
-    ctx_view.lowering_module = @fromBackingInt(0);
     ctx.view = &ctx_view;
     ctx_view.key = .{ .bytes = @splat(0) };
     ctx_view.types = checked_types.view();
@@ -71411,7 +71400,6 @@ test "issue 11362: checked instantiation allocates placeholders only for recursi
     ctx.builder = &builder;
     ctx.graph = graph;
     var ctx_view: ModuleViewData = undefined;
-    ctx_view.lowering_module = @fromBackingInt(0);
     ctx.view = &ctx_view;
     ctx_view.key = .{ .bytes = @splat(0) };
     ctx_view.types = checked_types.view();
@@ -71479,7 +71467,6 @@ test "issue 11362: allocation failure removes checked instantiation markers" {
             ctx.builder = &builder;
             ctx.graph = graph;
             var ctx_view: ModuleViewData = undefined;
-            ctx_view.lowering_module = @fromBackingInt(0);
             ctx.view = &ctx_view;
             ctx_view.key = .{ .bytes = @splat(0) };
             ctx_view.types = view;
@@ -71541,7 +71528,6 @@ fn testLazyCheckedInstantiation(allocator: Allocator, recursive: bool) (Allocato
     ctx.builder = &builder;
     ctx.graph = graph;
     var ctx_view: ModuleViewData = undefined;
-    ctx_view.lowering_module = @fromBackingInt(0);
     ctx.view = &ctx_view;
     ctx_view.key = .{ .bytes = @splat(0) };
     ctx_view.types = checked_types.view();
@@ -71660,7 +71646,6 @@ test "lazy checked instantiation allocates only recursive placeholders and clear
             ctx.builder = &builder;
             ctx.graph = graph;
             var ctx_view: ModuleViewData = undefined;
-            ctx_view.lowering_module = @fromBackingInt(0);
             ctx.view = &ctx_view;
             ctx_view.key = .{ .bytes = @splat(0) };
             ctx_view.types = checked_types.view();
@@ -71728,7 +71713,6 @@ test "lazy checked placeholders obey closed and innermost declaration scopes" {
     defer builder.task_storage.deinit(ctx.allocator);
     ctx.graph = graph;
     var ctx_view: ModuleViewData = undefined;
-    ctx_view.lowering_module = @fromBackingInt(0);
     ctx.view = &ctx_view;
     ctx_view.types = checked_types.view();
     ctx.instantiation = TypeInstantiationContext.init(gpa, builder.allocateInstantiationScope(), @splat(0));
@@ -71843,11 +71827,12 @@ test "issue 11453: direct alias lowering shares runtime types without wrapper al
     builder.type_cache = .empty;
     defer builder.type_cache.deinit(gpa);
     var view_data: ModuleViewData = undefined;
-    view_data.lowering_module = @fromBackingInt(0);
     const view = &view_data;
     view.key = .{};
     view.names = &source_names;
     view.types = checked_types.view();
+    // The program seeds this module as its lowering input, as the coordinator does.
+    view.lowering_module = try program.addLoweringModule(view.key);
 
     const pair_ty = try builder.lowerType(view, previous);
     try std.testing.expectEqual(@as(usize, 3), program.types.typeCount());
@@ -71940,7 +71925,6 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     ctx.graph = graph;
     ctx.draft = &draft;
     var view_data: ModuleViewData = undefined;
-    view_data.lowering_module = @fromBackingInt(0);
     const view = &view_data;
     view.names = &source_names;
     view.const_store = &constants;
