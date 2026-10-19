@@ -20502,15 +20502,40 @@ consumed read through it takes those slots from the container, and its
 other uses observe its whole range. Its definition copies only the
 container's representation, which may name slots the container has already
 given away on that path; ARC writes those slots on the definition as the
-view's residual shell, numbered in the view's own layout. A view whose value
-reaches an owned operand reads its whole range there, so any take through it
-is rejected. This is what lets
+view's residual shell, numbered in the view's own layout. This is what lets
 `{ cursor, builder: { nodes, children }, node }` returned from one call
 hand `builder.nodes` to the next append without a retain: the builder is
 read as a view each time the source names it, and each list leaves the dying
 result by a take. A residual release reads a struct field whose slots are
 only partly residual as a view marked with its absent slots and releases the
 residual slots through it.
+
+A view whose value reaches an owned operand is first solved as a take of its
+whole range at its definition. While it is, it holds those slots: reads
+through it, through its aliases, and through views nested in it are reads of
+the view, not of its container, and once the take is committed the view is a
+container in its own right, solved right after the container it was taken
+from, with its own field takes, whole uses, and residual release. Only an
+observation of its slots that does not go through it can reject that take.
+So when the view is lent whole and then a field is moved out of it, the view
+leaves the dying record intact, is lent, and gives up the field by a take of
+its own, and when a field is passed along before the view is moved whole, the
+field is read from the view without a take and the view itself still moves.
+A view whose take is rejected is a borrowed view again, and every read through
+it is solved as a read of its container. The innermost view whose definition
+is a take decides, per emission, where every view nested in it reads its
+slots: in an emission where that take applies, the view holding the slots is
+no view, and a view nested in it reads that view's own container.
+
+Every read of a borrowed binding with an owned demand is solved as a take
+first. A read that the solve does not commit as a take leaves its binding
+borrowed from the container, so the binding and every binding borrowed onward
+from it observe its slots at each later mention, exactly like a read solved
+borrowed. Those mentions can reject other takes, including the take of a view
+that held the read, so the container is solved again with them until every
+read solved as a take is committed. Each round only rejects more reads, so
+this terminates, and a container with no rejected owned-demanded read solves
+once.
 
 An owned same-value binding (`ref.local` solved owned) is bound exactly once
 and holds the unit its definition gave it, whether that definition moved the

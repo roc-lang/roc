@@ -2167,7 +2167,7 @@ const Inserter = struct {
 
         // The absent pieces' stored units, in the shell's own slots.
         const container_unit, const first: u32 = if (shell_view) |view| blk: {
-            const placement = self.dismantles.viewOf(view) orelse arcInvariant("ARC view shell named a local that is no view");
+            const placement = self.viewForEmission(view) orelse arcInvariant("ARC view shell named a local that is no view");
             break :blk .{ self.unitOf(placement.root), placement.base };
         } else .{ self.unitOf(assign.op.source), 0 };
         const container = self.dismantleFor(container_unit) orelse
@@ -2182,7 +2182,7 @@ const Inserter = struct {
     /// The pieces of the container behind `view` that its container no
     /// longer holds on this path and that overlap the view's slots.
     fn viewShellAbsentMask(self: *const Inserter, owned: *const OwnedSet, view: LIR.LocalId) u64 {
-        const placement = self.dismantles.viewOf(view) orelse arcInvariant("ARC view shell query named a local that is no view");
+        const placement = self.viewForEmission(view) orelse arcInvariant("ARC view shell query named a local that is no view");
         const root_unit = self.unitOf(placement.root);
         const container = self.dismantleFor(root_unit) orelse return 0;
         const absent = if (owned.contains(root_unit))
@@ -2567,12 +2567,12 @@ const Inserter = struct {
                 .assign_ref => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
                     const any_views = self.dismantles.views.count() != 0;
-                    if (any_views and assign.op.kind == .field and self.dismantles.viewOf(assign.target) != null and self.isBindingBorrowed(assign.target)) {
+                    if (any_views and assign.op.kind == .field and self.viewForEmission(assign.target) != null and self.isBindingBorrowed(assign.target)) {
                         // A view copies its container's representation,
                         // including slots already given away on this path.
                         step.residual_shell_absent_mask = self.viewShellAbsentMask(&segment.owned, assign.target);
                         step.residual_shell_view = assign.target;
-                    } else if (any_views and assign.op.kind == .local and self.dismantles.viewOf(assign.op.source) != null and self.isBindingBorrowed(assign.op.source) and
+                    } else if (any_views and assign.op.kind == .local and self.viewForEmission(assign.op.source) != null and self.isBindingBorrowed(assign.op.source) and
                         self.store.getLocal(assign.op.source).layout_idx == self.store.getLocal(assign.target).layout_idx)
                     {
                         step.residual_shell_absent_mask = self.viewShellAbsentMask(&segment.owned, assign.op.source);
@@ -7175,6 +7175,18 @@ const Inserter = struct {
             if (self.owned_binding_override.contains(take.root)) return take;
         }
         return null;
+    }
+
+    /// Where a view reads its slots in the current emission: its container's,
+    /// or its holder's once the holder's take applies here, when the holder
+    /// dismantles. A view that is its holder, or that reads a holder which
+    /// does not dismantle, is no view in such an emission.
+    fn viewForEmission(self: *const Inserter, local: LIR.LocalId) ?arc_dismantle.View {
+        const view = self.dismantles.viewOf(local) orelse return null;
+        const holder = view.holder orelse return view;
+        if (!self.owned_binding_override.contains(holder)) return view;
+        if (view.is_holder or self.dismantleFor(holder) == null) return null;
+        return .{ .root = holder, .base = view.base - view.holder_base };
     }
 
     fn fieldRestitutionForEmission(self: *const Inserter, stmt: LIR.CFStmtId, position: usize) ?arc_dismantle.FieldRestitutionArg {

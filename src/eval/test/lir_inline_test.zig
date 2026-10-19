@@ -10900,6 +10900,167 @@ test "field takes split across the arms of a branch" {
 // `Try`, so its record's field reads must take the union's stored units
 // rather than each paying a retain followed by a whole release of the `Try`
 // on every loop iteration.
+/// The field reads of `main` that bind a struct or a tag union, and how many
+/// of each are takes.
+const MainFieldReadTakes = struct {
+    struct_takes: usize = 0,
+    tag_union_reads: usize = 0,
+    tag_union_takes: usize = 0,
+};
+
+fn mainFieldReadTakes(allocator: Allocator, lowered: *const lir.CheckedPipeline.LoweredProgram) TestError!MainFieldReadTakes {
+    const store = &lowered.lir_result.store;
+    const layouts = &lowered.lir_result.layouts;
+    var counts: MainFieldReadTakes = .{};
+    var found_main = false;
+    for (0..store.procSpecCount()) |index| {
+        const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
+        const name = store.procDebugName(proc_id) orelse continue;
+        if (!std.mem.eql(u8, name, "main")) continue;
+        if (store.getProcSpecImmediate(proc_id).body == null) continue;
+        found_main = true;
+        const stmts = try procStmts(allocator, store, proc_id);
+        defer allocator.free(stmts);
+        for (stmts) |stmt_id| {
+            const stmt = store.getCFStmtImmediate(stmt_id);
+            if (stmt.* != .assign_ref or stmt.assign_ref.op.kind != .field) continue;
+            const taken = store.stmtRowOrDefault(stmt.assign_ref.extra).take_kind == .take;
+            const tag = layouts.getLayout(store.getLocal(stmt.assign_ref.target).layout_idx).tag;
+            if (tag == .struct_) counts.struct_takes += @intFromBool(taken);
+            if (tag == .tag_union) {
+                counts.tag_union_reads += 1;
+                counts.tag_union_takes += @intFromBool(taken);
+            }
+        }
+    }
+    if (!found_main) return error.MissingRootProcedure;
+    return counts;
+}
+
+/// A dying record whose `view` field is a record with one refcounted field,
+/// read by functions that take ownership in their mandatory owned variants.
+const dying_view_record_source =
+    \\Tree := [Node(List(Tree)), Leaf(List(Str))]
+    \\
+    \\consume : Tree -> List(Str)
+    \\consume = |tree| match tree {
+    \\    Leaf(items) => items
+    \\    Node(kids) => {
+    \\        var $out = []
+    \\        for kid in kids {
+    \\            $out = $out.concat(consume(kid))
+    \\        }
+    \\        $out
+    \\    }
+    \\}
+    \\
+    \\find : Tree, Str -> Try(Str, [Missing])
+    \\find = |tree, name| match tree {
+    \\    Leaf(items) => items.find_first(|s| s == name).map_err(|_| Missing)
+    \\    Node(kids) => match kids.first() {
+    \\        Ok(kid) => find(kid, name)
+    \\        Err(_) => Err(Missing)
+    \\    }
+    \\}
+    \\
+    \\View : { indexed : Bool, first : Tree }
+    \\
+    \\lookup_first : View, Str -> Try(Str, [Missing])
+    \\lookup_first = |view, name| {
+    \\    if !view.indexed {
+    \\        return Err(Missing)
+    \\    }
+    \\    find(view.first, name)
+    \\}
+    \\
+    \\indexed : Str -> { view : View, cache : Str }
+    \\indexed = |s| {
+    \\    items = ["a${s}", "b${s}"]
+    \\    { view: { indexed: True, first: Node([Leaf(items)]) }, cache: "c${s}" }
+    \\}
+    \\
+;
+
+// https://github.com/roc-lang/roc/issues/12436
+//
+// `view` reaches `lookup_first`'s owned variant after its `first` field was
+// passed to `consume`. The view is taken out of the dying record whole and
+// holds its own slots, so `first` is read from it without a take: the later
+// `lookup_first` call still reads it.
+test "field takes: a view taken whole keeps a field it is read again for" {
+    const allocator = std.testing.allocator;
+    const source = dying_view_record_source ++
+        \\main : Str -> Bool
+        \\main = |s| {
+        \\    view = indexed(s).view
+        \\    a = consume(view.first) == ["a", "b"]
+        \\    b = lookup_first(view, "a") == Ok("a")
+        \\    a and b
+        \\}
+    ;
+
+    var lowered = try lowerModuleWithOptions(allocator, source, .none, .{ .proc_debug_names = true });
+    defer lowered.deinit(allocator);
+
+    const counts = try mainFieldReadTakes(allocator, &lowered.lowered);
+    try std.testing.expectEqual(@as(usize, 1), counts.struct_takes);
+    try std.testing.expectEqual(@as(usize, 1), counts.tag_union_reads);
+    try std.testing.expectEqual(@as(usize, 0), counts.tag_union_takes);
+}
+
+// With the calls in the other order, `view` is taken whole and lent to
+// `lookup_first`, and then `first` is taken out of the view for `consume`.
+test "field takes: a view taken whole gives up a field after its last whole use" {
+    const allocator = std.testing.allocator;
+    const source = dying_view_record_source ++
+        \\main : Str -> Bool
+        \\main = |s| {
+        \\    view = indexed(s).view
+        \\    b = lookup_first(view, "a") == Ok("a")
+        \\    a = consume(view.first) == ["a", "b"]
+        \\    a and b
+        \\}
+    ;
+
+    var lowered = try lowerModuleWithOptions(allocator, source, .none, .{ .proc_debug_names = true });
+    defer lowered.deinit(allocator);
+
+    const counts = try mainFieldReadTakes(allocator, &lowered.lowered);
+    try std.testing.expectEqual(@as(usize, 1), counts.struct_takes);
+    try std.testing.expectEqual(@as(usize, 1), counts.tag_union_reads);
+    try std.testing.expectEqual(@as(usize, 1), counts.tag_union_takes);
+}
+
+// A field read twice: the first read's binding reaches `consume` after the
+// second read did. The first read is no take, so it borrows the record's
+// stored field at that later call, and the second read may not take it.
+test "field takes: a borrowed read used after a second read of its field blocks that read's take" {
+    const allocator = std.testing.allocator;
+    const source = dying_view_record_source ++
+        \\pair : Str -> { a : Tree, b : Str }
+        \\pair = |s| {
+        \\    items = ["a${s}", "b${s}"]
+        \\    { a: Node([Leaf(items)]), b: "c${s}" }
+        \\}
+        \\
+        \\main : Str -> Bool
+        \\main = |s| {
+        \\    r = pair(s)
+        \\    t = r.a
+        \\    x = consume(r.a)
+        \\    y = consume(t)
+        \\    x == y
+        \\}
+    ;
+
+    var lowered = try lowerModuleWithOptions(allocator, source, .none, .{ .proc_debug_names = true });
+    defer lowered.deinit(allocator);
+
+    const counts = try mainFieldReadTakes(allocator, &lowered.lowered);
+    try std.testing.expectEqual(@as(usize, 2), counts.tag_union_reads);
+    try std.testing.expectEqual(@as(usize, 0), counts.tag_union_takes);
+}
+
 test "field takes dismantle a Try whose caller match tag reachability folded" {
     const allocator = std.testing.allocator;
     const source =
