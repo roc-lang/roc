@@ -385,8 +385,14 @@ pub const ConstFn = struct {
 
 /// Named type owner for a stored nominal constant.
 pub const NamedType = struct {
+    /// The checked module that declares the type.
     module: names.CheckedModuleDigest,
+    /// The checked type occurrence the stored type was lowered from, an id in
+    /// the type store of `ty_module`.
     ty: checked_ids.CheckedTypeId,
+    /// The checked module whose type store `ty` indexes, which need not be
+    /// `module` (design.md "Compile-Time Value Reuse Across Edits").
+    ty_module: names.CheckedModuleDigest,
 };
 
 /// Checked function definition referenced by a stored function value.
@@ -892,8 +898,9 @@ pub const ConstTypeStore = struct {
 
     /// Whether the stored type at `root` can move into a later version of the
     /// module whose checked digest is `own` and whose content identity is
-    /// `own_identity`: it names no function, erased or generated type, and no
-    /// named type or field default that module declares (design.md
+    /// `own_identity`: it names no function, erased or generated type, no
+    /// named type or field default that module declares, and no named type
+    /// whose checked occurrence is in that module's type store (design.md
     /// "Compile-Time Value Reuse Across Edits").
     pub fn typePortable(
         self: *const ConstTypeStore,
@@ -926,6 +933,7 @@ pub const ConstTypeStore = struct {
                 .named => |named| {
                     if (named.def.generated != null) return false;
                     if (std.mem.eql(u8, &named.named_type.module.bytes, &own.bytes)) return false;
+                    if (std.mem.eql(u8, &named.named_type.ty_module.bytes, &own.bytes)) return false;
                     if (std.mem.eql(u8, type_names.moduleIdentityBytes(named.def.module), own_identity)) return false;
                     try pending.appendSlice(self.allocator, self.typeSpan(named.args));
                     for (self.declaredFieldSpan(named.declared_order)) |declared| switch (declared) {
@@ -1503,8 +1511,10 @@ pub const ConstStore = struct {
     }
 
     /// Whether the value graph at `root` can move into a later version of the
-    /// module `own` names: it holds no function value and no named type that
-    /// module declares (design.md "Compile-Time Value Reuse Across Edits").
+    /// module `own` names: it holds no function value, no named type that
+    /// module declares, and no named type whose checked occurrence is in that
+    /// module's type store (design.md "Compile-Time Value Reuse Across
+    /// Edits").
     pub fn valuePortable(self: *const ConstStore, root: ConstNodeId, own: names.CheckedModuleDigest) Allocator.Error!bool {
         var seen = collections.DenseMap(ConstNodeId, void).init(self.allocator);
         defer seen.deinit();
@@ -1518,7 +1528,10 @@ pub const ConstStore = struct {
             switch (value) {
                 .pending => constStoreInvariant("a pending node reached a portability walk"),
                 .fn_value => return false,
-                .nominal => |nominal| if (std.mem.eql(u8, &nominal.named_type.module.bytes, &own.bytes)) return false,
+                .nominal => |nominal| {
+                    if (std.mem.eql(u8, &nominal.named_type.module.bytes, &own.bytes)) return false;
+                    if (std.mem.eql(u8, &nominal.named_type.ty_module.bytes, &own.bytes)) return false;
+                },
                 .zst, .scalar, .str, .crash, .checked_error, .box, .list, .tuple, .record, .tag => {},
             }
             try appendValueChildren(value, &pending, self.allocator);
@@ -1852,7 +1865,7 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     const capture_ty = try store.type_store.append(.{ .primitive = .u64 });
     const private_backing_ty = try store.type_store.append(.{ .record = .{} });
     const private_named_ty = try store.type_store.append(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(8)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(8)), .ty_module = .{} },
         .def = .{ .module = @fromBackingInt(@intCast(9)), .type_name = @fromBackingInt(@intCast(10)) },
         .kind = .@"opaque",
         .args = .{},

@@ -16882,7 +16882,7 @@ test "SpecConstr accepts a transparent alias record update base" {
     const module_identity = try program.names.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const type_name = try program.names.internTypeName("RecordAlias");
     const alias_ty = try program.types.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)), .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .alias,
         .args = Type.Span.empty(),
@@ -16918,7 +16918,7 @@ test "SpecConstr compares representations, not checked provenance" {
     const Nominal = struct {
         fn add(p: *Ast.Program, module: names.ModuleIdentityId, name: names.TypeNameId, checked_ty: u32, backing: Type.TypeId) Allocator.Error!Type.TypeId {
             return p.types.add(.{ .named = .{
-                .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(checked_ty)) },
+                .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(checked_ty)), .ty_module = .{} },
                 .def = .{ .module = module, .type_name = name, .source_decl = 7 },
                 .kind = .nominal,
                 .args = Type.Span.empty(),
@@ -18643,14 +18643,14 @@ fn substituteNamedForTest(
     const type_name = try program.names.internTypeName("Nominal");
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const first_ty = try program.types.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(first_checked_ty)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(first_checked_ty)), .ty_module = .{} },
         .def = def,
         .kind = .nominal,
         .args = Type.Span.empty(),
         .backing = .{ .ty = first_backing, .use = .inspectable },
     } });
     const second_ty = try program.types.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(second_checked_ty)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(second_checked_ty)), .ty_module = .{} },
         .def = def,
         .kind = .nominal,
         .args = Type.Span.empty(),

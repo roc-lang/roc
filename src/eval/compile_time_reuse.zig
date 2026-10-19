@@ -9,6 +9,7 @@
 const std = @import("std");
 const base = @import("base");
 const check = @import("check");
+const collections = @import("collections");
 
 const CompileTimeFinalization = @import("compile_time_finalization.zig");
 
@@ -281,17 +282,27 @@ fn installEvaluationRows(module: *checked.CheckedModuleArtifact, previous: *cons
     module.compile_time_debug = stored;
 }
 
+/// The checked modules of a compilation, by checked key: the type stores a
+/// stored named type's checked occurrence (`NamedType.ty_module`) names.
+pub const CheckedModules = struct {
+    context: *anyopaque,
+    find: *const fn (context: *anyopaque, key: [32]u8) ?*const checked.CheckedModuleArtifact,
+};
+
 /// After finalization of a module whose matches stayed pending: compare each
 /// evaluated root with its copy, then install the copy. A root the
 /// compilation did not demand is installed from its copy. A difference means
-/// the value identity missed an input, which is a compiler invariant.
-pub fn verifyAndInstall(module: *checked.CheckedModuleArtifact, previous: *const Previous, transplant: *const Transplant) Allocator.Error!void {
+/// the value identity missed an input, which is a compiler invariant. Every
+/// named type the copy holds must name, through its checked occurrence, the
+/// nominal type it stands for in the compilation's own checked modules.
+pub fn verifyAndInstall(module: *checked.CheckedModuleArtifact, previous: *const Previous, transplant: *const Transplant, modules: CheckedModules) Allocator.Error!void {
     var unevaluated = std.ArrayList(Match).empty;
     defer unevaluated.deinit(transplant.allocator);
     for (transplant.matches.items) |match| {
         const root = module.compile_time_roots.root(match.root);
         const fresh = root.payload;
         const copy = try copyRoot(module, previous, match);
+        try verifyNamedTypeOccurrences(module, previous, modules, copy);
         switch (fresh) {
             .unevaluated => {
                 fillRoot(module, match.root, copy);
@@ -311,6 +322,103 @@ pub fn verifyAndInstall(module: *checked.CheckedModuleArtifact, previous: *const
         if (copy.root_type) |root_type| replaceStoredConst(module, root, copy.payload, root_type);
     }
     try installEvaluationRows(module, previous, transplant, unevaluated.items);
+}
+
+/// Assert that every named type of a copied value graph and stored type
+/// re-enters a checked type store of another module at the nominal type it
+/// names: a copy carries no checked occurrence of the version that stored it.
+fn verifyNamedTypeOccurrences(module: *const checked.CheckedModuleArtifact, previous: *const Previous, modules: CheckedModules, copy: Copy) Allocator.Error!void {
+    const allocator = module.canonical_names.allocator;
+    const store = &module.const_store;
+    switch (copy.payload) {
+        .const_node => |root| {
+            var seen = collections.DenseMap(check.ConstStore.ConstNodeId, void).init(allocator);
+            defer seen.deinit();
+            var pending = std.ArrayList(check.ConstStore.ConstNodeId).empty;
+            defer pending.deinit(allocator);
+            try pending.append(allocator, root);
+            while (pending.pop()) |node| {
+                const entry = try seen.getOrPut(node);
+                if (entry.found_existing) continue;
+                switch (store.get(node)) {
+                    .pending, .fn_value => base.invariant("a transplanted value held a pending node or a function value", .{}),
+                    .zst, .scalar, .str, .crash, .checked_error => {},
+                    .box => |payload| try pending.append(allocator, payload),
+                    .nominal => |nominal| {
+                        verifyNamedTypeOccurrence(module, previous, modules, nominal.named_type, null);
+                        try pending.append(allocator, nominal.backing);
+                    },
+                    .list => |list| switch (list) {
+                        .nodes => |items| try pending.appendSlice(allocator, items),
+                        .packed_bytes, .empty => {},
+                    },
+                    .tuple, .record => |items| try pending.appendSlice(allocator, items),
+                    .tag => |tag| try pending.appendSlice(allocator, tag.payloads),
+                }
+            }
+        },
+        .discarded => {},
+        .pending, .unevaluated, .fn_value, .expect, .runtime => base.invariant("a compile-time root without reusable stored data was transplanted", .{}),
+    }
+    const root_type = copy.root_type orelse return;
+    const types = &store.type_store;
+    var seen = collections.DenseMap(ConstTypeId, void).init(allocator);
+    defer seen.deinit();
+    var pending = std.ArrayList(ConstTypeId).empty;
+    defer pending.deinit(allocator);
+    try pending.append(allocator, root_type);
+    while (pending.pop()) |ty| {
+        const entry = try seen.getOrPut(ty);
+        if (entry.found_existing) continue;
+        switch (types.get(ty)) {
+            .primitive, .zst, .erased => {},
+            .list, .box => |elem| try pending.append(allocator, elem),
+            .tuple => |span| try pending.appendSlice(allocator, types.typeSpan(span)),
+            .func => |func| {
+                try pending.appendSlice(allocator, types.typeSpan(func.args));
+                try pending.append(allocator, func.ret);
+            },
+            .record => |span| for (types.fieldSpan(span)) |field| {
+                try pending.append(allocator, field.ty);
+                if (field.value_ty) |value_ty| try pending.append(allocator, value_ty);
+            },
+            .tag_union => |span| for (types.tagSpan(span)) |tag| try pending.appendSlice(allocator, types.typeSpan(tag.payloads)),
+            .named => |named| {
+                verifyNamedTypeOccurrence(module, previous, modules, named.named_type, named.kind);
+                try pending.appendSlice(allocator, types.typeSpan(named.args));
+                for (types.declaredFieldSpan(named.declared_order)) |declared| switch (declared) {
+                    .named => {},
+                    .padding => |padding| try pending.append(allocator, padding),
+                };
+                if (named.backing) |backing| try pending.append(allocator, backing.ty);
+            },
+        }
+    }
+}
+
+fn verifyNamedTypeOccurrence(
+    module: *const checked.CheckedModuleArtifact,
+    previous: *const Previous,
+    modules: CheckedModules,
+    named_type: check.ConstStore.NamedType,
+    kind: ?check.ConstStore.TypeNamedKind,
+) void {
+    if (std.mem.eql(u8, &named_type.ty_module.bytes, &previous.key.bytes) or std.mem.eql(u8, &named_type.ty_module.bytes, &module.key.bytes)) {
+        base.invariant("a transplanted named type's checked occurrence was in the version of its module that stored it", .{});
+    }
+    const owner = modules.find(modules.context, named_type.ty_module.bytes) orelse
+        base.invariant("a transplanted named type's checked occurrence named a module outside the compilation", .{});
+    const types = owner.checked_types.view();
+    if (@backingInt(named_type.ty) >= types.payloadCount()) {
+        base.invariant("a transplanted named type's checked occurrence was out of range", .{});
+    }
+    switch (types.payload(named_type.ty)) {
+        .nominal => |nominal| if (!std.mem.eql(u8, &nominal.owner_module.bytes, &named_type.module.bytes)) {
+            base.invariant("a transplanted named type's checked occurrence named another module's nominal type", .{});
+        },
+        .alias => if (kind != .alias) base.invariant("a transplanted nominal type's checked occurrence was an alias", .{}),
+        .pending, .err, .flex, .rigid, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => base.invariant("a transplanted named type's checked occurrence was not a named type", .{}),
+    }
 }
 
 fn sameEvaluation(

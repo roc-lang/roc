@@ -2543,13 +2543,20 @@ completed constant or a discarded validation and its value graph and stored
 type contain no function value, no function, erased or generated named type,
 no named type or field default declared in the module itself, and nothing
 else carrying a module-version id. A `runtime` payload (a guarded root whose
-evaluation failed) and an `expect` root are never reused. A named type's
-`named_type.ty` is checked provenance, not value identity: which checked
-occurrence a Monotype type carries already depends on how it was produced
-("SpecConstr compares types ... by the representation digest"), restore takes
-its shape from the requested type, and the only reader that re-enters a
-checked store with it reads the declaring module's, which an edit of this
-module leaves unchanged. Portability therefore follows the declaring module.
+evaluation failed) and an `expect` root are never reused. A named type
+carries the checked occurrence it was lowered from: `named_type.ty`, an id
+in the type store of `named_type.ty_module`, the module whose checked types
+the occurrence came from. That module is the declaring module when the type
+was lowered inside it and the module that used the type otherwise, so
+`ty_module` is explicit and need not be `named_type.module`. Static data
+planning re-enters `ty_module`'s store at `ty`, and the occurrence takes part
+in a Monotype type's full and specialization digests. An occurrence in the
+module's own store names a type of the version that stored it: after an edit
+the same id names another type of the new version, or none. A root holding
+one is therefore not portable. An occurrence in another module's store stays
+valid, because the value identity covers that module's key. Compilers with
+runtime safety check, for every transplanted root, that each named type's
+occurrence re-enters another module's store at the nominal type it names.
 A literal conversion stores no type, so its value is portable when its checked
 type mentions one of the module's own types only where the value holds nothing
 of it (a phantom parameter of an imported nominal); its value identity still

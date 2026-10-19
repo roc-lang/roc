@@ -2994,10 +2994,17 @@ pub const Coordinator = struct {
             runtime_target,
             options,
         );
-        for (transplants.items) |*pending| try eval.CompileTimeReuse.verifyAndInstall(pending.module, &pending.previous, &pending.transplant);
+        const checked_modules: eval.CompileTimeReuse.CheckedModules = .{ .context = self, .find = findCheckedModule };
+        for (transplants.items) |*pending| try eval.CompileTimeReuse.verifyAndInstall(pending.module, &pending.previous, &pending.transplant, checked_modules);
         if (literal_values) |entry| try self.storeProgramLiteralValues(entry, literal_records_before);
         for (entries.items) |entry| try self.commitPreparedModule(entry.pkg, entry.mod);
         try unfinalized.commit();
+    }
+
+    /// The checked module of this compilation whose key is `key`.
+    fn findCheckedModule(context: *anyopaque, key: [32]u8) ?*const CheckedArtifact.CheckedModuleArtifact {
+        const self: *Coordinator = @ptrCast(@alignCast(context));
+        return self.checkedArtifactByKey(.{ .bytes = key });
     }
 
     fn cacheEnabled(self: *const Coordinator) bool {
@@ -7459,8 +7466,15 @@ const ReuseRun = struct {
     values: []?i64,
     /// What each per-program literal root did, with its source owned.
     literals: []eval.LiteralValues.Record,
+    /// The checked occurrence of every named type in each root's stored
+    /// value and type, by name, in walk order.
+    occurrences: [][]NamedOccurrence,
+
+    const NamedOccurrence = struct { ty_module: [32]u8, ty: u32 };
 
     fn deinit(self: *ReuseRun, allocator: Allocator) void {
+        for (self.occurrences) |list| allocator.free(list);
+        allocator.free(self.occurrences);
         for (self.literals) |literal| allocator.free(literal.text);
         allocator.free(self.literals);
         for (self.names) |name| allocator.free(name);
@@ -7484,6 +7498,10 @@ const ReuseRun = struct {
 
     fn value(self: *const ReuseRun, name: []const u8) ?i64 {
         return self.values[self.index(name)];
+    }
+
+    fn namedOccurrences(self: *const ReuseRun, name: []const u8) []const NamedOccurrence {
+        return self.occurrences[self.index(name)];
     }
 
     /// The literal root whose source is `text`.
@@ -7559,6 +7577,11 @@ fn compileForReuseWith(allocator: Allocator, cache_dir: []const u8, app_path: []
     errdefer identities.deinit(allocator);
     var values = std.ArrayList(?i64).empty;
     errdefer values.deinit(allocator);
+    var occurrences = std.ArrayList([]ReuseRun.NamedOccurrence).empty;
+    errdefer {
+        for (occurrences.items) |list| allocator.free(list);
+        occurrences.deinit(allocator);
+    }
     for (app.compile_time_roots.roots) |root| {
         const def = switch (root.source) {
             .def => |def| def,
@@ -7575,6 +7598,7 @@ fn compileForReuseWith(allocator: Allocator, cache_dir: []const u8, app_path: []
             if (node == .scalar and node.scalar == .i64) stored = node.scalar.i64;
         }
         try values.append(allocator, stored);
+        try occurrences.append(allocator, try storedNamedOccurrences(allocator, &coord, app, root));
     }
     var literals = std.ArrayList(eval.LiteralValues.Record).empty;
     errdefer {
@@ -7600,7 +7624,87 @@ fn compileForReuseWith(allocator: Allocator, cache_dir: []const u8, app_path: []
         .identities = try identities.toOwnedSlice(allocator),
         .values = try values.toOwnedSlice(allocator),
         .literals = try literals.toOwnedSlice(allocator),
+        .occurrences = try occurrences.toOwnedSlice(allocator),
     };
+}
+
+/// The checked occurrences of the named types in a root's stored value and
+/// type, each checked to re-enter, in this compilation's checked modules, the
+/// nominal type it stands for.
+fn storedNamedOccurrences(
+    allocator: Allocator,
+    coord: *Coordinator,
+    app: *const CheckedArtifact.CheckedModuleArtifact,
+    root: CheckedArtifact.CompileTimeRoot,
+) (Allocator.Error || error{TestUnexpectedResult})![]ReuseRun.NamedOccurrence {
+    var found = std.ArrayList(ReuseRun.NamedOccurrence).empty;
+    errdefer found.deinit(allocator);
+    var named_types = std.ArrayList(check.ConstStore.NamedType).empty;
+    defer named_types.deinit(allocator);
+    const node = switch (root.payload) {
+        .const_node => |node| node,
+        .pending, .unevaluated, .fn_value, .discarded, .expect, .runtime => return found.toOwnedSlice(allocator),
+    };
+    var nodes = std.ArrayList(check.ConstStore.ConstNodeId).empty;
+    defer nodes.deinit(allocator);
+    try nodes.append(allocator, node);
+    while (nodes.pop()) |current| switch (app.const_store.get(current)) {
+        .nominal => |nominal| {
+            try named_types.append(allocator, nominal.named_type);
+            try nodes.append(allocator, nominal.backing);
+        },
+        .box => |payload| try nodes.append(allocator, payload),
+        .list => |list| switch (list) {
+            .nodes => |items| try nodes.appendSlice(allocator, items),
+            .packed_bytes, .empty => {},
+        },
+        .tuple, .record => |items| try nodes.appendSlice(allocator, items),
+        .tag => |tag| try nodes.appendSlice(allocator, tag.payloads),
+        .pending, .zst, .scalar, .str, .crash, .checked_error, .fn_value => {},
+    };
+    const def = switch (root.source) {
+        .def => |def| def,
+        .expr, .statement, .required_binding, .hoisted => null,
+    };
+    if (def) |def_idx| if (app.top_level_values.lookupByDef(def_idx)) |top| switch (top.value) {
+        .const_ref => |ref| switch (app.const_templates.get(ref).state) {
+            .stored_const => |stored| {
+                var types = std.ArrayList(check.ConstStore.ConstTypeId).empty;
+                defer types.deinit(allocator);
+                var seen = collections.DenseMap(check.ConstStore.ConstTypeId, void).init(allocator);
+                defer seen.deinit();
+                try types.append(allocator, stored.root_type);
+                while (types.pop()) |ty| {
+                    if ((try seen.getOrPut(ty)).found_existing) continue;
+                    const store = &app.const_store.type_store;
+                    switch (store.get(ty)) {
+                        .named => |named| {
+                            try named_types.append(allocator, named.named_type);
+                            try types.appendSlice(allocator, store.typeSpan(named.args));
+                        },
+                        .list, .box => |elem| try types.append(allocator, elem),
+                        .tuple => |span| try types.appendSlice(allocator, store.typeSpan(span)),
+                        .record => |span| for (store.fieldSpan(span)) |field| try types.append(allocator, field.ty),
+                        .tag_union => |span| for (store.tagSpan(span)) |tag| try types.appendSlice(allocator, store.typeSpan(tag.payloads)),
+                        .primitive, .zst, .erased, .func => {},
+                    }
+                }
+            },
+            .reserved, .eval_template, .unimplemented => {},
+        },
+        .procedure_binding => {},
+    };
+    for (named_types.items) |named_type| {
+        const owner = coord.checkedArtifactByKey(.{ .bytes = named_type.ty_module.bytes }) orelse return error.TestUnexpectedResult;
+        const types = owner.checked_types.view();
+        if (@backingInt(named_type.ty) >= types.payloadCount()) return error.TestUnexpectedResult;
+        switch (types.payload(named_type.ty)) {
+            .nominal => |nominal| if (!std.mem.eql(u8, &nominal.owner_module.bytes, &named_type.module.bytes)) return error.TestUnexpectedResult,
+            .pending, .err, .flex, .rigid, .alias, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => return error.TestUnexpectedResult,
+        }
+        try found.append(allocator, .{ .ty_module = named_type.ty_module.bytes, .ty = @backingInt(named_type.ty) });
+    }
+    return found.toOwnedSlice(allocator);
 }
 
 const reuse_platform =
@@ -7742,6 +7846,75 @@ test "an edited module reuses the compile-time values its edit leaves unchanged"
     try std.testing.expectEqualStrings("[dbg] 50\n", partial.stderr);
     try std.testing.expectEqual(@as(?i64, 52), partial.value("answer"));
     try std.testing.expectEqual(@as(?i64, 5), partial.value("wrapped"));
+}
+
+test "a transplanted value carries no checked type occurrence of the version that stored it" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const counter =
+        \\Counter := { n : I64 }.{
+        \\    make : I64 -> Counter
+        \\    make = |n| { n: n }
+        \\    get : Counter -> I64
+        \\    get = |c| c.n
+        \\}
+        \\
+    ;
+    // `built`'s type is lowered from the app's own checked types, `made`'s
+    // from `Counter`'s.
+    const occurrence_app =
+        \\app [answer] { pf: platform "./platform.roc" }
+        \\
+        \\import Counter
+        \\
+        \\built : Counter
+        \\built = { n: 5.I64 }
+        \\made = Counter.make(6.I64)
+        \\answer = built.get() + made.get()
+        \\
+    ;
+    try writeReuseFixture(&tmp, occurrence_app);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Counter.roc", .data = counter });
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+    const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+    defer allocator.free(app);
+
+    var first = try compileForReuse(allocator, cache, app);
+    defer first.deinit(allocator);
+    // A definition ahead of them shifts the app's checked type ids, so an
+    // occurrence the previous version's app types held would name another
+    // type, or none.
+    const shifted = try std.mem.replaceOwned(u8, allocator, occurrence_app, "import Counter\n", "import Counter\n\npad : { a : Str, b : List(U8), d : (I64, Str) }\npad = { a: \"x\", b: [], d: (1, \"y\") }\n");
+    defer allocator.free(shifted);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = shifted });
+    for ([_]bool{ std.debug.runtime_safety, false }, 0..) |verify, index| {
+        const edited = try std.fmt.allocPrint(allocator, "{s}# edit {d}\n", .{ shifted, index });
+        defer allocator.free(edited);
+        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = edited });
+        var warm = try compileForReuseVerifying(allocator, cache, app, verify);
+        defer warm.deinit(allocator);
+        try std.testing.expect(warm.stats.transplanted_roots != 0);
+        const cold_name = try std.fmt.allocPrint(allocator, "cold{d}", .{index});
+        defer allocator.free(cold_name);
+        try tmp.dir.createDirPath(std.testing.io, cold_name);
+        const cold_cache = try tmp.dir.realPathFileAlloc(std.testing.io, cold_name, allocator);
+        defer allocator.free(cold_cache);
+        var cold = try compileForReuse(allocator, cold_cache, app);
+        defer cold.deinit(allocator);
+        for ([_][]const u8{ "built", "made" }) |name| {
+            const expected = cold.namedOccurrences(name);
+            const actual = warm.namedOccurrences(name);
+            try std.testing.expect(expected.len != 0);
+            try std.testing.expectEqual(expected.len, actual.len);
+            for (expected, actual) |e, a| {
+                try std.testing.expectEqualSlices(u8, &e.ty_module, &a.ty_module);
+                try std.testing.expectEqual(e.ty, a.ty);
+            }
+        }
+        try std.testing.expectEqual(cold.value("answer"), warm.value("answer"));
+    }
 }
 
 test "compile-time roots that call a generated method have value identities and are reused" {

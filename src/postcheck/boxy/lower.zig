@@ -43768,6 +43768,7 @@ const ConstPlanBuilder = struct {
                 .named_type = .{
                     .module = moduleDigestFromId(rep.source_type.module),
                     .ty = rep.source_type.ty,
+                    .ty_module = moduleDigestFromId(rep.source_type.module),
                 },
                 .backing = try self.appendLeafPlan(try self.boolTagUnionConstPlan(rep)),
             } },
@@ -43889,6 +43890,7 @@ const ConstPlanBuilder = struct {
                         .named_type = .{
                             .module = moduleDigestFromId(rep.source_type.module),
                             .ty = rep.source_type.ty,
+                            .ty_module = moduleDigestFromId(rep.source_type.module),
                         },
                         .backing = child,
                     } },

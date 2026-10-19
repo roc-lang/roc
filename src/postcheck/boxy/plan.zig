@@ -7250,7 +7250,7 @@ const Builder = struct {
                         boxyPlanInvariant("transparent static nominal node was not unwrapped before traversal");
                     }
                 } else {
-                    const nominal_view = self.moduleForId(.{ .bytes = nominal.named_type.module.bytes });
+                    const nominal_view = self.moduleForId(.{ .bytes = nominal.named_type.ty_module.bytes });
                     const nominal_rep = try self.analyzeType(nominal_view, nominal.named_type.ty);
                     try actions.append(self.allocator, child.at(state, node, nominal_rep, null));
                 }

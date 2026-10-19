@@ -162,8 +162,15 @@ fn iteratorOwnerPair(
 
 /// Named checked type instance.
 pub const NamedType = struct {
+    /// The checked module that declares the type.
     module: names.CheckedModuleDigest,
+    /// The checked type occurrence the type was lowered from, an id in the
+    /// type store of `ty_module`.
     ty: checked.CheckedTypeId,
+    /// The checked module whose type store `ty` indexes: the module whose
+    /// checked types the occurrence was lowered from, which need not be
+    /// `module`.
+    ty_module: names.CheckedModuleDigest,
 };
 
 /// How much of a named type's backing type later stages may inspect.
@@ -3121,7 +3128,10 @@ pub const Store = struct {
                     try sink.writeBytes("site");
                 } else {
                     try sink.writeBytes(&named.named_type.module.bytes);
-                    if (mode == .full or mode == .identity_only) try sink.writeU32(@backingInt(named.named_type.ty));
+                    if (mode == .full or mode == .identity_only) {
+                        try sink.writeU32(@backingInt(named.named_type.ty));
+                        try sink.writeBytes(&named.named_type.ty_module.bytes);
+                    }
                     try sink.writeBytes(name_store.moduleIdentityBytes(named.def.module));
                 }
                 try sinkOptionalU32(sink, named.def.source_decl);
@@ -4470,7 +4480,7 @@ test "monotype type prefix views stay readable while their store grows" {
         },
     });
     const named = try source.internNamed(&name_store, .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(7)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(7)), .ty_module = .{} },
         .def = .{ .module = module, .type_name = type_name },
         .kind = .nominal,
         .args = &.{tag_union},
@@ -4682,7 +4692,7 @@ test "monotype cross-store import preserves named metadata and deduplicates repe
     defer source.deinit();
     const unit = try source.internZst(&source_names);
     const named = try source.internNamed(&source_names, .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)), .ty_module = .{} },
         .def = .{
             .module = module,
             .type_name = type_name,
@@ -4919,7 +4929,7 @@ test "monotype cross-store import is atomic under allocation failure" {
         .payloads = try source.addSpan(&.{ record, unit }),
     }}) });
     const named = try source.internNamed(&source_names, .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)), .ty_module = .{} },
         .def = .{ .module = module, .type_name = type_name },
         .kind = .nominal,
         .args = &.{recursive},
@@ -5334,7 +5344,7 @@ test "monotype type store recursive transaction preserves captured side-pool row
         .{ .name = more_tag, .checked_name = more_tag, .payloads = try store.addSpan(&.{ named, unit }) },
     }) });
     transaction.fill(&store, named, .{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)), .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = try store.addSpan(&.{unit}),
@@ -5382,7 +5392,7 @@ test "monotype type store recursive transaction preserves captured side-pool row
         .{ .name = more_tag, .checked_name = more_tag, .payloads = try store.addSpan(&.{ second_named, unit }) },
     }) });
     second.fill(&store, second_named, .{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)), .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = try store.addSpan(&.{unit}),
@@ -5532,19 +5542,19 @@ test "monotype type store acyclic interning keeps distinct backing-less aliases"
     defer store.deinit();
 
     const first = try store.internNamed(&name_store, .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)), .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = first_name },
         .kind = .alias,
         .backing = null,
     });
     const second = try store.internNamed(&name_store, .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)), .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = second_name },
         .kind = .alias,
         .backing = null,
     });
     const repeat_first = try store.internNamed(&name_store, .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)), .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = first_name },
         .kind = .alias,
         .backing = null,
@@ -5575,13 +5585,13 @@ test "monotype named type digest includes generic arguments" {
     const checked_ty: checked.CheckedTypeId = @fromBackingInt(@intCast(1));
 
     const named_i64 = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .named_type = .{ .module = .{}, .ty = checked_ty, .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = i64_args,
     } });
     const named_str = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .named_type = .{ .module = .{}, .ty = checked_ty, .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = str_args,
@@ -5611,7 +5621,7 @@ test "monotype cached digest visits nested parameterized nominals once" {
     for (&ladder) |*ty| {
         const args = try store.addSpan(&.{nested});
         nested = try store.add(.{ .named = .{
-            .named_type = .{ .module = .{}, .ty = checked_ty },
+            .named_type = .{ .module = .{}, .ty = checked_ty, .ty_module = .{} },
             .def = .{ .module = module_identity, .type_name = type_name },
             .kind = .nominal,
             .args = args,
@@ -5672,7 +5682,7 @@ test "monotype recursive nominal digest ignores how deep the knot is tied" {
                 .payloads = try ctx.store.addSpan(&.{list_ty}),
             }}) });
             return .{ .named = .{
-                .named_type = .{ .module = .{}, .ty = ctx.checked_ty },
+                .named_type = .{ .module = .{}, .ty = ctx.checked_ty, .ty_module = .{} },
                 .def = .{ .module = ctx.module_identity, .type_name = ctx.type_name },
                 .kind = .nominal,
                 .args = try ctx.store.addSpan(&.{ctx.arg}),
@@ -5729,7 +5739,7 @@ test "monotype recursive nominal digest still separates different arguments" {
         .payloads = try store.addSpan(&.{u64_ty}),
     }}) });
     const inner = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .named_type = .{ .module = .{}, .ty = checked_ty, .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = inner_args,
@@ -5743,7 +5753,7 @@ test "monotype recursive nominal digest still separates different arguments" {
         .payloads = try store.addSpan(&.{inner}),
     }}) });
     const outer = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .named_type = .{ .module = .{}, .ty = checked_ty, .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = outer_args,
@@ -5952,7 +5962,7 @@ test "monotype iterator containment cache is invalidated by rollback" {
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const type_name = try name_store.internTypeName("Iter");
     const replacement = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)), .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .builtin_owner = .iter,
@@ -6034,14 +6044,14 @@ test "monotype digest keeps aliases opaque" {
 
     const str = try store.add(.{ .primitive = .str });
     const aliased = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .named_type = .{ .module = .{}, .ty = checked_ty, .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .alias,
         .args = Span.empty(),
         .backing = .{ .ty = str, .use = .inspectable },
     } });
     const nominal = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .named_type = .{ .module = .{}, .ty = checked_ty, .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = Span.empty(),
@@ -6057,7 +6067,7 @@ test "monotype digest keeps aliases opaque" {
 
     // Alias-over-nominal is likewise distinct from the nominal it wraps.
     const alias_over_nominal = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .named_type = .{ .module = .{}, .ty = checked_ty, .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .alias,
         .args = Span.empty(),
@@ -6087,14 +6097,14 @@ test "monotype type equality treats aliases as their backing" {
 
     const str = try store.add(.{ .primitive = .str });
     const aliased = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .named_type = .{ .module = .{}, .ty = checked_ty, .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .alias,
         .args = Span.empty(),
         .backing = .{ .ty = str, .use = .inspectable },
     } });
     const nominal = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .named_type = .{ .module = .{}, .ty = checked_ty, .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = Span.empty(),
@@ -6119,14 +6129,14 @@ test "monotype type equality and digests separate aliases without backing" {
     const second_name = try name_store.internTypeName("Second");
 
     const first = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)), .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = first_name },
         .kind = .alias,
         .args = Span.empty(),
         .backing = null,
     } });
     const second = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)), .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = second_name },
         .kind = .alias,
         .args = Span.empty(),
@@ -6153,14 +6163,14 @@ test "monotype named type digest includes backing" {
     const str_ty = try store.add(.{ .primitive = .str });
 
     const named_i64 = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .named_type = .{ .module = .{}, .ty = checked_ty, .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = Span.empty(),
         .backing = .{ .ty = i64_ty, .use = .inspectable },
     } });
     const named_str = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .named_type = .{ .module = .{}, .ty = checked_ty, .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = Span.empty(),
@@ -6190,14 +6200,14 @@ test "monotype specialization identity includes generated backing without builti
     const str_ty = try store.add(.{ .primitive = .str });
 
     const evidence_i64 = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .named_type = .{ .module = .{}, .ty = checked_ty, .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .@"opaque",
         .args = Span.empty(),
         .backing = .{ .ty = i64_ty, .use = .runtime_layout_only, .authority = .generated_private },
     } });
     const evidence_str = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .named_type = .{ .module = .{}, .ty = checked_ty, .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .@"opaque",
         .args = Span.empty(),
@@ -6221,7 +6231,7 @@ test "monotype named backing authority participates in durable identity" {
     const type_name = try name_store.internTypeName("UnownedEvidence");
     const backing = try store.add(.{ .record = Span.empty() });
     const base = NamedContent{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)), .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .@"opaque",
         .args = Span.empty(),
@@ -6254,28 +6264,28 @@ test "monotype named type digest includes nested named backing" {
     const str_ty = try store.add(.{ .primitive = .str });
 
     const inner_i64 = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = inner_checked_ty },
+        .named_type = .{ .module = .{}, .ty = inner_checked_ty, .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = inner_type_name },
         .kind = .nominal,
         .args = Span.empty(),
         .backing = .{ .ty = i64_ty, .use = .inspectable },
     } });
     const inner_str = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = inner_checked_ty },
+        .named_type = .{ .module = .{}, .ty = inner_checked_ty, .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = inner_type_name },
         .kind = .nominal,
         .args = Span.empty(),
         .backing = .{ .ty = str_ty, .use = .inspectable },
     } });
     const outer_i64 = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = outer_checked_ty },
+        .named_type = .{ .module = .{}, .ty = outer_checked_ty, .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = outer_type_name },
         .kind = .nominal,
         .args = Span.empty(),
         .backing = .{ .ty = inner_i64, .use = .inspectable },
     } });
     const outer_str = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = outer_checked_ty },
+        .named_type = .{ .module = .{}, .ty = outer_checked_ty, .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = outer_type_name },
         .kind = .nominal,
         .args = Span.empty(),
@@ -6315,7 +6325,7 @@ test "monotype named type digest includes declared field order" {
     });
 
     const named_ab = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .named_type = .{ .module = .{}, .ty = checked_ty, .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = Span.empty(),
@@ -6323,7 +6333,7 @@ test "monotype named type digest includes declared field order" {
         .declared_order = order_ab,
     } });
     const named_ba = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .named_type = .{ .module = .{}, .ty = checked_ty, .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = Span.empty(),
@@ -6636,14 +6646,14 @@ test "monotype equality digest caches alias queries without rehashing their back
     const name = try name_store.internTypeName("Text");
     const str = try store.add(.{ .primitive = .str });
     const first = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)), .ty_module = .{} },
         .def = .{ .module = module, .type_name = name },
         .kind = .alias,
         .args = Span.empty(),
         .backing = .{ .ty = str, .use = .inspectable },
     } });
     const second = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)), .ty_module = .{} },
         .def = .{ .module = module, .type_name = name },
         .kind = .alias,
         .args = Span.empty(),
@@ -6676,13 +6686,13 @@ test "monotype digest separates named types by checked type id" {
     const type_name = try name_store.internTypeName("Reentrant");
 
     const first = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)), .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = Span.empty(),
     } });
     const second = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)), .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = Span.empty(),
@@ -6762,14 +6772,14 @@ test "monotype named type digest includes padding backing" {
     const order_str = try store.addDeclaredFields(&.{.{ .padding = str_ty }});
 
     const named_i64 = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .named_type = .{ .module = .{}, .ty = checked_ty, .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = Span.empty(),
         .declared_order = order_i64,
     } });
     const named_str = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .named_type = .{ .module = .{}, .ty = checked_ty, .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = Span.empty(),
@@ -6817,7 +6827,7 @@ test "monotype read sharing borrows prepared recursive and alias queries without
     const recursive = try store.reserveSlot();
     store.fillReservedSlot(recursive, .{ .list = recursive });
     const alias = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(17)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(17)), .ty_module = .{} },
         .def = .{ .module = module, .type_name = type_name },
         .kind = .alias,
         .args = Span.empty(),
@@ -6884,7 +6894,7 @@ test "monotype read sharing explicit queries leave omitted caches cold and inval
     const module = try name_store.internModuleIdentity(&(@as([32]u8, @splat(42))));
     const type_name = try name_store.internTypeName("Alias");
     const alias = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(17)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(17)), .ty_module = .{} },
         .def = .{ .module = module, .type_name = type_name },
         .kind = .alias,
         .args = Span.empty(),
@@ -7078,17 +7088,18 @@ test "monotype digest byte fixtures preserve scalar and recursive encodings" {
     const list = try store.add(.{ .list = tree });
     const record = try store.add(.{ .record = try store.addFields(&.{.{ .name = field, .ty = list, .default = null }}) });
     store.fillReservedSlot(tree, .{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(17)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(17)), .ty_module = .{} },
         .def = .{ .module = module, .type_name = type_name },
         .kind = .nominal,
         .args = try store.addSpan(&.{scalar}),
         .backing = .{ .ty = record, .use = .inspectable },
     } });
     const function = try store.add(.{ .func = .{ .args = try store.addSpan(&.{ tree, scalar, list }), .ret = record } });
-    // Digests captured on main after the v3 format change, before scalar-byte reuse.
+    // Digests of the current encoding, which names a named type's checked
+    // occurrence by its id and the module whose type store the id indexes.
     const expected = [_][]const u8{
-        "1df6f2a1d02b6dfbe99e3aa18c8d0cc4084570de26f69072ec8bf1c621dc948c",
-        "8732a616baee8db689c7952a5f23672cd0c1316d16c2a7f6e5a0f0803682dbdb",
+        "0eeb10ebb7da5f2248b61d80cfb52c2d93417bc692c528deb12cfaf96c6896d1",
+        "285944b1cda1306ad6ab6a86397a97c6f0b24ece8365c3c2cf11fa961a9ff5d1",
         "51999cf46a730a706829bbdcb8d7dfab9c4457ddf5d8ea11d297e896f4a3cafb",
     };
     for ([_]Store.NamedDigestMode{ .full, .identity_only, .equality }, expected) |mode, hex| {
