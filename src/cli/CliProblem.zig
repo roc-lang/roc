@@ -1433,11 +1433,16 @@ test "invalid_flag_value names the one other value of a two-value flag" {
         .{ .name = "yes", .description = "lambda-set specialization (default)" },
         .{ .name = "no", .description = "experimental boxy lowering" },
     };
-    const rendered = try renderPlainForTest(.{ .invalid_arguments = .{ .invalid_flag_value = .{
-        .flag = "--specialize",
-        .value = "yse",
-        .expected = .{ .choices = &choices },
-    } } });
+    const rendered = try renderPlainForTest(.{
+        .invalid_arguments = .{
+            .invalid_flag_value = .{
+                .flag = "--specialize",
+                // spellchecker:ignore-next-line
+                .value = "yse",
+                .expected = .{ .choices = &choices },
+            },
+        },
+    });
     defer std.testing.allocator.free(rendered);
     try std.testing.expect(std.mem.find(u8, rendered, "Did you mean `yes`?\n\nThe other valid value is no.\n") != null);
 }

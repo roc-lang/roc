@@ -57,6 +57,7 @@ test "editDistance counts edits and adjacent swaps" {
     try std.testing.expectEqual(@as(usize, 0), try editDistance(gpa, "speed", "speed"));
     try std.testing.expectEqual(@as(usize, 1), try editDistance(gpa, "sped", "speed"));
     try std.testing.expectEqual(@as(usize, 1), try editDistance(gpa, "seped", "speed"));
+    // spellchecker:ignore-next-line
     try std.testing.expectEqual(@as(usize, 1), try editDistance(gpa, "spead", "speed"));
     try std.testing.expectEqual(@as(usize, 3), try editDistance(gpa, "", "dev"));
     try std.testing.expectEqual(@as(usize, 3), try editDistance(gpa, "dev", ""));
@@ -66,6 +67,7 @@ test "closestCandidate suggests only likely misspellings" {
     const gpa = std.testing.allocator;
     const levels = [_][]const u8{ "dev", "interpreter", "speed", "size" };
     try std.testing.expectEqual(@as(?usize, 2), try closestCandidate(gpa, "sped", &levels));
+    // spellchecker:ignore-next-line
     try std.testing.expectEqual(@as(?usize, 1), try closestCandidate(gpa, "interpeter", &levels));
     try std.testing.expectEqual(@as(?usize, null), try closestCandidate(gpa, "less_nice", &levels));
     try std.testing.expectEqual(@as(?usize, null), try closestCandidate(gpa, "x", &levels));
