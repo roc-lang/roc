@@ -40,17 +40,16 @@ test {
     try std.testing.expectEqual(24, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
     try std.testing.expectEqual(20, @sizeOf(NominalType)); // Increased from 16 due to source identity and opacity bits
-    // Folding `binop_negated` and `num_literal` into the `origin` union is a
-    // semantic regrouping (kind-specific payloads now live inside their variant),
-    // not a size win: the literal-origin variant still embeds a full `NumeralInfo`,
-    // so the `Origin` union dominates the struct. Provenance adds one raw expr
-    // index (4B); expect effects live in checker-owned slots because they belong
-    // to call occurrences, not copied type constraints. The optional derived-map
+    // A numeric literal's facts live in the type store's `numeral_infos`, so
+    // the constraint holds one row index rather than a full `NumeralInfo`, and
+    // `origin` holds only kind flags. Provenance adds one raw expr index (4B);
+    // expect effects live in checker-owned slots because they belong to call
+    // occurrences, not copied type constraints. The optional derived-map
     // payload selection adds its tag, payload index, and optional discriminant
     // without affecting type identity. Interpolation metadata records whose
     // source its regions point into, so reports never render another module's
     // positions against this module's source.
-    try std.testing.expectEqual(92, @sizeOf(StaticDispatchConstraint));
+    try std.testing.expectEqual(56, @sizeOf(StaticDispatchConstraint));
     // Directed effect dependencies must survive type generalization,
     // instantiation, and cross-module copying, so they live with the function
     // payload rather than in checker-only side state.
@@ -1059,6 +1058,27 @@ pub const NumeralInfo = struct {
         return sum[0];
     }
 
+    /// A type store's numeral facts, one row per numeric literal (and per
+    /// merge of two literals' facts).
+    pub const SafeList = MkSafeList(NumeralInfo);
+
+    /// A row of a type store's `numeral_infos`, or none. A constraint carries
+    /// one exactly when its origin is a numeric literal conversion.
+    pub const OptIdx = enum(u32) {
+        none = std.math.maxInt(u32),
+        _,
+
+        pub fn from(idx: SafeList.Idx) OptIdx {
+            std.debug.assert(@backingInt(idx) != std.math.maxInt(u32));
+            return @fromBackingInt(@backingInt(idx));
+        }
+
+        /// The row, or null when absent.
+        pub fn get(self: OptIdx) ?SafeList.Idx {
+            return if (self == .none) null else @fromBackingInt(@backingInt(self));
+        }
+    };
+
     /// Test-only convenience: facts for an integer literal given as a value,
     /// for unit tests that need a numeral constraint without parsing source.
     pub fn testOnlyInt(value: u128, is_negative: bool, region: base.Region) NumeralInfo {
@@ -1102,9 +1122,14 @@ pub const StaticDispatchConstraint = struct {
     /// the dispatch fn var, a function
     fn_var: Var,
     /// the origin of this constraint (operator, method call, where clause, or
-    /// literal). Kind-specific payloads (binop negation, literal info) live
+    /// literal). Kind-specific flags (binop negation, literal kind) live
     /// *inside* the variant, so they can't exist without or apart from it.
     origin: Origin,
+    /// A numeric literal conversion's facts in the owning type store's
+    /// `numeral_infos`; present exactly when `origin` is the `numeral`
+    /// literal kind. Like the interpolation part range, it is relative to the
+    /// owning store, so a copy into another store copies the facts too.
+    numeral: NumeralInfo.OptIdx = .none,
     /// Where this constraint was introduced, so ambiguity can be reported at the
     /// user's own expression without reconstructing var->expr maps after the
     /// fact. Copied verbatim by instantiation and cross-module import. This is
@@ -1213,18 +1238,6 @@ pub const StaticDispatchConstraint = struct {
         interpolation, // interpolated string literal, dispatches `from_interpolation`
     };
 
-    /// The per-kind payload carried by a literal-conversion origin. The payload can't
-    /// exist without its kind, nor a literal-origin without its payload.
-    pub const LiteralInfo = union(LiteralKind) {
-        numeral: NumeralInfo,
-        /// No payload here; a string literal's bytes live in the dispatch plan,
-        /// not the type store.
-        quote,
-        /// Interpolated string literals carry no payload here either; like
-        /// quotes they default to Str.
-        interpolation,
-    };
-
     /// Tracks where a static dispatch constraint originated from
     pub const Origin = union(enum) {
         /// From binary operator desugaring (e.g., +, -, *). `negated` is true when
@@ -1244,20 +1257,11 @@ pub const StaticDispatchConstraint = struct {
         /// scheme's body is not otherwise visible—module-local provenance like
         /// `intro_expr` cannot substitute for it.
         where_clause: struct { body_required: bool = false },
-        from_literal: LiteralInfo, // From a literal conversion (from_numeral, from_quote, or from_interpolation)
-
-        /// The numeral payload, if this origin is a numeric literal conversion;
-        /// null otherwise.
-        pub fn numeralInfo(self: Origin) ?NumeralInfo {
-            return switch (self) {
-                .from_literal => |lit| switch (lit) {
-                    .numeral => |info| info,
-                    .quote => null,
-                    .interpolation => null,
-                },
-                .desugared_binop, .desugared_unaryop, .method_call, .where_clause => null,
-            };
-        }
+        /// From a literal conversion (from_numeral, from_quote, or
+        /// from_interpolation). A numeral's facts are the constraint's
+        /// `numeral`; a string literal's bytes live in the dispatch plan, not
+        /// the type store.
+        from_literal: LiteralKind,
 
         /// The literal kind, if this origin is a literal conversion; null otherwise.
         pub fn literalKind(self: Origin) ?LiteralKind {

@@ -2950,7 +2950,7 @@ const StaticDispatchConstraintIndex = struct {
             const entry = try index.by_fn_var.getOrPut(allocator, constraint.fn_var);
             if (entry.found_existing) {
                 const existing = index.constraints[entry.value_ptr.*];
-                if (staticDispatchConstraintsEquivalent(existing, constraint)) continue;
+                if (staticDispatchConstraintsEquivalent(store, existing, constraint)) continue;
                 if (@import("builtin").mode == .debug) {
                     base.invariant(
                         "checked static dispatch constraint invariant violated: duplicate fn_var {d}; existing idx={d} name={s} origin={s} negated={} new idx={d} name={s} origin={s} negated={}",
@@ -2986,12 +2986,13 @@ const StaticDispatchConstraintIndex = struct {
     }
 };
 
-fn staticDispatchConstraintsEquivalent(a: types.StaticDispatchConstraint, b: types.StaticDispatchConstraint) bool {
-    // origin now carries the binop-negation and literal payloads, so structural
-    // equality of origin subsumes the former separate field comparisons.
+fn staticDispatchConstraintsEquivalent(store: *const types.Store, a: types.StaticDispatchConstraint, b: types.StaticDispatchConstraint) bool {
+    // origin carries the binop-negation and literal-kind flags; a numeral's
+    // facts are compared by content, wherever each constraint's row is.
     return a.fn_name == b.fn_name and
         a.fn_var == b.fn_var and
-        std.meta.eql(a.origin, b.origin);
+        std.meta.eql(a.origin, b.origin) and
+        std.meta.eql(store.constraintNumeralInfo(a), store.constraintNumeralInfo(b));
 }
 
 fn staticDispatchResultModeForCheckedValueCall(

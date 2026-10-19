@@ -11343,7 +11343,8 @@ fn mkFlexWithFromNumeralConstraint(
     const constraint = types_mod.StaticDispatchConstraint{
         .fn_name = from_numeral_ident,
         .fn_var = fn_var,
-        .origin = .{ .from_literal = .{ .numeral = num_literal_info } },
+        .origin = .{ .from_literal = .numeral },
+        .numeral = try self.types.appendNumeralInfo(num_literal_info),
     };
     if (source_node != null) {
         try self.recordCurrentExpectDispatchWatcher(fn_var);
@@ -34107,11 +34108,12 @@ fn copyImportedBindingSchemeCodecRequirements(
     for (source_requirements) |source_requirement| {
         const source_constraint = source_env.types.getStaticDispatchConstraintAt(source_requirement.constraint_index);
 
-        // Generated codec requirements cannot carry either metadata shape;
-        // both belong to other method families and would require their own
+        // Generated codec requirements cannot carry any metadata shape; each
+        // belongs to another method family and would require its own
         // source-node/value-pool rebasing rules at this boundary.
         std.debug.assert(source_constraint.derived_map_plan == null);
         std.debug.assert(!source_constraint.interpolation.isPresent());
+        std.debug.assert(source_constraint.numeral == .none);
 
         const receiver_var = try copy_import.copyVar(
             &source_env.types,
@@ -37875,7 +37877,7 @@ fn instanceRequirementsAccept(
                 const accepted = switch (constraint.origin) {
                     .from_literal => |literal| switch (literal) {
                         .numeral => if (self.builtinNumKindFromNominalType(nominal)) |kind|
-                            literalInfoAcceptsBuiltinNumKind(literal, kind)
+                            self.literalAcceptsBuiltinNumKind(constraint, literal, kind)
                         else
                             try self.staticDispatchConstraintAcceptsCandidate(probe, constraint, requirement.var_, env),
                         .quote, .interpolation => if (self.isBuiltinStrNominal(nominal))
@@ -38223,7 +38225,7 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
                 member_count += 1;
                 const member_range = self.types.resolveVar(member_root).desc.content.flex.constraints;
                 for (self.types.sliceStaticDispatchConstraints(member_range)) |constraint| {
-                    if (constraint.origin.numeralInfo()) |info| {
+                    if (self.types.constraintNumeralInfo(constraint)) |info| {
                         component_fits = component_fits.intersectWith(info.fits);
                     }
                 }
@@ -40443,7 +40445,7 @@ fn literalSourceRegion(self: *Self, var_: Var) ?Region {
     const resolved = self.types.resolveVar(var_);
     if (resolved.desc.content != .flex) return null;
     for (self.types.sliceStaticDispatchConstraints(resolved.desc.content.flex.constraints)) |constraint| {
-        if (constraint.origin.numeralInfo()) |info| return info.region;
+        if (self.types.constraintNumeralInfo(constraint)) |info| return info.region;
     }
     return null;
 }
@@ -40791,7 +40793,7 @@ fn reportUndeterminedType(
         const shared_subject: problem.UndeterminedType.Subject, const literal_region: Region = switch (kind) {
             .numeral => .{
                 .number_literal_shared_with_string,
-                if (constraint.origin.numeralInfo()) |info|
+                if (self.types.constraintNumeralInfo(constraint)) |info|
                     info.region
                 else
                     self.undeterminedTypeUseRegion(dispatcher_var, constraint, owner_expr),
@@ -41122,7 +41124,7 @@ fn rangeHasNonLiteralConstraint(self: *Self, range: StaticDispatchConstraint.Saf
 ///
 /// Two refutation facts, per non-literal constraint (the literal-conversion
 /// ones are pre-filtered by digit-fit inside `tryCommitNumeralCandidate` via
-/// `literalInfoAcceptsBuiltinNumKind`):
+/// `literalAcceptsBuiltinNumKind`):
 ///
 /// 1. Method lookup miss: the candidate's owner env has no method for the
 ///    constraint's `fn_name`. The probe performs the IDENTICAL lookup
@@ -41270,11 +41272,12 @@ fn tryCommitNumeralCandidate(
 }
 
 /// Whether the concrete builtin numeric candidate of `num_kind` can represent
-/// the literal payload `lit`. The numeral arm validates the digits fit;
-/// future kinds fill in their own arm (compiler-enforced).
-fn literalInfoAcceptsBuiltinNumKind(lit: StaticDispatchConstraint.LiteralInfo, num_kind: CIR.NumKind) bool {
+/// the literal of `constraint`, a literal conversion of kind `lit`. The
+/// numeral arm validates the digits fit; future kinds fill in their own arm
+/// (compiler-enforced).
+fn literalAcceptsBuiltinNumKind(self: *const Self, constraint: StaticDispatchConstraint, lit: StaticDispatchConstraint.LiteralKind, num_kind: CIR.NumKind) bool {
     return switch (lit) {
-        .numeral => |info| validateBuiltinFromNumeralLiteral(num_kind, info) == null,
+        .numeral => validateBuiltinFromNumeralLiteral(num_kind, self.types.constraintNumeralInfo(constraint).?) == null,
         // A string or interpolation literal can never be represented by a builtin
         // numeric type; its sole candidate (Str) is not a builtin num kind.
         .quote, .interpolation => false,
@@ -41354,7 +41357,7 @@ fn rangeNumeralDigitsFit(
     for (self.types.sliceStaticDispatchConstraints(range)) |constraint| {
         switch (constraint.origin) {
             .from_literal => |lit| {
-                if (!literalInfoAcceptsBuiltinNumKind(lit, candidate_kind)) return false;
+                if (!self.literalAcceptsBuiltinNumKind(constraint, lit, candidate_kind)) return false;
             },
             .desugared_binop, .desugared_unaryop, .method_call, .where_clause => {},
         }
@@ -48289,6 +48292,7 @@ fn mkDerivedComponentConstraint(
         .fn_name = method_name,
         .fn_var = constraint_fn_var,
         .origin = parent_constraint.origin,
+        .numeral = parent_constraint.numeral,
         .provenance = parent_constraint.provenance,
     };
     try self.recordCurrentExpectDispatchWatcher(constraint_fn_var);
@@ -49552,7 +49556,7 @@ fn reportInvalidBuiltinFromNumeralLiteral(
     num_kind: CIR.NumKind,
     _: *Env,
 ) Allocator.Error!bool {
-    const num_literal = constraint.origin.numeralInfo() orelse return false;
+    const num_literal = self.types.constraintNumeralInfo(constraint) orelse return false;
     if (validateBuiltinFromNumeralLiteral(num_kind, num_literal) == null) return false;
 
     // Constraint merging retains aggregate fit facts, while this occurrence
@@ -49576,7 +49580,7 @@ fn firstRejectedOpenNumeral(
     var first_rejected: ?OpenNumeralLiteral = null;
     for (self.open_numeral_literals.items) |entry| {
         if (self.types.resolveVar(entry.var_).var_ != dispatcher_root) continue;
-        const info = entry.constraint.origin.numeralInfo() orelse continue;
+        const info = self.types.constraintNumeralInfo(entry.constraint) orelse continue;
         if (validateBuiltinFromNumeralLiteral(num_kind, info) != null) {
             // Raw constraint fn vars retain occurrence identity even when
             // unification puts several callables in one rejected class.
@@ -49624,7 +49628,7 @@ fn rejectInvalidBuiltinNumeralOccurrence(
     constraint: StaticDispatchConstraint,
     num_kind: CIR.NumKind,
 ) Allocator.Error!bool {
-    const num_literal = constraint.origin.numeralInfo() orelse return false;
+    const num_literal = self.types.constraintNumeralInfo(constraint) orelse return false;
     if (validateBuiltinFromNumeralLiteral(num_kind, num_literal) == null) return false;
     const failure_expr = constraintIntroExpr(constraint) orelse self.constraintSourceExpr(dispatcher_var, constraint);
     if (self.staticDispatchConstraintIsInactive(constraint)) {
@@ -49647,7 +49651,7 @@ fn reportUnmaterializableNumeralLiteral(
     constraint: StaticDispatchConstraint,
     _: *Env,
 ) Allocator.Error!bool {
-    const num_literal = constraint.origin.numeralInfo() orelse return false;
+    const num_literal = self.types.constraintNumeralInfo(constraint) orelse return false;
     if (num_literal.can_materialize_numeral) return false;
     const failure_expr = constraintIntroExpr(constraint) orelse self.constraintSourceExpr(dispatcher_var, constraint);
     if (self.staticDispatchConstraintIsInactive(constraint)) {
@@ -56015,7 +56019,7 @@ fn reportConstraintErrorAt(
                     .method_name = constraint.fn_name,
                     .origin = constraint.origin,
                     .owner_region = owner_region,
-                    .num_literal = constraint.origin.numeralInfo(),
+                    .num_literal = self.types.constraintNumeralInfo(constraint),
                     .quote_region = self.quoteLiteralRegionForDispatcher(constraint, dispatcher_var),
                     .str_conversion = if (constraint.origin.literalKind() == .numeral)
                         try self.numeralDispatcherStrConversion(dispatcher_var)

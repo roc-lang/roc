@@ -2454,13 +2454,16 @@ pub const CheckedStaticDispatchConstraint = struct {
     fn_name: canonical.MethodNameId,
     fn_ty: CheckedTypeId,
     origin: types.StaticDispatchConstraint.Origin,
+    /// A numeric literal conversion's facts; present exactly when `origin` is
+    /// the `numeral` literal kind.
+    numeral: ?types.NumeralInfo = null,
 
     pub fn binopNegated(self: @This()) bool {
         return self.origin.binopNegated();
     }
 
     pub fn numeralInfo(self: @This()) ?types.NumeralInfo {
-        return self.origin.numeralInfo();
+        return self.numeral;
     }
 };
 
@@ -3801,7 +3804,8 @@ fn checkedTypeVariableAlphaStep(
     }
     for (left.constraints, right.constraints) |left_constraint, right_constraint| {
         if (left_constraint.fn_name != right_constraint.fn_name or
-            !std.meta.eql(left_constraint.origin, right_constraint.origin))
+            !std.meta.eql(left_constraint.origin, right_constraint.origin) or
+            !std.meta.eql(left_constraint.numeral, right_constraint.numeral))
         {
             return false;
         }
@@ -5519,6 +5523,7 @@ fn cloneCheckedTypeBuildVariable(
                 .fn_name = constraint.fn_name,
                 .fn_ty = cloned.typeId(),
                 .origin = constraint.origin,
+                .numeral = constraint.numeral,
             };
         }
         break :blk out;
@@ -8755,6 +8760,7 @@ const CheckedTypePublisher = struct {
                 .fn_name = try self.names.internMethodIdent(module.identStoreConst(), constraint.fn_name),
                 .fn_ty = undefined,
                 .origin = constraint.origin,
+                .numeral = module.typeStoreConst().constraintNumeralInfo(constraint),
             };
             return rootStep(constraint.fn_var, null);
         }
@@ -35857,6 +35863,7 @@ const CheckedTypeStoreImportProjector = struct {
                     .fn_name = @fromBackingInt(@intCast(results.take())),
                     .fn_ty = results.typeId(),
                     .origin = constraint.origin,
+                    .numeral = constraint.numeral,
                 };
             }
             break :blk out;
@@ -39525,8 +39532,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xDE, 0x56, 0xFC, 0xD5, 0x05, 0x71, 0x3A, 0xE7, 0x49, 0x07, 0x9E, 0x5F, 0x7E, 0x70, 0x33, 0xCB,
-        0xF5, 0x7A, 0xF7, 0x35, 0x93, 0x8B, 0x5B, 0x07, 0x47, 0x6E, 0xAA, 0x31, 0x8A, 0xFD, 0xC2, 0xAA,
+        0x66, 0x43, 0x81, 0xC2, 0x0A, 0x13, 0xDE, 0x22, 0x56, 0x01, 0xDB, 0x2D, 0xDA, 0xE0, 0x6C, 0x3B,
+        0xE1, 0xD8, 0x5D, 0x0A, 0xA0, 0xC8, 0x73, 0x36, 0x36, 0x6F, 0x3E, 0x4B, 0xE5, 0x70, 0x3A, 0x35,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

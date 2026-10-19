@@ -336,7 +336,10 @@ pub const Constants = struct {
     /// 153: a package or platform header's qualified exposures record a
     ///      deferred reference, and canonical diagnostics gain
     ///      `public_type_not_defined`.
-    pub const CACHE_VERSION = 153;
+    /// 154: Type stores keep each slot's kind in a column beside its payload,
+    ///      and numeric literal facts in a table that static dispatch
+    ///      constraints index.
+    pub const CACHE_VERSION = 154;
 };
 
 /// Configuration for the Roc cache system.

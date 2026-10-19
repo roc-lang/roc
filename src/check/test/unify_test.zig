@@ -2581,7 +2581,8 @@ test "unify - rigid with from_numeral flex retains constraints on resolved rigid
     const to_str_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("to_str")),
         .fn_var = to_str_fn,
-        .origin = .{ .from_literal = .{ .numeral = types_mod.NumeralInfo.testOnlyInt(12345, false, base.Region.zero()) } },
+        .origin = .{ .from_literal = .numeral },
+        .numeral = try env.module_env.types.appendNumeralInfo(types_mod.NumeralInfo.testOnlyInt(12345, false, base.Region.zero())),
     };
     const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{to_str_constraint});
 

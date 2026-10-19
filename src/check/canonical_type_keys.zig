@@ -631,7 +631,7 @@ const SourceAdapter = struct {
             try self.child(sink, constraint.fn_var);
             try sink.text(@tagName(constraint.origin));
             try sink.boolean(constraint.origin.binopNegated());
-            const maybe_num_literal = constraint.origin.numeralInfo();
+            const maybe_num_literal = self.store.constraintNumeralInfo(constraint);
             try sink.boolean(maybe_num_literal != null);
             if (maybe_num_literal) |num_literal| try sink.bytes(&num_literal.keyBytes());
         }
@@ -1156,7 +1156,8 @@ test "concrete keys default open literal flex vars per kind (numeral -> Dec, quo
     const numeral_constraints = try store.appendStaticDispatchConstraints(&.{.{
         .fn_name = from_numeral_ident,
         .fn_var = numeral_fn_var,
-        .origin = .{ .from_literal = .{ .numeral = types.NumeralInfo.testOnlyInt(1, false, base.Region.zero()) } },
+        .origin = .{ .from_literal = .numeral },
+        .numeral = try store.appendNumeralInfo(types.NumeralInfo.testOnlyInt(1, false, base.Region.zero())),
     }});
     const numeral_var = try store.freshFromContent(.{
         .flex = types.Flex.init().withConstraints(numeral_constraints),

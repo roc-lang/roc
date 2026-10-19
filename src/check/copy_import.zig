@@ -627,6 +627,9 @@ fn stepIdentity(ctx: *CopyContext, frame: *IdentityFrame) std.mem.Allocator.Erro
                 frame.stage = .finish_constraint;
             },
             .finish_constraint => {
+                if (ctx.source_store.constraintNumeralInfo(frame.source_constraints[frame.idx])) |info| {
+                    frame.pending.numeral = try ctx.dest_store.appendNumeralInfo(info);
+                }
                 if (frame.source_constraints[frame.idx].derived_map_plan) |plan| {
                     frame.pending.derived_map_plan = .{
                         .tag_name = try ctx.copyIdent(plan.tag_name),
