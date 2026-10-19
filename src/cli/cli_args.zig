@@ -64,6 +64,17 @@ pub const ArgProblem = union(enum) {
         flag: []const u8,
     },
     unexpected_argument: struct { cmd: []const u8, arg: []const u8 },
+    /// A dash-prefixed argument, before any `--`, that names none of the
+    /// command's flags.
+    unknown_flag: struct {
+        /// The command's name; empty for the command that runs with no word.
+        cmd: []const u8,
+        arg: []const u8,
+        /// The command's flag whose name `arg` most likely misspells.
+        suggestion: ?[]const u8,
+        /// Whether the command passes the arguments after `--` to the app it runs.
+        passes_args_to_app: bool,
+    },
     // Bare `roc <shorthand>` is rejected so the subcommand namespace can never
     // be conflated with the user-chosen shorthand namespace; running an
     // installed shorthand requires the explicit `roc run` subcommand.
@@ -402,7 +413,7 @@ const FlagForm = enum {
     terminator,
     /// Matched exactly; the command answers with the compiler's version.
     version,
-    /// Matched like `attached` and refused as an unexpected argument.
+    /// `--name` or `--name=<value>`, refused as an unexpected argument.
     rejected,
     /// Listed in help only; another part of argument parsing consumes it.
     documented,
@@ -568,9 +579,6 @@ const Command = struct {
     rest: ?[]const u8 = null,
     /// The one element `rest` holds when no argument reached it.
     rest_default: ?[]const u8 = null,
-    /// Which unrecognized arguments are problems rather than positional
-    /// arguments. An argument after `--` is never refused.
-    refuses: enum { double_dashed, dashed } = .double_dashed,
     /// The fields no argument sets: the command's implementation fills them.
     derived: []const []const u8 = &.{},
 
@@ -601,12 +609,11 @@ const Command = struct {
 
     /// Compile error unless the command and its args struct account for each
     /// other: every struct field is set by exactly one of a flag, a positional
-    /// argument, `rest`, or the implementation (`derived`); a field with no
+    /// argument, `rest`, or the implementation (`derived`); and a field with no
     /// default is always set.
     fn check(comptime cmd: Command) void {
         @setEvalBranchQuota(100_000);
         const flags = cmd.allFlags();
-
         const Parsed = cmd.Args();
         if (Parsed == void) return;
         for (cmd.derived) |name| {
@@ -635,6 +642,30 @@ const Command = struct {
                     " must be set by exactly one of: a flag, a positional argument, `rest`, or `derived`");
             }
         }
+    }
+
+    /// The long flag name `arg` most likely misspells, if any is close enough.
+    fn closestFlag(comptime cmd: Command, arg: []const u8) ?[]const u8 {
+        const names = comptime flag_names: {
+            var names: []const []const u8 = &.{"--help"};
+            for (cmd.allFlags()) |flag| {
+                if (flag.form == .terminator or flag.form == .rejected) continue;
+                // A documented flag's name may be followed by its arguments.
+                names = names ++ .{flag.name[0 .. mem.findScalar(u8, flag.name, ' ') orelse flag.name.len]};
+            }
+            break :flag_names names;
+        };
+        const written = arg[0 .. mem.findScalar(u8, arg, '=') orelse arg.len];
+        var closest: ?[]const u8 = null;
+        var closest_distance: u32 = std.math.maxInt(u32);
+        for (names) |name| {
+            const distance = base.typo.editDistance(written, name);
+            if (distance < closest_distance and base.typo.isLikelyTypo(written.len, name.len, distance)) {
+                closest = name;
+                closest_distance = distance;
+            }
+        }
+        return closest;
     }
 
     /// The text `roc <name> --help` prints.
@@ -879,7 +910,6 @@ const commands = [_]Command{
         \\                      [default: all .tar.zst files in current directory]
         ,
         .rest = "paths",
-        .refuses = .dashed,
     },
     .{
         .name = "test",
@@ -908,7 +938,6 @@ const commands = [_]Command{
         .resolve = .limits_and_replace_deps,
         .min_column = 38,
         .positionals = &.{.{ .field = "path" }},
-        .refuses = .dashed,
         .derived = &.{ "root_source_url", "main_source_url" },
     },
     .{
@@ -942,7 +971,6 @@ const commands = [_]Command{
         },
         .rest = "paths",
         .rest_default = default_roc_file,
-        .refuses = .dashed,
     },
     .{
         .name = "glue",
@@ -1028,7 +1056,6 @@ const commands = [_]Command{
         .resolve = .limits_and_replace_deps,
         .min_column = 31,
         .positionals = &.{.{ .field = "path" }},
-        .refuses = .dashed,
     },
     .{
         .name = "bump",
@@ -1256,8 +1283,9 @@ fn unexpectedArgument(cmd: []const u8, arg: []const u8) CliArgs {
 }
 
 /// Parses the arguments after a command's name from its `Command` declaration.
-/// Each flag is recognized by the comparison its form names; an argument no
-/// flag recognizes is positional unless the command refuses it.
+/// Each flag is recognized by the comparison its form names. Before `--`, a
+/// dash-prefixed argument no flag recognizes is an unknown flag, and any other
+/// argument is positional.
 fn parseArgsFor(comptime cmd: Command, alloc: mem.Allocator, args: []const []const u8) mem.Allocator.Error!CliArgs {
     comptime cmd.check();
     const Parsed = cmd.Args();
@@ -1327,11 +1355,12 @@ fn parseArgsFor(comptime cmd: Command, alloc: mem.Allocator, args: []const []con
                 }
             }
 
-            const refused = switch (cmd.refuses) {
-                .dashed => mem.startsWith(u8, arg, "-"),
-                .double_dashed => mem.startsWith(u8, arg, "--"),
-            };
-            if (refused) return unexpectedArgument(cmd.name, arg);
+            if (mem.startsWith(u8, arg, "-")) return .{ .problem = .{ .unknown_flag = .{
+                .cmd = cmd.name,
+                .arg = arg,
+                .suggestion = cmd.closestFlag(arg),
+                .passes_args_to_app = cmd.tag == .run,
+            } } };
 
             inline for (cmd.positionals, 0..) |positional, index| {
                 if (positional_count == index) {
@@ -1765,7 +1794,7 @@ test "roc build" {
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "build", "--thisisactuallyafile" });
         defer result.deinit(gpa);
-        try testing.expectEqualStrings("--thisisactuallyafile", result.problem.unexpected_argument.arg);
+        try testing.expectEqualStrings("--thisisactuallyafile", result.problem.unknown_flag.arg);
     }
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "build", "./--thisisactuallyafile" });
@@ -1892,12 +1921,12 @@ test "roc test" {
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "test", "--target=wasm32", "foo.roc" });
         defer result.deinit(gpa);
-        try testing.expectEqualStrings("--target=wasm32", result.problem.unexpected_argument.arg);
+        try testing.expectEqualStrings("--target=wasm32", result.problem.unknown_flag.arg);
     }
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "test", "foo.roc", "--target=wasm32" });
         defer result.deinit(gpa);
-        try testing.expectEqualStrings("--target=wasm32", result.problem.unexpected_argument.arg);
+        try testing.expectEqualStrings("--target=wasm32", result.problem.unknown_flag.arg);
     }
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "test", "-h" });
@@ -2162,8 +2191,8 @@ test "roc experimental-lsp" {
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "experimental-lsp", "--bogus" });
         defer result.deinit(gpa);
-        try testing.expectEqualStrings("experimental-lsp", result.problem.unexpected_argument.cmd);
-        try testing.expectEqualStrings("--bogus", result.problem.unexpected_argument.arg);
+        try testing.expectEqualStrings("experimental-lsp", result.problem.unknown_flag.cmd);
+        try testing.expectEqualStrings("--bogus", result.problem.unknown_flag.arg);
     }
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "experimental-lsp", "-h" });
@@ -2495,19 +2524,19 @@ test "flags are not matched by prefix" {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "run", "--optBORK=speed", "main.roc" });
         defer result.deinit(gpa);
         try testing.expectEqual(.problem, std.meta.activeTag(result));
-        try testing.expectEqualStrings("--optBORK=speed", result.problem.unexpected_argument.arg);
+        try testing.expectEqualStrings("--optBORK=speed", result.problem.unknown_flag.arg);
     }
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "--optBORK=speed", "main.roc" });
         defer result.deinit(gpa);
         try testing.expectEqual(.problem, std.meta.activeTag(result));
-        try testing.expectEqualStrings("--optBORK=speed", result.problem.unexpected_argument.arg);
+        try testing.expectEqualStrings("--optBORK=speed", result.problem.unknown_flag.arg);
     }
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "build", "--optBORK=speed", "main.roc" });
         defer result.deinit(gpa);
         try testing.expectEqual(.problem, std.meta.activeTag(result));
-        try testing.expectEqualStrings("--optBORK=speed", result.problem.unexpected_argument.arg);
+        try testing.expectEqualStrings("--optBORK=speed", result.problem.unknown_flag.arg);
     }
 }
 
@@ -2669,9 +2698,70 @@ test "issue 5181: misspelled formatter flags identify the offending argument" {
         const result = try parse(gpa, testing.io, &.{ "fmt", flag, "foo.roc" });
         defer result.deinit(gpa);
         try testing.expectEqual(.problem, std.meta.activeTag(result));
-        try testing.expectEqualStrings("fmt", result.problem.unexpected_argument.cmd);
-        try testing.expectEqualStrings(flag, result.problem.unexpected_argument.arg);
+        try testing.expectEqualStrings("fmt", result.problem.unknown_flag.cmd);
+        try testing.expectEqualStrings(flag, result.problem.unknown_flag.arg);
     }
+}
+
+test "issue 12353: an unknown flag is reported as one, for every command" {
+    // repro for https://github.com/roc-lang/roc/issues/12353
+    const gpa = testing.allocator;
+    const Case = struct { args: []const []const u8, cmd: []const u8, suggestion: ?[]const u8, passes_args_to_app: bool };
+    for ([_]Case{
+        .{ .args = &.{ "run", "--bork" }, .cmd = "run", .suggestion = null, .passes_args_to_app = true },
+        .{ .args = &.{ "run", "app.roc", "--bork" }, .cmd = "run", .suggestion = null, .passes_args_to_app = true },
+        .{ .args = &.{"--bork"}, .cmd = "", .suggestion = null, .passes_args_to_app = true },
+        .{ .args = &.{ "app.roc", "-x" }, .cmd = "", .suggestion = null, .passes_args_to_app = true },
+        // spellchecker:ignore-next-line
+        .{ .args = &.{ "run", "--targt=x64mac" }, .cmd = "run", .suggestion = "--target", .passes_args_to_app = true },
+        .{ .args = &.{ "run", "--optimise" }, .cmd = "run", .suggestion = null, .passes_args_to_app = true },
+        .{ .args = &.{ "run", "--opts=speed" }, .cmd = "run", .suggestion = "--opt", .passes_args_to_app = true },
+        .{ .args = &.{ "check", "--bork" }, .cmd = "check", .suggestion = null, .passes_args_to_app = false },
+        .{ .args = &.{ "build", "app.roc", "--outptu=x" }, .cmd = "build", .suggestion = "--output", .passes_args_to_app = false },
+        .{ .args = &.{ "bundle", "-x" }, .cmd = "bundle", .suggestion = null, .passes_args_to_app = false },
+        // spellchecker:ignore-next-line
+        .{ .args = &.{ "fmt", "--hlep" }, .cmd = "fmt", .suggestion = "--help", .passes_args_to_app = false },
+    }) |case| {
+        const result = try parse(gpa, testing.io, case.args);
+        defer result.deinit(gpa);
+        try testing.expectEqual(.problem, std.meta.activeTag(result));
+        const unknown = result.problem.unknown_flag;
+        try testing.expectEqualStrings(case.cmd, unknown.cmd);
+        try testing.expectEqualStrings(case.args[case.args.len - 1], unknown.arg);
+        if (case.suggestion) |suggestion| {
+            try testing.expectEqualStrings(suggestion, unknown.suggestion.?);
+        } else {
+            try testing.expectEqual(null, unknown.suggestion);
+        }
+        try testing.expectEqual(case.passes_args_to_app, unknown.passes_args_to_app);
+    }
+}
+
+test "issue 12353: a flag-like file or app argument is written with ./ or after --" {
+    const gpa = testing.allocator;
+    {
+        const result = try parse(gpa, testing.io, &.{ "run", "./--bork" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("./--bork", result.run.path);
+    }
+    {
+        const result = try parse(gpa, testing.io, &.{ "run", "app.roc", "--", "--bork" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("app.roc", result.run.path);
+        try testing.expectEqualSlices([]const u8, &.{"--bork"}, result.run.app_args);
+    }
+    {
+        const result = try parse(gpa, testing.io, &.{ "check", "./-x.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("./-x.roc", result.check.path);
+    }
+}
+
+test "issue 12353: a flag's value is everything after its first =" {
+    const gpa = testing.allocator;
+    const result = try parse(gpa, testing.io, &.{ "check", "--main=a=b.roc" });
+    defer result.deinit(gpa);
+    try testing.expectEqualStrings("a=b.roc", result.check.main.?);
 }
 
 test "formatter accepts flag-like filenames after the option terminator" {
