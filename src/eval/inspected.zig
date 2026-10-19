@@ -2446,7 +2446,7 @@ test "native inspected boolean roots share normal call objects and current heade
     const header_value: lir.LIR.StaticDataId = @fromBackingInt(@intCast(static_data_value_count - 1));
     const value = try store.addLocal(.{ .layout_idx = .bool });
     const leaf_return = try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
-    const load = try store.addCFStmt(.{ .assign_literal = .{ .target = value, .value = .{ .static_data = header_value }, .next = leaf_return } }, .test_fixture);
+    const load = try store.addCFStmt(.{ .assign_literal = .{ .target = value, .value = .{ .static_data = .{ .id = header_value } }, .next = leaf_return } }, .test_fixture);
     const leaf = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = lir.ProcIdentity.forTest(751), .args = .empty(), .body = load, .ret_layout = .bool }, .none);
     const result = try store.addLocal(.{ .layout_idx = .bool });
     const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);

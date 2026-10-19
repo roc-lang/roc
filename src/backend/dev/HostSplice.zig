@@ -685,7 +685,7 @@ test "nonfragment ordinary code links shared static cells and common source even
     const site: lir.LIR.ComptimeSiteId = @fromBackingInt(@intCast(sites.len - 1));
     const value = try store.addLocal(.{ .layout_idx = .i64 });
     const ret = try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
-    const load = try store.addCFStmt(.{ .assign_literal = .{ .target = value, .value = .{ .static_data = exports[0].value_id.? }, .next = ret } }, .test_fixture);
+    const load = try store.addCFStmt(.{ .assign_literal = .{ .target = value, .value = .{ .static_data = .{ .id = exports[0].value_id.? } }, .next = ret } }, .test_fixture);
     const branch = try store.addCFStmt(.{ .comptime_branch_taken = .{ .site = site, .branch_index = 0, .next = load } }, .test_fixture);
     const proc = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = identity, .args = .empty(), .body = branch, .ret_layout = .i64 }, .none);
     var slots = try StaticDataImage.init(allocator, &exports);

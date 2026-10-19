@@ -186,7 +186,7 @@ fn testConcat(store: *LirStore, target: LocalId, args: []const LocalId, next: CF
     return try store.addCFStmt(.{ .assign_low_level = .{
         .target = target,
         .op = .str_concat,
-        .rc_effect = LowLevelOp.str_concat.rcEffect(),
+        .rc_effect = try store.addRcEffect(LowLevelOp.str_concat.rcEffect()),
         .args = try store.addLocalSpan(args),
         .next = next,
     } }, .test_fixture);
@@ -256,7 +256,7 @@ test "str append fuses through a single-use alias of the call result" {
     const concat = try testConcat(&store, out, &.{ acc, result_alias }, ret);
     const alias = try store.addCFStmt(.{ .assign_ref = .{
         .target = result_alias,
-        .op = .{ .local = result },
+        .op = .local(result),
         .next = concat,
     } }, .test_fixture);
     const call = try store.addCFStmt(.{ .assign_call = .{
@@ -302,7 +302,7 @@ test "str append does not fuse across an alias of an unrelated local" {
     const concat = try testConcat(&store, out, &.{ acc, result }, late_use);
     const alias = try store.addCFStmt(.{ .assign_ref = .{
         .target = unrelated_alias,
-        .op = .{ .local = unrelated },
+        .op = .local(unrelated),
         .next = concat,
     } }, .test_fixture);
     const call = try store.addCFStmt(.{ .assign_call = .{

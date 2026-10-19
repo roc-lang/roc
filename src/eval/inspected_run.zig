@@ -353,7 +353,7 @@ test "native inspected image returns through shared ordinary code and readonly h
     const header_value: lir.LIR.StaticDataId = @fromBackingInt(@intCast(static_data_value_count - 1));
     const value = try store.addLocal(.{ .layout_idx = .str });
     const ret = try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
-    const load = try store.addCFStmt(.{ .assign_literal = .{ .target = value, .value = .{ .static_data = header_value }, .next = ret } }, .test_fixture);
+    const load = try store.addCFStmt(.{ .assign_literal = .{ .target = value, .value = .{ .static_data = .{ .id = header_value } }, .next = ret } }, .test_fixture);
     const root = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = lir.ProcIdentity.forTest(741), .args = .empty(), .body = load, .ret_layout = .str }, .none);
     var header: [24]u8 = @splat(0);
     std.mem.writeInt(u64, header[8..16], text.len << 1, .little);

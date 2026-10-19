@@ -3945,17 +3945,19 @@ pub const MonoLlvmCodeGen = struct {
             .init_uninitialized => |uninit| {
                 try work.append(wa, .{ .node = uninit.next });
             },
-            .assign_call => |assign| if (assign.replaces_frame) {
+            .assign_call => |assign| if (self.store.stmtRowOrDefault(assign.extra).replaces_frame) {
                 try self.emitFrameReplacingCall(assign.proc, assign.args);
             } else {
-                try self.emitDirectCall(assign.target, assign.proc, assign.args, assign.out_desc, assign.is_cold);
-                try self.emitDrivePending(assign.drive, assign.target, assign.result_desc, assign.out_desc);
-                if (assign.returns_pending) |pending| try self.emitReturnIfCallPending(pending);
+                const extra = self.store.stmtRowOrDefault(assign.extra);
+                try self.emitDirectCall(assign.target, assign.proc, assign.args, extra.out_desc, extra.is_cold);
+                try self.emitDrivePending(extra.drive, assign.target, extra.result_desc, extra.out_desc);
+                if (extra.returns_pending) |pending| try self.emitReturnIfCallPending(pending);
                 try work.append(wa, .{ .node = assign.next });
             },
-            .assign_call_erased => |assign| {
+            .assign_call_erased => |assign_stmt| {
+                const assign = self.store.stmtRow(assign_stmt.data);
                 try self.emitErasedCall(
-                    assign.target,
+                    assign_stmt.target,
                     assign.closure,
                     assign.args,
                     assign.arg_layouts,
@@ -3967,13 +3969,14 @@ pub const MonoLlvmCodeGen = struct {
                     assign.reuse_closure,
                     assign.deferred,
                 );
-                try self.emitDrivePending(assign.drive, assign.target, assign.result_desc, assign.out_desc);
+                try self.emitDrivePending(assign.drive, assign_stmt.target, assign.result_desc, assign.out_desc);
                 if (assign.returns_pending) |pending| try self.emitReturnIfCallPending(pending);
-                try work.append(wa, .{ .node = assign.next });
+                try work.append(wa, .{ .node = assign_stmt.next });
             },
-            .assign_packed_erased_fn => |assign| {
+            .assign_packed_erased_fn => |assign_stmt| {
+                const assign = self.store.stmtRow(assign_stmt.data);
                 try self.emitPackedErasedFn(
-                    assign.target,
+                    assign_stmt.target,
                     assign.proc,
                     assign.capture,
                     assign.capture_layout,
@@ -3982,10 +3985,10 @@ pub const MonoLlvmCodeGen = struct {
                     assign.reuse,
                     assign.reuse_unique,
                 );
-                try work.append(wa, .{ .node = assign.next });
+                try work.append(wa, .{ .node = assign_stmt.next });
             },
             .assign_boxy_desc_ref => |assign| {
-                try self.emitBoxyDescRef(assign);
+                try self.emitBoxyDescRef(assign.target, self.store.stmtRow(assign.data));
                 try work.append(wa, .{ .node = assign.next });
             },
             .assign_boxy_dict_ref => |assign| {
@@ -3993,16 +3996,16 @@ pub const MonoLlvmCodeGen = struct {
                 try work.append(wa, .{ .node = assign.next });
             },
             inline .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload => |assign, tag| {
-                try self.emitBoxyValueOp(boxy_call_plan.forStatement(tag, assign));
+                try self.emitBoxyValueOp(boxy_call_plan.forStatement(tag, assign.target, self.store.stmtRow(assign.data)));
                 try work.append(wa, .{ .node = assign.next });
             },
             .boxy_tag_match => |tag_match| try self.emitBoxyTagMatch(tag_match, wa, work),
             .assign_call_dict => |assign| {
-                try self.emitBoxyCallDict(assign);
+                try self.emitBoxyCallDict(assign.target, self.store.stmtRow(assign.data));
                 try work.append(wa, .{ .node = assign.next });
             },
             .assign_low_level => |assign| {
-                try self.emitLowLevel(assign.target, assign.op, assign.args, assign.unique_args, assign.interchangeable, assign.simd_concat_count);
+                try self.emitLowLevel(assign.target, assign.op, assign.args, self.store.stmtRowOrDefault(assign.extra).unique_args, self.store.stmtRowOrDefault(assign.extra).interchangeable, self.store.stmtRowOrDefault(assign.extra).simd_concat_count);
                 try work.append(wa, .{ .node = assign.next });
             },
             .assign_list => |assign| {
@@ -4048,19 +4051,20 @@ pub const MonoLlvmCodeGen = struct {
                 try work.append(wa, .{ .node = marker.next });
             },
             .incref => |inc| {
-                try self.emitExplicitRcStmt(inc.rc, .incref, inc.value, inc.count, inc.atomicity);
+                try self.emitExplicitRcStmt(self.store.rcHelper(inc.rc), .incref, inc.value, inc.count, inc.atomicity);
                 try work.append(wa, .{ .node = inc.next });
             },
             .decref => |dec| {
-                try self.emitExplicitRcStmt(dec.rc, .decref, dec.value, 1, dec.atomicity);
+                try self.emitExplicitRcStmt(self.store.rcHelper(dec.rc), .decref, dec.value, 1, dec.atomicity);
                 try work.append(wa, .{ .node = dec.next });
             },
-            .decref_if_initialized => |dec| {
-                try self.emitDecrefIfInitialized(dec.cond, dec.cond_mask, dec.value, dec.rc, dec.atomicity);
-                try work.append(wa, .{ .node = dec.next });
+            .decref_if_initialized => |dec_stmt| {
+                const dec = self.store.stmtRow(dec_stmt.data);
+                try self.emitDecrefIfInitialized(dec_stmt.cond, dec.cond_mask, dec_stmt.value, dec.rc, dec.atomicity);
+                try work.append(wa, .{ .node = dec_stmt.next });
             },
             .free => |free_stmt| {
-                try self.emitExplicitRcStmt(free_stmt.rc, .free, free_stmt.value, 1, free_stmt.atomicity);
+                try self.emitExplicitRcStmt(self.store.rcHelper(free_stmt.rc), .free, free_stmt.value, 1, free_stmt.atomicity);
                 try work.append(wa, .{ .node = free_stmt.next });
             },
             .switch_stmt => |sw| try self.emitSwitch(sw, wa, work),
@@ -4102,47 +4106,47 @@ pub const MonoLlvmCodeGen = struct {
 
     fn emitAssignRef(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LIR.RefOp) Error!void {
         const target_slot = self.slot(target);
-        switch (op) {
-            .local => |source| try self.copyLocal(target, source),
-            inline .list_reinterpret, .nominal => |ref| try self.copyLocal(target, ref.backing_ref),
-            .discriminant => |ref| {
+        switch (op.kind) {
+            .local => try self.copyLocal(target, op.source),
+            inline .list_reinterpret, .nominal => try self.copyLocal(target, op.source),
+            .discriminant => {
                 try self.prepareLocalWrite(target);
-                try self.materializeLocalIfDeferred(ref.source);
-                const base = try self.resolveTagBase(ref.source);
+                try self.materializeLocalIfDeferred(op.source);
+                const base = try self.resolveTagBase(op.source);
                 const discrim = try self.readTagDiscriminant(base.ptr, base.layout_idx);
                 try self.storeIntToLayout(target_slot.ptr, discrim, target_slot.layout_idx);
             },
-            .field => |ref| {
+            .field => {
                 try self.prepareLocalWrite(target);
-                try self.materializeLocalIfDeferred(ref.source);
-                const base = try self.resolveStructBase(ref.source);
+                try self.materializeLocalIfDeferred(op.source);
+                const base = try self.resolveStructBase(op.source);
                 const base_layout = self.layoutValue(base.layout_idx);
                 if (base_layout.tag != .struct_) return error.CompilationFailed;
-                const offset = self.layouts().getStructFieldOffsetByOriginalIndex(base_layout.getStruct().idx, ref.field_idx);
-                const field_layout = self.layouts().getStructFieldLayoutByOriginalIndex(base_layout.getStruct().idx, ref.field_idx);
+                const offset = self.layouts().getStructFieldOffsetByOriginalIndex(base_layout.getStruct().idx, op.index);
+                const field_layout = self.layouts().getStructFieldLayoutByOriginalIndex(base_layout.getStruct().idx, op.index);
                 const src = try self.offsetPtr(base.ptr, offset);
                 try self.copyBytes(target_slot.ptr, src, self.layoutDataSize(field_layout), self.alignmentForLayout(field_layout));
             },
-            .tag_payload => |ref| {
+            .tag_payload => {
                 try self.prepareLocalWrite(target);
-                try self.materializeLocalIfDeferred(ref.source);
-                const base = try self.resolveTagBase(ref.source);
-                const payload_layout = self.tagPayloadLayout(base.layout_idx, ref.tag_discriminant);
+                try self.materializeLocalIfDeferred(op.source);
+                const base = try self.resolveTagBase(op.source);
+                const payload_layout = self.tagPayloadLayout(base.layout_idx, op.tag_discriminant);
                 const payload_layout_val = self.layoutValue(payload_layout);
                 var src = base.ptr;
                 var copy_layout = payload_layout;
                 if (payload_layout_val.tag == .struct_) {
-                    const offset = self.layouts().getStructFieldOffsetByOriginalIndex(payload_layout_val.getStruct().idx, ref.payload_idx);
+                    const offset = self.layouts().getStructFieldOffsetByOriginalIndex(payload_layout_val.getStruct().idx, op.index);
                     src = try self.offsetPtr(base.ptr, offset);
-                    copy_layout = self.layouts().getStructFieldLayoutByOriginalIndex(payload_layout_val.getStruct().idx, ref.payload_idx);
+                    copy_layout = self.layouts().getStructFieldLayoutByOriginalIndex(payload_layout_val.getStruct().idx, op.index);
                 }
                 try self.copyBytes(target_slot.ptr, src, self.layoutDataSize(copy_layout), self.alignmentForLayout(copy_layout));
             },
-            .tag_payload_struct => |ref| {
+            .tag_payload_struct => {
                 try self.prepareLocalWrite(target);
-                try self.materializeLocalIfDeferred(ref.source);
-                const base = try self.resolveTagBase(ref.source);
-                const payload_layout = self.tagPayloadLayout(base.layout_idx, ref.tag_discriminant);
+                try self.materializeLocalIfDeferred(op.source);
+                const base = try self.resolveTagBase(op.source);
+                const payload_layout = self.tagPayloadLayout(base.layout_idx, op.tag_discriminant);
                 try self.copyBytes(target_slot.ptr, base.ptr, self.layoutDataSize(payload_layout), self.alignmentForLayout(payload_layout));
             },
         }
@@ -4153,14 +4157,23 @@ pub const MonoLlvmCodeGen = struct {
         const slot_v = self.slot(target);
         switch (value) {
             .i64_literal => |lit| try self.storeIntLiteral(slot_v.ptr, slot_v.layout_idx, lit.value),
-            .i128_literal => |lit| try self.storeI128Literal(slot_v.ptr, slot_v.layout_idx, lit.value),
+            .i128_literal => |lit_id| blk_lit: {
+                const lit = self.store.stmtRow(lit_id);
+                break :blk_lit try self.storeI128Literal(slot_v.ptr, slot_v.layout_idx, lit.value);
+            },
             .f64_literal => |lit| try self.storeFloatLiteral(slot_v.ptr, .f64, lit),
             .f32_literal => |lit| try self.storeFloatLiteral(slot_v.ptr, .f32, lit),
             .dec_literal => |lit| try self.storeI128Literal(slot_v.ptr, .dec, lit),
             .str_literal => |str_idx| try self.emitStrLiteral(slot_v.ptr, str_idx),
-            .boxy_dynamic_num_literal => |lit| try self.emitBoxyDynamicLiteral(target, lit.value, lit.desc, lit.default_layout, false),
-            .boxy_dynamic_frac_literal => |lit| try self.emitBoxyDynamicLiteral(target, lit.dec_bits, lit.desc, lit.default_layout, true),
-            .static_data => |id| try self.emitStaticDataLiteral(slot_v, id),
+            .boxy_dynamic_num_literal => |id| {
+                const lit = self.store.stmtRow(id);
+                try self.emitBoxyDynamicLiteral(target, lit.value, lit.desc, lit.default_layout, false);
+            },
+            .boxy_dynamic_frac_literal => |id| {
+                const lit = self.store.stmtRow(id);
+                try self.emitBoxyDynamicLiteral(target, lit.dec_bits, lit.desc, lit.default_layout, true);
+            },
+            .static_data => |read| try self.emitStaticDataLiteral(slot_v, read.id),
             .bytes_literal => |bytes_idx| try self.emitBytesLiteral(slot_v.ptr, bytes_idx),
             .proc_ref => |proc_id| {
                 const func = self.proc_registry.get(@backingInt(proc_id)) orelse return error.CompilationFailed;
@@ -4260,8 +4273,8 @@ pub const MonoLlvmCodeGen = struct {
         try self.storePointer(self.slot(desc_local).ptr, try self.loadPointer(out_desc_ptr));
     }
 
-    fn emitBoxyDescRef(self: *MonoLlvmCodeGen, assign: anytype) Error!void {
-        try self.prepareLocalWrite(assign.target);
+    fn emitBoxyDescRef(self: *MonoLlvmCodeGen, target: LocalId, assign: anytype) Error!void {
+        try self.prepareLocalWrite(target);
         const ptr_ty = try self.ptrType();
         const captures = self.store.getLocalSpan(assign.captures);
         var desc: LlvmBuilder.Value = undefined;
@@ -4335,7 +4348,7 @@ pub const MonoLlvmCodeGen = struct {
         } else if (assign.tag_ext) {
             desc = try self.callBoxy("roc_boxy_tag_ext_desc", ptr_ty, &.{ptr_ty}, &.{desc});
         }
-        try self.storePointer(self.slot(assign.target).ptr, desc);
+        try self.storePointer(self.slot(target).ptr, desc);
     }
 
     fn emitBoxyDictRef(self: *MonoLlvmCodeGen, assign: anytype) Error!void {
@@ -4429,7 +4442,7 @@ pub const MonoLlvmCodeGen = struct {
 
     fn emitBoxyTagMatch(self: *MonoLlvmCodeGen, tag_match: anytype, wa: Allocator, work: *std.ArrayList(StmtWork)) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
-        const matches = try self.callBoxyPlan(&boxy_call_plan.tagMatch(tag_match), .i1, undefined);
+        const matches = try self.callBoxyPlan(&boxy_call_plan.tagMatch(tag_match, self.store.stmtRow(tag_match.source_desc)), .i1, undefined);
         const on_match = wip.block(0, "boxy_tag_match") catch return error.OutOfMemory;
         const on_miss = wip.block(0, "boxy_tag_miss") catch return error.OutOfMemory;
         _ = wip.brCond(matches, on_match, on_miss, .none) catch return error.OutOfMemory;
@@ -4437,8 +4450,8 @@ pub const MonoLlvmCodeGen = struct {
         try work.append(wa, .{ .boxy_tag_body = .{ .block = on_match, .stmt = tag_match.on_match } });
     }
 
-    fn emitBoxyCallDict(self: *MonoLlvmCodeGen, assign: anytype) Error!void {
-        try self.prepareLocalWrite(assign.target);
+    fn emitBoxyCallDict(self: *MonoLlvmCodeGen, target: LocalId, assign: anytype) Error!void {
+        try self.prepareLocalWrite(target);
         if (self.builder == null) return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const ptr_ty = try self.ptrType();
@@ -4479,7 +4492,7 @@ pub const MonoLlvmCodeGen = struct {
             "roc_boxy_call_dict",
             &.{ ptr_ty, ptr_ty, ptr_ty, .i32, .i32, ptr_ty, self.ptrSizedIntType(), ptr_ty, self.ptrSizedIntType(), ptr_ty, .i32 },
             &.{
-                try self.boxyValuePtr(assign.target),
+                try self.boxyValuePtr(target),
                 out_desc,
                 try self.resolveBoxyDict(assign.dict),
                 try self.boxyInt(.i32, assign.method_slot),
@@ -4489,10 +4502,10 @@ pub const MonoLlvmCodeGen = struct {
                 hidden_ptr,
                 try self.boxyInt(self.ptrSizedIntType(), hidden_locals.len),
                 if (assign.result_desc) |ref| try self.resolveBoxyDesc(ref) else try self.boxyNullPtr(),
-                try self.boxyInt(.i32, @backingInt(self.localLayout(assign.target))),
+                try self.boxyInt(.i32, @backingInt(self.localLayout(target))),
             },
         );
-        try self.storeBoxyOutDesc(assign.target, out_desc);
+        try self.storeBoxyOutDesc(target, out_desc);
     }
 
     fn emitBoxyDynamicLiteral(
@@ -7968,7 +7981,7 @@ pub const MonoLlvmCodeGen = struct {
         end_ptr: LlvmBuilder.Value,
     };
 
-    fn emitStrMatch(self: *MonoLlvmCodeGen, str_match: anytype, wa: Allocator, work: *std.ArrayList(StmtWork)) Error!void {
+    fn emitStrMatch(self: *MonoLlvmCodeGen, str_match: @FieldType(lir.LIR.CFStmt, "str_match"), wa: Allocator, work: *std.ArrayList(StmtWork)) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
 
         try self.materializeAllDeferredStrCaptures();
@@ -7976,7 +7989,9 @@ pub const MonoLlvmCodeGen = struct {
 
         const on_miss_block = wip.block(0, "str_match_miss") catch return error.OutOfMemory;
         const source = try self.emitStrMatchSourceShape(self.slot(str_match.source).ptr);
-        const match_body = try self.emitStrMatchArmTest(str_match.source, source, str_match, on_miss_block);
+        const pattern = self.store.stmtRow(str_match.data);
+        const arm = .{ .prefix = pattern.prefix, .steps = pattern.steps, .end = pattern.end, .on_match = str_match.on_match };
+        const match_body = try self.emitStrMatchArmTest(str_match.source, source, arm, on_miss_block);
         try work.append(wa, .{ .str_match_body = .{ .block = on_miss_block, .stmt = str_match.on_miss } });
         try work.append(wa, .{ .str_match_body = match_body });
     }

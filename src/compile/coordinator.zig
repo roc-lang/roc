@@ -10649,8 +10649,11 @@ test "shared CTFE and runtime requests specialize once across workers and target
                 if (stmt != .assign_literal) continue;
                 switch (stmt.assign_literal.value) {
                     .static_data => slot_reads += 1,
-                    .i128_literal => |literal| if (literal.value == 42) {
-                        literal_answers += 1;
+                    .i128_literal => |literal_id| blk_literal: {
+                        const literal = store.stmtRow(literal_id);
+                        break :blk_literal if (literal.value == 42) {
+                            literal_answers += 1;
+                        };
                     },
                     .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .bytes_literal, .proc_ref => {},
                 }

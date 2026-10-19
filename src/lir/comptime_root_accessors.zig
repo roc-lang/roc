@@ -158,7 +158,7 @@ fn testRebuild(allocator: Allocator) (Allocator.Error || error{ TestExpectedEqua
     const value = try program.store.addLocal(.{ .layout_idx = list_layout });
     const origin = LIR.StmtOrigin{ .loc = .none, .region = .zero(), .inline_scope = .none, .kind = .scaffold };
     const ret = try program.store.addCFStmt(.{ .ret = .{ .value = value } }, origin);
-    const body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = value, .value = .{ .static_data = value_slot }, .next = ret } }, origin);
+    const body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = value, .value = .{ .static_data = .{ .id = value_slot } }, .next = ret } }, origin);
     const accessor = try program.store.addProcSpec(.{
         .name = .fromRaw(1),
         .identity = LIR.ProcIdentity.forTest(1),
@@ -180,7 +180,7 @@ fn testRebuild(allocator: Allocator) (Allocator.Error || error{ TestExpectedEqua
     try rebuild(allocator, &program, &frozen);
     try std.testing.expectEqual(body, program.store.getProcSpec(accessor).body.?);
     try std.testing.expectEqual(@as(u64, 0), program.store.getProcSpec(accessor).native_code_revision);
-    try std.testing.expectEqual(failure_slot, program.store.getCFStmt(body).assign_literal.value.static_data);
+    try std.testing.expectEqual(failure_slot, program.store.getCFStmt(body).assign_literal.value.static_data.id);
     failure_record[failed_offset] = 0;
     try rebuild(allocator, &program, &frozen);
     const rebuilt = program.store.getProcSpec(accessor);
