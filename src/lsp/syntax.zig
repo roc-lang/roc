@@ -456,6 +456,60 @@ pub const SyntaxChecker = struct {
     }
 
     /// Check the file referenced by the URI and return diagnostics grouped by URI.
+    /// The absolute path of an existing file, or null when it cannot be
+    /// resolved.
+    fn realAbsolutePath(self: *SyntaxChecker, path: []const u8) std.mem.Allocator.Error!?[:0]u8 {
+        return std.Io.Dir.cwd().realPathFileAlloc(self.std_io, path, self.allocator) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.AccessDenied,
+            error.AntivirusInterference,
+            error.BadPathName,
+            error.Canceled,
+            error.DeviceBusy,
+            error.FileBusy,
+            error.FileNotFound,
+            error.FileSystem,
+            error.FileTooBig,
+            error.InputOutput,
+            error.IsDir,
+            error.NameTooLong,
+            error.NetworkNotFound,
+            error.NoDevice,
+            error.NoSpaceLeft,
+            error.NotDir,
+            error.OperationUnsupported,
+            error.PathAlreadyExists,
+            error.PermissionDenied,
+            error.PipeBusy,
+            error.ProcessFdQuotaExceeded,
+            error.SymLinkLoop,
+            error.SystemFdQuotaExceeded,
+            error.SystemResources,
+            error.Unexpected,
+            error.UnrecognizedVolume,
+            => null,
+        };
+    }
+
+    /// Drop what was kept for a document the client closed: its last-built
+    /// content hash and its completion snapshot, which holds a whole build.
+    pub fn forget(self: *SyntaxChecker, uri: []const u8) std.mem.Allocator.Error!void {
+        self.mutex.lockUncancelable(self.std_io);
+        defer self.mutex.unlock(self.std_io);
+
+        const path = try uri_util.uriToPath(self.allocator, uri);
+        defer self.allocator.free(path);
+        const abs_path = try self.realAbsolutePath(path);
+        defer if (abs_path) |a| self.allocator.free(a);
+        const key: []const u8 = abs_path orelse path;
+
+        if (self.content_hashes.fetchRemove(key)) |removed| self.allocator.free(removed.key);
+        if (self.snapshot_envs.fetchRemove(key)) |removed| {
+            removed.value.release(owner_snapshot);
+            self.allocator.free(removed.key);
+        }
+    }
+
     pub fn check(self: *SyntaxChecker, uri: []const u8, override_text: ?[]const u8, workspace_root: ?[]const u8) CheckError![]Diagnostics.PublishDiagnostics {
         self.mutex.lockUncancelable(self.std_io);
         defer self.mutex.unlock(self.std_io);
@@ -475,36 +529,7 @@ pub const SyntaxChecker = struct {
             const path = try uri_util.uriToPath(self.allocator, uri);
             defer self.allocator.free(path);
 
-            const abs_path: ?[:0]u8 = std.Io.Dir.cwd().realPathFileAlloc(self.std_io, path, self.allocator) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                error.AccessDenied,
-                error.AntivirusInterference,
-                error.BadPathName,
-                error.Canceled,
-                error.DeviceBusy,
-                error.FileBusy,
-                error.FileNotFound,
-                error.FileSystem,
-                error.FileTooBig,
-                error.InputOutput,
-                error.IsDir,
-                error.NameTooLong,
-                error.NetworkNotFound,
-                error.NoDevice,
-                error.NoSpaceLeft,
-                error.NotDir,
-                error.OperationUnsupported,
-                error.PathAlreadyExists,
-                error.PermissionDenied,
-                error.PipeBusy,
-                error.ProcessFdQuotaExceeded,
-                error.SymLinkLoop,
-                error.SystemFdQuotaExceeded,
-                error.SystemResources,
-                error.Unexpected,
-                error.UnrecognizedVolume,
-                => null,
-            };
+            const abs_path: ?[:0]u8 = try self.realAbsolutePath(path);
             defer if (abs_path) |a| self.allocator.free(a);
 
             if (abs_path) |ap| {
