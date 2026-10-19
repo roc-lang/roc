@@ -142,8 +142,8 @@ pub const Idx = packed struct(u32) {
 
     /// Direct-column index for this identifier: its bits, attributes included,
     /// so that `fromDenseIndex` restores it exactly.
-    pub fn denseIndex(self: Idx) usize {
-        return @as(u32, @bitCast(self));
+    pub fn denseIndex(self: Idx) u32 {
+        return @bitCast(self);
     }
 
     /// The identifier whose `denseIndex` is `dense_index`.
@@ -183,20 +183,19 @@ pub const Attributes = packed struct(u3) {
 /// An interner for identifier names.
 pub const Store = struct {
     interner: SmallStringInterner,
-    attributes: collections.SafeList(Attributes) = .{},
     next_unique_name: u32 = 0,
     /// Owned transient scratch, omitted from both serialized representations.
     /// Frozen views can own this scratch separately from their backing bytes.
     text_rank: ?*TextRankCache = null,
 
-    /// Debug-only: verify `idx` was produced by this store. An Idx is a byte
-    /// offset into this store's interner, so an Idx from a different store points
-    /// outside this interner's data and is caught by the bounds check.
+    /// Debug-only: verify `idx` was produced by this store. An Idx is a serial
+    /// index into this store's interner, so an Idx from a larger store can point
+    /// past this interner's entries and is caught by the bounds check.
     fn verifyIdx(self: *const Store, idx: Idx) void {
         if (enable_store_tracking) {
             if (!self.interner.isInBounds(@fromBackingInt(@as(u32, idx.idx)))) {
                 invariant(
-                    "Ident.Idx lookup in wrong store: offset {d} is not a valid " ++
+                    "Ident.Idx lookup in wrong store: index {d} is not a valid " ++
                         "entry in this interner. It was created by a different store.",
                     .{idx.idx},
                 );
@@ -208,7 +207,6 @@ pub const Store = struct {
     /// Uses extern struct to guarantee consistent field layout across optimization levels.
     pub const Serialized = extern struct {
         interner: SmallStringInterner.Serialized,
-        attributes: collections.SafeList(Attributes).Serialized,
         next_unique_name: u32,
 
         /// Serialize a Store into this Serialized struct, appending data to the writer
@@ -219,7 +217,6 @@ pub const Store = struct {
             writer: *CompactWriter,
         ) std.mem.Allocator.Error!void {
             try self.interner.serialize(&store.interner, allocator, writer);
-            try self.attributes.serialize(&store.attributes, allocator, writer);
             self.next_unique_name = store.next_unique_name;
         }
 
@@ -228,7 +225,6 @@ pub const Store = struct {
         pub fn deserializeInto(self: *const Serialized, base: usize) Store {
             return Store{
                 .interner = self.interner.deserializeInto(base),
-                .attributes = self.attributes.deserializeInto(base),
                 .next_unique_name = self.next_unique_name,
             };
             // Note: We don't register deserialized stores for debug tracking.
@@ -250,7 +246,6 @@ pub const Store = struct {
     pub fn deinit(self: *Store, gpa: std.mem.Allocator) void {
         self.deinitTextRanks();
         self.interner.deinit(gpa);
-        self.attributes.deinit(gpa);
     }
 
     /// Clone this store into fresh owned memory.
@@ -262,7 +257,6 @@ pub const Store = struct {
         return .{
             .text_rank = text_rank,
             .interner = interner,
-            .attributes = try self.attributes.clone(gpa),
             .next_unique_name = self.next_unique_name,
         };
     }
@@ -355,10 +349,6 @@ pub const Store = struct {
             .reserved = false,
         };
 
-        const expected_idx = self.attributes.items.items.len;
-        const attributes_idx = try self.attributes.append(gpa, attributes);
-        std.debug.assert(@backingInt(attributes_idx) == expected_idx);
-
         const result = Idx{
             .attributes = attributes,
             .idx = @intCast(@backingInt(idx)),
@@ -385,7 +375,7 @@ pub const Store = struct {
         self.verifyIdx(a);
         self.verifyIdx(b);
         if (self.text_rank) |cache| {
-            if (cache.current(@intCast(self.interner.bytes.len()))) |ranks| return ranks[a.idx] < ranks[b.idx];
+            if (cache.current(self.rankLimit())) |ranks| return ranks[a.idx] < ranks[b.idx];
         }
         return textLessThan(self.getText(a), self.getText(b));
     }
@@ -398,17 +388,23 @@ pub const Store = struct {
             pub fn text(ctx: @This(), index: u32) []const u8 {
                 return ctx.store.interner.getText(@fromBackingInt(@intCast(index)));
             }
-            pub fn next(_: @This(), index: u32, bytes: []const u8) u32 {
-                return index + @as(u32, @intCast(bytes.len)) + 1;
+            pub fn next(_: @This(), index: u32, _: []const u8) u32 {
+                return index + 1;
             }
         };
-        return (self.text_rank orelse scratch).ensure(1, @intCast(self.interner.bytes.len()), self.interner.entry_count, Context{ .store = self });
+        return (self.text_rank orelse scratch).ensure(1, self.rankLimit(), self.interner.entry_count, Context{ .store = self });
+    }
+
+    /// One past the largest identifier index: ranks are indexed by `Idx.idx`,
+    /// and serial indices start at 1.
+    fn rankLimit(self: *const Store) usize {
+        return @as(usize, self.interner.entry_count) + 1;
     }
 
     /// Rank of an identifier after preparing the current text-rank generation.
     pub fn idxTextRank(self: *const Store, idx: Idx) u32 {
         self.verifyIdx(idx);
-        return self.text_rank.?.current(@intCast(self.interner.bytes.len())).?[idx.idx];
+        return self.text_rank.?.current(self.rankLimit()).?[idx.idx];
     }
 
     /// Check if an identifier text already exists in the store.
@@ -542,10 +538,10 @@ test "Ident.Store empty CompactWriter roundtrip" {
     var deserialized_value = deserialized_serialized.deserializeInto(@intFromPtr(buffer.ptr));
     const deserialized = &deserialized_value;
 
-    // Verify empty - interner always has at least 1 byte (0) to ensure Idx.unused doesn't point to valid data
-    try std.testing.expectEqual(@as(usize, 1), deserialized.interner.bytes.len());
+    // Verify empty - no text, and the interner's `ends` holds only the leading 0
+    try std.testing.expectEqual(@as(usize, 0), deserialized.interner.bytes.len());
+    try std.testing.expectEqual(@as(usize, 1), deserialized.interner.ends.len());
     try std.testing.expectEqual(@as(u32, 0), deserialized.interner.entry_count);
-    try std.testing.expectEqual(@as(usize, 0), deserialized.attributes.len());
     try std.testing.expectEqual(@as(u32, 0), deserialized.next_unique_name);
 }
 
@@ -610,12 +606,8 @@ test "Ident.Store basic CompactWriter roundtrip" {
     var deserialized_value = deserialized_serialized.deserializeInto(@intFromPtr(buffer.ptr));
     const deserialized = &deserialized_value;
 
-    // Check the bytes length for validation
-    const bytes_len = deserialized.interner.bytes.len();
-    const idx1_value = @backingInt(@as(SmallStringInterner.Idx, @fromBackingInt(@intCast(@as(u32, idx1.idx)))));
-
     // Verify the index is valid
-    if (bytes_len <= idx1_value) {
+    if (!deserialized.interner.isInBounds(@fromBackingInt(@as(u32, idx1.idx)))) {
         return error.InvalidIndex;
     }
 
@@ -770,18 +762,18 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
     defer original.deinit(gpa);
 
     // Test various identifier types and edge cases
-    // Note: SmallStringInterner starts with a 0 byte at index 0, so strings start at index 1
+    // Note: SmallStringInterner reserves index 0, so serial indices start at 1
     const test_idents = [_]struct { text: []const u8, expected_idx: u32 }{
         .{ .text = "hello", .expected_idx = 1 },
-        .{ .text = "world!", .expected_idx = 7 },
-        .{ .text = "_ignored", .expected_idx = 14 },
-        .{ .text = "a", .expected_idx = 23 }, // single character
-        .{ .text = "very_long_identifier_name_that_might_cause_issues", .expected_idx = 25 },
-        .{ .text = "effectful!", .expected_idx = 75 },
-        .{ .text = "_", .expected_idx = 86 }, // Just underscore
-        .{ .text = "CamelCase", .expected_idx = 88 },
-        .{ .text = "snake_case", .expected_idx = 98 },
-        .{ .text = "SCREAMING_CASE", .expected_idx = 109 },
+        .{ .text = "world!", .expected_idx = 2 },
+        .{ .text = "_ignored", .expected_idx = 3 },
+        .{ .text = "a", .expected_idx = 4 }, // single character
+        .{ .text = "very_long_identifier_name_that_might_cause_issues", .expected_idx = 5 },
+        .{ .text = "effectful!", .expected_idx = 6 },
+        .{ .text = "_", .expected_idx = 7 }, // Just underscore
+        .{ .text = "CamelCase", .expected_idx = 8 },
+        .{ .text = "snake_case", .expected_idx = 9 },
+        .{ .text = "SCREAMING_CASE", .expected_idx = 10 },
         .{ .text = "hello", .expected_idx = 1 }, // duplicate, should reuse
     };
 
@@ -877,14 +869,14 @@ test "identifier text ranks preserve byte order and refresh after insertion" {
     };
     const old = store.idxTextRank(ids[1]);
     const first = try store.insert(gpa, Ident.for_text("A"));
-    try std.testing.expect(store.text_rank.?.current(@intCast(store.interner.bytes.len())) == null);
+    try std.testing.expect(store.text_rank.?.current(store.rankLimit()) == null);
     try std.testing.expect(store.idxTextLessThan(first, ids[1]));
     _ = try store.textRanks(&scratch);
     try std.testing.expectEqual(old + 1, store.idxTextRank(ids[1]));
     try std.testing.expect(store.idxTextRank(first) < store.idxTextRank(ids[1]));
     const generation = store.text_rank.?.generation.load(.acquire);
     try std.testing.expectEqual(ids[0], try store.insert(gpa, Ident.for_text("ab")));
-    try std.testing.expectEqual(generation, store.interner.bytes.len());
+    try std.testing.expectEqual(generation, store.rankLimit());
     const unique = try store.genUnique(gpa);
     _ = try store.textRanks(&scratch);
     try std.testing.expect(store.idxTextRank(unique) < store.idxTextRank(first));

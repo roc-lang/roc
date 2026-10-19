@@ -40,7 +40,16 @@ pub fn Index(comptime Policy: type) type {
         pub const Find = FindResult(Policy.Id);
 
         pub fn fromCells(cells: SafeList(Policy.Cell), len: u32) Self {
+            comptime std.debug.assert(!use_fingerprints);
             return .{ .cells = cells, .fingerprints = .{}, .len = len };
+        }
+
+        /// View an owner's persisted table, whose fingerprint column runs
+        /// parallel to its cells.
+        pub fn fromParts(cells: SafeList(Policy.Cell), fingerprints: SafeList(u8), len: u32) Self {
+            comptime std.debug.assert(use_fingerprints);
+            std.debug.assert(fingerprints.len() == cells.len());
+            return .{ .cells = cells, .fingerprints = fingerprints, .len = len };
         }
 
         pub fn deinit(self: *Self, gpa: Allocator) void {

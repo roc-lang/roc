@@ -339,7 +339,10 @@ pub const Constants = struct {
     /// 154: Type stores keep each slot's kind in a column beside its payload,
     ///      and numeric literal facts in a table that static dispatch
     ///      constraints index.
-    pub const CACHE_VERSION = 154;
+    /// 155: Identifier stores assign serial indices, keep each name's end
+    ///      offset and probe fingerprints in columns of their own, and drop
+    ///      the per-identifier attribute column.
+    pub const CACHE_VERSION = 155;
 };
 
 /// Configuration for the Roc cache system.
