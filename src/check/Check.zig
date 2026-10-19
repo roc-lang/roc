@@ -12327,7 +12327,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.poisonErroneousValueUses();
     try self.publishDispatchRelationMerges();
     try self.finalizeLiteralDispatchResolutions();
-    try self.finalizeTopLevelDemandDependencies(&env);
+    try self.finalizeTopLevelDemandDependencies();
     try self.finalizeExpectEffectSlots();
     try self.finalizeComptimeConditions();
 
@@ -12397,14 +12397,13 @@ fn finalizePlatformRequirementSolutions(self: *Self) Allocator.Error!void {
     }
 }
 
-/// Replace canonicalization's strict-demand relation with the checked one:
-/// the exact dispatch targets selected by checking, and function values
-/// demanding their bodies wherever their holder can invoke them (design.md
-/// "Function Values In Strict Demand"). Then reject any value cycle that only
-/// became visible through those. The rebuilt graph is the durable producer
-/// output consumed by checked-root scheduling and CTFE, and the module's
-/// invoking definitions are what its importers' relations read.
-fn finalizeTopLevelDemandDependencies(self: *Self, env: *Env) Allocator.Error!void {
+/// Build the module's strict-demand relation from checked facts: the exact
+/// dispatch targets selected by checking, and function values demanding their
+/// bodies wherever their holder can invoke them (design.md "Function Values In
+/// Strict Demand"). Then reject every value cycle left in it. The graph is the
+/// durable producer output consumed by checked-root scheduling and CTFE, and
+/// the module's invoking definitions are what its importers' relations read.
+fn finalizeTopLevelDemandDependencies(self: *Self) Allocator.Error!void {
     var dispatch_targets = std.ArrayList(DependencyGraph.ResolvedDispatchTarget).empty;
     defer dispatch_targets.deinit(self.gpa);
     for (self.dispatch_target_instantiations.items) |target| {
@@ -12434,13 +12433,13 @@ fn finalizeTopLevelDemandDependencies(self: *Self, env: *Env) Allocator.Error!vo
     var eval_order = try DependencyGraph.computeSCCs(&demand.graph, self.gpa);
     defer eval_order.deinit();
 
-    try self.poisonCheckedStrictDemandCycles(&eval_order, env);
+    _ = try self.rejectStrictValueCycles(&eval_order, .after_checking);
     self.cir.setTopLevelDemandDependencies(dependencies);
     dependencies = .{};
     try self.cir.setInvokingDefs(demand.invoking_defs.items);
 
-    // The new cycle poisoning happens after the ordinary erroneous-use sweep,
-    // so propagate it once more before checked bodies are published.
+    // Cycle poisoning happens after the ordinary erroneous-use sweep, so
+    // propagate it once more before checked bodies are published.
     try self.poisonErroneousValueUses();
     try self.poisonErroneousValueExprs();
 }
@@ -12473,11 +12472,16 @@ const ForeignCalleeIndex = struct {
     }
 };
 
-fn poisonCheckedStrictDemandCycles(
+/// Report every name a non-function definition in a cyclic SCC binds as a
+/// circular value definition, and poison the definition. Before checking,
+/// poisoning only replaces the definition's expression, which checking then
+/// rejects like any runtime error; after checking it also marks what the
+/// definition binds erroneous. Returns whether any cycle was found.
+fn rejectStrictValueCycles(
     self: *Self,
     eval_order: *const DependencyGraph.EvaluationOrder,
-    env: *Env,
-) Allocator.Error!void {
+    stage: StrictValueCycleStage,
+) Allocator.Error!bool {
     const RecursiveNonFunctionDef = struct {
         def_idx: CIR.Def.Idx,
         ident: Ident.Idx,
@@ -12486,6 +12490,7 @@ fn poisonCheckedStrictDemandCycles(
 
     var bindings = std.ArrayList(PatternBinding).empty;
     defer bindings.deinit(self.gpa);
+    var found = false;
 
     for (eval_order.sccs) |scc| {
         if (!scc.is_recursive) continue;
@@ -12510,6 +12515,7 @@ fn poisonCheckedStrictDemandCycles(
             }
         }
 
+        if (defs_to_poison.items.len != 0) found = true;
         std.mem.sort(RecursiveNonFunctionDef, defs_to_poison.items, {}, struct {
             fn lessThan(_: void, a: RecursiveNonFunctionDef, b: RecursiveNonFunctionDef) bool {
                 if (a.region.start.offset != b.region.start.offset) {
@@ -12532,13 +12538,58 @@ fn poisonCheckedStrictDemandCycles(
             // A destructuring def reports once per bound name but is poisoned once.
             const poisoned = try poisoned_defs.getOrPut(self.gpa, def_to_poison.def_idx);
             if (poisoned.found_existing) continue;
-            try self.poisonRecursiveNonFunctionProcessingDef(.{
-                .def_idx = def_to_poison.def_idx,
-                .def_name = def_to_poison.ident,
-                .status = .processed,
-            }, null, env);
+            try self.poisonStrictValueCycleDef(def_to_poison.def_idx, def_to_poison.ident, stage);
         }
     }
+    return found;
+}
+
+const StrictValueCycleStage = enum { before_checking, after_checking };
+
+/// Reject the strict value cycles that need neither a dispatch target nor a
+/// function value to be seen, before any definition is checked, so no
+/// definition is inferred from a value that is never computed. Every such
+/// cycle lies within one binding group that holds a value definition.
+/// Returns whether any cycle was found.
+fn rejectUncheckedStrictValueCycles(self: *Self) Allocator.Error!bool {
+    const check_order = &self.check_order.?;
+    var found = false;
+    var reachable_groups = std.ArrayList(u32).empty;
+    defer reachable_groups.deinit(self.gpa);
+    var group_seen = std.DynamicBitSetUnmanaged{};
+    defer group_seen.deinit(self.gpa);
+    var reachable_defs = std.ArrayList(CIR.Def.Idx).empty;
+    defer reachable_defs.deinit(self.gpa);
+    for (check_order.sccs, 0..) |scc, group_index| {
+        if (!scc.is_recursive) continue;
+        for (scc.defs) |def_idx| {
+            if (!isFunctionDef(&self.cir.store, self.cir.store.getExpr(self.cir.store.getDef(def_idx).expr))) break;
+        } else continue;
+
+        try group_seen.resize(self.gpa, check_order.sccs.len, false);
+        group_seen.unsetAll();
+        reachable_groups.clearRetainingCapacity();
+        reachable_defs.clearRetainingCapacity();
+        group_seen.set(group_index);
+        try reachable_groups.append(self.gpa, @intCast(group_index));
+        var next: usize = 0;
+        while (next < reachable_groups.items.len) : (next += 1) {
+            const reached = reachable_groups.items[next];
+            try reachable_defs.appendSlice(self.gpa, check_order.sccs[reached].defs);
+            for (check_order.dependenciesOf(reached)) |dependency| {
+                if (group_seen.isSet(dependency)) continue;
+                group_seen.set(dependency);
+                try reachable_groups.append(self.gpa, dependency);
+            }
+        }
+
+        var graph = try DependencyGraph.buildUncheckedGroupDependencyGraph(self.cir, reachable_defs.items, scc.defs, self.gpa);
+        defer graph.deinit();
+        var eval_order = try DependencyGraph.computeSCCs(&graph, self.gpa);
+        defer eval_order.deinit();
+        if (try self.rejectStrictValueCycles(&eval_order, .before_checking)) found = true;
+    }
+    return found;
 }
 
 /// Debug-only invariant check: every nominal application in this store that
@@ -17838,6 +17889,12 @@ fn isCompileTimeExecutableRootDef(self: *const Self, def_idx: CIR.Def.Idx) bool 
 fn setupCheckOrder(self: *Self) std.mem.Allocator.Error!void {
     if (self.check_order != null) return;
     self.check_order = try DependencyGraph.computeCheckOrder(self.cir, self.cir.all_defs, self.gpa);
+    // A rejected definition no longer references anything, so the groups
+    // its references formed are recomputed without it.
+    if (try self.rejectUncheckedStrictValueCycles()) {
+        self.check_order.?.deinit();
+        self.check_order = try DependencyGraph.computeCheckOrder(self.cir, self.cir.all_defs, self.gpa);
+    }
     const sccs = self.check_order.?.sccs;
     try self.group_states.appendNTimes(self.gpa, .pending, sccs.len);
     try self.group_dependency_collected.resize(self.gpa, sccs.len, false);
@@ -19411,9 +19468,6 @@ const LocalDispatchTargetResolution = union(enum) {
     in_flight_rhs: Var,
     /// The obligation stays deferred until the target is checked.
     waiting,
-    /// The target is a value def caught in a recursive cycle; the obligation
-    /// has been rejected and its receiver marked erroneous.
-    rejected,
 };
 
 /// Decide how an obligation reaches a same-module target from the target
@@ -19434,7 +19488,6 @@ fn resolveLocalDispatchTargetByStatus(
     def_idx: CIR.Def.Idx,
     def: CIR.Def,
     env: *Env,
-    failure_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!LocalDispatchTargetResolution {
     std.debug.assert(processing_def.def_idx == def_idx);
     const mb_predeclared_scheme = self.predeclaredSchemeVar(def_idx);
@@ -19455,13 +19508,6 @@ fn resolveLocalDispatchTargetByStatus(
             if (self.dispatchTargetFrameNestedInsideObligationOwner(def_idx, deferred_constraint.owner_group_index)) {
                 try self.deferDispatchObligationForUncheckedTarget(deferred_constraint, constraint, def_idx, env);
                 return .waiting;
-            }
-            if (!isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr)) and self.delayed_dependency_depth == 0) {
-                try self.poisonRecursiveNonFunctionProcessingDef(processing_def, null, env);
-                try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
-                try self.markStaticDispatchRejected(constraint);
-                try self.markErroneous(deferred_constraint.var_);
-                return .rejected;
             }
             // In-flight unannotated target (self-dispatch, an in-group member,
             // or a suspended ancestor at its boundary): the binding-group
@@ -26952,31 +26998,26 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                                     base.invariant("type checker invariant violated: name reference to unchecked def outside the current binding group", .{});
                                 }
                             }
-                            if (!isFunctionDef(&self.cir.store, self.cir.store.getExpr(referenced_def.expr)) and
-                                self.delayed_dependency_depth == 0)
-                            {
-                                // A value member of a recursive group referenced
-                                // outside any lambda body is a strict value
-                                // cycle.
-                                try self.poisonRecursiveNonFunctionProcessingDef(processing_def, expr_idx, env);
-                            } else {
-                                // The binding-group recursion rule: an in-group
-                                // reference to an unannotated member unifies
-                                // monomorphically with the member's in-flight
-                                // type, so facts discovered at the call site
-                                // flow into the inferred scheme.
-                                _ = try self.unifyInContext(expr_var, pat_var, env, .{ .recursive_def = .{ .def_name = processing_def.def_name } });
-                                try self.recordSharedSchemeUse(
-                                    @backingInt(expr_idx),
-                                    .shared_value_use,
-                                    0,
-                                    ModuleEnv.varFrom(processing_def.def_idx),
-                                );
-                                try self.recordRecursiveReference(
-                                    @backingInt(expr_idx),
-                                    ModuleEnv.varFrom(processing_def.def_idx),
-                                );
-                            }
+                            // The binding-group recursion rule: an in-group
+                            // reference to an unannotated member unifies
+                            // monomorphically with the member's in-flight
+                            // type, so facts discovered at the call site
+                            // flow into the inferred scheme. Strict value
+                            // cycles are rejected from the strict-demand
+                            // relation, not here
+                            // (`rejectUncheckedStrictValueCycles`,
+                            // `finalizeTopLevelDemandDependencies`).
+                            _ = try self.unifyInContext(expr_var, pat_var, env, .{ .recursive_def = .{ .def_name = processing_def.def_name } });
+                            try self.recordSharedSchemeUse(
+                                @backingInt(expr_idx),
+                                .shared_value_use,
+                                0,
+                                ModuleEnv.varFrom(processing_def.def_idx),
+                            );
+                            try self.recordRecursiveReference(
+                                @backingInt(expr_idx),
+                                ModuleEnv.varFrom(processing_def.def_idx),
+                            );
                             break :blk;
                         }
                     },
@@ -27015,11 +27056,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                             break :blk;
                         }
                         if (!isFunctionDef(&self.cir.store, self.cir.store.getExpr(referenced_def.expr))) {
-                            if (self.delayed_dependency_depth == 0) {
-                                try self.poisonRecursiveNonFunctionProcessingDef(processing_def, expr_idx, env);
-                            } else {
-                                _ = try self.unify(expr_var, ModuleEnv.varFrom(referenced_def.expr), env);
-                            }
+                            _ = try self.unify(expr_var, ModuleEnv.varFrom(referenced_def.expr), env);
                             break :blk;
                         }
 
@@ -35111,36 +35148,24 @@ fn checkAllConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     try self.quiesceConstraints(env, false);
 }
 
-fn poisonRecursiveNonFunctionProcessingDef(
-    self: *Self,
-    processing_def: DefProcessed,
-    use_expr: ?CIR.Expr.Idx,
-    _: *Env,
-) Allocator.Error!void {
-    const def = self.cir.store.getDef(processing_def.def_idx);
-    const diagnostic_idx = if (processing_def.def_name) |ident|
-        try self.cir.addDiagnostic(.{ .circular_value_definition = .{
-            .ident = ident,
-            .region = self.cir.store.getPatternRegion(def.pattern),
-        } })
-    else
-        try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
-            .region = self.cir.store.getExprRegion(def.expr),
-        } });
-
+/// Replace a value def caught in a strict value cycle with a runtime error,
+/// and once checked, mark everything it binds erroneous.
+fn poisonStrictValueCycleDef(self: *Self, def_idx: CIR.Def.Idx, ident: Ident.Idx, stage: StrictValueCycleStage) Allocator.Error!void {
+    const def = self.cir.store.getDef(def_idx);
+    const diagnostic_idx = try self.cir.addDiagnostic(.{ .circular_value_definition = .{
+        .ident = ident,
+        .region = self.cir.store.getPatternRegion(def.pattern),
+    } });
     if (self.cir.store.getExpr(def.expr) != .e_runtime_error) {
         try self.replaceExprWithRuntimeError(def.expr, diagnostic_idx);
     }
-    try self.markErroneousValueExpr(def.expr);
-    try self.markErroneousValuePattern(def.pattern);
-    try self.markPatternBindingsErroneous(def.pattern);
-
-    if (use_expr) |expr_idx| {
-        if (self.cir.store.getExpr(expr_idx) != .e_runtime_error) {
-            try self.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
-        }
-        try self.markErroneousValueExpr(expr_idx);
-        try self.markErroneous(ModuleEnv.varFrom(expr_idx));
+    switch (stage) {
+        .before_checking => {},
+        .after_checking => {
+            try self.markErroneousValueExpr(def.expr);
+            try self.markErroneousValuePattern(def.pattern);
+            try self.markPatternBindingsErroneous(def.pattern);
+        },
     }
 }
 
@@ -46871,12 +46896,11 @@ inline fn processDeferredDispatchEntry(
                             def_idx,
                             def,
                             env,
-                            failure_expr,
                         )) {
                             .def_var => {},
                             .predeclared_scheme => |scheme_var| predeclared_scheme_for_method = scheme_var,
                             .in_flight_rhs => |rhs_var| cycle_method_expr_var = rhs_var,
-                            .waiting, .rejected => continue,
+                            .waiting => continue,
                         }
                     }
                 }
@@ -47114,12 +47138,11 @@ inline fn processDeferredDispatchEntry(
                             def_idx,
                             def,
                             env,
-                            failure_expr,
                         )) {
                             .def_var => {},
                             .predeclared_scheme => |scheme_var| predeclared_scheme_for_method = scheme_var,
                             .in_flight_rhs => |rhs_var| cycle_method_expr_var = rhs_var,
-                            .waiting, .rejected => continue,
+                            .waiting => continue,
                         }
                     }
                 }
@@ -48502,28 +48525,6 @@ fn tagExtIsClosedAndUnit(self: *Self, ext_var: Var) std.mem.Allocator.Error!bool
 fn builtinNumKindFromNominalType(self: *const Self, nominal_type: types_mod.NominalType) ?CIR.NumKind {
     if (!nominal_type.originIsBuiltin()) return null;
     return self.builtinNumKindFromBuiltinSourceDecl(nominal_type.sourceDeclOptional());
-}
-
-fn varResolvesToBuiltinScalarNominal(self: *const Self, var_: Var) bool {
-    const resolved = self.types.resolveThroughAliases(var_);
-    return switch (resolved.desc.content) {
-        .structure => |structure| switch (structure) {
-            .nominal_type => |nominal| self.nominalIsBuiltinBoolType(nominal) or
-                self.nominalIsBuiltinStrType(nominal) or
-                (self.builtinNumKindFromNominalType(nominal) != null),
-            .record,
-            .tuple,
-            .fn_pure,
-            .fn_effectful,
-            .fn_unbound,
-            .empty_record,
-            .tag_union,
-            .empty_tag_union,
-            => false,
-        },
-        .alias => unreachable,
-        .flex, .rigid, .field_presence, .err => false,
-    };
 }
 
 fn nominalIsBuiltinStrType(self: *const Self, nominal_type: types_mod.NominalType) bool {
@@ -50222,21 +50223,20 @@ test "top-level destructure bound through its own name is a circular value defin
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertOneCanError("Circular Value Definition");
+    try test_env.assertOneTypeError("Circular Value Definition");
 }
 
-/// Assert that canonicalization reported exactly one circular value
-/// definition for each expected name and nothing else, in any order.
+/// Assert that checking reported exactly one circular value definition for
+/// each expected name and nothing else, in any order.
 fn expectCircularValueDefinitions(test_env: anytype, expected_names: []const []const u8) error{ OutOfMemory, TestExpectedEqual, TestUnexpectedResult }!void {
-    const diagnostics = try test_env.module_env.getDiagnostics();
-    defer std.testing.allocator.free(diagnostics);
-    try std.testing.expectEqual(expected_names.len, diagnostics.len);
+    const problems = test_env.checker.problems.problems.items;
+    try std.testing.expectEqual(expected_names.len, problems.len);
     for (expected_names) |expected_name| {
         const expected_ident = try test_env.module_env.common.idents.insert(std.testing.allocator, Ident.for_text(expected_name));
         var reports: usize = 0;
-        for (diagnostics) |diagnostic| {
-            try std.testing.expect(diagnostic == .circular_value_definition);
-            if (diagnostic.circular_value_definition.ident.eql(expected_ident)) reports += 1;
+        for (problems) |found_problem| {
+            try std.testing.expect(found_problem == .circular_value_definition);
+            if (found_problem.circular_value_definition.ident.eql(expected_ident)) reports += 1;
         }
         try std.testing.expectEqual(@as(usize, 1), reports);
     }
@@ -50631,6 +50631,41 @@ test "literal pattern strict demands flow through a called function summary" {
     try test_env.assertOneTypeError("Circular Value Definition");
 }
 
+test "construction omitting a defaulted field demands the default's references" {
+    // `cfg` omits the defaulted field `n`, whose default references `base`,
+    // declared after `cfg`. Materializing `cfg` materializes the default, so
+    // the top-level demand graph carries the explicit edge cfg -> base
+    // (design.md "Defaulted Fields": omission edges are explicit, not
+    // recovered later).
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.init("Test",
+        \\Cfg := { n : U8 ?? base }
+        \\
+        \\cfg : Cfg
+        \\cfg = Cfg.{}
+        \\
+        \\base : U8
+        \\base = 40 + 2
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    const env = test_env.module_env;
+    const cfg_ident = try env.common.idents.insert(std.testing.allocator, Ident.for_text("cfg"));
+    const base_ident = try env.common.idents.insert(std.testing.allocator, Ident.for_text("base"));
+    var cfg_def: ?CIR.Def.Idx = null;
+    var base_def: ?CIR.Def.Idx = null;
+    for (env.store.sliceDefs(env.all_defs)) |def_idx| {
+        const def = env.store.getDef(def_idx);
+        if (env.store.getExpr(def.expr) == .e_anno_only) continue;
+        const pattern = env.store.getPattern(def.pattern);
+        if (pattern != .assign) continue;
+        if (pattern.assign.ident.eql(cfg_ident)) cfg_def = def_idx;
+        if (pattern.assign.ident.eql(base_ident)) base_def = def_idx;
+    }
+    try std.testing.expect(DependencyGraph.hasDependency(env.topLevelDemandDependencies(), cfg_def.?, base_def.?));
+}
+
 fn expectCircularValues(comptime source: []const u8, count: usize) @import("test/TestEnv.zig").TestEnvError!void {
     const TestEnv = @import("test/TestEnv.zig");
     var test_env = try TestEnv.init("FunctionValueDemand", source);
@@ -50667,6 +50702,13 @@ test "a closure a constant stores without invoking it may read that constant" {
     try expectCircularValues(
         \\handlers : List(Box(U64 -> U64))
         \\handlers = [Box.box(|k| List.len(handlers) + k)]
+    , 0);
+}
+
+test "an unannotated value referenced only from a closure its holder stores is not a value cycle" {
+    try expectCircularValues(
+        \\x = List.len(y)
+        \\y = [|_| x]
     , 0);
 }
 
@@ -50711,7 +50753,7 @@ test "an associated function called through its type demands its body" {
     );
     defer test_env.deinit();
 
-    try test_env.assertCanErrors(&.{ "Circular Value Definition", "Circular Value Definition" });
+    try test_env.assertTypeErrorTitles(&.{ "Circular Value Definition", "Circular Value Definition" });
 }
 
 test "a where-clause method demands the body each instantiation selects" {
@@ -55494,17 +55536,6 @@ fn stepDerivedEncodeNominal(
     }
     if (self.builtinNumKindFromNominalType(nominal)) |num_kind| {
         return .{ .done = try self.validateEncodeFormatMethod(encoding_var, state_var, nominal_var, specDeclForNumKind(BuiltinEncodeSpecDecl, num_kind), err_var, constraint, env, region) };
-    }
-    // A user opaque over a builtin scalar (`Money := F64`, `Username := Str`) validates its derived
-    // encoder through the backing scalar, threading the same err_var: error-row unification then
-    // rejects a fallible backing (F32/F64) exactly as a bare scalar is, and passes an infallible one
-    // (Str/Bool/int/Dec), instead of slipping through to a lowering panic.
-    // `varResolvesToBuiltinScalarNominal` admits only ground scalars, so the declaration's backing
-    // template equals the instance here and is safe to unify directly.
-    if (self.nominalDeclBackingTemplate(nominal)) |backing_var| {
-        if (self.varResolvesToBuiltinScalarNominal(backing_var)) {
-            return component(backing_var);
-        }
     }
     if (self.nominalBuiltinPayloadVar(nominal, .list)) |payload_var| {
         if (derivedCodecFailed(try self.validateEncodeFormatMethod(encoding_var, state_var, nominal_var, .list, err_var, constraint, env, region))) |result| return .{ .done = result };

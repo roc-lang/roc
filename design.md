@@ -598,8 +598,8 @@ a build writes.
 
 A pack entry's code is a function of the procedure alone: every reference
 from it into code placed with it, and every reference by identity to code
-placed elsewhere, holds no displacement in the stored bytes
-(`LirCodeGen.normalizeArtifactRefSite`), since placement patches each again.
+placed elsewhere, holds no displacement in the stored bytes, since placement
+patches each again.
 Two programs that compile one procedure therefore store the same bytes for it
 however their buffers were laid out, which is what lets a dev build take
 compile-time evaluation's code for a procedure as its own (tested by
@@ -1860,8 +1860,8 @@ An expect never changes state outside its own body (see "Control Flow and Var
 Writes Inside `expect`"), so the shared Monotype lowers it as a plain `expect` statement whose
 condition is an ordinary expression. Running or omitting it changes no variable
 the continuation reads, so target LIR lowering selects run/omit per consumer
-without any merge. Checked loop mutation plans and Monotype state merges
-likewise never look inside expect bodies.
+without any merge. Checked loop mutation and state merge plans likewise
+never look inside expect bodies, so both expect modes read the same plans.
 
 Compile-time evaluation is a function of the checked program alone. Every
 command that finalizes checking specializes the same roots, every checked
@@ -2090,8 +2090,8 @@ parked, unparked, and upgraded requests, and never-run stubs.
 A runtime build fills the object cache with packs of dev code; compile-time
 evaluation reads them. A command that only checks fills it too: compile-time
 evaluation runs a dev build's code, so once checking completes with no error,
-the CLI files the code evaluation ran, lifted from each stage's image
-(`CompletedStages.artifacts`) with one copy of each procedure, as one pack of
+the CLI files the code evaluation ran, lifted from each stage's image with
+one copy of each procedure, as one pack of
 its keyed closed specializations, under the same withholding rules as a
 runtime pack: an entry whose closure names a program-local symbol it does not
 carry, or still converts a literal, is not offered. A completed value the
@@ -2140,7 +2140,7 @@ and compile-time code calls nothing in the compiler. Compile-time evaluation
 compiles its procedures as a dev build's object code, so a procedure's code
 in evaluation is the code a build links, and links that code into its own
 image (`HostSplice`): the program's static data, the slots evaluation
-publishes completed values into included, is placed in a writable region at
+writes completed values into included, is placed in a writable region at
 the end of the image, where object code's PC-relative data references reach
 it. Immutable carried data is captured only from referenced export closure
 using one prepared catalog. Native procedure code ownership
@@ -5463,8 +5463,8 @@ Ordinary top-level constant bodies use a stronger compile-time-root context that
 suppresses nested root selection and nested eligibility entirely, because the
 enclosing body is already evaluated at compile time.
 
-Canonicalization's top-level dependency order remains an input for ordinary
-top-level constants, and checking should prefer to emit selected hoisted roots
+The checked strict-demand relation orders ordinary top-level constants, and
+checking should prefer to emit selected hoisted roots
 in dependency-first order as it proves and selects them. The request order is
 then computed from explicit checked references across all same-module
 compile-time roots: ordinary top-level constants, selected hoisted constants,
@@ -5474,22 +5474,34 @@ the checked module is finalized. The durable checked module data stores only the
 roots, the sorted request stream, stored `ConstStore` payloads, and sparse
 lookup indexes.
 
-Canonicalization outputs the initial exact strict-demand edges between top-level
-definitions. Literal conversions and method dispatches remain leaves in that
-initial relation because their method targets do not exist until static
-dispatch resolves. At the checked boundary, checking supplies every selected
-dispatch target (literal conversions, method calls, operators, interpolation,
-`for` loop iteration, and the component dispatches derived for a derived
-method, structural comparison, or hash) and reruns the same demand analysis
-once. Demand summaries retain an unresolved dispatch requirement while it is
+The exact strict-demand edges between top-level definitions are computed once,
+at the checked boundary, because literal conversions and method dispatches
+have no targets until static dispatch resolves. Checking supplies every
+selected dispatch target (literal conversions, method calls, operators,
+interpolation, `for` loop iteration, and the component dispatches derived for
+a derived method, structural comparison, or hash) to the demand analysis. Demand summaries retain an unresolved dispatch requirement while it is
 polymorphic; when a callable is demanded, the checker-produced
 `SchemeUseRecord` pairs map that requirement through each concrete
 instantiation until its selected target is exact, so a `where`-clause method
 demands only the body its own instantiation selects. A resolved dispatch is an
 eager call, so the selected callable body's top-level demands flow into its
-caller exactly like those of any other statically known call. The resulting
-relation replaces the initial one, and checking applies the ordinary SCC
-non-function-cycle rule before constructing the CheckedModule.
+caller exactly like those of any other statically known call. Checking then
+reports every non-function definition in a cyclic SCC of the relation as a
+circular value definition and poisons it before constructing the
+CheckedModule.
+
+Most value cycles need neither a dispatch target nor a function value to be
+seen, and those are rejected before any definition is checked, so no type is
+inferred from a value that is never computed. Every demand edge is a name
+reference, so such a cycle lies within one recursive binding group that holds
+a value definition. For each such group, checking runs the same demand
+analysis over the group and every definition it reaches, with dispatches as
+leaves and function values left out, and poisons the cycles it finds; the
+binding groups are then recomputed without the poisoned definitions'
+references. Inference itself never decides a value cycle: an in-group
+reference to a value member links monomorphically, like any other
+binding-group reference, and the relation built after checking rejects the
+cycles only dispatch targets or function values reveal.
 
 ### Function Values In Strict Demand
 
@@ -5515,9 +5527,6 @@ function it holds. An importer reads it for each imported function it calls,
 including a method dispatch that selects a foreign target. Imports are
 acyclic, so an imported function's body can never demand the importer's
 values, and the record is the only thing an importer needs from it.
-Canonicalization's initial relation has no knowledge of imported functions,
-so it leaves function values out; the checked relation alone applies this
-rule.
 
 The finalized edges are durable `ModuleEnv` data, serialized independently of
 the transient SCC evaluation order, because `RootRequestTable` scheduling and
@@ -11932,7 +11941,7 @@ non-record backings construct no fields. Three consumers agree on it:
 (1) `DefaultCycles`—the omission edges of the cycle graph; (2)
 `DependencyGraph`'s demand walk—a def constructing `Cfg.{}` that omits a
 defaulted field depends on everything that default's expression demands,
-so `evaluation_order` and the top-level demand relation carry the edge
+so the top-level demand relation carries the edge
 explicitly and comptime root scheduling never re-derives it; (3)
 `collectNameReferences` (check order)—the checker materializes the
 default at the construction site, so the default's referenced defs are
@@ -13636,11 +13645,19 @@ function argument may have exposed an overlap in its return row.
 
 Procedure-use roots and ordinary specialization bodies can lower concurrently
 because their results cross the worker boundary as sealed, graph-free drafts.
-Each executor lane owns a private cumulative type/name domain. Ordinary bodies
+Each executor lane owns a private cumulative type/name domain, which the
+coordinator reads in place rather than copying. A completed task's shard
+carries prefix views of the lane's stores at the task's end. The lane never
+moves or rewrites a row below a captured boundary: its stores grow into fresh
+backings, and each replaced backing stays alive until the coordinator has
+absorbed a later epoch of that lane, after which no view reaches it. The
+coordinator's view of a lane is its latest absorbed epoch's views plus the
+cumulative relocation into the program. Digest caches are not part of a view,
+since the lane keeps filling them; the program computes its own. Ordinary bodies
 stream through a bounded executor session: the coordinator accepts completed
 shards strictly in request order and immediately makes discovered requests
 available to free lanes. Running and completed-but-unaccepted tasks share the
-same bounded window. Each immutable lane suffix is absorbed even when its body
+same bounded window. Each immutable lane epoch is absorbed even when its body
 is discarded after an earlier shard committed its reservation, preserving cumulative lane ids.
 The pending FIFO is a reusable geometrically growing ring. Dispatch consumes
 its head without moving the undispatched suffix; ordered acceptance never
@@ -13667,7 +13684,13 @@ which matches the type/name snapshot. Patricia branches preserve all prior
 keys when splitting; full keys and exact evidence/constraint comparisons
 resolve collisions. Entries and their evidence remain alive until workers have
 joined. This keeps memo reuse concurrent without exposing mutable hash-table
-storage or making results depend on completion order. Global identities are still
+storage or making results depend on completion order. A lane replays a
+coordinator entry in place, in the program's store domain: each settled leaf
+and name crosses through the lane's cumulative program-to-workspace relocation
+as instantiation reaches it, and matching a request relocates only the
+request's leaves. A lane keeps copies only of the summaries it produced,
+until the coordinator shares them through a table one of the lane's tasks
+reads; the coordinator's table then answers for them. Global identities are still
 assigned solely by ordered coordinator commit. Root kinds
 that reserve durable identities or write directly to the final program remain
 serial barriers until they have the same sealed-draft boundary. A template
@@ -14051,9 +14074,10 @@ repeats, never what it lowers. The pins are the compile tests "interface
 summary replay of an open request leaf lowers like a fresh expansion within
 one body" and "... across bodies", which lower one program with and without
 summary replay and require identical specialization identities and LIR. The
-coordinator and each executor lane own cumulative tables. Frozen inputs borrow
-the coordinator table read-only; ordered commit relocates interned type leaves
-and interned names.
+coordinator owns the cumulative table; each executor lane holds only its own
+summaries the coordinator has not yet shared back to it. Frozen inputs
+borrow the coordinator table read-only; ordered commit relocates interned type
+leaves and interned names.
 Settled leaves across each completed batch share one type import and interning
 transaction. Cache insertion retains worker leaves before their transaction ends;
 coordinator leaves already belong to permanent storage and need no extra sealing.
@@ -14776,6 +14800,19 @@ Only binders in scope at loop entry become carried state. Every iteration and
 exit transports that state explicitly. An expression-form loop produces unit
 after binding its exit state, and enclosing branch results must be constructed
 inside the scope of those bindings. Discarding unit never discards mutations.
+
+Monotype threads reassigned binders through `if`, `match`, `for`, and
+expression statements as explicit state, and checked output records those
+binders the same way. Every `if`, `match`, and `for` expression and every
+expression statement references a state merge plan: the binders reassigned
+anywhere inside it, in source order with each binder's first occurrence kept,
+excluding nested function bodies and `expect` bodies. A `for` expression's
+plan is its iterable's binders followed by its loop's. One pass over the
+checked bodies records loop and state merge plans together, reusing each
+nested construct's plan instead of revisiting its parts, and an expression
+statement over control flow shares that expression's plan. Monotype reads
+these plans and keeps no memo of its own, so parallel lanes never each
+recompute them.
 
 Monotype normally preserves source control structure, but compiler-generated
 algorithms may introduce typed `join_point` and `jump` expressions when their
@@ -21880,7 +21917,7 @@ an object-cache pack and back into another program's image):
   means more than a crash at its statement (`LIR.FailureMeaning`): code
   checking rejected, a literal conversion rejecting its literal, an
   exhaustiveness failure at a checked site, or a read of a compile-time value
-  whose producer failed. Meanings name checked modules by artifact key and
+  whose producer failed. Meanings name checked modules by checked module key and
   checked ids, never program-local statement ids or numbering, so cached code
   reports its failures exactly like freshly compiled code. `LirStore`
   derives a failing statement's meaning (`failureMeaning`); code generation
@@ -22549,7 +22586,7 @@ Producers are grouped into the strongly connected groups of that graph, and
 each group gets a level one past the deepest level it reads. The roots of one
 level are independent pure computations and run together, each module's
 checked roots as one batch on the post-check executor's lanes, then each
-literal root. Every root of a level publishes its value or failure before the
+literal root. Every root of a level records its value or failure before the
 next level starts. A batch's results are committed and reported in the
 batch's root order, so output does not depend on scheduling.
 

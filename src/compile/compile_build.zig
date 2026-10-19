@@ -1138,6 +1138,7 @@ pub const BuildEnv = struct {
             // and app-less builds (platform/package/module roots) record that
             // explicitly so every module takes the transform.
             if (is_main_pkg) {
+                coord.markRootPackage(coord_pkg.name);
                 if (pkg.kind == .app or pkg.kind == .default_app) {
                     coord.markAppPackage(coord_pkg.name);
                 } else {

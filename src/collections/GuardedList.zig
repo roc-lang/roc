@@ -8,6 +8,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const Allocator = std.mem.Allocator;
+const SupersededBackings = @import("SupersededBackings.zig");
 const debug_guards = builtin.mode == .debug;
 
 /// Growable list wrapper that checks stale borrows in Debug and erases to `std.ArrayList` otherwise.
@@ -98,6 +99,19 @@ pub fn List(comptime T: type, comptime list_name: []const u8) type {
             const old = self.moveStateBeforeGrowth();
             try self.__guarded_backing.ensureUnusedCapacity(allocator, additional_count);
             self.bumpIfMoved(old);
+        }
+
+        /// `ensureUnusedCapacity` for a list whose captured prefix another
+        /// thread may be reading: growth keeps the old backing alive in
+        /// `superseded` instead of moving or freeing it.
+        pub fn ensureUnusedCapacityKeepingBacking(
+            self: *Self,
+            allocator: Allocator,
+            additional_count: usize,
+            superseded: *SupersededBackings,
+        ) Allocator.Error!void {
+            const moved = try superseded.ensureUnusedCapacity(T, &self.__guarded_backing, allocator, additional_count);
+            if (debug_guards and moved and self.__guarded_backing.items.len != 0) self.__guarded_generation +%= 1;
         }
 
         pub fn ensureTotalCapacity(self: *Self, allocator: Allocator, new_capacity: usize) Allocator.Error!void {

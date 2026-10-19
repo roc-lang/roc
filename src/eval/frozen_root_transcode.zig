@@ -94,7 +94,7 @@ const Builder = struct {
             try self.source_relocations.ensureUnusedCapacity(self.graph.allocator, @intCast(relocations.len));
             try self.indexed_sources.put(self.graph.allocator, src.symbol, {});
             for (relocations, 0..) |rel, index| {
-                const entry = self.source_relocations.getOrPutAssumeCapacity(.{ .symbol = src.symbol, .offset = rel.offset });
+                const entry = self.source_relocations.getOrPutAssumeCapacity(.{ .symbol = src.symbol, .offset = @intCast(rel.offset) });
                 if (entry.found_existing) invariant("frozen symbol had two relocations at one offset");
                 entry.value_ptr.* = @intCast(index);
             }
