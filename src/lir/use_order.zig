@@ -6,6 +6,8 @@ const builtin = @import("builtin");
 const collections = @import("collections");
 const core = @import("lir_core");
 const body_clone = @import("body_clone.zig");
+const task_executor = @import("base").post_check_task_executor;
+const invariant = @import("base").invariant;
 const Allocator = std.mem.Allocator;
 const LIR = core.LIR;
 const LirStore = core.LirStore;
@@ -148,9 +150,9 @@ pub const UseOrder = struct {
                 self.defs_of.clearIndex();
                 self.preds.clearIndex();
             }
-            self.reads_of.deinit(allocator);
-            self.defs_of.deinit(allocator);
-            self.preds.deinit(allocator);
+            self.reads_of.deinit();
+            self.defs_of.deinit();
+            self.preds.deinit();
             allocator.free(self.unresolved_list);
             allocator.free(self.members);
         }
@@ -275,7 +277,10 @@ pub const UseOrder = struct {
     };
 
     /// Sorted rows of statement ids per key, placed through a shared index.
+    /// A row table may be built on a worker lane, so it keeps the allocator
+    /// that owns its storage.
     pub const Rows = struct {
+        allocator: Allocator,
         index: *RowIndex,
         /// The keys whose rows are nonempty.
         keys: []u32,
@@ -298,22 +303,22 @@ pub const UseOrder = struct {
             for (self.keys) |key| self.index.len[key] = 0;
         }
 
-        pub fn deinit(self: *Rows, allocator: Allocator) void {
-            allocator.free(self.keys);
-            allocator.free(self.stmts);
+        pub fn deinit(self: *Rows) void {
+            self.allocator.free(self.keys);
+            self.allocator.free(self.stmts);
         }
     };
 
     const RowKind = enum { reads, defs };
 
     pub fn init(allocator: Allocator, store: *const LirStore, lists: []const []const LIR.CFStmtId) Allocator.Error!UseOrder {
-        return fromTopology(allocator, try initTopology(allocator, store, lists, .{ .owned = .with_marks }));
+        return fromTopology(allocator, try initTopology(allocator, store, lists, .{ .owned = .with_marks }, null));
     }
 
     /// An order over `lists` whose store-indexed tables are the caller's
     /// reusable `scratch`, which must outlive the order.
     pub fn initInScratch(allocator: Allocator, store: *const LirStore, lists: []const []const LIR.CFStmtId, scratch: *Scratch) Allocator.Error!UseOrder {
-        return fromTopology(allocator, try initTopology(allocator, store, lists, .{ .scratch = scratch }));
+        return fromTopology(allocator, try initTopology(allocator, store, lists, .{ .scratch = scratch }, null));
     }
 
     fn fromTopology(allocator: Allocator, topology: Topology) UseOrder {
@@ -339,7 +344,16 @@ pub const UseOrder = struct {
         compact: *Domain,
     };
 
-    pub fn initTopology(allocator: Allocator, store: *const LirStore, lists: []const []const LIR.CFStmtId, source: Tables) Allocator.Error!Topology {
+    /// With an executor of more than one lane, the three row tables are built
+    /// as one session of three tasks; each table then belongs to the output
+    /// allocator of the lane that built it.
+    pub fn initTopology(
+        allocator: Allocator,
+        store: *const LirStore,
+        lists: []const []const LIR.CFStmtId,
+        source: Tables,
+        executor: ?*const task_executor.Executor,
+    ) Allocator.Error!Topology {
         if (builtin.is_test) topology_builds += 1;
         const scratch: ?*Scratch = switch (source) {
             .owned, .compact => null,
@@ -397,26 +411,19 @@ pub const UseOrder = struct {
             }
         }
 
-        var reads_of = try buildRows(allocator, store, members, &tables.reads_index, .reads);
-        errdefer {
-            reads_of.clearIndex();
-            reads_of.deinit(allocator);
-        }
-        var defs_of = try buildRows(allocator, store, members, &tables.defs_index, .defs);
-        errdefer {
-            defs_of.clearIndex();
-            defs_of.deinit(allocator);
-        }
-        var unresolved_list = std.ArrayList(u32).empty;
-        errdefer unresolved_list.deinit(allocator);
-        errdefer for (unresolved_list.items) |stmt| tables.unresolved.unset(tables.stmtIndex(stmt));
-        var preds = try buildPreds(allocator, store, members, tables, &unresolved_list);
-        errdefer {
-            preds.clearIndex();
-            preds.deinit(allocator);
-        }
-        const owned_unresolved = try allocator.dupe(u32, unresolved_list.items);
-        unresolved_list.deinit(allocator);
+        var row_tables = [_]RowTableTask{
+            .{ .store = store, .members = members, .tables = tables, .table = .reads },
+            .{ .store = store, .members = members, .tables = tables, .table = .defs },
+            .{ .store = store, .members = members, .tables = tables, .table = .preds },
+        };
+        errdefer for (&row_tables) |*table| table.release();
+        try RowTableTask.buildAll(allocator, &row_tables, executor);
+        const owned_unresolved = try allocator.dupe(u32, row_tables[2].unresolved.items);
+        // Nothing below fails: the topology takes every row table.
+        row_tables[2].unresolved.deinit(row_tables[2].allocator.?);
+        const reads_of = row_tables[0].rows.?;
+        const defs_of = row_tables[1].rows.?;
+        const preds = row_tables[2].rows.?;
         buildBlocks(store, members, tables, &preds);
         // Only a reusable scratch needs `seen` for a later build, or the
         // member inventory to reset its entries on release.
@@ -592,6 +599,7 @@ pub const UseOrder = struct {
                     std.mem.sortUnstable(u32, self.stmts[self.index.start[raw]..][0..self.index.len[raw]], {}, std.sort.asc(u32));
                 }
                 return .{
+                    .allocator = self.allocator,
                     .index = self.index,
                     .keys = try self.keys.toOwnedSlice(self.allocator),
                     .stmts = self.stmts,
@@ -637,6 +645,79 @@ pub const UseOrder = struct {
             }
         }
         return try builder.finish();
+    }
+
+    /// One of a topology's three row tables over fixed members and jump
+    /// targets. Each table writes only its own row index (predecessors also
+    /// the unresolved set), so the three are independent tasks.
+    const RowTableTask = struct {
+        store: *const LirStore,
+        members: []const u32,
+        tables: *Scratch,
+        table: enum { reads, defs, preds },
+        /// The allocator owning `rows` and `unresolved`, once executed.
+        allocator: ?Allocator = null,
+        rows: ?Rows = null,
+        unresolved: std.ArrayList(u32) = .empty,
+        failed: bool = false,
+        completed: bool = false,
+
+        fn run(context: *anyopaque, worker: task_executor.Worker) ?*anyopaque {
+            const self: *@This() = @ptrCast(@alignCast(context));
+            self.execute(worker.allocator) catch {
+                self.failed = true;
+            };
+            return self;
+        }
+
+        fn execute(self: *@This(), allocator: Allocator) Allocator.Error!void {
+            self.allocator = allocator;
+            self.rows = switch (self.table) {
+                .reads => try buildRows(allocator, self.store, self.members, &self.tables.reads_index, .reads),
+                .defs => try buildRows(allocator, self.store, self.members, &self.tables.defs_index, .defs),
+                .preds => try buildPreds(allocator, self.store, self.members, self.tables, &self.unresolved),
+            };
+        }
+
+        /// Frees whatever this table built and resets the entries it wrote.
+        fn release(self: *@This()) void {
+            const allocator = self.allocator orelse return;
+            if (self.rows) |*rows| {
+                rows.clearIndex();
+                rows.deinit();
+                self.rows = null;
+            }
+            for (self.unresolved.items) |stmt| self.tables.unresolved.unset(self.tables.stmtIndex(stmt));
+            self.unresolved.deinit(allocator);
+            self.allocator = null;
+        }
+
+        /// Builds every table, on lanes when there are several. A failed
+        /// table leaves the others built for the caller to release.
+        fn buildAll(allocator: Allocator, row_tables: *[3]RowTableTask, executor: ?*const task_executor.Executor) Allocator.Error!void {
+            const lanes = executor orelse return buildInline(allocator, row_tables);
+            if (lanes.worker_count <= 1) return buildInline(allocator, row_tables);
+            var tasks: [3]task_executor.Task = undefined;
+            for (&tasks, row_tables, 0..) |*task, *context, id| task.* = .{ .id = id, .context = context, .run = run };
+            var completions: [3]task_executor.Completion = undefined;
+            try lanes.run(&tasks, &completions);
+            for (completions) |completion| {
+                if (completion.id >= row_tables.len or completion.worker_id >= lanes.worker_count) topologyInvariant("row table received invalid task identity");
+                const context = &row_tables[completion.id];
+                if (context.completed or completion.value != @as(*anyopaque, @ptrCast(context))) topologyInvariant("row table received invalid task completion");
+                context.completed = true;
+            }
+            for (row_tables) |context| if (context.failed) return error.OutOfMemory;
+        }
+
+        fn buildInline(allocator: Allocator, row_tables: *[3]RowTableTask) Allocator.Error!void {
+            for (row_tables) |*context| try context.execute(allocator);
+        }
+    };
+
+    fn topologyInvariant(comptime message: []const u8) noreturn {
+        if (builtin.mode == .debug) invariant(message, .{});
+        unreachable;
     }
 
     /// Predecessor rows over the successor edges of every member, and the
@@ -699,7 +780,7 @@ pub const UseOrder = struct {
         if (only_proc == null) return init(allocator, store, lists.items);
         const domain = try Domain.create(allocator, store, lists.items);
         errdefer domain.destroy(allocator);
-        return fromTopology(allocator, try initTopology(allocator, store, lists.items, .{ .compact = domain }));
+        return fromTopology(allocator, try initTopology(allocator, store, lists.items, .{ .compact = domain }, null));
     }
 
     pub fn deinit(self: *UseOrder) void {
