@@ -33128,7 +33128,7 @@ pub const CheckedModuleArtifact = struct {
     /// Owns the evaluation columns of a finalized artifact that a compilation
     /// reopened to evaluate roots no earlier compilation demanded (see
     /// `reopenForEvaluation`). Process-local, like `pairing_arena`.
-    reopened_arena: ?*std.heap.ArenaAllocator = null,
+    reopened_arena: ?*base.SingleThreadArena = null,
     /// 16-byte-aligned buffer backing a relocated (frozen) artifact loaded from
     /// the disk cache or the compiler's static builtin data. When set, every
     /// sub-store's slices alias this buffer, so `deinit` handles this buffer plus
@@ -33215,8 +33215,8 @@ pub const CheckedModuleArtifact = struct {
         // artifact this process published already owns them.
         if (self.serialized_backing != null or self.pairing_arena != null) {
             const owner = if (self.pairing_arena) |arena| arena.allocator() else blk: {
-                const arena = try allocator.create(std.heap.ArenaAllocator);
-                arena.* = std.heap.ArenaAllocator.init(allocator);
+                const arena = try allocator.create(base.SingleThreadArena);
+                arena.* = base.SingleThreadArena.init(allocator);
                 self.reopened_arena = arena;
                 break :blk arena.allocator();
             };
