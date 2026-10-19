@@ -123,7 +123,7 @@ test "every compliant form passes" {
     , &.{});
 }
 
-test "bare and mis-attributed forms are flagged" {
+test "bare and misattributed forms are flagged" {
     try expectViolations(
         \\fn f(x: ?u8, y: error{Failed}!u8, e: enum { a, b }) u8 {
         \\    switch (e) {
