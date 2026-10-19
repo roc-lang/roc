@@ -199,7 +199,14 @@ ground_expected_backups: std.AutoHashMapUnmanaged(u64, Var) = .empty,
 ground_polarized_instances: std.AutoHashMapUnmanaged(PolarizedInstanceKey, Var) = .empty,
 /// Ground subtrees of the latest instance of a type declaration at each
 /// position whose instance is not ground. See `instantiateVarPolarized`.
-polarized_instance_subtrees: std.AutoHashMapUnmanaged(PolarizedInstanceKey, []Instantiator.SharedSubtree) = .empty,
+polarized_instance_subtrees: std.AutoHashMapUnmanaged(PolarizedInstanceKey, std.ArrayListUnmanaged(Instantiator.SharedSubtree)) = .empty,
+/// Storage of the most recently finished ground walk, kept with its capacity
+/// for the next one. A walk that starts while another is in progress finds it
+/// empty and allocates its own.
+ground_marks_scratch: GroundMarks = .{},
+/// Storage of the most recently finished filtering of shared subtrees, kept
+/// like `ground_marks_scratch`.
+shared_subtrees_scratch: std.ArrayListUnmanaged(Instantiator.SharedSubtree) = .empty,
 /// Variable-free types reached by generated-codec derivation snapshots or by
 /// derivation row closing, each with the copy a snapshot made of it, if one
 /// has. Every copy of a variable-free type is the same, so later snapshots
@@ -243,6 +250,13 @@ alias_row_name_set: std.AutoHashMapUnmanaged(AliasRowName, void) = .empty,
 /// stack's capacity retained, so checking a body does not pay a heap
 /// allocation and a task stack grown from empty per `checkExpr`.
 expr_kernel_pool: std.ArrayList(*ExprKernelActivity) = .empty,
+/// Finished block checks kept for reuse. A block's statement state is far
+/// larger than any other suspended expression's, so a block task holds it out
+/// of line rather than sizing every task by it.
+block_check_pool: std.ArrayListUnmanaged(*BlockCheck) = .empty,
+/// Finished implicit parser runs kept for reuse with their walk storage's
+/// capacity. Runs nest, and each keeps its address while it is open.
+implicit_parse_run_pool: std.ArrayListUnmanaged(*ImplicitParseRun) = .empty,
 /// Activity stacks of finished `runCheckActivities` calls, kept with their
 /// capacity for the next run. Each run takes its own stack, so a nested run
 /// never moves the activity an outer step is still working on.
@@ -253,6 +267,25 @@ check_activity_pool: std.ArrayList(std.ArrayList(CheckActivity)) = .empty,
 pattern_frame_pool: std.ArrayList(std.ArrayList(PatternCheckFrame)) = .empty,
 /// A map from one var to another. Used to apply type arguments in instantiation
 rigid_var_substitutions: std.AutoHashMapUnmanaged(Ident.Idx, Var) = .empty,
+/// The receiver and parameter substitutions of the most recently finished
+/// `declareWhereAliasConstraints`, kept with their capacity for the next one.
+/// A call that starts while another is in progress finds it empty.
+where_alias_substitutions: std.AutoHashMapUnmanaged(Ident.Idx, Var) = .empty,
+/// Storage of the most recently finished `normalizeRowUnion`, kept with its
+/// capacity for the next one. Relating labels can normalize another row,
+/// which then finds it empty and allocates its own.
+row_union_scratch: RowUnionScratch = .{},
+/// Storage of the most recently finished
+/// `deduplicateGeneralizedDispatchRequirements`, kept like
+/// `row_union_scratch`; null until the first one finishes.
+dispatch_dedup_scratch: ?DispatchDedupScratch = null,
+/// The slot images of the most recently finished `relatePredeclaredUse`, kept
+/// like `row_union_scratch`; null until the first one finishes.
+predeclared_use_images: ?collections.DenseMap(Var, Var) = null,
+/// The first constraint position of each method name of the most recently
+/// finished rigid where-clause set (`stepRigidAnnoGen`), kept with its
+/// capacity like `where_alias_substitutions`.
+where_constraint_representatives: std.AutoHashMapUnmanaged(Ident.Idx, u32) = .empty,
 /// Header rigid vars for the currently-processed type declaration.
 /// Used to resolve rigid vars in local type decl bodies that were not
 /// rewritten as rigid_var_lookup during canonicalization.
@@ -337,6 +370,15 @@ exhaustiveness_arena: base.SingleThreadArena,
 exhaustiveness_arena_in_use: bool = false,
 /// scratch vars used to build up intermediate lists, used for various things
 scratch_vars: base.Scratch(Var),
+/// Each open type application's argument reaches, one run per application
+/// frame above the frames it nests in (`applicationArgumentReaches`).
+anno_apply_reaches: std.ArrayListUnmanaged(GenTypeAnnoCtx.AnnotationGenCtx.AdapterReach) = .empty,
+/// The walk of one `applicationArgumentReaches` call: the reaches each
+/// resolved var was visited at, as a bit set over `AdapterReach`, its pending
+/// vars, and which formals it reached.
+adapter_reach_visited: collections.DenseMapUnmanaged(Var, u8) = .empty,
+adapter_reach_pending: std.ArrayListUnmanaged(AdapterReachItem) = .empty,
+adapter_reach_seen_formals: std.ArrayListUnmanaged(bool) = .empty,
 /// scratch (parameter name, instantiated flex copy) pairs for the default
 /// parameter-constraint judgment (`checkDefaultParameterConstraints`)
 scratch_default_param_vars: base.Scratch(DefaultParamVar),
@@ -587,9 +629,11 @@ scratch_scheme_owned_codec_fns: std.ArrayListUnmanaged(Var) = .empty,
 /// Dispatch requirements discovered while checking a prospective scheme.
 /// Candidates live in an append-only arena while any prospective owner is
 /// active, and the owner index lets each generalization boundary visit only its
-/// own entries. Probe rollback removes speculative tail entries from both.
+/// own entries: each owner's candidates form one doubly linked chain through the
+/// arena, and the index holds the chain's ends. Probe rollback removes
+/// speculative tail entries from both.
 scheme_requirement_candidates: std.ArrayListUnmanaged(SchemeRequirementCandidate) = .empty,
-scheme_requirement_candidate_indices_by_owner: collections.DenseMapUnmanaged(Var, std.ArrayListUnmanaged(u32)) = .empty,
+scheme_requirement_candidate_chains_by_owner: collections.DenseMapUnmanaged(Var, SchemeRequirementCandidateChain) = .empty,
 /// The innermost expression whose type is the scheme currently being built.
 /// Constraint creation and transitive scheme instantiation stamp requirements
 /// with this exact owner instead of reconstructing ownership at a boundary.
@@ -639,7 +683,9 @@ predeclared_local_annotations: collections.DenseMapUnmanaged(CIR.Pattern.Idx, CI
 /// body's inference and the uses' constraints stay monomorphically consistent
 /// until the group's boundary generalizes the holes; see
 /// `predeclareAnnotationSchemeKeepingHolesShared` and `reunifySharedSchemeHoles`.
-hole_shared_schemes: collections.DenseMapUnmanaged(Var, []const Var) = .empty,
+/// Each value is a run of `hole_shared_vars`.
+hole_shared_schemes: collections.DenseMapUnmanaged(Var, HoleSharedRun) = .empty,
+hole_shared_vars: std.ArrayListUnmanaged(Var) = .empty,
 /// The one expression (a recursive group member's top-level RHS) whose
 /// generalization is suppressed because it lives in its group's shared rank
 /// frame and generalizes at the group boundary instead. Consume-once, like
@@ -777,8 +823,15 @@ bounding_annotation: ?CIR.Annotation.Idx = null,
 /// whole class, and rows of different definitions can share one class, so
 /// releasing one definition's bound restores every bound still owned there.
 bounded_row_marks: std.ArrayListUnmanaged(BoundedRowMark) = .empty,
-/// Scoped sink owned by the alias declaration currently being constructed.
+/// Scoped sink owned by the alias declaration currently being constructed:
+/// `alias_hidden_ext_vars` while one is, null otherwise.
 alias_hidden_exts: ?*std.ArrayListUnmanaged(Var) = null,
+/// The hidden polarity parameters of every alias declaration being
+/// constructed, one run per declaration frame above the runs of the frames it
+/// nests in. Appends while a declaration is innermost extend its run.
+alias_hidden_ext_vars: std.ArrayListUnmanaged(Var) = .empty,
+/// Roots `finishAliasDeclarationParameters` has added as parameters.
+alias_hidden_ext_seen: collections.DenseMapUnmanaged(Var, void) = .empty,
 nominal_positions: std.AutoHashMapUnmanaged(NominalPositionKey, ?[]annotation_positions.Positions) = .empty,
 annotation_implicit_open_exts: collections.DenseMapUnmanaged(CIR.Annotation.Idx, ImplicitOpenExtRange) = .empty,
 /// The `implicit_open_exts` ranges of top-level VALUE bindings that do not
@@ -1095,8 +1148,11 @@ dispatch_target_instantiations: std.ArrayListUnmanaged(DispatchTargetInstantiati
 dispatch_target_instantiation_by_fn_var: std.AutoHashMapUnmanaged(Var, u32) = .empty,
 /// Concrete dispatch replay (design.md): per replay shape hash, the edges
 /// whose target instance was ground right after their relation settled,
-/// with their exact shapes in `dispatch_replay_shapes`.
-dispatch_replay_sources: std.AutoHashMapUnmanaged(u64, std.ArrayListUnmanaged(DispatchReplaySource)) = .empty,
+/// with their exact shapes in `dispatch_replay_shapes`. Sources of one hash
+/// form a chain through `next_same_hash`, headed in
+/// `dispatch_replay_source_heads`.
+dispatch_replay_sources: std.ArrayListUnmanaged(DispatchReplaySource) = .empty,
+dispatch_replay_source_heads: std.AutoHashMapUnmanaged(u64, u32) = .empty,
 dispatch_replay_shapes: std.ArrayListUnmanaged(u8) = .empty,
 dispatch_replay_frozen_pairs: std.ArrayListUnmanaged(ModuleEnv.SchemeUsePair) = .empty,
 dispatch_replay_trees: std.ArrayListUnmanaged(u8) = .empty,
@@ -1153,8 +1209,11 @@ probe_link_copies: std.ArrayListUnmanaged(SavedCopy) = .empty,
 /// Schemes one of whose uses settled as a replay source would: only their
 /// uses encode a shape.
 use_replayable_schemes: collections.DenseMapUnmanaged(Var, void) = .empty,
-/// Per whole-use shape hash, the settled uses that are replay sources.
-use_replay_sources: std.AutoHashMapUnmanaged(u64, std.ArrayListUnmanaged(UseReplaySource)) = .empty,
+/// Per whole-use shape hash, the settled uses that are replay sources: sources
+/// of one hash form a chain through `next_same_hash`, headed in
+/// `use_replay_source_heads`.
+use_replay_sources: std.ArrayListUnmanaged(UseReplaySource) = .empty,
+use_replay_source_heads: std.AutoHashMapUnmanaged(u64, u32) = .empty,
 use_replay_shapes: std.ArrayListUnmanaged(u8) = .empty,
 use_replay_trees: std.ArrayListUnmanaged(u8) = .empty,
 /// Queue positions a use's settling processed ahead of the drain's cursor.
@@ -1499,6 +1558,8 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .ground_expected_backups = .keyed,
     .ground_polarized_instances = .keyed,
     .polarized_instance_subtrees = .keyed,
+    .ground_marks_scratch = .scratch,
+    .shared_subtrees_scratch = .scratch,
     .snapshot_ground_copies = .keyed,
     .snapshot_ground_epoch = .keyed,
     .var_set = .scratch,
@@ -1512,9 +1573,16 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .alias_row_names = .scratch,
     .alias_row_name_set = .scratch,
     .expr_kernel_pool = .scratch,
+    .block_check_pool = .scratch,
+    .implicit_parse_run_pool = .scratch,
     .check_activity_pool = .scratch,
     .pattern_frame_pool = .scratch,
     .rigid_var_substitutions = .scratch,
+    .where_alias_substitutions = .scratch,
+    .row_union_scratch = .scratch,
+    .dispatch_dedup_scratch = .scratch,
+    .predeclared_use_images = .scratch,
+    .where_constraint_representatives = .scratch,
     .type_decl_rigid_vars = .lexical,
     .pending_default_checks = .settled,
     .optional_field_accesses = .boundary,
@@ -1536,6 +1604,10 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .exhaustiveness_arena = .scratch,
     .exhaustiveness_arena_in_use = .lexical,
     .scratch_vars = .scratch,
+    .anno_apply_reaches = .scratch,
+    .adapter_reach_visited = .scratch,
+    .adapter_reach_pending = .scratch,
+    .adapter_reach_seen_formals = .scratch,
     .scratch_default_param_vars = .scratch,
     .scratch_tags = .scratch,
     .scratch_record_fields = .scratch,
@@ -1601,7 +1673,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .settled_static_dispatch_failure_exprs = .keyed,
     .scratch_scheme_owned_codec_fns = .scratch,
     .scheme_requirement_candidates = .frame_partitioned,
-    .scheme_requirement_candidate_indices_by_owner = .frame_partitioned,
+    .scheme_requirement_candidate_chains_by_owner = .frame_partitioned,
     .active_scheme_root = .lexical,
     .predeclared_scheme_vars = .keyed,
     .predeclared_slots = .keyed,
@@ -1612,6 +1684,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .predeclared_relation_vars = .keyed,
     .predeclared_local_annotations = .lexical,
     .hole_shared_schemes = .keyed,
+    .hole_shared_vars = .keyed,
     .suppress_generalize_expr = .lexical,
     .checking_call_arg = .lexical,
     .checking_immediate_callee = .lexical,
@@ -1638,6 +1711,8 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .bounding_annotation = .lexical,
     .bounded_row_marks = .keyed,
     .alias_hidden_exts = .lexical,
+    .alias_hidden_ext_vars = .scratch,
+    .alias_hidden_ext_seen = .scratch,
     .nominal_positions = .keyed,
     .annotation_implicit_open_exts = .keyed,
     .weak_value_implicit_open_ext_ranges = .settled,
@@ -1709,6 +1784,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .dispatch_target_instantiations = .keyed,
     .dispatch_target_instantiation_by_fn_var = .keyed,
     .dispatch_replay_sources = .keyed,
+    .dispatch_replay_source_heads = .keyed,
     .dispatch_replay_shapes = .keyed,
     .dispatch_replay_frozen_pairs = .keyed,
     .dispatch_replay_trees = .keyed,
@@ -1746,6 +1822,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .probe_link_copies = .frame_partitioned,
     .use_replayable_schemes = .keyed,
     .use_replay_sources = .keyed,
+    .use_replay_source_heads = .keyed,
     .use_replay_shapes = .keyed,
     .use_replay_trees = .keyed,
     .use_settled_entries = .scratch,
@@ -2136,10 +2213,20 @@ const SchemeRequirementCandidate = struct {
     failure_expr: ?CIR.Expr.Idx,
     structural_origin: StructuralSchemeRequirementOrigin,
     deferred_generated_codec: bool,
+    /// The neighbouring candidates of the same owner, in arena order.
+    prev_of_owner: u32,
+    next_of_owner: u32,
 
     source: Source,
 
     const Source = enum { creation, scheme_copy };
+    const none: u32 = std.math.maxInt(u32);
+};
+
+/// The first and last candidates of one owner's chain.
+const SchemeRequirementCandidateChain = struct {
+    first: u32,
+    last: u32,
 };
 
 /// One generalization-boundary root. `owner` is the stable source var used by
@@ -2327,6 +2414,7 @@ const DispatchReplaySource = struct {
     shape_start: u32,
     shape_len: u32,
     scheme_use: ?u32,
+    next_same_hash: ?u32,
     freeze: enum { pending, frozen, unusable } = .pending,
     frozen_root: Var = undefined,
     pairs_start: u32 = 0,
@@ -2425,6 +2513,7 @@ const UseReplaySource = struct {
     use: u32,
     shape_start: u32,
     shape_len: u32,
+    next_same_hash: ?u32,
     freeze: enum { pending, frozen, unusable } = .pending,
     frozen_root: Var = undefined,
     pairs_start: u32 = 0,
@@ -2602,16 +2691,19 @@ fn recordSchemeRequirementCandidate(
     if (self.constraintIsLiteralConversion(constraint)) return;
     std.debug.assert((source == .creation) == (structural_origin == null));
     const owner_root = self.prospectiveSchemeOwner(self.active_scheme_root) orelse return;
+    const candidate_idx = std.math.cast(u32, self.scheme_requirement_candidates.items.len) orelse return error.OutOfMemory;
+    if (candidate_idx == SchemeRequirementCandidate.none) return error.OutOfMemory;
     try self.scheme_requirement_candidates.ensureUnusedCapacity(self.gpa, 1);
-    const owner_entry = try self.scheme_requirement_candidate_indices_by_owner.getOrPut(self.gpa, owner_root);
-    if (!owner_entry.found_existing) owner_entry.value_ptr.* = .empty;
-    errdefer if (!owner_entry.found_existing) {
-        owner_entry.value_ptr.deinit(self.gpa);
-        _ = self.scheme_requirement_candidate_indices_by_owner.remove(owner_root);
+    const owner_entry = try self.scheme_requirement_candidate_chains_by_owner.getOrPut(self.gpa, owner_root);
+    const prev_of_owner = if (owner_entry.found_existing) blk: {
+        const last = owner_entry.value_ptr.last;
+        self.scheme_requirement_candidates.items[last].next_of_owner = candidate_idx;
+        owner_entry.value_ptr.last = candidate_idx;
+        break :blk last;
+    } else blk: {
+        owner_entry.value_ptr.* = .{ .first = candidate_idx, .last = candidate_idx };
+        break :blk SchemeRequirementCandidate.none;
     };
-    try owner_entry.value_ptr.ensureUnusedCapacity(self.gpa, 1);
-
-    const candidate_idx: u32 = @intCast(self.scheme_requirement_candidates.items.len);
     self.scheme_requirement_candidates.appendAssumeCapacity(.{
         .owner_root = owner_root,
         .receiver_var = receiver_var,
@@ -2626,8 +2718,9 @@ fn recordSchemeRequirementCandidate(
         },
         .source = source,
         .deferred_generated_codec = deferred_generated_codec,
+        .prev_of_owner = prev_of_owner,
+        .next_of_owner = SchemeRequirementCandidate.none,
     });
-    owner_entry.value_ptr.appendAssumeCapacity(candidate_idx);
 }
 
 /// Keep the first occurrence of each exact evidence substitution, grouped
@@ -2869,12 +2962,15 @@ fn shrinkSchemeRequirementCandidatesTo(self: *Self, new_len: usize) void {
     while (self.scheme_requirement_candidates.items.len > new_len) {
         const candidate_idx: u32 = @intCast(self.scheme_requirement_candidates.items.len - 1);
         const candidate = self.scheme_requirement_candidates.pop().?;
-        const owner_indices = self.scheme_requirement_candidate_indices_by_owner.getPtr(candidate.owner_root) orelse unreachable;
-        const removed_idx = owner_indices.pop().?;
-        std.debug.assert(removed_idx == candidate_idx);
-        if (owner_indices.items.len == 0) {
-            var removed = self.scheme_requirement_candidate_indices_by_owner.fetchRemove(candidate.owner_root).?;
-            removed.value.deinit(self.gpa);
+        const chain = self.scheme_requirement_candidate_chains_by_owner.getPtr(candidate.owner_root) orelse unreachable;
+        std.debug.assert(chain.last == candidate_idx);
+        std.debug.assert(candidate.next_of_owner == SchemeRequirementCandidate.none);
+        if (candidate.prev_of_owner == SchemeRequirementCandidate.none) {
+            std.debug.assert(chain.first == candidate_idx);
+            _ = self.scheme_requirement_candidate_chains_by_owner.remove(candidate.owner_root);
+        } else {
+            chain.last = candidate.prev_of_owner;
+            self.scheme_requirement_candidates.items[candidate.prev_of_owner].next_of_owner = SchemeRequirementCandidate.none;
         }
     }
 }
@@ -4292,10 +4388,6 @@ pub fn deinit(self: *Self) void {
         scheme.indexed_vars.deinit(self.gpa);
         scheme.dispatch_requirements.deinit(self.gpa);
     }
-    var scheme_candidate_indices = self.scheme_requirement_candidate_indices_by_owner.valueIterator();
-    while (scheme_candidate_indices.next()) |indices| indices.deinit(self.gpa);
-    var hole_shared_iter = self.hole_shared_schemes.valueIterator();
-    while (hole_shared_iter.next()) |holes| self.gpa.free(holes.*);
     var position_values = self.nominal_positions.valueIterator();
     while (position_values.next()) |positions| if (positions.*) |items| self.gpa.free(items);
     var known_value_iter = self.hoist_known_values.iterator();
@@ -4306,15 +4398,11 @@ pub fn deinit(self: *Self) void {
         hoist_roots.deinitSelectedRoot(self.gpa, root);
     }
     var subtree_entries = self.polarized_instance_subtrees.valueIterator();
-    while (subtree_entries.next()) |entry| self.gpa.free(entry.*);
+    while (subtree_entries.next()) |entries| entries.deinit(self.gpa);
     for (self.try_row_fixpoints.items) |*fixpoint| fixpoint.deinit(self.gpa);
     for (self.platform_requirement_solutions.items) |solution| {
         self.gpa.free(@constCast(solution.identity_vars));
     }
-    var dispatch_sources = self.dispatch_replay_sources.valueIterator();
-    while (dispatch_sources.next()) |list| list.deinit(self.gpa);
-    var use_sources = self.use_replay_sources.valueIterator();
-    while (use_sources.next()) |list| list.deinit(self.gpa);
     var mint_names = self.method_name_mints.valueIterator();
     while (mint_names.next()) |names| self.gpa.free(names.*);
     var scheme_names = self.scheme_mint_names.valueIterator();
@@ -4324,6 +4412,10 @@ pub fn deinit(self: *Self) void {
         state.tasks.deinit(self.gpa);
         self.gpa.destroy(state);
     }
+    for (self.block_check_pool.items) |state| self.gpa.destroy(state);
+    for (self.implicit_parse_run_pool.items) |run| self.destroyImplicitParseRun(run);
+    if (self.dispatch_dedup_scratch) |*scratch| scratch.deinit(self.gpa);
+    if (self.predeclared_use_images) |*images| images.deinit();
     for (self.check_activity_pool.items) |*activities| activities.deinit(self.gpa);
     for (self.pattern_frame_pool.items) |*frames| frames.deinit(self.gpa);
     const fields = @typeInfo(Self).@"struct";
@@ -4660,18 +4752,24 @@ fn localLookupPattern(self: *const Self, expr: CIR.Expr.Idx) ?CIR.Pattern.Idx {
 const LocalFunctionCaptures = struct {
     checker: *Self,
     methods: *const std.AutoArrayHashMapUnmanaged(CIR.Pattern.Idx, LocalMethod),
-    /// Outer references of each function-like binding the methods reach.
-    refs: std.AutoArrayHashMapUnmanaged(CIR.Pattern.Idx, std.ArrayListUnmanaged(CIR.Pattern.Idx)) = .empty,
+    /// Outer references of each function-like binding the methods reach: the
+    /// ends of its chain through `ref_links`, in reference order.
+    refs: std.AutoArrayHashMapUnmanaged(CIR.Pattern.Idx, RefChain) = .empty,
+    ref_links: std.ArrayListUnmanaged(RefLink) = .empty,
     /// Bindings whose outer references are not collected yet.
     pending: std.ArrayListUnmanaged(CIR.Pattern.Idx) = .empty,
     /// The value each function-like binding reaches, once settled.
     reached: collections.DenseMapUnmanaged(CIR.Pattern.Idx, CIR.Pattern.Idx) = .empty,
     scope: LexicalScope = .{},
 
+    const no_link = std.math.maxInt(u32);
+    const RefChain = struct { first: u32 = no_link, last: u32 = no_link };
+    const RefLink = struct { referenced: CIR.Pattern.Idx, next: u32 };
+
     fn deinit(self: *LocalFunctionCaptures) void {
         const gpa = self.checker.gpa;
-        for (self.refs.values()) |*list| list.deinit(gpa);
         self.refs.deinit(gpa);
+        self.ref_links.deinit(gpa);
         self.pending.deinit(gpa);
         self.reached.deinit(gpa);
         self.scope.deinit(gpa);
@@ -4706,10 +4804,21 @@ const LocalFunctionCaptures = struct {
         for (self.scope.order.items) |expr| {
             const referenced = self.checker.localLookupPattern(expr) orelse continue;
             if (!self.isOuterRef(&self.scope, referenced)) continue;
-            if (owner) |function| try self.refs.getPtr(function).?.append(gpa, referenced);
+            if (owner) |function| {
+                const link = std.math.cast(u32, self.ref_links.items.len) orelse return error.OutOfMemory;
+                if (link == no_link) return error.OutOfMemory;
+                try self.ref_links.append(gpa, .{ .referenced = referenced, .next = no_link });
+                const chain = self.refs.getPtr(function).?;
+                if (chain.last == no_link) {
+                    chain.first = link;
+                } else {
+                    self.ref_links.items[chain.last].next = link;
+                }
+                chain.last = link;
+            }
             if (self.refs.contains(referenced)) continue;
             if ((try self.functionLikeExpr(referenced)) == null) continue;
-            try self.refs.put(gpa, referenced, .empty);
+            try self.refs.put(gpa, referenced, .{});
             try self.pending.append(gpa, referenced);
         }
     }
@@ -4721,9 +4830,11 @@ const LocalFunctionCaptures = struct {
         var changed = true;
         while (changed) {
             changed = false;
-            for (self.refs.keys(), self.refs.values()) |function, list| {
+            for (self.refs.keys(), self.refs.values()) |function, chain| {
                 if (self.reached.contains(function)) continue;
-                for (list.items) |referenced| {
+                var link = chain.first;
+                while (link != no_link) : (link = self.ref_links.items[link].next) {
+                    const referenced = self.ref_links.items[link].referenced;
                     const value = if (self.refs.contains(referenced))
                         self.reached.get(referenced) orelse continue
                     else
@@ -4749,10 +4860,15 @@ const LocalFunctionCaptures = struct {
 const LexicalScope = struct {
     patterns: collections.DenseMapUnmanaged(CIR.Pattern.Idx, void) = .empty,
     order: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty,
+    /// The pending expressions and patterns of the walk that fills the scope.
+    stack: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty,
+    pattern_stack: std.ArrayList(CIR.Pattern.Idx) = .empty,
 
     fn deinit(self: *LexicalScope, gpa: Allocator) void {
         self.patterns.deinit(gpa);
         self.order.deinit(gpa);
+        self.stack.deinit(gpa);
+        self.pattern_stack.deinit(gpa);
     }
 };
 
@@ -4761,13 +4877,13 @@ const LexicalScope = struct {
 fn collectLexicalScope(self: *Self, root: CIR.Expr.Idx, scope: *LexicalScope) Allocator.Error!void {
     scope.patterns.clearRetainingCapacity();
     scope.order.clearRetainingCapacity();
-    var stack: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty;
-    defer stack.deinit(self.gpa);
+    const stack = &scope.stack;
+    stack.clearRetainingCapacity();
     try stack.append(self.gpa, root);
     while (stack.pop()) |expr| {
         try scope.order.append(self.gpa, expr);
         const start = stack.items.len;
-        try self.visitExprChildren(expr, LexicalScopePusher{ .checker = self, .stack = &stack, .patterns = &scope.patterns });
+        try self.visitExprChildren(expr, LexicalScopePusher{ .checker = self, .stack = stack, .scope = scope });
         std.mem.reverse(CIR.Expr.Idx, stack.items[start..]);
     }
 }
@@ -4775,14 +4891,14 @@ fn collectLexicalScope(self: *Self, root: CIR.Expr.Idx, scope: *LexicalScope) Al
 const LexicalScopePusher = struct {
     checker: *Self,
     stack: *std.ArrayListUnmanaged(CIR.Expr.Idx),
-    patterns: *collections.DenseMapUnmanaged(CIR.Pattern.Idx, void),
+    scope: *LexicalScope,
 
     fn expr(p: LexicalScopePusher, child: CIR.Expr.Idx) Allocator.Error!void {
         try p.stack.append(p.checker.gpa, child);
     }
 
     fn boundPattern(p: LexicalScopePusher, pattern: CIR.Pattern.Idx) Allocator.Error!void {
-        try p.checker.collectPatternSubtree(pattern, p.patterns);
+        try p.checker.collectPatternSubtree(pattern, &p.scope.pattern_stack, &p.scope.patterns);
     }
 
     fn reassignTarget(_: LexicalScopePusher, _: CIR.Pattern.Idx) Allocator.Error!void {}
@@ -4790,13 +4906,17 @@ const LexicalScopePusher = struct {
     fn returnTarget(_: LexicalScopePusher, _: CIR.Expr.Idx) Allocator.Error!void {}
 };
 
-fn collectPatternSubtree(self: *Self, root: CIR.Pattern.Idx, out: *collections.DenseMapUnmanaged(CIR.Pattern.Idx, void)) Allocator.Error!void {
-    var pending: std.ArrayList(CIR.Pattern.Idx) = .empty;
-    defer pending.deinit(self.gpa);
+fn collectPatternSubtree(
+    self: *Self,
+    root: CIR.Pattern.Idx,
+    pending: *std.ArrayList(CIR.Pattern.Idx),
+    out: *collections.DenseMapUnmanaged(CIR.Pattern.Idx, void),
+) Allocator.Error!void {
+    pending.clearRetainingCapacity();
     try pending.append(self.gpa, root);
     while (pending.pop()) |pattern| {
         try out.put(self.gpa, pattern, {});
-        try self.pushCirSubpatterns(&pending, pattern);
+        try self.pushCirSubpatterns(pending, pattern);
     }
 }
 
@@ -4853,6 +4973,14 @@ pub fn compileTimeExecutableRootBody(self: *const Self, def_idx: CIR.Def.Idx) ?C
 }
 
 fn beginHoistFrame(self: *Self, expr: CIR.Expr.Idx, binding_rhs: bool, hoist_position: HoistPosition) Allocator.Error!HoistFrameGuard {
+    try self.openHoistFrame(expr, binding_rhs, hoist_position);
+    return .{
+        .checker = self,
+        .expr = expr,
+    };
+}
+
+fn openHoistFrame(self: *Self, expr: CIR.Expr.Idx, binding_rhs: bool, hoist_position: HoistPosition) Allocator.Error!void {
     try self.hoist_frames.append(self.gpa, .{
         .expr = expr,
         .hoist_position = hoist_position,
@@ -4862,10 +4990,6 @@ fn beginHoistFrame(self: *Self, expr: CIR.Expr.Idx, binding_rhs: bool, hoist_pos
         .deferred_dependency_start = self.hoist_deferred_roots.items.len,
     });
     self.last_hoist_result = null;
-    return .{
-        .checker = self,
-        .expr = expr,
-    };
 }
 
 fn abortHoistFrame(self: *Self, expr: CIR.Expr.Idx) void {
@@ -7640,10 +7764,10 @@ fn validateSettledValueRows(self: *Self, env: *Env) std.mem.Allocator.Error!void
     // normalization: expression and pattern types, definition types, and the
     // inferred roots publication enumerates through `output_type_roots`.
     const seeder = SettledRootSeeder{ .gpa = self.gpa, .seeds = &seeds };
-    var raw_node_idx: u32 = 0;
-    while (raw_node_idx < self.cir.store.nodes.len()) : (raw_node_idx += 1) {
-        const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(raw_node_idx));
-        const tag = self.cir.store.nodes.get(node_idx).tag;
+    // Seeding reads the node store without changing it, so the tag column
+    // stays valid throughout.
+    for (self.cir.store.nodes.field(.tag), 0..) |tag, node_slot| {
+        const raw_node_idx: u32 = @intCast(node_slot);
         if (isExprNodeTag(tag)) {
             const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(raw_node_idx));
             try seeder.visit(ModuleEnv.varFrom(expr_idx));
@@ -7804,20 +7928,50 @@ const RowLabelOccurrence = struct {
 /// remain; each pass removes at least one label. The repeated pairs of a pass
 /// relate together or not at all, so a conflicting pair is returned for the
 /// caller to report with nothing related.
+const RowUnionScratch = struct {
+    parts: std.ArrayListUnmanaged(Var) = .empty,
+    part_labels: std.ArrayListUnmanaged(Content) = .empty,
+    labels: std.ArrayListUnmanaged(Label) = .empty,
+    latest: std.AutoHashMapUnmanaged(Ident.Idx, RowLabelOccurrence) = .empty,
+    omitted: std.ArrayListUnmanaged(RowLabelOccurrence) = .empty,
+    pairs: std.ArrayListUnmanaged(RowLabelConflict) = .empty,
+
+    const Label = struct { name: Ident.Idx, occurrence: RowLabelOccurrence };
+
+    pub fn deinit(self: *RowUnionScratch, gpa: Allocator) void {
+        self.parts.deinit(gpa);
+        self.part_labels.deinit(gpa);
+        self.labels.deinit(gpa);
+        self.latest.deinit(gpa);
+        self.omitted.deinit(gpa);
+        self.pairs.deinit(gpa);
+    }
+
+    fn clearRetainingCapacity(self: *RowUnionScratch) void {
+        self.parts.clearRetainingCapacity();
+        self.part_labels.clearRetainingCapacity();
+        self.labels.clearRetainingCapacity();
+        self.latest.clearRetainingCapacity();
+        self.omitted.clearRetainingCapacity();
+        self.pairs.clearRetainingCapacity();
+    }
+};
+
 fn normalizeRowUnion(self: *Self, row: Var, env: *Env) Allocator.Error!?RowLabelConflict {
     std.debug.assert(self.probe_depth == 0 or self.commit_probe_active);
-    var parts: std.ArrayListUnmanaged(Var) = .empty;
-    defer parts.deinit(self.gpa);
-    var part_labels: std.ArrayListUnmanaged(Content) = .empty;
-    defer part_labels.deinit(self.gpa);
-    var labels: std.ArrayListUnmanaged(struct { name: Ident.Idx, occurrence: RowLabelOccurrence }) = .empty;
-    defer labels.deinit(self.gpa);
-    var latest: std.AutoHashMapUnmanaged(Ident.Idx, RowLabelOccurrence) = .empty;
-    defer latest.deinit(self.gpa);
-    var omitted: std.ArrayListUnmanaged(RowLabelOccurrence) = .empty;
-    defer omitted.deinit(self.gpa);
-    var pairs: std.ArrayListUnmanaged(RowLabelConflict) = .empty;
-    defer pairs.deinit(self.gpa);
+    var scratch = self.row_union_scratch;
+    self.row_union_scratch = .{};
+    defer {
+        scratch.clearRetainingCapacity();
+        self.row_union_scratch.deinit(self.gpa);
+        self.row_union_scratch = scratch;
+    }
+    const parts = &scratch.parts;
+    const part_labels = &scratch.part_labels;
+    const labels = &scratch.labels;
+    const latest = &scratch.latest;
+    const omitted = &scratch.omitted;
+    const pairs = &scratch.pairs;
 
     while (true) {
         parts.clearRetainingCapacity();
@@ -8466,8 +8620,11 @@ fn validateNominalDeclArgumentGrowth(self: *Self) std.mem.Allocator.Error!void {
     // Slot table: local, still-valid declarations with nominal content.
     var slots: std.ArrayListUnmanaged(types_mod.NominalDecl.Idx) = .empty;
     defer slots.deinit(self.gpa);
-    var slot_by_decl = std.AutoHashMap(types_mod.NominalDecl.Idx, u32).init(self.gpa);
-    defer slot_by_decl.deinit();
+    // Each declaration's slot, or `no_slot`, as a column over declarations.
+    const no_slot = std.math.maxInt(u32);
+    const slot_by_decl = try self.gpa.alloc(u32, decl_count);
+    defer self.gpa.free(slot_by_decl);
+    @memset(slot_by_decl, no_slot);
 
     var decl_int: u32 = 0;
     while (decl_int < decl_count) : (decl_int += 1) {
@@ -8480,7 +8637,7 @@ fn validateNominalDeclArgumentGrowth(self: *Self) std.mem.Allocator.Error!void {
         if (resolved != .structure or resolved.structure != .nominal_type) continue;
         const slot: u32 = @intCast(slots.items.len);
         try slots.append(self.gpa, decl_idx);
-        try slot_by_decl.put(decl_idx, slot);
+        slot_by_decl[decl_int] = slot;
     }
     if (slots.items.len == 0) return;
     const slot_count = slots.items.len;
@@ -8509,7 +8666,8 @@ fn validateNominalDeclArgumentGrowth(self: *Self) std.mem.Allocator.Error!void {
                 .structure => |flat_type| switch (flat_type) {
                     .nominal_type => |nominal_type| {
                         if (self.types.lookupNominalDecl(nominal_type)) |target_idx| {
-                            if (slot_by_decl.get(target_idx)) |to_slot| {
+                            const to_slot = slot_by_decl[@backingInt(target_idx)];
+                            if (to_slot != no_slot) {
                                 try mentions.append(self.gpa, .{
                                     .from_slot = from_slot,
                                     .to_slot = to_slot,
@@ -9374,13 +9532,21 @@ fn instantiateVarPolarized(
     // every instance at this position: the declaration's own ground subtrees,
     // copied. The latest instance's ground subtrees that are still ground are
     // read by the next instance instead of being copied again.
-    var shared_subtrees: []Instantiator.SharedSubtree = &.{};
-    if (evidence == .none) {
-        if (self.polarized_instance_subtrees.get(instance_key)) |entries| {
-            shared_subtrees = try self.groundSubtreeEntries(entries);
+    var shared_subtrees = self.shared_subtrees_scratch;
+    self.shared_subtrees_scratch = .empty;
+    defer {
+        shared_subtrees.clearRetainingCapacity();
+        if (self.shared_subtrees_scratch.capacity == 0) {
+            self.shared_subtrees_scratch = shared_subtrees;
+        } else {
+            shared_subtrees.deinit(self.gpa);
         }
     }
-    defer self.gpa.free(shared_subtrees);
+    if (evidence == .none) {
+        if (self.polarized_instance_subtrees.get(instance_key)) |entries| {
+            try self.groundSubtreeEntries(entries.items, &shared_subtrees);
+        }
+    }
     var opened_marker_exts: std.ArrayListUnmanaged(Instantiator.OpenedMarkerExt) = .empty;
     defer opened_marker_exts.deinit(self.gpa);
     var instantiate_ctx = self.baseInstantiator(env.rank(), .fresh_flex);
@@ -9392,17 +9558,17 @@ fn instantiateVarPolarized(
     instantiate_ctx.preserved_marker_exts = self.alias_hidden_exts;
     instantiate_ctx.nominal_argument_position = .{ .context = self, .resolve = nominalArgumentPosition };
     instantiate_ctx.alias_argument_unused = .{ .context = self, .resolve = aliasArgumentUnused };
-    instantiate_ctx.shared_subtrees = shared_subtrees;
+    instantiate_ctx.shared_subtrees = shared_subtrees.items;
     const instantiated = try self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior, false, evidence);
     try self.recordOpenedMarkerExts(opened_marker_exts.items, region_behavior);
     if (evidence == .none) {
         if (opened_marker_exts.items.len == 0 and try self.varIsGround(instantiated)) {
             try self.ground_polarized_instances.put(self.gpa, instance_key, instantiated);
         } else {
-            const entries = try self.maximalGroundSubtreeCopies(instantiated);
             const slot = try self.polarized_instance_subtrees.getOrPut(self.gpa, instance_key);
-            if (slot.found_existing) self.gpa.free(slot.value_ptr.*);
-            slot.value_ptr.* = entries;
+            if (!slot.found_existing) slot.value_ptr.* = .empty;
+            slot.value_ptr.clearRetainingCapacity();
+            try self.maximalGroundSubtreeCopies(instantiated, slot.value_ptr);
         }
     }
     return instantiated;
@@ -9418,16 +9584,43 @@ const GroundMarks = struct {
     order: std.ArrayListUnmanaged(Var) = .empty,
     /// Index into `order` by resolved var.
     index_of: collections.DenseMapUnmanaged(Var, u32) = .empty,
-    /// Parent indexes of each var.
-    parents: std.ArrayListUnmanaged(std.ArrayListUnmanaged(u32)) = .empty,
+    /// Every (child, parent) edge the walk followed, in walk order.
+    edges: std.ArrayListUnmanaged(Edge) = .empty,
+    /// The parent indexes of var `i` are
+    /// `parent_indexes[parent_starts[i]..parent_starts[i + 1]]`, in walk order.
+    parent_starts: std.ArrayListUnmanaged(u32) = .empty,
+    parent_indexes: std.ArrayListUnmanaged(u32) = .empty,
     ground: std.ArrayListUnmanaged(bool) = .empty,
+    pending: std.ArrayListUnmanaged(Pending) = .empty,
+    spread: std.ArrayListUnmanaged(u32) = .empty,
 
-    fn deinit(self: *GroundMarks, gpa: Allocator) void {
-        for (self.parents.items) |*list| list.deinit(gpa);
-        self.parents.deinit(gpa);
-        self.index_of.deinit(gpa);
+    const Edge = struct { child: u32, parent: u32 };
+    const Pending = struct { var_: Var, parent: ?u32 };
+
+    pub fn deinit(self: *GroundMarks, gpa: Allocator) void {
         self.order.deinit(gpa);
+        self.index_of.deinit(gpa);
+        self.edges.deinit(gpa);
+        self.parent_starts.deinit(gpa);
+        self.parent_indexes.deinit(gpa);
         self.ground.deinit(gpa);
+        self.pending.deinit(gpa);
+        self.spread.deinit(gpa);
+    }
+
+    fn clearRetainingCapacity(self: *GroundMarks) void {
+        self.order.clearRetainingCapacity();
+        self.index_of.clearRetainingCapacity();
+        self.edges.clearRetainingCapacity();
+        self.parent_starts.clearRetainingCapacity();
+        self.parent_indexes.clearRetainingCapacity();
+        self.ground.clearRetainingCapacity();
+        self.pending.clearRetainingCapacity();
+        self.spread.clearRetainingCapacity();
+    }
+
+    fn parentsOf(self: *const GroundMarks, index: u32) []const u32 {
+        return self.parent_indexes.items[self.parent_starts.items[index]..self.parent_starts.items[index + 1]];
     }
 
     fn isGround(self: *const GroundMarks, resolved_var: Var) bool {
@@ -9436,8 +9629,18 @@ const GroundMarks = struct {
     }
 };
 
-fn computeGroundMarks(self: *Self, roots: []const Var) Allocator.Error!GroundMarks {
-    return try self.computeGroundMarksKnowing(roots, null, .any);
+/// Ground-walk storage for one walk; return it with `releaseGroundMarks`.
+fn takeGroundMarks(self: *Self) GroundMarks {
+    const marks = self.ground_marks_scratch;
+    self.ground_marks_scratch = .{};
+    return marks;
+}
+
+fn releaseGroundMarks(self: *Self, marks: *GroundMarks) void {
+    marks.clearRetainingCapacity();
+    self.ground_marks_scratch.deinit(self.gpa);
+    self.ground_marks_scratch = marks.*;
+    marks.* = .{};
 }
 
 /// Which entries of a known-ground map a ground walk stops at.
@@ -9449,7 +9652,7 @@ const KnownGroundStop = enum {
     copied,
 };
 
-/// `computeGroundMarks`, treating the resolved vars in `known_ground` that
+/// The ground marks of every var reachable from `roots`, treating the resolved vars in `known_ground` that
 /// `stop` selects as ground leaves without walking below them.
 fn computeGroundMarksKnowing(
     self: *Self,
@@ -9457,23 +9660,31 @@ fn computeGroundMarksKnowing(
     known_ground: ?*const collections.DenseMapUnmanaged(Var, ?Var),
     stop: KnownGroundStop,
 ) Allocator.Error!GroundMarks {
-    var marks: GroundMarks = .{};
-    errdefer marks.deinit(self.gpa);
-    const Pending = struct { var_: Var, parent: ?u32 };
-    var pending: std.ArrayListUnmanaged(Pending) = .empty;
-    defer pending.deinit(self.gpa);
-    for (roots) |root| try pending.append(self.gpa, .{ .var_ = root, .parent = null });
+    var marks = self.takeGroundMarks();
+    errdefer self.releaseGroundMarks(&marks);
+    for (roots) |root| try marks.pending.append(self.gpa, .{ .var_ = root, .parent = null });
+    try self.walkGroundMarks(&marks, known_ground, stop);
+    return marks;
+}
+
+/// Mark every var reachable from the walk's pending roots.
+fn walkGroundMarks(
+    self: *Self,
+    marks: *GroundMarks,
+    known_ground: ?*const collections.DenseMapUnmanaged(Var, ?Var),
+    stop: KnownGroundStop,
+) Allocator.Error!void {
+    const pending = &marks.pending;
     while (pending.pop()) |item| {
         const resolved = self.types.resolveVar(item.var_);
         const entry = try marks.index_of.getOrPut(self.gpa, resolved.var_);
         if (!entry.found_existing) {
-            entry.value_ptr.* = @intCast(marks.order.items.len);
+            entry.value_ptr.* = std.math.cast(u32, marks.order.items.len) orelse return error.OutOfMemory;
             try marks.order.append(self.gpa, resolved.var_);
-            try marks.parents.append(self.gpa, .empty);
             try marks.ground.append(self.gpa, true);
         }
         const index = entry.value_ptr.*;
-        if (item.parent) |parent| try marks.parents.items[index].append(self.gpa, parent);
+        if (item.parent) |parent| try marks.edges.append(self.gpa, .{ .child = index, .parent = parent });
         if (entry.found_existing) continue;
         if (known_ground) |known| if (known.get(resolved.var_)) |copy| switch (stop) {
             .any => continue,
@@ -9514,58 +9725,69 @@ fn computeGroundMarksKnowing(
             },
         }
     }
-    var spread: std.ArrayListUnmanaged(u32) = .empty;
-    defer spread.deinit(self.gpa);
+    // Group the edges by child: a counting sort, stable in walk order.
+    const var_count = marks.order.items.len;
+    try marks.parent_starts.appendNTimes(self.gpa, 0, var_count + 1);
+    const starts = marks.parent_starts.items;
+    for (marks.edges.items) |edge| starts[edge.child + 1] += 1;
+    for (1..starts.len) |i| starts[i] += starts[i - 1];
+    try marks.parent_indexes.resize(self.gpa, marks.edges.items.len);
+    // `starts[i]` serves as var `i`'s fill cursor, ending at var `i + 1`'s
+    // start; shifting back restores every start.
+    for (marks.edges.items) |edge| {
+        marks.parent_indexes.items[starts[edge.child]] = edge.parent;
+        starts[edge.child] += 1;
+    }
+    var shift = starts.len - 1;
+    while (shift > 0) : (shift -= 1) starts[shift] = starts[shift - 1];
+    starts[0] = 0;
+
+    const spread = &marks.spread;
     for (marks.ground.items, 0..) |is_ground, index| {
         if (!is_ground) try spread.append(self.gpa, @intCast(index));
     }
     while (spread.pop()) |index| {
-        for (marks.parents.items[index].items) |parent| {
+        for (marks.parentsOf(index)) |parent| {
             if (!marks.ground.items[parent]) continue;
             marks.ground.items[parent] = false;
             try spread.append(self.gpa, parent);
         }
     }
-    return marks;
 }
 
 /// The copies `instantiateVarPolarized`'s last instantiation made of the
 /// declaration's subtrees that are ground and maximal: their instance var is
 /// ground and reached from a var that is not. Sharing those roots shares
 /// everything below them.
-fn maximalGroundSubtreeCopies(self: *Self, instance_root: Var) Allocator.Error![]Instantiator.SharedSubtree {
-    var marks = try self.computeGroundMarks(&.{instance_root});
-    defer marks.deinit(self.gpa);
-    var entries: std.ArrayListUnmanaged(Instantiator.SharedSubtree) = .empty;
-    errdefer entries.deinit(self.gpa);
+fn maximalGroundSubtreeCopies(self: *Self, instance_root: Var, entries: *std.ArrayListUnmanaged(Instantiator.SharedSubtree)) Allocator.Error!void {
+    var marks = try self.computeGroundMarksKnowing(&.{instance_root}, null, .any);
+    defer self.releaseGroundMarks(&marks);
+    errdefer entries.clearRetainingCapacity();
     var copies = self.var_map.iterator();
     while (copies.next()) |copy| {
         const resolved_copy = self.types.resolveVar(copy.value_ptr.*).var_;
         const index = marks.index_of.get(resolved_copy) orelse continue;
         if (!marks.ground.items[index]) continue;
-        var maximal = marks.parents.items[index].items.len == 0;
-        for (marks.parents.items[index].items) |parent| {
+        const parents = marks.parentsOf(index);
+        var maximal = parents.len == 0;
+        for (parents) |parent| {
             if (!marks.ground.items[parent]) maximal = true;
         }
         if (!maximal) continue;
         try entries.append(self.gpa, .{ .source = copy.key_ptr.*, .copy = resolved_copy });
     }
-    return entries.toOwnedSlice(self.gpa);
 }
 
-/// The entries whose copies are still ground types.
-fn groundSubtreeEntries(self: *Self, entries: []const Instantiator.SharedSubtree) Allocator.Error![]Instantiator.SharedSubtree {
-    const roots = try self.gpa.alloc(Var, entries.len);
-    defer self.gpa.free(roots);
-    for (entries, roots) |entry, *root| root.* = entry.copy;
-    var marks = try self.computeGroundMarks(roots);
-    defer marks.deinit(self.gpa);
-    var kept: std.ArrayListUnmanaged(Instantiator.SharedSubtree) = .empty;
-    errdefer kept.deinit(self.gpa);
+/// Append to `kept` the entries whose copies are still ground types.
+fn groundSubtreeEntries(self: *Self, entries: []const Instantiator.SharedSubtree, kept: *std.ArrayListUnmanaged(Instantiator.SharedSubtree)) Allocator.Error!void {
+    var marks = self.takeGroundMarks();
+    defer self.releaseGroundMarks(&marks);
+    try marks.pending.ensureUnusedCapacity(self.gpa, entries.len);
+    for (entries) |entry| marks.pending.appendAssumeCapacity(.{ .var_ = entry.copy, .parent = null });
+    try self.walkGroundMarks(&marks, null, .any);
     for (entries) |entry| {
         if (marks.isGround(self.types.resolveVar(entry.copy).var_)) try kept.append(self.gpa, entry);
     }
-    return kept.toOwnedSlice(self.gpa);
 }
 
 const PolarizedInstanceKey = struct {
@@ -9612,7 +9834,7 @@ fn instantiateTypeScheme(
     // A hole-sharing predeclared scheme's hole leaves are the LIVE
     // annotation hole vars: seed their identity so the copy shares them
     // and the body's inference stays connected to this use.
-    instantiate_ctx.share_vars = self.hole_shared_schemes.get(var_to_instantiate) orelse &.{};
+    instantiate_ctx.share_vars = self.holeSharedVars(var_to_instantiate) orelse &.{};
     return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior, true, evidence);
 }
 
@@ -18031,10 +18253,20 @@ fn predeclareAnnotationSchemeHelp(
 
         // Every use of the scheme shares the live hole vars; register them so
         // each use's instantiation seeds the identity mappings.
-        const holes = try self.gpa.dupe(Var, live_holes.items);
-        try self.hole_shared_schemes.put(self.gpa, scheme_var, holes);
+        const start = std.math.cast(u32, self.hole_shared_vars.items.len) orelse return error.OutOfMemory;
+        const len = std.math.cast(u32, live_holes.items.len) orelse return error.OutOfMemory;
+        try self.hole_shared_vars.appendSlice(self.gpa, live_holes.items);
+        try self.hole_shared_schemes.put(self.gpa, scheme_var, .{ .start = start, .len = len });
     }
     return scheme_var;
+}
+
+const HoleSharedRun = struct { start: u32, len: u32 };
+
+/// The live hole vars a hole-sharing predeclared scheme's uses share.
+fn holeSharedVars(self: *const Self, scheme_var: Var) ?[]const Var {
+    const run = self.hole_shared_schemes.get(scheme_var) orelse return null;
+    return self.hole_shared_vars.items[run.start..][0..run.len];
 }
 
 /// Keep only the holes the body still has to decide. Generating an annotation
@@ -18102,7 +18334,7 @@ fn predeclaredSchemeSlots(self: *Self, annotation_idx: CIR.Annotation.Idx) Alloc
 /// two sides still enumerate exactly the annotation's own variables, in the
 /// same order.
 fn appendPredeclaredIdentitySlots(self: *Self, scheme_var: Var, var_: Var) Allocator.Error!void {
-    const holes = self.hole_shared_schemes.get(scheme_var) orelse {
+    const holes = self.holeSharedVars(scheme_var) orelse {
         try self.canonical_key_writer.appendIdentityVarsFromVar(var_, &self.predeclared_slot_vars);
         return;
     };
@@ -18415,8 +18647,13 @@ fn relatePredeclaredUse(
     const body_range = self.predeclaredSlotsPtr(annotation_idx).body orelse
         base.invariant("type checker invariant violated: predeclared scheme use related before its body generated the annotation", .{});
     const body = body_range.slice(self.predeclared_slot_vars.items);
-    var images = collections.DenseMap(Var, Var).init(self.gpa);
-    defer images.deinit();
+    var images = self.predeclared_use_images orelse collections.DenseMap(Var, Var).init(self.gpa);
+    self.predeclared_use_images = null;
+    defer {
+        images.clearRetainingCapacity();
+        if (self.predeclared_use_images) |*other| other.deinit();
+        self.predeclared_use_images = images;
+    }
     for (body, use_copies[0..body.len]) |body_var, use_copy| {
         const image = (try self.predeclaredSlotImage(body_var, use_copy, quantified_from, &images, site.region, env)) orelse continue;
         const result = try self.runUnify(use_copy, image, env, .{ .on_mismatch = .write_no_report, .row_width_relation = .exact });
@@ -18813,7 +19050,7 @@ fn abortCheckActivity(self: *Self, activity: *CheckActivity, env: *Env) void {
         .group => |*state| self.gpa.free(state.member_roots),
         .def => |*state| state.restore(self),
         .expr => |state| {
-            if (state.finishing) |*finishing| finishing.frame.deinit();
+            if (state.finishing) |*finishing| finishing.frame.deinit(self, env);
             while (state.tasks.pop()) |task| {
                 var owned_task = task;
                 self.abortExprTask(&owned_task, env);
@@ -21581,26 +21818,36 @@ fn builtinTrySourceDecl(self: *const Self) ?u32 {
 /// Source-formal adapter positions from the completed declaration graph.
 /// Every occurrence participates; an unreachable occurrence keeps a shared
 /// actual closed. The visited (variable, reach) pairs make recursion finite.
-fn applicationArgumentReaches(self: *Self, apply: CIR.TypeAnno.Apply, env: *Env, ctx: GenTypeAnnoCtx) std.mem.Allocator.Error![]GenTypeAnnoCtx.AnnotationGenCtx.AdapterReach {
-    const Reach = GenTypeAnnoCtx.AnnotationGenCtx.AdapterReach;
+const AdapterReachItem = struct { var_: Var, reach: GenTypeAnnoCtx.AnnotationGenCtx.AdapterReach };
+
+/// Append the application's argument reaches to `anno_apply_reaches` and
+/// return where they start.
+fn applicationArgumentReaches(self: *Self, apply: CIR.TypeAnno.Apply, env: *Env, ctx: GenTypeAnnoCtx) std.mem.Allocator.Error!u32 {
     const args = self.cir.store.sliceTypeAnnos(apply.args);
-    const result = try self.gpa.alloc(Reach, args.len);
-    errdefer self.gpa.free(result);
-    @memset(result, .nested);
+    const start = std.math.cast(u32, self.anno_apply_reaches.items.len) orelse return error.OutOfMemory;
+    _ = std.math.cast(u32, self.anno_apply_reaches.items.len + args.len) orelse return error.OutOfMemory;
+    try self.anno_apply_reaches.appendNTimes(self.gpa, .nested, args.len);
+    errdefer self.anno_apply_reaches.shrinkRetainingCapacity(start);
+    try self.walkApplicationArgumentReaches(apply, env, ctx, start);
+    return start;
+}
+
+fn walkApplicationArgumentReaches(self: *Self, apply: CIR.TypeAnno.Apply, env: *Env, ctx: GenTypeAnnoCtx, start: u32) std.mem.Allocator.Error!void {
+    const args = self.cir.store.sliceTypeAnnos(apply.args);
     const initial = switch (ctx) {
-        .type_decl => return result,
-        .annotation => |annotation| if (annotation.opening == .per_use) annotation.adapter_reach else return result,
+        .type_decl => return,
+        .annotation => |annotation| if (annotation.opening == .per_use) annotation.adapter_reach else return,
     };
-    if (initial == .nested) return result;
+    if (initial == .nested) return;
     const declaration = switch (apply.base) {
-        .builtin, .pending => return result,
+        .builtin, .pending => return,
         .local => |local| blk: {
-            if (self.isForClauseAliasStatement(local.decl_idx)) return result;
-            if (!try self.ensureTypeDeclGenerated(local.decl_idx, env)) return result;
+            if (self.isForClauseAliasStatement(local.decl_idx)) return;
+            if (!try self.ensureTypeDeclGenerated(local.decl_idx, env)) return;
             break :blk ModuleEnv.varFrom(local.decl_idx);
         },
-        .external => |external| (try self.resolveVarFromExternal(external.module_idx, external.target_node_idx) orelse return result).local_var,
-        .external_identity => |external| (try self.resolveVarFromExternalIdentity(external.module_identity, external.target_node_idx) orelse return result).local_var,
+        .external => |external| (try self.resolveVarFromExternal(external.module_idx, external.target_node_idx) orelse return).local_var,
+        .external_identity => |external| (try self.resolveVarFromExternalIdentity(external.module_identity, external.target_node_idx) orelse return).local_var,
     };
     const content = self.types.resolveVar(declaration).desc.content;
     const formals = switch (content) {
@@ -21609,29 +21856,38 @@ fn applicationArgumentReaches(self: *Self, apply: CIR.TypeAnno.Apply, env: *Env,
             .nominal_type => |nominal| self.types.sliceNominalArgs(nominal),
             .fn_pure, .fn_effectful, .fn_unbound, .tuple, .record, .tag_union, .empty_record, .empty_tag_union => unreachable,
         },
-        .err => return result,
+        .err => return,
         .flex, .rigid, .field_presence => unreachable,
     };
-    if (formals.len != args.len) return result; // Existing arity diagnostic follows.
-    const seen_formals = try self.gpa.alloc(bool, formals.len);
-    defer self.gpa.free(seen_formals);
-    @memset(seen_formals, false);
-    const Item = struct { var_: Var, reach: Reach };
-    var pending: std.ArrayList(Item) = .empty;
-    defer pending.deinit(self.gpa);
-    var visited: std.AutoHashMapUnmanaged(Item, void) = .empty;
-    defer visited.deinit(self.gpa);
+    if (formals.len != args.len) return; // Existing arity diagnostic follows.
+    // `ensureTypeDeclGenerated` can run a nested walk, so the walk's scratch
+    // is claimed only from here on.
+    const result = self.anno_apply_reaches.items[start..][0..args.len];
+    const seen_formals = &self.adapter_reach_seen_formals;
+    seen_formals.clearRetainingCapacity();
+    try seen_formals.appendNTimes(self.gpa, false, formals.len);
+    const pending = &self.adapter_reach_pending;
+    pending.clearRetainingCapacity();
+    const visited = &self.adapter_reach_visited;
+    visited.clearRetainingCapacity();
+    defer {
+        pending.clearRetainingCapacity();
+        visited.clearRetainingCapacity();
+    }
     try pending.append(self.gpa, .{ .var_ = declaration, .reach = initial });
     while (pending.pop()) |item| {
         const resolved = self.types.resolveVar(item.var_);
-        const entry = try visited.getOrPut(self.gpa, .{ .var_ = resolved.var_, .reach = item.reach });
-        if (entry.found_existing) continue;
+        const entry = try visited.getOrPut(self.gpa, resolved.var_);
+        if (!entry.found_existing) entry.value_ptr.* = 0;
+        const reach_bit: u8 = @as(u8, 1) << @backingInt(item.reach);
+        if (entry.value_ptr.* & reach_bit != 0) continue;
+        entry.value_ptr.* |= reach_bit;
         var formal_found = false;
         for (formals, 0..) |formal, index| {
             if (self.types.resolveVar(formal).var_ != resolved.var_) continue;
             formal_found = true;
-            result[index] = if (!seen_formals[index]) item.reach else if (result[index] == .nested or item.reach == .nested) .nested else if (result[index] == item.reach) item.reach else .try_row;
-            seen_formals[index] = true;
+            result[index] = if (!seen_formals.items[index]) item.reach else if (result[index] == .nested or item.reach == .nested) .nested else if (result[index] == item.reach) item.reach else .try_row;
+            seen_formals.items[index] = true;
         }
         if (formal_found) continue;
         switch (resolved.desc.content) {
@@ -21668,7 +21924,6 @@ fn applicationArgumentReaches(self: *Self, apply: CIR.TypeAnno.Apply, env: *Env,
             .flex, .rigid, .err, .field_presence => {},
         }
     }
-    return result;
 }
 
 const annotation_positions = @import("annotation_positions.zig");
@@ -22088,8 +22343,13 @@ fn declareWhereAliasConstraints(
     // Every rigid variable in the declaration is either the receiver or a
     // parameter, so substituting all of them by name rewrites the declaration's
     // constraints into this signature's variables.
-    var subs = std.AutoHashMapUnmanaged(Ident.Idx, Var){};
-    defer subs.deinit(self.gpa);
+    var subs = self.where_alias_substitutions;
+    self.where_alias_substitutions = .empty;
+    defer {
+        subs.clearRetainingCapacity();
+        self.where_alias_substitutions.deinit(self.gpa);
+        self.where_alias_substitutions = subs;
+    }
     const receiver_rigid = self.resolvedRigid(resolved.receiver) orelse return;
     try subs.put(self.gpa, receiver_rigid.name, owner_var);
     for (resolved.params, arg_vars) |param_var, arg_var| {
@@ -22258,8 +22518,9 @@ const AnnoGenState = union(enum) {
         method_stage: u8 = 0,
     },
     apply: struct {
-        /// Each argument's adapter reach. Owned.
-        reaches: []GenTypeAnnoCtx.AnnotationGenCtx.AdapterReach = &.{},
+        /// Where the arguments' adapter reaches start in
+        /// `anno_apply_reaches`, once computed.
+        reaches_start: ?u32 = null,
         /// Each argument's formal's declaration positions.
         positions: ApplicationPositions = .invalid,
         /// Waiting for the referenced local declaration, generated before
@@ -22303,10 +22564,10 @@ const DeclGenFrame = struct {
     /// Whether generating the body filled `type_decl_rigid_vars` with the
     /// header's rigid variables.
     filled_rigid_vars: bool = false,
-    /// An alias body's hidden polarity parameters, collected while its
-    /// annotation generates and installed as `alias_hidden_exts` until the
-    /// frame finishes. Heap-allocated because frames move as the stack grows.
-    hidden_exts: ?*std.ArrayListUnmanaged(Var) = null,
+    /// Where an alias body's hidden polarity parameters start in
+    /// `alias_hidden_ext_vars`; they are collected while its annotation
+    /// generates, with `alias_hidden_exts` installed until the frame finishes.
+    hidden_exts_start: ?u32 = null,
     outer_hidden_exts: ?*std.ArrayListUnmanaged(Var) = null,
     stage: enum { start, alias_body, nominal_body, where_params, where_receiver, where_owners, finish } = .start,
     index: u32 = 0,
@@ -22508,8 +22769,9 @@ fn releaseAnnoGenScratch(self: *Self, frame: *AnnoGenFrame) void {
         .tag_union => |state| self.scratch_tags.clearFrom(state.scratch_top),
         .record => |state| self.scratch_record_fields.clearFrom(state.scratch_top),
         .tuple => |state| self.scratch_vars.clearFrom(state.scratch_top),
-        .apply => |state| {
-            self.gpa.free(state.reaches);
+        .apply => |state| if (state.reaches_start) |start| {
+            std.debug.assert(start <= self.anno_apply_reaches.items.len);
+            self.anno_apply_reaches.shrinkRetainingCapacity(start);
         },
         .none, .rigid, .lookup_awaiting_decl, .func => {},
     }
@@ -22520,11 +22782,11 @@ fn restoreDeclGenScope(self: *Self, frame: *DeclGenFrame) void {
     if (frame.where_scratch_top) |top| self.scratch_static_dispatch_constraints.clearFrom(top);
     frame.where_scratch_top = null;
     if (frame.filled_rigid_vars) self.type_decl_rigid_vars.clearRetainingCapacity();
-    if (frame.hidden_exts) |hidden_exts| {
+    if (frame.hidden_exts_start) |start| {
         self.alias_hidden_exts = frame.outer_hidden_exts;
-        hidden_exts.deinit(self.gpa);
-        self.gpa.destroy(hidden_exts);
-        frame.hidden_exts = null;
+        std.debug.assert(start <= self.alias_hidden_ext_vars.items.len);
+        self.alias_hidden_ext_vars.shrinkRetainingCapacity(start);
+        frame.hidden_exts_start = null;
     }
     switch (frame.mode) {
         .ensure => |ensure| {
@@ -22657,7 +22919,7 @@ fn stepDeclGen(self: *Self, frame: *DeclGenFrame, input: ?TypeGenResult, env: *E
         .alias_body => {
             const alias = decl.s_alias_decl;
             const backing_var: Var = ModuleEnv.varFrom(alias.anno);
-            try self.finishAliasDeclarationParameters(decl_var, frame.hidden_exts.?.items);
+            try self.finishAliasDeclarationParameters(decl_var, self.alias_hidden_ext_vars.items[frame.hidden_exts_start.?..]);
             if (!try self.validateAliasRows(backing_var, env, self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(alias.anno)))) {
                 self.markTypeDeclInvalid(decl_idx);
                 try self.markErroneous(decl_var);
@@ -22766,11 +23028,9 @@ fn beginAliasDeclBody(
         );
     }
 
-    const hidden_exts = try self.gpa.create(std.ArrayListUnmanaged(Var));
-    hidden_exts.* = .empty;
-    frame.hidden_exts = hidden_exts;
+    frame.hidden_exts_start = std.math.cast(u32, self.alias_hidden_ext_vars.items.len) orelse return error.OutOfMemory;
     frame.outer_hidden_exts = self.alias_hidden_exts;
-    self.alias_hidden_exts = hidden_exts;
+    self.alias_hidden_exts = &self.alias_hidden_ext_vars;
 
     self.type_decl_rigid_vars.clearRetainingCapacity();
     frame.filled_rigid_vars = true;
@@ -22801,22 +23061,23 @@ fn finishAliasDeclarationParameters(self: *Self, decl_var: Var, hidden: []const 
     const content = self.types.resolveVar(decl_var).desc.content;
     if (content == .err) return;
     const alias = content.alias;
-    var args: std.ArrayList(Var) = .empty;
-    defer args.deinit(self.gpa);
-    try args.appendSlice(self.gpa, self.types.sliceAliasArgs(alias));
+    const args_top = self.scratch_vars.top();
+    defer self.scratch_vars.clearFrom(args_top);
+    for (self.types.sliceAliasArgs(alias)) |arg| try self.scratch_vars.append(arg);
     // Instantiation records each newly copied marker once. A source argument
     // shared by several nested aliases still contributes just one parameter.
-    var seen: collections.DenseMapUnmanaged(Var, void) = .empty;
-    defer seen.deinit(self.gpa);
+    const seen = &self.alias_hidden_ext_seen;
+    seen.clearRetainingCapacity();
+    defer seen.clearRetainingCapacity();
     for (hidden) |var_| {
         const root = self.types.resolveVar(var_).var_;
         const entry = try seen.getOrPut(self.gpa, root);
-        if (!entry.found_existing) try args.append(self.gpa, root);
+        if (!entry.found_existing) try self.scratch_vars.append(root);
     }
     const completed = try self.types.mkAliasWithSourceDeclAndBuiltinOrigin(
         alias.ident,
         self.types.getAliasBackingVar(alias),
-        args.items,
+        self.scratch_vars.sliceFromStart(args_top),
         alias.source_arg_count,
         alias.origin_module,
         alias.source_decl.toOptional(),
@@ -23253,9 +23514,14 @@ fn stepRigidAnnoGen(self: *Self, frame: *AnnoGenFrame, rigid: std.meta.fieldInfo
         const scratch_constraints_start = state.scratch_start;
         const scratch_constraints_end = state.scratch_end;
 
-        var constraint_representatives = std.AutoHashMap(Ident.Idx, usize).init(self.gpa);
-        defer constraint_representatives.deinit();
-        try constraint_representatives.ensureTotalCapacity(@intCast(scratch_constraints_end - scratch_constraints_start));
+        var constraint_representatives = self.where_constraint_representatives;
+        self.where_constraint_representatives = .empty;
+        defer {
+            constraint_representatives.clearRetainingCapacity();
+            self.where_constraint_representatives.deinit(self.gpa);
+            self.where_constraint_representatives = constraint_representatives;
+        }
+        try constraint_representatives.ensureTotalCapacity(self.gpa, @intCast(scratch_constraints_end - scratch_constraints_start));
 
         // A dispatcher's requirements are a method-keyed set. Keep the
         // first source occurrence as its stable evidence position, and
@@ -23263,14 +23529,14 @@ fn stepRigidAnnoGen(self: *Self, frame: *AnnoGenFrame, rigid: std.meta.fieldInfo
         const static_dispatch_constraints_start = self.types.static_dispatch_constraints.len();
         for (scratch_constraints_start..scratch_constraints_end) |scratch_index| {
             const scratch_constraint = self.scratch_static_dispatch_constraints.items.items[scratch_index];
-            const representative = try constraint_representatives.getOrPut(scratch_constraint.constraint.fn_name);
+            const representative = constraint_representatives.getOrPutAssumeCapacity(scratch_constraint.constraint.fn_name);
             if (representative.found_existing) {
                 const representative_constraint = self.scratch_static_dispatch_constraints.items.items[representative.value_ptr.*];
                 _ = try self.unify(representative_constraint.constraint.fn_var, scratch_constraint.constraint.fn_var, env);
                 continue;
             }
 
-            representative.value_ptr.* = scratch_index;
+            representative.value_ptr.* = @intCast(scratch_index);
             _ = try self.types.static_dispatch_constraints.append(self.types.gpa, scratch_constraint.constraint);
         }
         const static_dispatch_constraints_end = self.types.static_dispatch_constraints.len();
@@ -23396,7 +23662,7 @@ fn stepApplyAnnoGen(self: *Self, frame: *AnnoGenFrame, a: CIR.TypeAnno.Apply, in
         // reference stands for. A `Try` written as the direct result also
         // passes the adapter's reach to its ERROR row; every other
         // application argument puts its arguments out of reach.
-        frame.state.apply.reaches = try self.applicationArgumentReaches(a, env, ctx);
+        frame.state.apply.reaches_start = try self.applicationArgumentReaches(a, env, ctx);
         frame.state.apply.positions = switch (try annotation_positions.classify(self.gpa, .{
             .builtin_owner = self.builtin_ctx.builtin_module,
             .context = self,
@@ -23418,7 +23684,7 @@ fn stepApplyAnnoGen(self: *Self, frame: *AnnoGenFrame, a: CIR.TypeAnno.Apply, in
         if (frame.index < anno_args.len) {
             const arg_index = frame.index;
             frame.index += 1;
-            const reached_arg_ctx = ctx.withReach(state.reaches[arg_index]);
+            const reached_arg_ctx = ctx.withReach(self.anno_apply_reaches.items[state.reaches_start.? + arg_index]);
             // A null result belongs only to rejected declaration/arity
             // diagnostics, never to a valid type application. An invariant
             // formal's argument stands on both sides at every depth.
@@ -25985,9 +26251,9 @@ fn commitProjectedStoredValue(
     return true;
 }
 
+/// A frame is begun, finished, and aborted by one checker against the one
+/// `Env` of the activity run it belongs to; both are passed to its methods.
 const ExprCheckFrame = struct {
-    checker: *Self,
-    env: *Env,
     expr_idx: CIR.Expr.Idx,
     expr: CIR.Expr,
     expr_region: Region,
@@ -26010,26 +26276,34 @@ const ExprCheckFrame = struct {
     suppress_group_member_generalize: bool,
     should_generalize: bool,
     rank_pushed: bool,
-    hoist_frame: ?HoistFrameGuard,
+    /// The hoist frame this frame opened for `expr_idx` is still open.
+    hoist_frame_open: bool,
     /// The annotation this frame materialized, if any.
     annotation: ?CIR.Annotation.Idx = null,
     active: bool = true,
 
-    fn deinit(self: *ExprCheckFrame) void {
+    fn deinit(self: *ExprCheckFrame, checker: *Self, env: *Env) void {
         if (!self.active) return;
 
-        if (self.hoist_frame) |*hoist_frame| {
-            hoist_frame.deinit();
+        if (self.hoist_frame_open) {
+            checker.abortHoistFrame(self.expr_idx);
+            self.hoist_frame_open = false;
         }
         if (self.rank_pushed) {
-            self.env.var_pool.popRank();
+            env.var_pool.popRank();
         }
-        self.checker.active_scheme_root = self.previous_active_scheme_root;
-        self.checker.discarded_binding_rhs_expr = self.previous_discarded_binding_rhs_expr;
-        self.checker.instantiation_is_immediate_callee = self.previous_instantiation_is_immediate_callee;
-        self.checker.instantiation_source_expr = self.previous_instantiation_source;
-        self.checker.checking_binding_rhs_pattern = null;
+        checker.active_scheme_root = self.previous_active_scheme_root;
+        checker.discarded_binding_rhs_expr = self.previous_discarded_binding_rhs_expr;
+        checker.instantiation_is_immediate_callee = self.previous_instantiation_is_immediate_callee;
+        checker.instantiation_source_expr = self.previous_instantiation_source;
+        checker.checking_binding_rhs_pattern = null;
         self.active = false;
+    }
+
+    fn finishHoistFrame(self: *ExprCheckFrame, checker: *Self, does_fx: bool) Allocator.Error!void {
+        std.debug.assert(self.hoist_frame_open);
+        try checker.finishHoistFrame(self.expr_idx, does_fx);
+        self.hoist_frame_open = false;
     }
 
     const FinishProgress = enum { finished, boundary };
@@ -26037,9 +26311,7 @@ const ExprCheckFrame = struct {
     /// Finish the frame up to its group's generalization boundary, when it is
     /// one; `.boundary` means the boundary must run before
     /// `finishAfterBoundary` completes the frame.
-    fn finishBeforeBoundary(self: *ExprCheckFrame, does_fx: bool) std.mem.Allocator.Error!FinishProgress {
-        const checker = self.checker;
-        const env = self.env;
+    fn finishBeforeBoundary(self: *ExprCheckFrame, checker: *Self, env: *Env, does_fx: bool) std.mem.Allocator.Error!FinishProgress {
 
         // Check if we have an annotation
         if (self.mb_anno_vars) |anno_vars| {
@@ -26158,25 +26430,23 @@ const ExprCheckFrame = struct {
             try checker.defaultLiteralsAtGeneralizationBoundary(.{ .owner = self.expr_var_raw, .interface = self.expr_var }, env);
             const roots = [_]BoundaryRoot{.{ .owner = self.expr_var_raw, .interface = self.expr_var, .annotation = self.annotation }};
             _ = try checker.relateBoundaryPredeclaredUses(&roots, env);
-            try self.generalize();
+            try self.generalize(checker, env);
             checker.publishBoundaryPredeclaredSchemes(&roots);
         }
 
-        try self.hoist_frame.?.finish(does_fx);
-        self.deinit();
+        try self.finishHoistFrame(checker, does_fx);
+        self.deinit(checker, env);
         return .finished;
     }
 
     /// Complete a frame whose group's generalization boundary has run.
-    fn finishAfterBoundary(self: *ExprCheckFrame, does_fx: bool) std.mem.Allocator.Error!void {
-        try self.generalize();
-        try self.hoist_frame.?.finish(does_fx);
-        self.deinit();
+    fn finishAfterBoundary(self: *ExprCheckFrame, checker: *Self, env: *Env, does_fx: bool) std.mem.Allocator.Error!void {
+        try self.generalize(checker, env);
+        try self.finishHoistFrame(checker, does_fx);
+        self.deinit(checker, env);
     }
 
-    fn generalize(self: *ExprCheckFrame) std.mem.Allocator.Error!void {
-        const checker = self.checker;
-        const env = self.env;
+    fn generalize(self: *ExprCheckFrame, checker: *Self, env: *Env) std.mem.Allocator.Error!void {
         try checker.judgePendingAccessesAtBoundary(env);
         checker.unify_scratch.clearPersistentOpenings();
         try checker.linkDeferredUsesFrom(env.rank());
@@ -26220,8 +26490,6 @@ fn beginExprCheckFrame(
     const previous_active_scheme_root = self.active_scheme_root;
 
     var frame = ExprCheckFrame{
-        .checker = self,
-        .env = env,
         .expr_idx = expr_idx,
         .expr = expr,
         .expr_region = expr_region,
@@ -26241,9 +26509,9 @@ fn beginExprCheckFrame(
         .suppress_group_member_generalize = false,
         .should_generalize = false,
         .rank_pushed = false,
-        .hoist_frame = null,
+        .hoist_frame_open = false,
     };
-    errdefer frame.deinit();
+    errdefer frame.deinit(self, env);
 
     // Attribute any dispatcher instantiated while checking this expression to it,
     // so an ambiguity verdict can pinpoint the source of an unsatisfiable
@@ -26343,7 +26611,8 @@ fn beginExprCheckFrame(
     };
 
     self.checking_binding_rhs_pattern = binding_rhs_pattern;
-    frame.hoist_frame = try self.beginHoistFrame(expr_idx, frame.is_binding_rhs, frame.nested_expected.hoist_position);
+    try self.openHoistFrame(expr_idx, frame.is_binding_rhs, frame.nested_expected.hoist_position);
+    frame.hoist_frame_open = true;
     self.checking_binding_rhs_pattern = null;
 
     return frame;
@@ -26374,9 +26643,6 @@ const ExprStep = union(enum) {
 /// expression-specific checking that remains after its current child.
 const ExprTask = struct {
     frame: ExprCheckFrame,
-    /// The expectation this expression was requested with, before the frame
-    /// materialized any annotation into `frame.nested_expected`.
-    expected: Expected,
     function_owner: CIR.Expr.Idx,
     does_fx: bool = false,
     state: ExprTaskState,
@@ -26394,7 +26660,8 @@ const ExprTaskState = union(enum) {
     record: AggregateCheck,
     tag: AggregateCheck,
     nominal: NominalCheck,
-    block: BlockCheck,
+    /// Null until the block begins; then the block's pooled check state.
+    block: ?*BlockCheck,
     lambda: LambdaCheck,
     closure: ClosureCheck,
     call: CallCheck,
@@ -26476,7 +26743,7 @@ fn releaseExprKernelActivity(self: *Self, state: *ExprKernelActivity) void {
 fn stepExprKernel(self: *Self, state: *ExprKernelActivity, env: *Env) std.mem.Allocator.Error!CheckActivityStep {
     if (state.finishing) |*finishing| {
         const previous_relation = try self.enterRelation(.of(.value, finishing.frame.expr_idx, 0));
-        try finishing.frame.finishAfterBoundary(finishing.does_fx);
+        try finishing.frame.finishAfterBoundary(self, env, finishing.does_fx);
         try self.leaveRelation(previous_relation);
         state.child_does_fx = finishing.does_fx;
         state.finishing = null;
@@ -26490,25 +26757,24 @@ fn stepExprKernel(self: *Self, state: *ExprKernelActivity, env: *Env) std.mem.Al
             const owner = request.function_owner orelse request.expr;
             if (exprTaskState(frame.expr)) |task_state| {
                 self.recordRelationOperands(frame.expr_idx, frame.expr) catch |err| {
-                    frame.deinit();
+                    frame.deinit(self, env);
                     return err;
                 };
                 state.tasks.append(self.gpa, .{
                     .frame = frame,
-                    .expected = request.expected,
                     .function_owner = owner,
                     .state = task_state,
                 }) catch |err| {
-                    frame.deinit();
+                    frame.deinit(self, env);
                     return err;
                 };
                 state.child_does_fx = null;
             } else {
-                errdefer frame.deinit();
+                errdefer frame.deinit(self, env);
                 const leaf_relation = try self.enterRelation(exprStepRelation(frame.expr_idx, frame.expr));
                 const does_fx = try self.checkLeafExpr(&frame, request.expected, env);
                 try self.leaveRelation(leaf_relation);
-                if (try self.finishExprFrame(state, &frame, does_fx)) |step| return step;
+                if (try self.finishExprFrame(state, &frame, env, does_fx)) |step| return step;
             }
         }
 
@@ -26523,8 +26789,8 @@ fn stepExprKernel(self: *Self, state: *ExprKernelActivity, env: *Env) std.mem.Al
             .child => |request| state.next = request,
             .done => {
                 var finished = state.tasks.pop().?;
-                errdefer finished.frame.deinit();
-                if (try self.finishExprFrame(state, &finished.frame, finished.does_fx)) |step| return step;
+                errdefer finished.frame.deinit(self, env);
+                if (try self.finishExprFrame(state, &finished.frame, env, finished.does_fx)) |step| return step;
             },
         }
     }
@@ -26532,9 +26798,9 @@ fn stepExprKernel(self: *Self, state: *ExprKernelActivity, env: *Env) std.mem.Al
 
 /// Finish a checked expression's frame; a frame at its group's generalization
 /// boundary suspends until the boundary activity completes.
-fn finishExprFrame(self: *Self, state: *ExprKernelActivity, frame: *ExprCheckFrame, does_fx: bool) std.mem.Allocator.Error!?CheckActivityStep {
+fn finishExprFrame(self: *Self, state: *ExprKernelActivity, frame: *ExprCheckFrame, env: *Env, does_fx: bool) std.mem.Allocator.Error!?CheckActivityStep {
     const previous_relation = try self.enterRelation(.of(.value, frame.expr_idx, 0));
-    const finish = try frame.finishBeforeBoundary(does_fx);
+    const finish = try frame.finishBeforeBoundary(self, env, does_fx);
     try self.leaveRelation(previous_relation);
     switch (finish) {
         .finished => {
@@ -26566,7 +26832,7 @@ fn exprTaskState(expr: CIR.Expr) ?ExprTaskState {
         .e_tag => .{ .tag = .{ .scratch = .vars } },
         .e_nominal => |nominal| .{ .nominal = .{ .source = .{ .local = nominal } } },
         .e_nominal_external => |nominal| .{ .nominal = .{ .source = .{ .external = nominal } } },
-        .e_block => .{ .block = .{} },
+        .e_block => .{ .block = null },
         .e_lambda => .{ .lambda = .{} },
         .e_closure => .{ .closure = .{} },
         .e_call => .{ .call = .{} },
@@ -26695,7 +26961,7 @@ fn resumeExprTask(self: *Self, task: *ExprTask, env: *Env, child_does_fx: ?bool)
 fn abortExprTask(self: *Self, task: *ExprTask, env: *Env) void {
     switch (task.state) {
         .tuple, .record, .tag => |state| self.abortAggregateCheck(state),
-        .block => |*state| self.abortBlockCheck(state, env),
+        .block => |state| if (state) |block| self.abortBlockCheck(block, env),
         .lambda => |*state| self.abortLambdaCheck(state),
         .closure => |state| self.abortClosureCheck(state),
         .match => |*state| self.abortMatchCheck(state),
@@ -26725,7 +26991,7 @@ fn abortExprTask(self: *Self, task: *ExprTask, env: *Env) void {
         .run_low_level,
         => {},
     }
-    task.frame.deinit();
+    task.frame.deinit(self, env);
 }
 
 /// The stored-value view of an already-checked child: a generalized
@@ -28248,11 +28514,17 @@ const BlockCheck = struct {
     saved_call_position: CallPositionFlags = undefined,
 };
 
-fn resumeBlockCheck(self: *Self, task: *ExprTask, state: *BlockCheck, env: *Env, child_does_fx: ?bool) std.mem.Allocator.Error!ExprStep {
+fn resumeBlockCheck(self: *Self, task: *ExprTask, slot: *?*BlockCheck, env: *Env, child_does_fx: ?bool) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     const expr_var = frame.expr_var;
     const nested_expected = frame.nested_expected;
     const block = frame.expr.e_block;
+    const state = slot.* orelse blk: {
+        const acquired = self.block_check_pool.pop() orelse try self.gpa.create(BlockCheck);
+        acquired.* = .{};
+        slot.* = acquired;
+        break :blk acquired;
+    };
 
     switch (state.phase) {
         .start => {
@@ -28280,6 +28552,8 @@ fn resumeBlockCheck(self: *Self, task: *ExprTask, state: *BlockCheck, env: *Env,
                 _ = try self.unify(expr_var, ModuleEnv.varFrom(block.final_expr), env);
             }
             self.endHoistLexicalScope(state.hoist_scope);
+            self.releaseBlockCheck(state);
+            slot.* = null;
             return .done;
         },
     }
@@ -28306,12 +28580,17 @@ fn resumeBlockCheck(self: *Self, task: *ExprTask, state: *BlockCheck, env: *Env,
 }
 
 fn abortBlockCheck(self: *Self, state: *BlockCheck, env: *Env) void {
+    defer self.releaseBlockCheck(state);
     switch (state.phase) {
         .start => return,
         .statements => self.abortBlockStatements(&state.statements, env),
         .final_expr => self.restoreCallPosition(state.saved_call_position),
     }
     self.endHoistLexicalScope(state.hoist_scope);
+}
+
+fn releaseBlockCheck(self: *Self, state: *BlockCheck) void {
+    self.block_check_pool.append(self.gpa, state) catch self.gpa.destroy(state);
 }
 
 // stmts //
@@ -28682,9 +28961,8 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
                 .iterable = for_stmt.expr,
                 .body = for_stmt.body,
                 .loop_region = for_region,
-                .expected = statement_expected,
             } };
-            return try self.startForLoop(&statement.kind.for_, env);
+            return try self.startForLoop(&statement.kind.for_, statement_expected, env);
         },
         inline .s_while, .s_breakable_loop, .s_infinite_loop => |while_stmt| {
             self.markCurrentHoistObservableEffect();
@@ -28931,7 +29209,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
             return null;
         },
         .s_for => {
-            if (try self.resumeForLoop(&statement.kind.for_, env)) |request| return request;
+            if (try self.resumeForLoop(&statement.kind.for_, statement.statement_expected, env)) |request| return request;
             self.assertLoopBodyHasNoFinalExpr(statement.kind.for_.body);
             // Every `for!` pulls its items with the effectful `next!`.
             if (statement.kind.for_.kind == .stream) block_state.does_fx = true;
@@ -29076,7 +29354,6 @@ const ForLoopCheck = struct {
     iterable: CIR.Expr.Idx = undefined,
     body: CIR.Expr.Idx = undefined,
     loop_region: Region = undefined,
-    expected: Expected = undefined,
     valid_pattern: bool = false,
     phase: enum { start, iterable, body } = .start,
 };
@@ -29124,17 +29401,19 @@ fn assertLoopBodyHasNoFinalExpr(self: *const Self, body: CIR.Expr.Idx) void {
     if (!final_is_empty_record) base.invariant("check invariant violated: loop body has a final expression", .{});
 }
 
-fn startForLoop(self: *Self, state: *ForLoopCheck, env: *Env) std.mem.Allocator.Error!ExprChildRequest {
+/// `expected` is the expectation the loop was requested with: its statement's,
+/// or a `for` expression's statement expectation.
+fn startForLoop(self: *Self, state: *ForLoopCheck, expected: Expected, env: *Env) std.mem.Allocator.Error!ExprChildRequest {
     std.debug.assert(state.phase == .start);
     const pattern_ctx: PatternCtx = .{ .row_openness = if (try self.patternNeedsExhaustiveness(state.pattern)) .open else .closed, .failure_owner = state.loop_node };
     state.valid_pattern = try self.checkPattern(state.pattern, pattern_ctx, env);
     state.phase = .iterable;
-    return .{ .expr = state.iterable, .expected = state.expected.forStatement() };
+    return .{ .expr = state.iterable, .expected = expected.forStatement() };
 }
 
 /// Continue a `for` loop after its iterable or body. Returns the body, or
 /// null once the loop is fully checked.
-fn resumeForLoop(self: *Self, state: *ForLoopCheck, env: *Env) std.mem.Allocator.Error!?ExprChildRequest {
+fn resumeForLoop(self: *Self, state: *ForLoopCheck, expected: Expected, env: *Env) std.mem.Allocator.Error!?ExprChildRequest {
     switch (state.phase) {
         .start => unreachable,
         .body => return null,
@@ -29226,14 +29505,14 @@ fn resumeForLoop(self: *Self, state: *ForLoopCheck, env: *Env) std.mem.Allocator
     );
 
     state.phase = .body;
-    return .{ .expr = state.body, .expected = state.expected.forStatement().guardHoistSelection() };
+    return .{ .expr = state.body, .expected = expected.forStatement().guardHoistSelection() };
 }
 
 fn resumeForExprCheck(self: *Self, task: *ExprTask, state: *ForLoopCheck, env: *Env, child_does_fx: ?bool) std.mem.Allocator.Error!ExprStep {
     const frame = &task.frame;
     if (child_does_fx) |does_fx| {
         task.does_fx = does_fx or task.does_fx;
-        if (try self.resumeForLoop(state, env)) |request| return .{ .child = request };
+        if (try self.resumeForLoop(state, frame.nested_expected.forStatement(), env)) |request| return .{ .child = request };
         // Every `for!` pulls its items with the effectful `next!`.
         if (state.kind == .stream) task.does_fx = true;
 
@@ -29254,9 +29533,8 @@ fn resumeForExprCheck(self: *Self, task: *ExprTask, state: *ForLoopCheck, env: *
         .iterable = for_expr.expr,
         .body = for_expr.body,
         .loop_region = frame.expr_region,
-        .expected = frame.nested_expected.forStatement(),
     };
-    return .{ .child = try self.startForLoop(state, env) };
+    return .{ .child = try self.startForLoop(state, frame.nested_expected.forStatement(), env) };
 }
 
 // expect //
@@ -36760,6 +37038,8 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
         try entry.value_ptr.append(self.gpa, @intCast(index));
     }
 
+    var recursion_scratch: DefaultRecursionScratch = .{};
+    defer recursion_scratch.deinit(self.gpa);
     for (self.pending_default_checks.items) |pending| {
         // An erroring default already reported (an explicitly recorded
         // effectful/parameter-constraint rejection, or a unify mismatch
@@ -36767,7 +37047,7 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
         // would cascade a second problem onto the same default. It is
         // retired below instead.
         if (self.defaultWasRejected(pending)) continue;
-        if (try self.defaultMaterializationIsRecursive(pending.default_expr, &evidence)) {
+        if (try self.defaultMaterializationIsRecursive(pending.default_expr, &evidence, &recursion_scratch)) {
             try recursive_defaults.append(self.gpa, pending);
         }
     }
@@ -37082,28 +37362,62 @@ const DefaultWalkEvidence = struct {
 /// the recorded omitted defaults owned by each construction. Foreign
 /// defaults were validated in their declaring module, which cannot reference
 /// this one.
+/// The walk storage of `defaultMaterializationIsRecursive`, cleared by each
+/// walk and kept across the module's pending defaults.
+const DefaultRecursionScratch = struct {
+    expr_work: std.ArrayList(CIR.Expr.Idx) = .empty,
+    visited_defaults: std.AutoHashMapUnmanaged(u32, void) = .empty,
+    visited_exprs: collections.DenseMapUnmanaged(CIR.Expr.Idx, void) = .empty,
+    seed_work: std.ArrayList(Var) = .empty,
+    visited_seed_vars: collections.DenseMapUnmanaged(Var, void) = .empty,
+    visited_instantiations: std.AutoHashMapUnmanaged(u32, void) = .empty,
+    invoked_work: std.ArrayList(CIR.Expr.Idx) = .empty,
+    visited_invoked: collections.DenseMapUnmanaged(CIR.Expr.Idx, void) = .empty,
+    local_pattern_to_expr: collections.DenseMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx) = .empty,
+
+    fn deinit(self: *DefaultRecursionScratch, gpa: Allocator) void {
+        self.expr_work.deinit(gpa);
+        self.visited_defaults.deinit(gpa);
+        self.visited_exprs.deinit(gpa);
+        self.seed_work.deinit(gpa);
+        self.visited_seed_vars.deinit(gpa);
+        self.visited_instantiations.deinit(gpa);
+        self.invoked_work.deinit(gpa);
+        self.visited_invoked.deinit(gpa);
+        self.local_pattern_to_expr.deinit(gpa);
+    }
+
+    fn clearRetainingCapacity(self: *DefaultRecursionScratch) void {
+        self.expr_work.clearRetainingCapacity();
+        self.visited_defaults.clearRetainingCapacity();
+        self.visited_exprs.clearRetainingCapacity();
+        self.seed_work.clearRetainingCapacity();
+        self.visited_seed_vars.clearRetainingCapacity();
+        self.visited_instantiations.clearRetainingCapacity();
+        self.invoked_work.clearRetainingCapacity();
+        self.visited_invoked.clearRetainingCapacity();
+        self.local_pattern_to_expr.clearRetainingCapacity();
+    }
+};
+
 fn defaultMaterializationIsRecursive(
     self: *Self,
     root: CIR.Expr.Idx,
     evidence: *const DefaultWalkEvidence,
+    scratch: *DefaultRecursionScratch,
 ) std.mem.Allocator.Error!bool {
     const target_expr_node: u32 = @backingInt(root);
     const self_module = self.cir.selfModuleIdentity();
+    scratch.clearRetainingCapacity();
 
-    var expr_work: std.ArrayList(CIR.Expr.Idx) = .empty;
-    defer expr_work.deinit(self.gpa);
+    const expr_work = &scratch.expr_work;
     try expr_work.append(self.gpa, root);
 
-    var visited_defaults: std.AutoHashMapUnmanaged(u32, void) = .empty;
-    defer visited_defaults.deinit(self.gpa);
-    var visited_exprs: collections.DenseMapUnmanaged(CIR.Expr.Idx, void) = .empty;
-    defer visited_exprs.deinit(self.gpa);
-    var seed_work: std.ArrayList(Var) = .empty;
-    defer seed_work.deinit(self.gpa);
-    var visited_seed_vars: collections.DenseMapUnmanaged(Var, void) = .empty;
-    defer visited_seed_vars.deinit(self.gpa);
-    var visited_instantiations: std.AutoHashMapUnmanaged(u32, void) = .empty;
-    defer visited_instantiations.deinit(self.gpa);
+    const visited_defaults = &scratch.visited_defaults;
+    const visited_exprs = &scratch.visited_exprs;
+    const seed_work = &scratch.seed_work;
+    const visited_seed_vars = &scratch.visited_seed_vars;
+    const visited_instantiations = &scratch.visited_instantiations;
     // Expressions reached in INVOKED position (a call's direct callee, a
     // dispatch-resolved target, a resolved method binding, and—per the
     // conservative argument rule, see `appendArgsInvoked`—every argument of
@@ -37115,10 +37429,8 @@ fn defaultMaterializationIsRecursive(
     // positions of function-producing forms (block final expression,
     // if/match branch results), with its own visited set so chains
     // terminate.
-    var invoked_work: std.ArrayList(CIR.Expr.Idx) = .empty;
-    defer invoked_work.deinit(self.gpa);
-    var visited_invoked: collections.DenseMapUnmanaged(CIR.Expr.Idx, void) = .empty;
-    defer visited_invoked.deinit(self.gpa);
+    const invoked_work = &scratch.invoked_work;
+    const visited_invoked = &scratch.visited_invoked;
     // Local pattern bindings encountered during THIS walk: a block statement
     // binding a pattern to an expression records the edge, so a lookup that
     // resolves to a default-expression-local binder follows the same
@@ -37127,8 +37439,7 @@ fn defaultMaterializationIsRecursive(
     // it, and a local lookup is only reachable from inside its binding block,
     // so every consulted binding has been recorded by the time its lookup
     // pops.
-    var local_pattern_to_expr: collections.DenseMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx) = .empty;
-    defer local_pattern_to_expr.deinit(self.gpa);
+    const local_pattern_to_expr = &scratch.local_pattern_to_expr;
 
     while (true) {
         // Drain dispatch seeds: a seed var identifies a constraint whose
@@ -37201,7 +37512,7 @@ fn defaultMaterializationIsRecursive(
                 // consult them first.
                 .e_block => |block| {
                     for (self.cir.store.sliceStatements(block.stmts)) |stmt_idx| {
-                        try self.recordDefaultWalkStmtBindings(stmt_idx, &local_pattern_to_expr);
+                        try self.recordDefaultWalkStmtBindings(stmt_idx, local_pattern_to_expr);
                     }
                     try invoked_work.append(self.gpa, block.final_expr);
                 },
@@ -37318,7 +37629,7 @@ fn defaultMaterializationIsRecursive(
                 // (see the drain loop above).
                 try seed_work.append(self.gpa, call.constraint_fn_var);
                 try expr_work.append(self.gpa, call.receiver);
-                try appendArgsInvoked(self.gpa, &invoked_work, self.cir.store.sliceExpr(call.args));
+                try appendArgsInvoked(self.gpa, invoked_work, self.cir.store.sliceExpr(call.args));
             },
             .e_type_dispatch_call => |call| {
                 // A derived method dispatched through its owner type has no
@@ -37330,20 +37641,20 @@ fn defaultMaterializationIsRecursive(
                     },
                     .dispatcher => {},
                 }
-                try appendArgsInvoked(self.gpa, &invoked_work, self.cir.store.sliceExpr(call.args));
+                try appendArgsInvoked(self.gpa, invoked_work, self.cir.store.sliceExpr(call.args));
             },
             .e_type_method_call => |call| {
                 if (self.cir.lookupMethodBindingForOwnerConst(call.type_dispatch_stmt, call.method_name)) |binding| {
                     // A resolved method binding is INVOKED by this call.
                     try invoked_work.append(self.gpa, self.cir.store.getDef(binding.def_idx).expr);
                 }
-                try appendArgsInvoked(self.gpa, &invoked_work, self.cir.store.sliceExpr(call.args));
+                try appendArgsInvoked(self.gpa, invoked_work, self.cir.store.sliceExpr(call.args));
             },
             .e_method_call => |call| {
                 // An unreplaced method call carries no stamped target (it is
                 // an already-diagnosed error form by finalize); walk operands.
                 try expr_work.append(self.gpa, call.receiver);
-                try appendArgsInvoked(self.gpa, &invoked_work, self.cir.store.sliceExpr(call.args));
+                try appendArgsInvoked(self.gpa, invoked_work, self.cir.store.sliceExpr(call.args));
             },
             .e_empty_record => {
                 if (try self.appendOmittedDefaultDependencies(
@@ -37351,8 +37662,8 @@ fn defaultMaterializationIsRecursive(
                     evidence,
                     self_module,
                     target_expr_node,
-                    &visited_defaults,
-                    &expr_work,
+                    visited_defaults,
+                    expr_work,
                 )) return true;
             },
             .e_record => |record| {
@@ -37363,8 +37674,8 @@ fn defaultMaterializationIsRecursive(
                         evidence,
                         self_module,
                         target_expr_node,
-                        &visited_defaults,
-                        &expr_work,
+                        visited_defaults,
+                        expr_work,
                     )) return true;
                 } else {
                     // An UPDATE omits nothing: unmentioned fields copy from
@@ -37391,7 +37702,7 @@ fn defaultMaterializationIsRecursive(
                 // ARGUMENT is conservatively invoked too (see
                 // `appendArgsInvoked`).
                 try invoked_work.append(self.gpa, call.func);
-                try appendArgsInvoked(self.gpa, &invoked_work, self.cir.store.sliceExpr(call.args));
+                try appendArgsInvoked(self.gpa, invoked_work, self.cir.store.sliceExpr(call.args));
             },
             // A lambda reached as a VALUE only creates the function value;
             // its body is not evaluated at materialization, so the body is
@@ -37431,7 +37742,7 @@ fn defaultMaterializationIsRecursive(
             },
             .e_block => |block| {
                 for (self.cir.store.sliceStatements(block.stmts)) |stmt_idx| {
-                    try self.appendDefaultWalkStmtExprs(stmt_idx, &expr_work, &local_pattern_to_expr);
+                    try self.appendDefaultWalkStmtExprs(stmt_idx, expr_work, local_pattern_to_expr);
                 }
                 try expr_work.append(self.gpa, block.final_expr);
             },
@@ -38857,6 +39168,49 @@ fn appendGeneralizedIdentityVars(self: *Self, var_: Var, out: *std.ArrayListUnma
 
 /// `value` is the binding or expression whose scheme `scheme_var` is: a row
 /// conflict found while keying the scheme is reported there.
+/// The storage of one `deduplicateGeneralizedDispatchRequirements` call.
+const DispatchDedupScratch = struct {
+    anchors: collections.DenseMap(Var, void),
+    callable_shapes: collections.DenseMap(Var, [32]u8),
+    pending_receivers: std.ArrayListUnmanaged(Var) = .empty,
+    snapshot: std.ArrayListUnmanaged(StaticDispatchConstraint) = .empty,
+    retained_constraints: std.ArrayListUnmanaged(StaticDispatchConstraint) = .empty,
+    retained_by_key: std.AutoHashMapUnmanaged(GeneralizedAttachedConstraintKey, Var) = .empty,
+    seen: std.AutoHashMapUnmanaged(GeneralizedSchemeRequirementKey, SeenRequirement) = .empty,
+
+    const SeenRequirement = struct {
+        fn_var: Var,
+        write_index: usize,
+    };
+
+    fn init(gpa: Allocator) DispatchDedupScratch {
+        return .{
+            .anchors = collections.DenseMap(Var, void).init(gpa),
+            .callable_shapes = collections.DenseMap(Var, [32]u8).init(gpa),
+        };
+    }
+
+    fn deinit(self: *DispatchDedupScratch, gpa: Allocator) void {
+        self.anchors.deinit();
+        self.callable_shapes.deinit();
+        self.pending_receivers.deinit(gpa);
+        self.snapshot.deinit(gpa);
+        self.retained_constraints.deinit(gpa);
+        self.retained_by_key.deinit(gpa);
+        self.seen.deinit(gpa);
+    }
+
+    fn clearRetainingCapacity(self: *DispatchDedupScratch) void {
+        self.anchors.clearRetainingCapacity();
+        self.callable_shapes.clearRetainingCapacity();
+        self.pending_receivers.clearRetainingCapacity();
+        self.snapshot.clearRetainingCapacity();
+        self.retained_constraints.clearRetainingCapacity();
+        self.retained_by_key.clearRetainingCapacity();
+        self.seen.clearRetainingCapacity();
+    }
+};
+
 fn deduplicateGeneralizedDispatchRequirements(
     self: *Self,
     scheme_var: Var,
@@ -38880,30 +39234,31 @@ fn deduplicateGeneralizedDispatchRequirements(
         false;
     if (!has_receiver_candidates and !has_scheme_candidates) return;
 
-    var anchors = collections.DenseMap(Var, void).init(self.gpa);
-    defer anchors.deinit();
+    var scratch = self.dispatch_dedup_scratch orelse DispatchDedupScratch.init(self.gpa);
+    self.dispatch_dedup_scratch = null;
+    defer {
+        scratch.clearRetainingCapacity();
+        if (self.dispatch_dedup_scratch) |*other| other.deinit(self.gpa);
+        self.dispatch_dedup_scratch = scratch;
+    }
+    const anchors = &scratch.anchors;
     try anchors.ensureTotalCapacity(identity_vars.len);
     for (identity_vars) |identity_var| {
         try anchors.put(self.types.resolveVar(identity_var).var_, {});
     }
 
-    var callable_shapes = collections.DenseMap(Var, [32]u8).init(self.gpa);
-    defer callable_shapes.deinit();
+    const callable_shapes = &scratch.callable_shapes;
     // Callables share most of what they reach, so their shapes are keyed with
     // one retained engine; every store change below invalidates it.
     self.canonical_key_writer.retainAnchoredKeys();
     defer self.canonical_key_writer.releaseAnchoredKeys();
 
-    var pending_receivers: std.ArrayListUnmanaged(Var) = .empty;
-    defer pending_receivers.deinit(self.gpa);
+    const pending_receivers = &scratch.pending_receivers;
     try pending_receivers.appendSlice(self.gpa, identity_vars);
 
-    var snapshot: std.ArrayListUnmanaged(StaticDispatchConstraint) = .empty;
-    defer snapshot.deinit(self.gpa);
-    var retained_constraints: std.ArrayListUnmanaged(StaticDispatchConstraint) = .empty;
-    defer retained_constraints.deinit(self.gpa);
-    var retained_by_key = std.AutoHashMap(GeneralizedAttachedConstraintKey, Var).init(self.gpa);
-    defer retained_by_key.deinit();
+    const snapshot = &scratch.snapshot;
+    const retained_constraints = &scratch.retained_constraints;
+    const retained_by_key = &scratch.retained_by_key;
 
     while (pending_receivers.pop()) |receiver_var| {
         // Unifying two callables appends merged constraint ranges to the
@@ -38926,9 +39281,9 @@ fn deduplicateGeneralizedDispatchRequirements(
                 .fn_name = constraint.fn_name,
                 .origin_tag = std.meta.activeTag(constraint.origin),
                 .origin_flag = dispatchConstraintOriginFlag(constraint.origin),
-                .callable_shape = try self.generalizedCallableShape(&anchors, &callable_shapes, constraint.fn_var, value, env),
+                .callable_shape = try self.generalizedCallableShape(anchors, callable_shapes, constraint.fn_var, value, env),
             };
-            const entry = try retained_by_key.getOrPut(key);
+            const entry = try retained_by_key.getOrPut(self.gpa, key);
             if (!entry.found_existing) {
                 entry.value_ptr.* = constraint.fn_var;
                 continue;
@@ -38936,7 +39291,7 @@ fn deduplicateGeneralizedDispatchRequirements(
             const merged = try self.unifyEquivalentGeneralizedCallables(entry.value_ptr.*, constraint.fn_var, env);
             self.canonical_key_writer.invalidateAnchoredKeys();
             if (merged) {
-                try self.appendGeneralizedIdentityVars(entry.value_ptr.*, &pending_receivers, value, env);
+                try self.appendGeneralizedIdentityVars(entry.value_ptr.*, pending_receivers, value, env);
             }
         }
 
@@ -38978,13 +39333,8 @@ fn deduplicateGeneralizedDispatchRequirements(
     const scheme_idx = self.typeSchemeIndexForRoot(scheme_var) orelse return;
     if (self.type_schemes.items[scheme_idx].dispatch_requirements.items.len <= 1) return;
 
-    const SeenRequirement = struct {
-        fn_var: Var,
-        write_index: usize,
-    };
-    var seen = std.AutoHashMap(GeneralizedSchemeRequirementKey, SeenRequirement).init(self.gpa);
-    defer seen.deinit();
-    try seen.ensureTotalCapacity(@intCast(self.type_schemes.items[scheme_idx].dispatch_requirements.items.len));
+    const seen = &scratch.seen;
+    try seen.ensureTotalCapacity(self.gpa, @intCast(self.type_schemes.items[scheme_idx].dispatch_requirements.items.len));
 
     var write: usize = 0;
     var read: usize = 0;
@@ -39003,7 +39353,7 @@ fn deduplicateGeneralizedDispatchRequirements(
             .fn_name = requirement.constraint.fn_name,
             .origin_tag = std.meta.activeTag(requirement.constraint.origin),
             .origin_flag = dispatchConstraintOriginFlag(requirement.constraint.origin),
-            .callable_shape = try self.generalizedCallableShape(&anchors, &callable_shapes, requirement.constraint.fn_var, value, env),
+            .callable_shape = try self.generalizedCallableShape(anchors, callable_shapes, requirement.constraint.fn_var, value, env),
         };
         const entry = seen.getOrPutAssumeCapacity(key);
         if (entry.found_existing) {
@@ -39445,7 +39795,7 @@ fn finalizeTypeSchemeRequirementsAtCheckedBoundary(self: *Self) Allocator.Error!
 
     if (builtin.mode == .debug) {
         std.debug.assert(self.type_scheme_by_var.count() == 0);
-        std.debug.assert(self.scheme_requirement_candidate_indices_by_owner.count() == 0);
+        std.debug.assert(self.scheme_requirement_candidate_chains_by_owner.count() == 0);
     }
 }
 
@@ -39671,18 +40021,21 @@ fn captureSchemeDispatchRequirements(
 
     const rank = env.rank();
     for (roots) |root| {
-        var owner_indices = (self.scheme_requirement_candidate_indices_by_owner.fetchRemove(root.owner) orelse continue).value;
-        defer owner_indices.deinit(self.gpa);
+        const owner_chain = (self.scheme_requirement_candidate_chains_by_owner.fetchRemove(root.owner) orelse continue).value;
         // Candidates whose receiver still carries this boundary's rank are
         // undecided until generalization adjusts ranks: a receiver created
         // here that unified with an enclosing-scope variable escapes only
         // then. They stay owned by this root for the capture that runs
         // after generalization, where an escaped receiver is captured and a
         // quantified one carries its own constraint.
-        var undecided = std.ArrayListUnmanaged(u32).empty;
-        errdefer undecided.deinit(self.gpa);
-        for (owner_indices.items) |candidate_idx| {
+        // Undecided candidates are relinked, in order, into the owner's
+        // remaining chain.
+        var undecided: ?SchemeRequirementCandidateChain = null;
+        var next_candidate_idx = owner_chain.first;
+        while (next_candidate_idx != SchemeRequirementCandidate.none) {
+            const candidate_idx = next_candidate_idx;
             const candidate = self.scheme_requirement_candidates.items[candidate_idx];
+            next_candidate_idx = candidate.next_of_owner;
             std.debug.assert(candidate.owner_root == root.owner);
 
             // This is the candidate's one declared owner boundary. Whether it
@@ -39737,7 +40090,15 @@ fn captureSchemeDispatchRequirements(
                 break :blk switch (candidate.source) {
                     .creation => created: {
                         if (receiver.desc.rank == rank) {
-                            try undecided.append(self.gpa, candidate_idx);
+                            const candidates = self.scheme_requirement_candidates.items;
+                            if (undecided) |*chain| {
+                                candidates[chain.last].next_of_owner = candidate_idx;
+                                candidates[candidate_idx].prev_of_owner = chain.last;
+                                chain.last = candidate_idx;
+                            } else {
+                                candidates[candidate_idx].prev_of_owner = SchemeRequirementCandidate.none;
+                                undecided = .{ .first = candidate_idx, .last = candidate_idx };
+                            }
                             break :created false;
                         }
                         break :created @backingInt(receiver.desc.rank) < @backingInt(rank);
@@ -39772,13 +40133,12 @@ fn captureSchemeDispatchRequirements(
                 .structural_origin = candidate.structural_origin,
             });
         }
-        if (undecided.items.len == 0) {
-            undecided.deinit(self.gpa);
-        } else {
-            try self.scheme_requirement_candidate_indices_by_owner.putNoClobber(self.gpa, root.owner, undecided);
+        if (undecided) |chain| {
+            self.scheme_requirement_candidates.items[chain.last].next_of_owner = SchemeRequirementCandidate.none;
+            try self.scheme_requirement_candidate_chains_by_owner.putNoClobber(self.gpa, root.owner, chain);
         }
     }
-    if (self.scheme_requirement_candidate_indices_by_owner.count() == 0) {
+    if (self.scheme_requirement_candidate_chains_by_owner.count() == 0) {
         self.scheme_requirement_candidates.clearRetainingCapacity();
     }
 }
@@ -39811,7 +40171,7 @@ fn addSchemeDispatchRequirementsToBoundaryReachability(
 fn assertSchemeRequirementBoundaryQuiescent(self: *const Self, roots: []const BoundaryRoot) void {
     if (builtin.mode != .debug) return;
     for (roots) |root| {
-        std.debug.assert(!self.scheme_requirement_candidate_indices_by_owner.contains(root.owner));
+        std.debug.assert(!self.scheme_requirement_candidate_chains_by_owner.contains(root.owner));
     }
 }
 
@@ -39821,8 +40181,9 @@ fn assertSchemeRequirementBoundaryDecided(self: *const Self, roots: []const Boun
     if (builtin.mode != .debug) return;
     const rank = env.rank();
     for (roots) |root| {
-        const owner_indices = self.scheme_requirement_candidate_indices_by_owner.get(root.owner) orelse continue;
-        for (owner_indices.items) |candidate_idx| {
+        const owner_chain = self.scheme_requirement_candidate_chains_by_owner.get(root.owner) orelse continue;
+        var candidate_idx = owner_chain.first;
+        while (candidate_idx != SchemeRequirementCandidate.none) : (candidate_idx = self.scheme_requirement_candidates.items[candidate_idx].next_of_owner) {
             const candidate = self.scheme_requirement_candidates.items[candidate_idx];
             const receiver = self.types.resolveVar(candidate.receiver_var);
             std.debug.assert(candidate.source == .creation);
@@ -44154,12 +44515,14 @@ fn replayShapeEql(a: []const u8, b: []const u8) bool {
 }
 
 /// The replay source whose shape equals `shape`, if any.
-fn findDispatchReplaySource(self: *Self, hash: u64, shape: []const u8) ?*DispatchReplaySource {
-    const sources = self.dispatch_replay_sources.getPtr(hash) orelse return null;
-    for (sources.items) |*source| {
+fn findDispatchReplaySource(self: *const Self, hash: u64, shape: []const u8) ?u32 {
+    var next = self.dispatch_replay_source_heads.get(hash);
+    while (next) |source_idx| {
+        const source = self.dispatch_replay_sources.items[source_idx];
         if (replayShapeEql(self.dispatch_replay_shapes.items[source.shape_start..][0..source.shape_len], shape)) {
-            return source;
+            return source_idx;
         }
+        next = source.next_same_hash;
     }
     return null;
 }
@@ -44270,15 +44633,19 @@ noinline fn recordDispatchReplaySource(self: *Self, fn_var: Var) Allocator.Error
     self.pending_replay_shape_edge = null;
     const hash = self.pending_replay_shape_hash;
     if (self.findDispatchReplaySource(hash, self.pending_replay_shape.items) != null) return;
-    const entry = try self.dispatch_replay_sources.getOrPut(self.gpa, hash);
-    if (!entry.found_existing) entry.value_ptr.* = .empty;
+    const source_idx = std.math.cast(u32, self.dispatch_replay_sources.items.len) orelse return error.OutOfMemory;
+    try self.dispatch_replay_sources.ensureUnusedCapacity(self.gpa, 1);
+    const entry = try self.dispatch_replay_source_heads.getOrPut(self.gpa, hash);
+    const next_same_hash: ?u32 = if (entry.found_existing) entry.value_ptr.* else null;
+    entry.value_ptr.* = source_idx;
     const start: u32 = @intCast(self.dispatch_replay_shapes.items.len);
     try self.dispatch_replay_shapes.appendSlice(self.gpa, self.pending_replay_shape.items);
-    try entry.value_ptr.append(self.gpa, .{
+    self.dispatch_replay_sources.appendAssumeCapacity(.{
         .edge = raw_index,
         .shape_start = start,
         .shape_len = @intCast(self.pending_replay_shape.items.len),
         .scheme_use = self.pending_replay_scheme_use,
+        .next_same_hash = next_same_hash,
     });
 }
 
@@ -45082,10 +45449,12 @@ fn encodeUseReplayShape(self: *Self, scheme_root: Var, instance_root: Var) Alloc
     return std.hash.Wyhash.hash(0, out.items);
 }
 
-fn findUseReplaySource(self: *Self, hash: u64, shape: []const u8) ?*UseReplaySource {
-    const sources = self.use_replay_sources.getPtr(hash) orelse return null;
-    for (sources.items) |*source| {
-        if (replayShapeEql(self.use_replay_shapes.items[source.shape_start..][0..source.shape_len], shape)) return source;
+fn findUseReplaySource(self: *const Self, hash: u64, shape: []const u8) ?u32 {
+    var next = self.use_replay_source_heads.get(hash);
+    while (next) |source_idx| {
+        const source = self.use_replay_sources.items[source_idx];
+        if (replayShapeEql(self.use_replay_shapes.items[source.shape_start..][0..source.shape_len], shape)) return source_idx;
+        next = source.next_same_hash;
     }
     return null;
 }
@@ -45111,12 +45480,16 @@ fn recordUseReplaySource(self: *Self, use_idx: u32) Allocator.Error!void {
     }
     const shape = self.use_replay_shapes.items[use.shape_start..][0..use.shape_len];
     if (self.findUseReplaySource(use.shape_hash, shape) != null) return;
-    const entry = try self.use_replay_sources.getOrPut(self.gpa, use.shape_hash);
-    if (!entry.found_existing) entry.value_ptr.* = .empty;
-    try entry.value_ptr.append(self.gpa, .{
+    const source_idx = std.math.cast(u32, self.use_replay_sources.items.len) orelse return error.OutOfMemory;
+    try self.use_replay_sources.ensureUnusedCapacity(self.gpa, 1);
+    const entry = try self.use_replay_source_heads.getOrPut(self.gpa, use.shape_hash);
+    const next_same_hash: ?u32 = if (entry.found_existing) entry.value_ptr.* else null;
+    entry.value_ptr.* = source_idx;
+    self.use_replay_sources.appendAssumeCapacity(.{
         .use = use_idx,
         .shape_start = use.shape_start,
         .shape_len = use.shape_len,
+        .next_same_hash = next_same_hash,
     });
 }
 
@@ -45124,9 +45497,9 @@ fn recordUseReplaySource(self: *Self, use_idx: u32) Allocator.Error!void {
 /// root, every variable its substitution names, and every requirement its
 /// relations derived—and restate over that copy its substitution, in
 /// `scheme_use_pairs`, and the dispatch-target records its relations wrote.
-fn freezeUseReplaySource(self: *Self, source: *UseReplaySource, env: *Env) Allocator.Error!void {
-    source.freeze = .unusable;
-    const use = self.use_instances.items[source.use];
+fn freezeUseReplaySource(self: *Self, source_idx: u32, env: *Env) Allocator.Error!void {
+    self.use_replay_sources.items[source_idx].freeze = .unusable;
+    const use = self.use_instances.items[self.use_replay_sources.items[source_idx].use];
     const record = self.cir.scheme_uses.items.items[use.record];
     var root_list: std.ArrayListUnmanaged(Var) = .empty;
     defer root_list.deinit(self.gpa);
@@ -45218,10 +45591,12 @@ fn freezeUseReplaySource(self: *Self, source: *UseReplaySource, env: *Env) Alloc
             try self.appendReplayTree(@fromBackingInt(@intCast(pair.fresh_var)), &self.use_replay_trees);
         }
     }
+    const source = &self.use_replay_sources.items[source_idx];
     source.* = .{
         .use = source.use,
         .shape_start = source.shape_start,
         .shape_len = source.shape_len,
+        .next_same_hash = source.next_same_hash,
         .freeze = .frozen,
         .frozen_root = frozen_root,
         .pairs_start = pairs_start,
@@ -45287,15 +45662,16 @@ fn frozenUseRoot(self: *Self, root: Var) Allocator.Error!Var {
 /// is related to the frozen node at its position, its relations are never
 /// processed, and its scheme-use record names the source's restated
 /// substitution. False when the source cannot be replayed now.
-fn replayUse(self: *Self, source: *UseReplaySource, use_idx: u32, env: *Env) Allocator.Error!bool {
-    switch (source.freeze) {
+fn replayUse(self: *Self, source_idx: u32, use_idx: u32, env: *Env) Allocator.Error!bool {
+    switch (self.use_replay_sources.items[source_idx].freeze) {
         .frozen => {},
         .unusable => return false,
         .pending => {
-            try self.freezeUseReplaySource(source, env);
-            if (source.freeze != .frozen) return false;
+            try self.freezeUseReplaySource(source_idx, env);
+            if (self.use_replay_sources.items[source_idx].freeze != .frozen) return false;
         },
     }
+    const source = self.use_replay_sources.items[source_idx];
     const use = self.use_instances.items[use_idx];
     const record = self.cir.scheme_uses.items.items[use.record];
     // Both substitutions are ordered by scheme variable. A use whose
@@ -45412,39 +45788,41 @@ fn verifyUseReplay(self: *Self, relations: []const DispatchReplayPair) Allocator
 /// replayed now.
 fn replayDispatchTarget(
     self: *Self,
-    replay_source: *DispatchReplaySource,
+    replay_source_idx: u32,
     dispatcher_var: Var,
     constraint: StaticDispatchConstraint,
     method_lookup: StaticDispatchMethodBinding,
     env: *Env,
 ) Allocator.Error!?Var {
-    if (!try self.dispatchReplaySourceReady(replay_source.edge)) return null;
-    const source = self.dispatch_target_instantiations.items[replay_source.edge];
+    const pending_source = self.dispatch_replay_sources.items[replay_source_idx];
+    if (!try self.dispatchReplaySourceReady(pending_source.edge)) return null;
+    const source = self.dispatch_target_instantiations.items[pending_source.edge];
     if (source.target_env != method_lookup.env or
         !std.meta.eql(source.target_binding, method_lookup.binding) or
         !source.method_name.eql(constraint.fn_name))
     {
         base.invariant("dispatch replay key matched an edge with a different method binding", .{});
     }
-    switch (replay_source.freeze) {
+    switch (pending_source.freeze) {
         .frozen => {},
         .unusable => return null,
         .pending => {
             // A ground type changes later only by being poisoned, so an
             // instance still ground now is the one the source settled to.
             const frozen = if (try self.varIsReplayGround(source.method_var))
-                try self.freezeDispatchReplaySource(source, replay_source.scheme_use)
+                try self.freezeDispatchReplaySource(source, pending_source.scheme_use)
             else
                 null;
             const instance = frozen orelse {
-                replay_source.freeze = .unusable;
+                self.dispatch_replay_sources.items[replay_source_idx].freeze = .unusable;
                 return null;
             };
-            replay_source.* = .{
-                .edge = replay_source.edge,
-                .shape_start = replay_source.shape_start,
-                .shape_len = replay_source.shape_len,
-                .scheme_use = replay_source.scheme_use,
+            self.dispatch_replay_sources.items[replay_source_idx] = .{
+                .edge = pending_source.edge,
+                .shape_start = pending_source.shape_start,
+                .shape_len = pending_source.shape_len,
+                .scheme_use = pending_source.scheme_use,
+                .next_same_hash = pending_source.next_same_hash,
                 .freeze = .frozen,
                 .frozen_root = instance.root,
                 .pairs_start = instance.pairs_start,
@@ -45454,6 +45832,7 @@ fn replayDispatchTarget(
             };
         },
     }
+    const replay_source = self.dispatch_replay_sources.items[replay_source_idx];
     const source_record: ?ModuleEnv.SchemeUseRecord = if (replay_source.scheme_use) |record_idx|
         self.cir.scheme_uses.items.items[record_idx]
     else
@@ -45467,7 +45846,7 @@ fn replayDispatchTarget(
     if (!try self.pairDispatchReplayInstance(replay_source.frozen_root, constraint.fn_var)) return null;
     var expected_callable_tree: std.ArrayListUnmanaged(u8) = .empty;
     defer expected_callable_tree.deinit(self.gpa);
-    if (std.debug.runtime_safety) try self.verifyDispatchReplayAgainstFresh(replay_source.*, constraint, method_lookup, &expected_callable_tree);
+    if (std.debug.runtime_safety) try self.verifyDispatchReplayAgainstFresh(replay_source, constraint, method_lookup, &expected_callable_tree);
 
     try self.dispatch_target_instantiations.ensureUnusedCapacity(self.gpa, 1);
     try self.dispatch_target_instantiation_by_fn_var.ensureUnusedCapacity(self.gpa, 1);
@@ -45644,29 +46023,23 @@ fn finishDispatchReplayFreezes(self: *Self) Allocator.Error!void {
     if (std.debug.runtime_safety) {
         var tree: std.ArrayListUnmanaged(u8) = .empty;
         defer tree.deinit(self.gpa);
-        var buckets = self.dispatch_replay_sources.valueIterator();
-        while (buckets.next()) |bucket| {
-            for (bucket.items) |source| {
-                if (source.freeze != .frozen) continue;
-                tree.clearRetainingCapacity();
-                try self.appendReplayTree(source.frozen_root, &tree);
-                if (!replayShapeEql(self.dispatch_replay_trees.items[source.tree_start..][0..source.tree_len], tree.items)) {
-                    base.invariant("a frozen dispatch replay instance changed while replayed edges shared it", .{});
-                }
+        for (self.dispatch_replay_sources.items) |source| {
+            if (source.freeze != .frozen) continue;
+            tree.clearRetainingCapacity();
+            try self.appendReplayTree(source.frozen_root, &tree);
+            if (!replayShapeEql(self.dispatch_replay_trees.items[source.tree_start..][0..source.tree_len], tree.items)) {
+                base.invariant("a frozen dispatch replay instance changed while replayed edges shared it", .{});
             }
         }
-        var use_buckets = self.use_replay_sources.valueIterator();
-        while (use_buckets.next()) |bucket| {
-            for (bucket.items) |source| {
-                if (source.freeze != .frozen) continue;
-                tree.clearRetainingCapacity();
-                try self.appendReplayTree(source.frozen_root, &tree);
-                for (self.cir.scheme_use_pairs.items.items[source.pairs_start..][0..source.pairs_len]) |pair| {
-                    try self.appendReplayTree(@fromBackingInt(@intCast(pair.fresh_var)), &tree);
-                }
-                if (!replayShapeEql(self.use_replay_trees.items[source.tree_start..][0..source.tree_len], tree.items)) {
-                    base.invariant("a frozen whole-use replay instance changed while replayed uses shared it", .{});
-                }
+        for (self.use_replay_sources.items) |source| {
+            if (source.freeze != .frozen) continue;
+            tree.clearRetainingCapacity();
+            try self.appendReplayTree(source.frozen_root, &tree);
+            for (self.cir.scheme_use_pairs.items.items[source.pairs_start..][0..source.pairs_len]) |pair| {
+                try self.appendReplayTree(@fromBackingInt(@intCast(pair.fresh_var)), &tree);
+            }
+            if (!replayShapeEql(self.use_replay_trees.items[source.tree_start..][0..source.tree_len], tree.items)) {
+                base.invariant("a frozen whole-use replay instance changed while replayed uses shared it", .{});
             }
         }
     }
@@ -48567,7 +48940,7 @@ fn rememberGroundTypes(self: *Self, roots: []const Var) Allocator.Error!void {
     if (self.types.savepointActive()) return;
     self.syncSnapshotGroundEpoch();
     var marks = try self.computeGroundMarksKnowing(roots, &self.snapshot_ground_copies, .any);
-    defer marks.deinit(self.gpa);
+    defer self.releaseGroundMarks(&marks);
     for (marks.order.items, marks.ground.items) |resolved_var, is_ground| {
         if (!is_ground) continue;
         const slot = try self.snapshot_ground_copies.getOrPut(self.gpa, resolved_var);
@@ -51369,9 +51742,25 @@ fn collectDerivedMapTypeVars(
     }
 }
 
-fn declaredMapArgsAreEligible(self: *Self, args: []const Var, env: *Env, region: Region) Allocator.Error!bool {
+/// The declared arguments of a named dispatcher. Judging an argument can grow
+/// the types store, so each one is read from the store when it is judged.
+const DeclaredMapArgs = union(enum) {
+    nominal: types_mod.NominalType,
+    alias: types_mod.Alias,
+
+    fn slice(self: DeclaredMapArgs, store: *const types_mod.Store) []const Var {
+        return switch (self) {
+            .nominal => |nominal| store.sliceNominalArgs(nominal),
+            .alias => |alias| store.sliceAliasArgs(alias),
+        };
+    }
+};
+
+fn declaredMapArgsAreEligible(self: *Self, args: DeclaredMapArgs, env: *Env, region: Region) Allocator.Error!bool {
     var non_zst: u32 = 0;
-    for (args) |arg| {
+    const len = args.slice(self.types).len;
+    for (0..len) |index| {
+        const arg = args.slice(self.types)[index];
         if (!try self.varIsDerivedMapZstRoot(arg, env, region)) {
             non_zst += 1;
             if (non_zst > 1) return false;
@@ -51394,16 +51783,12 @@ fn analyzeDerivedMap(
     switch (dispatcher.desc.content) {
         .structure => |structure| if (structure == .nominal_type) {
             const named = structure.nominal_type;
-            const named_args = try self.gpa.dupe(Var, self.types.sliceNominalArgs(named));
-            defer self.gpa.free(named_args);
-            if (!try self.declaredMapArgsAreEligible(named_args, env, region)) return null;
+            if (!try self.declaredMapArgsAreEligible(.{ .nominal = named }, env, region)) return null;
             backing_var = (try self.openNominalBackingForApp(named, env, region)) orelse return null;
             nominal = named;
         },
         .alias => |alias| {
-            const alias_args = try self.gpa.dupe(Var, self.types.sliceAliasArgs(alias));
-            defer self.gpa.free(alias_args);
-            if (!try self.declaredMapArgsAreEligible(alias_args, env, region)) return null;
+            if (!try self.declaredMapArgsAreEligible(.{ .alias = alias }, env, region)) return null;
             backing_var = self.types.getAliasBackingVar(alias);
         },
         .flex, .rigid, .field_presence, .err => {},
@@ -51428,9 +51813,10 @@ fn analyzeDerivedMap(
     var payload_ordinal: u32 = 0;
 
     for (tags.items) |tag| {
-        const args = try self.gpa.dupe(Var, self.types.sliceVars(tag.args));
-        defer self.gpa.free(args);
-        for (args, 0..) |arg, arg_index| {
+        // Judging a payload can grow the types store, so each payload is read
+        // from the store when it is judged.
+        for (0..tag.args.len()) |arg_index| {
+            const arg = self.types.sliceVars(tag.args)[arg_index];
             total_payload_count += 1;
             var payload_vars = collections.DenseMap(Var, void).init(self.gpa);
             defer payload_vars.deinit();
@@ -51494,21 +51880,23 @@ fn mappedStructuralTagUnion(
     env: *Env,
     region: Region,
 ) Allocator.Error!Var {
-    const mapped_tags = try self.gpa.alloc(types_mod.Tag, tags.len);
-    defer self.gpa.free(mapped_tags);
-    for (tags, 0..) |tag, tag_index| {
-        const args = try self.gpa.dupe(Var, self.types.sliceVars(tag.args));
-        defer self.gpa.free(args);
+    const tags_top = self.scratch_tags.top();
+    defer self.scratch_tags.clearFrom(tags_top);
+    for (tags) |tag| {
+        const args_top = self.scratch_vars.top();
+        defer self.scratch_vars.clearFrom(args_top);
+        for (0..tag.args.len()) |index| try self.scratch_vars.append(self.types.sliceVars(tag.args)[index]);
+        const args = self.scratch_vars.sliceFromStart(args_top);
         if (tag.name.eql(plan.tag_name)) {
             if (plan.payload_index >= args.len) {
                 base.invariant("checked derived map payload plan was outside the selected tag's payloads", .{});
             }
             args[plan.payload_index] = replacement;
         }
-        mapped_tags[tag_index] = .{ .name = tag.name, .args = try self.types.appendVars(args) };
+        try self.scratch_tags.append(.{ .name = tag.name, .args = try self.types.appendVars(args) });
     }
     const ext = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region);
-    return try self.freshFromContent(try self.types.mkTagUnion(mapped_tags, ext), env, region);
+    return try self.freshFromContent(try self.types.mkTagUnion(self.scratch_tags.sliceFromStart(tags_top), ext), env, region);
 }
 
 fn recordDerivedMapPlan(self: *Self, constraint_fn_var: Var, plan: types_mod.DerivedMapPlan) void {
@@ -51563,8 +51951,10 @@ fn satisfyDerivedMapConstraint(
 
     const output_union = if (analysis.nominal) |nominal| blk: {
         const flexible_arg = analysis.flexible_nominal_arg orelse break :blk dispatcher_var;
-        const args = try self.gpa.dupe(Var, self.types.sliceNominalArgs(nominal));
-        defer self.gpa.free(args);
+        const args_top = self.scratch_vars.top();
+        defer self.scratch_vars.clearFrom(args_top);
+        for (0..self.types.sliceNominalArgs(nominal).len) |index| try self.scratch_vars.append(self.types.sliceNominalArgs(nominal)[index]);
+        const args = self.scratch_vars.sliceFromStart(args_top);
         args[flexible_arg] = output_payload;
         break :blk try self.freshFromContent(try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
             nominal.ident,
@@ -51826,7 +52216,18 @@ fn beginImplicitParse(self: *Self, request: ImplicitParseRequest, env: *Env) All
     const err_var = shape.err_var;
 
     const generated_calls_start = self.scratch_generated_codec_calls.items.len;
-    const run = try self.gpa.create(ImplicitParseRun);
+    const run = if (self.implicit_parse_run_pool.pop()) |pooled| blk: {
+        pooled.walk.reset(generated_calls_start);
+        pooled.err_tags_before.clearRetainingCapacity();
+        break :blk pooled;
+    } else blk: {
+        const created = try self.gpa.create(ImplicitParseRun);
+        created.walk = DerivedCodecWalk.init(self.gpa, generated_calls_start);
+        created.err_tags_before = .empty;
+        break :blk created;
+    };
+    const walk = run.walk;
+    const err_tags_before = run.err_tags_before;
     run.* = .{
         .request = request,
         .runtime_fn_var = runtime_fn_var,
@@ -51835,8 +52236,9 @@ fn beginImplicitParse(self: *Self, request: ImplicitParseRequest, env: *Env) All
         .state_var = state_var,
         .err_var = err_var,
         .generated_calls_start = generated_calls_start,
-        .walk = DerivedCodecWalk.init(self.gpa, generated_calls_start),
+        .walk = walk,
         .owner_region_before = self.active_codec_owner_region,
+        .err_tags_before = err_tags_before,
     };
     errdefer self.endImplicitParse(run);
     // A dispatcher that derives its own codec is validated against the shape
@@ -51884,6 +52286,10 @@ fn finishImplicitParse(self: *Self, run: *ImplicitParseRun, validation: DerivedP
 fn endImplicitParse(self: *Self, run: *ImplicitParseRun) void {
     self.active_codec_owner_region = run.owner_region_before;
     self.scratch_generated_codec_calls.shrinkRetainingCapacity(run.generated_calls_start);
+    self.implicit_parse_run_pool.append(self.gpa, run) catch self.destroyImplicitParseRun(run);
+}
+
+fn destroyImplicitParseRun(self: *Self, run: *ImplicitParseRun) void {
     run.err_tags_before.deinit(self.gpa);
     run.walk.deinit();
     self.gpa.destroy(run);
@@ -52045,7 +52451,7 @@ fn recordGeneratedCodecDerivationSnapshot(
     // with it, so a probe remembers nothing.
     self.syncSnapshotGroundEpoch();
     var ground_marks = try self.computeGroundMarksKnowing(roots.items, &self.snapshot_ground_copies, .copied);
-    defer ground_marks.deinit(self.gpa);
+    defer self.releaseGroundMarks(&ground_marks);
     var shared_copies = collections.DenseMapUnmanaged(Var, void).empty;
     defer shared_copies.deinit(self.gpa);
     for (ground_marks.order.items) |source| {
@@ -53752,6 +54158,9 @@ const DerivedCodecWalk = struct {
     /// nominal codecs temporarily move this boundary so reusable format calls
     /// are shared only within the body that owns them.
     generated_calls_start: usize,
+    /// The pending pairs and assumed-equal pairs of one `derivedCodecVarsEql`.
+    eql_pending: std.ArrayListUnmanaged(DerivedCodecVarPair) = .empty,
+    eql_assumed: std.AutoHashMapUnmanaged(DerivedCodecVarPair, void) = .empty,
     gpa: std.mem.Allocator,
 
     const WalkedApp = struct {
@@ -53779,6 +54188,19 @@ const DerivedCodecWalk = struct {
         self.visited.deinit();
         self.walked_apps.deinit(self.gpa);
         self.walked_app_args.deinit(self.gpa);
+        self.eql_pending.deinit(self.gpa);
+        self.eql_assumed.deinit(self.gpa);
+    }
+
+    /// Start a new walk, keeping this one's capacity.
+    fn reset(self: *DerivedCodecWalk, generated_calls_start: usize) void {
+        self.visited.clearRetainingCapacity();
+        self.walked_apps.clearRetainingCapacity();
+        self.walked_app_args.clearRetainingCapacity();
+        self.nominal_backing_depth = 0;
+        self.generated_calls_start = generated_calls_start;
+        self.eql_pending.clearRetainingCapacity();
+        self.eql_assumed.clearRetainingCapacity();
     }
 
     fn recordApp(
@@ -53811,14 +54233,16 @@ fn derivedCodecVarsEql(
     self: *Self,
     a_vars: []const Var,
     b_vars: []const Var,
-    assumed: *std.AutoHashMap(DerivedCodecVarPair, void),
+    walk: *DerivedCodecWalk,
 ) Allocator.Error!bool {
     if (a_vars.len != b_vars.len) return false;
-    var pending: std.ArrayListUnmanaged(DerivedCodecVarPair) = .empty;
-    defer pending.deinit(self.gpa);
-    try self.pushDerivedCodecVarPairs(&pending, a_vars, b_vars);
+    const pending = &walk.eql_pending;
+    const assumed = &walk.eql_assumed;
+    pending.clearRetainingCapacity();
+    assumed.clearRetainingCapacity();
+    try self.pushDerivedCodecVarPairs(pending, a_vars, b_vars);
     while (pending.pop()) |pair| {
-        if (!try self.derivedCodecPairEql(&pending, pair.a, pair.b, assumed)) return false;
+        if (!try self.derivedCodecPairEql(pending, pair.a, pair.b, assumed)) return false;
     }
     return true;
 }
@@ -53842,7 +54266,7 @@ fn derivedCodecPairEql(
     pending: *std.ArrayListUnmanaged(DerivedCodecVarPair),
     a_var: Var,
     b_var: Var,
-    assumed: *std.AutoHashMap(DerivedCodecVarPair, void),
+    assumed: *std.AutoHashMapUnmanaged(DerivedCodecVarPair, void),
 ) Allocator.Error!bool {
     const a = self.types.resolveVar(a_var);
     const b = self.types.resolveVar(b_var);
@@ -53862,7 +54286,7 @@ fn derivedCodecPairEql(
     }
     if (a.desc.content != .structure or b.desc.content != .structure) return false;
 
-    if ((try assumed.getOrPut(.{ .a = a.var_, .b = b.var_ })).found_existing) return true;
+    if ((try assumed.getOrPut(self.gpa, .{ .a = a.var_, .b = b.var_ })).found_existing) return true;
 
     const a_structure = a.desc.content.structure;
     const b_structure = b.desc.content.structure;
@@ -53950,10 +54374,12 @@ fn derivedCodecPairEql(
 fn derivedCodecDeclGrowsItsFormals(self: *Self, decl_idx: types_mod.NominalDecl.Idx) Allocator.Error!bool {
     const decl = self.types.getNominalDecl(decl_idx);
     if (!decl.isValid()) return false;
-    const formals = try self.gpa.dupe(Var, self.types.sliceVars(decl.formals));
-    defer self.gpa.free(formals);
-    if (formals.len == 0) return false;
-    for (formals) |*formal| formal.* = self.types.resolveVar(formal.*).var_;
+    if (decl.formals.len() == 0) return false;
+    // The walk below only reads the types store, so slices into it stay valid.
+    const formals_top = self.scratch_vars.top();
+    defer self.scratch_vars.clearFrom(formals_top);
+    for (self.types.sliceVars(decl.formals)) |formal| try self.scratch_vars.append(self.types.resolveVar(formal).var_);
+    const formals = self.scratch_vars.sliceFromStart(formals_top);
 
     var pending = std.ArrayList(Var).empty;
     defer pending.deinit(self.gpa);
@@ -53965,9 +54391,7 @@ fn derivedCodecDeclGrowsItsFormals(self: *Self, decl_idx: types_mod.NominalDecl.
         const resolved = self.types.resolveVar(candidate);
         if ((try seen.getOrPut(resolved.var_)).found_existing) continue;
         if (resolved.desc.content == .structure and resolved.desc.content.structure == .nominal_type) {
-            const args = try self.gpa.dupe(Var, self.types.sliceNominalArgs(resolved.desc.content.structure.nominal_type));
-            defer self.gpa.free(args);
-            for (args) |arg| {
+            for (self.types.sliceNominalArgs(resolved.desc.content.structure.nominal_type)) |arg| {
                 if (try self.derivedCodecArgGrowsAFormal(arg, formals)) return true;
             }
         }
@@ -54048,22 +54472,18 @@ fn takeDerivedCodecBackingWalk(
     // draws the same line when it looks for a custom codec target.
     if (nominal.originIsBuiltin()) return .builtin;
     const decl_idx = self.types.lookupNominalDecl(nominal) orelse return .walk_backing;
-    // The argument list points into the types store, which the comparison and
-    // the walk both read through.
-    const args = try self.gpa.dupe(Var, self.types.sliceNominalArgs(nominal));
-    defer self.gpa.free(args);
-    for (args) |*arg| arg.* = self.types.resolveVar(arg.*).var_;
-
-    var assumed = std.AutoHashMap(DerivedCodecVarPair, void).init(self.gpa);
-    defer assumed.deinit();
+    // The comparison and the walk compare resolved arguments.
+    const args_top = self.scratch_vars.top();
+    defer self.scratch_vars.clearFrom(args_top);
+    for (self.types.sliceNominalArgs(nominal)) |arg| try self.scratch_vars.append(self.types.resolveVar(arg).var_);
+    const args_len = self.scratch_vars.top() - args_top;
 
     var seen_decl = false;
     for (walk.walked_apps.items) |app| {
         if (app.decl != decl_idx) continue;
         seen_decl = true;
-        if (app.args_len != args.len) continue;
-        assumed.clearRetainingCapacity();
-        if (try self.derivedCodecVarsEql(walk.appArgs(app), args, &assumed)) return .{ .reuse = app.derivation_source };
+        if (app.args_len != args_len) continue;
+        if (try self.derivedCodecVarsEql(walk.appArgs(app), self.scratch_vars.sliceFromStart(args_top), walk)) return .{ .reuse = app.derivation_source };
     }
 
     // Reaching one declaration again at a shape the walk has not accounted for
@@ -54072,7 +54492,7 @@ fn takeDerivedCodecBackingWalk(
     // obligations to check and none to lower either.
     if (seen_decl and try self.derivedCodecDeclGrowsItsFormals(decl_idx)) return .unbounded;
 
-    try walk.recordApp(decl_idx, args, derivation_source);
+    try walk.recordApp(decl_idx, self.scratch_vars.sliceFromStart(args_top), derivation_source);
     return .walk_backing;
 }
 
