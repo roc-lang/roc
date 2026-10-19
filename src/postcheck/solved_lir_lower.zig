@@ -1638,7 +1638,7 @@ const Lowerer = struct {
         capture_ids: *collections.DenseMap(check.CheckedModule.CaptureId, void),
     ) std.mem.Allocator.Error!void {
         try locals.put(local, {});
-        if (lifted.getLocal(local).capture_id) |capture_id| try capture_ids.put(capture_id, {});
+        if (lifted.getLocal(local).identity.captureId()) |capture_id| try capture_ids.put(capture_id, {});
     }
 
     fn initFnBodyWorker(
@@ -3156,9 +3156,9 @@ const Lowerer = struct {
             self.own_captures.appendAssumeCapacity(.{
                 .local = capture.local,
                 .symbol = local.symbol,
-                .binder = local.binder,
-                .capture_id = local.capture_id,
-                .checked_capture_id = local.checked_capture_id,
+                .binder = local.identity.binder(),
+                .capture_id = local.identity.captureId(),
+                .checked_capture_id = local.identity.checkedCaptureId(),
                 .capture_kind = local.capture_kind,
                 .ty = self.solved.local_tys.items[@backingInt(capture.local)],
             });
@@ -3269,7 +3269,7 @@ const Lowerer = struct {
         // function's own capture set, where CaptureIds are unique.
         const local = self.solved.lifted.getLocal(local_id);
         const capture = self.solved.lifted.getLocal(capture_local);
-        return local.capture_id != null and capture.capture_id != null and local.capture_id.? == capture.capture_id.?;
+        return local.identity.captureId() != null and capture.identity.captureId() != null and local.identity.captureId().? == capture.identity.captureId().?;
     }
 
     /// Whether two lifted locals are aliases of the same lowered binding, used

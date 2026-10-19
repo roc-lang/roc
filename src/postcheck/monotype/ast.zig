@@ -944,19 +944,66 @@ pub const Local = struct {
     id: LocalId,
     symbol: Common.Symbol,
     ty: Type.TypeId,
-    binder: ?checked.PatternBinderId = null,
-    /// Identity of this local as a closure capture. During construction this
-    /// may be a checked binder/generated identity; final Monotype output
-    /// replaces every non-null value with the final local's program-global
-    /// post-check identity.
-    capture_id: ?checked.CaptureId = null,
-    /// Checked capture provenance for pre-lift target-key normalization and
-    /// `ConstStore` publication. Alternative binders use their arm's
-    /// representative key; durable runtime capture identity remains separate.
-    checked_capture_id: ?checked.CaptureId = null,
+    identity: LocalIdentity = .{},
     /// Whether this local, when captured, is a lexical value or a top-level
     /// root's recursive binding; carried to `ConstStore` captures.
     capture_kind: checked.ConstCaptureKind = .lexical,
+};
+
+/// A local's optional checked identities. `CaptureId` uses every `u32`
+/// value, so each identity's presence is its own bit beside its raw value.
+pub const LocalIdentity = struct {
+    binder_raw: u32 = 0,
+    capture_raw: u32 = 0,
+    checked_capture_raw: u32 = 0,
+    present: packed struct(u8) {
+        binder: bool = false,
+        capture: bool = false,
+        checked_capture: bool = false,
+        _: u5 = 0,
+    } = .{},
+
+    pub fn init(binder_id: ?checked.PatternBinderId, capture_id: ?checked.CaptureId, checked_capture_id: ?checked.CaptureId) LocalIdentity {
+        var result: LocalIdentity = .{};
+        result.setBinder(binder_id);
+        result.setCaptureId(capture_id);
+        result.setCheckedCaptureId(checked_capture_id);
+        return result;
+    }
+
+    pub fn binder(self: LocalIdentity) ?checked.PatternBinderId {
+        return if (self.present.binder) @fromBackingInt(self.binder_raw) else null;
+    }
+
+    /// Identity of this local as a closure capture. During construction this
+    /// may be a checked binder/generated identity; final Monotype output
+    /// replaces every present value with the final local's program-global
+    /// post-check identity.
+    pub fn captureId(self: LocalIdentity) ?checked.CaptureId {
+        return if (self.present.capture) @fromBackingInt(self.capture_raw) else null;
+    }
+
+    /// Checked capture provenance for pre-lift target-key normalization and
+    /// `ConstStore` publication. Alternative binders use their arm's
+    /// representative key; durable runtime capture identity remains separate.
+    pub fn checkedCaptureId(self: LocalIdentity) ?checked.CaptureId {
+        return if (self.present.checked_capture) @fromBackingInt(self.checked_capture_raw) else null;
+    }
+
+    pub fn setBinder(self: *LocalIdentity, value: ?checked.PatternBinderId) void {
+        self.present.binder = value != null;
+        self.binder_raw = if (value) |id| @backingInt(id) else 0;
+    }
+
+    pub fn setCaptureId(self: *LocalIdentity, value: ?checked.CaptureId) void {
+        self.present.capture = value != null;
+        self.capture_raw = if (value) |id| @backingInt(id) else 0;
+    }
+
+    pub fn setCheckedCaptureId(self: *LocalIdentity, value: ?checked.CaptureId) void {
+        self.present.checked_capture = value != null;
+        self.checked_capture_raw = if (value) |id| @backingInt(id) else 0;
+    }
 };
 
 /// Local id paired with its monomorphic type.
@@ -2382,11 +2429,9 @@ pub const ProgramBuilder = struct {
             .id = id,
             .symbol = symbol,
             .ty = ty,
-            .binder = binder,
             // A binder-backed local carries the exact capture identity of
             // its binding, so any function that captures it joins by CaptureId.
-            .capture_id = checked_capture_id,
-            .checked_capture_id = checked_capture_id,
+            .identity = .init(binder, checked_capture_id, checked_capture_id),
         });
         try self.local_names.append(self.allocator, .empty);
         return id;
@@ -2398,8 +2443,8 @@ pub const ProgramBuilder = struct {
     pub fn setLocalCaptureId(self: *ProgramBuilder, id: LocalId, capture_id: u32) void {
         const checked_id = checked.CaptureId.generatedCheck(capture_id);
         const local = self.locals.getPtrImmediate(@backingInt(id));
-        local.capture_id = checked_id;
-        local.checked_capture_id = checked_id;
+        local.identity.setCaptureId(checked_id);
+        local.identity.setCheckedCaptureId(checked_id);
     }
 
     /// Record the source-level name of a local (dupes; empty means none).
@@ -2614,14 +2659,14 @@ pub const ProgramBuilder = struct {
         defer durable_by_checked.deinit();
         for (0..self.locals.len()) |index| {
             const local = self.locals.getPtrImmediate(index);
-            const provisional = local.capture_id orelse continue;
+            const provisional = local.identity.captureId() orelse continue;
             if (provisional.isGeneratedLift()) continue;
             if (index > checked.CaptureId.max_generated_index) {
                 Common.invariant("Monotype program had too many locals for durable capture identity");
             }
             const entry = try durable_by_checked.getOrPut(provisional);
             if (!entry.found_existing) entry.value_ptr.* = checked.CaptureId.generatedLift(@intCast(index));
-            local.capture_id = entry.value_ptr.*;
+            local.identity.setCaptureId(entry.value_ptr.*);
         }
     }
 
@@ -2672,13 +2717,13 @@ test "final Monotype capture identities preserve direct aliases" {
 
     try program.sealRemainingCaptureIdentities();
 
-    try std.testing.expectEqual(checked.CaptureId.generatedLift(@backingInt(first)), program.getLocal(first).capture_id.?);
-    try std.testing.expectEqual(program.getLocal(first).capture_id, program.getLocal(second).capture_id);
-    try std.testing.expectEqual(checked.CaptureId.fromBinder(binder), program.getLocal(first).checked_capture_id.?);
-    try std.testing.expectEqual(checked.CaptureId.fromBinder(binder), program.getLocal(second).checked_capture_id.?);
-    try std.testing.expectEqual(@as(?checked.CaptureId, null), program.getLocal(uncaptured).capture_id);
-    try std.testing.expectEqual(checked.CaptureId.generatedLift(@backingInt(generated)), program.getLocal(generated).capture_id.?);
-    try std.testing.expectEqual(checked.CaptureId.generatedCheck(0), program.getLocal(generated).checked_capture_id.?);
+    try std.testing.expectEqual(checked.CaptureId.generatedLift(@backingInt(first)), program.getLocal(first).identity.captureId().?);
+    try std.testing.expectEqual(program.getLocal(first).identity.captureId(), program.getLocal(second).identity.captureId());
+    try std.testing.expectEqual(checked.CaptureId.fromBinder(binder), program.getLocal(first).identity.checkedCaptureId().?);
+    try std.testing.expectEqual(checked.CaptureId.fromBinder(binder), program.getLocal(second).identity.checkedCaptureId().?);
+    try std.testing.expectEqual(@as(?checked.CaptureId, null), program.getLocal(uncaptured).identity.captureId());
+    try std.testing.expectEqual(checked.CaptureId.generatedLift(@backingInt(generated)), program.getLocal(generated).identity.captureId().?);
+    try std.testing.expectEqual(checked.CaptureId.generatedCheck(0), program.getLocal(generated).identity.checkedCaptureId().?);
 }
 
 test "monotype program view exposes read-only side arrays" {

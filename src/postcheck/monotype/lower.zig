@@ -16684,9 +16684,7 @@ const DraftLocal = struct {
     id: DraftLocalId,
     symbol: Common.Symbol,
     ty: DraftTypeCell,
-    binder: ?checked.PatternBinderId = null,
-    capture_id: ?checked.CaptureId = null,
-    checked_capture_id: ?checked.CaptureId = null,
+    identity: Ast.LocalIdentity = .{},
     /// Whether this local, when captured, is a lexical value or the recursive
     /// binding reserved for a top-level compile-time root. Set where the
     /// binding is reserved and carried to the stored closure's captures.
@@ -19822,9 +19820,7 @@ const BodyDraftStore = struct {
             .id = id,
             .symbol = symbol,
             .ty = ty,
-            .binder = binder,
-            .capture_id = capture_id,
-            .checked_capture_id = checked_capture_id,
+            .identity = .init(binder, capture_id, checked_capture_id),
         });
         try self.local_names.append(self.allocator, .empty());
         return id;
@@ -19845,7 +19841,7 @@ const BodyDraftStore = struct {
         if (index > checked.CaptureId.max_generated_index) {
             Common.invariant("Monotype body had too many locals for provisional capture identity");
         }
-        self.locals.items[index].capture_id = checked.CaptureId.generatedLift(index);
+        self.locals.items[index].identity.setCaptureId(checked.CaptureId.generatedLift(index));
         return id;
     }
 
@@ -20081,8 +20077,8 @@ const BodyDraftStore = struct {
 
     fn setLocalCaptureId(self: *BodyDraftStore, id: DraftLocalId, capture_id: u32) void {
         const checked_id = checked.CaptureId.generatedCheck(capture_id);
-        self.locals.items[@backingInt(id)].capture_id = checked_id;
-        self.locals.items[@backingInt(id)].checked_capture_id = checked_id;
+        self.locals.items[@backingInt(id)].identity.setCaptureId(checked_id);
+        self.locals.items[@backingInt(id)].identity.setCheckedCaptureId(checked_id);
     }
 
     fn setLocalType(self: *BodyDraftStore, id: DraftLocalId, ty: DraftTypeCell) void {
@@ -20507,7 +20503,7 @@ const BodyDraftStore = struct {
             if (!ids.retained(.locals, index)) continue;
             const expected = ids.local(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
             const sealed_ty = try local.ty.sealCommitted(committed_types);
-            const durable_capture_id = if (local.capture_id) |provisional| blk: {
+            const durable_capture_id = if (local.identity.captureId()) |provisional| blk: {
                 const final_index = @backingInt(expected);
                 if (final_index > checked.CaptureId.max_generated_index) {
                     Common.invariant("Monotype program had too many locals for durable capture identity");
@@ -20520,9 +20516,7 @@ const BodyDraftStore = struct {
                 .id = expected,
                 .symbol = local.symbol,
                 .ty = sealed_ty,
-                .binder = local.binder,
-                .capture_id = durable_capture_id,
-                .checked_capture_id = local.checked_capture_id,
+                .identity = .init(local.identity.binder(), durable_capture_id, local.identity.checkedCaptureId()),
                 .capture_kind = local.capture_kind,
             });
             const local_name = self.sourceText(self.local_names.items[index]);
@@ -21003,7 +20997,7 @@ const BodyDraftStore = struct {
                 => Common.invariant("Monotype direct-call capture operand was not a local expression"),
             };
             const local = program.getLocal(ids.local(draft_local));
-            const id = local.checked_capture_id orelse local.capture_id orelse
+            const id = local.identity.checkedCaptureId() orelse local.identity.captureId() orelse
                 Common.invariant("Monotype direct-call capture local had no capture identity");
             operand.* = .{
                 .id = id,
@@ -24084,7 +24078,7 @@ const BodyContext = struct {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .draft_ir);
         defer timing_scope.end();
         const existing = if (binder) |source_binder| self.binders.get(source_binder) else null;
-        const inherited_capture_id = if (existing) |local| self.draft.locals.items[@backingInt(local)].capture_id else null;
+        const inherited_capture_id = if (existing) |local| self.draft.locals.items[@backingInt(local)].identity.captureId() else null;
         const id = try self.draft.addLocal(symbol, ty, binder, inherited_capture_id);
         // A new version of a binding keeps that binding's capture identity,
         // including whether it is a root's recursive binding.
@@ -24196,7 +24190,7 @@ const BodyContext = struct {
     /// Supplying expressions never determine the target key during lifting.
     fn captureKey(self: *const BodyContext, local: DraftLocalId) checked.CaptureId {
         const target = self.draft.locals.items[@backingInt(local)];
-        return target.checked_capture_id orelse target.capture_id orelse
+        return target.identity.checkedCaptureId() orelse target.identity.captureId() orelse
             Common.invariant("declared capture slot has no capture identity");
     }
 
@@ -26069,7 +26063,7 @@ const BodyContext = struct {
         if (lhs == rhs) return true;
         const lhs_data = self.draft.locals.items[@backingInt(lhs)];
         const rhs_data = self.draft.locals.items[@backingInt(rhs)];
-        if (lhs_data.binder == null or rhs_data.binder == null or lhs_data.binder.? != rhs_data.binder.?) {
+        if (lhs_data.identity.binder() == null or rhs_data.identity.binder() == null or lhs_data.identity.binder().? != rhs_data.identity.binder().?) {
             return false;
         }
         const lhs_node = try lhs_data.ty.toGraphNode(self.graph);
@@ -45156,7 +45150,7 @@ const BodyContext = struct {
                 Common.invariant("local procedure context capture referenced an unknown local");
             }
             const local_data = self.draft.locals.items[raw];
-            const capture_id = local_data.capture_id orelse
+            const capture_id = local_data.identity.captureId() orelse
                 Common.invariant("local procedure context capture local had no capture identity");
             const seen_entry = try seen.getOrPut(capture_id);
             if (seen_entry.found_existing) continue;
@@ -62860,8 +62854,7 @@ const BodyContext = struct {
                 Common.invariant("match alternative binder remap referenced an unbound candidate binder");
             // All alternatives implement the arm's one checked capture slot.
             // Preserve each local's separate runtime identity and lexical binder.
-            self.draft.locals.items[@backingInt(local)].checked_capture_id =
-                checked.CaptureId.fromBinder(remap.representative_binder);
+            self.draft.locals.items[@backingInt(local)].identity.setCheckedCaptureId(checked.CaptureId.fromBinder(remap.representative_binder));
             try self.binders.put(remap.representative_binder, local);
         }
     }

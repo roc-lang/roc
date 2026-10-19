@@ -5270,7 +5270,7 @@ const Subst = struct {
     /// program mutable.
     fn binderIdentityOf(program: *Ast.Program, local: Ast.LocalId) ?BinderIdentity {
         const local_data = program.getLocal(local);
-        const binder = local_data.binder orelse return null;
+        const binder = local_data.identity.binder() orelse return null;
         return .{
             .binder = binder,
             .digest = program.types.equalityDigest(&program.names, local_data.ty),
@@ -11859,9 +11859,9 @@ const Cloner = struct {
             const local = try self.pass.program.addLocalWithCaptureIdentity(
                 self.pass.symbols.fresh(),
                 capture_ty,
-                source_local.binder,
+                source_local.identity.binder(),
                 id,
-                source_local.checked_capture_id,
+                source_local.identity.checkedCaptureId(),
                 source_local.capture_kind,
             );
             worker_captures[index] = .{ .local = local, .ty = capture_ty };

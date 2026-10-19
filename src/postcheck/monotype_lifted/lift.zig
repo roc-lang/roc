@@ -332,10 +332,10 @@ fn checkCaptureSlotSpan(program: *const Ast.Program, slots: anytype) ?[]const u8
     for (0..slots.len) |index| {
         const slot = GuardedList.at(slots, index);
         const local = program.getLocal(slot.local);
-        const id = local.capture_id orelse return "capture slot local had no CaptureId";
+        const id = local.identity.captureId() orelse return "capture slot local had no CaptureId";
         if (slot.ty != local.ty) return "capture slot type disagreed with its local type";
         if (id.isCanonical()) {
-            const binder = local.binder orelse return "binder-derived capture slot had no checked binder";
+            const binder = local.identity.binder() orelse return "binder-derived capture slot had no checked binder";
             if (id != checked.CaptureId.fromBinder(binder)) return "binder-derived CaptureId did not match its binder";
         }
         if (previous) |prev| {
@@ -1060,7 +1060,7 @@ const Lifter = struct {
         for (0..slots.len) |index| {
             const slot = GuardedList.at(slots, index);
             const slot_local = self.output.getLocal(slot.local);
-            const id = slot_local.checked_capture_id orelse slotCaptureId(self.output, slot);
+            const id = slot_local.identity.checkedCaptureId() orelse slotCaptureId(self.output, slot);
             const value = explicitCaptureValueForSlot(self.output, explicit, slot) orelse
                 try self.output.addExpr(.{ .ty = slot.ty, .data = .{ .local = slot.local } });
             operands[index] = .{ .id = id, .value = value };
@@ -1117,7 +1117,7 @@ fn operandValueForSlot(program: *const Ast.Program, existing: anytype, slot: Ast
         const operand = GuardedList.at(existing, index);
         const matches = if (operand.id.isLiftGenerated())
             operand.id == lifted_id
-        else if (slot_local.checked_capture_id) |checked_id|
+        else if (slot_local.identity.checkedCaptureId()) |checked_id|
             operand.id == checked_id
         else
             operand.id == lifted_id;
@@ -1207,7 +1207,7 @@ fn finalizeProgramFunctionReferenceCaptures(
 /// local carries a CaptureId (assigned at creation for binder-backed and
 /// compile-time locals, in `addIfFree` for lift-synthesized locals).
 fn slotCaptureId(program: *const Ast.Program, slot: Ast.TypedLocal) checked.CaptureId {
-    return program.getLocal(slot.local).capture_id orelse
+    return program.getLocal(slot.local).identity.captureId() orelse
         Common.invariant("lifted capture slot local had no CaptureId");
 }
 
@@ -1270,7 +1270,7 @@ const BoundSet = struct {
     }
 
     fn binderIdentity(input: *const Ast.Program, local: Mono.LocalId) ?checked.PatternBinderId {
-        return input.getLocal(local).binder;
+        return input.getLocal(local).identity.binder();
     }
 
     fn bindingFor(self: *const BoundSet, input: *const Ast.Program, local: Mono.LocalId) Allocator.Error!?Mono.LocalId {
@@ -1995,14 +1995,14 @@ const CaptureDependencyGraph = struct {
 
     fn scopeBindingFor(self: *const CaptureDependencyGraph, scope: ?CaptureScopeId, local: Ast.LocalId) Allocator.Error!?Ast.LocalId {
         const local_data = self.program.getLocal(local);
-        const binder = local_data.binder;
+        const binder = local_data.identity.binder();
         var current = scope;
         while (current) |id| {
             const entry = self.scopes.items[@backingInt(id)];
             if (entry.local == local) return entry.local;
             if (binder) |identity| {
                 const candidate = self.program.getLocal(entry.local);
-                if (candidate.binder == identity and
+                if (candidate.identity.binder() == identity and
                     try self.program.types.typeEql(&self.program.names, local_data.ty, candidate.ty))
                 {
                     return entry.local;
@@ -2126,7 +2126,7 @@ const CaptureDependencyGraph = struct {
         const edge = self.edges.items[@backingInt(edge_id)];
         const local = self.program.getLocal(capture.local);
         const id = if (self.lifter != null)
-            local.checked_capture_id orelse slotCaptureId(self.program, capture)
+            local.identity.checkedCaptureId() orelse slotCaptureId(self.program, capture)
         else
             slotCaptureId(self.program, capture);
         return findSupply(edge.supplies.items, id);

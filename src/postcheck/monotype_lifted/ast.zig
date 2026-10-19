@@ -307,7 +307,7 @@ pub const ProgramView = struct {
     /// The CaptureId of a local. Every local that participates in a capture set
     /// carries one; asserts it is present.
     pub fn captureIdOfLocal(self: ProgramView, id: LocalId) check.CheckedModule.CaptureId {
-        return self.locals[@backingInt(id)].capture_id orelse
+        return self.locals[@backingInt(id)].identity.captureId() orelse
             Common.invariant("lifted capture local had no CaptureId");
     }
 
@@ -1605,11 +1605,9 @@ pub const Program = struct {
             .id = id,
             .symbol = symbol,
             .ty = ty,
-            .binder = binder,
             // A binder-backed local carries the exact capture identity of
             // its binding, so any function that captures it joins by CaptureId.
-            .capture_id = checked_capture_id,
-            .checked_capture_id = checked_capture_id,
+            .identity = .init(binder, checked_capture_id, checked_capture_id),
         });
         try self.local_names.append(self.allocator, .empty);
         return id;
@@ -1648,9 +1646,7 @@ pub const Program = struct {
             .id = id,
             .symbol = symbol,
             .ty = ty,
-            .binder = binder,
-            .capture_id = capture_id,
-            .checked_capture_id = checked_capture_id,
+            .identity = .init(binder, capture_id, checked_capture_id),
             .capture_kind = capture_kind,
         });
         try self.local_names.append(self.allocator, .empty);
@@ -1756,17 +1752,17 @@ pub const Program = struct {
     /// The CaptureId of a local. Every local that participates in a capture set
     /// carries one; asserts it is present.
     pub fn captureIdOfLocal(self: *const Program, id: LocalId) check.CheckedModule.CaptureId {
-        return self.getLocal(id).capture_id orelse
+        return self.getLocal(id).identity.captureId() orelse
             Common.invariant("lifted capture local had no CaptureId");
     }
 
     pub fn ensureLiftCaptureId(self: *Program, id: LocalId) check.CheckedModule.CaptureId {
         if (self.body_prefix != null) return self.captureIdOfLocal(id);
         const local = self.locals.getPtrImmediate(@backingInt(id));
-        if (local.capture_id == null) {
-            local.capture_id = self.nextLiftCaptureId();
+        if (local.identity.captureId() == null) {
+            local.identity.setCaptureId(self.nextLiftCaptureId());
         }
-        return local.capture_id.?;
+        return local.identity.captureId().?;
     }
 
     pub fn stmtSpan(self: *const Program, span_: Span(StmtId)) ProgramSpanBorrow(StmtId, "stmt_ids") {
