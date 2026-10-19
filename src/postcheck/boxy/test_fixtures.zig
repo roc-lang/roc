@@ -125,7 +125,7 @@ pub fn moduleKey(byte: u8) checked.ModuleId {
     return key;
 }
 
-/// The artifact key whose digest is `moduleKey(byte)`.
+/// The checked module key whose digest is `moduleKey(byte)`.
 pub fn checkedModuleKey(byte: u8) checked.CheckedModuleArtifactKey {
     var key = checked.CheckedModuleArtifactKey{};
     key.bytes[0] = byte;

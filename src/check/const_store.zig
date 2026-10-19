@@ -944,7 +944,7 @@ pub const ConstStore = struct {
     /// Build-only content index over blob ids. Hashing and equality read each
     /// id's bytes through `blob_views`, so the index stays valid when
     /// `blob_backing` moves.
-    blob_index: std.HashMapUnmanaged(ConstBlobDataId, void, BlobIdContext, std.hash_map.default_max_load_percentage) = .empty,
+    blob_index: std.HashMapUnmanaged(u32, void, BlobIdContext, std.hash_map.default_max_load_percentage) = .empty,
     /// True for a store reconstructed from a serialized buffer (pools point into
     /// buffer-owned memory and must not be freed).
     serialized: bool = false,
@@ -954,12 +954,12 @@ pub const ConstStore = struct {
     const BlobIdContext = struct {
         store: *const ConstStore,
 
-        pub fn hash(ctx: BlobIdContext, id: ConstBlobDataId) u64 {
-            return std.hash.Wyhash.hash(0, ctx.store.blobData(id));
+        pub fn hash(ctx: BlobIdContext, id: u32) u64 {
+            return std.hash.Wyhash.hash(0, ctx.store.blobData(@fromBackingInt(id)));
         }
 
-        pub fn eql(ctx: BlobIdContext, a: ConstBlobDataId, b: ConstBlobDataId) bool {
-            return bytesEqual(ctx.store.blobData(a), ctx.store.blobData(b));
+        pub fn eql(_: BlobIdContext, a: u32, b: u32) bool {
+            return a == b;
         }
     };
 
@@ -970,8 +970,8 @@ pub const ConstStore = struct {
             return std.hash.Wyhash.hash(0, bytes);
         }
 
-        pub fn eql(ctx: BlobBytesContext, bytes: []const u8, id: ConstBlobDataId) bool {
-            return bytesEqual(bytes, ctx.store.blobData(id));
+        pub fn eql(ctx: BlobBytesContext, bytes: []const u8, id: u32) bool {
+            return bytesEqual(bytes, ctx.store.blobData(@fromBackingInt(id)));
         }
     };
 
@@ -1191,7 +1191,7 @@ pub const ConstStore = struct {
             BlobBytesContext{ .store = self },
             BlobIdContext{ .store = self },
         );
-        if (entry.found_existing) return entry.key_ptr.*;
+        if (entry.found_existing) return @fromBackingInt(entry.key_ptr.*);
         errdefer self.blob_index.removeByPtr(entry.key_ptr);
 
         const id: ConstBlobDataId = @fromBackingInt(@intCast(@as(u32, @intCast(self.blob_views.items.len))));
@@ -1199,7 +1199,7 @@ pub const ConstStore = struct {
         const view = try artifact_serialize.appendSpan(ConstRange, u8, &self.blob_backing, self.allocator, bytes);
         errdefer self.blob_backing.shrinkRetainingCapacity(backing_len);
         try self.blob_views.append(self.allocator, view);
-        entry.key_ptr.* = id;
+        entry.key_ptr.* = @backingInt(id);
         return id;
     }
 

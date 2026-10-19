@@ -246,7 +246,7 @@ pub fn buildCheckOwnerEnvs(
         }
     }
 
-    var seen_public_dependencies = std.AutoHashMap(CheckedArtifact.ModuleId, void).init(allocator);
+    var seen_public_dependencies = std.AutoHashMap(CheckedArtifact.CheckedModuleDigest, void).init(allocator);
     defer seen_public_dependencies.deinit();
 
     for (imported_artifacts) |imported_artifact| {
@@ -266,7 +266,7 @@ fn appendCheckOwnerEnvPublicDependencies(
     allocator: Allocator,
     owner_envs: *std.ArrayList(*const ModuleEnv),
     available_artifacts: []const CheckedArtifact.ImportedModuleView,
-    seen_public_dependencies: *std.AutoHashMap(CheckedArtifact.ModuleId, void),
+    seen_public_dependencies: *std.AutoHashMap(CheckedArtifact.CheckedModuleDigest, void),
     view: CheckedArtifact.ImportedModuleView,
 ) Allocator.Error!void {
     for (view.public_api_dependencies.type_owner_artifacts) |dependency_key| {

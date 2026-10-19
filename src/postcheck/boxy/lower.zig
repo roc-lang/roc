@@ -24,7 +24,6 @@ const test_fixtures = @import("test_fixtures.zig");
 /// synthetic checked payloads from one definition.
 const fixtureTableIndex = test_fixtures.tableIndex;
 const builtinNominal = test_fixtures.builtinNominal;
-const moduleKey = test_fixtures.moduleKey;
 const checkedModuleKey = test_fixtures.checkedModuleKey;
 const typeKey = test_fixtures.typeKey;
 const typeSchemeKey = test_fixtures.typeSchemeKey;

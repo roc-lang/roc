@@ -143,18 +143,19 @@ pub const LocalNameId = enum(u32) {
 pub const LocalNameTable = struct {
     bytes: std.ArrayList(u8) = .empty,
     spans: std.ArrayList(TextSpan) = .empty,
-    index: std.HashMapUnmanaged(LocalNameId, void, IdContext, std.hash_map.default_max_load_percentage) = .empty,
+    /// Every interned name by its `LocalNameId` backing index.
+    index: std.HashMapUnmanaged(u32, void, IdContext, std.hash_map.default_max_load_percentage) = .empty,
 
     const TextSpan = struct { start: u32, len: u32 };
 
     const IdContext = struct {
         table: *const LocalNameTable,
 
-        pub fn hash(ctx: IdContext, id: LocalNameId) u64 {
-            return std.hash.Wyhash.hash(0, ctx.table.text(id));
+        pub fn hash(ctx: IdContext, id: u32) u64 {
+            return std.hash.Wyhash.hash(0, ctx.table.text(@fromBackingInt(id)));
         }
 
-        pub fn eql(_: IdContext, a: LocalNameId, b: LocalNameId) bool {
+        pub fn eql(_: IdContext, a: u32, b: u32) bool {
             return a == b;
         }
     };
@@ -166,8 +167,8 @@ pub const LocalNameTable = struct {
             return std.hash.Wyhash.hash(0, name);
         }
 
-        pub fn eql(ctx: TextContext, name: []const u8, id: LocalNameId) bool {
-            return std.mem.eql(u8, name, ctx.table.text(id));
+        pub fn eql(ctx: TextContext, name: []const u8, id: u32) bool {
+            return std.mem.eql(u8, name, ctx.table.text(@fromBackingInt(id)));
         }
     };
 
@@ -180,7 +181,7 @@ pub const LocalNameTable = struct {
             TextContext{ .table = self },
             IdContext{ .table = self },
         );
-        if (entry.found_existing) return entry.key_ptr.*;
+        if (entry.found_existing) return @fromBackingInt(entry.key_ptr.*);
         errdefer self.index.removeByPtr(entry.key_ptr);
         if (self.spans.items.len >= @backingInt(LocalNameId.none)) return error.OutOfMemory;
         const start = std.math.cast(u32, self.bytes.items.len) orelse return error.OutOfMemory;
@@ -189,7 +190,7 @@ pub const LocalNameTable = struct {
         try self.bytes.appendSlice(allocator, name);
         const id: LocalNameId = @fromBackingInt(@intCast(self.spans.items.len));
         self.spans.appendAssumeCapacity(.{ .start = start, .len = len });
-        entry.key_ptr.* = id;
+        entry.key_ptr.* = @backingInt(id);
         return id;
     }
 
@@ -208,7 +209,7 @@ pub const LocalNameTable = struct {
         var result: LocalNameTable = .{ .bytes = bytes, .spans = spans };
         try result.index.ensureTotalCapacityContext(allocator, @intCast(spans.items.len), IdContext{ .table = &result });
         for (0..spans.items.len) |index| {
-            result.index.putAssumeCapacityNoClobberContext(@fromBackingInt(@intCast(index)), {}, IdContext{ .table = &result });
+            result.index.putAssumeCapacityNoClobberContext(@intCast(index), {}, IdContext{ .table = &result });
         }
         return result;
     }

@@ -519,14 +519,14 @@ const MethodLookupScopeBuilder = struct {
     allocator: Allocator,
     current: ModuleId,
     module_ids: std.ArrayList(ModuleId) = .empty,
-    seen: std.AutoHashMap(ModuleId, void),
+    seen: std.AutoHashMap(CheckedModuleDigest, void),
     seen_module_hashes: std.AutoHashMap([32]u8, void),
 
     fn init(allocator: Allocator, current: ModuleId) MethodLookupScopeBuilder {
         return .{
             .allocator = allocator,
             .current = current,
-            .seen = std.AutoHashMap(ModuleId, void).init(allocator),
+            .seen = std.AutoHashMap(CheckedModuleDigest, void).init(allocator),
             .seen_module_hashes = std.AutoHashMap([32]u8, void).init(allocator),
         };
     }
@@ -31306,9 +31306,9 @@ const LoweringVisibilityBuilder = struct {
     /// Every key `appendKey` has settled. The type walk names an owner at
     /// every alias and nominal it reaches, so each owner settles once
     /// rather than once per reference.
-    settled_keys: std.AutoHashMapUnmanaged(ModuleId, void) = .empty,
+    settled_keys: std.AutoHashMapUnmanaged(CheckedModuleDigest, void) = .empty,
     visited_types: std.AutoHashMap(LoweringVisibilityTypeVisit, void),
-    visited_public_api: std.AutoHashMap(ModuleId, void),
+    visited_public_api: std.AutoHashMap(CheckedModuleDigest, void),
 
     fn init(
         allocator: Allocator,
@@ -31326,7 +31326,7 @@ const LoweringVisibilityBuilder = struct {
             .available_artifacts = available_artifacts,
             .relation_artifacts = relation_artifacts,
             .visited_types = std.AutoHashMap(LoweringVisibilityTypeVisit, void).init(allocator),
-            .visited_public_api = std.AutoHashMap(ModuleId, void).init(allocator),
+            .visited_public_api = std.AutoHashMap(CheckedModuleDigest, void).init(allocator),
         };
     }
 
