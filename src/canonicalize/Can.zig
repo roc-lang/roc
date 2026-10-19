@@ -1876,7 +1876,7 @@ fn declScopeEnter(self: *Self, scope_idx: AST.DeclIndex.ScopeIdx) std.mem.Alloca
     var value_iter = parser_scope.value_decls.iterator();
     while (value_iter.next()) |entry| {
         const ident = entry.key_ptr.*;
-        const decl_idx = self.forwardVisibleValueDecl(parser_scope, entry.value_ptr.*) orelse continue;
+        const decl_idx = self.forwardVisibleValueDecl(parser_scope, self.parse_ir.decl_index.nameBucket(entry.value_ptr.*)) orelse continue;
         const previous = self.active_decl_values.get(ident);
         const value_entry_idx = self.active_decl_value_entries.items.len;
         try self.active_decl_value_entries.append(self.env.gpa, .{
@@ -1892,7 +1892,7 @@ fn declScopeEnter(self: *Self, scope_idx: AST.DeclIndex.ScopeIdx) std.mem.Alloca
         var iter = parser_scope.type_decls.iterator();
         while (iter.next()) |entry| {
             const ident = entry.key_ptr.*;
-            const first_decl_idx = self.firstUsableParserTypeDecl(entry.value_ptr.*) orelse continue;
+            const first_decl_idx = self.firstUsableParserTypeDecl(self.parse_ir.decl_index.nameBucket(entry.value_ptr.*)) orelse continue;
             const previous = self.active_decl_types.get(ident);
             const type_entry_idx = self.active_decl_type_entries.items.len;
             try self.active_decl_type_entries.append(self.env.gpa, .{
@@ -1907,7 +1907,7 @@ fn declScopeEnter(self: *Self, scope_idx: AST.DeclIndex.ScopeIdx) std.mem.Alloca
         var import_iter = parser_scope.import_alias_decls.iterator();
         while (import_iter.next()) |entry| {
             const ident = entry.key_ptr.*;
-            const decl_idx = entry.value_ptr.first orelse continue;
+            const decl_idx = entry.value_ptr.first;
             const previous = self.active_decl_import_aliases.get(ident);
             const import_entry_idx = self.active_decl_import_alias_entries.items.len;
             try self.active_decl_import_alias_entries.append(self.env.gpa, .{
@@ -2324,7 +2324,7 @@ fn parserTypePathForDependencySegments(
     while (maybe_scope) |scope_idx| {
         const scope = decl_index.scopes.items[@backingInt(scope_idx)];
         if (scope.type_decls.get(segments[0])) |bucket| {
-            var iter = bucket.iter();
+            var iter = decl_index.nameBucket(bucket).iter();
             while (iter.next()) |decl_idx| {
                 const candidate = decl_index.decls.items[@backingInt(decl_idx)];
                 if (!self.parserTypeDeclCanPrepare(candidate)) continue;
@@ -2682,7 +2682,7 @@ const AliasCycleContext = struct {
         while (maybe_scope) |idx| {
             const scope = decl_index.scopes.items[@backingInt(idx)];
             if (scope.type_decls.get(ident)) |bucket| {
-                var decl_iter = bucket.iter();
+                var decl_iter = decl_index.nameBucket(bucket).iter();
                 while (decl_iter.next()) |decl_idx| {
                     const decl = decl_index.decls.items[@backingInt(decl_idx)];
                     if (!self.can.parserTypeDeclCanPrepare(decl)) continue;
@@ -21347,7 +21347,7 @@ const MainFunctionStatus = enum { valid, invalid, not_found };
 fn checkMainFunction(self: *Self, report_errors: bool) std.mem.Allocator.Error!MainFunctionStatus {
     const decl_index = &self.parse_ir.decl_index;
     const module_scope = decl_index.scopes.items[@backingInt(self.moduleParserScopeIdx())];
-    const bucket = module_scope.value_decls.get(self.env.idents.main_bang) orelse return .not_found;
+    const bucket = decl_index.nameBucket(module_scope.value_decls.get(self.env.idents.main_bang) orelse return .not_found);
 
     var iter = bucket.iter();
     while (iter.next()) |decl_idx| {
