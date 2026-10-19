@@ -5531,6 +5531,52 @@ const Subst = struct {
     }
 };
 
+/// Emptied lists kept with their capacity for the clone tasks that build
+/// spans while their children append to them. A fixed number are kept so
+/// returning one never allocates; beyond that a returned list is freed.
+fn SpareLists(comptime T: type) type {
+    return struct {
+        const Self = @This();
+        const max_lists = 8;
+
+        lists: [max_lists]std.ArrayList(T) = undefined,
+        len: usize = 0,
+
+        fn take(self: *Self) std.ArrayList(T) {
+            if (self.len == 0) return .empty;
+            self.len -= 1;
+            return self.lists[self.len];
+        }
+
+        /// Keep `list` empty for the next task, leaving `list` itself empty.
+        fn give(self: *Self, allocator: Allocator, list: *std.ArrayList(T)) void {
+            defer list.* = .empty;
+            if (list.capacity == 0) return;
+            if (self.len == max_lists) return list.deinit(allocator);
+            list.clearRetainingCapacity();
+            self.lists[self.len] = list.*;
+            self.len += 1;
+        }
+
+        fn deinit(self: *Self, allocator: Allocator) void {
+            for (self.lists[0..self.len]) |*list| list.deinit(allocator);
+            self.len = 0;
+        }
+    };
+}
+
+const ClonerSpareLists = struct {
+    stmts: SpareLists(Ast.StmtId) = .{},
+    exprs: SpareLists(Ast.ExprId) = .{},
+    typed_locals: SpareLists(Ast.TypedLocal) = .{},
+
+    fn deinit(self: *ClonerSpareLists, allocator: Allocator) void {
+        self.stmts.deinit(allocator);
+        self.exprs.deinit(allocator);
+        self.typed_locals.deinit(allocator);
+    }
+};
+
 /// Empty frame stacks kept for reuse by `Cloner.runClone`.
 const CloneFramePool = struct {
     stacks: [max_stacks]std.ArrayList(Cloner.CloneFrame) = undefined,
@@ -5585,6 +5631,7 @@ const ClonerScratch = struct {
     /// capacity for the next run. A fixed number are kept so returning one
     /// never allocates.
     spare_clone_frames: CloneFramePool,
+    spare_lists: ClonerSpareLists,
 
     fn fresh(allocator: Allocator) ClonerScratch {
         return .{
@@ -5605,6 +5652,7 @@ const ClonerScratch = struct {
             .inline_scope_origins = collections.DenseMap(Ast.InlineScopeId, Ast.InlineScopeId).init(allocator),
             .rebased_inline_scope_changes = .empty,
             .spare_clone_frames = .{},
+            .spare_lists = .{},
         };
     }
 
@@ -5646,6 +5694,7 @@ const ClonerScratch = struct {
         self.inline_scope_origins.deinit();
         self.rebased_inline_scope_changes.deinit(allocator);
         self.spare_clone_frames.deinit(allocator);
+        self.spare_lists.deinit(allocator);
         self.subst.deinit();
         self.arena.deinit();
     }
@@ -5723,6 +5772,8 @@ const Cloner = struct {
     /// attempt rollback. Accepted entries remain useful for the rest of the clone.
     rebased_inline_scope_changes: std.ArrayList(InlineScopeRebasePair),
     spare_clone_frames: CloneFramePool,
+    /// Span-building lists for clone tasks (`ClonerSpareLists`).
+    spare_lists: ClonerSpareLists,
     /// Depth of the wrapper-strip recursion in the static value matchers
     /// (`bindPatToValue`/`bindPatToMatchValue`/`bindPatToFlowValue`), counting
     /// each `runtime_anchor.structure`/`nominal.backing`/
@@ -5808,6 +5859,7 @@ const Cloner = struct {
             .inline_scope_origins = scratch.inline_scope_origins,
             .rebased_inline_scope_changes = scratch.rebased_inline_scope_changes,
             .spare_clone_frames = scratch.spare_clone_frames,
+            .spare_lists = scratch.spare_lists,
             .wrapper_strip_depth = 0,
             .materialize_strip_depth = 0,
             .inline_calls = .all,
@@ -5865,6 +5917,7 @@ const Cloner = struct {
             .inline_scope_origins = self.inline_scope_origins,
             .rebased_inline_scope_changes = self.rebased_inline_scope_changes,
             .spare_clone_frames = self.spare_clone_frames,
+            .spare_lists = self.spare_lists,
         };
         self.pass.returnClonerScratch(&scratch);
     }
@@ -6017,11 +6070,11 @@ const Cloner = struct {
         const allocator = self.pass.allocator;
         switch (frame.task) {
             .block_value => |*task| if (task.statements_owned) {
-                task.statements.deinit(allocator);
+                self.spare_lists.stmts.give(allocator, task.statements);
                 task.statements_owned = false;
             },
             .exit_block_value => |*task| if (task.statements_owned) {
-                task.statements.deinit(allocator);
+                self.spare_lists.stmts.give(allocator, task.statements);
                 task.statements_owned = false;
             },
             .let_case_arm_body => |*task| {
@@ -6029,20 +6082,20 @@ const Cloner = struct {
                 task.emitted_statements = .empty;
             },
             .distribute_arm => |*task| if (task.statements_owned) {
-                task.statements.deinit(allocator);
+                self.spare_lists.stmts.give(allocator, task.statements);
                 task.statements_owned = false;
             },
             .continue_ => |*task| if (task.new_values_owned) {
-                task.new_values.deinit(allocator);
+                self.spare_lists.exprs.give(allocator, task.new_values);
                 task.new_values_owned = false;
             },
             .loop_value => |task| if (task.attempt_lists_owned) {
-                task.new_params.deinit(allocator);
-                task.new_initials.deinit(allocator);
+                self.spare_lists.typed_locals.give(allocator, task.new_params);
+                self.spare_lists.exprs.give(allocator, task.new_initials);
                 task.attempt_lists_owned = false;
             },
             .call_proc => |*task| if (task.out_owned) {
-                task.out.deinit(allocator);
+                self.spare_lists.exprs.give(allocator, task.out);
                 task.out_owned = false;
             },
             .stmt_span => |*task| {
@@ -9099,14 +9152,14 @@ const Cloner = struct {
                         .initial_values = try self.pass.program.addExprSpan(task.new_initials.items),
                         .body = body,
                     } } });
-                    task.new_params.deinit(self.pass.allocator);
-                    task.new_initials.deinit(self.pass.allocator);
+                    self.spare_lists.typed_locals.give(self.pass.allocator, task.new_params);
+                    self.spare_lists.exprs.give(self.pass.allocator, task.new_initials);
                     task.attempt_lists_owned = false;
                     return self.finishLoopValue(task, .{ .expr = loop });
                 }
 
-                task.new_params.deinit(self.pass.allocator);
-                task.new_initials.deinit(self.pass.allocator);
+                self.spare_lists.typed_locals.give(self.pass.allocator, task.new_params);
+                self.spare_lists.exprs.give(self.pass.allocator, task.new_initials);
                 task.attempt_lists_owned = false;
                 self.subst.restore(task.split_start);
                 self.rewindLoopAttempt(task.attempt_mark);
@@ -9204,9 +9257,9 @@ const Cloner = struct {
         if (task.has_constructor) {
             task.attempt_mark = self.markLoopAttempt();
             task.new_params = try arena.create(std.ArrayList(Ast.TypedLocal));
-            task.new_params.* = .empty;
+            task.new_params.* = self.spare_lists.typed_locals.take();
             task.new_initials = try arena.create(std.ArrayList(Ast.ExprId));
-            task.new_initials.* = .empty;
+            task.new_initials.* = self.spare_lists.exprs.take();
             task.attempt_lists_owned = true;
             task.split_start = self.subst.watermark();
             task.forward_sources = .empty;
@@ -9323,7 +9376,7 @@ const Cloner = struct {
     };
 
     fn finishBlockValueTask(self: *Cloner, task: *BlockValueTask, value: Value) CloneStep {
-        task.statements.deinit(self.pass.allocator);
+        self.spare_lists.stmts.give(self.pass.allocator, task.statements);
         task.statements_owned = false;
         self.subst.restore(task.change_start);
         return retValue(value);
@@ -9347,7 +9400,7 @@ const Cloner = struct {
                 task.change_start = self.subst.watermark();
                 task.block_bindings = try self.newChain();
                 task.statements = try self.arena.allocator().create(std.ArrayList(Ast.StmtId));
-                task.statements.* = .empty;
+                task.statements.* = self.spare_lists.stmts.take();
                 task.statements_owned = true;
                 task.terminated = self.pass.program.getExpr(block.final_expr).data == .@"unreachable";
             },
@@ -9561,7 +9614,7 @@ const Cloner = struct {
                 task.change_start = self.subst.watermark();
                 task.block_bindings = try self.newChain();
                 task.statements = try self.arena.allocator().create(std.ArrayList(Ast.StmtId));
-                task.statements.* = .empty;
+                task.statements.* = self.spare_lists.stmts.take();
                 task.statements_owned = true;
                 frame.cursor = 1;
             },
@@ -9598,7 +9651,7 @@ const Cloner = struct {
                     } } })
                 else
                     try self.wrapBindings(task.block_bindings.*, materialized);
-                task.statements.deinit(self.pass.allocator);
+                self.spare_lists.stmts.give(self.pass.allocator, task.statements);
                 task.statements_owned = false;
                 self.subst.restore(task.change_start);
                 return retValue(.{ .expr = result });
@@ -9657,7 +9710,7 @@ const Cloner = struct {
             return .{ .call = .{ .materialize = .{ .value = value } } };
         }
         task.bindings.appendChain(task.block_bindings.*);
-        task.statements.deinit(self.pass.allocator);
+        self.spare_lists.stmts.give(self.pass.allocator, task.statements);
         task.statements_owned = false;
         self.subst.restore(task.change_start);
         return retValue(value);
@@ -9712,7 +9765,7 @@ const Cloner = struct {
                     Common.invariantFmt("continue value count differed from specialized loop pattern: continue has {d} values, {d} frames with innermost expecting {d}", .{ task.source_values.len, task.frame_count, loop.values.len });
                 }
                 task.new_values = try arena.create(std.ArrayList(Ast.ExprId));
-                task.new_values.* = .empty;
+                task.new_values.* = self.spare_lists.exprs.take();
                 task.new_values_owned = true;
                 task.chain = try self.newChain();
                 frame.cursor = 1;
@@ -9748,7 +9801,7 @@ const Cloner = struct {
         const continued = try self.addExpr(.{ .ty = task.ty, .data = .{ .continue_ = .{
             .values = try self.pass.program.addExprSpan(task.new_values.items),
         } } });
-        task.new_values.deinit(self.pass.allocator);
+        self.spare_lists.exprs.give(self.pass.allocator, task.new_values);
         task.new_values_owned = false;
         return retExpr(try self.wrapBindings(task.chain.*, continued));
     }
@@ -9861,7 +9914,7 @@ const Cloner = struct {
         // chains: those chains must be placed exactly once before the call.
         task.chain = try self.newChain();
         task.out = try arena.create(std.ArrayList(Ast.ExprId));
-        task.out.* = .empty;
+        task.out.* = self.spare_lists.exprs.take();
         task.out_owned = true;
         var order_buffer: [spec_constr_specialization_count]u8 = undefined;
         for (try self.pass.specSelectionOrder(raw, &order_buffer)) |spec_index| {
@@ -9887,7 +9940,7 @@ const Cloner = struct {
             return .{ .call = .{ .append_exprs_from_value = .{ .shape = pattern.args[frame.index], .value = task.values[frame.index], .out = task.out } } };
         }
         task.expr_span = try self.pass.program.addExprSpan(task.out.items);
-        task.out.deinit(self.pass.allocator);
+        self.spare_lists.exprs.give(self.pass.allocator, task.out);
         task.out_owned = false;
         frame.cursor = CallProcCursor.specialized_captures;
         return .{ .call = .{ .capture_span = .{ .span = task.call.captures } } };
@@ -9900,7 +9953,7 @@ const Cloner = struct {
             return .{ .call = .{ .materialize = .{ .value = task.values[frame.index] } } };
         }
         task.expr_span = try self.pass.program.addExprSpan(task.out.items);
-        task.out.deinit(self.pass.allocator);
+        self.spare_lists.exprs.give(self.pass.allocator, task.out);
         task.out_owned = false;
         frame.cursor = CallProcCursor.residual_captures;
         return .{ .call = .{ .capture_span = .{ .span = task.call.captures } } };
@@ -10888,7 +10941,7 @@ const Cloner = struct {
                     const arm_data = self.pass.program.getExpr(task.arm_body).data;
                     if (arm_data == .block) {
                         task.statements = try self.arena.allocator().create(std.ArrayList(Ast.StmtId));
-                        task.statements.* = .empty;
+                        task.statements.* = self.spare_lists.stmts.take();
                         task.statements_owned = true;
                         const existing = self.pass.program.stmtSpan(arm_data.block.statements);
                         for (0..existing.len) |index| {
@@ -10910,7 +10963,7 @@ const Cloner = struct {
             },
             3 => {
                 const body = input.?.get(.expr);
-                task.statements.deinit(self.pass.allocator);
+                self.spare_lists.stmts.give(self.pass.allocator, task.statements);
                 task.statements_owned = false;
                 self.subst.restore(task.change_start);
                 return .{ .ret = .{ .maybe_arm = .{ .body = body, .value = task.outer_value } } };
