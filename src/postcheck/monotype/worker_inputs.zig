@@ -44,19 +44,19 @@ fn Prefix(comptime T: type) type {
 
 const NamePrefix = struct {
     bytes: Prefix(u8) = .{},
-    ranges: Prefix(names.NameInterner.Range) = .{},
+    ends: Prefix(u32) = .{},
 
     fn capture(self: *NamePrefix, allocator: Allocator, source: *const names.NameInterner) Allocator.Error!names.NameInterner {
         return .{
             .bytes = .{ .items = std.ArrayList(u8).fromOwnedSlice(try self.bytes.capture(allocator, source.bytes.items.items)) },
-            .ranges = .{ .items = std.ArrayList(names.NameInterner.Range).fromOwnedSlice(try self.ranges.capture(allocator, source.ranges.items.items)) },
+            .ends = .{ .items = std.ArrayList(u32).fromOwnedSlice(try self.ends.capture(allocator, source.ends.items.items)) },
             .supports_inserts = false,
         };
     }
 
     fn deinit(self: *NamePrefix, allocator: Allocator) void {
         self.bytes.deinit(allocator);
-        self.ranges.deinit(allocator);
+        self.ends.deinit(allocator);
     }
 };
 

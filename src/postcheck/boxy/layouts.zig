@@ -1047,12 +1047,16 @@ test "boxy layout planner reuses dynamic storage for Box(a) worker layout" {
     const gpa = std.testing.allocator;
 
     const type_pool = [_]checked.CheckedTypeId{@fromBackingInt(@intCast(fixtureTableIndex(0)))};
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.box, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }),
+    };
     const payloads = [_]checked.StoredCheckedTypePayload{
         .{ .flex = .{} },
-        .{ .nominal = builtinNominal(.box, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }) },
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
     };
     const view = checked.CheckedTypeStoreView{
         .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
         .type_id_pool = &type_pool,
     };
 
@@ -1076,12 +1080,16 @@ test "boxy layout planner substitutes dynamic boxes into list elements" {
     const gpa = std.testing.allocator;
 
     const type_pool = [_]checked.CheckedTypeId{@fromBackingInt(@intCast(fixtureTableIndex(0)))};
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.list, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }),
+    };
     const payloads = [_]checked.StoredCheckedTypePayload{
         .{ .flex = .{} },
-        .{ .nominal = builtinNominal(.list, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }) },
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
     };
     const view = checked.CheckedTypeStoreView{
         .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
         .type_id_pool = &type_pool,
     };
 
@@ -1110,13 +1118,17 @@ test "boxy layout planner preserves zero-payload tag variants" {
         .{ .name = tag_a, .args_start = 0, .args_len = 0 },
         .{ .name = tag_b, .args_start = 0, .args_len = 1 },
     };
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
+    };
     const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}) },
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
         .empty_tag_union,
         .{ .tag_union = .{ .tags = .{ .start = 0, .len = tags.len }, .ext = @fromBackingInt(@intCast(1)) } },
     };
     const view = checked.CheckedTypeStoreView{
         .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
         .type_id_pool = &type_pool,
         .tag_pool = &tags,
     };
@@ -1142,10 +1154,14 @@ test "boxy layout planner preserves zero-payload tag variants" {
 
 test "boxy projected closed singleton layouts cannot alias multi-variant storage" {
     const gpa = std.testing.allocator;
+    const payload_cases_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.u64, @fromBackingInt(fixtureTableIndex(0)), .{}),
+        builtinNominal(.str, @fromBackingInt(fixtureTableIndex(0)), .{}),
+    };
     const payload_cases = [_]checked.StoredCheckedTypePayload{
         .empty_record,
-        .{ .nominal = builtinNominal(.u64, @fromBackingInt(fixtureTableIndex(0)), .{}) },
-        .{ .nominal = builtinNominal(.str, @fromBackingInt(fixtureTableIndex(0)), .{}) },
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
+        .{ .nominal = @fromBackingInt(1) },
         .{ .flex = .{} },
         .{ .tag_union = .{ .tags = .{ .start = 3, .len = 2 }, .ext = @fromBackingInt(1) } },
     };
@@ -1171,6 +1187,7 @@ test "boxy projected closed singleton layouts cannot alias multi-variant storage
             };
             const view = checked.CheckedTypeStoreView{
                 .stored_payloads = &payloads,
+                .nominal_row_pool = &payload_cases_nominal_rows,
                 .type_id_pool = &type_pool,
                 .tag_pool = &tags,
             };
@@ -1203,13 +1220,17 @@ test "boxy layout planner gives open tag descriptors a row-extension payload lay
     const tags = [_]checked.CheckedTag{
         .{ .name = tag_exit, .args_start = 0, .args_len = 1 },
     };
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.i64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
+    };
     const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.i64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}) },
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
         .{ .flex = .{} },
         .{ .tag_union = .{ .tags = .{ .start = 0, .len = tags.len }, .ext = @fromBackingInt(@intCast(1)) } },
     };
     const view = checked.CheckedTypeStoreView{
         .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
         .type_id_pool = &type_pool,
         .tag_pool = &tags,
     };
@@ -1244,9 +1265,12 @@ test "boxy layout planner records private worker function arg and return layouts
         @fromBackingInt(@intCast(fixtureTableIndex(0))), // List(a) argument.
         @fromBackingInt(@intCast(fixtureTableIndex(0))), // Function argument a.
     };
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.list, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }),
+    };
     const payloads = [_]checked.StoredCheckedTypePayload{
         .{ .flex = .{} },
-        .{ .nominal = builtinNominal(.list, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }) },
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
         .{ .function = .{
             .kind = .pure,
             .args = .{ .start = 1, .len = 1 },
@@ -1255,6 +1279,7 @@ test "boxy layout planner records private worker function arg and return layouts
     };
     const view = checked.CheckedTypeStoreView{
         .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
         .type_id_pool = &type_pool,
     };
     const roots = [_]checked.RootRequest{
@@ -1370,12 +1395,10 @@ test "boxy layout planner commits nominal declared fields through shared layout 
         .df_start = 0,
         .df_len = declared_fields.len,
     }};
-    const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.u8, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}) },
-        .{ .nominal = builtinNominal(.u16, @fromBackingInt(@intCast(1)), .{}) },
-        .{ .empty_record = {} },
-        .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(@intCast(2)) } },
-        .{ .nominal = .{
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.u8, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
+        builtinNominal(.u16, @fromBackingInt(@intCast(1)), .{}),
+        .{
             .name = @fromBackingInt(@intCast(3)),
             .origin_module = @fromBackingInt(@intCast(4)),
             .owner_module = .{},
@@ -1384,10 +1407,18 @@ test "boxy layout planner commits nominal declared fields through shared layout 
             .representation = .{ .local_declaration = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
             .padding_field_types = .{ .start = 0, .len = 1 },
             .declared_fields = .{ .start = 0, .len = 3 },
-        } },
+        },
+    };
+    const payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
+        .{ .nominal = @fromBackingInt(1) },
+        .{ .empty_record = {} },
+        .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(@intCast(2)) } },
+        .{ .nominal = @fromBackingInt(2) },
     };
     const view = checked.CheckedTypeStoreView{
         .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
         .nominal_declarations = &nominal_declarations,
         .type_id_pool = &type_pool,
         .record_field_pool = &record_fields,
@@ -1434,11 +1465,9 @@ test "boxy layout planner reuses structural backing order without padding" {
         .df_start = 0,
         .df_len = declared_fields.len,
     }};
-    const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.f32, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}) },
-        .{ .empty_record = {} },
-        .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(@intCast(1)) } },
-        .{ .nominal = .{
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.f32, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
+        .{
             .name = @fromBackingInt(@intCast(3)),
             .origin_module = @fromBackingInt(@intCast(4)),
             .owner_module = .{},
@@ -1446,10 +1475,17 @@ test "boxy layout planner reuses structural backing order without padding" {
             .is_opaque = false,
             .representation = .{ .local_declaration = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
             .declared_fields = .{ .start = 0, .len = 2 },
-        } },
+        },
+    };
+    const payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
+        .{ .empty_record = {} },
+        .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(@intCast(1)) } },
+        .{ .nominal = @fromBackingInt(1) },
     };
     const view = checked.CheckedTypeStoreView{
         .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
         .nominal_declarations = &nominal_declarations,
         .record_field_pool = &record_fields,
         .declared_field_pool = &declared_fields,

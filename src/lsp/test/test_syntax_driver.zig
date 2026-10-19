@@ -27,6 +27,7 @@ pub const TestSyntaxDriver = struct {
     references_calls: usize = 0,
     inlay_hint_calls: usize = 0,
     code_action_calls: usize = 0,
+    forget_calls: usize = 0,
 
     pub const CheckError = syntax.SyntaxChecker.CheckError;
     pub const QueryError = syntax.SyntaxChecker.QueryError;
@@ -77,6 +78,10 @@ pub const TestSyntaxDriver = struct {
     }
 
     pub fn deinit(_: *TestSyntaxDriver) void {}
+
+    pub fn forget(self: *TestSyntaxDriver, _: []const u8) std.mem.Allocator.Error!void {
+        self.forget_calls += 1;
+    }
 
     pub fn check(
         self: *TestSyntaxDriver,

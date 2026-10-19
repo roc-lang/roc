@@ -342,6 +342,8 @@ pub const Store = struct {
     /// Digests of the erased nodes in `types`, by `StoredNode.erased` index.
     erased_digests: StoreList(names.TypeDigest, "erased_digests"),
     type_digests: StoreList(?names.TypeDigest, "type_digests"),
+    /// Empty until the first specialization digest is cached, which most
+    /// stores never compute; from then on it has a row per type.
     specialization_digests: StoreList(?names.TypeDigest, "specialization_digests"),
     equality_digests: StoreList(?names.TypeDigest, "equality_digests"),
     representation_digests: StoreList(?names.TypeDigest, "representation_digests"),
@@ -522,7 +524,7 @@ pub const Store = struct {
                         const digest = try self.computeDigest(name_store, ty, mode, null);
                         // Equality unwraps aliases before traversal, so also
                         // cache the answer on the original query id.
-                        self.setCachedDigest(ty, mode, digest);
+                        try self.setCachedDigest(ty, mode, digest);
                     }
                 }
                 @field(self.read_sharing_coverage, query) = true;
@@ -703,8 +705,9 @@ pub const Store = struct {
         }
         try self.type_digests.append(self.allocator, null);
         errdefer _ = self.type_digests.pop();
-        try self.specialization_digests.append(self.allocator, null);
-        errdefer _ = self.specialization_digests.pop();
+        const specialization_digests_len = self.specialization_digests.len();
+        if (specialization_digests_len != 0) try self.specialization_digests.append(self.allocator, null);
+        errdefer self.specialization_digests.restoreLen(specialization_digests_len);
         try self.equality_digests.append(self.allocator, null);
         errdefer _ = self.equality_digests.pop();
         try self.representation_digests.append(self.allocator, null);
@@ -1100,7 +1103,7 @@ pub const Store = struct {
             Common.compilerBug("cannot capture a Monotype type epoch during speculative construction");
         }
         std.debug.assert(self.type_digests.len() == self.types.len());
-        std.debug.assert(self.specialization_digests.len() == self.types.len());
+        std.debug.assert(self.specialization_digests.len() == 0 or self.specialization_digests.len() == self.types.len());
         std.debug.assert(self.equality_digests.len() == self.types.len());
         std.debug.assert(self.representation_digests.len() == self.types.len());
         std.debug.assert(begin.types <= end.types and end.types <= self.types.len());
@@ -1220,7 +1223,7 @@ pub const Store = struct {
         self.named_nodes.restoreLen(mark_.named_nodes_len);
         self.erased_digests.restoreLen(mark_.erased_digests_len);
         self.type_digests.restoreLen(mark_.type_digests_len);
-        self.specialization_digests.restoreLen(mark_.specialization_digests_len);
+        self.specialization_digests.restoreLen(@min(mark_.specialization_digests_len, self.specialization_digests.len()));
         self.equality_digests.restoreLen(mark_.equality_digests_len);
         self.representation_digests.restoreLen(mark_.representation_digests_len);
         self.constructing.restoreLen(mark_.constructing_len);
@@ -1610,7 +1613,7 @@ pub const Store = struct {
                     Common.compilerBug("recursive transaction changed a representative's content while rewriting references");
                 }
             }
-            self.setCachedDigest(durable, .full, digest);
+            try self.setCachedDigest(durable, .full, digest);
         }
         for (representatives.items, 0..) |original, representative_index| {
             const durable: TypeId = @fromBackingInt(@intCast(@as(u32, @intCast(mark_.types_len + representative_index))));
@@ -1760,7 +1763,7 @@ pub const Store = struct {
         // commit intern them by lookup instead of hashing each one again.
         for (closure.items, reserved) |source_ty, destination_ty| {
             inline for (.{ NamedDigestMode.full, NamedDigestMode.identity_only, NamedDigestMode.equality, NamedDigestMode.representation }) |mode| {
-                if (source.cachedDigest(source_ty, mode)) |digest| self.setCachedDigest(destination_ty, mode, digest);
+                if (source.cachedDigest(source_ty, mode)) |digest| try self.setCachedDigest(destination_ty, mode, digest);
             }
         }
 
@@ -2437,14 +2440,10 @@ pub const Store = struct {
     }
 
     pub fn verify(self: *const Store, name_store: *const names.NameStore) ?VerifyError {
-        if (self.specialization_digests.len() != self.types.len() or self.equality_digests.len() != self.types.len() or self.representation_digests.len() != self.types.len()) {
+        if ((self.specialization_digests.len() != 0 and self.specialization_digests.len() != self.types.len()) or self.equality_digests.len() != self.types.len() or self.representation_digests.len() != self.types.len()) {
             return .type_digest_count_mismatch;
         }
         return self.view().verify(name_store);
-    }
-
-    pub fn specializationDigestsView(self: *const Store) []const ?names.TypeDigest {
-        return self.specialization_digests.unsafeRawItemsForView();
     }
 
     /// `typeDigest` with optional cache statistics.
@@ -2941,7 +2940,7 @@ pub const Store = struct {
 
     /// Sole writer of the digest caches. Digests are content-addressed, so a
     /// re-write must agree with the existing entry.
-    fn setCachedDigest(self: *Store, ty: TypeId, mode: NamedDigestMode, digest: names.TypeDigest) void {
+    fn setCachedDigest(self: *Store, ty: TypeId, mode: NamedDigestMode, digest: names.TypeDigest) std.mem.Allocator.Error!void {
         if (self.borrowed_read_only) Common.invariant("borrowed Monotype digest cache cannot be mutated");
         if (self.cachedDigest(ty, mode)) |existing| {
             std.debug.assert(std.mem.eql(u8, &existing.bytes, &digest.bytes));
@@ -2949,7 +2948,13 @@ pub const Store = struct {
         const index = @backingInt(ty);
         switch (mode) {
             .full => self.type_digests.set(index, digest),
-            .identity_only => self.specialization_digests.set(index, digest),
+            .identity_only => {
+                if (self.specialization_digests.len() == 0) {
+                    try self.specialization_digests.ensureUnusedCapacity(self.allocator, self.types.len());
+                    for (0..self.types.len()) |_| self.specialization_digests.appendAssumeCapacity(null);
+                }
+                self.specialization_digests.set(index, digest);
+            },
             .equality => self.equality_digests.set(index, digest),
             .representation => self.representation_digests.set(index, digest),
         }
@@ -2996,7 +3001,7 @@ pub const Store = struct {
         const digest_ty = self.digestType(ty, mode);
         if (digest_ty != ty) {
             if (self.cachedDigest(digest_ty, mode)) |digest| {
-                self.setCachedDigest(ty, mode, digest);
+                try self.setCachedDigest(ty, mode, digest);
                 if (stats) |s| s.cache_hits += 1;
                 return digest;
             }
@@ -3006,7 +3011,7 @@ pub const Store = struct {
         const digest = try engine.run(digest_ty, mode);
         // Equality unwraps aliases; cache the answer on the original query
         // too, so repeated specialization requests need no alias traversal.
-        if (digest_ty != ty) self.setCachedDigest(ty, mode, digest);
+        if (digest_ty != ty) try self.setCachedDigest(ty, mode, digest);
         return digest;
     }
 
@@ -3651,15 +3656,15 @@ pub const Store = struct {
             if (self.store.recursive_digest_unfoldings.get(digest.bytes)) |member_digest| {
                 digest = member_digest;
             }
-            self.finalizeNode(index, digest);
+            try self.finalizeNode(index, digest);
         }
 
-        fn finalizeNode(self: *DigestEngine, index: u32, digest: names.TypeDigest) void {
+        fn finalizeNode(self: *DigestEngine, index: u32, digest: names.TypeDigest) std.mem.Allocator.Error!void {
             const node = &self.nodes.items[index];
             std.debug.assert(!node.resolved);
             node.digest = digest;
             node.resolved = true;
-            self.store.setCachedDigest(node.ty, node.mode, digest);
+            try self.store.setCachedDigest(node.ty, node.mode, digest);
         }
 
         /// Reduce one cyclic SCC by bisimulation refinement over content
@@ -3737,7 +3742,7 @@ pub const Store = struct {
                     std.debug.assert(!node.resolved);
                     node.digest = digests[rank];
                     node.resolved = true;
-                    self.store.setCachedDigest(node.ty, node.mode, node.digest);
+                    try self.store.setCachedDigest(node.ty, node.mode, node.digest);
                 }
                 return;
             }
@@ -3873,7 +3878,7 @@ pub const Store = struct {
             self.store.recursive_scc_digests.appendSliceAssumeCapacity(block_digest);
             for (members) |node_index| {
                 const node = self.nodes.items[node_index];
-                self.store.setCachedDigest(node.ty, node.mode, node.digest);
+                try self.store.setCachedDigest(node.ty, node.mode, node.digest);
             }
         }
     };
@@ -4967,11 +4972,11 @@ test "monotype type store acyclic interning reuses child-first function nodes" {
     try std.testing.expectEqual(first, second);
     try std.testing.expectEqual(@as(usize, 2), store.view().types.len);
     try std.testing.expect(store.view().type_digests[@backingInt(first)] != null);
-    try std.testing.expect(store.specializationDigestsView()[@backingInt(first)] == null);
+    try std.testing.expect(store.cachedDigest(first, .identity_only) == null);
     var stats: Store.DigestStats = .{};
     const digest = store.specializationDigestCached(&name_store, first, &stats);
     try std.testing.expect(stats.cache_misses > 0);
-    try std.testing.expectEqual(digest, store.specializationDigestsView()[@backingInt(first)].?);
+    try std.testing.expectEqual(digest, store.cachedDigest(first, .identity_only).?);
 }
 
 test "monotype type store function interning reuses an existing argument span" {
@@ -5013,11 +5018,11 @@ test "monotype type store recursive transaction interns equal SCC positions" {
     try std.testing.expectEqual(result.root, result.remap[0]);
     try std.testing.expectEqual(@as(usize, 1), store.view().types.len);
     try std.testing.expect(store.view().type_digests[@backingInt(result.root)] != null);
-    try std.testing.expect(store.specializationDigestsView()[@backingInt(result.root)] == null);
+    try std.testing.expect(store.cachedDigest(result.root, .identity_only) == null);
     var stats: Store.DigestStats = .{};
     const digest = store.specializationDigestCached(&name_store, result.root, &stats);
     try std.testing.expect(stats.cache_misses > 0);
-    try std.testing.expectEqual(digest, store.specializationDigestsView()[@backingInt(result.root)].?);
+    try std.testing.expectEqual(digest, store.cachedDigest(result.root, .identity_only).?);
 }
 
 test "monotype transaction retains full digests and counts only requested modes" {
@@ -5039,7 +5044,7 @@ test "monotype transaction retains full digests and counts only requested modes"
     const misses = stats.cache_misses;
     for (result.remap) |ty| {
         _ = store.typeDigestCached(&name_store, ty, null);
-        try std.testing.expect(store.specializationDigestsView()[@backingInt(ty)] == null);
+        try std.testing.expect(store.cachedDigest(ty, .identity_only) == null);
     }
     try std.testing.expectEqual(misses, stats.cache_misses);
     const default_requests = stats.root_requests;

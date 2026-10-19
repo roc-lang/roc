@@ -22563,11 +22563,20 @@ fn patternBindsCapture(
 test "boxy planner records root wrapper plans from checked root metadata" {
     const gpa = std.testing.allocator;
 
-    const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}) },
-        .{ .nominal = builtinNominal(.u8, @fromBackingInt(@intCast(1)), .{}) },
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
+
+        builtinNominal(.u8, @fromBackingInt(@intCast(1)), .{}),
     };
-    const view = checked.CheckedTypeStoreView{ .stored_payloads = &payloads };
+
+    const payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
+        .{ .nominal = @fromBackingInt(1) },
+    };
+    const view = checked.CheckedTypeStoreView{
+        .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
+    };
     const roots = [_]checked.RootRequest{
         .{
             .order = 3,
@@ -22611,6 +22620,9 @@ test "boxy planner walks callable eval finalized const function bodies" {
 
     const root_key = moduleKey(1);
     const template_ref = procedureTemplateRef(root_key, 0);
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
+    };
     const payloads = [_]checked.StoredCheckedTypePayload{
         .{ .empty_record = {} },
         .{ .function = .{
@@ -22618,17 +22630,15 @@ test "boxy planner walks callable eval finalized const function bodies" {
             .args = .{},
             .ret = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         } },
-        .{ .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}) },
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
     };
     const exprs = [_]checked.StoredCheckedExpr{
         .{
-            .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
             .ty = @fromBackingInt(@intCast(1)),
             .source_region = .zero(),
             .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
         },
         .{
-            .id = @fromBackingInt(@intCast(1)),
             .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
             .source_region = .zero(),
             .data = .empty_record,
@@ -22645,7 +22655,6 @@ test "boxy planner walks callable eval finalized const function bodies" {
         },
     };
     const patterns = [_]checked.StoredCheckedPattern{.{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = .zero(),
         .data = .{ .assign = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
@@ -22729,7 +22738,10 @@ test "boxy planner walks callable eval finalized const function bodies" {
     };
     const root_view = ModuleView{
         .key = root_key,
-        .checked_types = .{ .stored_payloads = &payloads },
+        .checked_types = .{
+            .stored_payloads = &payloads,
+            .nominal_row_pool = &payloads_nominal_rows,
+        },
         .checked_bodies = .{
             .stored_exprs = &exprs,
             .stored_patterns = &patterns,
@@ -22873,13 +22885,11 @@ test "boxy planner describes an imported hosted worker's type variables on the R
     try root_checked_module.checked_bodies.pattern_id_pool.append(gpa, @as(checked.CheckedPatternId, @fromBackingInt(@intCast(fixtureTableIndex(0)))));
     try root_checked_module.checked_bodies.expr_id_pool.append(gpa, @as(checked.CheckedExprId, @fromBackingInt(@intCast(3))));
     try root_checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = .zero(),
         .data = .{ .assign = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
     });
     try root_checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = .zero(),
         .data = .{ .lambda = .{
@@ -22888,7 +22898,6 @@ test "boxy planner describes an imported hosted worker's type variables on the R
         } },
     });
     try root_checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = .zero(),
         .data = .{ .call = .{
@@ -22900,13 +22909,11 @@ test "boxy planner describes an imported hosted worker's type variables on the R
         } },
     });
     try root_checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = .zero(),
         .data = .{ .lookup_external = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
     });
     try root_checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = .zero(),
         .data = .{ .lookup_local = .{ .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))), .resolved = null } },
@@ -22937,11 +22944,11 @@ test "boxy planner describes an imported hosted worker's type variables on the R
             .scope_depth = 0,
         },
     };
-    var refs_by_expr = [_]?checked.ResolvedValueRefId{
-        null,
-        null,
-        @as(checked.ResolvedValueRefId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
-        null,
+    var refs_by_expr = [_]checked.OptionalId(checked.ResolvedValueRefId){
+        .none,
+        .none,
+        .some(@as(checked.ResolvedValueRefId, @fromBackingInt(@intCast(fixtureTableIndex(0))))),
+        .none,
     };
     root_checked_module.resolved_value_refs = .{
         .records = &resolved_records,
@@ -23015,9 +23022,8 @@ test "boxy planner records relation-owned source type for platform-required dire
     defer app_checked_module.checked_types.deinit(gpa);
     defer app_checked_module.checked_bodies.deinit(gpa);
 
-    try app_checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try app_checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try app_checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(app_checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try app_checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -23027,13 +23033,11 @@ test "boxy planner records relation-owned source type for platform-required dire
     });
     const app_template = procedureTemplateRef(app_checked_module.key.digest(), 0);
     try app_checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = .zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try app_checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = .zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(1), .plan = null } },
@@ -23058,9 +23062,8 @@ test "boxy planner records relation-owned source type for platform-required dire
     };
     app_checked_module.top_level_procedure_bindings = .{ .bindings = .{ .items = &app_bindings, .capacity = app_bindings.len, .pointer_stability = .{} } };
 
-    try platform_checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try platform_checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try platform_checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(platform_checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try platform_checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -23078,13 +23081,11 @@ test "boxy planner records relation-owned source type for platform-required dire
 
     const platform_template = procedureTemplateRef(platform_checked_module.key.digest(), 0);
     try platform_checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = .zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try platform_checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = .zero(),
         .data = .{ .call = .{
@@ -23096,7 +23097,6 @@ test "boxy planner records relation-owned source type for platform-required dire
         } },
     });
     try platform_checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = .zero(),
         .data = .{ .lookup_required = @as(?checked.ResolvedValueRefId, @fromBackingInt(@intCast(fixtureTableIndex(0)))) },
@@ -23136,10 +23136,10 @@ test "boxy planner records relation-owned source type for platform-required dire
             .scope_depth = 0,
         },
     };
-    var refs_by_expr = [_]?checked.ResolvedValueRefId{
-        null,
-        null,
-        @as(checked.ResolvedValueRefId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
+    var refs_by_expr = [_]checked.OptionalId(checked.ResolvedValueRefId){
+        .none,
+        .none,
+        .some(@as(checked.ResolvedValueRefId, @fromBackingInt(@intCast(fixtureTableIndex(0))))),
     };
     platform_checked_module.resolved_value_refs = .{
         .records = &resolved_records,
@@ -23181,9 +23181,15 @@ test "boxy planner records relation-owned source type for platform-required dire
 test "boxy planner records explicit source type representation bindings" {
     const gpa = std.testing.allocator;
 
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
+
+        builtinNominal(.u8, @fromBackingInt(@intCast(1)), .{}),
+    };
+
     const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}) },
-        .{ .nominal = builtinNominal(.u8, @fromBackingInt(@intCast(1)), .{}) },
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
+        .{ .nominal = @fromBackingInt(1) },
         .{ .function = .{
             .kind = .pure,
             .args = .{ .start = 0, .len = 1 },
@@ -23193,6 +23199,7 @@ test "boxy planner records explicit source type representation bindings" {
     const type_pool = [_]checked.CheckedTypeId{@fromBackingInt(@intCast(fixtureTableIndex(0)))};
     const view = checked.CheckedTypeStoreView{
         .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
         .type_id_pool = &type_pool,
     };
 
@@ -23209,6 +23216,10 @@ test "boxy planner records explicit source type representation bindings" {
 test "boxy planner classifies constrained variables as dynamic with descriptor and dictionary requirements" {
     const gpa = std.testing.allocator;
 
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.u64, @fromBackingInt(@intCast(2)), .{}),
+    };
+
     const payloads = [_]checked.StoredCheckedTypePayload{
         .{ .function = .{
             .kind = .pure,
@@ -23216,7 +23227,7 @@ test "boxy planner classifies constrained variables as dynamic with descriptor a
             .ret = @fromBackingInt(@intCast(2)),
         } },
         .{ .flex = .{ .constraints = .{ .start = 0, .len = 1 } } },
-        .{ .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(2)), .{}) },
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
     };
     const constraints = [_]checked.CheckedStaticDispatchConstraint{
         .{
@@ -23227,6 +23238,7 @@ test "boxy planner classifies constrained variables as dynamic with descriptor a
     };
     const view = checked.CheckedTypeStoreView{
         .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
         .constraint_pool = &constraints,
     };
 
@@ -23245,11 +23257,14 @@ test "boxy planner classifies constrained variables as dynamic with descriptor a
 
 test "boxy dictionary target slots share independent callable relations" {
     const gpa = std.testing.allocator;
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.u64, @fromBackingInt(@intCast(3)), .{}),
+    };
     const payloads = [_]checked.StoredCheckedTypePayload{
         .{ .flex = .{ .constraints = .{ .start = 0, .len = 3 } } },
         .{ .function = .{ .kind = .pure, .args = .{}, .ret = @fromBackingInt(@intCast(3)) } },
         .{ .function = .{ .kind = .pure, .args = .{}, .ret = @fromBackingInt(@intCast(4)) } },
-        .{ .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(3)), .{}) },
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
         .{ .rigid = .{} },
     };
     const constraints = [_]checked.CheckedStaticDispatchConstraint{
@@ -23259,6 +23274,7 @@ test "boxy dictionary target slots share independent callable relations" {
     };
     var plan = try analyzeCheckedTypes(gpa, .{
         .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
         .constraint_pool = &constraints,
     }, &.{@as(checked.CheckedTypeId, @fromBackingInt(@intCast(fixtureTableIndex(0))))}, .{});
     defer plan.deinit();
@@ -23273,11 +23289,14 @@ test "boxy dictionary target slots share independent callable relations" {
 
 test "boxy dictionary owners share signature groups and forward exact callable contracts" {
     const gpa = std.testing.allocator;
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.u64, @fromBackingInt(@intCast(3)), .{}),
+    };
     const payloads = [_]checked.StoredCheckedTypePayload{
         .{ .flex = .{ .constraints = .{ .start = 0, .len = 2 } } },
         .{ .function = .{ .kind = .pure, .args = .{}, .ret = @fromBackingInt(@intCast(3)) } },
         .{ .function = .{ .kind = .pure, .args = .{}, .ret = @fromBackingInt(@intCast(4)) } },
-        .{ .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(3)), .{}) },
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
         .{ .rigid = .{} },
     };
     const constraints = [_]checked.CheckedStaticDispatchConstraint{
@@ -23300,7 +23319,7 @@ test "boxy dictionary owners share signature groups and forward exact callable c
     }};
     const plans = static_dispatch.StaticDispatchPlanTable{ .evidence_refs = &refs };
     var builder = Builder.init(gpa, .{ .root_view = .{
-        .checked_types = .{ .stored_payloads = &payloads, .constraint_pool = &constraints },
+        .checked_types = .{ .stored_payloads = &payloads, .nominal_row_pool = &payloads_nominal_rows, .constraint_pool = &constraints },
         .checked_procedure_templates = &templates,
         .static_dispatch_plans = &plans,
     } });
@@ -23357,14 +23376,18 @@ test "boxy dictionary owners share signature groups and forward exact callable c
 }
 
 test "boxy literal materialization substitutes repeated constructor positions independently" {
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.u8, @fromBackingInt(@intCast(2)), .{}),
+        builtinNominal(.str, @fromBackingInt(@intCast(3)), .{}),
+    };
     const payloads = [_]checked.StoredCheckedTypePayload{
         .{ .rigid = .{} },
         .{ .tuple = .{ .start = 0, .len = 2 } },
-        .{ .nominal = builtinNominal(.u8, @fromBackingInt(@intCast(2)), .{}) },
-        .{ .nominal = builtinNominal(.str, @fromBackingInt(@intCast(3)), .{}) },
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
+        .{ .nominal = @fromBackingInt(1) },
     };
     const type_pool = [_]checked.CheckedTypeId{ @fromBackingInt(@intCast(fixtureTableIndex(0))), @fromBackingInt(@intCast(fixtureTableIndex(0))) };
-    var builder = Builder.init(std.testing.allocator, .{ .checked_types = .{ .stored_payloads = &payloads, .type_id_pool = &type_pool } });
+    var builder = Builder.init(std.testing.allocator, .{ .checked_types = .{ .stored_payloads = &payloads, .nominal_row_pool = &payloads_nominal_rows, .type_id_pool = &type_pool } });
     defer builder.deinit();
     var literals = LiteralPlanner.init(&builder);
     defer literals.deinit();
@@ -23385,16 +23408,22 @@ test "boxy literal materialization substitutes repeated constructor positions in
 }
 
 test "boxy literal terms identify defaults and explicit leaves identically" {
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.dec, @fromBackingInt(@intCast(1)), .{}),
+    };
     const payloads = [_]checked.StoredCheckedTypePayload{
         .{ .flex = .{ .numeric_default_phase = .mono_specialization } },
-        .{ .nominal = builtinNominal(.dec, @fromBackingInt(@intCast(1)), .{}) },
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
         .{ .empty_record = {} },
         .{ .record = .{ .fields = .{}, .ext = @fromBackingInt(@intCast(3)) } },
         .{ .flex = .{ .row_default = .empty_tag_union } },
         .{ .empty_tag_union = {} },
         .{ .rigid = .{} },
     };
-    var builder = Builder.init(std.testing.allocator, .{ .checked_types = .{ .stored_payloads = &payloads } });
+    var builder = Builder.init(std.testing.allocator, .{ .checked_types = .{
+        .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
+    } });
     defer builder.deinit();
     var literals = LiteralPlanner.init(&builder);
     defer literals.deinit();
@@ -23415,6 +23444,10 @@ test "boxy literal terms identify defaults and explicit leaves identically" {
 test "boxy planner keeps checked specialization defaults dynamically represented" {
     const gpa = std.testing.allocator;
 
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.u64, @fromBackingInt(@intCast(2)), .{}),
+    };
+
     const payloads = [_]checked.StoredCheckedTypePayload{
         .{ .function = .{
             .kind = .pure,
@@ -23425,7 +23458,7 @@ test "boxy planner keeps checked specialization defaults dynamically represented
             .constraints = .{ .start = 0, .len = 1 },
             .numeric_default_phase = .mono_specialization,
         } },
-        .{ .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(2)), .{}) },
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
     };
     const constraints = [_]checked.CheckedStaticDispatchConstraint{
         .{
@@ -23436,6 +23469,7 @@ test "boxy planner keeps checked specialization defaults dynamically represented
     };
     const view = checked.CheckedTypeStoreView{
         .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
         .constraint_pool = &constraints,
     };
 
@@ -23467,10 +23501,17 @@ test "boxy dictionary slots are stable across module ids and requirement subsets
     _ = try source_names.internMethodName(Ident.PARSER_FOR_METHOD_NAME);
     try std.testing.expect(root_to_hash != source_to_hash);
 
-    const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}) },
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
     };
-    const checked_types = checked.CheckedTypeStoreView{ .stored_payloads = &payloads };
+
+    const payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
+    };
+    const checked_types = checked.CheckedTypeStoreView{
+        .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
+    };
     const root_key = moduleKey(1);
     const source_key = moduleKey(2);
     const source_views = [_]ModuleView{.{
@@ -24093,14 +24134,18 @@ test "boxy planner propagates dynamic descriptor requirements through records" {
         .{ .name = @fromBackingInt(@intCast(1)), .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
         .{ .name = @fromBackingInt(@intCast(2)), .ty = @fromBackingInt(@intCast(1)) },
     };
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
+    };
     const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}) },
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
         .{ .rigid = .{} },
         .{ .empty_record = {} },
         .{ .record = .{ .fields = .{ .start = 0, .len = fields.len }, .ext = @fromBackingInt(@intCast(2)) } },
     };
     const view = checked.CheckedTypeStoreView{
         .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
         .record_field_pool = &fields,
     };
 
@@ -24132,13 +24177,17 @@ test "boxy planner preserves optional record field representation and descriptor
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .kind = .optional,
     }};
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
+    };
     const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}) },
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
         .{ .empty_record = {} },
         .{ .record = .{ .fields = .{ .start = 0, .len = fields.len }, .ext = @fromBackingInt(@intCast(1)) } },
     };
     const checked_types = checked.CheckedTypeStoreView{
         .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
         .record_field_pool = &fields,
     };
 
@@ -24187,14 +24236,18 @@ test "boxy planner preserves undetermined record field kind identity in a presen
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .kind = .undetermined(kind_var),
     }};
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
+    };
     const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}) },
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
         .{ .flex = .{} },
         .{ .empty_record = {} },
         .{ .record = .{ .fields = .{ .start = 0, .len = fields.len }, .ext = @fromBackingInt(@intCast(2)) } },
     };
     const checked_types = checked.CheckedTypeStoreView{
         .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
         .record_field_pool = &fields,
     };
 
@@ -24261,7 +24314,8 @@ test "boxy Bool retains its closed row for generic descriptor arguments" {
     defer module.canonical_names.deinit();
     defer module.checked_types.deinit(gpa);
     const bool_ty: checked.CheckedTypeId = @fromBackingInt(@intCast(fixtureTableIndex(0)));
-    try module.checked_types.payloads.append(gpa, .{ .nominal = builtinNominal(.bool, bool_ty, .{}) });
+    try module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.bool, bool_ty, .{}));
+    try module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(module.checked_types.nominal_row_pool.items.len - 1)) });
     try test_fixtures.addBoolDeclaration(gpa, &module, bool_ty);
     const tail: checked.CheckedTypeId = @fromBackingInt(@intCast(@as(u32, @intCast(module.checked_types.payloads.items.len))));
     try module.checked_types.payloads.append(gpa, .{ .rigid = .{} });
@@ -24487,13 +24541,17 @@ test "boxy planner preserves known variants on open tag-union rows" {
     const tags = [_]checked.CheckedTag{
         .{ .name = tag_exit, .args_start = 0, .args_len = 1 },
     };
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.i64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
+    };
     const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.i64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}) },
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
         .{ .flex = .{} },
         .{ .tag_union = .{ .tags = .{ .start = 0, .len = tags.len }, .ext = @fromBackingInt(@intCast(1)) } },
     };
     const view = checked.CheckedTypeStoreView{
         .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
         .type_id_pool = &type_pool,
         .tag_pool = &tags,
     };
@@ -24585,12 +24643,16 @@ test "boxy planner keeps explicit Box of dynamic payload distinct from dynamic p
     const gpa = std.testing.allocator;
 
     const type_pool = [_]checked.CheckedTypeId{@fromBackingInt(@intCast(fixtureTableIndex(0)))};
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.box, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }),
+    };
     const payloads = [_]checked.StoredCheckedTypePayload{
         .{ .flex = .{} },
-        .{ .nominal = builtinNominal(.box, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }) },
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
     };
     const view = checked.CheckedTypeStoreView{
         .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
         .type_id_pool = &type_pool,
     };
 
@@ -24617,13 +24679,17 @@ test "boxy planner preserves zero-payload tag variants explicitly" {
         .{ .name = tag_a, .args_start = 0, .args_len = 0 },
         .{ .name = tag_b, .args_start = 0, .args_len = 1 },
     };
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
+    };
     const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}) },
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
         .empty_tag_union,
         .{ .tag_union = .{ .tags = .{ .start = 0, .len = tags.len }, .ext = @fromBackingInt(@intCast(1)) } },
     };
     const view = checked.CheckedTypeStoreView{
         .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
         .type_id_pool = &type_pool,
         .tag_pool = &tags,
     };
@@ -24662,14 +24728,19 @@ test "boxy planner stores tag variants in identity layout order" {
         .{ .name = ok_tag, .args_start = 0, .args_len = 1 },
         .{ .name = err_tag, .args_start = 1, .args_len = 1 },
     };
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
+        builtinNominal(.u8, @fromBackingInt(@intCast(1)), .{}),
+    };
     const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}) },
-        .{ .nominal = builtinNominal(.u8, @fromBackingInt(@intCast(1)), .{}) },
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
+        .{ .nominal = @fromBackingInt(1) },
         .empty_tag_union,
         .{ .tag_union = .{ .tags = .{ .start = 0, .len = tags.len }, .ext = @fromBackingInt(@intCast(2)) } },
     };
     const view = checked.CheckedTypeStoreView{
         .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
         .type_id_pool = &type_pool,
         .tag_pool = &tags,
     };
@@ -24726,12 +24797,10 @@ test "boxy planner records nominal declared field order from checked payloads" {
         .df_start = 0,
         .df_len = declared_fields.len,
     }};
-    const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.u8, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}) },
-        .{ .nominal = builtinNominal(.u16, @fromBackingInt(@intCast(1)), .{}) },
-        .{ .empty_record = {} },
-        .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(@intCast(2)) } },
-        .{ .nominal = .{
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.u8, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
+        builtinNominal(.u16, @fromBackingInt(@intCast(1)), .{}),
+        .{
             .name = @fromBackingInt(@intCast(3)),
             .origin_module = @fromBackingInt(@intCast(4)),
             .owner_module = .{},
@@ -24740,10 +24809,18 @@ test "boxy planner records nominal declared field order from checked payloads" {
             .representation = .{ .local_declaration = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
             .padding_field_types = .{ .start = 0, .len = 1 },
             .declared_fields = .{ .start = 0, .len = 3 },
-        } },
+        },
+    };
+    const payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
+        .{ .nominal = @fromBackingInt(1) },
+        .{ .empty_record = {} },
+        .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(@intCast(2)) } },
+        .{ .nominal = @fromBackingInt(2) },
     };
     const view = checked.CheckedTypeStoreView{
         .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
         .nominal_declarations = &nominal_declarations,
         .type_id_pool = &type_pool,
         .record_field_pool = &record_fields,
@@ -24798,19 +24875,24 @@ test "boxy planner resolves local nominal declared order from box payload capabi
             .df_len = declared_fields.len,
         },
     };
-    const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.u8, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}) },
-        .{ .nominal = builtinNominal(.u16, @fromBackingInt(@intCast(1)), .{}) },
-        .{ .empty_record = {} },
-        .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(@intCast(2)) } },
-        .{ .nominal = .{
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.u8, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
+        builtinNominal(.u16, @fromBackingInt(@intCast(1)), .{}),
+        .{
             .name = @fromBackingInt(@intCast(3)),
             .origin_module = nominal_key.module,
             .owner_module = root_key,
             .source_decl = nominal_key.source_decl,
             .is_opaque = false,
             .representation = .{ .local_box_payload_capability = .{ .capability = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
-        } },
+        },
+    };
+    const payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
+        .{ .nominal = @fromBackingInt(1) },
+        .{ .empty_record = {} },
+        .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(@intCast(2)) } },
+        .{ .nominal = @fromBackingInt(2) },
     };
     const capability_padding = [_]checked.CheckedTypeId{@fromBackingInt(@intCast(fixtureTableIndex(0)))};
     const capabilities = [_]checked.BoxPayloadCapabilityEntry{
@@ -24832,6 +24914,7 @@ test "boxy planner resolves local nominal declared order from box payload capabi
     };
     const view = checked.CheckedTypeStoreView{
         .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
         .nominal_declarations = &declarations,
         .type_id_pool = &type_pool,
         .record_field_pool = &record_fields,
@@ -24894,12 +24977,10 @@ test "boxy planner records imported box payload capability source modules" {
         .{ .name = root_a, .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
         .{ .name = root_b, .ty = @fromBackingInt(@intCast(1)) },
     };
-    const root_payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.u8, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}) },
-        .{ .nominal = builtinNominal(.u16, @fromBackingInt(@intCast(1)), .{}) },
-        .{ .empty_record = {} },
-        .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(@intCast(2)) } },
-        .{ .nominal = .{
+    const root_payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.u8, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
+        builtinNominal(.u16, @fromBackingInt(@intCast(1)), .{}),
+        .{
             .name = @fromBackingInt(@intCast(3)),
             .origin_module = nominal_key.module,
             .owner_module = source_key,
@@ -24909,7 +24990,14 @@ test "boxy planner records imported box payload capability source modules" {
                 .artifact = source_key,
                 .capability = @fromBackingInt(@intCast(fixtureTableIndex(0))),
             } },
-        } },
+        },
+    };
+    const root_payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
+        .{ .nominal = @fromBackingInt(1) },
+        .{ .empty_record = {} },
+        .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(@intCast(2)) } },
+        .{ .nominal = @fromBackingInt(2) },
     };
     const root_roots = [_]checked.CheckedTypeRoot{
         .{ .id = @fromBackingInt(@intCast(fixtureTableIndex(0))), .key = typeKey(15) },
@@ -24921,6 +25009,7 @@ test "boxy planner records imported box payload capability source modules" {
     const root_view = checked.CheckedTypeStoreView{
         .roots = &root_roots,
         .stored_payloads = &root_payloads,
+        .nominal_row_pool = &root_payloads_nominal_rows,
         .record_field_pool = &root_record_fields,
     };
 
@@ -24947,20 +25036,26 @@ test "boxy planner records imported box payload capability source modules" {
             .df_len = source_declared_fields.len,
         },
     };
-    const source_payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.u8, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}) },
-        .{ .nominal = builtinNominal(.u16, @fromBackingInt(@intCast(1)), .{}) },
-        .{ .empty_record = {} },
-        .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(@intCast(2)) } },
-        .{ .nominal = .{
+    const source_payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.u8, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
+        builtinNominal(.u16, @fromBackingInt(@intCast(1)), .{}),
+        .{
             .name = @fromBackingInt(@intCast(3)),
             .origin_module = nominal_key.module,
             .owner_module = source_key,
             .source_decl = nominal_key.source_decl,
             .is_opaque = false,
             .representation = .{ .local_box_payload_capability = .{ .capability = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
-        } },
-        .{ .nominal = builtinNominal(.u8, @fromBackingInt(@intCast(5)), .{}) },
+        },
+        builtinNominal(.u8, @fromBackingInt(@intCast(5)), .{}),
+    };
+    const source_payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
+        .{ .nominal = @fromBackingInt(1) },
+        .{ .empty_record = {} },
+        .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(@intCast(2)) } },
+        .{ .nominal = @fromBackingInt(2) },
+        .{ .nominal = @fromBackingInt(3) },
     };
     const source_roots = [_]checked.CheckedTypeRoot{
         .{ .id = @fromBackingInt(@intCast(fixtureTableIndex(0))), .key = typeKey(10) },
@@ -24991,6 +25086,7 @@ test "boxy planner records imported box payload capability source modules" {
     const source_view = checked.CheckedTypeStoreView{
         .roots = &source_roots,
         .stored_payloads = &source_payloads,
+        .nominal_row_pool = &source_payloads_nominal_rows,
         .nominal_declarations = &source_declarations,
         .type_id_pool = &source_type_pool,
         .record_field_pool = &source_record_fields,
@@ -25057,12 +25153,18 @@ test "boxy nominal substitutions share formals independently of runtime demand a
         .source_decl = 9,
     };
     var payloads: [9 + use_count]checked.StoredCheckedTypePayload = undefined;
+    var nominal_rows: [9 + use_count]checked.StoredNominal = undefined;
+    var nominal_row_count: u32 = 0;
     var initialized_payload_count: usize = 0;
     const u8_type: checked.CheckedTypeId = @fromBackingInt(@intCast(initialized_payload_count));
-    payloads[initialized_payload_count] = .{ .nominal = builtinNominal(.u8, u8_type, .{}) };
+    nominal_rows[nominal_row_count] = builtinNominal(.u8, u8_type, .{});
+    payloads[initialized_payload_count] = .{ .nominal = @fromBackingInt(nominal_row_count) };
+    nominal_row_count += 1;
     initialized_payload_count += 1;
     const u16_type: checked.CheckedTypeId = @fromBackingInt(@intCast(initialized_payload_count));
-    payloads[initialized_payload_count] = .{ .nominal = builtinNominal(.u16, u16_type, .{}) };
+    nominal_rows[nominal_row_count] = builtinNominal(.u16, u16_type, .{});
+    payloads[initialized_payload_count] = .{ .nominal = @fromBackingInt(nominal_row_count) };
+    nominal_row_count += 1;
     initialized_payload_count += 1;
     const type_pool = [_]checked.CheckedTypeId{
         u8_type, u16_type, u8_type, // first use's actuals
@@ -25095,7 +25197,7 @@ test "boxy nominal substitutions share formals independently of runtime demand a
         .{ .tuple = .{ .start = 3, .len = 2 } },
     });
     for (payloads[9..], 0..) |*payload, index| {
-        payload.* = .{ .nominal = .{
+        nominal_rows[nominal_row_count] = .{
             .name = @fromBackingInt(@intCast(3)),
             .origin_module = nominal_key.module,
             .owner_module = key,
@@ -25103,7 +25205,9 @@ test "boxy nominal substitutions share formals independently of runtime demand a
             .is_opaque = false,
             .args = .{ .start = @intCast((index % 2) * 3), .len = 3 },
             .representation = .{ .local_box_payload_capability = .{ .capability = @fromBackingInt(@intCast(index % 2)) } },
-        } };
+        };
+        payload.* = .{ .nominal = @fromBackingInt(nominal_row_count) };
+        nominal_row_count += 1;
     }
     var capabilities = std.array_list.Managed(checked.BoxPayloadCapabilityEntry).init(gpa);
     defer capabilities.deinit();
@@ -25130,6 +25234,7 @@ test "boxy nominal substitutions share formals independently of runtime demand a
         .key = key,
         .checked_types = .{
             .stored_payloads = &payloads,
+            .nominal_row_pool = nominal_rows[0..nominal_row_count],
             .type_id_pool = &type_pool,
             .nominal_declarations = declarations.items,
             .constraint_pool = &constraints,
@@ -25304,7 +25409,6 @@ test "boxy planner resolves callable eval bindings to finalized const function e
     checked_module.compile_time_roots = .{ .roots = &compile_time_roots };
 
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },

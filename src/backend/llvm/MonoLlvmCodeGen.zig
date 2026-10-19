@@ -398,25 +398,18 @@ pub const MonoLlvmCodeGen = struct {
     /// Reusable store-indexed columns. Only a procedure's explicit inventory
     /// is invalidated at its end; growing the store initializes only new rows.
     local_slot_storage: std.ArrayList(LocalSlot) = .empty,
-    deferred_str_capture_storage: std.ArrayList(?DeferredStrCapture) = .empty,
     /// Deterministic regression metric for initialization/invalidation work.
     /// Allocation accounting alone cannot detect repeated whole-table clearing.
     local_scratch_rows_visited: if (builtin.is_test) usize else void = if (builtin.is_test) 0 else {},
     /// Active function's view. Synthetic helpers temporarily install no locals.
     local_slots: []LocalSlot = &.{},
-    deferred_str_captures: []?DeferredStrCapture = &.{},
-    /// Number of non-null entries in `deferred_str_captures`. Deferred
-    /// captures are rare, and several hooks run once per local write or once
-    /// per join; the count lets those hooks skip their whole-table scans in
-    /// the overwhelmingly common all-empty state, which otherwise turn
-    /// quadratic in a proc's local count.
-    deferred_str_capture_count: usize = 0,
-    /// Indices of `deferred_str_captures` slots that may be non-null. The
-    /// slot array spans every LIR local, so the clear-all and scan-all
-    /// operations that run per jump and per call must touch only the handful
-    /// of live captures rather than the whole program's local space. Entries
-    /// go stale when a single capture is cleared; readers skip null slots.
-    deferred_str_capture_actives: std.ArrayList(u32) = .empty,
+    /// The active procedure's deferred string captures by local. They are
+    /// rare, so the map holds only live captures rather than a row for every
+    /// LIR local, and clearing or scanning them touches only those.
+    deferred_str_captures: collections.DenseMap(LocalId, DeferredStrCapture),
+    /// Reusable list of the captured locals a scan materializes, since
+    /// materializing one changes the map.
+    deferred_str_capture_scratch: std.ArrayList(LocalId) = .empty,
     string_counter: u32 = 0,
     /// When true the module is built with DWARF debug info: a compile unit,
     /// one subprogram per proc, and per-statement line locations from the
@@ -609,6 +602,7 @@ pub const MonoLlvmCodeGen = struct {
             .boxy_dict_thunks = collections.DenseMap(u32, LlvmBuilder.Function.Index).init(allocator),
             .join_points = collections.DenseMap(u32, JoinInfo).init(allocator),
             .compiled_joins = collections.DenseMap(u32, void).init(allocator),
+            .deferred_str_captures = collections.DenseMap(LocalId, DeferredStrCapture).init(allocator),
             .stmt_incoming_counts = collections.DenseMap(u32, u32).init(allocator),
             .stmt_entry_blocks = collections.DenseMap(u32, LlvmBuilder.Function.Block.Index).init(allocator),
             .debug_inline_subprograms = std.AutoHashMap(u32, LlvmBuilder.Metadata).init(allocator),
@@ -655,8 +649,8 @@ pub const MonoLlvmCodeGen = struct {
     pub fn deinit(self: *MonoLlvmCodeGen) void {
         self.inline_everywhere.deinit(self.allocator);
         self.local_slot_storage.deinit(self.allocator);
-        self.deferred_str_capture_storage.deinit(self.allocator);
-        self.deferred_str_capture_actives.deinit(self.allocator);
+        self.deferred_str_captures.deinit();
+        self.deferred_str_capture_scratch.deinit(self.allocator);
         self.debug_types.deinit();
         self.debug_inline_callsites.deinit();
         self.debug_inline_subprograms.deinit();
@@ -2608,15 +2602,13 @@ pub const MonoLlvmCodeGen = struct {
         const outer_runtime_ret_desc = self.current_runtime_ret_desc;
         const outer_ret_layout = self.current_ret_layout;
         const outer_slots = self.local_slots;
-        const outer_deferred_str_captures = self.deferred_str_captures;
         const outer_fast_ret_registers = self.fast_ret_registers;
         const outer_tail_scratch = self.current_tail_scratch;
         const outer_tail_group = self.current_tail_group;
         const outer_caller_drives_flag = self.caller_drives_flag;
         // Procedure bodies are emitted serially by compileAllProcSpecs. Helper
         // emission saves/restores the active views without owning this storage.
-        std.debug.assert(self.deferred_str_capture_count == 0);
-        std.debug.assert(self.deferred_str_capture_actives.items.len == 0);
+        std.debug.assert(self.deferred_str_captures.count() == 0);
         defer {
             self.wip = outer_wip;
             self.rc_arg_scratch = outer_rc_scratch;
@@ -2632,7 +2624,6 @@ pub const MonoLlvmCodeGen = struct {
             self.current_runtime_ret_desc = outer_runtime_ret_desc;
             self.current_ret_layout = outer_ret_layout;
             self.local_slots = outer_slots;
-            self.deferred_str_captures = outer_deferred_str_captures;
         }
 
         self.join_points.clearRetainingCapacity();
@@ -2744,7 +2735,6 @@ pub const MonoLlvmCodeGen = struct {
         self.current_ret_layout = proc.ret_layout;
 
         self.local_slots = self.local_slot_storage.items;
-        self.deferred_str_captures = self.deferred_str_capture_storage.items;
         // Install cleanup before allocating any LLVM slots, including for OOM.
         // Specialized siblings can share LocalIds but never LLVM slot values.
         defer self.clearProcLocalSlots(proc);
@@ -3190,12 +3180,6 @@ pub const MonoLlvmCodeGen = struct {
                     .allocated = false,
                 };
             }
-        }
-        const old_captures_len = self.deferred_str_capture_storage.items.len;
-        if (count > old_captures_len) {
-            try self.deferred_str_capture_storage.resize(self.allocator, count);
-            @memset(self.deferred_str_capture_storage.items[old_captures_len..], null);
-            if (builtin.is_test) self.local_scratch_rows_visited += count - old_captures_len;
         }
     }
 
@@ -8760,36 +8744,21 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn clearDeferredStrCaptures(self: *MonoLlvmCodeGen) void {
-        for (self.deferred_str_capture_actives.items) |index| {
-            if (builtin.is_test) self.local_scratch_rows_visited += 1;
-            self.deferred_str_captures[index] = null;
-        }
-        self.deferred_str_capture_count = 0;
-        self.deferred_str_capture_actives.clearRetainingCapacity();
+        self.deferred_str_captures.clearRetainingCapacity();
     }
 
     fn installDeferredStrCapture(self: *MonoLlvmCodeGen, local: LocalId, capture: DeferredStrCapture) Error!void {
         if (!self.isStrLocal(local)) return error.CompilationFailed;
         try self.prepareLocalWrite(local);
-        const capture_slot = &self.deferred_str_captures[@backingInt(local)];
-        if (capture_slot.* == null) {
-            self.deferred_str_capture_actives.append(self.allocator, @backingInt(local)) catch return error.OutOfMemory;
-            self.deferred_str_capture_count += 1;
-        }
-        capture_slot.* = capture;
+        self.deferred_str_captures.put(local, capture) catch return error.OutOfMemory;
     }
 
     fn deferredStrCapture(self: *MonoLlvmCodeGen, local: LocalId) ?DeferredStrCapture {
-        if (self.deferred_str_captures.len == 0) return null;
-        return self.deferred_str_captures[@backingInt(local)];
+        return self.deferred_str_captures.get(local);
     }
 
     fn clearDeferredStrCapture(self: *MonoLlvmCodeGen, local: LocalId) void {
-        if (self.deferred_str_captures.len == 0) return;
-        if (self.deferred_str_captures[@backingInt(local)] != null) {
-            self.deferred_str_captures[@backingInt(local)] = null;
-            self.deferred_str_capture_count -= 1;
-        }
+        _ = self.deferred_str_captures.remove(local);
     }
 
     fn materializeLocalIfDeferred(self: *MonoLlvmCodeGen, local: LocalId) Error!void {
@@ -8814,13 +8783,25 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn materializeAllDeferredStrCaptures(self: *MonoLlvmCodeGen) Error!void {
-        if (self.deferred_str_capture_count == 0) return;
-        var index: usize = 0;
-        while (index < self.deferred_str_capture_actives.items.len) : (index += 1) {
-            const local_index = self.deferred_str_capture_actives.items[index];
-            if (self.deferred_str_captures[local_index] != null) {
-                try self.materializeLocalIfDeferred(@fromBackingInt(@intCast(local_index)));
+        try self.materializeDeferredStrCapturesWhere(null);
+    }
+
+    /// Materialize every deferred capture, or only those reading `source`
+    /// other than `source` itself.
+    fn materializeDeferredStrCapturesWhere(self: *MonoLlvmCodeGen, source: ?LocalId) Error!void {
+        if (self.deferred_str_captures.count() == 0) return;
+        const scratch_start = self.deferred_str_capture_scratch.items.len;
+        defer self.deferred_str_capture_scratch.shrinkRetainingCapacity(scratch_start);
+        var captures = self.deferred_str_captures.iterator();
+        while (captures.next()) |entry| {
+            if (source) |reader_source| {
+                if (entry.value_ptr.source_local != reader_source or entry.key_ptr.* == reader_source) continue;
             }
+            self.deferred_str_capture_scratch.append(self.allocator, entry.key_ptr.*) catch return error.OutOfMemory;
+        }
+        var index = scratch_start;
+        while (index < self.deferred_str_capture_scratch.items.len) : (index += 1) {
+            try self.materializeLocalIfDeferred(self.deferred_str_capture_scratch.items[index]);
         }
     }
 
@@ -8834,15 +8815,7 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn materializeDeferredCapturesUsingSource(self: *MonoLlvmCodeGen, source: LocalId) Error!void {
-        if (self.deferred_str_capture_count == 0) return;
-        var index: usize = 0;
-        while (index < self.deferred_str_capture_actives.items.len) : (index += 1) {
-            const local_index = self.deferred_str_capture_actives.items[index];
-            const capture = self.deferred_str_captures[local_index] orelse continue;
-            if (capture.source_local == source and local_index != @backingInt(source)) {
-                try self.materializeLocalIfDeferred(@fromBackingInt(@intCast(local_index)));
-            }
-        }
+        try self.materializeDeferredStrCapturesWhere(source);
     }
 
     fn prepareLocalWrite(self: *MonoLlvmCodeGen, local: LocalId) Error!void {
@@ -8872,7 +8845,7 @@ pub const MonoLlvmCodeGen = struct {
         if (total > std.math.maxInt(u32)) return error.OutOfMemory;
         capture.pending_rc_count = @intCast(total);
         capture.pending_rc_atomicity = atomicity;
-        self.deferred_str_captures[@backingInt(local)] = capture;
+        self.deferred_str_captures.putAssumeCapacity(local, capture);
     }
 
     fn offsetPtrValue(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, offset: LlvmBuilder.Value) Error!LlvmBuilder.Value {
@@ -13988,17 +13961,15 @@ test "issue 11132: scratch clearing follows proc inventories and survives module
     // Each column is initialized once; each proc invalidates its argument and
     // frame inventory. No clearing work may scale with procs * global locals.
     const proc_work = 2 * proc_count;
-    try std.testing.expectEqual(2 * store.localCount() + proc_work, codegen.local_scratch_rows_visited);
+    try std.testing.expectEqual(store.localCount() + proc_work, codegen.local_scratch_rows_visited);
     for (codegen.local_slot_storage.items) |slot_value| try std.testing.expect(!slot_value.allocated);
     const slots_ptr = codegen.local_slot_storage.items.ptr;
-    const captures_ptr = codegen.deferred_str_capture_storage.items.ptr;
 
     const before = codegen.local_scratch_rows_visited;
     var second = try codegen.generateEntrypointModule("scratch_reuse", &.{});
     defer second.deinit();
     try std.testing.expectEqual(proc_work, codegen.local_scratch_rows_visited - before);
     try std.testing.expectEqual(slots_ptr, codegen.local_slot_storage.items.ptr);
-    try std.testing.expectEqual(captures_ptr, codegen.deferred_str_capture_storage.items.ptr);
     try std.testing.expectEqualSlices(u32, first.bitcode, second.bitcode);
 
     // A failure after slots were allocated must leave the instance reusable.
@@ -14006,7 +13977,7 @@ test "issue 11132: scratch clearing follows proc inventories and survives module
     try std.testing.expectError(error.CompilationFailed, codegen.generateEntrypointModule("scratch_reuse", &.{}));
     try std.testing.expect(codegen.local_slots.len == 0);
     for (codegen.local_slot_storage.items) |slot_value| try std.testing.expect(!slot_value.allocated);
-    try std.testing.expectEqual(@as(usize, 0), codegen.deferred_str_capture_count);
+    try std.testing.expectEqual(@as(usize, 0), codegen.deferred_str_captures.count());
     store.setProcSpecBody(procs[0], body);
     var after_failure = try codegen.generateEntrypointModule("scratch_reuse", &.{});
     defer after_failure.deinit();
@@ -14018,21 +13989,19 @@ test "issue 11132: scratch allocation failure and store growth initialize only n
     var store = lir.LirStore.init(gpa);
     defer store.deinit();
     _ = try store.addLocal(.{ .layout_idx = .str });
-    // Fail the capture table allocation after the slot table succeeds.
-    var failing = std.testing.FailingAllocator.init(gpa, .{ .fail_index = 1 });
+    // Fail the slot table allocation.
+    var failing = std.testing.FailingAllocator.init(gpa, .{ .fail_index = 0 });
     var codegen = MonoLlvmCodeGen.init(failing.allocator(), &store, &.{}, &.{}, &.{});
     defer codegen.deinit();
     try std.testing.expectError(error.OutOfMemory, codegen.ensureLocalScratch());
-    try std.testing.expectEqual(@as(usize, 1), codegen.local_scratch_rows_visited);
-    try std.testing.expect(!codegen.local_slot_storage.items[0].allocated);
+    try std.testing.expectEqual(@as(usize, 0), codegen.local_scratch_rows_visited);
     failing.fail_index = std.math.maxInt(usize);
     try codegen.ensureLocalScratch();
-    try std.testing.expectEqual(@as(usize, 2), codegen.local_scratch_rows_visited);
+    try std.testing.expectEqual(@as(usize, 1), codegen.local_scratch_rows_visited);
     _ = try store.addLocal(.{ .layout_idx = .str });
     try codegen.ensureLocalScratch();
-    try std.testing.expectEqual(@as(usize, 4), codegen.local_scratch_rows_visited);
+    try std.testing.expectEqual(@as(usize, 2), codegen.local_scratch_rows_visited);
     for (codegen.local_slot_storage.items) |slot_value| try std.testing.expect(!slot_value.allocated);
-    for (codegen.deferred_str_capture_storage.items) |capture| try std.testing.expect(capture == null);
 }
 
 test "issue 11132: installed and propagated deferred captures are counted and cleared" {
@@ -14048,7 +14017,6 @@ test "issue 11132: installed and propagated deferred captures are counted and cl
     defer codegen.deinit();
     codegen.layout_store = &layouts;
     try codegen.ensureLocalScratch();
-    codegen.deferred_str_captures = codegen.deferred_str_capture_storage.items;
     const capture = MonoLlvmCodeGen.DeferredStrCapture{
         .source_local = source,
         // No materialization occurs here; only the source identity is read.
@@ -14059,24 +14027,22 @@ test "issue 11132: installed and propagated deferred captures are counted and cl
         .pending_rc_atomicity = .atomic,
     };
     try codegen.installDeferredStrCapture(first, capture);
-    try std.testing.expectEqual(@as(usize, 1), codegen.deferred_str_capture_count);
+    try std.testing.expectEqual(@as(usize, 1), codegen.deferred_str_captures.count());
     try std.testing.expect(try codegen.propagateDeferredStrCapture(second, first));
-    try std.testing.expectEqual(@as(usize, 2), codegen.deferred_str_capture_count);
-    try std.testing.expectEqual(@as(usize, 2), codegen.deferred_str_capture_actives.items.len);
+    try std.testing.expectEqual(@as(usize, 2), codegen.deferred_str_captures.count());
     try std.testing.expect(try codegen.propagateDeferredStrCapture(first, first));
-    try std.testing.expectEqual(@as(usize, 2), codegen.deferred_str_capture_count);
+    try std.testing.expectEqual(@as(usize, 2), codegen.deferred_str_captures.count());
     codegen.clearDeferredStrCapture(first);
-    try std.testing.expectEqual(@as(usize, 1), codegen.deferred_str_capture_count);
+    try std.testing.expectEqual(@as(usize, 1), codegen.deferred_str_captures.count());
     try codegen.installDeferredStrCapture(first, capture);
-    try std.testing.expectEqual(@as(usize, 2), codegen.deferred_str_capture_count);
+    try std.testing.expectEqual(@as(usize, 2), codegen.deferred_str_captures.count());
     codegen.clearDeferredStrCaptures();
-    try std.testing.expectEqual(@as(usize, 0), codegen.deferred_str_capture_count);
-    try std.testing.expectEqual(@as(usize, 0), codegen.deferred_str_capture_actives.items.len);
+    try std.testing.expectEqual(@as(usize, 0), codegen.deferred_str_captures.count());
     try std.testing.expect(codegen.deferredStrCapture(first) == null);
     try std.testing.expect(codegen.deferredStrCapture(second) == null);
     // Reusing the same IDs in another procedure starts with empty capture state.
     try codegen.installDeferredStrCapture(second, capture);
-    try std.testing.expectEqual(@as(usize, 1), codegen.deferred_str_capture_count);
+    try std.testing.expectEqual(@as(usize, 1), codegen.deferred_str_captures.count());
     codegen.clearDeferredStrCaptures();
 }
 

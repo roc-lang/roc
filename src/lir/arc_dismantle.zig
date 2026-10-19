@@ -1914,7 +1914,7 @@ test "component dominance agrees with whole-store dominance across shared proced
     const rc = try gpa.alloc(bool, store.localCount());
     defer gpa.free(rc);
     @memset(rc, false);
-    var solution = try arc_solve.solve(gpa, &store, &layouts, rc, &.{}, &.{}, true);
+    var solution = try arc_solve.solve(gpa, &store, &layouts, rc, .{}, &.{}, true);
     defer solution.deinit();
 
     const stmt_first_proc = try gpa.alloc(u32, store.cfStmtCount());

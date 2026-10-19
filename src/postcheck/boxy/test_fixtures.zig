@@ -41,7 +41,7 @@ pub fn addBoolDeclaration(
     bool_ty: checked.CheckedTypeId,
 ) std.mem.Allocator.Error!void {
     const types = &module.checked_types;
-    const nominal = types.payloads.items[@backingInt(bool_ty)].nominal;
+    const nominal = types.nominal_row_pool.items[@backingInt(types.payloads.items[@backingInt(bool_ty)].nominal)];
     const empty: checked.CheckedTypeId = @fromBackingInt(@intCast(@as(u32, @intCast(types.payloads.items.len))));
     try types.payloads.append(allocator, .empty_tag_union);
     const tags_start: u32 = @intCast(types.tag_pool.items.len);
