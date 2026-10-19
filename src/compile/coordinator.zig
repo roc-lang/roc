@@ -7744,6 +7744,45 @@ test "an edited module reuses the compile-time values its edit leaves unchanged"
     try std.testing.expectEqual(@as(?i64, 5), partial.value("wrapped"));
 }
 
+test "compile-time roots that call a generated method have value identities and are reused" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const generated_app =
+        \\app [answer] { pf: platform "./platform.roc" }
+        \\
+        \\Pt := [P(I64)].{
+        \\    is_eq : _
+        \\}
+        \\
+        \\same = Pt.is_eq(Pt.P(1.I64), Pt.P(1.I64))
+        \\answer = {
+        \\    f = |n| {
+        \\        k = Pt.is_eq(Pt.P(2.I64), Pt.P(2.I64))
+        \\        if k n else 0.I64
+        \\    }
+        \\    f(42.I64)
+        \\}
+        \\
+        \\expect Pt.is_eq(Pt.P(3.I64), Pt.P(3.I64))
+        \\
+    ;
+    try writeReuseFixture(&tmp, generated_app);
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+    const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+    defer allocator.free(app);
+
+    var first = try compileForReuse(allocator, cache, app);
+    defer first.deinit(allocator);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = generated_app ++ "# a trailing comment\n" });
+    var warm = try compileForReuse(allocator, cache, app);
+    defer warm.deinit(allocator);
+    try std.testing.expectEqual(@as(u32, 1), warm.stats.previous_entries);
+    try std.testing.expectEqualSlices(u8, &first.identity("same"), &warm.identity("same"));
+    try std.testing.expect(warm.stats.transplanted_roots != 0);
+}
+
 test "compile-time values installed before evaluation read, store and replay like evaluated ones" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
