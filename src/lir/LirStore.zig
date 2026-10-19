@@ -334,7 +334,7 @@ const rewrite_columns = .{ "cf_stmts", "cf_switch_branches", "str_match_arms", "
 /// the statement column's keys, so replacing a prefix statement records the
 /// replacement's stated origin privately and publishes it with the
 /// statement on commit.
-const origin_columns = .{ "cf_stmt_locs", "cf_stmt_regions", "cf_stmt_inline_scopes", "cf_stmt_origin_kinds" };
+const origin_columns = .{ "cf_stmt_sources", "cf_stmt_inline_scopes", "cf_stmt_origin_kinds" };
 
 /// Exists only for opt-in procedure rewrites; ordinary lowering shards do not
 /// allocate overlays. All copies are prepared before infallible mutable borrows.
@@ -343,8 +343,7 @@ const ProcRewrite = struct {
     proc: LirProcSpec,
     cf_stmts: RewriteColumn(CFStmt, "cf_stmts"),
     /// Statement provenance rows, keyed by `cf_stmts.keys`.
-    cf_stmt_locs: RewriteRows(base.SourceLoc, "cf_stmt_locs") = .{},
-    cf_stmt_regions: RewriteRows(base.Region, "cf_stmt_regions") = .{},
+    cf_stmt_sources: RewriteRows(StmtSourceId, "cf_stmt_sources") = .{},
     cf_stmt_inline_scopes: RewriteRows(InlineScopeId, "cf_stmt_inline_scopes") = .{},
     cf_stmt_origin_kinds: RewriteRows(OriginKind, "cf_stmt_origin_kinds") = .{},
     cf_switch_branches: RewriteColumn(CFSwitchBranch, "cf_switch_branches"),
@@ -448,9 +447,10 @@ pub fn procRewriteChanged(self: *const Self) bool {
     }
     if (!std.meta.eql(rewrite.proc, source.getProcSpec(rewrite.proc_id))) return true;
     inline for (.{
-        "cf_stmts",    "cf_switch_branches", "str_match_steps",       "str_match_arms",
-        "join_points", "locals",             "local_descs",           "local_ids",
-        "u64s",        "u32s",               "erased_call_arg_plans", "inline_scopes",
+        "cf_stmts",     "cf_switch_branches", "str_match_steps",       "str_match_arms",
+        "join_points",  "locals",             "local_descs",           "local_ids",
+        "u64s",         "u32s",               "erased_call_arg_plans", "inline_scopes",
+        "stmt_sources",
     }) |field| {
         if (@field(self, field).len() != 0) return true;
     }
@@ -496,6 +496,7 @@ pub const BodyPrefix = struct {
     erased_call_arg_plans: u32,
     stmt_rows: [stmt_row_column_count]u32,
     inline_scopes: u32,
+    stmt_sources: u32,
     string_bytes: u32,
     boxy_names: u32,
     proc_specs: u32,
@@ -541,6 +542,7 @@ pub const BodyRelocation = struct {
     erased_call_arg_plans: u32,
     stmt_rows: [stmt_row_column_count]u32,
     inline_scopes: u32,
+    stmt_sources: u32,
     string_bytes: u32,
     join_point_id_base: u32,
     relocate_join_point_ids: bool,
@@ -631,6 +633,7 @@ pub fn captureBodyPrefix(self: *const Self) BodyPrefix {
         .erased_call_arg_plans = @intCast(self.erased_call_arg_plans.len()),
         .stmt_rows = self.stmtRowLengths(),
         .inline_scopes = @intCast(self.inline_scopes.len()),
+        .stmt_sources = @intCast(self.stmt_sources.len()),
         .string_bytes = self.stringByteCount(),
         .boxy_names = self.boxyNameCount(),
         .proc_specs = @intCast(self.proc_specs.len()),
@@ -687,6 +690,7 @@ pub fn captureBodyShard(self: *const Self, prefix: BodyPrefix) AppendBodyError!B
         prefix.erased_call_arg_plans > self.erased_call_arg_plans.len() or
         !self.stmtRowPrefixFits(prefix) or
         prefix.inline_scopes > self.inline_scopes.len() or
+        prefix.stmt_sources > self.stmt_sources.len() or
         prefix.string_bytes > self.stringByteCount() or
         prefix.boxy_names > self.boxyNameCount() or
         prefix.proc_specs > self.proc_specs.len() or
@@ -744,6 +748,7 @@ fn relocateBodyValue(comptime T: type, value: T, prefix: BodyPrefix, bases: Body
         if (value == base.StringLiteral.Idx.none) return value;
         return @fromBackingInt(@intCast(movedIndex(@backingInt(value), prefix.string_bytes, bases.string_bytes)));
     }
+    if (T == StmtSourceId) return @fromBackingInt(movedIndex(@backingInt(value), prefix.stmt_sources, bases.stmt_sources));
     if (T == InlineScopeId) {
         if (value == InlineScopeId.none) return value;
         return @fromBackingInt(@intCast(movedIndex(@backingInt(value), prefix.inline_scopes, bases.inline_scopes)));
@@ -827,8 +832,7 @@ pub fn appendBodyShardWithJoinRelocation(
         prefix;
     // Revalidate because a BodyShard is a borrowed suffix view.
     _ = try source.captureBodyShard(prefix);
-    if (source.cf_stmts.len() != source.cf_stmt_locs.len() or
-        source.cf_stmts.len() != source.cf_stmt_regions.len() or
+    if (source.cf_stmts.len() != source.cf_stmt_sources.len() or
         source.cf_stmts.len() != source.cf_stmt_inline_scopes.len() or
         source.cf_stmts.len() != source.cf_stmt_origin_kinds.len() or
         source.locals.len() != source.local_names.len())
@@ -850,6 +854,7 @@ pub fn appendBodyShardWithJoinRelocation(
         .erased_call_arg_plans = @intCast(self.erased_call_arg_plans.len()),
         .stmt_rows = self.ownStmtRowLengths(),
         .inline_scopes = @intCast(self.inline_scopes.len()),
+        .stmt_sources = @intCast(self.stmt_sources.len()),
         .string_bytes = self.ownStringByteCount(),
         .join_point_id_base = if (relocation) |joins| joins.offset else 0,
         .relocate_join_point_ids = relocation != null,
@@ -877,8 +882,8 @@ pub fn appendBodyShardWithJoinRelocation(
         );
     }
     try self.cf_stmts.ensureUnusedCapacity(self.allocator, stmt_len);
-    try self.cf_stmt_locs.ensureUnusedCapacity(self.allocator, stmt_len);
-    try self.cf_stmt_regions.ensureUnusedCapacity(self.allocator, stmt_len);
+    try self.cf_stmt_sources.ensureUnusedCapacity(self.allocator, stmt_len);
+    try self.stmt_sources.ensureUnusedCapacity(self.allocator, source.stmt_sources.len() - source_prefix.stmt_sources);
     try self.cf_stmt_inline_scopes.ensureUnusedCapacity(self.allocator, stmt_len);
     try self.cf_stmt_origin_kinds.ensureUnusedCapacity(self.allocator, stmt_len);
     try self.cf_switch_branches.ensureUnusedCapacity(self.allocator, source.cf_switch_branches.len() - source_prefix.cf_switch_branches);
@@ -941,8 +946,10 @@ pub fn appendBodyShardWithJoinRelocation(
     for (source.str_match_arms.unsafeRawItemsForView()[source_prefix.str_match_arms..]) |item| self.str_match_arms.appendAssumeCapacity(relocateBodyValue(StrMatchArm, item, prefix, bases));
     for (source.join_points.unsafeRawItemsForView()[source_prefix.join_points..]) |item| self.join_points.appendAssumeCapacity(relocateBodyValue(JoinPoint, item, prefix, bases));
     for (source.cf_stmts.unsafeRawItemsForView()[source_prefix.cf_stmts..]) |item| self.cf_stmts.appendAssumeCapacity(relocateBodyValue(CFStmt, item, prefix, bases));
-    self.cf_stmt_locs.appendSliceAssumeCapacity(source.cf_stmt_locs.unsafeRawItemsForView()[source_prefix.cf_stmts..]);
-    self.cf_stmt_regions.appendSliceAssumeCapacity(source.cf_stmt_regions.unsafeRawItemsForView()[source_prefix.cf_stmts..]);
+    self.stmt_sources.appendSliceAssumeCapacity(source.stmt_sources.unsafeRawItemsForView()[source_prefix.stmt_sources..]);
+    for (source.cf_stmt_sources.unsafeRawItemsForView()[source_prefix.cf_stmts..]) |source_id| {
+        self.cf_stmt_sources.appendAssumeCapacity(relocateBodyValue(StmtSourceId, source_id, prefix, bases));
+    }
     for (source.cf_stmt_inline_scopes.unsafeRawItemsForView()[source_prefix.cf_stmts..]) |scope| {
         self.cf_stmt_inline_scopes.appendAssumeCapacity(
             relocateBodyValue(InlineScopeId, scope, prefix, bases),
@@ -1017,16 +1024,18 @@ source_file_identities: GuardedList.List([32]u8, "LirStore.source_file_identitie
 /// statement's owning module in identities that stay meaningful in every
 /// compilation.
 lowering_module_keys: GuardedList.List([32]u8, "LirStore.lowering_module_keys"),
-/// Source location per statement, parallel to `cf_stmts`. Reference-count
-/// statements always record `SourceLoc.none`; they have no source counterpart.
-cf_stmt_locs: GuardedList.List(base.SourceLoc, "LirStore.cf_stmt_locs"),
-/// Checked source region per statement, parallel to `cf_stmts`. Reference-count
-/// statements always record `Region.zero`; they have no source counterpart.
-cf_stmt_regions: GuardedList.List(base.Region, "LirStore.cf_stmt_regions"),
+/// Source location and checked source region per statement, parallel to
+/// `cf_stmts`, as a row of `stmt_sources`. Reference-count statements always
+/// record `SourceLoc.none` and `Region.zero`; they have no source counterpart.
+cf_stmt_sources: GuardedList.List(StmtSourceId, "LirStore.cf_stmt_sources"),
+/// Each distinct statement source. A source construct usually lowers to
+/// several statements, and specializations repeat them, so statements share
+/// rows.
+stmt_sources: GuardedList.List(StmtSource, "LirStore.stmt_sources"),
 /// Virtual inline scope per statement, parallel to `cf_stmts`.
 cf_stmt_inline_scopes: GuardedList.List(InlineScopeId, "LirStore.cf_stmt_inline_scopes"),
 /// Why each statement exists, parallel to `cf_stmts`. Together with
-/// `cf_stmt_locs`, `cf_stmt_regions`, and `cf_stmt_inline_scopes` this forms
+/// `cf_stmt_sources` and `cf_stmt_inline_scopes` this forms
 /// the statement's `StmtOrigin` (see `stmtOrigin`).
 cf_stmt_origin_kinds: GuardedList.List(OriginKind, "LirStore.cf_stmt_origin_kinds"),
 /// Interned virtual source-frame graph.
@@ -1052,6 +1061,9 @@ tail_call_builder: ?*TailCallBuilder = null,
 /// statements with equal effects share one row. A handful of distinct effects
 /// covers every low-level statement. Never persisted; compaction renumbers
 /// rows, so it clears this.
+/// The row of `stmt_sources` holding each source this store added. Never
+/// persisted.
+stmt_source_rows: std.AutoHashMapUnmanaged(StmtSource, StmtSourceId) = .empty,
 rc_effect_rows: std.AutoHashMapUnmanaged(lir_defs.LowLevel.RcEffect, lir_defs.StmtRowId(lir_defs.LowLevel.RcEffect)) = .empty,
 /// Shapes of the statements appended to this store since the accumulator was
 /// last reset: the body being lowered, or a procedure rewrite's additions.
@@ -1084,8 +1096,8 @@ pub fn init(allocator: Allocator) Self {
         .source_file_qualified_ends = .empty,
         .source_file_identities = .empty,
         .lowering_module_keys = .empty,
-        .cf_stmt_locs = .empty,
-        .cf_stmt_regions = .empty,
+        .cf_stmt_sources = .empty,
+        .stmt_sources = .empty,
         .cf_stmt_inline_scopes = .empty,
         .cf_stmt_origin_kinds = .empty,
         .inline_scopes = .empty,
@@ -1143,8 +1155,8 @@ pub fn releaseCode(self: *Self) void {
         "u64s",
         "u32s",
         "erased_call_arg_plans",
-        "cf_stmt_locs",
-        "cf_stmt_regions",
+        "cf_stmt_sources",
+        "stmt_sources",
         "cf_stmt_inline_scopes",
         "cf_stmt_origin_kinds",
         "local_names",
@@ -1157,6 +1169,7 @@ pub fn releaseCode(self: *Self) void {
         self.stmt_rows[column] = .empty;
     }
     self.rc_effect_rows.clearAndFree(self.allocator);
+    self.stmt_source_rows.clearAndFree(self.allocator);
 }
 
 /// Releases all storage owned by this LIR store.
@@ -1185,8 +1198,9 @@ pub fn deinit(self: *Self) void {
     self.source_file_qualified_ends.deinit(self.allocator);
     self.source_file_identities.deinit(self.allocator);
     self.lowering_module_keys.deinit(self.allocator);
-    self.cf_stmt_locs.deinit(self.allocator);
-    self.cf_stmt_regions.deinit(self.allocator);
+    self.cf_stmt_sources.deinit(self.allocator);
+    self.stmt_sources.deinit(self.allocator);
+    self.stmt_source_rows.deinit(self.allocator);
     self.cf_stmt_inline_scopes.deinit(self.allocator);
     self.cf_stmt_origin_kinds.deinit(self.allocator);
     self.inline_scopes.deinit(self.allocator);
@@ -1387,19 +1401,57 @@ pub fn sourceFileModuleIdentity(self: *const Self, file: u32) [32]u8 {
     return self.source_file_identities.get(file);
 }
 
-/// Source location of a statement.
-pub fn stmtLoc(self: *const Self, id: CFStmtId) base.SourceLoc {
+/// A row of `stmt_sources`.
+pub const StmtSourceId = enum(u32) { _ };
+
+/// Where a statement comes from in the source.
+pub const StmtSource = struct {
+    loc: base.SourceLoc,
+    region: base.Region,
+};
+
+fn stmtSourceId(self: *const Self, id: CFStmtId) StmtSourceId {
     const index = @backingInt(id);
     if (self.proc_rewrite) |*rewrite| {
         if (rewrite.cf_stmts.keys.lookup(index)) |private| {
-            if (rewrite.cf_stmt_locs.owned(private)) return rewrite.cf_stmt_locs.rows.get(private);
+            if (rewrite.cf_stmt_sources.owned(private)) return rewrite.cf_stmt_sources.rows.get(private);
         }
     }
     if (self.body_coordinator) |coordinator| {
-        if (index < self.body_prefix.cf_stmts) return coordinator.stmtLoc(id);
-        return self.cf_stmt_locs.get(index - self.body_prefix.cf_stmts);
+        if (index < self.body_prefix.cf_stmts) return coordinator.stmtSourceId(id);
+        return self.cf_stmt_sources.get(index - self.body_prefix.cf_stmts);
     }
-    return self.cf_stmt_locs.get(index);
+    return self.cf_stmt_sources.get(index);
+}
+
+fn stmtSource(self: *const Self, id: StmtSourceId) StmtSource {
+    const index = @backingInt(id);
+    if (self.body_coordinator) |coordinator| {
+        if (index < self.body_prefix.stmt_sources) return coordinator.stmtSource(id);
+        return self.stmt_sources.get(index - self.body_prefix.stmt_sources);
+    }
+    return self.stmt_sources.get(index);
+}
+
+/// The row holding `source`, adding one when no visible row does.
+fn internStmtSource(self: *Self, source: StmtSource) Allocator.Error!StmtSourceId {
+    if (self.body_coordinator) |coordinator| {
+        // A body worker reads its frozen coordinator's rows.
+        if (coordinator.stmt_source_rows.get(source)) |existing| return existing;
+    }
+    const entry = try self.stmt_source_rows.getOrPut(self.allocator, source);
+    if (entry.found_existing) return entry.value_ptr.*;
+    errdefer self.stmt_source_rows.removeByPtr(entry.key_ptr);
+    const index = self.stmt_sources.len() + if (self.body_coordinator != null) self.body_prefix.stmt_sources else 0;
+    if (index > std.math.maxInt(u32)) return error.OutOfMemory;
+    try self.stmt_sources.append(self.allocator, source);
+    entry.value_ptr.* = @fromBackingInt(@intCast(index));
+    return entry.value_ptr.*;
+}
+
+/// Source location of a statement.
+pub fn stmtLoc(self: *const Self, id: CFStmtId) base.SourceLoc {
+    return self.stmtSource(self.stmtSourceId(id)).loc;
 }
 
 /// Virtual source frame associated with a statement.
@@ -1443,17 +1495,7 @@ pub fn addInlineScope(self: *Self, scope: InlineScope) Allocator.Error!InlineSco
 
 /// Checked source region of a statement.
 pub fn stmtRegion(self: *const Self, id: CFStmtId) base.Region {
-    const index = @backingInt(id);
-    if (self.proc_rewrite) |*rewrite| {
-        if (rewrite.cf_stmts.keys.lookup(index)) |private| {
-            if (rewrite.cf_stmt_regions.owned(private)) return rewrite.cf_stmt_regions.rows.get(private);
-        }
-    }
-    if (self.body_coordinator) |coordinator| {
-        if (index < self.body_prefix.cf_stmts) return coordinator.stmtRegion(id);
-        return self.cf_stmt_regions.get(index - self.body_prefix.cf_stmts);
-    }
-    return self.cf_stmt_regions.get(index);
+    return self.stmtSource(self.stmtSourceId(id)).region;
 }
 
 /// Origin kind recorded for a statement.
@@ -2022,13 +2064,12 @@ pub fn addCFStmt(self: *Self, stmt: CFStmt, origin: StmtOrigin) Allocator.Error!
     const idx = self.cf_stmts.len() + if (self.body_coordinator != null) self.body_prefix.cf_stmts else 0;
     if (idx >= lir_defs.max_cf_stmt_count) return error.OutOfMemory;
     try self.cf_stmts.ensureUnusedCapacity(self.allocator, 1);
-    try self.cf_stmt_locs.ensureUnusedCapacity(self.allocator, 1);
-    try self.cf_stmt_regions.ensureUnusedCapacity(self.allocator, 1);
+    try self.cf_stmt_sources.ensureUnusedCapacity(self.allocator, 1);
     try self.cf_stmt_inline_scopes.ensureUnusedCapacity(self.allocator, 1);
     try self.cf_stmt_origin_kinds.ensureUnusedCapacity(self.allocator, 1);
+    const source = try self.internStmtSource(.{ .loc = origin.loc, .region = origin.region });
     self.cf_stmts.appendAssumeCapacity(stmt);
-    self.cf_stmt_locs.appendAssumeCapacity(origin.loc);
-    self.cf_stmt_regions.appendAssumeCapacity(origin.region);
+    self.cf_stmt_sources.appendAssumeCapacity(source);
     self.cf_stmt_inline_scopes.appendAssumeCapacity(origin.inline_scope);
     self.cf_stmt_origin_kinds.appendAssumeCapacity(origin.kind);
     self.noteStmtShapes(stmt);
@@ -2042,20 +2083,19 @@ pub fn addCFStmt(self: *Self, stmt: CFStmt, origin: StmtOrigin) Allocator.Error!
 /// publishes it on commit; any other body worker's prefix metadata is
 /// immutable, so it must restate a prefix statement's existing origin.
 pub fn replaceCFStmt(self: *Self, id: CFStmtId, stmt: CFStmt, origin: StmtOrigin) Allocator.Error!void {
+    const source = try self.internStmtSource(.{ .loc = origin.loc, .region = origin.region });
     self.getCFStmtPtr(id).* = stmt;
     const index = @backingInt(id);
     if (self.body_coordinator != null and index < self.body_prefix.cf_stmts) {
         if (self.proc_rewrite) |*rewrite| {
             const coordinator = self.body_coordinator.?;
-            rewrite.cf_stmt_locs.rows.getPtrImmediate(rewrite.cf_stmt_locs.mark(&rewrite.cf_stmts.keys, coordinator, index, 1)).* = origin.loc;
-            rewrite.cf_stmt_regions.rows.getPtrImmediate(rewrite.cf_stmt_regions.mark(&rewrite.cf_stmts.keys, coordinator, index, 1)).* = origin.region;
+            rewrite.cf_stmt_sources.rows.getPtrImmediate(rewrite.cf_stmt_sources.mark(&rewrite.cf_stmts.keys, coordinator, index, 1)).* = source;
             rewrite.cf_stmt_inline_scopes.rows.getPtrImmediate(rewrite.cf_stmt_inline_scopes.mark(&rewrite.cf_stmts.keys, coordinator, index, 1)).* = origin.inline_scope;
             rewrite.cf_stmt_origin_kinds.rows.getPtrImmediate(rewrite.cf_stmt_origin_kinds.mark(&rewrite.cf_stmts.keys, coordinator, index, 1)).* = origin.kind;
         } else if (!std.meta.eql(self.stmtOrigin(id), origin)) self.assertBodyMetadataImmutable();
     } else {
         const own = index - if (self.body_coordinator != null) self.body_prefix.cf_stmts else 0;
-        self.cf_stmt_locs.getPtrImmediate(own).* = origin.loc;
-        self.cf_stmt_regions.getPtrImmediate(own).* = origin.region;
+        self.cf_stmt_sources.getPtrImmediate(own).* = source;
         self.cf_stmt_inline_scopes.getPtrImmediate(own).* = origin.inline_scope;
         self.cf_stmt_origin_kinds.getPtrImmediate(own).* = origin.kind;
     }
@@ -2789,7 +2829,7 @@ test "body shard relocates nonzero local and body suffixes" {
         @as(u64, 9),
         GuardedList.at(coordinator.getU64Span(.{ .start = appended.relocation.u64s, .len = masks.len }), 0),
     );
-    try std.testing.expectEqual(coordinator.cfStmtCount(), coordinator.cf_stmt_locs.len());
+    try std.testing.expectEqual(coordinator.cfStmtCount(), coordinator.cf_stmt_sources.len());
     try std.testing.expectEqual(coordinator.localCount(), coordinator.local_names.len());
 }
 
@@ -2903,8 +2943,7 @@ test "body shard append preserves destination on every reserve-stage allocation 
             _ = destination.appendBodyShard(shard, null, .empty(), null) catch |err| {
                 try std.testing.expectEqual(error.OutOfMemory, err);
                 try std.testing.expectEqual(@as(usize, 1), destination.cf_stmts.len());
-                try std.testing.expectEqual(@as(usize, 1), destination.cf_stmt_locs.len());
-                try std.testing.expectEqual(@as(usize, 1), destination.cf_stmt_regions.len());
+                try std.testing.expectEqual(@as(usize, 1), destination.cf_stmt_sources.len());
                 try std.testing.expectEqual(@as(usize, 1), destination.cf_stmt_inline_scopes.len());
                 try std.testing.expectEqual(@as(usize, 1), destination.cf_stmt_origin_kinds.len());
                 try std.testing.expectEqual(@as(usize, 1), destination.cf_switch_branches.len());
@@ -3028,29 +3067,25 @@ pub fn compactProcSpecs(self: *Self, reachable: []const bool) void {
 pub fn compactCFStmts(self: *Self, reachable: []const bool) Allocator.Error!void {
     std.debug.assert(self.body_coordinator == null and self.proc_rewrite == null);
     std.debug.assert(reachable.len == self.cf_stmts.len());
-    std.debug.assert(self.cf_stmts.len() == self.cf_stmt_locs.len());
-    std.debug.assert(self.cf_stmts.len() == self.cf_stmt_regions.len());
+    std.debug.assert(self.cf_stmts.len() == self.cf_stmt_sources.len());
     std.debug.assert(self.cf_stmts.len() == self.cf_stmt_inline_scopes.len());
     std.debug.assert(self.cf_stmts.len() == self.cf_stmt_origin_kinds.len());
 
     var write: usize = 0;
     const cf_stmts = self.cf_stmts.unsafeRawItemsMutForStore();
-    const cf_stmt_locs = self.cf_stmt_locs.unsafeRawItemsMutForStore();
-    const cf_stmt_regions = self.cf_stmt_regions.unsafeRawItemsMutForStore();
+    const cf_stmt_sources = self.cf_stmt_sources.unsafeRawItemsMutForStore();
     const cf_stmt_inline_scopes = self.cf_stmt_inline_scopes.unsafeRawItemsMutForStore();
     const cf_stmt_origin_kinds = self.cf_stmt_origin_kinds.unsafeRawItemsMutForStore();
-    for (cf_stmts, cf_stmt_locs, cf_stmt_regions, cf_stmt_inline_scopes, cf_stmt_origin_kinds, 0..) |stmt, loc, region, inline_scope, origin_kind, index| {
+    for (cf_stmts, cf_stmt_sources, cf_stmt_inline_scopes, cf_stmt_origin_kinds, 0..) |stmt, source, inline_scope, origin_kind, index| {
         if (!reachable[index]) continue;
         cf_stmts[write] = stmt;
-        cf_stmt_locs[write] = loc;
-        cf_stmt_regions[write] = region;
+        cf_stmt_sources[write] = source;
         cf_stmt_inline_scopes[write] = inline_scope;
         cf_stmt_origin_kinds[write] = origin_kind;
         write += 1;
     }
     self.cf_stmts.shrinkAndFree(self.allocator, write);
-    self.cf_stmt_locs.shrinkAndFree(self.allocator, write);
-    self.cf_stmt_regions.shrinkAndFree(self.allocator, write);
+    self.cf_stmt_sources.shrinkAndFree(self.allocator, write);
     self.cf_stmt_inline_scopes.shrinkAndFree(self.allocator, write);
     self.cf_stmt_origin_kinds.shrinkAndFree(self.allocator, write);
     try self.compactStmtRows();

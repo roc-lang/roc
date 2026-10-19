@@ -69,7 +69,7 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 ///      layouts are plain layout indices.
 /// v51: statements keep their rows out of line, and the store records its
 ///      lowering modules' keys.
-pub const FORMAT_VERSION: u32 = 52;
+pub const FORMAT_VERSION: u32 = 53;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
@@ -201,8 +201,8 @@ pub const LirStoreImage = extern struct {
     source_file_qualified_ends: ArrayRef,
     source_file_identities: ArrayRef,
     lowering_module_keys: ArrayRef,
-    cf_stmt_locs: ArrayRef,
-    cf_stmt_regions: ArrayRef,
+    cf_stmt_sources: ArrayRef,
+    stmt_sources: ArrayRef,
     cf_stmt_inline_scopes: ArrayRef,
     cf_stmt_origin_kinds: ArrayRef,
     inline_scopes: ArrayRef,
@@ -236,8 +236,8 @@ pub const LirStoreImage = extern struct {
             .source_file_qualified_ends = try encoder.ref(store.source_file_qualified_ends.unsafeRawItemsForView()),
             .source_file_identities = try encoder.ref(store.source_file_identities.unsafeRawItemsForView()),
             .lowering_module_keys = try encoder.ref(store.lowering_module_keys.unsafeRawItemsForView()),
-            .cf_stmt_locs = try encoder.ref(store.cf_stmt_locs.unsafeRawItemsForView()),
-            .cf_stmt_regions = try encoder.ref(store.cf_stmt_regions.unsafeRawItemsForView()),
+            .cf_stmt_sources = try encoder.ref(store.cf_stmt_sources.unsafeRawItemsForView()),
+            .stmt_sources = try encoder.ref(store.stmt_sources.unsafeRawItemsForView()),
             .cf_stmt_inline_scopes = try encoder.ref(store.cf_stmt_inline_scopes.unsafeRawItemsForView()),
             .cf_stmt_origin_kinds = try encoder.ref(store.cf_stmt_origin_kinds.unsafeRawItemsForView()),
             .inline_scopes = try encoder.ref(store.inline_scopes.unsafeRawItemsForView()),
@@ -290,8 +290,8 @@ pub const LirStoreImage = extern struct {
             .source_file_qualified_ends = try guardedListFromRef(u32, "LirStore.source_file_qualified_ends", base_ptr, image_size, self.source_file_qualified_ends),
             .source_file_identities = try guardedListFromRef([32]u8, "LirStore.source_file_identities", base_ptr, image_size, self.source_file_identities),
             .lowering_module_keys = try guardedListFromRef([32]u8, "LirStore.lowering_module_keys", base_ptr, image_size, self.lowering_module_keys),
-            .cf_stmt_locs = try guardedListFromRef(base.SourceLoc, "LirStore.cf_stmt_locs", base_ptr, image_size, self.cf_stmt_locs),
-            .cf_stmt_regions = try guardedListFromRef(base.Region, "LirStore.cf_stmt_regions", base_ptr, image_size, self.cf_stmt_regions),
+            .cf_stmt_sources = try guardedListFromRef(LirStore.StmtSourceId, "LirStore.cf_stmt_sources", base_ptr, image_size, self.cf_stmt_sources),
+            .stmt_sources = try guardedListFromRef(LirStore.StmtSource, "LirStore.stmt_sources", base_ptr, image_size, self.stmt_sources),
             .cf_stmt_inline_scopes = try guardedListFromRef(LIR.InlineScopeId, "LirStore.cf_stmt_inline_scopes", base_ptr, image_size, self.cf_stmt_inline_scopes),
             .cf_stmt_origin_kinds = try guardedListFromRef(LIR.OriginKind, "LirStore.cf_stmt_origin_kinds", base_ptr, image_size, self.cf_stmt_origin_kinds),
             .inline_scopes = try guardedListFromRef(LIR.InlineScope, "LirStore.inline_scopes", base_ptr, image_size, self.inline_scopes),
@@ -825,10 +825,10 @@ comptime {
     // bottom of this file, then update the expected field count below. A
     // same-build omission is otherwise silent, since `FORMAT_VERSION` only
     // guards cross-version mismatches. `tail_call_builder`, `proc_rewrite`,
-    // `rc_effect_rows` and `facts` are transient worker state, not
+    // `stmt_source_rows`, `rc_effect_rows` and `facts` are transient worker state, not
     // serialized, and default to null or empty in views. The layout store's `digest_cache` is a memo
     // each view starts empty.
-    std.debug.assert(@typeInfo(LirStore).@"struct".field_names.len == 39);
+    std.debug.assert(@typeInfo(LirStore).@"struct".field_names.len == 40);
     std.debug.assert(@typeInfo(layout_mod.Store).@"struct".field_names.len == 18);
     std.debug.assert(@typeInfo(base.StringLiteral.Store).@"struct".field_names.len == 1);
 
@@ -1526,8 +1526,8 @@ const serialized_guarded_fields = [_][]const u8{
     "source_file_qualified_ends",
     "source_file_identities",
     "lowering_module_keys",
-    "cf_stmt_locs",
-    "cf_stmt_regions",
+    "cf_stmt_sources",
+    "stmt_sources",
     "cf_stmt_inline_scopes",
     "cf_stmt_origin_kinds",
     "inline_scopes",
