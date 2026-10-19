@@ -1879,7 +1879,7 @@ fn matchingBrace(source: []const u8, open: usize) usize {
 }
 
 /// Every function definition with a body in `source`, in order.
-fn collectSourceFns(allocator: std.mem.Allocator, source: []const u8) ![]SourceFn {
+fn collectSourceFns(allocator: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error![]SourceFn {
     var fns: std.ArrayList(SourceFn) = .empty;
     errdefer fns.deinit(allocator);
     var line_start: usize = 0;
@@ -1936,7 +1936,7 @@ fn collectSourceFns(allocator: std.mem.Allocator, source: []const u8) ![]SourceF
 /// (`self.program.`, `self.builder.`, `self.parent.`) read as `self.`, so two
 /// copies of one helper that differ only in which scope they hang off
 /// compare equal.
-fn normalizedBodyTokens(allocator: std.mem.Allocator, body: []const u8) ![]const []const u8 {
+fn normalizedBodyTokens(allocator: std.mem.Allocator, body: []const u8) std.mem.Allocator.Error![]const []const u8 {
     var raw: std.ArrayList([]const u8) = .empty;
     defer raw.deinit(allocator);
     var i: usize = 0;
@@ -1969,7 +1969,7 @@ fn normalizedBodyTokens(allocator: std.mem.Allocator, body: []const u8) ![]const
 
 /// `2 * LCS / (len(a) + len(b))` over token sequences: 1.0 for identical
 /// bodies, 0.0 for bodies sharing no token in order.
-fn tokenSimilarity(allocator: std.mem.Allocator, a: []const []const u8, b: []const []const u8) !f64 {
+fn tokenSimilarity(allocator: std.mem.Allocator, a: []const []const u8, b: []const []const u8) std.mem.Allocator.Error!f64 {
     if (a.len + b.len == 0) return 1.0;
     const prev = try allocator.alloc(u32, b.len + 1);
     defer allocator.free(prev);
@@ -1992,7 +1992,7 @@ const near_duplicate_threshold = 0.70;
 
 /// Names defined more than once in `source` whose closest pair of bodies is
 /// at least `near_duplicate_threshold` similar.
-fn nearDuplicateFnNames(allocator: std.mem.Allocator, source: []const u8) ![]const []const u8 {
+fn nearDuplicateFnNames(allocator: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error![]const []const u8 {
     const fns = try collectSourceFns(allocator, source);
     defer allocator.free(fns);
     var by_name: std.StringArrayHashMapUnmanaged(std.ArrayList(usize)) = .empty;

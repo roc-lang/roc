@@ -6307,14 +6307,6 @@ const Builder = struct {
         ));
     }
 
-    fn typeName(self: *Builder, view: ModuleView, id: names.TypeNameId) Allocator.Error!names.TypeNameId {
-        return self.activeNameStore().internTypeName(view.names.typeNameText(id));
-    }
-
-    fn moduleIdentity(self: *Builder, view: ModuleView, id: names.ModuleIdentityId) Allocator.Error!names.ModuleIdentityId {
-        return self.activeNameStore().internModuleIdentity(view.names.moduleIdentityBytes(id));
-    }
-
     fn hostedTryAdapterCapability(
         self: *Builder,
         view: ModuleView,
@@ -41837,7 +41829,8 @@ const BodyContext = struct {
         };
 
         const start_init = switch (container) {
-            inline else => |_, kind| try self.lowerParseCountedStartInit(start_event_local, start_event_ty, state_ty, bool_ty, u64_ty, @tagName(kind) ++ " parse Counted start event"),
+            .list => try self.lowerParseCountedStartInit(start_event_local, start_event_ty, state_ty, bool_ty, u64_ty, "list parse Counted start event"),
+            .dict => try self.lowerParseCountedStartInit(start_event_local, start_event_ty, state_ty, bool_ty, u64_ty, "dict parse Counted start event"),
         };
         const init_ty = start_init.ty;
         const init_expr = start_init.expr;

@@ -13436,6 +13436,30 @@ frame stack, and an argument's evidence computation that reaches such an
 operand stops, lets the loop draft it, and resumes. A nested function never
 starts a lowering run of its own inside its parent's.
 
+### Lowering Scopes Share One Helper Layer
+
+Monotype lowering keeps its state in two scopes: the coordinator `Builder`,
+whose ids belong to the program or to the active specialization workspace, and
+each body's `BodyContext`, whose ids belong to its instantiation graph's
+stores. Boxy lowering has the same split between `ProcedureBuilder` and each
+`ProcBodyBuilder`. A question asked of either scope's data has one definition,
+which takes the stores it reads as parameters: type-shape queries take a type
+store (and the name store a tag label belongs to), name imports take the
+destination name store, and method lookup takes the name store its owner's ids
+belong to and memoizes only owners in the program's domain. Each scope passes
+its own stores, so the scope a helper is called from never changes which store
+it reads. Tag lookup within one name store is label identity, which there is
+id equality; a label from another domain is imported before it is looked up.
+
+Coordinator work whose inputs are program ids, such as result-row widening
+adapters, reads the program store explicitly and only under a program
+destination. Where the two scopes genuinely differ, such as the store a
+restored constant is emitted into or how a node's reuse is cached, a generic
+walker takes the scope as a comptime-duck-typed parameter (`runConstRestore`)
+or a policy struct (`RuntimeImpossibilityProofEvaluation`). A source-text test
+fails when either lowerer defines one name twice with near-identical bodies
+outside an explicit list of such per-scope interface methods.
+
 ### Monotype Types
 
 Monotype types contain no lambda sets.
