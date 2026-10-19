@@ -23,8 +23,12 @@ The following notifications are handled:
 - `initialized`, `exit`
 - `didOpen` (stores the buffer into a `StringHashMap`)
 - `didChange` (same as `didOpen`, and supports incremental changes)
+- `didClose` (drops the buffer and forgets the document's URI)
 
 Diagnostics are pushed as `textDocument/publishDiagnostics` when a document is opened or changed.
+Diagnostics and locations for an open document always use the URI the client opened it under,
+exactly as the client spelled it, since a URI rebuilt from the file's path can name the same file
+differently (percent-encoding, drive-letter case, or a path through a symlink).
 
 ### Inlay hints
 

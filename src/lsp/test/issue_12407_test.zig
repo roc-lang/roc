@@ -84,7 +84,7 @@ fn expectDiagnosticsForClientUri(cache_root: []const u8, client_uri: []const u8)
     try publishes.expectDiagnosticsFor(client_uri);
 }
 
-/// A temporary directory holding `real/Broken.roc` and a symlink `linked` to `real`.
+/// A temporary directory holding `real/<file_name>` and a symlink `linked` to `real`.
 const SymlinkedFixture = struct {
     tmp: test_env.TmpDir,
     tmp_path: [:0]u8,
