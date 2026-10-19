@@ -64,6 +64,12 @@ pub const Writer = struct {
     erased_callable_resolver: ErasedCallableResolver,
     product_plans: std.AutoHashMap(ProductPlanKey, ?lir.PackedData.Plan),
     product_eligibility: collections.DenseMap(LirProgram.ConstPlanId, bool),
+    /// Composites being stored, innermost last, and the shared stacks their
+    /// component requests, nodes and capture types occupy runs of.
+    store_frames: std.ArrayList(StoreFrame) = .empty,
+    store_requests: std.ArrayList(ValueRequest) = .empty,
+    store_nodes: std.ArrayList(checked.ConstNodeId) = .empty,
+    store_capture_types: std.ArrayList(const_store.ConstTypeId) = .empty,
 
     const ProductPlanKey = struct { plan: LirProgram.ConstPlanId, layout_idx: layout.Idx };
 
@@ -90,6 +96,10 @@ pub const Writer = struct {
     }
 
     pub fn deinit(self: *Writer) void {
+        self.store_capture_types.deinit(self.allocator);
+        self.store_nodes.deinit(self.allocator);
+        self.store_requests.deinit(self.allocator);
+        self.store_frames.deinit(self.allocator);
         var plans = self.product_plans.valueIterator();
         while (plans.next()) |plan| if (plan.*) |*present| present.deinit();
         self.product_plans.deinit();
@@ -182,12 +192,16 @@ pub const Writer = struct {
     /// its own node once every component is stored.
     const StoreFrame = struct {
         finish: StoreFinish,
-        requests: []ValueRequest,
-        nodes: []checked.ConstNodeId,
+        /// The frame's run of `store_requests`; `store_nodes` holds the
+        /// node of each request from `nodes_start`.
+        requests_start: usize,
+        requests_len: usize,
+        nodes_start: usize,
         /// Capture slots of a function value: each slot's type is cloned just
-        /// before its value is stored.
+        /// before its value is stored, into `store_capture_types` from
+        /// `capture_types_start`.
         slots: []const LirProgram.CaptureSlot = &.{},
-        capture_types: []const_store.ConstTypeId = &.{},
+        capture_types_start: usize,
         index: usize = 0,
     };
 
@@ -197,10 +211,9 @@ pub const Writer = struct {
         layout_idx: layout.Idx,
         value: Value,
     ) Error!checked.ConstNodeId {
-        var frames = std.ArrayList(StoreFrame).empty;
-        defer self.releaseStoreFrames(&frames);
-        const node = try self.startStore(&frames, .{ .plan = plan_id, .layout_idx = layout_idx, .value = value });
-        _ = try self.drainStore(&frames);
+        self.clearStoreStacks();
+        const node = try self.startStore(.{ .plan = plan_id, .layout_idx = layout_idx, .value = value });
+        _ = try self.drainStore();
         return node;
     }
 
@@ -210,10 +223,9 @@ pub const Writer = struct {
         layout_idx: layout.Idx,
         value: Value,
     ) Error!checked.ConstFnId {
-        var frames = std.ArrayList(StoreFrame).empty;
-        defer self.releaseStoreFrames(&frames);
-        try self.pushFnValue(&frames, null, set_id, layout_idx, value);
-        return (try self.drainStore(&frames)).?;
+        self.clearStoreStacks();
+        try self.pushFnValue(null, set_id, layout_idx, value);
+        return (try self.drainStore()).?;
     }
 
     fn storeErasedFn(
@@ -221,66 +233,64 @@ pub const Writer = struct {
         set_id: LirProgram.ErasedFnsId,
         value: Value,
     ) Error!checked.ConstFnId {
-        var frames = std.ArrayList(StoreFrame).empty;
-        defer self.releaseStoreFrames(&frames);
-        try self.pushErasedFn(&frames, null, set_id, value);
-        return (try self.drainStore(&frames)).?;
+        self.clearStoreStacks();
+        try self.pushErasedFn(null, set_id, value);
+        return (try self.drainStore()).?;
     }
 
-    fn releaseStoreFrames(self: *Writer, frames: *std.ArrayList(StoreFrame)) void {
-        for (frames.items) |*frame| self.freeStoreFrame(frame);
-        frames.deinit(self.allocator);
-    }
-
-    fn freeStoreFrame(self: *Writer, frame: *StoreFrame) void {
-        self.allocator.free(frame.requests);
-        self.allocator.free(frame.nodes);
-        self.allocator.free(frame.capture_types);
+    fn clearStoreStacks(self: *Writer) void {
+        self.store_frames.clearRetainingCapacity();
+        self.store_requests.clearRetainingCapacity();
+        self.store_nodes.clearRetainingCapacity();
+        self.store_capture_types.clearRetainingCapacity();
     }
 
     /// Stores every pending component, and returns the function id of a
-    /// callable root.
-    fn drainStore(self: *Writer, frames: *std.ArrayList(StoreFrame)) Error!?checked.ConstFnId {
+    /// callable root. Frames finish in reverse order of starting, so each
+    /// finished frame's runs are the tops of the shared stacks.
+    fn drainStore(self: *Writer) Error!?checked.ConstFnId {
         var root_fn: ?checked.ConstFnId = null;
-        while (frames.items.len > 0) {
-            const top = frames.items.len - 1;
-            const frame = &frames.items[top];
-            if (frame.index < frame.requests.len) {
+        while (self.store_frames.items.len > 0) {
+            const top = self.store_frames.items.len - 1;
+            const frame = &self.store_frames.items[top];
+            if (frame.index < frame.requests_len) {
                 const index = frame.index;
                 frame.index += 1;
-                const request = frame.requests[index];
+                const request = self.store_requests.items[frame.requests_start + index];
                 if (frame.slots.len > 0) {
-                    frame.capture_types[index] = try self.cloneCaptureType(frame.slots[index].ty);
+                    const ty = try self.cloneCaptureType(frame.slots[index].ty);
+                    self.store_capture_types.items[frame.capture_types_start + index] = ty;
                 }
-                const node = try self.startStore(frames, request);
-                frames.items[top].nodes[index] = node;
+                const node = try self.startStore(request);
+                self.store_nodes.items[self.store_frames.items[top].nodes_start + index] = node;
                 continue;
             }
-            var finished = frames.pop().?;
-            defer self.freeStoreFrame(&finished);
+            const finished = self.store_frames.pop().?;
             if (try self.finishStore(&finished)) |fn_id| root_fn = fn_id;
+            self.store_requests.shrinkRetainingCapacity(finished.requests_start);
+            self.store_nodes.shrinkRetainingCapacity(finished.nodes_start);
+            self.store_capture_types.shrinkRetainingCapacity(finished.capture_types_start);
         }
         return root_fn;
     }
 
     /// Reserves the request's node, fills it when the value has no
     /// components, and pushes the frame that stores its components otherwise.
-    fn startStore(self: *Writer, frames: *std.ArrayList(StoreFrame), request: ValueRequest) Error!checked.ConstNodeId {
+    fn startStore(self: *Writer, request: ValueRequest) Error!checked.ConstNodeId {
         if (self.memoAddress(request.plan, request.layout_idx, request.value, request.storage)) |address| {
             if (self.stored_values.get(address)) |existing| return existing;
             const node = try self.module.const_store.reserve();
             try self.stored_values.put(address, node);
-            try self.beginFresh(frames, node, request);
+            try self.beginFresh(node, request);
             return node;
         }
         const node = try self.module.const_store.reserve();
-        try self.beginFresh(frames, node, request);
+        try self.beginFresh(node, request);
         return node;
     }
 
     fn beginFresh(
         self: *Writer,
-        frames: *std.ArrayList(StoreFrame),
         node: checked.ConstNodeId,
         request: ValueRequest,
     ) Error!void {
@@ -297,8 +307,8 @@ pub const Writer = struct {
                 value = .{ .ptr = payload };
             },
         }
-        var children = std.ArrayList(ValueRequest).empty;
-        defer children.deinit(self.allocator);
+        const requests_start = self.store_requests.items.len;
+        const children = &self.store_requests;
         const finish: StoreFinish = switch (self.constPlan(request.plan)) {
             .boxy_box => writerInvariant("Boxy-only box reached ConstStore writer"),
             .pending => writerInvariant("pending const plan reached ConstStore writer"),
@@ -308,63 +318,64 @@ pub const Writer = struct {
             .str => return self.module.const_store.fill(node, try self.storeStr(value)),
             .list => |elem_plan| blk: {
                 if (try self.storeListLeaf(node, elem_plan, layout_idx, value)) return;
-                try self.appendListRequests(&children, elem_plan, layout_idx, value);
+                try self.appendListRequests(children, elem_plan, layout_idx, value);
                 break :blk .{ .list = node };
             },
             .box => |elem_plan| blk: {
-                try self.appendBoxRequest(&children, elem_plan, layout_idx, value);
+                try self.appendBoxRequest(children, elem_plan, layout_idx, value);
                 break :blk .{ .box = node };
             },
             .tuple => |items| blk: {
-                try self.appendStructRequests(&children, items, layout_idx, value);
+                try self.appendStructRequests(children, items, layout_idx, value);
                 break :blk .{ .tuple = node };
             },
             .record => |fields| blk: {
-                try self.appendStructRequests(&children, fields, layout_idx, value);
+                try self.appendStructRequests(children, fields, layout_idx, value);
                 break :blk .{ .record = node };
             },
             .tag_union => |variants| blk: {
                 const tag_base = self.resolveTagBase(layout_idx, value);
                 const selected = self.selectTagVariant(variants, tag_base.layout_idx, tag_base.value);
                 const payload_layout = self.tagPayloadLayout(tag_base.layout_idx, selected.discriminant);
-                try self.appendTagPayloadRequests(&children, selected.payloads, payload_layout, tag_base.value);
+                try self.appendTagPayloadRequests(children, selected.payloads, payload_layout, tag_base.value);
                 break :blk .{ .tag = .{ .node = node, .name = selected.name } };
             },
             .named => |named| blk: {
                 try children.append(self.allocator, .{ .plan = named.backing, .layout_idx = layout_idx, .value = value });
                 break :blk .{ .nominal = .{ .node = node, .named = named } };
             },
-            .fn_value => |set| return self.pushFnValue(frames, node, set, layout_idx, value),
-            .erased_fn => |set| return self.pushErasedFn(frames, node, set, value),
+            .fn_value => |set| return self.pushFnValue(node, set, layout_idx, value),
+            .erased_fn => |set| return self.pushErasedFn(node, set, value),
         };
-        try self.pushStoreFrame(frames, finish, &children, &.{});
+        try self.pushStoreFrame(finish, requests_start, &.{});
     }
 
+    /// Push the frame storing the requests appended to `store_requests`
+    /// since `requests_start`.
     fn pushStoreFrame(
         self: *Writer,
-        frames: *std.ArrayList(StoreFrame),
         finish: StoreFinish,
-        children: *std.ArrayList(ValueRequest),
+        requests_start: usize,
         slots: []const LirProgram.CaptureSlot,
     ) Allocator.Error!void {
-        try frames.ensureUnusedCapacity(self.allocator, 1);
-        const nodes = try self.allocator.alloc(checked.ConstNodeId, children.items.len);
-        errdefer self.allocator.free(nodes);
-        const capture_types = try self.allocator.alloc(const_store.ConstTypeId, slots.len);
-        errdefer self.allocator.free(capture_types);
-        const requests = try children.toOwnedSlice(self.allocator);
-        frames.appendAssumeCapacity(.{
+        const requests_len = self.store_requests.items.len - requests_start;
+        try self.store_frames.ensureUnusedCapacity(self.allocator, 1);
+        const nodes_start = self.store_nodes.items.len;
+        try self.store_nodes.resize(self.allocator, nodes_start + requests_len);
+        const capture_types_start = self.store_capture_types.items.len;
+        try self.store_capture_types.resize(self.allocator, capture_types_start + slots.len);
+        self.store_frames.appendAssumeCapacity(.{
             .finish = finish,
-            .requests = requests,
-            .nodes = nodes,
+            .requests_start = requests_start,
+            .requests_len = requests_len,
+            .nodes_start = nodes_start,
             .slots = slots,
-            .capture_types = capture_types,
+            .capture_types_start = capture_types_start,
         });
     }
 
     fn pushFnValue(
         self: *Writer,
-        frames: *std.ArrayList(StoreFrame),
         node: ?checked.ConstNodeId,
         set_id: LirProgram.FnSetId,
         layout_idx: layout.Idx,
@@ -373,25 +384,22 @@ pub const Writer = struct {
         const set = self.program.fn_sets.items[@backingInt(set_id)];
         const tag_base = self.resolveTagBase(layout_idx, value);
         const variant = self.selectFnVariant(set, tag_base.layout_idx, tag_base.value);
-        var children = std.ArrayList(ValueRequest).empty;
-        defer children.deinit(self.allocator);
-        try self.appendCaptureRequests(&children, variant.captures, variant.payload_layout, tag_base.value);
-        try self.pushStoreFrame(frames, .{ .fn_value = .{ .node = node, .template = variant.template } }, &children, variant.captures);
+        const requests_start = self.store_requests.items.len;
+        try self.appendCaptureRequests(&self.store_requests, variant.captures, variant.payload_layout, tag_base.value);
+        try self.pushStoreFrame(.{ .fn_value = .{ .node = node, .template = variant.template } }, requests_start, variant.captures);
     }
 
     fn pushErasedFn(
         self: *Writer,
-        frames: *std.ArrayList(StoreFrame),
         node: ?checked.ConstNodeId,
         set_id: LirProgram.ErasedFnsId,
         value: Value,
     ) Error!void {
         const entry = try self.resolveErasedEntry(set_id, value);
-        var children = std.ArrayList(ValueRequest).empty;
-        defer children.deinit(self.allocator);
-        try self.appendCaptureRequests(&children, entry.entry.captures, entry.entry.capture_layout, .{ .ptr = entry.capture_ptr });
+        const requests_start = self.store_requests.items.len;
+        try self.appendCaptureRequests(&self.store_requests, entry.entry.captures, entry.entry.capture_layout, .{ .ptr = entry.capture_ptr });
         const template = entry.entry.template orelse writerInvariant("Boxy frozen environment has no ConstStore provenance");
-        try self.pushStoreFrame(frames, .{ .fn_value = .{ .node = node, .template = template } }, &children, entry.entry.captures);
+        try self.pushStoreFrame(.{ .fn_value = .{ .node = node, .template = template } }, requests_start, entry.entry.captures);
     }
 
     const ResolvedErasedEntry = struct {
@@ -413,7 +421,8 @@ pub const Writer = struct {
     /// Fills a finished composite's node, and returns the function id when
     /// the composite is a callable root.
     fn finishStore(self: *Writer, frame: *const StoreFrame) Error!?checked.ConstFnId {
-        const nodes = frame.nodes;
+        const nodes = self.store_nodes.items[frame.nodes_start..][0..frame.requests_len];
+        const capture_types = self.store_capture_types.items[frame.capture_types_start..][0..frame.slots.len];
         switch (frame.finish) {
             .list => |node| self.module.const_store.fill(node, .{ .list = .{ .nodes = nodes } }),
             .box => |node| self.module.const_store.fill(node, .{ .box = nodes[0] }),
@@ -434,7 +443,7 @@ pub const Writer = struct {
             .fn_value => |fn_value| {
                 const captures = try self.module.const_store.allocator.alloc(const_store.ConstCapture, frame.slots.len);
                 defer self.module.const_store.allocator.free(captures);
-                for (captures, frame.slots, frame.capture_types, nodes) |*capture, slot, ty, node| {
+                for (captures, frame.slots, capture_types, nodes) |*capture, slot, ty, node| {
                     capture.* = .{ .id = slot.id, .kind = slot.kind, .ty = ty, .value = node };
                 }
                 const template = fn_value.template;
@@ -766,15 +775,12 @@ pub const Writer = struct {
         const byte_len = std.math.mul(usize, list.len(), plan.packed_width) catch unreachable;
         const memory_len = std.math.mul(usize, list.len(), plan.memory_width) catch unreachable;
         const memory = if (memory_len == 0) &.{} else list.bytes.?[0..memory_len];
-        var converted: ?[]u8 = null;
-        defer if (converted) |owned| self.allocator.free(owned);
-        const bytes = if (plan.isIdentity() and builtin.cpu.arch.endian() == .little) memory else blk: {
-            const out = try self.allocator.alloc(u8, byte_len);
-            converted = out;
-            plan.encode(out, memory, list.len(), builtin.cpu.arch.endian());
-            break :blk out;
+        const data = if (plan.isIdentity() and builtin.cpu.arch.endian() == .little)
+            try self.module.const_store.addBlobData(memory)
+        else blk: {
+            plan.encode(try self.module.const_store.reserveBlobData(byte_len), memory, list.len(), builtin.cpu.arch.endian());
+            break :blk try self.module.const_store.commitBlobData(byte_len);
         };
-        const data = try self.module.const_store.addBlobData(bytes);
         self.module.const_store.fill(node, .{ .list = .{ .packed_bytes = .{
             .bytes = .{ .data = data, .offset = 0, .len = checkedU32(byte_len, "packed product bytes exceed ConstStore limit") },
             .len = checkedU32(list.len(), "packed product length exceeds ConstStore limit"),
@@ -856,20 +862,18 @@ pub const Writer = struct {
 
         const byte_len = std.math.mul(usize, roc_list.len(), element.byteWidth()) catch
             writerInvariant("packed list byte length overflowed");
-        const bytes = try self.allocator.alloc(u8, byte_len);
-        defer self.allocator.free(bytes);
-
+        if (roc_list.bytes == null and roc_list.len() != 0) {
+            writerInvariant("non-empty packed list had null element pointer");
+        }
+        const bytes = try self.module.const_store.reserveBlobData(byte_len);
         if (roc_list.bytes) |source| {
             const width: usize = element.byteWidth();
             for (0..roc_list.len()) |index| {
                 const scalar = self.storeScalar(elem_layout, .{ .ptr = source + index * width });
                 writePackedScalar(bytes[index * width ..][0..width], element, scalar);
             }
-        } else if (roc_list.len() != 0) {
-            writerInvariant("non-empty packed list had null element pointer");
         }
-
-        const data = try self.module.const_store.addBlobData(bytes);
+        const data = try self.module.const_store.commitBlobData(byte_len);
         self.module.const_store.fill(target_node, .{ .list = .{ .packed_bytes = .{
             .bytes = .{ .data = data, .offset = 0, .len = checkedU32(byte_len, "packed list byte length exceeds ConstStore limit") },
             .len = checkedU32(roc_list.len(), "packed list length exceeds ConstStore limit"),

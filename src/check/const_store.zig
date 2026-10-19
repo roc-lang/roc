@@ -1184,6 +1184,45 @@ pub const ConstStore = struct {
         try std.testing.expectEqual(@as(?usize, null), try evidenceVectorEnd(std.testing.allocator, &nodes, 0, 3));
     }
 
+    /// Writable space for `len` candidate blob bytes at the end of the blob
+    /// backing. `commitBlobData` interns what the caller writes there exactly
+    /// as `addBlobData` interns a copy of it; nothing else may touch the blob
+    /// table in between.
+    pub fn reserveBlobData(self: *ConstStore, len: usize) Allocator.Error![]u8 {
+        if (self.serialized) constStoreInvariant("cannot add blob data to a serialized const store");
+        return self.blob_backing.addManyAsSlice(self.allocator, len);
+    }
+
+    /// Intern the `len` bytes written into the space `reserveBlobData`
+    /// returned, releasing that space when equal bytes are already interned.
+    pub fn commitBlobData(self: *ConstStore, len: usize) Allocator.Error!ConstBlobDataId {
+        const start = self.blob_backing.items.len - len;
+        errdefer self.blob_backing.shrinkRetainingCapacity(start);
+        const bytes = self.blob_backing.items[start..];
+        const entry = try self.blob_index.getOrPutContextAdapted(
+            self.allocator,
+            bytes,
+            BlobBytesContext{ .store = self },
+            BlobIndexContext{ .store = self },
+        );
+        if (entry.found_existing) {
+            self.blob_backing.shrinkRetainingCapacity(start);
+            return @fromBackingInt(entry.key_ptr.*);
+        }
+        errdefer self.blob_index.removeByPtr(entry.key_ptr);
+
+        const raw_id = std.math.cast(u32, self.blob_views.items.len) orelse return error.OutOfMemory;
+        // An empty blob owns no backing, as `artifact_serialize.appendSpan`
+        // records it.
+        const view: ConstRange = if (len == 0) .{ .start = 0, .len = 0 } else .{
+            .start = std.math.cast(u32, start) orelse return error.OutOfMemory,
+            .len = std.math.cast(u32, len) orelse return error.OutOfMemory,
+        };
+        try self.blob_views.append(self.allocator, view);
+        entry.key_ptr.* = raw_id;
+        return @fromBackingInt(raw_id);
+    }
+
     pub fn addBlobData(self: *ConstStore, bytes: []const u8) Allocator.Error!ConstBlobDataId {
         if (self.serialized) constStoreInvariant("cannot add blob data to a serialized const store");
         const entry = try self.blob_index.getOrPutContextAdapted(
