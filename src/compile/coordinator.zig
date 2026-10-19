@@ -2179,21 +2179,16 @@ pub const Coordinator = struct {
     }
 
     /// Evaluate the checked program. A build whose runtime output for exactly
-    /// this program is recorded evaluates it as checking does, and lowers no
-    /// runtime program.
+    /// this program is recorded evaluates the same compile-time roots a build
+    /// without the record does, since its program's specialization decides
+    /// which roots are demanded, and its consumer lowers no runtime program.
     fn evaluateProgram(
         self: *Coordinator,
         extra_cached: ?*const CheckedArtifact.CheckedModuleArtifact,
         program_root: ?*const CheckedArtifact.CheckedModuleArtifact,
     ) CoordinatorError!void {
         if (self.runtime_lowering != null) if (program_root) |root| if (self.runtime_output_probe) |probe| {
-            if (try probe.cached(probe.context, root)) {
-                self.runtime_output_cached = true;
-                const runtime = self.runtime_lowering;
-                self.runtime_lowering = null;
-                defer self.runtime_lowering = runtime;
-                return self.evaluatePreparedModules(true, null, extra_cached, program_root);
-            }
+            self.runtime_output_cached = try probe.cached(probe.context, root);
         };
         return self.evaluatePreparedModules(true, null, extra_cached, program_root);
     }
