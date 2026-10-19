@@ -283,6 +283,8 @@ dispatch_dedup_scratch: ?DispatchDedupScratch = null,
 /// The use positions of the most recently finished static-dispatch drain,
 /// kept like `row_union_scratch`.
 use_positions_scratch: UsePositions = .{},
+/// The storage of the most recently finished hoist selection transaction.
+hoist_transaction_scratch: HoistTransactionStorage = .{},
 /// The slot images of the most recently finished `relatePredeclaredUse`, kept
 /// like `row_union_scratch`; null until the first one finishes.
 predeclared_use_images: ?collections.DenseMap(Var, Var) = null,
@@ -1594,6 +1596,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .row_union_scratch = .scratch,
     .dispatch_dedup_scratch = .scratch,
     .use_positions_scratch = .scratch,
+    .hoist_transaction_scratch = .scratch,
     .predeclared_use_images = .scratch,
     .where_constraint_representatives = .scratch,
     .type_decl_rigid_vars = .lexical,
@@ -3273,30 +3276,99 @@ const HoistSelectionAction = enum {
     drop_empty,
 };
 
+/// The storage of the most recently finished `HoistSelectionTransaction`,
+/// kept with its capacity for the next one (`hoist_transaction_scratch`). A
+/// transaction that starts while another is open finds it empty.
+const HoistTransactionStorage = struct {
+    staged_roots: std.ArrayListUnmanaged(hoist_roots.SelectedHoistedRoot) = .empty,
+    staged_exprs: collections.DenseMapUnmanaged(CIR.Expr.Idx, u32) = .empty,
+    staged_bindings: collections.DenseMapUnmanaged(CIR.Pattern.Idx, u32) = .empty,
+    staged_pattern_validations: collections.DenseMapUnmanaged(CIR.Pattern.Idx, u32) = .empty,
+    known_updates: std.ArrayListUnmanaged(HoistKnownUpdate) = .empty,
+    run_items: std.ArrayListUnmanaged(HoistSelectionTransaction.StageItem) = .empty,
+    run_contexts: std.ArrayListUnmanaged(HoistedDependencyContext) = .empty,
+    /// Cleared contexts kept for the next root that stages under one. Its
+    /// capacity covers every context the storage owns, so releasing one
+    /// never allocates.
+    spare_contexts: std.ArrayListUnmanaged(HoistedDependencyContext) = .empty,
+
+    pub fn deinit(self: *HoistTransactionStorage, gpa: Allocator) void {
+        self.staged_roots.deinit(gpa);
+        self.staged_exprs.deinit(gpa);
+        self.staged_bindings.deinit(gpa);
+        self.staged_pattern_validations.deinit(gpa);
+        self.known_updates.deinit(gpa);
+        self.run_items.deinit(gpa);
+        for (self.run_contexts.items) |*context| context.deinit(gpa);
+        self.run_contexts.deinit(gpa);
+        for (self.spare_contexts.items) |*context| context.deinit(gpa);
+        self.spare_contexts.deinit(gpa);
+    }
+};
+
 const HoistSelectionTransaction = struct {
     checker: *Self,
-    staged_roots: std.ArrayListUnmanaged(hoist_roots.SelectedHoistedRoot) = .empty,
-    staged_exprs: collections.DenseMapUnmanaged(CIR.Expr.Idx, u32) = .{},
-    staged_bindings: collections.DenseMapUnmanaged(CIR.Pattern.Idx, u32) = .{},
-    staged_pattern_validations: collections.DenseMapUnmanaged(CIR.Pattern.Idx, u32) = .{},
-    known_updates: std.ArrayListUnmanaged(HoistKnownUpdate) = .empty,
+    staged_roots: std.ArrayListUnmanaged(hoist_roots.SelectedHoistedRoot),
+    staged_exprs: collections.DenseMapUnmanaged(CIR.Expr.Idx, u32),
+    staged_bindings: collections.DenseMapUnmanaged(CIR.Pattern.Idx, u32),
+    staged_pattern_validations: collections.DenseMapUnmanaged(CIR.Pattern.Idx, u32),
+    known_updates: std.ArrayListUnmanaged(HoistKnownUpdate),
+    /// The staging run in progress; empty between runs.
+    run: StageRun,
+    spare_contexts: std.ArrayListUnmanaged(HoistedDependencyContext),
     committed: bool = false,
 
     fn init(checker: *Self) HoistSelectionTransaction {
-        return .{ .checker = checker };
+        const storage = checker.hoist_transaction_scratch;
+        checker.hoist_transaction_scratch = .{};
+        return .{
+            .checker = checker,
+            .staged_roots = storage.staged_roots,
+            .staged_exprs = storage.staged_exprs,
+            .staged_bindings = storage.staged_bindings,
+            .staged_pattern_validations = storage.staged_pattern_validations,
+            .known_updates = storage.known_updates,
+            .run = .{ .items = storage.run_items, .contexts = storage.run_contexts },
+            .spare_contexts = storage.spare_contexts,
+        };
     }
 
     fn deinit(self: *HoistSelectionTransaction) void {
+        const gpa = self.checker.gpa;
         if (!self.committed) {
             for (self.staged_roots.items) |*root| {
-                hoist_roots.deinitSelectedRoot(self.checker.gpa, root);
+                hoist_roots.deinitSelectedRoot(gpa, root);
             }
         }
-        self.staged_roots.deinit(self.checker.gpa);
-        self.staged_exprs.deinit(self.checker.gpa);
-        self.staged_bindings.deinit(self.checker.gpa);
-        self.staged_pattern_validations.deinit(self.checker.gpa);
-        self.known_updates.deinit(self.checker.gpa);
+        self.staged_roots.clearRetainingCapacity();
+        self.staged_exprs.clearRetainingCapacity();
+        self.staged_bindings.clearRetainingCapacity();
+        self.staged_pattern_validations.clearRetainingCapacity();
+        self.known_updates.clearRetainingCapacity();
+        self.resetRun();
+        self.checker.hoist_transaction_scratch.deinit(gpa);
+        self.checker.hoist_transaction_scratch = .{
+            .staged_roots = self.staged_roots,
+            .staged_exprs = self.staged_exprs,
+            .staged_bindings = self.staged_bindings,
+            .staged_pattern_validations = self.staged_pattern_validations,
+            .known_updates = self.known_updates,
+            .run_items = self.run.items,
+            .run_contexts = self.run.contexts,
+            .spare_contexts = self.spare_contexts,
+        };
+    }
+
+    /// Empty the staging run, keeping its contexts' storage as spares.
+    fn resetRun(self: *HoistSelectionTransaction) void {
+        self.run.items.clearRetainingCapacity();
+        while (self.run.contexts.pop()) |context| self.releaseContext(context);
+    }
+
+    fn releaseContext(self: *HoistSelectionTransaction, context: HoistedDependencyContext) void {
+        var released = context;
+        released.clearRetainingCapacity();
+        self.spare_contexts.appendAssumeCapacity(released);
     }
 
     fn selectedRootCount(self: *const HoistSelectionTransaction) usize {
@@ -3383,15 +3455,9 @@ const HoistSelectionTransaction = struct {
     };
 
     const StageRun = struct {
-        items: std.ArrayListUnmanaged(StageItem) = .empty,
-        contexts: std.ArrayListUnmanaged(HoistedDependencyContext) = .empty,
+        items: std.ArrayListUnmanaged(StageItem),
+        contexts: std.ArrayListUnmanaged(HoistedDependencyContext),
         root_index: u32 = undefined,
-
-        fn deinit(run: *StageRun, allocator: Allocator) void {
-            run.items.deinit(allocator);
-            for (run.contexts.items) |*pending_context| pending_context.deinit(allocator);
-            run.contexts.deinit(allocator);
-        }
 
         fn context(run: *StageRun) *HoistedDependencyContext {
             return &run.contexts.items[run.contexts.items.len - 1];
@@ -3455,10 +3521,11 @@ const HoistSelectionTransaction = struct {
             .unavailable_runtime => return false,
         };
         if (!staged) return false;
-        var run = StageRun{};
-        defer run.deinit(self.checker.gpa);
+        const run = &self.run;
+        std.debug.assert(run.items.items.len == 0 and run.contexts.items.len == 0);
+        defer self.resetRun();
         try run.items.append(self.checker.gpa, .{ .binding_root = pattern });
-        try self.drainStageRun(&run);
+        try self.drainStageRun(run);
         return true;
     }
 
@@ -3469,10 +3536,11 @@ const HoistSelectionTransaction = struct {
         known_update: ?CIR.Pattern.Idx,
         deps_expr: CIR.Expr.Idx,
     ) Allocator.Error!u32 {
-        var run = StageRun{};
-        defer run.deinit(self.checker.gpa);
-        try self.pushRootWork(&run, root, known_update, deps_expr);
-        try self.drainStageRun(&run);
+        const run = &self.run;
+        std.debug.assert(run.items.items.len == 0 and run.contexts.items.len == 0);
+        defer self.resetRun();
+        try self.pushRootWork(run, root, known_update, deps_expr);
+        try self.drainStageRun(run);
         return run.root_index;
     }
 
@@ -3485,7 +3553,12 @@ const HoistSelectionTransaction = struct {
     ) Allocator.Error!void {
         const gpa = self.checker.gpa;
         try run.items.ensureUnusedCapacity(gpa, 2);
-        try run.contexts.append(gpa, .{});
+        try run.contexts.ensureUnusedCapacity(gpa, 1);
+        const context = self.spare_contexts.pop() orelse fresh: {
+            try self.spare_contexts.ensureTotalCapacity(gpa, run.contexts.items.len + 1);
+            break :fresh HoistedDependencyContext{};
+        };
+        run.contexts.appendAssumeCapacity(context);
         run.items.appendAssumeCapacity(.{ .finish_root = .{ .root = root, .known_update = known_update } });
         run.items.appendAssumeCapacity(.{ .expr = deps_expr });
     }
@@ -3498,8 +3571,7 @@ const HoistSelectionTransaction = struct {
                 .pop_mark => |mark| run.context().pop(mark),
                 .binding_root => |pattern| try self.stageBindingRootItem(run, pattern),
                 .finish_root => |finish| {
-                    var context = run.contexts.pop().?;
-                    context.deinit(self.checker.gpa);
+                    self.releaseContext(run.contexts.pop().?);
                     const root_index = try self.appendStagedRoot(finish.root);
                     if (finish.known_update) |pattern| try self.stageKnownUpdate(pattern, root_index);
                     run.root_index = root_index;
@@ -6282,6 +6354,7 @@ const HoistSelectionTestState = struct {
         checker.last_hoist_result = null;
         checker.hoist_promotion_dependencies = .empty;
         checker.pending_comptime_conditions = .empty;
+        checker.hoist_transaction_scratch = .{};
         return .{
             .checker = checker,
             .allocator = allocator,
@@ -6315,6 +6388,7 @@ const HoistSelectionTestState = struct {
             hoist_roots.deinitSelectedRoot(self.allocator, root);
         }
         self.checker.selected_hoisted_roots.deinit(self.allocator);
+        self.checker.hoist_transaction_scratch.deinit(self.allocator);
     }
 
     fn borrowCheckedContext(self: *HoistSelectionTestState, checked: *Self) error{ExpectedHoistSelectionTestExpr}!CIR.Expr.Idx {
@@ -13237,6 +13311,12 @@ const HoistedDependencyContext = struct {
         self.bindings.deinit(allocator);
         self.callable_stability.deinit(allocator);
         self.local_procedure_stability.deinit(allocator);
+    }
+
+    fn clearRetainingCapacity(self: *@This()) void {
+        self.bindings.clearRetainingCapacity();
+        self.callable_stability.clearRetainingCapacity();
+        self.local_procedure_stability.clearRetainingCapacity();
     }
 
     fn mark(self: *const @This()) usize {
