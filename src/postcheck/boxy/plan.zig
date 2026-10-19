@@ -4543,7 +4543,7 @@ const Builder = struct {
             .ensure_worker_parser_runtime => |state| {
                 try self.plan.generated_parser_runtime_plans.append(self.allocator, .{
                     .worker = state.worker,
-                    .schema_type = try self.generatedParserRuntimeSchema(state.body_shape),
+                    .schema_type = self.generatedParserRuntimeSchema(state.body_shape),
                 });
                 try self.planWorkerBody(actions, state.worker, state.body);
             },
@@ -5833,35 +5833,13 @@ const Builder = struct {
                     return;
                 }
 
-                if (methodOwnerForModuleType(view, shape.ty)) |owner| {
-                    if (view.canonical_names.?.lookupMethodName(Ident.ENCODER_FOR_METHOD_NAME)) |encoder_for| {
-                        if (lookupMethodTarget(self.methodSearchModules(), view, owner, view, encoder_for)) |lookup| {
-                            switch (lookup.target.kind) {
-                                // A declared encoder, or the compiler-generated
-                                // structural encoder, whose body the checker
-                                // validated as a nested derivation of its own
-                                // (reached through the contract's `encoder_for`
-                                // edge).
-                                .procedure, .local_proc => {
-                                    try actions.append(self.allocator, codecCallAction(worker, shape, Ident.ENCODER_FOR_METHOD_NAME, shape));
-                                    return;
-                                },
-                                .structural => |kind| switch (kind) {
-                                    .encoder => {
-                                        try actions.append(self.allocator, codecCallAction(worker, shape, Ident.ENCODER_FOR_METHOD_NAME, shape));
-                                        return;
-                                    },
-                                    .parser => boxyPlanInvariant("encoder planning resolved to generated parser target"),
-                                    .equality, .hash, .map, .map_effectful => boxyPlanInvariant("encoder planning resolved to a non-encoder structural target"),
-                                },
-                            }
-                        }
-                    }
-                }
-
-                const shape_rep = try self.analyzeType(view, shape.ty);
-                const backing = requiredSingleChildOf(&self.plan, shape_rep, .nominal_backing);
-                try actions.append(self.allocator, .{ .encoder_shape = .{ .worker = worker, .contract_worker = contract_worker, .shape = backing.source_type, .subject_type = subject_type, .encoding_type = encoding_type } });
+                // A user nominal is encodable only through its own `encoder_for`:
+                // a declared encoder, or the compiler-generated structural
+                // encoder, whose body the checker validated as a nested
+                // derivation of its own (reached through the contract's
+                // `encoder_for` edge).
+                self.debugAssertNominalCodecMethod(view, shape, Ident.ENCODER_FOR_METHOD_NAME, .encoder);
+                try actions.append(self.allocator, codecCallAction(worker, shape, Ident.ENCODER_FOR_METHOD_NAME, shape));
             },
         }
     }
@@ -8695,34 +8673,48 @@ const Builder = struct {
         });
     }
 
+    /// Debug-only check that a user nominal a codec walk reaches as a nested
+    /// boundary has its own `method_text` codec method of `kind`, declared or
+    /// derived. The checker requires one before it accepts any codec over the
+    /// nominal.
+    fn debugAssertNominalCodecMethod(
+        self: *Builder,
+        view: ModuleView,
+        shape: CheckedTypeIdentity,
+        comptime method_text: []const u8,
+        comptime kind: static_dispatch.StructuralKind,
+    ) void {
+        if (@import("builtin").mode != .debug) return;
+        const owner = methodOwnerForModuleType(view, shape.ty) orelse
+            boxyPlanInvariant("user nominal codec boundary had no method owner");
+        const lookup = switch (lookupMethodTargetByText(self.methodSearchModules(), view, owner, method_text) orelse
+            boxyPlanInvariant("user nominal codec boundary had no codec method")) {
+            .target => |lookup| lookup,
+            .rejected => boxyPlanInvariant("user nominal codec boundary's codec method was a rejected declaration"),
+        };
+        switch (lookup.target.kind) {
+            .procedure, .local_proc => {},
+            .structural => |structural| if (structural != kind) boxyPlanInvariant("user nominal codec boundary resolved to a different structural derivation"),
+        }
+    }
+
     fn generatedParserRuntimeSchema(
         self: *Builder,
         root_shape: CheckedTypeIdentity,
-    ) Allocator.Error!CheckedTypeIdentity {
+    ) CheckedTypeIdentity {
         var shape = root_shape;
         while (true) {
             const view = self.moduleForId(shape.module);
             switch (view.checked_types.payload(shape.ty)) {
                 .alias => |alias| shape = typeRef(view, alias.backing),
+                // The derivation's body is already its nominal's backing, so a
+                // nominal here is a nested boundary: a builtin parses through the
+                // format protocol, and a user nominal through its own
+                // `parser_for`, declared or derived, which the checker recorded
+                // as a nested call.
                 .nominal => |nominal| {
-                    if (nominal.builtin != null) return shape;
-                    if (methodOwnerForModuleType(view, shape.ty)) |owner| {
-                        if (view.canonical_names.?.lookupMethodName(Ident.PARSER_FOR_METHOD_NAME)) |parser_for| {
-                            if (lookupMethodTarget(self.methodSearchModules(), view, owner, view, parser_for)) |lookup| {
-                                switch (lookup.target.kind) {
-                                    .procedure, .local_proc => return shape,
-                                    .structural => |kind| switch (kind) {
-                                        .parser => {},
-                                        .encoder => boxyPlanInvariant("parser schema resolved to generated encoder target"),
-                                        .equality, .hash, .map, .map_effectful => boxyPlanInvariant("parser schema resolved to a non-parser structural target"),
-                                    },
-                                }
-                            }
-                        }
-                    }
-                    const backing = try self.nominalBackingSource(view, nominal);
-                    if (checkedTryPayloads(backing.view, backing.ty) != null) return shape;
-                    shape = typeRef(backing.view, backing.ty);
+                    if (nominal.builtin == null) self.debugAssertNominalCodecMethod(view, shape, Ident.PARSER_FOR_METHOD_NAME, .parser);
+                    return shape;
                 },
                 .pending,
                 .err,

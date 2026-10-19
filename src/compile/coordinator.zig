@@ -1275,6 +1275,9 @@ pub const Coordinator = struct {
     /// compiling an app. This is role metadata; package identity itself still
     /// comes from package_identity.zig.
     app_package_name: ?[]const u8,
+    /// The package whose root module is the file the compiler was pointed at,
+    /// whatever kind of package that is. See `markRootPackage`.
+    root_package_name: ?[]const u8,
     /// True when the build's root is not an app, recorded explicitly so the
     /// hosted transform never has to guess whether an app exists.
     app_package_absent: bool,
@@ -1424,6 +1427,7 @@ pub const Coordinator = struct {
             .frontend_complete = false,
             .total_remaining = 0,
             .app_package_name = null,
+            .root_package_name = null,
             .app_package_absent = false,
             .targeted_module_package = null,
             .targeted_module_id = null,
@@ -1569,6 +1573,15 @@ pub const Coordinator = struct {
 
     pub fn markAppPackage(self: *Coordinator, package_name: []const u8) void {
         self.app_package_name = package_name;
+    }
+
+    /// Record the build's root package: the one whose root module is the file
+    /// the compiler was pointed at (or the `main.roc` that supplied its
+    /// dependency graph), whether that package is an app, a package, a
+    /// platform, or a plain module. Its root module is an entry module; see
+    /// `isEntryModule`.
+    pub fn markRootPackage(self: *Coordinator, package_name: []const u8) void {
+        self.root_package_name = package_name;
     }
 
     /// Record the module for the file the compiler was pointed at, for builds
@@ -5185,14 +5198,14 @@ pub const Coordinator = struct {
     /// compiler was pointed at, rather than one it reached by following
     /// imports.
     ///
-    /// That is the root module of the app package, and—when the two differ—the
-    /// file explicitly targeted while some owning `main.roc` supplied the
-    /// dependency graph (`markTargetedModule`).
+    /// That is the root module of the build's root package, and—when the two
+    /// differ—the file explicitly targeted while some owning `main.roc`
+    /// supplied the dependency graph (`markTargetedModule`).
     ///
     /// Only those modules may be classified `default_app`, and so only they
     /// receive the synthetic `echo!` hosted lambda. Any other headerless
-    /// module with a valid `main!` is an ordinary type module, whichever
-    /// package it lives in.
+    /// module is a type module, whichever package it lives in, and a `main!`
+    /// it defines is an ordinary top-level definition.
     ///
     /// This is the same shape as the `is_platform_pkg` gate on the hosted
     /// transform in `handleCanonicalized`, and for the same reason: a
@@ -5205,8 +5218,8 @@ pub const Coordinator = struct {
                 return true;
             }
         }
-        const app_package_name = self.app_package_name orelse return false;
-        if (!std.mem.eql(u8, pkg.name, app_package_name)) return false;
+        const root_package_name = self.root_package_name orelse return false;
+        if (!std.mem.eql(u8, pkg.name, root_package_name)) return false;
         const root_module_id = pkg.root_module_id orelse return false;
         return root_module_id == module_id;
     }
@@ -9990,9 +10003,9 @@ test "platform root candidate comes from registration, not name probing" {
 /// What one module's phases were observed to be while the module it imports
 /// was still incomplete.
 const ImportPhaseObservations = struct {
-    /// The importer was canonicalized -- it reached `.WaitingOnImports` and
-    /// its environment carries canonicalization's strict-demand relation --
-    /// while the module it imports had not been canonicalized itself.
+    /// The importer was canonicalized -- it reached `.WaitingOnImports` with
+    /// its canonicalized environment -- while the module it imports had not
+    /// been canonicalized itself.
     canonicalized_before_import_canonicalized: bool,
     /// The importer left `.WaitingOnImports` for type checking while the
     /// module it imports had not completed.
@@ -10068,10 +10081,7 @@ fn observeImportPhases(
         };
         switch (importer.phase) {
             .WaitingOnImports => {
-                const importer_canonicalized = if (importer.moduleEnv()) |env|
-                    env.topLevelDemandDependenciesReady()
-                else
-                    false;
+                const importer_canonicalized = importer.moduleEnv() != null;
                 if (importer_canonicalized and import_not_canonicalized) {
                     observations.canonicalized_before_import_canonicalized = true;
                 }

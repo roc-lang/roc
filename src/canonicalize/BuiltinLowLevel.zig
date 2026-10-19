@@ -9,7 +9,6 @@ const Allocator = std.mem.Allocator;
 const base = @import("base");
 
 const CIR = @import("CIR.zig");
-const DependencyGraph = @import("DependencyGraph.zig");
 const ModuleEnv = @import("ModuleEnv.zig");
 
 /// Returns whether this module is the compiler-owned Builtin module.
@@ -101,28 +100,6 @@ pub fn isIntrinsicAnnotation(env: *const ModuleEnv, ident: base.Ident.Idx) bool 
 pub fn apply(env: *ModuleEnv) (Allocator.Error || error{ UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound })!void {
     var new_def_indices = try replaceProvidedByCompilerLowLevels(env);
     defer new_def_indices.deinit(env.gpa);
-
-    if (new_def_indices.items.len == 0) return;
-
-    var graph = try DependencyGraph.buildDependencyGraph(
-        env,
-        env.all_defs,
-        env.gpa,
-    );
-    defer graph.deinit();
-
-    var demand_dependencies = try DependencyGraph.collectDependencies(&graph, env.gpa);
-    errdefer demand_dependencies.deinit(env.gpa);
-    const eval_order = try DependencyGraph.computeSCCs(&graph, env.gpa);
-    if (env.evaluation_order) |old_order| {
-        old_order.deinit();
-        env.gpa.destroy(old_order);
-    }
-    const eval_order_ptr = try env.gpa.create(DependencyGraph.EvaluationOrder);
-    eval_order_ptr.* = eval_order;
-    env.setTopLevelDemandDependencies(demand_dependencies);
-    demand_dependencies = .{};
-    env.evaluation_order = eval_order_ptr;
 }
 
 const LowLevelMap = std.AutoHashMap(base.Ident.Idx, CIR.Expr.LowLevel);

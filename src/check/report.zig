@@ -3817,14 +3817,13 @@ pub const ReportBuilder = struct {
         var report = try Report.init(self.gpa, "Circular Value Definition", "", .runtime_error);
         errdefer report.deinit();
 
-        try D.renderSliceInto(&.{
-            D.bytes("The value"),
-            D.ident(data.ident),
-            D.bytes("is part of a recursive non-function definition cycle."),
-        }, self, &report, &report.headline);
-        try self.addSourceHighlightRegion(&report, data.region);
-        try report.document.addLineBreaks(2);
+        const owned_ident = try report.addOwnedString(self.can_ir.getIdent(data.ident));
+        try report.headline.addReflowingText("The value ");
+        try report.headline.addUnqualifiedSymbol(owned_ident);
+        try report.headline.addReflowingText(" is part of a recursive non-function definition cycle.");
         try report.document.addReflowingText("Only functions can be recursive. Non-function top-level values must be fully computable without depending on themselves through other values.");
+        try report.document.addLineBreaks(2);
+        try self.addSourceHighlightRegion(&report, data.region);
 
         return report;
     }
