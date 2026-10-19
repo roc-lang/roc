@@ -126,7 +126,7 @@ const TaskContext = struct {
             .tag_fusion, .loop_append, .range, .box_reuse => try laneScratch(BodyClone.AnalysisScratch, lane),
             .branch_expectation, .trmc, .forwarding_join, .prune_join_params, .scalarize => null,
         };
-        var shard = try self.source.cloneForProcRewrite(output_allocator, self.proc);
+        var shard = try self.source.cloneForProcRewriteWithMarks(output_allocator, self.proc, try laneScratch(LirStore.RewriteMarks, lane));
         errdefer shard.deinit();
         switch (self.phase) {
             .branch_expectation => try BranchExpectation.runProc(&shard, self.proc, scratch_allocator),
@@ -145,7 +145,7 @@ const TaskContext = struct {
             },
             .prune_join_params => try PruneJoinParams.runProc(&shard, self.proc, scratch_allocator),
             .scalarize => try ScalarizeJoins.runProcWithScratch(&shard, self.layouts, self.proc, try laneScratch(ScalarizeJoins.LaneScratch, lane)),
-            .loop_append => try LoopAppendPromote.runProcWithScratch(&shard, self.layouts, self.proc, scratch_allocator, analysis.?),
+            .loop_append => try LoopAppendPromote.runProcInLane(&shard, self.layouts, self.proc, try laneScratch(LoopAppendPromote.LaneScratch, lane), analysis.?),
             .range => {
                 var joins = BodyClone.JoinParamIndex.init(scratch_allocator);
                 defer joins.deinit();

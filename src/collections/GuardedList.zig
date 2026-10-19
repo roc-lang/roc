@@ -87,6 +87,12 @@ pub fn List(comptime T: type, comptime list_name: []const u8) type {
             self.bumpIfMoved(old);
         }
 
+        pub fn appendNTimes(self: *Self, allocator: Allocator, value: T, n: usize) Allocator.Error!void {
+            const old = self.moveStateBeforeGrowth();
+            try self.__guarded_backing.appendNTimes(allocator, value, n);
+            self.bumpIfMoved(old);
+        }
+
         pub fn appendSliceAssumeCapacity(self: *Self, values: []const T) void {
             self.__guarded_backing.appendSliceAssumeCapacity(values);
         }
