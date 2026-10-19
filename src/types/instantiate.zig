@@ -341,6 +341,9 @@ const TagUnionFrame = struct {
     saved_reach: AdapterReachPosition,
 };
 
+/// Rigid variable name -> the var each occurrence of that rigid becomes.
+pub const RigidSubstitutions = @import("collections").DenseMapUnmanaged(Ident.Idx, Var);
+
 /// Type to manage instantiation.
 ///
 /// Entry point is `instantiateVar`
@@ -354,9 +357,6 @@ const TagUnionFrame = struct {
 ///
 /// This type does not own any of it's fields – it's a convenience wrapper to
 /// making threading it's field through all the copy steps easier
-/// Rigid variable name -> the var each occurrence of that rigid becomes.
-pub const RigidSubstitutions = @import("collections").DenseMapUnmanaged(Ident.Idx, Var);
-
 pub const Instantiator = struct {
     // not owned
     store: *TypesStore,
