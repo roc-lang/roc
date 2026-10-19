@@ -11151,7 +11151,11 @@ fn reconstructBodyData(comptime Live: type, pool_owner: anytype, stored: anytype
     } else if (comptime info == .@"struct") {
         var live: Live = undefined;
         inline for (info.@"struct".field_names, info.@"struct".field_types) |name, FieldType| {
-            @field(live, name) = reconstructBodyData(FieldType, pool_owner, @field(stored, name));
+            // A stored expression, pattern, or statement omits its id, which
+            // is its position; the caller supplies it.
+            if (comptime @hasField(@TypeOf(stored), name)) {
+                @field(live, name) = reconstructBodyData(FieldType, pool_owner, @field(stored, name));
+            }
         }
         return live;
     } else {
@@ -11244,7 +11248,6 @@ pub const StoredCheckedStatementData = StoredBodyData(CheckedStatementData);
 
 /// POD wrapper for a stored checked expression: `data` is the stored form.
 pub const StoredCheckedExpr = struct {
-    id: CheckedExprId,
     ty: CheckedTypeId,
     source_region: base.Region,
     data: StoredCheckedExprData,
@@ -11265,7 +11268,6 @@ pub const StoredCheckedExpr = struct {
 
 /// POD wrapper for a stored checked pattern.
 pub const StoredCheckedPattern = struct {
-    id: CheckedPatternId,
     ty: CheckedTypeId,
     source_region: base.Region,
     data: StoredCheckedPatternData,
@@ -11273,7 +11275,6 @@ pub const StoredCheckedPattern = struct {
 
 /// POD wrapper for a stored checked statement.
 pub const StoredCheckedStatement = struct {
-    id: CheckedStatementId,
     source_region: base.Region,
     data: StoredCheckedStatementData,
     /// Whether this statement diverges. Stored inline so it travels with its
@@ -11438,7 +11439,9 @@ pub const CheckedBodyStoreView = struct {
     }
 
     pub fn expr(self: CheckedBodyStoreView, id: CheckedExprId) CheckedExpr {
-        return reconstructBodyData(CheckedExpr, self, self.stored_exprs[@backingInt(id)]);
+        var live = reconstructBodyData(CheckedExpr, self, self.stored_exprs[@backingInt(id)]);
+        live.id = id;
+        return live;
     }
 
     /// The literal-conversion compile-time root checking linked to a literal
@@ -11448,11 +11451,15 @@ pub const CheckedBodyStoreView = struct {
     }
 
     pub fn pattern(self: CheckedBodyStoreView, id: CheckedPatternId) CheckedPattern {
-        return reconstructBodyData(CheckedPattern, self, self.stored_patterns[@backingInt(id)]);
+        var live = reconstructBodyData(CheckedPattern, self, self.stored_patterns[@backingInt(id)]);
+        live.id = id;
+        return live;
     }
 
     pub fn statement(self: CheckedBodyStoreView, id: CheckedStatementId) CheckedStatement {
-        return reconstructBodyData(CheckedStatement, self, self.stored_statements[@backingInt(id)]);
+        var live = reconstructBodyData(CheckedStatement, self, self.stored_statements[@backingInt(id)]);
+        live.id = id;
+        return live;
     }
 
     pub fn patternBinder(self: CheckedBodyStoreView, id: PatternBinderId) CheckedPatternBinder {
@@ -12971,8 +12978,9 @@ pub const CheckedBodyStore = struct {
         std.debug.assert(!self.serialized);
         try self.stored_exprs.ensureUnusedCapacity(allocator, exprs.len);
         for (exprs) |e| {
+            // A stored expression's id is its position.
+            std.debug.assert(@backingInt(e.id) == self.stored_exprs.items.len);
             self.stored_exprs.appendAssumeCapacity(.{
-                .id = e.id,
                 .ty = e.ty,
                 .source_region = e.source_region,
                 .data = try commitBodyData(self, allocator, e.data),
@@ -12984,8 +12992,9 @@ pub const CheckedBodyStore = struct {
         std.debug.assert(!self.serialized);
         try self.stored_patterns.ensureUnusedCapacity(allocator, patterns.len);
         for (patterns) |p| {
+            // A stored pattern's id is its position.
+            std.debug.assert(@backingInt(p.id) == self.stored_patterns.items.len);
             self.stored_patterns.appendAssumeCapacity(.{
-                .id = p.id,
                 .ty = p.ty,
                 .source_region = p.source_region,
                 .data = try commitBodyData(self, allocator, p.data),
@@ -12997,8 +13006,9 @@ pub const CheckedBodyStore = struct {
         std.debug.assert(!self.serialized);
         try self.stored_statements.ensureUnusedCapacity(allocator, statements.len);
         for (statements) |s| {
+            // A stored statement's id is its position.
+            std.debug.assert(@backingInt(s.id) == self.stored_statements.items.len);
             self.stored_statements.appendAssumeCapacity(.{
-                .id = s.id,
                 .source_region = s.source_region,
                 .data = try commitBodyData(self, allocator, s.data),
             });
@@ -13020,7 +13030,9 @@ pub const CheckedBodyStore = struct {
     }
 
     pub fn expr(self: *const CheckedBodyStore, id: CheckedExprId) CheckedExpr {
-        return reconstructBodyData(CheckedExpr, self, self.stored_exprs.items[@backingInt(id)]);
+        var live = reconstructBodyData(CheckedExpr, self, self.stored_exprs.items[@backingInt(id)]);
+        live.id = id;
+        return live;
     }
 
     /// The literal-conversion compile-time root checking linked to a literal
@@ -13030,11 +13042,15 @@ pub const CheckedBodyStore = struct {
     }
 
     pub fn pattern(self: *const CheckedBodyStore, id: CheckedPatternId) CheckedPattern {
-        return reconstructBodyData(CheckedPattern, self, self.stored_patterns.items[@backingInt(id)]);
+        var live = reconstructBodyData(CheckedPattern, self, self.stored_patterns.items[@backingInt(id)]);
+        live.id = id;
+        return live;
     }
 
     pub fn statement(self: *const CheckedBodyStore, id: CheckedStatementId) CheckedStatement {
-        return reconstructBodyData(CheckedStatement, self, self.stored_statements.items[@backingInt(id)]);
+        var live = reconstructBodyData(CheckedStatement, self, self.stored_statements.items[@backingInt(id)]);
+        live.id = id;
+        return live;
     }
 
     pub fn stringLiteral(self: *const CheckedBodyStore, id: CheckedStringLiteralId) []const u8 {
@@ -13410,7 +13426,6 @@ pub const CheckedBodyStore = struct {
         const stored_data = try commitBodyData(self, allocator, data);
         const id: CheckedExprId = @fromBackingInt(@intCast(@as(u32, @intCast(self.stored_exprs.items.len))));
         self.stored_exprs.appendAssumeCapacity(.{
-            .id = id,
             .ty = ty,
             .source_region = source_region,
             .data = stored_data,
@@ -33640,8 +33655,7 @@ pub const CheckedModuleArtifact = struct {
             }
         }
 
-        for (self.checked_bodies.stored_exprs.items, 0..) |expr, i| {
-            std.debug.assert(@backingInt(expr.id) == i);
+        for (self.checked_bodies.stored_exprs.items) |expr| {
             std.debug.assert(@backingInt(expr.ty) < self.checked_types.roots.items.len);
             verifyCheckedExprDataComplete(expr.data, &self.checked_bodies, self.checked_types.roots.items.len);
         }
@@ -33948,25 +33962,26 @@ pub const CheckedModuleArtifact = struct {
         const table = &self.static_dispatch_plans;
         const type_view = self.checked_types.view();
 
-        for (self.checked_bodies.stored_exprs.items) |expr| {
+        for (self.checked_bodies.stored_exprs.items, 0..) |expr, expr_index| {
+            const expr_id: CheckedExprId = @fromBackingInt(@intCast(expr_index));
             const expr_failure: ?DispatchEvidenceFailure = if (expr.data == .dispatch_call)
-                dispatchPlanFailure(table, expr.data.dispatch_call, expr.id, true)
+                dispatchPlanFailure(table, expr.data.dispatch_call, expr_id, true)
             else if (expr.data == .type_dispatch_call)
-                dispatchPlanFailure(table, expr.data.type_dispatch_call, expr.id, true)
+                dispatchPlanFailure(table, expr.data.type_dispatch_call, expr_id, true)
             else if (expr.data == .method_eq)
-                dispatchPlanFailure(table, expr.data.method_eq, expr.id, true)
+                dispatchPlanFailure(table, expr.data.method_eq, expr_id, true)
             else if (expr.data == .interpolation)
-                dispatchPlanFailure(table, expr.data.interpolation.plan, expr.id, true)
+                dispatchPlanFailure(table, expr.data.interpolation.plan, expr_id, true)
             else if (expr.data == .numeral)
-                dispatchPlanFailure(table, expr.data.numeral.plan, expr.id, false)
+                dispatchPlanFailure(table, expr.data.numeral.plan, expr_id, false)
             else if (expr.data == .str_from_quote)
-                dispatchPlanFailure(table, expr.data.str_from_quote.plan, expr.id, false)
+                dispatchPlanFailure(table, expr.data.str_from_quote.plan, expr_id, false)
             else if (expr.data == .for_)
-                iteratorPlanFailure(table, expr.data.for_.plan, expr.id, null)
+                iteratorPlanFailure(table, expr.data.for_.plan, expr_id, null)
             else
                 null;
             if (expr_failure) |failure| return failure;
-            if (self.checked_bodies.literalConversionRoot(expr.id)) |root_id| {
+            if (self.checked_bodies.literalConversionRoot(expr_id)) |root_id| {
                 const plan_id = switch (expr.data) {
                     .numeral => |numeral| numeral.plan,
                     .str_from_quote => |quote| quote.plan,
@@ -34020,10 +34035,10 @@ pub const CheckedModuleArtifact = struct {
                 const valid = if (plan_id) |id| blk: {
                     if (@backingInt(root_id) >= self.compile_time_roots.roots.len) break :blk false;
                     const root = self.compile_time_roots.root(root_id);
-                    break :blk root.expr == expr.id and root.literalConversionKind() != null and
+                    break :blk root.expr == expr_id and root.literalConversionKind() != null and
                         table.plans[@backingInt(id)].resolution == .direct_closed;
                 } else false;
-                if (!valid) return .{ .kind = .literal_conversion_root_invalid, .expr = expr.id };
+                if (!valid) return .{ .kind = .literal_conversion_root_invalid, .expr = expr_id };
             }
         }
 
@@ -34829,14 +34844,12 @@ pub const CheckedModuleArtifact = struct {
             }
         }
 
-        for (self.checked_bodies.stored_exprs.items, 0..) |expr, i| {
-            std.debug.assert(@backingInt(expr.id) == i);
+        for (self.checked_bodies.stored_exprs.items) |expr| {
             std.debug.assert(@backingInt(expr.ty) < self.checked_types.roots.items.len);
             verifyCheckedExprDataComplete(expr.data, &self.checked_bodies, self.checked_types.roots.items.len);
         }
 
-        for (self.checked_bodies.stored_patterns.items, 0..) |pattern, i| {
-            std.debug.assert(@backingInt(pattern.id) == i);
+        for (self.checked_bodies.stored_patterns.items) |pattern| {
             std.debug.assert(@backingInt(pattern.ty) < self.checked_types.roots.items.len);
             verifyCheckedPatternDataComplete(pattern.data);
         }
@@ -34850,8 +34863,7 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(indexed == binder.id);
         }
 
-        for (self.checked_bodies.stored_statements.items, 0..) |statement, i| {
-            std.debug.assert(@backingInt(statement.id) == i);
+        for (self.checked_bodies.stored_statements.items) |statement| {
             verifyCheckedStatementDataComplete(statement.data);
             std.debug.assert((statement.data == .expr) == (statement.state_merge != null));
         }
@@ -37617,7 +37629,6 @@ test "checked body builder appends reserved synthetic expressions without alloca
             .empty_record,
         );
         try std.testing.expectEqual(i, @backingInt(expr));
-        try std.testing.expectEqual(expr, builder.store.stored_exprs.items[i].id);
         try std.testing.expect(!builder.store.stored_exprs.items[i].diverges);
     }
 
@@ -39536,8 +39547,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xBE, 0x96, 0xF9, 0x34, 0x4E, 0xC9, 0x43, 0xD9, 0x80, 0x8E, 0x4B, 0x96, 0x17, 0x16, 0xA0, 0x7C,
-        0xD6, 0x05, 0x70, 0x10, 0x82, 0xC8, 0xCD, 0x58, 0xF0, 0x15, 0x84, 0xCE, 0xC2, 0xEF, 0x7F, 0x0C,
+        0xD5, 0x1F, 0x74, 0x32, 0xD0, 0x55, 0xFA, 0x55, 0x6E, 0x4D, 0xD0, 0x39, 0xAB, 0x68, 0xA9, 0x6C,
+        0x11, 0xC4, 0x21, 0x85, 0x26, 0xCC, 0x1E, 0x76, 0x49, 0xFA, 0x13, 0xD4, 0x74, 0xBD, 0x34, 0x8F,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

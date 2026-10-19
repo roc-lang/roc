@@ -22634,13 +22634,11 @@ test "boxy planner walks callable eval finalized const function bodies" {
     };
     const exprs = [_]checked.StoredCheckedExpr{
         .{
-            .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
             .ty = @fromBackingInt(@intCast(1)),
             .source_region = .zero(),
             .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
         },
         .{
-            .id = @fromBackingInt(@intCast(1)),
             .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
             .source_region = .zero(),
             .data = .empty_record,
@@ -22657,7 +22655,6 @@ test "boxy planner walks callable eval finalized const function bodies" {
         },
     };
     const patterns = [_]checked.StoredCheckedPattern{.{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = .zero(),
         .data = .{ .assign = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
@@ -22888,13 +22885,11 @@ test "boxy planner describes an imported hosted worker's type variables on the R
     try root_checked_module.checked_bodies.pattern_id_pool.append(gpa, @as(checked.CheckedPatternId, @fromBackingInt(@intCast(fixtureTableIndex(0)))));
     try root_checked_module.checked_bodies.expr_id_pool.append(gpa, @as(checked.CheckedExprId, @fromBackingInt(@intCast(3))));
     try root_checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = .zero(),
         .data = .{ .assign = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
     });
     try root_checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = .zero(),
         .data = .{ .lambda = .{
@@ -22903,7 +22898,6 @@ test "boxy planner describes an imported hosted worker's type variables on the R
         } },
     });
     try root_checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = .zero(),
         .data = .{ .call = .{
@@ -22915,13 +22909,11 @@ test "boxy planner describes an imported hosted worker's type variables on the R
         } },
     });
     try root_checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = .zero(),
         .data = .{ .lookup_external = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
     });
     try root_checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = .zero(),
         .data = .{ .lookup_local = .{ .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))), .resolved = null } },
@@ -23041,13 +23033,11 @@ test "boxy planner records relation-owned source type for platform-required dire
     });
     const app_template = procedureTemplateRef(app_checked_module.key.digest(), 0);
     try app_checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = .zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try app_checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = .zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(1), .plan = null } },
@@ -23091,13 +23081,11 @@ test "boxy planner records relation-owned source type for platform-required dire
 
     const platform_template = procedureTemplateRef(platform_checked_module.key.digest(), 0);
     try platform_checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = .zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try platform_checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = .zero(),
         .data = .{ .call = .{
@@ -23109,7 +23097,6 @@ test "boxy planner records relation-owned source type for platform-required dire
         } },
     });
     try platform_checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = .zero(),
         .data = .{ .lookup_required = @as(?checked.ResolvedValueRefId, @fromBackingInt(@intCast(fixtureTableIndex(0)))) },
@@ -25422,7 +25409,6 @@ test "boxy planner resolves callable eval bindings to finalized const function e
     checked_module.compile_time_roots = .{ .roots = &compile_time_roots };
 
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
