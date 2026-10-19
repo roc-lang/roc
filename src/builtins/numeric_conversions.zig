@@ -16,13 +16,14 @@ pub fn f64FitsF32(value: f64) bool {
         value <= f32_max_as_f64 and value >= -f32_max_as_f64;
 }
 
+/// Exactly 2^exponent, built from its IEEE bits. A power past the type's
+/// finite range is infinity.
 fn powerOfTwo(comptime Float: type, exponent: u32) Float {
-    var result: Float = 1.0;
-    var i: u32 = 0;
-    while (i < exponent) : (i += 1) {
-        result *= 2.0;
-    }
-    return result;
+    const Bits = @Int(.unsigned, @typeInfo(Float).float.bits);
+    const exponent_bias = std.math.floatExponentMax(Float);
+    if (exponent > exponent_bias) return std.math.inf(Float);
+    const biased: Bits = @intCast(exponent + exponent_bias);
+    return @bitCast(biased << std.math.floatMantissaBits(Float));
 }
 
 /// Return whether a signed 128-bit integer fits in the target integer type.
@@ -267,4 +268,15 @@ test "raw float and Dec conversion bits preserve signed integer representation" 
     try std.testing.expectEqual(@as(?u128, 255), decToIntTryBits(255_999_000_000_000_000_000, 8, false));
     try std.testing.expectEqual(@as(?u128, null), decToIntTryBits(128_000_000_000_000_000_000, 8, true));
     try std.testing.expectEqual(@as(?u128, null), decToIntTryBits(-dec.RocDec.one_point_zero_i128, 8, false));
+}
+
+test "powerOfTwo matches repeated doubling" {
+    inline for (.{ f32, f64 }) |Float| {
+        var expected: Float = 1.0;
+        var exponent: u32 = 0;
+        while (exponent <= 128) : (exponent += 1) {
+            try std.testing.expectEqual(expected, powerOfTwo(Float, exponent));
+            expected *= 2.0;
+        }
+    }
 }
