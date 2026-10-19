@@ -23570,10 +23570,15 @@ The compiler's developer-only environment variables (`ROC_LIR_DUMP`,
 `ROC_DEV_PACK_OBJECTS`, `ROC_DEV_PACK_HITS`, the object-compile round-trip
 variable and `ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE`) are honored only by a
 compiler for which `build_options.dev_diagnostics` is true: every Debug compiler, and any
-other build made with `-Ddev-diagnostics`. Every site tests that constant at
-compile time, so a release compiler neither reads these variables nor
-carries the code they enable, and an end user's environment cannot change
-what it does. The constant reads each compiler binary's own optimize mode,
+other build made with `-Ddev-diagnostics`. Every read goes through
+`base.dev_diagnostics`, whose `Var` enum names exactly these variables and
+whose `get` and `isSet` are compile-time null and false in any other compiler,
+so a release compiler neither reads these variables nor carries the code they
+enable, and an end user's environment cannot change what it does. The Zig
+lints reject a string literal naming one of them anywhere else outside test
+code. A compiler that honors them reads each one from the environment once
+per process, since it never changes its own environment, so a check on a hot
+path costs a load rather than an environment scan. The constant reads each compiler binary's own optimize mode,
 since the release compiler binary shares its modules with the development one. CLI
 cases that set one of these variables skip against a compiler without them.
 Performance work that needs them on an optimized compiler builds it with

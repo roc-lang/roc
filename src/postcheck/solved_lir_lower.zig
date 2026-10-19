@@ -6,8 +6,8 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const build_options = @import("build_options");
 const base = @import("base");
+const dev_diagnostics = base.dev_diagnostics;
 const builtins = @import("builtins");
 const can = @import("can");
 const check = @import("check");
@@ -2947,12 +2947,12 @@ const Lowerer = struct {
                                 cached = hit;
                                 cached_key = key.bytes;
                             }
-                            if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup direct-lir key={x} {s}\n", .{ key.bytes[0..8], if (cached != null) "hit" else "identity-mismatch" });
-                        } else if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup direct-lir key={x} miss\n", .{key.bytes[0..8]});
+                            if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("lookup direct-lir key={x} {s}\n", .{ key.bytes[0..8], if (cached != null) "hit" else "identity-mismatch" });
+                        } else if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("lookup direct-lir key={x} miss\n", .{key.bytes[0..8]});
                     }
                 }
             }
-        } else if (pack_trace_available and self.spec_cache != null and packTraceEnabled()) {
+        } else if (dev_diagnostics.isSet(.pack_trace) and self.spec_cache != null) {
             if (source_fn.source) |template| if (template.spec_key) |key| std.debug.print("lookup direct-lir key={x} skipped comptime={} plain={} cached={}\n", .{ key.bytes[0..8], self.comptime_phase, plain_spec, cached != null });
         }
         // Only a program using the object cache separates a site-named
@@ -2974,7 +2974,7 @@ const Lowerer = struct {
                         cached_key = key;
                     }
                 }
-                if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup identity key={x} {s}\n", .{ key[0..8], if (cached != null) "hit" else "miss" });
+                if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("lookup identity key={x} {s}\n", .{ key[0..8], if (cached != null) "hit" else "miss" });
             }
         }
         if (self.procs_by_identity.get(identity)) |owner| {
@@ -15658,16 +15658,6 @@ test "direct LIR lower declarations are referenced" {
 }
 
 /// Whether a root's procedure runs in the compile-time evaluator.
-/// Builds without libc (the playground) and compilers built without
-/// developer diagnostics never read the environment and compile no trace
-/// output.
-const pack_trace_available = @import("builtin").link_libc and build_options.dev_diagnostics;
-
-/// `ROC_PACK_TRACE` is set: print every object cache lookup.
-fn packTraceEnabled() bool {
-    return std.c.getenv("ROC_PACK_TRACE") != null;
-}
-
 fn rootRunsAtCompileTime(request: check.CheckedModule.RootRequest) bool {
     return switch (request.kind) {
         .compile_time_constant, .compile_time_callable => true,

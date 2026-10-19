@@ -12,6 +12,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
+const dev_diagnostics = @import("base").dev_diagnostics;
 const bindings = @import("vendor_llvm_compile_bindings");
 const llvm_embedded = @import("llvm_embedded");
 const builtins = @import("builtins");
@@ -685,7 +686,7 @@ pub fn compileBitcodeModulesToObject(allocator: Allocator, io: std.Io, bitcodes:
     pic_options.lower_memory_intrinsics_to_loops = pic_options.no_target_libcalls;
 
     const object_bytes = try emitMergedBitcodeModulesToObject(allocator, io, bitcodes, pic_options);
-    if (comptime build_options.dev_diagnostics) recordInProcessCompileForTest(allocator, io);
+    if (dev_diagnostics.get(.test_llvm_object_compile_count_file)) |path| recordInProcessCompileForTest(allocator, io, path);
 
     if (comptime build_options.llvm_keep_object.len != 0) {
         std.Io.Dir.cwd().writeFile(io, .{
@@ -697,16 +698,10 @@ pub fn compileBitcodeModulesToObject(allocator: Allocator, io: std.Io, bitcodes:
     return object_bytes;
 }
 
-/// Append one record to the file `ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE`
+/// Append one record to `path`, the file `ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE`
 /// names, so a test can count how many in-process objects a run compiled.
-/// Only compilers built with developer diagnostics call it.
-fn recordInProcessCompileForTest(allocator: Allocator, io: std.Io) void {
-    const path_key = allocator.dupeSentinel(u8, "ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE", 0) catch return;
-    defer allocator.free(path_key);
-    const path_z = std.c.getenv(path_key) orelse return;
-    const path = allocator.dupe(u8, path_z[0..std.mem.len(path_z)]) catch return;
-    defer allocator.free(path);
-
+/// Only compilers that read developer diagnostics call it.
+fn recordInProcessCompileForTest(allocator: Allocator, io: std.Io, path: []const u8) void {
     const existing_owned = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(1024 * 1024)) catch |err| switch (err) {
         error.FileNotFound => null,
         error.AccessDenied,

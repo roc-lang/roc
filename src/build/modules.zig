@@ -261,7 +261,7 @@ pub const ModuleType = enum {
         return switch (self) {
             .base => .{
                 .root = "src/base/mod.zig",
-                .deps = &.{ .collections, .builtins },
+                .deps = &.{ .collections, .builtins, .build_options },
                 .tests = .{ .unit = .{ .aggregators = &.{"base tests"} } },
             },
             .collections => .{

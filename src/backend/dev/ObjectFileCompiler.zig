@@ -13,8 +13,8 @@
 
 const std = @import("std");
 const invariant = @import("base").invariant;
+const dev_diagnostics = @import("base").dev_diagnostics;
 const builtin = @import("builtin");
-const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
 
 const layout = @import("layout");
@@ -606,7 +606,9 @@ fn compileWithCodeGen(
     // Get generated code and relocations
     symbol_relocations_started_ns = if (timing) |timings| timings.start() else 0;
     codegen.finishImage() catch return CompilationError.OutOfMemory;
-    if (artifactRoundTripRequested()) {
+    // `ROC_DEV_ARTIFACT_ROUNDTRIP` makes every object compile also assemble the
+    // program from its own procedure artifacts and panic if the result differs.
+    if (dev_diagnostics.isSet(.dev_artifact_roundtrip)) {
         var fresh = CodeGen.initWithBoxyMetadata(
             allocator,
             lir_store,
@@ -1266,12 +1268,4 @@ test "ObjectFileCompiler runtime static-root pack owns only reachable canonical 
             try std.testing.expectEqualStrings(text, value[0..output[2]]);
         }
     }
-}
-
-/// `ROC_DEV_ARTIFACT_ROUNDTRIP` makes every object compile also assemble the
-/// program from its own procedure artifacts and panic if the result differs.
-/// A compiler built without developer diagnostics never reads it.
-fn artifactRoundTripRequested() bool {
-    if (comptime !build_options.dev_diagnostics) return false;
-    return std.c.getenv("ROC_DEV_ARTIFACT_ROUNDTRIP") != null;
 }

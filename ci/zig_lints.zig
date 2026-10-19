@@ -179,7 +179,44 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    // Lint 6: Check for top level comments in new Zig files
+    // Lint 6: Check that developer-diagnostic variables are read only through base.dev_diagnostics.
+    try stdout.print("Checking developer-diagnostic environment reads...\n", .{});
+
+    {
+        var dev_diagnostic_names = try devDiagnosticNames(gpa, io);
+        defer freePathList(&dev_diagnostic_names, gpa);
+
+        var dev_diagnostic_files: PathList = .empty;
+        defer freePathList(&dev_diagnostic_files, gpa);
+
+        try walkTree(gpa, io, "src", &dev_diagnostic_files);
+
+        for (dev_diagnostic_files.items) |file_path| {
+            if (std.mem.eql(u8, file_path, dev_diagnostics_path) or isTestPath(file_path)) continue;
+            const source = (try readSourceFileIfExists(gpa, io, file_path)) orelse continue;
+            defer gpa.free(source);
+
+            var errors: std.ArrayList(u8) = .empty;
+            defer errors.deinit(gpa);
+            try appendDevDiagnosticNameErrors(gpa, &errors, file_path, source, dev_diagnostic_names.items);
+
+            if (errors.items.len > 0) {
+                try stdout.print("{s}", .{errors.items});
+                found_errors = true;
+            }
+        }
+
+        if (found_errors) {
+            try stdout.print("\n", .{});
+            try stdout.print("Developer-diagnostic environment variables are read only through base.dev_diagnostics,\n", .{});
+            try stdout.print("so a compiler built without developer diagnostics never reads them.\n", .{});
+            try stdout.print("\n", .{});
+            try stdout.flush();
+            std.process.exit(1);
+        }
+    }
+
+    // Lint 7: Check for top level comments in new Zig files
     try stdout.print("Checking for top level comments in new Zig files...\n", .{});
 
     var new_zig_files = try getNewZigFiles(gpa, io);
@@ -588,6 +625,59 @@ fn lineNumber(source: []const u8, offset: usize) usize {
     return std.mem.count(u8, source[0..offset], "\n") + 1;
 }
 
+/// The file that declares every developer-diagnostic environment variable.
+const dev_diagnostics_path = "src/base/dev_diagnostics.zig";
+
+/// Every `ROC_` string literal in `dev_diagnostics_path`, quotes included:
+/// the names of the developer-diagnostic environment variables.
+fn devDiagnosticNames(allocator: Allocator, io: std.Io) !PathList {
+    const source = try readSourceFile(allocator, io, dev_diagnostics_path);
+    defer allocator.free(source);
+
+    var names: PathList = .empty;
+    errdefer freePathList(&names, allocator);
+
+    var tokenizer = std.zig.Tokenizer.init(source);
+    var token = tokenizer.next();
+    while (token.tag != .eof) : (token = tokenizer.next()) {
+        if (token.tag != .string_literal) continue;
+        const text = source[token.loc.start..token.loc.end];
+        if (std.mem.startsWith(u8, text, "\"ROC_")) try names.append(allocator, try allocator.dupe(u8, text));
+    }
+    return names;
+}
+
+/// Whether a source file holds only tests, which set these variables for the
+/// compiler they run.
+fn isTestPath(file_path: []const u8) bool {
+    return std.mem.find(u8, file_path, "/test/") != null or std.mem.endsWith(u8, file_path, "_test.zig");
+}
+
+fn appendDevDiagnosticNameErrors(
+    allocator: Allocator,
+    errors: *std.ArrayList(u8),
+    file_path: []const u8,
+    source: [:0]const u8,
+    names: []const []u8,
+) !void {
+    var tokenizer = std.zig.Tokenizer.init(source);
+    var token = tokenizer.next();
+    while (token.tag != .eof) : (token = tokenizer.next()) {
+        if (token.tag != .string_literal) continue;
+        const text = source[token.loc.start..token.loc.end];
+        for (names) |name| {
+            if (!std.mem.eql(u8, text, name)) continue;
+            const msg = try std.fmt.allocPrint(
+                allocator,
+                "{s}:{d}: developer-diagnostic variable {s} must be read through base.dev_diagnostics\n",
+                .{ file_path, lineNumber(source, token.loc.start), name },
+            );
+            defer allocator.free(msg);
+            try errors.appendSlice(allocator, msg);
+        }
+    }
+}
+
 fn isReExport(line: []const u8) bool {
     // Match pattern: pub const X = lowercase.something;
     // This detects re-exports like "pub const Foo = bar.Baz;"
@@ -730,4 +820,21 @@ test "dense ID hash map lint recognizes qualified and multiline keys" {
 
     const fourth = std.mem.findPos(u8, source, third + 1, "HashMap(").?;
     try std.testing.expect(denseIdHashMapKey(source, fourth + "HashMap(".len) == null);
+}
+
+test "developer-diagnostic lint flags string literals naming a variable, not comments" {
+    const source =
+        \\// Prints when ROC_PACK_STATS is set.
+        \\const a = std.c.getenv("ROC_PACK_STATS");
+        \\const b = std.c.getenv("ROC_CACHE_DIR");
+        \\const c = dev_diagnostics.isSet(.pack_stats);
+    ;
+    var name = "\"ROC_PACK_STATS\"".*;
+    const names = [_][]u8{&name};
+
+    var errors: std.ArrayList(u8) = .empty;
+    defer errors.deinit(std.testing.allocator);
+    try appendDevDiagnosticNameErrors(std.testing.allocator, &errors, "x.zig", source, &names);
+
+    try std.testing.expectEqualStrings("x.zig:2: developer-diagnostic variable \"ROC_PACK_STATS\" must be read through base.dev_diagnostics\n", errors.items);
 }

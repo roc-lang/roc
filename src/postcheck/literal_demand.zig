@@ -46,7 +46,7 @@
 //! reached through the types it dispatches on.
 
 const std = @import("std");
-const build_options = @import("build_options");
+const base = @import("base");
 const collections = @import("collections");
 const check = @import("check");
 
@@ -59,17 +59,12 @@ const checked = check.CheckedModule;
 const static_dispatch = check.StaticDispatchRegistry;
 const checked_names = check.CanonicalNames;
 
-/// Builds without libc (the playground) and compilers built without
-/// developer diagnostics never read the environment and compile no trace
-/// output.
-const trace_available = @import("builtin").link_libc and build_options.dev_diagnostics;
-
 /// `ROC_CTFE_DEMAND_TRACE` is set: print every demand decision, from the
 /// analysis to each discovery root and each parked, unparked, and upgraded
-/// specialization. Inline, so a build without libc sees a compile-time false
-/// and compiles none of the trace output.
+/// specialization. Inline, so a compiler that does not read developer
+/// diagnostics sees a compile-time false and compiles none of the trace output.
 pub inline fn traceEnabled() bool {
-    return trace_available and std.c.getenv("ROC_CTFE_DEMAND_TRACE") != null;
+    return base.dev_diagnostics.isSet(.ctfe_demand_trace);
 }
 
 /// A compile-time root this compilation evaluates.

@@ -7,7 +7,6 @@
 const std = @import("std");
 const collections = @import("collections");
 const builtin = @import("builtin");
-const build_options = @import("build_options");
 const base = @import("base");
 const check = @import("check");
 const core = @import("lir_core");
@@ -2364,14 +2363,10 @@ test "checked pipeline declarations are referenced" {
 }
 
 /// Print the final LIR of every procedure whose debug name contains
-/// `ROC_LIR_DUMP`, for reading what the passes actually produced. Off unless
-/// the variable is set, and absent on targets without an environment and in
-/// compilers built without developer diagnostics.
-/// Printing the final LIR of selected procedures, for reading what the passes
-/// actually produced. Selected at compile time, so a build without an
-/// environment or a standard error stream, and a compiler built without
-/// developer diagnostics, carries none of it.
-const LirDump = if (builtin.os.tag == .freestanding or !build_options.dev_diagnostics) struct {
+/// `ROC_LIR_DUMP`, for reading what the passes actually produced. Selected at
+/// compile time, so a compiler that does not read developer diagnostics
+/// carries none of it.
+const LirDump = if (!base.dev_diagnostics.available) struct {
     fn filter() ?[]const u8 {
         return null;
     }
@@ -2379,8 +2374,7 @@ const LirDump = if (builtin.os.tag == .freestanding or !build_options.dev_diagno
     fn run(_: *const LirProgram.Result) Allocator.Error!void {}
 } else struct {
     fn filter() ?[]const u8 {
-        const raw = std.c.getenv("ROC_LIR_DUMP") orelse return null;
-        return std.mem.span(raw);
+        return base.dev_diagnostics.get(.lir_dump);
     }
 
     fn run(result: *const LirProgram.Result) Allocator.Error!void {
@@ -2512,7 +2506,7 @@ test "adopting completed compile-time values drops their initializers and identi
 /// function type or an erased callable, and the request and solved type
 /// digests. Never enabled by default; it only reads the finished stores, and a
 /// compiler built without developer diagnostics carries none of it.
-const SpecCensus = if (builtin.os.tag == .freestanding or !build_options.dev_diagnostics) struct {
+const SpecCensus = if (!base.dev_diagnostics.available) struct {
     fn enabled() bool {
         return false;
     }
@@ -2524,7 +2518,7 @@ const SpecCensus = if (builtin.os.tag == .freestanding or !build_options.dev_dia
     const MonoType = postcheck.Monotype.Type;
 
     fn enabled() bool {
-        return std.c.getenv("ROC_SPEC_CENSUS") != null;
+        return base.dev_diagnostics.isSet(.spec_census);
     }
 
     fn runLifted(lifted: *const postcheck.MonotypeLifted.Ast.Program) void {
