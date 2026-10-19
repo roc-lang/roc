@@ -1786,6 +1786,7 @@ fn canDiagnosticIsError(diag: anytype) bool {
         .default_not_allowed_on_local_type_decl,
         .record_default_reference_cycle,
         .var_across_function_boundary,
+        .var_in_binder_pattern,
         .type_redeclared,
         .file_import_not_found,
         .file_import_io_error,

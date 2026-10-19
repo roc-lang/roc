@@ -67,7 +67,7 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 ///      side tables carry only what lowering produces.
 /// v45: layout representation fields are sized for practice, and resolved list
 ///      layouts are plain layout indices.
-pub const FORMAT_VERSION: u32 = 49;
+pub const FORMAT_VERSION: u32 = 50;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
@@ -187,6 +187,7 @@ pub const LirStoreImage = extern struct {
     u64s: ArrayRef,
     u32s: ArrayRef,
     erased_call_arg_plans: ArrayRef,
+    stmt_rows: [LirStore.stmt_row_column_count]ArrayRef,
     proc_specs: ArrayRef,
     strings: StringLiteralStoreImage,
     boxy_names: BoxyNamesImage,
@@ -219,6 +220,7 @@ pub const LirStoreImage = extern struct {
             .u64s = try encoder.ref(store.u64s.unsafeRawItemsForView()),
             .u32s = try encoder.ref(store.u32s.unsafeRawItemsForView()),
             .erased_call_arg_plans = try encoder.ref(store.erased_call_arg_plans.unsafeRawItemsForView()),
+            .stmt_rows = try stmtRowRefs(encoder, store),
             .proc_specs = try encoder.ref(store.proc_specs.unsafeRawItemsForView()),
             .strings = try StringLiteralStoreImage.fromStore(encoder, &store.strings),
             .boxy_names = try BoxyNamesImage.fromStore(encoder, &store.boxy_names),
@@ -239,6 +241,22 @@ pub const LirStoreImage = extern struct {
         };
     }
 
+    fn stmtRowRefs(encoder: anytype, store: *const LirStore) @TypeOf(encoder).Error![LirStore.stmt_row_column_count]ArrayRef {
+        var refs: [LirStore.stmt_row_column_count]ArrayRef = undefined;
+        inline for (0..LirStore.stmt_row_column_count) |column| {
+            refs[column] = try encoder.ref(store.stmt_rows[column].unsafeRawItemsForView());
+        }
+        return refs;
+    }
+
+    fn stmtRowsView(self: LirStoreImage, base_ptr: [*]align(1) u8, image_size: usize) ImageError!LirStore.StmtRowColumns {
+        var columns: LirStore.StmtRowColumns = undefined;
+        inline for (LirStore.stmt_row_types, 0..) |Row, column| {
+            columns[column] = try guardedListFromRef(Row, "LirStore.stmt_rows", base_ptr, image_size, self.stmt_rows[column]);
+        }
+        return columns;
+    }
+
     fn view(self: LirStoreImage, base_ptr: [*]align(1) u8, image_size: usize, allocator: std.mem.Allocator) ImageError!LirStore {
         return .{
             .cf_stmts = try guardedListFromRef(LIR.CFStmt, "LirStore.cf_stmts", base_ptr, image_size, self.cf_stmts),
@@ -251,6 +269,7 @@ pub const LirStoreImage = extern struct {
             .u64s = try guardedListFromRef(u64, "LirStore.u64s", base_ptr, image_size, self.u64s),
             .u32s = try guardedListFromRef(u32, "LirStore.u32s", base_ptr, image_size, self.u32s),
             .erased_call_arg_plans = try guardedListFromRef(LIR.ErasedCallArgsPlan, "LirStore.erased_call_arg_plans", base_ptr, image_size, self.erased_call_arg_plans),
+            .stmt_rows = try self.stmtRowsView(base_ptr, image_size),
             .proc_specs = try guardedListFromRef(LIR.LirProcSpec, "LirStore.proc_specs", base_ptr, image_size, self.proc_specs),
             .strings = try self.strings.view(base_ptr, image_size),
             .boxy_names = try self.boxy_names.view(base_ptr, image_size),
@@ -799,7 +818,7 @@ comptime {
     // `facts` are transient worker state, not serialized, and default to
     // null or empty in views. The layout store's `digest_cache` is a memo
     // each view starts empty.
-    std.debug.assert(@typeInfo(LirStore).@"struct".field_names.len == 35);
+    std.debug.assert(@typeInfo(LirStore).@"struct".field_names.len == 36);
     std.debug.assert(@typeInfo(layout_mod.Store).@"struct".field_names.len == 17);
     std.debug.assert(@typeInfo(base.StringLiteral.Store).@"struct".field_names.len == 1);
 
@@ -1553,7 +1572,7 @@ test "LIR image round-trips ordered procedure rewrites with relocated suffixes" 
         });
         worker.getCFStmtPtr(root).* = .{ .assign_ref = .{
             .target = local,
-            .op = .{ .local = original },
+            .op = .local(original),
             .next = ret,
         } };
     }
@@ -1684,6 +1703,9 @@ test "LIR image copies and round-trips every populated store field" {
     inline for (serialized_guarded_fields, 0..) |fname, i| {
         @field(store, fname) = try h.guarded(@FieldType(LirStore, fname), source_allocator, 2 + i, @intCast(0x20 + i));
     }
+    inline for (0..LirStore.stmt_row_column_count) |column| {
+        store.stmt_rows[column] = try h.guarded(@TypeOf(store.stmt_rows[column]), source_allocator, 2 + column, @intCast(0x60 + column));
+    }
     store.next_synthetic_symbol = 0x0123_4567_89ab_cdef;
     store.strings = .{ .buffer = .{ .items = .{ .items = try h.distinct(u8, source_allocator, 24, 0x90), .capacity = 24, .pointer_stability = .{} } } };
 
@@ -1735,6 +1757,12 @@ test "LIR image copies and round-trips every populated store field" {
     inline for (serialized_guarded_fields) |fname| {
         const a = @field(store, fname).unsafeRawItemsForView();
         const b = @field(view.store, fname).unsafeRawItemsForView();
+        try std.testing.expectEqual(a.len, b.len);
+        try h.expectBytesEq(std.mem.sliceAsBytes(a), std.mem.sliceAsBytes(b));
+    }
+    inline for (0..LirStore.stmt_row_column_count) |column| {
+        const a = store.stmt_rows[column].unsafeRawItemsForView();
+        const b = view.store.stmt_rows[column].unsafeRawItemsForView();
         try std.testing.expectEqual(a.len, b.len);
         try h.expectBytesEq(std.mem.sliceAsBytes(a), std.mem.sliceAsBytes(b));
     }
@@ -1886,7 +1914,7 @@ test "in-place frozen image retains existing LIR arrays" {
     try program.static_data_values.append(image_allocator, .{ .initializer = null, .layout_idx = .u64 });
     const local = try program.store.addLocal(.{ .layout_idx = .u64 });
     const ret = try program.store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
-    const body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .static_data = value_slot }, .next = ret } }, .test_fixture);
+    const body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .static_data = .{ .id = value_slot } }, .next = ret } }, .test_fixture);
     const proc = try program.store.addProcSpec(.{ .name = .fromRaw(1), .identity = LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = try program.store.addLocalSpan(&.{local}), .body = body, .ret_layout = .u64 }, .none);
     try program.root_procs.append(image_allocator, proc);
     var value: [8]u8 = undefined;

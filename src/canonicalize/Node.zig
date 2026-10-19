@@ -243,6 +243,7 @@ pub const Tag = enum {
     diag_var_across_function_boundary,
     diag_shadowing_warning,
     diag_binding_name_does_not_match_mutability,
+    diag_var_in_binder_pattern,
     diag_type_redeclared,
     diag_undeclared_type,
     diag_undeclared_type_var,

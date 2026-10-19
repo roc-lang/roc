@@ -1376,6 +1376,20 @@ test "NodeStore round trip - Diagnostics" {
             .region = rand_region(),
         },
     });
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .var_in_binder_pattern = .{
+            .ident = rand_ident_idx(),
+            .position = .match_branch,
+            .region = rand_region(),
+        },
+    });
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .var_in_binder_pattern = .{
+            .ident = rand_ident_idx(),
+            .position = .for_loop,
+            .region = rand_region(),
+        },
+    });
 
     // Test the round-trip for all diagnostics
     for (diagnostics.items) |diagnostic| {
