@@ -45168,7 +45168,7 @@ const BodyContext = struct {
                 if (raw_pattern >= store_view.bodies.pattern_binder_by_pattern.len) {
                     Common.invariant("hoisted const result pattern was outside the binder index");
                 }
-                const binder = store_view.bodies.pattern_binder_by_pattern[raw_pattern] orelse return null;
+                const binder = store_view.bodies.pattern_binder_by_pattern[raw_pattern].get() orelse return null;
                 return .{ .binder = binder, .root = entry.root };
             },
         };
@@ -51836,7 +51836,7 @@ const BodyContext = struct {
     fn useSiteSchema(self: *BodyContext, expr: checked.CheckedExprId) Allocator.Error!SchemeRequirements {
         const raw_expr = @backingInt(expr);
         if (raw_expr >= self.view.resolved_refs.by_checked_expr.len) return emptySchema(self.view);
-        const ref_id = self.view.resolved_refs.by_checked_expr[raw_expr] orelse return emptySchema(self.view);
+        const ref_id = self.view.resolved_refs.by_checked_expr[raw_expr].get() orelse return emptySchema(self.view);
         const record = self.view.resolved_refs.records[@backingInt(ref_id)];
         return switch (record.ref) {
             .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |proc| self.procedureUseSchema(proc),
@@ -68183,7 +68183,7 @@ fn checkedBinderType(view: ModuleView, binder: checked.PatternBinderId) checked.
 fn checkedCaptureBinder(view: ModuleView, pattern: checked.CheckedPatternId) checked.PatternBinderId {
     const raw = @backingInt(pattern);
     if (raw >= view.bodies.pattern_binder_by_pattern.len) Common.invariant("checked closure capture pattern was outside the binder index");
-    return view.bodies.pattern_binder_by_pattern[raw] orelse
+    return view.bodies.pattern_binder_by_pattern[raw].get() orelse
         Common.invariant("checked closure capture pattern had no binder");
 }
 

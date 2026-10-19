@@ -11350,7 +11350,7 @@ pub const CheckedBodyStoreView = struct {
     stored_patterns: []const StoredCheckedPattern = &.{},
     stored_statements: []const StoredCheckedStatement = &.{},
     pattern_binders: []const CheckedPatternBinder = &.{},
-    pattern_binder_by_pattern: []const ?PatternBinderId = &.{},
+    pattern_binder_by_pattern: []const OptionalId(PatternBinderId) = &.{},
     expr_id_pool: []const CheckedExprId = &.{},
     pattern_id_pool: []const CheckedPatternId = &.{},
     statement_id_pool: []const CheckedStatementId = &.{},
@@ -11461,7 +11461,7 @@ pub const CheckedBodyStoreView = struct {
 
     /// A custom literal guard reads the matched value through this explicit binder.
     pub fn literalPatternBinder(self: CheckedBodyStoreView, pattern_id: CheckedPatternId) PatternBinderId {
-        return self.pattern_binder_by_pattern[@backingInt(pattern_id)] orelse
+        return self.pattern_binder_by_pattern[@backingInt(pattern_id)].get() orelse
             checkedArtifactInvariant("custom literal pattern had no matched-value binder", .{});
     }
 
@@ -12443,7 +12443,7 @@ pub const CheckedBodyStore = struct {
     stored_patterns: std.ArrayList(StoredCheckedPattern) = .empty,
     stored_statements: std.ArrayList(StoredCheckedStatement) = .empty,
     pattern_binders: std.ArrayList(CheckedPatternBinder) = .empty,
-    pattern_binder_by_pattern: std.ArrayList(?PatternBinderId) = .empty,
+    pattern_binder_by_pattern: std.ArrayList(OptionalId(PatternBinderId)) = .empty,
     /// Flat pool of `CheckedExprId`s for str/list/tuple/call/tag/record-ext-less
     /// arg spans, block-less expr spans, and run_low_level args.
     expr_id_pool: std.ArrayList(CheckedExprId) = .empty,
@@ -12620,9 +12620,9 @@ pub const CheckedBodyStore = struct {
             }
         }
 
-        const pattern_binder_by_pattern = try allocator.alloc(?PatternBinderId, patterns.items.len);
+        const pattern_binder_by_pattern = try allocator.alloc(OptionalId(PatternBinderId), patterns.items.len);
         errdefer allocator.free(pattern_binder_by_pattern);
-        @memset(pattern_binder_by_pattern, null);
+        @memset(pattern_binder_by_pattern, .none);
 
         var literal_pattern_exprs = std.ArrayList(LiteralPatternExprs).empty;
         errdefer literal_pattern_exprs.deinit(allocator);
@@ -13137,7 +13137,7 @@ pub const CheckedBodyStore = struct {
     pub fn patternBinderForCheckedPattern(self: *const CheckedBodyStore, checked_pattern: CheckedPatternId) ?PatternBinderId {
         const raw = @backingInt(checked_pattern);
         if (raw >= self.pattern_binder_by_pattern.items.len) return null;
-        return self.pattern_binder_by_pattern.items[raw];
+        return self.pattern_binder_by_pattern.items[raw].get();
     }
 
     pub fn patternBinderForSource(self: *const CheckedBodyStore, pattern_idx: CIR.Pattern.Idx) ?PatternBinderId {
@@ -13439,7 +13439,7 @@ pub const CheckedBodyStore = struct {
         stored_patterns: SerializedSlice(StoredCheckedPattern) = .{},
         stored_statements: SerializedSlice(StoredCheckedStatement) = .{},
         pattern_binders: SerializedSlice(CheckedPatternBinder) = .{},
-        pattern_binder_by_pattern: SerializedSlice(?PatternBinderId) = .{},
+        pattern_binder_by_pattern: SerializedSlice(OptionalId(PatternBinderId)) = .{},
         expr_id_pool: SerializedSlice(CheckedExprId) = .{},
         pattern_id_pool: SerializedSlice(CheckedPatternId) = .{},
         statement_id_pool: SerializedSlice(CheckedStatementId) = .{},
@@ -14981,7 +14981,7 @@ const CheckedBodyPayloadCopier = struct {
     source_node_map: *CheckedSourceNodeMap,
     string_builder: *CheckedStringLiteralBuilder,
     pattern_binders: *std.ArrayList(CheckedPatternBinder),
-    pattern_binder_by_pattern: []?PatternBinderId,
+    pattern_binder_by_pattern: []OptionalId(PatternBinderId),
     checked_types: *const CheckedTypePublication,
     exprs: *std.ArrayList(CheckedExpr),
     literal_pattern_exprs: *std.ArrayList(CheckedBodyStore.LiteralPatternExprs),
@@ -15356,9 +15356,9 @@ const CheckedBodyPayloadCopier = struct {
     ) Allocator.Error!CheckedExprId {
         const pattern_id = self.checkedPattern(pattern_idx);
         const binder: PatternBinderId = @fromBackingInt(@intCast(@as(u32, @intCast(self.pattern_binders.items.len))));
-        std.debug.assert(self.pattern_binder_by_pattern[@backingInt(pattern_id)] == null);
+        std.debug.assert(self.pattern_binder_by_pattern[@backingInt(pattern_id)] == .none);
         try self.pattern_binders.append(self.allocator, .{ .id = binder, .pattern = pattern_id, .reassignable = false });
-        self.pattern_binder_by_pattern[@backingInt(pattern_id)] = binder;
+        self.pattern_binder_by_pattern[@backingInt(pattern_id)] = .some(binder);
         const context = plan.patternContext(&self.module.moduleEnvConst().store) orelse unreachable;
         std.debug.assert(context.equality_fn_var_plus_one != 0);
         const callable = try self.checkedTypeForRequiredVar(@fromBackingInt(@intCast(context.equality_fn_var_plus_one - 1)), "literal pattern equality callable was not published");
@@ -16009,7 +16009,7 @@ const CheckedBodyPayloadCopier = struct {
     fn patternBinder(self: *@This(), pattern: CIR.Pattern.Idx) Allocator.Error!PatternBinderId {
         const checked_pattern = self.checkedPattern(pattern);
         const raw = @backingInt(checked_pattern);
-        if (self.pattern_binder_by_pattern[raw]) |existing| return existing;
+        if (self.pattern_binder_by_pattern[raw].get()) |existing| return existing;
 
         const id: PatternBinderId = @fromBackingInt(@intCast(@as(u32, @intCast(self.pattern_binders.items.len))));
         try self.pattern_binders.append(self.allocator, .{
@@ -16017,7 +16017,7 @@ const CheckedBodyPayloadCopier = struct {
             .pattern = checked_pattern,
             .reassignable = self.sourcePatternBinderIsReassignable(pattern),
         });
-        self.pattern_binder_by_pattern[raw] = id;
+        self.pattern_binder_by_pattern[raw] = .some(id);
         return id;
     }
 
@@ -16804,12 +16804,12 @@ pub const ResolvedValueRefRecord = struct {
 /// Public `ResolvedValueRefTable` declaration.
 pub const ResolvedValueRefTable = struct {
     records: []ResolvedValueRefRecord = &.{},
-    by_checked_expr: []?ResolvedValueRefId = &.{},
+    by_checked_expr: []OptionalId(ResolvedValueRefId) = &.{},
     template_refs: []ResolvedValueRefId = &.{},
 
     pub const Serialized = extern struct {
         records: SerializedSlice(ResolvedValueRefRecord) = .{},
-        by_checked_expr: SerializedSlice(?ResolvedValueRefId) = .{},
+        by_checked_expr: SerializedSlice(OptionalId(ResolvedValueRefId)) = .{},
         template_refs: SerializedSlice(ResolvedValueRefId) = .{},
         const Serde = artifact_serialize.SliceStoreSerde(ResolvedValueRefTable, @This());
         pub const serialize = Serde.serialize;
@@ -16847,9 +16847,9 @@ pub const ResolvedValueRefTable = struct {
         var local_pattern_roles = try LocalPatternRoleIndex.init(allocator, module, checked_bodies);
         defer local_pattern_roles.deinit(allocator);
 
-        const by_checked_expr = try allocator.alloc(?ResolvedValueRefId, checked_bodies.exprCount());
+        const by_checked_expr = try allocator.alloc(OptionalId(ResolvedValueRefId), checked_bodies.exprCount());
         errdefer allocator.free(by_checked_expr);
-        @memset(by_checked_expr, null);
+        @memset(by_checked_expr, .none);
 
         var recursive_reference_nodes = std.AutoHashMap(u32, void).init(allocator);
         defer recursive_reference_nodes.deinit();
@@ -16928,7 +16928,7 @@ pub const ResolvedValueRefTable = struct {
                 .scope_depth = 0,
                 .recursive_reference = recursive_reference_nodes.contains(node_idx),
             });
-            by_checked_expr[@backingInt(checked_expr)] = id;
+            by_checked_expr[@backingInt(checked_expr)] = .some(id);
             if (resolved_ref == .local_proc and resolved_ref.local_proc.is_alias) {
                 try callable_aliases.append(allocator, id);
             }
@@ -16944,7 +16944,7 @@ pub const ResolvedValueRefTable = struct {
                 .checked_ty = expr.ty,
                 .scope_depth = 0,
             });
-            by_checked_expr[@backingInt(expr.id)] = id;
+            by_checked_expr[@backingInt(expr.id)] = .some(id);
         }
 
         try appendSyntheticLocalLookupRefs(
@@ -16968,7 +16968,7 @@ pub const ResolvedValueRefTable = struct {
     pub fn lookupIdByCheckedExpr(self: *const ResolvedValueRefTable, expr: CheckedExprId) ?ResolvedValueRefId {
         const raw = @backingInt(expr);
         if (raw >= self.by_checked_expr.len) return null;
-        return self.by_checked_expr[raw];
+        return self.by_checked_expr[raw].get();
     }
 
     /// The original callable identity of a procedure reference. Alias use
@@ -16991,7 +16991,7 @@ pub const ResolvedValueTable = ResolvedValueRefTable;
 fn publishCallableAliasTargets(
     allocator: Allocator,
     records: []ResolvedValueRefRecord,
-    by_checked_expr: []const ?ResolvedValueRefId,
+    by_checked_expr: []const OptionalId(ResolvedValueRefId),
     aliases: []const ResolvedValueRefId,
 ) Allocator.Error!void {
     var path = std.ArrayList(ResolvedValueRefId).empty;
@@ -17009,7 +17009,7 @@ fn publishCallableAliasTargets(
             }
             if (path.items.len == aliases.len) checkedArtifactInvariant("cyclic callable alias declarations", .{});
             try path.append(allocator, target);
-            target = by_checked_expr[@backingInt(ref.local_proc.expr)] orelse
+            target = by_checked_expr[@backingInt(ref.local_proc.expr)].get() orelse
                 checkedArtifactInvariant("callable alias RHS has no resolved lookup", .{});
         }
         for (path.items) |id| records[@backingInt(id)].ref.local_proc.alias_target = target;
@@ -17080,7 +17080,7 @@ fn checkedExprDataCategory(tag: std.meta.Tag(CheckedExprData)) CheckedExprDataCa
 fn appendSyntheticLocalLookupRefs(
     allocator: Allocator,
     records: *std.ArrayList(ResolvedValueRefRecord),
-    by_checked_expr: []?ResolvedValueRefId,
+    by_checked_expr: []OptionalId(ResolvedValueRefId),
     checked_bodies: *const CheckedBodyStore,
     selected_hoisted_callables: *const SelectedHoistedCallableTable,
     hoisted_constants: *const HoistedConstTable,
@@ -17093,7 +17093,7 @@ fn appendSyntheticLocalLookupRefs(
                 if (raw_expr >= checked_bodies.exprCount()) {
                     checkedArtifactInvariant("synthetic lookup origin referenced an expression out of range", .{});
                 }
-                if (by_checked_expr[raw_expr] != null) {
+                if (by_checked_expr[raw_expr] != .none) {
                     checkedArtifactInvariant("synthetic lookup origin was resolved more than once", .{});
                 }
 
@@ -17125,7 +17125,7 @@ fn appendSyntheticLocalLookupRefs(
                     .checked_ty = expr.ty,
                     .scope_depth = 0,
                 });
-                by_checked_expr[raw_expr] = id;
+                by_checked_expr[raw_expr] = .some(id);
             },
             .pattern_validation_result, .pattern_error => {},
             .pattern_extraction_wrapper, .pattern_validation_wrapper => {
@@ -17143,7 +17143,7 @@ fn appendSyntheticLocalLookupRefs(
 
 fn validateAllLookupRefsResolved(
     checked_bodies: *const CheckedBodyStore,
-    by_checked_expr: []const ?ResolvedValueRefId,
+    by_checked_expr: []const OptionalId(ResolvedValueRefId),
 ) void {
     for (0..checked_bodies.exprCount()) |raw_expr| {
         const expr_id: CheckedExprId = @fromBackingInt(@intCast(@as(u32, @intCast(raw_expr))));
@@ -17153,7 +17153,7 @@ fn validateAllLookupRefsResolved(
             .match_expr, .other => false,
         };
         if (!is_lookup) continue;
-        if (raw_expr >= by_checked_expr.len or by_checked_expr[raw_expr] == null) {
+        if (raw_expr >= by_checked_expr.len or by_checked_expr[raw_expr] == .none) {
             checkedArtifactInvariant("checked lookup expression has no resolved value ref", .{});
         }
     }
@@ -23947,7 +23947,7 @@ const NestedProcSiteBuilder = struct {
     }
 
     fn captureBinder(self: *const NestedProcSiteBuilder, capture: CheckedCapture) PatternBinderId {
-        return self.checked_bodies.pattern_binder_by_pattern.items[@backingInt(capture.pattern)] orelse
+        return self.checked_bodies.pattern_binder_by_pattern.items[@backingInt(capture.pattern)].get() orelse
             checkedArtifactInvariant("nested procedure capture referenced a non-binding pattern", .{});
     }
 
@@ -34838,7 +34838,7 @@ pub const CheckedModuleArtifact = struct {
         for (self.checked_bodies.pattern_binders.items, 0..) |binder, i| {
             std.debug.assert(@backingInt(binder.id) == i);
             std.debug.assert(@backingInt(binder.pattern) < self.checked_bodies.patternCount());
-            const indexed = self.checked_bodies.pattern_binder_by_pattern.items[@backingInt(binder.pattern)] orelse {
+            const indexed = self.checked_bodies.pattern_binder_by_pattern.items[@backingInt(binder.pattern)].get() orelse {
                 base.invariant("checked artifact invariant violated: pattern binder was not indexed by pattern", .{});
             };
             std.debug.assert(indexed == binder.id);
@@ -39530,8 +39530,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x10, 0xC9, 0x2F, 0xB7, 0xBD, 0x1E, 0x4B, 0x69, 0x4F, 0x2E, 0xA9, 0xE4, 0x70, 0xC8, 0x1E, 0xE6,
-        0x27, 0x0D, 0xE4, 0x0C, 0x56, 0xBD, 0x9E, 0xF8, 0x9E, 0xF0, 0x1C, 0xCF, 0xC0, 0x2E, 0x76, 0x29,
+        0x00, 0x2B, 0x86, 0x57, 0xA8, 0x25, 0xCD, 0x28, 0x03, 0x0B, 0x64, 0x39, 0xF3, 0x6F, 0x4A, 0x5E,
+        0xC0, 0x9D, 0x8E, 0x9C, 0xC1, 0x36, 0x27, 0xFD, 0xFE, 0x4B, 0xDF, 0x46, 0x1D, 0xFF, 0xF6, 0x83,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

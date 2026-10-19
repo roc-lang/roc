@@ -18837,7 +18837,7 @@ const ProcBodyBuilder = struct {
     }
 
     fn captureIsReassignable(self: *ProcBodyBuilder, capture: checked.CheckedCapture) bool {
-        const binder = self.module.checked_bodies.pattern_binder_by_pattern[@backingInt(capture.pattern)] orelse
+        const binder = self.module.checked_bodies.pattern_binder_by_pattern[@backingInt(capture.pattern)].get() orelse
             boxyLowerInvariant("boxy closure capture referenced a non-binding pattern");
         return self.module.checked_bodies.patternBinder(binder).reassignable;
     }
@@ -18863,7 +18863,7 @@ const ProcBodyBuilder = struct {
                 local.* = null;
                 continue;
             }
-            const binder = self.module.checked_bodies.pattern_binder_by_pattern[@backingInt(capture.pattern)].?;
+            const binder = self.module.checked_bodies.pattern_binder_by_pattern[@backingInt(capture.pattern)].get().?;
             const rep = self.binderStorageRep(binder);
             local.* = if (self.parent.layoutIsBoxStorage(self.workerRuntimeLayoutForRep(rep).layoutIdx()))
                 try self.addFrameLocalForRepWithFreshDescriptor(rep)
@@ -20907,7 +20907,7 @@ const ProcBodyBuilder = struct {
                 if (pattern_index >= self.module.checked_bodies.pattern_binder_by_pattern.len) {
                     boxyLowerInvariant("boxy local lookup referenced missing binder metadata");
                 }
-                break :blk self.module.checked_bodies.pattern_binder_by_pattern[pattern_index];
+                break :blk self.module.checked_bodies.pattern_binder_by_pattern[pattern_index].get();
             },
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => null,
         };
@@ -20934,7 +20934,7 @@ const ProcBodyBuilder = struct {
                 if (pattern_index >= self.module.checked_bodies.pattern_binder_by_pattern.len) {
                     boxyLowerInvariant("boxy local lookup referenced missing binder metadata");
                 }
-                break :blk self.module.checked_bodies.pattern_binder_by_pattern[pattern_index];
+                break :blk self.module.checked_bodies.pattern_binder_by_pattern[pattern_index].get();
             },
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => null,
         } orelse boxyLowerInvariant("boxy expression had explicit storage representation without a binder source");
@@ -21012,7 +21012,7 @@ const ProcBodyBuilder = struct {
         if (lookup.resolved) |ref_id| {
             return try self.beginResolvedLookup(target, expr_id, checked_ty, ref_id, next);
         }
-        const binder = self.module.checked_bodies.pattern_binder_by_pattern[@backingInt(lookup.pattern)] orelse
+        const binder = self.module.checked_bodies.pattern_binder_by_pattern[@backingInt(lookup.pattern)].get() orelse
             boxyLowerInvariant("boxy unresolved local lookup referenced a non-binding pattern");
         return exprDone(try self.assignTypedLocalFromRep(
             target,
@@ -25301,7 +25301,7 @@ const ProcBodyBuilder = struct {
                 if (pattern_index >= self.module.checked_bodies.pattern_binder_by_pattern.len) {
                     boxyLowerInvariant("boxy direct call operand lookup referenced missing binder metadata");
                 }
-                break :blk self.module.checked_bodies.pattern_binder_by_pattern[pattern_index];
+                break :blk self.module.checked_bodies.pattern_binder_by_pattern[pattern_index].get();
             },
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => null,
         } orelse return planned_rep;
@@ -42552,7 +42552,7 @@ const ProcBodyBuilder = struct {
         if (pattern_index >= self.module.checked_bodies.pattern_binder_by_pattern.len) {
             boxyLowerInvariant("boxy local lookup referenced a pattern without binder metadata");
         }
-        const binder = self.module.checked_bodies.pattern_binder_by_pattern[pattern_index] orelse
+        const binder = self.module.checked_bodies.pattern_binder_by_pattern[pattern_index].get() orelse
             boxyLowerInvariant("boxy local lookup referenced a non-binding pattern");
         return self.localForBinder(binder);
     }
@@ -44852,9 +44852,9 @@ fn expectBoxyTopLevelConstLookup(kind: ConstLookupExprKind, stored: ConstLookupS
             .scope_depth = 0,
         },
     };
-    var refs_by_expr = [_]?checked.ResolvedValueRefId{
-        null,
-        @as(checked.ResolvedValueRefId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
+    var refs_by_expr = [_]checked.OptionalId(checked.ResolvedValueRefId){
+        .none,
+        .some(@as(checked.ResolvedValueRefId, @fromBackingInt(@intCast(fixtureTableIndex(0))))),
     };
     checked_module.resolved_value_refs = .{
         .records = &resolved_records,
@@ -45016,7 +45016,7 @@ test "boxy lowerer emits direct calls to planned private workers" {
         .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .reassignable = false,
     });
-    try checked_module.checked_bodies.pattern_binder_by_pattern.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
+    try checked_module.checked_bodies.pattern_binder_by_pattern.append(gpa, .some(@fromBackingInt(@intCast(fixtureTableIndex(0)))));
     try checked_module.checked_bodies.pattern_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
@@ -45111,13 +45111,13 @@ test "boxy lowerer emits direct calls to planned private workers" {
             .scope_depth = 0,
         },
     };
-    var refs_by_expr = [_]?checked.ResolvedValueRefId{
-        null,
-        null,
-        @as(checked.ResolvedValueRefId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
-        null,
-        null,
-        null,
+    var refs_by_expr = [_]checked.OptionalId(checked.ResolvedValueRefId){
+        .none,
+        .none,
+        .some(@as(checked.ResolvedValueRefId, @fromBackingInt(@intCast(fixtureTableIndex(0))))),
+        .none,
+        .none,
+        .none,
     };
     checked_module.resolved_value_refs = .{
         .records = &resolved_records,
@@ -45291,12 +45291,12 @@ test "boxy lowerer emits direct calls to planned imported workers" {
             .scope_depth = 0,
         },
     };
-    var import_refs_by_expr = [_]?checked.ResolvedValueRefId{
-        null,
-        null,
-        @as(checked.ResolvedValueRefId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
-        null,
-        null,
+    var import_refs_by_expr = [_]checked.OptionalId(checked.ResolvedValueRefId){
+        .none,
+        .none,
+        .some(@as(checked.ResolvedValueRefId, @fromBackingInt(@intCast(fixtureTableIndex(0))))),
+        .none,
+        .none,
     };
     import_checked_module.resolved_value_refs = .{
         .records = &import_resolved_records,
@@ -45382,10 +45382,10 @@ test "boxy lowerer emits direct calls to planned imported workers" {
             .scope_depth = 0,
         },
     };
-    var refs_by_expr = [_]?checked.ResolvedValueRefId{
-        null,
-        null,
-        @as(checked.ResolvedValueRefId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
+    var refs_by_expr = [_]checked.OptionalId(checked.ResolvedValueRefId){
+        .none,
+        .none,
+        .some(@as(checked.ResolvedValueRefId, @fromBackingInt(@intCast(fixtureTableIndex(0))))),
     };
     root_checked_module.resolved_value_refs = .{
         .records = &resolved_records,
@@ -45567,10 +45567,10 @@ test "boxy lowerer emits recursive direct calls to the current private worker" {
             .scope_depth = 0,
         },
     };
-    var refs_by_expr = [_]?checked.ResolvedValueRefId{
-        null,
-        null,
-        @as(checked.ResolvedValueRefId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
+    var refs_by_expr = [_]checked.OptionalId(checked.ResolvedValueRefId){
+        .none,
+        .none,
+        .some(@as(checked.ResolvedValueRefId, @fromBackingInt(@intCast(fixtureTableIndex(0))))),
     };
     checked_module.resolved_value_refs = .{
         .records = &resolved_records,
@@ -46566,7 +46566,7 @@ test "boxy lowerer emits checked tag matches as ordered discriminant tests" {
         },
     });
 
-    try checked_module.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{ null, null });
+    try checked_module.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{ .none, .none });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
@@ -46741,9 +46741,9 @@ test "boxy lowerer binds checked tag payload match patterns before branch bodies
         .reassignable = false,
     });
     try checked_module.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{
-        null,
-        @as(?checked.PatternBinderId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
-        null,
+        .none,
+        .some(@fromBackingInt(@intCast(fixtureTableIndex(0)))),
+        .none,
     });
     try checked_module.checked_bodies.pattern_id_pool.append(gpa, @fromBackingInt(@intCast(1)));
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
@@ -46924,9 +46924,9 @@ test "boxy lowerer emits checked list match patterns as length checks and elemen
         .reassignable = false,
     });
     try checked_module.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{
-        null,
-        null,
-        @as(?checked.PatternBinderId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
+        .none,
+        .none,
+        .some(@fromBackingInt(@intCast(fixtureTableIndex(0)))),
     });
     try checked_module.checked_bodies.pattern_id_pool.appendSlice(gpa, &.{
         @as(checked.CheckedPatternId, @fromBackingInt(@intCast(1))),
@@ -47126,8 +47126,8 @@ test "boxy lowerer emits checked string interpolation match patterns" {
         .reassignable = false,
     });
     try checked_module.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{
-        null,
-        @as(?checked.PatternBinderId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
+        .none,
+        .some(@fromBackingInt(@intCast(fixtureTableIndex(0)))),
     });
     try checked_module.checked_bodies.str_pattern_step_pool.append(gpa, .{
         .capture = @fromBackingInt(@intCast(1)),
@@ -47288,10 +47288,10 @@ test "boxy lowerer maps checked alternative binders onto representative match lo
         .{ .id = @fromBackingInt(@intCast(1)), .pattern = @fromBackingInt(@intCast(3)), .reassignable = false },
     });
     try checked_module.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{
-        null,
-        @as(?checked.PatternBinderId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
-        null,
-        @as(?checked.PatternBinderId, @fromBackingInt(@intCast(1))),
+        .none,
+        .some(@fromBackingInt(@intCast(fixtureTableIndex(0)))),
+        .none,
+        .some(@fromBackingInt(@intCast(1))),
     });
     try checked_module.checked_bodies.pattern_id_pool.appendSlice(gpa, &.{
         @as(checked.CheckedPatternId, @fromBackingInt(@intCast(1))),
@@ -47460,7 +47460,7 @@ test "boxy lowerer emits checked numeric literal match patterns as equality test
         },
     });
 
-    try checked_module.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{ null, null });
+    try checked_module.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{ .none, .none });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
@@ -47607,7 +47607,7 @@ test "boxy lowerer emits checked small decimal match patterns as Dec equality te
         },
     });
 
-    try checked_module.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{ null, null });
+    try checked_module.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{ .none, .none });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
@@ -47764,7 +47764,7 @@ test "boxy lowerer emits checked string literal match patterns as string equalit
         },
     });
 
-    try checked_module.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{ null, null });
+    try checked_module.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{ .none, .none });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
@@ -49328,7 +49328,7 @@ test "boxy lowerer emits block declaration bindings with checked type layouts" {
         .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .reassignable = false,
     });
-    try checked_module.checked_bodies.pattern_binder_by_pattern.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
+    try checked_module.checked_bodies.pattern_binder_by_pattern.append(gpa, .some(@fromBackingInt(@intCast(fixtureTableIndex(0)))));
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
@@ -49450,7 +49450,7 @@ test "boxy lowerer emits uninitialized mutable block bindings" {
         .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .reassignable = true,
     });
-    try checked_module.checked_bodies.pattern_binder_by_pattern.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
+    try checked_module.checked_bodies.pattern_binder_by_pattern.append(gpa, .some(@fromBackingInt(@intCast(fixtureTableIndex(0)))));
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
@@ -49560,7 +49560,7 @@ test "boxy lowerer emits mutable reassignment as set_local replace" {
         .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .reassignable = true,
     });
-    try checked_module.checked_bodies.pattern_binder_by_pattern.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
+    try checked_module.checked_bodies.pattern_binder_by_pattern.append(gpa, .some(@fromBackingInt(@intCast(fixtureTableIndex(0)))));
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
@@ -49726,9 +49726,9 @@ test "boxy lowerer destructures tuple declaration patterns" {
         .reassignable = false,
     });
     try checked_module.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{
-        null,
-        @as(?checked.PatternBinderId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
-        @as(?checked.PatternBinderId, @fromBackingInt(@intCast(1))),
+        .none,
+        .some(@fromBackingInt(@intCast(fixtureTableIndex(0)))),
+        .some(@fromBackingInt(@intCast(1))),
     });
     try checked_module.checked_bodies.pattern_id_pool.appendSlice(gpa, &.{
         @as(checked.CheckedPatternId, @fromBackingInt(@intCast(1))),
@@ -49920,9 +49920,9 @@ test "boxy lowerer materializes record rest declaration patterns" {
         .reassignable = false,
     });
     try checked_module.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{
-        @as(?checked.PatternBinderId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
-        null,
-        null,
+        .some(@fromBackingInt(@intCast(fixtureTableIndex(0)))),
+        .none,
+        .none,
     });
     try checked_module.checked_bodies.record_destruct_pool.appendSlice(gpa, &.{
         .{ .label = field_a, .kind = .{ .required = @fromBackingInt(@intCast(1)) } },
@@ -50116,8 +50116,8 @@ test "boxy lowerer binds irrefutable list rest declaration patterns" {
         .reassignable = false,
     });
     try checked_module.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{
-        @as(?checked.PatternBinderId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
-        null,
+        .some(@fromBackingInt(@intCast(fixtureTableIndex(0)))),
+        .none,
     });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
@@ -51088,9 +51088,9 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
         .reassignable = false,
     });
     try checked_module.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{
-        @as(?checked.PatternBinderId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
-        null,
-        null,
+        .some(@fromBackingInt(@intCast(fixtureTableIndex(0)))),
+        .none,
+        .none,
     });
     try checked_module.checked_bodies.record_destruct_pool.append(gpa, .{
         .label = field_a,
@@ -52003,8 +52003,8 @@ test "boxy lowerer stores dynamic list elements with boxy storage layout" {
         .reassignable = false,
     });
     try checked_module.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{
-        @as(?checked.PatternBinderId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
-        @as(?checked.PatternBinderId, @fromBackingInt(@intCast(1))),
+        .some(@fromBackingInt(@intCast(fixtureTableIndex(0)))),
+        .some(@fromBackingInt(@intCast(1))),
     });
     try checked_module.checked_bodies.pattern_id_pool.appendSlice(gpa, &.{
         @as(checked.CheckedPatternId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
@@ -52594,7 +52594,7 @@ test "boxy lowerer reuses dynamic boxes for Box(a)" {
         .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .reassignable = false,
     });
-    try checked_module.checked_bodies.pattern_binder_by_pattern.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
+    try checked_module.checked_bodies.pattern_binder_by_pattern.append(gpa, .some(@fromBackingInt(@intCast(fixtureTableIndex(0)))));
     try checked_module.checked_bodies.pattern_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
@@ -53143,7 +53143,7 @@ test "boxy lowerer publishes host wrapper proc for exported roots" {
         .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .reassignable = false,
     });
-    try checked_module.checked_bodies.pattern_binder_by_pattern.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
+    try checked_module.checked_bodies.pattern_binder_by_pattern.append(gpa, .some(@fromBackingInt(@intCast(fixtureTableIndex(0)))));
     try checked_module.checked_bodies.pattern_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
@@ -53464,8 +53464,8 @@ fn lowerListMapCanReuseFixture(
         .reassignable = false,
     });
     try checked_module.checked_bodies.pattern_binder_by_pattern.appendSlice(allocator, &.{
-        @as(?checked.PatternBinderId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
-        @as(?checked.PatternBinderId, @fromBackingInt(@intCast(1))),
+        .some(@fromBackingInt(@intCast(fixtureTableIndex(0)))),
+        .some(@fromBackingInt(@intCast(1))),
     });
     try checked_module.checked_bodies.pattern_id_pool.appendSlice(allocator, &.{
         @as(checked.CheckedPatternId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
