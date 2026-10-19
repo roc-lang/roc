@@ -11,8 +11,8 @@ type=repl
 » "first" <= "second"
 ~~~
 # OUTPUT
-**Type Not Determined**
-Nothing in this program determines the type of this string.
+**Missing Method**
+This string's type never resolved to a concrete type, so it has no `is_gt` method for `>` to call.
 ```roc
 "apple" > "banana"
 ```
@@ -22,12 +22,10 @@ Its type needs all of these:
 
     a where [a.is_gt : a, a -> Bool]
 
-Without knowing which type it is, there's no way to tell which `>` to use.
-
 **Hint:** None of the built-in string types support `>`.
 ---
-**Type Not Determined**
-Nothing in this program determines the type of this string.
+**Missing Method**
+This string's type never resolved to a concrete type, so it has no `is_lt` method for `<` to call.
 ```roc
 "zoo" < "aardvark"
 ```
@@ -37,12 +35,10 @@ Its type needs all of these:
 
     a where [a.is_lt : a, a -> Bool]
 
-Without knowing which type it is, there's no way to tell which `<` to use.
-
 **Hint:** None of the built-in string types support `<`.
 ---
-**Type Not Determined**
-Nothing in this program determines the type of this string.
+**Missing Method**
+This string's type never resolved to a concrete type, so it has no `is_gte` method for `>=` to call.
 ```roc
 "equal" >= "equal"
 ```
@@ -52,12 +48,10 @@ Its type needs all of these:
 
     a where [a.is_gte : a, a -> Bool]
 
-Without knowing which type it is, there's no way to tell which `>=` to use.
-
 **Hint:** None of the built-in string types support `>=`.
 ---
-**Type Not Determined**
-Nothing in this program determines the type of this string.
+**Missing Method**
+This string's type never resolved to a concrete type, so it has no `is_lte` method for `<=` to call.
 ```roc
 "first" <= "second"
 ```
@@ -66,8 +60,6 @@ Nothing in this program determines the type of this string.
 Its type needs all of these:
 
     a where [a.is_lte : a, a -> Bool]
-
-Without knowing which type it is, there's no way to tell which `<=` to use.
 
 **Hint:** None of the built-in string types support `<=`.
 # PROBLEMS

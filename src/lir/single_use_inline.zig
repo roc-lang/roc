@@ -96,7 +96,7 @@ const Inventory = struct {
                     self.unique_site[callee_index] = .{ .caller = caller, .stmt = stmt_id };
                     try self.markReachable(call.proc);
                 } else if (stmt == .assign_packed_erased_fn) {
-                    const packed_fn = stmt.assign_packed_erased_fn;
+                    const packed_fn = self.store.stmtRow(stmt.assign_packed_erased_fn.data);
                     self.escapes[@backingInt(packed_fn.proc)] = true;
                     try self.markReachable(packed_fn.proc);
                 } else if (stmt == .assign_literal and stmt.assign_literal.value == .proc_ref) {
@@ -147,7 +147,8 @@ fn eligibleCall(
     layouts: *const layout_mod.Store,
     call: @FieldType(LIR.CFStmt, "assign_call"),
 ) bool {
-    if (call.is_cold or call.result_desc != null or call.out_desc != null) return false;
+    const extra = store.stmtRowOrDefault(call.extra);
+    if (extra.is_cold or extra.result_desc != null or extra.out_desc != null) return false;
     const callee = store.getProcSpec(call.proc);
     return callee.body != null and
         callee.hosted == null and
@@ -206,7 +207,7 @@ const ReturnRewriter = struct {
         }
         return try cloner.store.addCFStmt(.{ .assign_ref = .{
             .target = self.target,
-            .op = .{ .local = source },
+            .op = .local(source),
             .next = self.next,
         } }, self.call_origin);
     }
@@ -268,7 +269,7 @@ fn inlineAt(store: *LirStore, layouts: *layout_mod.Store, site: CallSite) Resour
         arg_index -= 1;
         cloned_body = try store.addCFStmt(.{ .assign_ref = .{
             .target = cloner.local_map.get(source_args[arg_index]).?,
-            .op = .{ .local = call_args[arg_index] },
+            .op = .local(call_args[arg_index]),
             .next = cloned_body,
         } }, boundary_origin);
     }
@@ -351,7 +352,7 @@ test "single-use inline keeps writable callee arguments distinct from caller ope
     while (try walk.next()) |stmt_id| {
         const stmt = store.getCFStmt(stmt_id);
         if (stmt == .assign_call) return error.TestUnexpectedResult;
-        if (stmt == .assign_ref and stmt.assign_ref.op == .local and stmt.assign_ref.op.local == caller_arg and stmt.assign_ref.target != caller_arg) {
+        if (stmt == .assign_ref and stmt.assign_ref.op.kind == .local and stmt.assign_ref.op.source == caller_arg and stmt.assign_ref.target != caller_arg) {
             saw_argument_copy = true;
         }
         if (stmt == .set_local and stmt.set_local.value != caller_arg and stmt.set_local.target != caller_arg) {

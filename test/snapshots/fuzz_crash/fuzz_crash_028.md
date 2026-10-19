@@ -269,8 +269,8 @@ TYPE MISMATCH - fuzz_crash_028.md:133:5:133:25
 TYPE MISMATCH - fuzz_crash_028.md:133:5:133:31
 DECLARATION HAS NO VALUE - fuzz_crash_028.md:141:1:141:7
 DECLARATION HAS NO VALUE - fuzz_crash_028.md:144:1:144:13
-TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:12
-TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:18
+MISSING METHOD - fuzz_crash_028.md:133:5:133:12
+MISSING METHOD - fuzz_crash_028.md:133:5:133:18
 # PROBLEMS
 ~~~clojure
 (reports
@@ -2462,50 +2462,53 @@ TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:18
 			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
 	(report
 		(severity runtime_error)
-		(title "Type Not Determined")
+		(title "Missing Method")
 		(region (start 133 5) (end 133 12))
 		(headline
-			(reflow "Nothing in this program determines the type this")
+			(reflow "This")
 			(reflow " ")
 			(annotated code "od")
 			(reflow " ")
-			(reflow "method is called on."))
+			(reflow "call is on")
+			(reflow " ")
+			(reflow "a value whose type never resolved to a concrete type,")
+			(reflow " ")
+			(reflow "so it has no")
+			(reflow " ")
+			(annotated code "od")
+			(reflow " ")
+			(reflow "method."))
 		(document
 			(source-region (file "fuzz_crash_028.md") (start 133 5) (end 133 12) (annotation error) (line-text "le =(arg1)?.od()?.ned()?.recd?"))
 			(line-break)
-			(reflow "Without knowing which type it is, there's no way to tell which")
-			(reflow " ")
-			(annotated code "od")
-			(reflow " ")
-			(reflow "method to use.")
-			(line-break)
-			(line-break)
-			(annotated emphasis "Hint:")
-			(reflow " ")
-			(reflow "Add a type annotation saying which type it should be.")))
+			(reflow "Using the value somewhere that requires a specific type, or annotating it, will give it one.")))
 	(report
 		(severity runtime_error)
-		(title "Type Not Determined")
+		(title "Missing Method")
 		(region (start 133 5) (end 133 18))
 		(headline
-			(reflow "Nothing in this program determines the type this")
+			(reflow "This")
 			(reflow " ")
 			(annotated code "ned")
 			(reflow " ")
-			(reflow "method is called on."))
+			(reflow "call is on")
+			(reflow " ")
+			(reflow "a value of type")
+			(reflow " ")
+			(annotated code "ok")
+			(reflow ",")
+			(reflow " ")
+			(reflow "which never resolved to a concrete type,")
+			(reflow " ")
+			(reflow "so it has no")
+			(reflow " ")
+			(annotated code "ned")
+			(reflow " ")
+			(reflow "method."))
 		(document
 			(source-region (file "fuzz_crash_028.md") (start 133 5) (end 133 18) (annotation error) (line-text "le =(arg1)?.od()?.ned()?.recd?"))
 			(line-break)
-			(reflow "Without knowing which type it is, there's no way to tell which")
-			(reflow " ")
-			(annotated code "ned")
-			(reflow " ")
-			(reflow "method to use.")
-			(line-break)
-			(line-break)
-			(annotated emphasis "Hint:")
-			(reflow " ")
-			(reflow "Add a type annotation saying which type it should be."))))
+			(reflow "Using the value somewhere that requires a specific type, or annotating it, will give it one."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -3211,7 +3214,7 @@ EndOfFile,
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 1360) (dispatcher-var 281)
+						(e-interpolation (constraint-fn-var 1366) (dispatcher-var 281)
 							(first
 								(e-literal (string "H, ")))
 							(parts
@@ -3268,11 +3271,11 @@ EndOfFile,
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 1543)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 1549)
 									(receiver
 										(e-runtime-error (tag "erroneous_value_expr")))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 1540)
+										(e-dispatch-call (method "times") (constraint-fn-var 1546)
 											(receiver
 												(e-num (value "5")))
 											(args
@@ -3287,18 +3290,18 @@ EndOfFile,
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 1576)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 1582)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 1566)
+															(e-dispatch-call (method "plus") (constraint-fn-var 1572)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 1603)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 1609)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 1593)
+															(e-dispatch-call (method "minus") (constraint-fn-var 1599)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -3313,11 +3316,11 @@ EndOfFile,
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 1642)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 1648)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 1639)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 1645)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -3332,12 +3335,12 @@ EndOfFile,
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "ned") (constraint-fn-var 1708)
+													(e-dispatch-call (method "ned") (constraint-fn-var 1714)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "od") (constraint-fn-var 1678)
+																		(e-dispatch-call (method "od") (constraint-fn-var 1684)
 																			(receiver
 																				(e-runtime-error (tag "erroneous_value_expr")))
 																			(args)))

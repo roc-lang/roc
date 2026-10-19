@@ -984,7 +984,7 @@ test "use order compact procedure domain matches dense queries and excludes unre
     const input = try store.addLocal(.{ .layout_idx = .u64 });
     const view = try store.addLocal(.{ .layout_idx = .u64 });
     const done = try store.addCFStmt(.{ .ret = .{ .value = view } }, .test_fixture);
-    const alias = try store.addCFStmt(.{ .assign_ref = .{ .target = view, .op = .{ .local = input }, .next = done } }, .test_fixture);
+    const alias = try store.addCFStmt(.{ .assign_ref = .{ .target = view, .op = .local(input), .next = done } }, .test_fixture);
     const proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(11661),
@@ -1047,7 +1047,7 @@ test "use order block queries agree with a statement-level search on random bodi
                 for (0..self.random.uintLessThan(usize, 4) + 1) |_| {
                     next = try self.store.addCFStmt(.{ .assign_ref = .{
                         .target = self.local(),
-                        .op = .{ .local = self.local() },
+                        .op = .local(self.local()),
                         .next = next,
                     } }, .test_fixture);
                 }

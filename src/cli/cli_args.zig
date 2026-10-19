@@ -82,8 +82,22 @@ pub const ArgProblem = union(enum) {
     invalid_flag_value: struct {
         value: []const u8,
         flag: []const u8,
-        valid_options: []const u8,
+        expected: ExpectedValue,
     },
+};
+
+/// What a flag's value must be, for the problem reported when it is not.
+pub const ExpectedValue = union(enum) {
+    /// One of these values.
+    choices: []const Choice,
+    /// A sentence stating what the value must be.
+    stated: []const u8,
+};
+
+/// A value a flag accepts, and what choosing it means.
+pub const Choice = struct {
+    name: []const u8,
+    description: []const u8,
 };
 
 /// The optimization strategy for the compilation of a Roc program
@@ -184,7 +198,7 @@ fn extractReplaceDeps(alloc: mem.Allocator, args: []const []const u8) mem.Alloca
                 problem = .{ .invalid_flag_value = .{
                     .flag = replace_dep_flag,
                     .value = arg[replace_dep_flag.len + 1 ..],
-                    .valid_options = "two separate arguments: --replace-dep OLD NEW",
+                    .expected = .{ .stated = "The flag takes two separate arguments instead: --replace-dep OLD NEW." },
                 } };
                 continue;
             }
@@ -199,7 +213,7 @@ fn extractReplaceDeps(alloc: mem.Allocator, args: []const []const u8) mem.Alloca
             if (problem == null) problem = .{ .invalid_flag_value = .{
                 .flag = replace_dep_flag,
                 .value = args[i + 1],
-                .valid_options = "at most 32 replacements per invocation",
+                .expected = .{ .stated = std.fmt.comptimePrint("A single invocation can replace at most {d} dependencies.", .{ReplaceDepArgs.max}) },
             } };
         } else {
             replace_deps.items[replace_deps.len] = .{ .old = args[i + 1], .new = args[i + 2] };
@@ -424,7 +438,8 @@ const Flag = struct {
     /// appends what the declaration already states: the accepted `levels`,
     /// the `range`, and the field's default.
     help: ?[]const u8 = null,
-    /// What an integer value must be, for the problem reported when it is not.
+    /// What an integer value must be, as the end of "The value must be ...",
+    /// for the problem reported when it is not.
     valid: []const u8 = "",
     /// Inclusive bounds of an integer value.
     range: ?[2]i32 = null,
@@ -446,7 +461,7 @@ const Flag = struct {
         var text: []const u8 = flag.help.?;
         const path = flag.field orelse return text;
         const field = fieldInfoAt(Parsed, path);
-        if (field.type == OptLevel) text = text ++ " " ++ optLevelList(flag.levels, .described);
+        if (field.type == OptLevel) text = text ++ " " ++ optLevelHelp(flag.levels);
         if (flag.range) |range| text = text ++ std.fmt.comptimePrint(" ({d}-{d})", .{ range[0], range[1] });
         const default = field.defaultValue() orelse return text;
         if (field.type == OptLevel) return text ++ " [default: " ++ @tagName(default) ++ "]";
@@ -456,19 +471,33 @@ const Flag = struct {
     }
 };
 
-/// `levels` by name: comma-separated for a problem's valid options, or each
-/// with its description for help.
-fn optLevelList(comptime levels: []const OptLevel, comptime style: enum { names, described }) []const u8 {
+/// `levels`, each with its description, for help.
+fn optLevelHelp(comptime levels: []const OptLevel) []const u8 {
     var text: []const u8 = "";
     for (levels, 0..) |level, index| {
-        text = text ++ switch (style) {
-            .names => (if (index == 0) "" else ",") ++ @tagName(level),
-            .described => (if (index == 0) "" else if (index + 1 == levels.len) ", or " else ", ") ++
-                @tagName(level) ++ " (" ++ level.description() ++ ")",
-        };
+        text = text ++ (if (index == 0) "" else if (index + 1 == levels.len) ", or " else ", ") ++
+            @tagName(level) ++ " (" ++ level.description() ++ ")";
     }
     return text;
 }
+
+/// `levels` as the choices a problem with an `OptLevel` value lists.
+fn optLevelChoices(comptime levels: []const OptLevel) []const Choice {
+    comptime {
+        var choices: [levels.len]Choice = undefined;
+        for (levels, &choices) |level, *choice| {
+            choice.* = .{ .name = @tagName(level), .description = level.description() };
+        }
+        const final = choices;
+        return &final;
+    }
+}
+
+/// The values `--specialize` accepts, as `SpecializationStrategy.fromCliValue` reads them.
+const specialization_choices = [_]Choice{
+    .{ .name = "yes", .description = "lambda-set specialization (default)" },
+    .{ .name = "no", .description = "experimental boxy lowering" },
+};
 
 /// A struct field's name, type and default, in the shape the argument checks read.
 const FieldInfo = struct {
@@ -686,7 +715,7 @@ const limit_flags = [_]Flag{
         .form = .attached,
         .field = "resolve_limits.max_package_mb",
         .value_name = "<N>",
-        .valid = "size in MB (0 for unlimited)",
+        .valid = "a size in MB (0 for unlimited)",
         .help = std.fmt.comptimePrint("Per-package decompressed size limit in MB (default: {d}, 0 for unlimited)", .{
             ResolutionConfig.default_max_package_expanded_bytes / bytes_per_mb,
         }),
@@ -696,7 +725,7 @@ const limit_flags = [_]Flag{
         .form = .attached,
         .field = "resolve_limits.max_transitive_mb",
         .value_name = "<N>",
-        .valid = "size in MB (0 for unlimited)",
+        .valid = "a size in MB (0 for unlimited)",
         .help = std.fmt.comptimePrint(
             \\Combined size limit in MB for each direct dependency's transitive packages
             \\(defaults: packages {d}, platforms {d}; 0 for unlimited)
@@ -749,7 +778,7 @@ const tier2_objects_flag: Flag = .{ .name = "--tier2-objects", .form = .attached
 const watch_inputs_file_flag: Flag = .{ .name = "--watch-inputs-file", .form = .attached, .field = "watch_inputs_file" };
 
 fn jobsFlag(comptime help: []const u8) Flag {
-    return .{ .name = "--jobs", .short = "-j", .form = .attached, .field = "max_threads", .value_name = "<N>", .valid = "positive integer", .help = help };
+    return .{ .name = "--jobs", .short = "-j", .form = .attached, .field = "max_threads", .value_name = "<N>", .valid = "a positive integer", .help = help };
 }
 
 const jobs_flag = jobsFlag("Max worker threads for parallel compilation (default: auto-detect CPU count)");
@@ -838,8 +867,8 @@ const commands = [_]Command{
             watch_inputs_file_flag,
             tier2_objects_flag,
             jobs_flag,
-            .{ .name = "--wasm-memory", .form = .attached, .field = "wasm_memory", .value_name = "<bytes>", .valid = "positive integer (bytes)", .help = "Initial memory size for WASM targets in bytes (default: sized from data segments plus the stack)" },
-            .{ .name = "--wasm-stack-size", .form = .attached, .field = "wasm_stack_size", .value_name = "<bytes>", .valid = "positive integer (bytes)", .help = std.fmt.comptimePrint("Stack size for WASM targets in bytes (default: {d} = {d}MB)", .{ linker.DEFAULT_WASM_STACK_SIZE, linker.DEFAULT_WASM_STACK_SIZE / bytes_per_mb }) },
+            .{ .name = "--wasm-memory", .form = .attached, .field = "wasm_memory", .value_name = "<bytes>", .valid = "a positive integer number of bytes", .help = "Initial memory size for WASM targets in bytes (default: sized from data segments plus the stack)" },
+            .{ .name = "--wasm-stack-size", .form = .attached, .field = "wasm_stack_size", .value_name = "<bytes>", .valid = "a positive integer number of bytes", .help = std.fmt.comptimePrint("Stack size for WASM targets in bytes (default: {d} = {d}MB)", .{ linker.DEFAULT_WASM_STACK_SIZE, linker.DEFAULT_WASM_STACK_SIZE / bytes_per_mb }) },
         },
         .resolve = .limits_and_replace_deps,
         .min_column = 37,
@@ -1369,15 +1398,15 @@ fn parseArgsFor(comptime cmd: Command, alloc: mem.Allocator, args: []const []con
 /// the field accepts; `written` is the spelling of the flag to report.
 fn setFlagValue(comptime flag: Flag, field: anytype, written: []const u8, value: []const u8) ?ArgProblem {
     const Field = @TypeOf(field.*);
-    const valid_options: []const u8 = comptime if (Field == OptLevel)
-        optLevelList(flag.levels, .names)
+    const expected: ExpectedValue = comptime if (Field == OptLevel)
+        .{ .choices = optLevelChoices(flag.levels) }
     else if (Field == ?SpecializationStrategy)
-        SpecializationStrategy.cliOptions()
+        .{ .choices = &specialization_choices }
     else if (flag.range) |range|
-        std.fmt.comptimePrint("integer between {d} and {d}", .{ range[0], range[1] })
+        .{ .stated = std.fmt.comptimePrint("The value must be an integer between {d} and {d}.", .{ range[0], range[1] }) }
     else
-        flag.valid;
-    const invalid: ArgProblem = .{ .invalid_flag_value = .{ .flag = written, .value = value, .valid_options = valid_options } };
+        .{ .stated = "The value must be " ++ flag.valid ++ "." };
+    const invalid: ArgProblem = .{ .invalid_flag_value = .{ .flag = written, .value = value, .expected = expected } };
 
     if (Field == []const u8 or Field == ?[]const u8) {
         field.* = value;
@@ -1392,6 +1421,7 @@ fn setFlagValue(comptime flag: Flag, field: anytype, written: []const u8, value:
     } else if (Field == ?SpecializationStrategy) {
         field.* = SpecializationStrategy.fromCliValue(value) orelse return invalid;
     } else {
+        if (comptime flag.range == null and flag.valid.len == 0) @compileError(flag.name ++ " takes an integer, so it must state what the integer must be");
         const Int = if (@typeInfo(Field) == .optional) @typeInfo(Field).optional.child else Field;
         const number = std.fmt.parseInt(Int, value, 10) catch return invalid;
         if (flag.range) |range| {
@@ -1478,7 +1508,7 @@ test "specialization strategy parsing" {
         defer result.deinit(gpa);
         try testing.expectEqualStrings("--specialize", result.problem.invalid_flag_value.flag);
         try testing.expectEqualStrings("maybe", result.problem.invalid_flag_value.value);
-        try testing.expectEqualStrings("yes,no", result.problem.invalid_flag_value.valid_options);
+        try expectChoiceNames(&.{ "yes", "no" }, result.problem.invalid_flag_value.expected);
     }
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "build", "--specialize=no" });
@@ -2128,7 +2158,7 @@ test "roc glue" {
         defer result.deinit(gpa);
         try testing.expectEqualStrings("--opt", result.problem.invalid_flag_value.flag);
         try testing.expectEqualStrings("interpreter", result.problem.invalid_flag_value.value);
-        try testing.expectEqualStrings("dev,size,speed", result.problem.invalid_flag_value.valid_options);
+        try expectChoiceNames(&.{ "dev", "size", "speed" }, result.problem.invalid_flag_value.expected);
     }
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "glue", "-h" });
@@ -2857,34 +2887,39 @@ test "roc test takes --main with an attached value, as its help says" {
     }
 }
 
+fn expectChoiceNames(names: []const []const u8, expected: ExpectedValue) error{TestExpectedEqual}!void {
+    try testing.expectEqual(names.len, expected.choices.len);
+    for (names, expected.choices) |name, choice| try testing.expectEqualStrings(name, choice.name);
+}
+
 test "the valid options of --opt are the levels the command accepts" {
     const gpa = testing.allocator;
     {
         const result = try parse(gpa, testing.io, &.{ "build", "--opt=fast" });
-        try testing.expectEqualStrings("dev,interpreter,speed,size", result.problem.invalid_flag_value.valid_options);
+        try expectChoiceNames(&.{ "dev", "interpreter", "speed", "size" }, result.problem.invalid_flag_value.expected);
     }
     {
         const result = try parse(gpa, testing.io, &.{ "glue", "--opt=fast", "Glue.roc", "out" });
-        try testing.expectEqualStrings("dev,size,speed", result.problem.invalid_flag_value.valid_options);
+        try expectChoiceNames(&.{ "dev", "size", "speed" }, result.problem.invalid_flag_value.expected);
     }
 }
 
 test "numeric flag values report what they must be" {
     const gpa = testing.allocator;
-    const cases = [_]struct { args: []const []const u8, flag: []const u8, valid_options: []const u8 }{
-        .{ .args = &.{ "bundle", "--compression", "23" }, .flag = "--compression", .valid_options = "integer between 1 and 22" },
-        .{ .args = &.{ "bundle", "--compression", "0" }, .flag = "--compression", .valid_options = "integer between 1 and 22" },
-        .{ .args = &.{ "bundle", "--compression", "x" }, .flag = "--compression", .valid_options = "integer between 1 and 22" },
-        .{ .args = &.{ "build", "--wasm-memory=x" }, .flag = "--wasm-memory", .valid_options = "positive integer (bytes)" },
-        .{ .args = &.{ "build", "--wasm-stack-size=-1" }, .flag = "--wasm-stack-size", .valid_options = "positive integer (bytes)" },
-        .{ .args = &.{ "check", "--max-package-mb=x" }, .flag = "--max-package-mb", .valid_options = "size in MB (0 for unlimited)" },
-        .{ .args = &.{ "check", "--jobs=x" }, .flag = "--jobs", .valid_options = "positive integer" },
+    const cases = [_]struct { args: []const []const u8, flag: []const u8, stated: []const u8 }{
+        .{ .args = &.{ "bundle", "--compression", "23" }, .flag = "--compression", .stated = "The value must be an integer between 1 and 22." },
+        .{ .args = &.{ "bundle", "--compression", "0" }, .flag = "--compression", .stated = "The value must be an integer between 1 and 22." },
+        .{ .args = &.{ "bundle", "--compression", "x" }, .flag = "--compression", .stated = "The value must be an integer between 1 and 22." },
+        .{ .args = &.{ "build", "--wasm-memory=x" }, .flag = "--wasm-memory", .stated = "The value must be a positive integer number of bytes." },
+        .{ .args = &.{ "build", "--wasm-stack-size=-1" }, .flag = "--wasm-stack-size", .stated = "The value must be a positive integer number of bytes." },
+        .{ .args = &.{ "check", "--max-package-mb=x" }, .flag = "--max-package-mb", .stated = "The value must be a size in MB (0 for unlimited)." },
+        .{ .args = &.{ "check", "--jobs=x" }, .flag = "--jobs", .stated = "The value must be a positive integer." },
     };
     for (cases) |case| {
         const result = try parse(gpa, testing.io, case.args);
         defer result.deinit(gpa);
         try testing.expectEqualStrings(case.flag, result.problem.invalid_flag_value.flag);
-        try testing.expectEqualStrings(case.valid_options, result.problem.invalid_flag_value.valid_options);
+        try testing.expectEqualStrings(case.stated, result.problem.invalid_flag_value.expected.stated);
     }
     {
         const result = try parse(gpa, testing.io, &.{ "bundle", "--compression", "22", "--output-dir", "out", "a.roc" });

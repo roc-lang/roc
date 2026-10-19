@@ -2351,7 +2351,79 @@ test "unify - flex with constraints unifies with flex with same constraints" {
     try std.testing.expectEqual(.unified, result);
 }
 
-test "unify - declarative static dispatch representative survives repeated merges" {
+test "unify - literal static dispatch representative survives repeated merges" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const method_name = try env.module_env.getIdentStore().insert(
+        env.module_env.gpa,
+        Ident.for_text("from_quote"),
+    );
+    const argument = try env.module_env.types.fresh();
+    const result_var = try env.module_env.types.fresh();
+    const declarative_fn = try env.module_env.types.freshFromContent(
+        try env.mkFuncPure(&.{argument}, result_var),
+    );
+    const first_call_fn = try env.module_env.types.freshFromContent(
+        try env.mkFuncPure(&.{argument}, result_var),
+    );
+    const second_call_fn = try env.module_env.types.freshFromContent(
+        try env.mkFuncPure(&.{argument}, result_var),
+    );
+
+    const declarative_constraint = types_mod.StaticDispatchConstraint{
+        .fn_name = method_name,
+        .fn_var = declarative_fn,
+        .origin = .{ .from_literal = .quote },
+    };
+    const first_call_constraint = types_mod.StaticDispatchConstraint{
+        .fn_name = method_name,
+        .fn_var = first_call_fn,
+        .origin = .method_call,
+    };
+    const second_call_constraint = types_mod.StaticDispatchConstraint{
+        .fn_name = method_name,
+        .fn_var = second_call_fn,
+        .origin = .method_call,
+    };
+
+    const declarative_range = try env.module_env.types.appendStaticDispatchConstraints(
+        &.{declarative_constraint},
+    );
+    const first_call_range = try env.module_env.types.appendStaticDispatchConstraints(
+        &.{first_call_constraint},
+    );
+    const second_call_range = try env.module_env.types.appendStaticDispatchConstraints(
+        &.{second_call_constraint},
+    );
+
+    const receiver = try env.module_env.types.freshFromContent(.{ .flex = .{
+        .name = null,
+        .constraints = declarative_range,
+    } });
+    const first_call_receiver = try env.module_env.types.freshFromContent(.{ .flex = .{
+        .name = null,
+        .constraints = first_call_range,
+    } });
+    const second_call_receiver = try env.module_env.types.freshFromContent(.{ .flex = .{
+        .name = null,
+        .constraints = second_call_range,
+    } });
+
+    try std.testing.expectEqual(.unified, try env.unify(receiver, first_call_receiver));
+    try std.testing.expectEqual(.unified, try env.unify(receiver, second_call_receiver));
+
+    const resolved = env.module_env.types.resolveVar(receiver);
+    try std.testing.expect(resolved.desc.content == .flex);
+    const retained = env.module_env.types.sliceStaticDispatchConstraints(
+        resolved.desc.content.flex.constraints,
+    );
+    try std.testing.expectEqual(@as(usize, 1), retained.len);
+    try std.testing.expect(retained[0].origin.literalKind() == .quote);
+}
+
+test "unify - operator and dot call requirements stay separate until generalization" {
     const gpa = std.testing.allocator;
     var env = try TestEnv.init(gpa);
     defer env.deinit();
@@ -2419,9 +2491,7 @@ test "unify - declarative static dispatch representative survives repeated merge
     const retained = env.module_env.types.sliceStaticDispatchConstraints(
         resolved.desc.content.flex.constraints,
     );
-    try std.testing.expectEqual(@as(usize, 1), retained.len);
-    try std.testing.expect(retained[0].origin == .desugared_binop);
-    try std.testing.expect(retained[0].origin.desugared_binop.negated);
+    try std.testing.expectEqual(@as(usize, 3), retained.len);
 }
 
 test "unify - static dispatch method ordering ignores ident interning order" {

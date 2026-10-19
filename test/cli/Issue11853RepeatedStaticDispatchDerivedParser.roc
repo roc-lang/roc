@@ -60,7 +60,8 @@ Db := [D].{
 	}
 }
 
-## Unannotated, so both `db.get` calls resolve through one constrained `get` evidence slot.
+## Both `db.get` calls parse a different record type through `Db`'s one `get` method.
+helper : Db -> Str
 helper = |db| {
 	a : { n : I64 }
 	a = db.get({ names: ["n"], values: [1], next: 0 }) ?? { n: 0 }

@@ -46,7 +46,7 @@ main = {
 # EXPECTED
 TYPE MISMATCH - Adv.md:17:28:17:31
 MISSING METHOD - Adv.md:23:17:23:28
-TYPE NOT DETERMINED - Adv.md:28:13:28:20
+MISSING METHOD - Adv.md:28:13:28:20
 # PROBLEMS
 ~~~clojure
 (reports
@@ -112,10 +112,14 @@ TYPE NOT DETERMINED - Adv.md:28:13:28:20
 			(reflow "associated with it in the type's declaration.")))
 	(report
 		(severity runtime_error)
-		(title "Type Not Determined")
+		(title "Missing Method")
 		(region (start 28 13) (end 28 20))
 		(headline
-			(reflow "Nothing in this program determines the type of this string."))
+			(reflow "This string's type never resolved to a concrete type, so it has no")
+			(reflow " ")
+			(annotated code "update")
+			(reflow " ")
+			(reflow "method."))
 		(document
 			(source-region (file "Adv.md") (start 28 13) (end 28 20) (annotation error) (line-text "\tnext_val = \"Hello\".update(100)"))
 			(line-break)
@@ -126,13 +130,6 @@ TYPE NOT DETERMINED - Adv.md:28:13:28:20
 			(indent 1)
 			(text "a where [a.update : a, b -> _ret]")
 			(annotation-end)
-			(line-break)
-			(line-break)
-			(reflow "Without knowing which type it is, there's no way to tell which")
-			(reflow " ")
-			(annotated code "update")
-			(reflow " ")
-			(reflow "method to use.")
 			(line-break)
 			(line-break)
 			(annotated emphasis "Hint:")
