@@ -6922,8 +6922,9 @@ method relates that method's signature. A call on a type name such as
 parser's `value` or the encoder's value argument is what determines them.
 Derivation needs every part of the receiver: a receiver that is still
 undetermined after numeric defaulting waits for the final codec boundary, and
-one that is undetermined there is reported as an undetermined codec type and
-its call becomes a checked runtime error.
+one that is undetermined there is reported as a missing method on a part of
+the type that never resolved to a concrete type, and its call becomes a
+checked runtime error.
 
 `StaticDispatchPlanTable.generated_codec_derivations` stores each parser/encoder
 derivation as an explicit generated-codec contract. It records every generated
@@ -12547,6 +12548,15 @@ Other solved-graph mutations:
   the original type. Only successful ordinary unification with the aggregate
   skeleton commits the expected-shape relation; the owning relation still checks the actual
   value against the complete expected type.
+- `relateSameMethodRequirementsAtBoundary` (`relateSameMethodRequirements`
+  committed probe)—policy: one requirement per method on a type about to be
+  generalized, as declared in Static Dispatch At The Checked Boundary
+  ("Evidence params"). Each same-name callable pair on a receiver still flex
+  at the boundary's rank is related through an ordinary committed probe; a
+  probe that cannot establish the pair rolls back, reports the method
+  conflict, and poisons the receiver. A relation that defers obligations is
+  redone after recording the two method types, so an obligation that later
+  fails reports the method conflict and poisons the definition.
 - `deduplicateGeneralizedDispatchRequirements` (`setVarContent` of a retained
   constraint list, `unifyEquivalentGeneralizedCallables` committed probe)—
   policy: evidence-param collapse of same-shape requirements as declared in
@@ -15692,11 +15702,29 @@ occurrence, then constraint fn types walked the same way). Index `k` in this
 list is the shared identity between a plan's `constraint(k)` resolution and
 the k-th evidence entry a call edge supplies. The definition's module and any
 importing module enumerate identical lists from their structural copies of the
-scheme. Repeated declarative constraints share one callable type, while
-independently inferred dot-method calls retain separate callable relations so a
-rank-1 method scheme can be instantiated independently at each use. Operators
-and literal conversions retain one numeric/defaulting relation per method
-identity. A relation folded into a retained one selects no target of its own,
+scheme. A where clause's own repeated requirements of one method share one
+callable type. While a definition is checked, dot-method calls, operators,
+interpolations, and requirements instantiated from a callee's where clause are
+pending uses of the receiver's method: they retain separate callable
+relations, and when the receiver becomes concrete each is discharged against
+that type's one method, whose rank-1 scheme each use may instantiate
+differently (one `U64.parser_for` serves a use at `Json` and another at a
+second format, and one `plus` generic in its other argument serves `+ 1.U8`
+and `+ "s"`). Whether a program checks therefore does not depend on whether
+the receiver became concrete before or after its uses. A number or string
+literal's conversion has one callable type for every literal of its kind, so
+those share one relation per literal kind from the start; relating them can
+neither fail nor bind anything else. A type has one method of each name, so
+when a receiver is still a type variable at its definition's generalization
+boundary, its requirements of one method become one requirement: the boundary
+relates their callables before it defaults literals and generalizes, and an
+inferred scheme never holds two requirements of one method on one type.
+Requirements that cannot be one are a type mismatch. The report says the use
+requires the type to have two different methods of that name and shows both
+method types, at the use that introduced the second requirement, or at the
+definition when another definition introduced it; the receiver is poisoned so
+it reports nothing further. An annotation that declares two such requirements
+is the same mismatch, reported at the second requirement. A relation folded into a retained one selects no target of its own,
 yet its dispatch site still outputs a plan. The unifier journals each fold as
 an exact (dropped, retained) pair of raw constraint function vars, and checking
 outputs `ModuleEnv.dispatch_relation_merges`, mapping every folded relation
@@ -15708,8 +15736,7 @@ Same-name relations must agree on fixed outer function properties:
 rank-1 instantiation can vary types but cannot vary a declaration's argument
 count or known effect mode. Once a scheme's public type is fixed, equivalent
 requirements whose only differences are private generalized variables collapse;
-public type variables remain identity anchors, so requirements a caller can
-specialize differently stay separate. Collapsing unifies the duplicate's
+public type variables remain identity anchors. Collapsing unifies the duplicate's
 callable with the retained one before dropping it, so the union-find records
 which retained private variable each dropped variable stands for: scheme-use
 pairs, nested evidence keys, and body expressions typed by the dropped callable
@@ -15889,10 +15916,11 @@ A default is a type the checker chose, not one the program wrote, so no
 diagnostic ever names it. When a requirement fails on a class that a
 defaulting decision chose—literal defaulting, including the shared-literal
 head default, or a specialization default materialization—the checker
-reports one `undetermined_type` problem ("type not determined") for that
-class instead of a missing-method or mismatch report against the default
-owner. The report states what the type must support and that nothing in the
-program determines it. The hint depends on whether a built-in type could
+reports one `undetermined_type` problem for that class instead of a
+missing-method or mismatch report against the default owner. It is titled
+"missing method": the report says the type never resolved to a concrete type,
+so it has no method the requirement can use, and states what the type must
+support. The hint depends on whether a built-in type could
 satisfy the failed requirement. When the class holds a literal, the checker
 looks up the failed method on every built-in type that literal's kind can
 default to—the defaulting oracle's numeral candidates
@@ -15903,7 +15931,8 @@ number (or string) type supports the operator or has the method, naming the
 operator for a desugared operator and the method otherwise. The claim is
 scoped to built-in types because a user nominal that converts literals of
 that kind may still have the method. Otherwise, and for a defaulted type that
-holds no literal, the hint asks for a suffix (numbers only) or an annotation.
+holds no literal, the report says that a suffix (numbers only), a use that
+requires a specific type, or an annotation gives the type one.
 The lookup checks the method's existence only, not its signature.
 
 Each defaulting decision records, immediately before it commits, every
@@ -15970,12 +15999,13 @@ defaults to `Str`, but the `T0` payload is a separate type variable that
 nothing relates to any value, and `unwrap`'s body requires `concat` on it. The
 call is a direct call edge, so that requirement must resolve during checking,
 and it cannot. Such a receiver is reported as an `unresolved_dispatcher`
-problem with the title "type not determined", like a defaulted type a
-requirement rejects (Diagnostics About Defaulted Types). The report says
-which method or operator needs the type, and when the dispatch is inside the
-called function it also shows the argument whose type leaves the receiver
-undetermined; it never describes the receiver as a type that is missing a
-method. The call becomes a runtime error.
+problem titled "missing method", like a defaulted type a requirement rejects
+(Diagnostics About Defaulted Types): methods belong to concrete types, so a
+type variable that never resolved to one has no method for the dispatch to
+call. The report names the variable when the program wrote one, says which
+method or operator needs it, and when the dispatch is inside the called
+function also shows the argument the receiver's type comes from. The call
+becomes a runtime error.
 
 A generalized constrained function instantiation is also an explicit pinning
 frontier for receivers reachable from that function's argument positions. This
