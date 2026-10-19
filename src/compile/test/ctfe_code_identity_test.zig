@@ -45,10 +45,10 @@ const echo_platform = [_]struct { path: []const u8, source: []const u8 }{
 
 /// How two artifacts of one procedure differ, or null when they are the same
 /// code: the same bytes, frame, references, relocations, lines, and failure
-/// sites. A relocation to a datum the program numbers names that datum by the
-/// program's own numbering, which two programs need not share, so only its
-/// scope and kind are compared.
-fn artifactDifference(expected: ProcArtifact.Artifact, actual: ProcArtifact.Artifact) ?[]const u8 {
+/// sites. Compile-time evaluation's combined artifacts name each constant by
+/// its content, so a relocation of `expected` to a constant the build
+/// numbers is compared by the content name `expected_names` gives it.
+fn artifactDifference(expected: ProcArtifact.Artifact, expected_names: *const ProcArtifact.ContentNames, actual: ProcArtifact.Artifact) ?[]const u8 {
     if (!std.mem.eql(u8, expected.code, actual.code)) return "code";
     if (expected.entry != actual.entry) return "entry";
     if (!std.meta.eql(expected.frame, actual.frame)) return "frame";
@@ -59,8 +59,9 @@ fn artifactDifference(expected: ProcArtifact.Artifact, actual: ProcArtifact.Arti
     if (expected.symbolic_refs.len != actual.symbolic_refs.len) return "symbolic reference count";
     if (expected.relocations.len != actual.relocations.len) return "relocation count";
     for (expected.relocations, actual.relocations) |left, right| {
-        if (left.offset != right.offset or left.scope != right.scope or !std.meta.eql(left.kind, right.kind)) return "relocation";
-        if (left.scope == .shared and !std.mem.eql(u8, left.name, right.name)) return "relocation target";
+        const left_scope: @TypeOf(left.scope) = if (expected_names.renames(left.name)) .shared else left.scope;
+        if (left.offset != right.offset or left_scope != right.scope or !std.meta.eql(left.kind, right.kind)) return "relocation";
+        if (left_scope == .shared and !std.mem.eql(u8, expected_names.of(left.name), right.name)) return "relocation target";
     }
     if (expected.lines.len != actual.lines.len) return "line count";
     for (expected.lines, actual.lines) |left, right| {
@@ -182,6 +183,8 @@ test "every procedure compile-time evaluation shares with a dev build is the bui
     defer compiled.deinit();
     const built = &(compiled.artifacts orelse return error.TestUnexpectedResult);
 
+    var built_names = try ProcArtifact.ContentNames.init(allocator, built);
+    defer built_names.deinit();
     var built_by_identity = std.AutoHashMap(lir.ProcIdentity, usize).init(allocator);
     defer built_by_identity.deinit();
     for (built.artifacts, 0..) |artifact, index| switch (artifact.kind) {
@@ -197,7 +200,7 @@ test "every procedure compile-time evaluation shares with a dev build is the bui
         };
         const index = built_by_identity.get(identity) orelse continue;
         shared += 1;
-        if (artifactDifference(built.artifacts[index], artifact)) |difference| {
+        if (artifactDifference(built.artifacts[index], &built_names, artifact)) |difference| {
             differing += 1;
             var name: []const u8 = "";
             for (runtime.lir_result.store.getProcSpecs(), 0..) |proc, proc_index| {
