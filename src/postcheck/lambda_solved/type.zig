@@ -19,6 +19,23 @@ pub const TypeVarId = enum(u32) {
     }
 };
 
+/// A `TypeVarId` or none, at the width of one id. `Store.add` refuses the
+/// sentinel id, so `none` never names a variable.
+pub const MaybeTypeVarId = enum(u32) {
+    none = std.math.maxInt(u32),
+    _,
+
+    pub fn of(ty: ?TypeVarId) MaybeTypeVarId {
+        const present = ty orelse return .none;
+        return @fromBackingInt(@backingInt(present));
+    }
+
+    pub fn get(self: MaybeTypeVarId) ?TypeVarId {
+        if (self == .none) return null;
+        return @fromBackingInt(@backingInt(self));
+    }
+};
+
 /// Slice descriptor for type, field, tag, capture, or member arrays.
 pub const Span = extern struct {
     start: u32,
@@ -192,7 +209,8 @@ pub const Store = struct {
     }
 
     pub fn add(self: *Store, content: Content) std.mem.Allocator.Error!TypeVarId {
-        const id: TypeVarId = @fromBackingInt(@intCast(@as(u32, @intCast(self.vars.items.len))));
+        if (self.vars.items.len >= @backingInt(MaybeTypeVarId.none)) return error.OutOfMemory;
+        const id: TypeVarId = @fromBackingInt(@as(u32, @intCast(self.vars.items.len)));
         try self.vars.append(self.allocator, content);
         errdefer _ = self.vars.pop();
         try self.owned_named_backings.append(self.allocator, false);
@@ -274,6 +292,31 @@ pub const Store = struct {
         const start: u32 = @intCast(self.spans.items.len);
         try self.spans.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    /// A span of `len` new vars at the end of the span pool, returned with
+    /// its slots for the caller to fill before the store's next append.
+    pub fn addSpanSlots(self: *Store, len: usize) std.mem.Allocator.Error!SpanSlots(TypeVarId) {
+        return try appendSlots(TypeVarId, self.allocator, &self.spans, len);
+    }
+
+    /// A span of `len` new captures at the end of the capture pool, returned
+    /// with its slots for the caller to fill before the store's next append.
+    pub fn addCaptureSlots(self: *Store, len: usize) std.mem.Allocator.Error!SpanSlots(Capture) {
+        return try appendSlots(Capture, self.allocator, &self.captures, len);
+    }
+
+    pub fn SpanSlots(comptime T: type) type {
+        return struct { span: Span, slots: []T };
+    }
+
+    fn appendSlots(comptime T: type, allocator: std.mem.Allocator, list: *std.ArrayList(T), len: usize) std.mem.Allocator.Error!SpanSlots(T) {
+        if (len == 0) return .{ .span = .empty(), .slots = &.{} };
+        const start = std.math.cast(u32, list.items.len) orelse return error.OutOfMemory;
+        const count = std.math.cast(u32, len) orelse return error.OutOfMemory;
+        if (std.math.maxInt(u32) - start < count) return error.OutOfMemory;
+        const slots = try list.addManyAsSlice(allocator, len);
+        return .{ .span = .{ .start = start, .len = count }, .slots = slots };
     }
 
     pub fn addFields(self: *Store, values: []const Field) std.mem.Allocator.Error!Span {
