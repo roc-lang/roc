@@ -3092,7 +3092,9 @@ const Lowerer = struct {
                 try self.solved.lifted.appCalleesReachedBy(spec.source, &app_callees, self.allocator);
                 for (app_callees.items) |callee| try self.served_member_fns.append(self.allocator, try self.ensureOwnFnSpec(callee, .finite));
             }
-            for (0..arg_tys.len) |i| try self.queueCallableMembers(GuardedList.at(arg_tys, i));
+            // Specializing those callees can grow the type store, so the
+            // argument types are read from it afresh.
+            for (0..arg_tys.len) |i| try self.queueCallableMembers(GuardedList.at(self.types.span(entry.args), i));
             if (entry.capture_arg_ty) |capture_arg_ty| try self.queueCallableMembers(capture_arg_ty);
             try self.queueCallableMembers(entry.ret);
         }
