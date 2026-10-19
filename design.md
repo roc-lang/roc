@@ -2110,7 +2110,10 @@ instead of lowering and compiling it.
 
 Native compile-time instruction generation consumes an explicit, read-only LIR
 demand closure seeded by compile-time root procedures and materialized callable
-relocations. Runtime-only procedures are in that program only when the runtime
+relocations, closed over the object-cache code it splices: a spliced entry's
+call to a procedure the program has binds to the program's own code, so that
+procedure joins the closure, and the entries its closure reaches are spliced
+in turn, to a fixed point. Runtime-only procedures are in that program only when the runtime
 consumer shares it, and are then left un-JIT-compiled. Runtime
 machine emission is a distinct consumer: host CPU and root-entry wrapper ABI
 are explicit execution policies. That machine emission does not repeat checked,

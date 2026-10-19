@@ -4249,6 +4249,83 @@ const StaticSlotEnvironment = struct {
     }
 };
 
+/// The procedures the compile-time evaluator compiles: the closures of the
+/// roots it runs, and of every procedure of the program that the
+/// object-cache code it splices calls, to a fixed point. A spliced entry's
+/// call to a procedure the program has binds to the program's own code
+/// (`ProcArtifact.splice`), so that procedure is compiled too, and the
+/// object-cache entries its closure reaches are spliced in turn.
+fn evaluationDemand(
+    allocator: Allocator,
+    result: *LirProgram.Result,
+    roots: []const lir.LIR.LirProcSpecId,
+    materialized: []LirProgram.StaticDataExport,
+    splice_source: ?backend.dev.SpliceSource,
+) Allocator.Error![]lir.LIR.LirProcSpecId {
+    const source = splice_source orelse return lir.ReachableProcs.collectProcDemand(allocator, result, roots, materialized);
+    const proc_specs = result.store.getProcSpecs();
+    var procs_by_identity = std.AutoHashMap(lir.ProcIdentity, lir.LIR.LirProcSpecId).init(allocator);
+    defer procs_by_identity.deinit();
+    for (proc_specs, 0..) |proc, index| {
+        if (proc.is_static_initializer) continue;
+        try procs_by_identity.put(proc.identity, @fromBackingInt(@intCast(@as(u32, @intCast(index)))));
+    }
+    var demand_roots = std.ArrayList(lir.LIR.LirProcSpecId).empty;
+    defer demand_roots.deinit(allocator);
+    try demand_roots.appendSlice(allocator, roots);
+    var added = collections.DenseMap(lir.LIR.LirProcSpecId, void).init(allocator);
+    defer added.deinit();
+    for (roots) |root| try added.put(root, {});
+    const Visit = struct { set: *const backend.dev.ProcArtifact.Set, index: u32 };
+    var visited = std.AutoHashMapUnmanaged(Visit, void).empty;
+    defer visited.deinit(allocator);
+    var stack = std.ArrayList(Visit).empty;
+    defer stack.deinit(allocator);
+    while (true) {
+        const demand = try lir.ReachableProcs.collectProcDemand(allocator, result, demand_roots.items, materialized);
+        var grew = false;
+        for (demand) |proc_id| {
+            const proc = proc_specs[@backingInt(proc_id)];
+            if (!proc.external or proc.c_abi_entry) continue;
+            const key = proc.cache_key orelse continue;
+            const located = source.find(source.context, key) orelse continue;
+            try stack.append(allocator, .{ .set = located.set, .index = located.index });
+        }
+        // Every artifact the spliced closures place, walked once, as
+        // `ProcArtifact.splice` places them: set-local references, and
+        // symbolic references to code the program does not have.
+        while (stack.pop()) |visit| {
+            if ((try visited.getOrPut(allocator, visit)).found_existing) continue;
+            const artifact = visit.set.artifacts[visit.index];
+            for (artifact.refs) |ref| try stack.append(allocator, .{ .set = visit.set, .index = ref.target });
+            for (artifact.symbolic_refs) |ref| {
+                switch (ref.target) {
+                    .proc => |identity| if (procs_by_identity.get(identity)) |proc_id| {
+                        if ((try added.getOrPut(proc_id)).found_existing) continue;
+                        try demand_roots.append(allocator, proc_id);
+                        grew = true;
+                        continue;
+                    },
+                    .boxy_thunk, .rc_helper => {},
+                }
+                for (visit.set.artifacts, 0..) |candidate, candidate_index| {
+                    const matches = switch (ref.target) {
+                        .proc => |identity| candidate.kind == .proc and std.meta.eql(identity, candidate.kind.proc),
+                        .boxy_thunk => |identity| candidate.kind == .boxy_thunk and std.meta.eql(identity, candidate.kind.boxy_thunk),
+                        .rc_helper => |name| candidate.kind == .rc_helper and std.mem.eql(u8, name, candidate.kind.rc_helper),
+                    };
+                    if (matches) {
+                        try stack.append(allocator, .{ .set = visit.set, .index = @intCast(candidate_index) });
+                        break;
+                    }
+                }
+            }
+        }
+        if (!grew) return demand;
+        allocator.free(demand);
+    }
+}
+
 const DevProgram = struct {
     allocator: Allocator,
     static_strings: backend.StaticStringData.Table,
@@ -4315,7 +4392,7 @@ const DevProgram = struct {
         defer allocator.free(evaluation_roots);
         for (lowered.lir_result.const_roots.items, evaluation_roots[0..const_root_count]) |root, *proc| proc.* = root.proc;
         for (lowered.lir_result.literal_roots.items, evaluation_roots[const_root_count..]) |root, *proc| proc.* = root.proc;
-        const evaluation_demand = try lir.ReachableProcs.collectProcDemand(allocator, &lowered.lir_result, evaluation_roots, materialized);
+        const evaluation_demand = try evaluationDemand(allocator, &lowered.lir_result, evaluation_roots, materialized, if (options.object_cache) |cache| cache.splice_source else null);
         defer allocator.free(evaluation_demand);
         var splice = backend.dev.HostSplice.init(allocator);
         errdefer splice.deinit();
