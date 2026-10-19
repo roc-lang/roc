@@ -172,7 +172,7 @@ const SettledDescs = struct {
 };
 
 /// Reperents either type data *or* a symlink to another type variable
-pub const Slot = union(enum) {
+pub const Slot = union(SlotKind) {
     root: DescStore.Idx,
     redirect: Var,
 };
@@ -349,7 +349,7 @@ pub const Store = struct {
     /// Ensure that slots & descriptor arrays have at least the provided capacity
     pub fn ensureTotalCapacity(self: *Self, capacity: usize) Allocator.Error!void {
         try self.descs.backing.ensureTotalCapacity(self.gpa, capacity);
-        try self.slots.backing.items.ensureTotalCapacity(self.gpa, capacity);
+        try self.slots.ensureTotalCapacity(self.gpa, capacity);
         try self.root_metas.ensureTotalCapacity(self.gpa, capacity);
         try self.union_ranks.items.ensureTotalCapacity(self.gpa, capacity);
     }
@@ -395,7 +395,7 @@ pub const Store = struct {
         return .{
             .gpa = gpa,
             .frozen_anchors = .init(gpa),
-            .slots = .{ .backing = try self.slots.backing.clone(gpa) },
+            .slots = try self.slots.clone(gpa),
             .descs = .{ .backing = try self.descs.backing.clone(gpa), .err_written = self.descs.err_written },
             .root_metas = try self.root_metas.clone(gpa),
             .union_ranks = try self.union_ranks.clone(gpa),
@@ -419,17 +419,17 @@ pub const Store = struct {
 
     /// Return the number of type variables in the store.
     pub fn len(self: *const Self) u64 {
-        return self.slots.backing.len();
+        return self.slots.len();
     }
 
     /// Return true when checking left any live type variable in the explicit
     /// error state. Descriptors not referenced by a current slot are rollback
     /// history and do not affect checked output.
     pub fn containsErrContent(self: *const Self) bool {
-        for (self.slots.backing.items.items) |slot| {
-            switch (slot) {
-                .root => |desc_idx| {
-                    if (self.descs.get(desc_idx).content == .err) return true;
+        for (self.slots.kinds.items.items, self.slots.payloads.items.items) |kind, payload| {
+            switch (kind) {
+                .root => {
+                    if (self.descs.get(@fromBackingInt(payload)).content == .err) return true;
                 },
                 .redirect => {},
             }
@@ -487,7 +487,7 @@ pub const Store = struct {
     const savepoint_verify_clone_init: SavepointVerifyClone = if (savepoint_verification == .clone_crosscheck) null else {};
 
     fn cloneForSavepointVerification(self: *Self) Allocator.Error!VerifyClone {
-        const slots = try self.gpa.dupe(Slot, self.slots.backing.items.items);
+        const slots = try self.slots.toOwnedSlots(self.gpa);
         errdefer self.gpa.free(slots);
 
         var descs = try self.descs.backing.items.clone(self.gpa);
@@ -548,7 +548,7 @@ pub const Store = struct {
         std.debug.assert(self.pending_free_descs.items.len == 0);
         std.debug.assert(self.probe_taken_descs == 0);
         self.savepoint_active = true;
-        self.savepoint_baseline_slots = @intCast(self.slots.backing.len());
+        self.savepoint_baseline_slots = @intCast(self.slots.len());
         self.savepoint_baseline_descs = @intCast(self.descs.backing.items.len);
 
         return savepoint;
@@ -638,7 +638,7 @@ pub const Store = struct {
         // Drop everything appended during the probe. The slot/desc baselines are
         // the store fields (also the journaling threshold); the rest come from
         // the savepoint.
-        self.slots.backing.items.shrinkRetainingCapacity(self.savepoint_baseline_slots);
+        self.slots.shrinkRetainingCapacity(self.savepoint_baseline_slots);
         self.descs.backing.items.shrinkRetainingCapacity(self.savepoint_baseline_descs);
         self.root_metas.items.shrinkRetainingCapacity(self.savepoint_baseline_descs);
         self.union_ranks.items.shrinkRetainingCapacity(self.savepoint_baseline_slots);
@@ -670,9 +670,8 @@ pub const Store = struct {
     /// Clone cross-check: assert the trail-restored store is byte-for-byte
     /// identical to the full copy taken at `createSavepointVerifying`.
     fn assertMatchesClone(self: *Self, vclone: *const VerifyClone) void {
-        const live_slots = self.slots.backing.items.items;
-        std.debug.assert(live_slots.len == vclone.slots.len);
-        for (live_slots, vclone.slots) |a, b| std.debug.assert(std.meta.eql(a, b));
+        std.debug.assert(self.slots.len() == vclone.slots.len);
+        for (vclone.slots, 0..) |b, i| std.debug.assert(std.meta.eql(self.slots.get(@fromBackingInt(@intCast(i))), b));
 
         std.debug.assert(self.descs.backing.items.len == vclone.descs.len);
         var i: usize = 0;
@@ -869,7 +868,7 @@ pub const Store = struct {
     /// Create a variable redirecting to the provided var
     /// Used in tests
     pub fn freshRedirect(self: *Self, var_: Var) std.mem.Allocator.Error!Var {
-        try self.slots.backing.items.ensureUnusedCapacity(self.gpa, 1);
+        try self.slots.ensureUnusedCapacity(self.gpa, 1);
         try self.union_ranks.items.ensureUnusedCapacity(self.gpa, 1);
         const slot_idx = self.slots.appendAssumeCapacity(.{ .redirect = var_ });
         const rank_idx = self.union_ranks.appendAssumeCapacity(0);
@@ -879,9 +878,9 @@ pub const Store = struct {
 
     /// Create a new variable with the given descriptor
     pub fn register(self: *Self, desc: Desc) std.mem.Allocator.Error!Var {
-        try self.slots.backing.items.ensureUnusedCapacity(self.gpa, 1);
+        try self.slots.ensureUnusedCapacity(self.gpa, 1);
         try self.union_ranks.items.ensureUnusedCapacity(self.gpa, 1);
-        const slot_idx: SlotStore.Idx = @fromBackingInt(@intCast(@as(u32, @intCast(self.slots.backing.len()))));
+        const slot_idx: SlotStore.Idx = @fromBackingInt(@intCast(@as(u32, @intCast(self.slots.len()))));
         const checked_var = Self.slotIdxToVar(slot_idx);
         const desc_idx = try self.appendClass(desc, checked_var);
         const inserted_slot_idx = self.slots.appendAssumeCapacity(.{ .root = desc_idx });
@@ -894,7 +893,7 @@ pub const Store = struct {
     /// Create a new variable with the provided content assuming there is capacity
     pub fn appendFromContentAssumeCapacity(self: *Self, content: Content, rank: Rank) Var {
         std.debug.assert(!self.savepoint_active);
-        const slot_idx: SlotStore.Idx = @fromBackingInt(@intCast(@as(u32, @intCast(self.slots.backing.len()))));
+        const slot_idx: SlotStore.Idx = @fromBackingInt(@intCast(@as(u32, @intCast(self.slots.len()))));
         const checked_var = Self.slotIdxToVar(slot_idx);
         const desc: Desc = .{ .content = content, .rank = rank };
         const desc_idx = if (self.free_descs.pop()) |freed| reused: {
@@ -2315,24 +2314,62 @@ pub const Store = struct {
     };
 };
 
-/// Represents a store of slots
+/// Which `Slot` variant a slot holds.
+const SlotKind = enum(u8) { root, redirect };
+
+/// Represents a store of slots. A slot's variant and its payload (a
+/// `DescStore.Idx` or a redirect `Var`) are parallel columns, so the payload
+/// column holds no tag padding.
 const SlotStore = struct {
     const Self = @This();
 
-    backing: collections.SafeList(Slot),
+    payloads: collections.SafeList(u32),
+    kinds: collections.SafeList(SlotKind),
 
     fn init(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!Self {
-        return .{ .backing = try collections.SafeList(Slot).initCapacity(gpa, capacity) };
+        var payloads = try collections.SafeList(u32).initCapacity(gpa, capacity);
+        errdefer payloads.deinit(gpa);
+        return .{
+            .payloads = payloads,
+            .kinds = try collections.SafeList(SlotKind).initCapacity(gpa, capacity),
+        };
     }
 
     fn deinit(self: *Self, gpa: Allocator) void {
-        self.backing.deinit(gpa);
+        self.payloads.deinit(gpa);
+        self.kinds.deinit(gpa);
+    }
+
+    fn clone(self: *const Self, gpa: Allocator) Allocator.Error!Self {
+        var payloads = try self.payloads.clone(gpa);
+        errdefer payloads.deinit(gpa);
+        return .{ .payloads = payloads, .kinds = try self.kinds.clone(gpa) };
+    }
+
+    fn len(self: *const Self) u64 {
+        return self.payloads.len();
+    }
+
+    fn ensureTotalCapacity(self: *Self, gpa: Allocator, capacity: usize) Allocator.Error!void {
+        try self.payloads.items.ensureTotalCapacity(gpa, capacity);
+        try self.kinds.items.ensureTotalCapacity(gpa, capacity);
+    }
+
+    fn ensureUnusedCapacity(self: *Self, gpa: Allocator, additional: usize) Allocator.Error!void {
+        try self.payloads.items.ensureUnusedCapacity(gpa, additional);
+        try self.kinds.items.ensureUnusedCapacity(gpa, additional);
+    }
+
+    fn shrinkRetainingCapacity(self: *Self, new_len: usize) void {
+        self.payloads.items.shrinkRetainingCapacity(new_len);
+        self.kinds.items.shrinkRetainingCapacity(new_len);
     }
 
     /// Serialized representation of SlotStore
     /// Uses extern struct to guarantee consistent field layout across optimization levels.
     pub const Serialized = extern struct {
-        backing: collections.SafeList(Slot).Serialized,
+        payloads: collections.SafeList(u32).Serialized,
+        kinds: collections.SafeList(SlotKind).Serialized,
 
         /// Serialize a SlotStore into this Serialized struct, appending data to the writer
         pub fn serialize(
@@ -2341,46 +2378,73 @@ const SlotStore = struct {
             allocator: Allocator,
             writer: *collections.CompactWriter,
         ) Allocator.Error!void {
-            try self.backing.serialize(&slot_store.backing, allocator, writer);
+            try self.payloads.serialize(&slot_store.payloads, allocator, writer);
+            try self.kinds.serialize(&slot_store.kinds, allocator, writer);
         }
 
         /// Deserialize into a SlotStore value (no in-place modification of cache buffer).
         /// The base parameter is the base address of the serialized buffer in memory.
         pub fn deserializeInto(self: *const Serialized, base_addr: usize) SlotStore {
             return SlotStore{
-                .backing = self.backing.deserializeInto(base_addr),
+                .payloads = self.payloads.deserializeInto(base_addr),
+                .kinds = self.kinds.deserializeInto(base_addr),
             };
         }
 
         /// Deserialize into a SlotStore value with fresh memory allocation.
         /// The returned SlotStore owns its memory and can be safely grown/mutated.
         pub fn deserializeWithCopy(self: *const Serialized, base_addr: usize, gpa: Allocator) Allocator.Error!SlotStore {
+            var payloads = try self.payloads.deserializeWithCopy(base_addr, gpa);
+            errdefer payloads.deinit(gpa);
             return SlotStore{
-                .backing = try self.backing.deserializeWithCopy(base_addr, gpa),
+                .payloads = payloads,
+                .kinds = try self.kinds.deserializeWithCopy(base_addr, gpa),
             };
         }
     };
 
     /// Insert a new slot into the store
     fn insert(self: *Self, gpa: Allocator, typ: Slot) std.mem.Allocator.Error!Idx {
-        const safe_idx = try self.backing.append(gpa, typ);
-        return @fromBackingInt(@intCast(@backingInt(safe_idx)));
+        try self.ensureUnusedCapacity(gpa, 1);
+        return self.appendAssumeCapacity(typ);
     }
 
     /// Insert a value into the store assuming there is capacity
     fn appendAssumeCapacity(self: *Self, typ: Slot) Idx {
-        const safe_idx = self.backing.appendAssumeCapacity(typ);
+        const safe_idx = self.payloads.appendAssumeCapacity(payloadOf(typ));
+        _ = self.kinds.appendAssumeCapacity(typ);
         return @fromBackingInt(@intCast(@backingInt(safe_idx)));
     }
 
     /// Set a value in the store
     pub fn set(self: *Self, idx: Idx, val: Slot) void {
-        self.backing.set(@fromBackingInt(@intCast(@backingInt(idx))), val);
+        const i: usize = @backingInt(idx);
+        self.payloads.items.items[i] = payloadOf(val);
+        self.kinds.items.items[i] = val;
     }
 
     /// Get a value from the store
     fn get(self: *const Self, idx: Idx) Slot {
-        return self.backing.get(@fromBackingInt(@intCast(@backingInt(idx)))).*;
+        const i: usize = @backingInt(idx);
+        const payload = self.payloads.items.items[i];
+        return switch (self.kinds.items.items[i]) {
+            .root => .{ .root = @fromBackingInt(payload) },
+            .redirect => .{ .redirect = @fromBackingInt(payload) },
+        };
+    }
+
+    /// Every slot, in order, as an owned slice.
+    fn toOwnedSlots(self: *const Self, gpa: Allocator) Allocator.Error![]Slot {
+        const slots = try gpa.alloc(Slot, self.payloads.items.items.len);
+        for (slots, 0..) |*slot, i| slot.* = self.get(@fromBackingInt(@intCast(i)));
+        return slots;
+    }
+
+    fn payloadOf(slot: Slot) u32 {
+        return switch (slot) {
+            .root => |desc_idx| @backingInt(desc_idx),
+            .redirect => |var_| @backingInt(var_),
+        };
     }
 
     /// A type-safe index into the store
@@ -2710,9 +2774,9 @@ fn storageDescIdx(store: *const Store, var_: Var) DescStore.Idx {
 
 /// Whether some slot names `desc_idx`.
 fn descIsNamed(store: *const Store, desc_idx: DescStore.Idx) bool {
-    for (store.slots.backing.items.items) |slot| {
-        switch (slot) {
-            .root => |named| if (named == desc_idx) return true,
+    for (store.slots.kinds.items.items, store.slots.payloads.items.items) |kind, payload| {
+        switch (kind) {
+            .root => if (payload == @backingInt(desc_idx)) return true,
             .redirect => {},
         }
     }
@@ -3082,7 +3146,7 @@ test "savepoint trail is byte-for-byte identical to a full store copy+rollback" 
         // Independent oracle: keep our own copy of the pre-savepoint slots/descs
         // to compare against after rollback, alongside the verifying savepoint's
         // internal cross-check.
-        const before_slots = try gpa.dupe(Slot, store.slots.backing.items.items);
+        const before_slots = try store.slots.toOwnedSlots(gpa);
         defer gpa.free(before_slots);
         var before_descs = try store.descs.backing.items.clone(gpa);
         defer before_descs.deinit(gpa);
@@ -3112,9 +3176,9 @@ test "savepoint trail is byte-for-byte identical to a full store copy+rollback" 
 
         // The store must be byte-identical to its pre-savepoint state.
         try std.testing.expect(!store.savepoint_active);
-        try std.testing.expectEqual(before_slots.len, store.slots.backing.items.items.len);
-        for (before_slots, store.slots.backing.items.items) |x, y| {
-            try std.testing.expect(std.meta.eql(x, y));
+        try std.testing.expectEqual(@as(u64, before_slots.len), store.slots.len());
+        for (before_slots, 0..) |x, slot_index| {
+            try std.testing.expect(std.meta.eql(x, store.slots.get(@fromBackingInt(@intCast(slot_index)))));
         }
         try std.testing.expectEqual(before_descs.len, store.descs.backing.items.len);
         var i: usize = 0;
@@ -3595,7 +3659,7 @@ test "SlotStore.Serialized roundtrip" {
     const deserialized = deser_ptr.deserializeInto(@intFromPtr(buffer.ptr));
 
     // Verify using captured indices
-    try std.testing.expectEqual(@as(u64, 3), deserialized.backing.len());
+    try std.testing.expectEqual(@as(u64, 3), deserialized.len());
     try std.testing.expectEqual(Slot{ .root = desc_idx_a }, deserialized.get(slot_a));
     try std.testing.expectEqual(Slot{ .redirect = var_b }, deserialized.get(slot_b));
     try std.testing.expectEqual(Slot{ .root = desc_idx_c }, deserialized.get(slot_c));
