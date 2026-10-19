@@ -6577,7 +6577,7 @@ const Builder = struct {
             self.active_body_draft = saved_draft;
         }
         const owner = self.moduleForId(root.module);
-        const body = try self.restoreConstNodeAtType(try self.literalStoreView(hit.store), owner, hit.root, conversion.ret);
+        const body = try runConstRestore(self, try self.literalStoreView(hit.store), owner, hit.root, conversion.ret, null);
         for (hit.reads) |read| {
             const current = self.literalValueReadRoot(read) orelse Common.invariant("an applied literal value read a root it no longer names");
             try self.recordRestoredRootRead(body, current.module, current.root);
@@ -67180,7 +67180,7 @@ test "shape queries cross alias layers for every aggregate a constant restores a
     const Aliased = struct {
         fn of(store: *Type.Store, store_names: *const names.NameStore, def: Type.TypeDef, backing: Type.TypeId) Allocator.Error!Type.TypeId {
             return try store.internNamed(store_names, .{
-                .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(@backingInt(backing))) },
+                .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(@backingInt(backing))), .ty_module = .{} },
                 .def = def,
                 .kind = .alias,
                 .backing = .{ .ty = backing, .use = .inspectable },
