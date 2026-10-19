@@ -196,14 +196,18 @@ pub const Digests = struct {
 /// lifetime. Code generators name a helper per layout, so per-query memos
 /// would re-digest a nested layout once per enclosing layout; this memo
 /// digests each layout once. Concurrent readers of an immutable store share
-/// it under its lock.
+/// it: a memoized digest is read under a shared lock, and only a digest that
+/// must be computed takes the lock exclusively.
 pub const DigestCache = struct {
-    lock: std.atomic.Mutex = .unlocked,
+    /// Number of shared holders, or `exclusive` while one writer holds it.
+    lock_state: std.atomic.Value(u32) = .init(0),
     digests: ?Digests = null,
     /// `interned_recursive_graphs.count()` when `digests` was built. A new
     /// recursive-graph key can name an already-digested layout, so a change
     /// rebuilds the memo.
     recursive_graph_count: usize = 0,
+
+    const exclusive = std.math.maxInt(u32);
 
     pub fn create(allocator: Allocator) Allocator.Error!*DigestCache {
         const cache = try allocator.create(DigestCache);
@@ -233,9 +237,11 @@ pub const DigestCache = struct {
     }
 
     pub fn get(self: *DigestCache, store: *const Store, idx: Idx) Allocator.Error!Digest {
-        while (!self.lock.tryLock()) std.atomic.spinLoopHint();
-        defer self.lock.unlock();
         const recursive_graph_count = store.interned_recursive_graphs.count();
+        if (self.memoizedDigest(recursive_graph_count, idx)) |digest| return digest;
+
+        self.lockExclusive();
+        defer self.lock_state.store(0, .release);
         if (self.digests != null and self.recursive_graph_count != recursive_graph_count) self.invalidate();
         if (self.digests == null) {
             self.digests = try Digests.init(store.allocator, store);
@@ -245,6 +251,34 @@ pub const DigestCache = struct {
         // The store may have moved since the memo was built.
         digests.store = store;
         return try digests.get(idx);
+    }
+
+    /// The memoized digest of `idx` in a memo that is still current, read
+    /// under the shared lock.
+    fn memoizedDigest(self: *DigestCache, recursive_graph_count: usize, idx: Idx) ?Digest {
+        self.lockShared();
+        defer _ = self.lock_state.fetchSub(1, .release);
+        const digests = if (self.digests) |*current| current else return null;
+        if (self.recursive_graph_count != recursive_graph_count) return null;
+        return digests.memo.get(idx);
+    }
+
+    fn lockShared(self: *DigestCache) void {
+        var state = self.lock_state.load(.monotonic);
+        while (true) {
+            if (state == exclusive) {
+                std.atomic.spinLoopHint();
+                state = self.lock_state.load(.monotonic);
+                continue;
+            }
+            state = self.lock_state.cmpxchgWeak(state, state + 1, .acquire, .monotonic) orelse return;
+        }
+    }
+
+    fn lockExclusive(self: *DigestCache) void {
+        while (self.lock_state.cmpxchgWeak(0, exclusive, .acquire, .monotonic) != null) {
+            std.atomic.spinLoopHint();
+        }
     }
 };
 
