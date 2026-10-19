@@ -110,16 +110,91 @@ pub fn parseIntFromStr(comptime T: type, buf: RocStr) NumParseResult(T) {
 /// Whole-input integer parse (`from_str` semantics): the input must be exactly
 /// one integer token, and the token must denote a value of `T`.
 pub fn parseIntSlice(comptime T: type, bytes: []const u8) ?T {
-    const consumed = intPrefixLen(bytes);
-    if (consumed == 0 or consumed != bytes.len) return null;
-    return parseIntToken(T, bytes);
+    const prefix = scanIntPrefix(T, bytes);
+    if (prefix.consumed == 0 or prefix.consumed != bytes.len) return null;
+    return prefix.value;
 }
 
 /// Parse an integer from the longest integer token at the start of `bytes`.
 pub fn parseIntPrefix(comptime T: type, bytes: []const u8) NumPrefixParseResult(T) {
-    const consumed = intPrefixLen(bytes);
-    if (consumed == 0) return prefixParseResult(T, 0, null);
-    return prefixParseResult(T, consumed, parseIntToken(T, bytes[0..consumed]));
+    const prefix = scanIntPrefix(T, bytes);
+    return prefixParseResult(T, prefix.consumed, prefix.value);
+}
+
+/// The longest integer token at the start of `bytes` (the token `intPrefixLen`
+/// measures) and the value it denotes in `T`, found in one scan of the token.
+fn scanIntPrefix(comptime T: type, bytes: []const u8) decimal_parse.IntPrefix(T) {
+    if (hasExplicitRadix(bytes)) {
+        if (scanRadixIntPrefix(T, bytes)) |prefix| return prefix;
+    }
+    return decimal_parse.parseIntPrefix(T, bytes);
+}
+
+/// The explicit-radix token at the start of `bytes`, or null when the radix
+/// prefix is followed by no digit of its radix.
+fn scanRadixIntPrefix(comptime T: type, bytes: []const u8) ?decimal_parse.IntPrefix(T) {
+    const negative = bytes[0] == '-';
+    const digits_start: usize = @as(usize, @intFromBool(negative or bytes[0] == '+')) + 2;
+    return switch (bytes[digits_start - 1]) {
+        'b', 'B' => scanRadixDigits(T, 2, negative, bytes, digits_start),
+        'o', 'O' => scanRadixDigits(T, 8, negative, bytes, digits_start),
+        'x', 'X' => scanRadixDigits(T, 16, negative, bytes, digits_start),
+        else => unreachable,
+    };
+}
+
+fn scanRadixDigits(comptime T: type, comptime radix: u8, negative: bool, bytes: []const u8, digits_start: usize) ?decimal_parse.IntPrefix(T) {
+    const signed = @typeInfo(T).int.signedness == .signed;
+    const positive_limit: u128 = @intCast(std.math.maxInt(T));
+    const run = if (signed and negative)
+        radixDigitRun(radix, positive_limit + 1, bytes, digits_start)
+    else
+        radixDigitRun(radix, positive_limit, bytes, digits_start);
+    if (run.end == digits_start) return null;
+
+    const magnitude = run.magnitude orelse return .{ .consumed = run.end, .value = null };
+    const value: ?T = if (!signed)
+        (if (negative and magnitude != 0) null else @intCast(magnitude))
+    else if (!negative)
+        @intCast(magnitude)
+    else if (magnitude == positive_limit + 1)
+        std.math.minInt(T)
+    else
+        -@as(T, @intCast(magnitude));
+    return .{ .consumed = run.end, .value = value };
+}
+
+const RadixDigitRun = struct {
+    /// End of the longest run of radix digits (with `_` only between digits).
+    end: usize,
+    /// The run's value, or null when it exceeds the limit.
+    magnitude: ?u128,
+};
+
+fn radixDigitRun(comptime radix: u8, comptime limit: u128, bytes: []const u8, digits_start: usize) RadixDigitRun {
+    const max_before_mul = limit / radix;
+    const max_digit = limit % radix;
+
+    var magnitude: ?u128 = 0;
+    var end = digits_start;
+    var index = digits_start;
+    while (index < bytes.len) : (index += 1) {
+        const byte = bytes[index];
+        if (byte == '_') {
+            if (index == digits_start or index + 1 == bytes.len or !isRadixDigit(bytes[index + 1], radix)) break;
+            continue;
+        }
+        if (!isRadixDigit(byte, radix)) break;
+        const digit = digitValue(byte) orelse unreachable;
+        if (magnitude) |value| {
+            magnitude = if (value > max_before_mul or (value == max_before_mul and digit > max_digit))
+                null
+            else
+                value * radix + digit;
+        }
+        end = index + 1;
+    }
+    return .{ .end = end, .magnitude = magnitude };
 }
 
 /// Length of the longest integer token at the start of `bytes`, or 0.
@@ -132,11 +207,6 @@ pub fn intPrefixLen(bytes: []const u8) usize {
     const radix_len = radixIntPrefixLen(bytes);
     if (radix_len != 0) return radix_len;
     return decimal_parse.prefixLen(bytes, .int);
-}
-
-fn parseIntToken(comptime T: type, token: []const u8) ?T {
-    if (hasExplicitRadix(token)) return parseIntNoFmt(T, token) catch null;
-    return decimal_parse.parseInt(T, token);
 }
 
 fn radixIntPrefixLen(bytes: []const u8) usize {
@@ -168,11 +238,6 @@ fn isRadixDigit(byte: u8, radix: u8) bool {
     return digit < radix;
 }
 
-const ParseIntError = error{
-    InvalidCharacter,
-    Overflow,
-};
-
 fn hasExplicitRadix(bytes: []const u8) bool {
     if (bytes.len == 0) return false;
     const start: usize = @intFromBool(bytes[0] == '-' or bytes[0] == '+');
@@ -181,103 +246,6 @@ fn hasExplicitRadix(bytes: []const u8) bool {
         'b', 'B', 'o', 'O', 'x', 'X' => true,
         else => false,
     };
-}
-
-fn parseIntNoFmt(comptime T: type, bytes: []const u8) ParseIntError!T {
-    if (bytes.len == 0) return error.InvalidCharacter;
-
-    const info = @typeInfo(T).int;
-    const signed = info.signedness == .signed;
-
-    var index: usize = 0;
-    const negative = bytes[index] == '-';
-    if (bytes[index] == '-' or bytes[index] == '+') {
-        index += 1;
-        if (index == bytes.len) return error.InvalidCharacter;
-    }
-
-    const radix = detectRadix(bytes, &index);
-
-    if (signed) {
-        const positive_limit: u128 = @intCast(std.math.maxInt(T));
-        const negative_limit = positive_limit + 1;
-        const magnitude = if (negative)
-            try parseMagnitude(negative_limit, bytes, index, radix)
-        else
-            try parseMagnitude(positive_limit, bytes, index, radix);
-
-        if (negative) {
-            if (magnitude == negative_limit) return std.math.minInt(T);
-            const positive: T = @intCast(magnitude);
-            return -positive;
-        }
-        return @intCast(magnitude);
-    } else {
-        const magnitude = try parseMagnitude(@as(u128, @intCast(std.math.maxInt(T))), bytes, index, radix);
-        if (negative and magnitude != 0) return error.Overflow;
-        return @intCast(magnitude);
-    }
-}
-
-fn detectRadix(bytes: []const u8, index: *usize) u8 {
-    if (bytes.len - index.* >= 2 and bytes[index.*] == '0') {
-        switch (bytes[index.* + 1]) {
-            'b', 'B' => {
-                index.* += 2;
-                return 2;
-            },
-            'o', 'O' => {
-                index.* += 2;
-                return 8;
-            },
-            'x', 'X' => {
-                index.* += 2;
-                return 16;
-            },
-            else => {},
-        }
-    }
-    return 10;
-}
-
-fn parseMagnitude(comptime limit: u128, bytes: []const u8, start: usize, radix: u8) ParseIntError!u128 {
-    return switch (radix) {
-        2 => parseMagnitudeRadix(2, limit, bytes, start),
-        8 => parseMagnitudeRadix(8, limit, bytes, start),
-        10 => parseMagnitudeRadix(10, limit, bytes, start),
-        16 => parseMagnitudeRadix(16, limit, bytes, start),
-        else => unreachable,
-    };
-}
-
-fn parseMagnitudeRadix(comptime radix: u8, comptime limit: u128, bytes: []const u8, start: usize) ParseIntError!u128 {
-    const max_before_mul = limit / radix;
-    const max_digit = limit % radix;
-
-    var value: u128 = 0;
-    var saw_digit = false;
-    var previous_underscore = false;
-
-    for (bytes[start..]) |byte| {
-        if (byte == '_') {
-            if (!saw_digit or previous_underscore) return error.InvalidCharacter;
-            previous_underscore = true;
-            continue;
-        }
-
-        const digit = digitValue(byte) orelse return error.InvalidCharacter;
-        if (digit >= radix) return error.InvalidCharacter;
-        if (value > max_before_mul or (value == max_before_mul and digit > max_digit)) {
-            return error.Overflow;
-        }
-
-        value = value * radix + digit;
-        saw_digit = true;
-        previous_underscore = false;
-    }
-
-    if (!saw_digit or previous_underscore) return error.InvalidCharacter;
-    return value;
 }
 
 fn digitValue(byte: u8) ?u8 {
@@ -1316,6 +1284,46 @@ test "numeric prefix parse properties over generated token compositions" {
         inline for (.{ f32, f64 }) |T| {
             const fns = FloatPrefixFns(T);
             try prefix_parse_testing.expectProperties(T, text, floatPrefixLen, fns.prefix, fns.whole);
+        }
+    }
+}
+
+test "radix integer tokens convert like std.fmt.parseInt" {
+    var prng = std.Random.DefaultPrng.init(0x0bad_5eed_0123);
+    const random = prng.random();
+    const prefixes = [_][]const u8{ "0b", "0o", "0x" };
+    const radixes = [_]u8{ 2, 8, 16 };
+    const digit_chars = "0123456789abcdef";
+    var buf: [48]u8 = undefined;
+
+    var iteration: usize = 0;
+    while (iteration < 20_000) : (iteration += 1) {
+        var len: usize = 0;
+        switch (random.uintLessThan(u8, 3)) {
+            0 => {},
+            1 => {
+                buf[0] = '-';
+                len = 1;
+            },
+            else => {
+                buf[0] = '+';
+                len = 1;
+            },
+        }
+        const which = random.uintLessThan(usize, prefixes.len);
+        @memcpy(buf[len..][0..2], prefixes[which]);
+        len += 2;
+        const digit_count = 1 + random.uintLessThan(usize, 40);
+        for (0..digit_count) |_| {
+            buf[len] = digit_chars[random.uintLessThan(usize, radixes[which])];
+            len += 1;
+        }
+        const text = buf[0..len];
+        inline for (.{ u8, i8, u16, i32, u64, i64, u128, i128 }) |T| {
+            const expected: ?T = std.fmt.parseInt(T, text, 0) catch null;
+            try std.testing.expectEqual(expected, parseIntSlice(T, text));
+            const prefix = parseIntPrefix(T, text);
+            try std.testing.expectEqual(@as(u64, len), prefix.consumed);
         }
     }
 }

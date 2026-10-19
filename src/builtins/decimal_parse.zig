@@ -205,12 +205,28 @@ fn positiveExponent(parsed: ParsedDecimal) ?usize {
     return @intCast(parsed.exponent_magnitude);
 }
 
-/// Parse an exact integer. The whole of `bytes` must be one `.int` token, so
-/// decimal points are rejected; a negative exponent is accepted only when the
-/// value stays an exact integer (`1e-0`), matching Roc integer conversion.
-pub fn parseInt(comptime T: type, bytes: []const u8) ?T {
+/// The longest `.int` token at the start of some bytes: its length
+/// (`consumed`, 0 when no prefix matches) and the exact integer it denotes in
+/// `T` (null when it denotes none).
+pub fn IntPrefix(comptime T: type) type {
+    return struct {
+        consumed: usize,
+        value: ?T,
+    };
+}
+
+/// Scan the longest `.int` token at the start of `bytes` and convert it in the
+/// same pass.
+pub fn parseIntPrefix(comptime T: type, bytes: []const u8) IntPrefix(T) {
+    const parsed = scanPrefix(bytes, .int) orelse return .{ .consumed = 0, .value = null };
+    return .{ .consumed = parsed.token_len, .value = intValue(T, parsed) };
+}
+
+/// The exact integer an `.int` token denotes in `T`. Decimal points are not
+/// part of the grammar; a negative exponent is accepted only when the value
+/// stays an exact integer (`1e-0`), matching Roc integer conversion.
+fn intValue(comptime T: type, parsed: ParsedDecimal) ?T {
     const info = @typeInfo(T).int;
-    const parsed = scan(bytes, .int) orelse return null;
 
     const zeros = positiveExponent(parsed) orelse {
         if (!parsed.exponent_negative and parsed.isZero()) return 0;
