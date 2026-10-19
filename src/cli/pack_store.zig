@@ -895,7 +895,7 @@ pub const LoadedPacks = struct {
     }
 
     fn loadPendingDiscovery(self: *LoadedPacks, pending: Pending, root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact) LoadError!void {
-        const store = pending.store;
+        const store = pending.store orelse return;
         if (pending.build_env.packPlacementForArtifactKey(root_artifact.key)) |placement| {
             try store.loadIdentityDiscovery(pending.io, self, placement.origin, placement.identity);
         }
@@ -914,7 +914,7 @@ pub const LoadedPacks = struct {
     }
 
     fn loadPending(self: *LoadedPacks, pending: Pending, root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact) LoadError!void {
-        const store = pending.store;
+        const store = pending.store orelse return;
         if (pending.build_env.packPlacementForArtifactKey(root_artifact.key)) |placement| {
             try store.loadIdentity(pending.io, self, placement.origin, placement.identity);
         }
