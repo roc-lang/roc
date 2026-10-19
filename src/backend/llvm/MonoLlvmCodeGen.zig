@@ -4607,7 +4607,7 @@ pub const MonoLlvmCodeGen = struct {
 
         pub fn appendAddressed(self: AddressedCallLocals, call: @FieldType(lir.LIR.CFStmt, "assign_call"), out: *std.ArrayList(LocalId)) AppendError!void {
             const codegen = self.codegen;
-            if (call.replaces_frame) return;
+            if (codegen.store.stmtRowOrDefault(call.extra).replaces_frame) return;
             const proc = codegen.store.getProcSpec(call.proc);
             if (proc.hosted != null) return;
             if (!codegen.enable_default_platform_diagnostics and codegen.inlineEverywhere(call.proc)) return;
