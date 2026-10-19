@@ -591,13 +591,15 @@ and source frames from it.
 
 Packs live under `<cache root>/<compiler version>/objects-v<pack format>/
 <target>-<opt>/<local|pkg>/<module identity>/<key>.rpk`. A pack's path is a
-function of its content, so a writer stages it beside its path, renames it
-into place, and leaves a pack already present alone; builds with runtime
+function of its content, so a writer stages it beside its path in a file it
+alone created (`CoreCtx.writeTempFile`), so two writers never share a partly
+written file, renames it into place, and leaves a pack already present alone; builds with runtime
 safety compare the bytes they would have written with the pack in place. The
 background sweep (`cache_cleanup.sweep`) deletes every `objects-v*` namespace
 of a format other than the compiler's own, ages the current namespace's
-`local/` packs (rewritten by every edit) on one day and its `pkg/` packs on
-thirty, by last use (`max(atime, mtime)`), and then deletes the least
+`local/` packs (rewritten by every edit) and recorded program outputs
+(`programs/`, see "Recorded Program Output") on one day and its `pkg/` packs
+on thirty, by last use (`max(atime, mtime)`), and then deletes the least
 recently used persistent cache files of every family until the cache fits
 `CacheConfig.max_size_mb`. Eviction only deletes files; it never changes what
 a build writes.
@@ -2101,11 +2103,11 @@ parked, unparked, and upgraded requests, and never-run stubs.
 
 #### Discovery Summaries
 
-A check whose evaluation succeeds settles the discovery of every keyed
+A compilation whose evaluation succeeds settles the discovery of every keyed
 specialization it lowered: every literal root the specialization's closure
 registered converted without an error, and evaluation printed nothing a later
-compilation would have to repeat. Once checking reports no error, the CLI
-files a discovery summary for each such specialization beside the root
+compilation would have to repeat. Once a check, test or build reports no
+error, the CLI files a discovery summary for each such specialization beside the root
 module's packs (`DiscoverySummary.collect`): the key the body was reserved
 under (`Mono.FnTemplate.discovery_key` for a discovery body) and the checked
 keys of the modules its closure's code comes from, closed over the lifted
@@ -2122,16 +2124,18 @@ A later discovery request whose key has a summary, every recorded module of
 which this lowering has at the same key, is parked exactly like a request the
 literal-demand analysis proves reaches no literal root: the same closure
 would register the same literal roots with the same outcomes. An evaluation
-request still unparks it. `--timings` counts these under "Summarized
-requests", which are included in the parked requests.
+request still unparks it. A settled request consults no cached code, and the
+summaries load apart from the code packs, so a program whose every discovery
+request is settled reads no code pack. `--timings` counts these under
+"Summarized requests", which are included in the parked requests.
 
 #### Compile-Time Object Packs
 
 A runtime build fills the object cache with packs of dev code; compile-time
-evaluation reads them. A command that only checks fills it too: compile-time
-evaluation runs a dev build's code, so once checking completes with no error,
-the CLI files the code evaluation ran, lifted from each stage's image with
-one copy of each procedure, as one pack of
+evaluation reads them. Every command's compile-time evaluation fills it too:
+evaluation runs a dev build's code, so once a check, test or build completes
+with no error, the CLI files the code evaluation ran, lifted from each stage's
+image with one copy of each procedure, as one pack of
 its keyed closed specializations, under the same withholding rules as a
 runtime pack: an entry whose closure names a program-local symbol it does not
 carry, or still converts a literal, is not offered. A completed value the
@@ -2146,7 +2150,11 @@ completed values and their representation metadata, so the levels' code
 never accumulates. The pack is filed beside the root module's
 dev packs under a key derived from the root module's code-generation key,
 which covers every module the program's code comes from and no runtime pack
-uses, so an edited program files a new pack beside the old one. Evaluation
+uses, so an edited program files a new pack beside the old one. The key also
+names the command and the optimization level its program is specialized for:
+each evaluates its own roots under its own Solved policy, so their packs sit
+side by side, and a build files its pack before its runtime program takes the
+Solved program they share. Evaluation
 and a dev build for the host serve its entries exactly as they serve runtime
 packs' (see "Early Compile-Time Object Reuse"), so a later check whose roots
 must be evaluated again, or a build of the checked program, splices the code
@@ -2401,6 +2409,21 @@ frame releases. A value that outlives its frame—a procedure's result, a
 frame-replacing call's arguments, a deferred erased call—is copied out before
 the frame ends. Roc heap data is unaffected: it is owned by the explicit LIR
 reference counts.
+
+#### Recorded Program Output
+
+A dev build also records its program's runtime output: the Roc object it
+linked and the link facts it read from the lowering (hosted symbols, link
+roots and app exports), filed under a key covering every checked module the
+program lowers against, with their code-generation keys, and the build's
+output policy, inside the store's namespace for the target, compiler and
+optimization level. Once a later build's program is checked and before it is
+evaluated, the build asks for that key. On a hit the program is evaluated as
+`roc check` evaluates it, which reports the same diagnostics, no runtime
+program is lowered, and the recorded object is linked with the platform's
+current inputs. A build that reports an error records nothing, and neither
+does a program that links Boxy runtime inputs or optimized pack objects,
+which the record does not carry.
 
 ### Demand-Driven Compile-Time Evaluation
 

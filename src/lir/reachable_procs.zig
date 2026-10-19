@@ -17,6 +17,10 @@ const LirStore = core.LirStore;
 const GuardedList = collections.GuardedList;
 const BodyClone = @import("body_clone.zig");
 
+/// `ROC_PACK_TRACE` output, compiled only into compilers built with developer
+/// diagnostics that can read the environment.
+const pack_trace_available = @import("builtin").link_libc and @import("build_options").dev_diagnostics;
+
 /// Remove proc specs unreachable from roots, closed static initializers, and
 /// explicit constant callable plans, then rewrite every retained proc reference
 /// to the compact id space.
@@ -570,9 +574,13 @@ const Pass = struct {
             proc.* = self.remapProc(proc.*);
         }
         // A specialization whose procedure was unreachable leaves the table.
+        const trace = pack_trace_available and std.c.getenv("ROC_PACK_TRACE") != null;
         var kept: usize = 0;
         for (self.result.spec_procs.items) |spec_proc| {
-            const new_proc = self.old_to_new[@backingInt(spec_proc.proc)] orelse continue;
+            const new_proc = self.old_to_new[@backingInt(spec_proc.proc)] orelse {
+                if (trace) std.debug.print("drop-spec key={x} name={s}\n", .{ spec_proc.key[0..8], self.result.store.procDebugName(spec_proc.proc) orelse "" });
+                continue;
+            };
             var remapped = spec_proc;
             remapped.proc = new_proc;
             self.result.spec_procs.items[kept] = remapped;
