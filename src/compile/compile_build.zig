@@ -1669,24 +1669,30 @@ pub const BuildEnv = struct {
     /// Uses the filesystem vtable which works on both POSIX, Windows, and wasm
     /// (unlike std.posix.getenv which only works on POSIX systems).
     fn logicalModuleToPath(self: *BuildEnv, root_dir: []const u8, logical_name: []const u8) (Allocator.Error || error{PathOutsideWorkspace})![]const u8 {
+        // `std.fs.path.join` of `root_dir` and the logical name's non-empty
+        // segments, then the extension, built in one buffer. Every segment
+        // adds at most its length plus one separator, so the capacity holds
+        // the whole path.
+        var with_ext = std.ArrayList(u8).empty;
+        defer with_ext.deinit(self.gpa);
+        try with_ext.ensureTotalCapacityPrecise(self.gpa, root_dir.len + logical_name.len + 1 + ".roc".len);
+        with_ext.appendSliceAssumeCapacity(root_dir);
         var parts = std.mem.splitScalar(u8, logical_name, '/');
-        var segs = std.ArrayList([]const u8).empty;
-        defer segs.deinit(self.gpa);
-
-        try segs.append(self.gpa, root_dir);
-        while (parts.next()) |p| {
-            if (p.len == 0) continue;
-            try segs.append(self.gpa, p);
+        while (parts.next()) |part| {
+            if (part.len == 0) continue;
+            if (with_ext.items.len == 0) {
+                with_ext.appendSliceAssumeCapacity(part);
+                continue;
+            }
+            const prev_sep = std.fs.path.isSep(with_ext.items[with_ext.items.len - 1]);
+            const this_sep = std.fs.path.isSep(part[0]);
+            if (!prev_sep and !this_sep) with_ext.appendAssumeCapacity(std.fs.path.sep);
+            with_ext.appendSliceAssumeCapacity(if (prev_sep and this_sep) part[1..] else part);
         }
-
-        const joined = try std.fs.path.join(self.gpa, segs.items);
-        defer self.gpa.free(joined);
-
-        const with_ext = try std.fmt.allocPrint(self.gpa, "{s}.roc", .{joined});
-        defer self.gpa.free(with_ext);
+        with_ext.appendSliceAssumeCapacity(".roc");
 
         // Canonicalize and sandbox
-        const canon = try std.fs.path.resolve(self.gpa, &.{with_ext});
+        const canon = try std.fs.path.resolve(self.gpa, &.{with_ext.items});
         // Enforce sandbox for dotted resolution: must be within the current package root (first workspace root).
         // If multiple roots are registered, we still require the resolved path to match at least one.
         if (!PathUtils.isWithinRoot(canon, self.workspace_roots.items)) {
