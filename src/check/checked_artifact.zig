@@ -12508,11 +12508,11 @@ pub const CheckedBodyStore = struct {
         source_nodes: *const CheckedSourceNodes,
         promoted_local_procedures: []const hoist_roots.PromotedLocalProcedure,
     ) Allocator.Error!CheckedBodyStore {
-        var promoted_patterns = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void){};
+        var promoted_patterns = collections.DenseMapUnmanaged(CIR.Pattern.Idx, void).empty;
         defer promoted_patterns.deinit(allocator);
-        try promoted_patterns.ensureTotalCapacity(allocator, @intCast(promoted_local_procedures.len));
-        for (promoted_local_procedures) |promoted| promoted_patterns.putAssumeCapacity(promoted.pattern, {});
-        var recursively_referenced_patterns = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void){};
+        try promoted_patterns.ensureTotalCapacity(allocator, promoted_local_procedures.len);
+        for (promoted_local_procedures) |promoted| try promoted_patterns.put(allocator, promoted.pattern, {});
+        var recursively_referenced_patterns = collections.DenseMapUnmanaged(CIR.Pattern.Idx, void).empty;
         defer recursively_referenced_patterns.deinit(allocator);
         for (module.moduleEnvConst().scheme_uses.items.items) |record| {
             if (record.slot_kind != @backingInt(ModuleEnv.SchemeUseRecord.Slot.recursive_value_reference)) continue;
@@ -12521,7 +12521,7 @@ pub const CheckedBodyStore = struct {
             if (lookup != .e_lookup_local) continue;
             try recursively_referenced_patterns.put(allocator, lookup.e_lookup_local.pattern_idx, {});
         }
-        var rejected_method_decls = std.AutoHashMapUnmanaged(CIR.Statement.Idx, void){};
+        var rejected_method_decls = collections.DenseMapUnmanaged(CIR.Statement.Idx, void).empty;
         defer rejected_method_decls.deinit(allocator);
         for (module.methodDefEntries()) |entry| {
             if (module.moduleEnvConst().store.nodes.get(entry.value.type_node_idx).tag != .statement_decl) continue;
@@ -12620,7 +12620,7 @@ pub const CheckedBodyStore = struct {
         errdefer binder_remap_pool.deinit(allocator);
         // Dedup set for locally-declared field defaults; consumed by the
         // defaults-collection block after the build arrays are committed.
-        var seen_defaults = std.AutoHashMap(u32, void).init(allocator);
+        var seen_defaults = collections.DenseMap(u32, void).init(allocator);
         errdefer seen_defaults.deinit();
 
         var copier = CheckedBodyPayloadCopier{
@@ -14978,15 +14978,15 @@ const CheckedBodyPayloadCopier = struct {
     binder_remap_pool: *std.ArrayList(CheckedAlternativeBinderRemap),
     /// Binding patterns of the local functions checking promoted to
     /// procedures of their own.
-    promoted_patterns: *const std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
+    promoted_patterns: *const collections.DenseMapUnmanaged(CIR.Pattern.Idx, void),
     /// Local value binders that checking recorded as referenced from inside
     /// their own binding's value.
-    recursively_referenced_patterns: *const std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
+    recursively_referenced_patterns: *const collections.DenseMapUnmanaged(CIR.Pattern.Idx, void),
     /// Declarations of methods of function-body types whose right-hand side
     /// was rejected. Such a method has no runtime target: dispatch resolves
     /// it to a checked error and checking retired every lookup of its name,
     /// so its declaration evaluates nothing and its block omits it.
-    rejected_method_decls: *const std.AutoHashMapUnmanaged(CIR.Statement.Idx, void),
+    rejected_method_decls: *const collections.DenseMapUnmanaged(CIR.Statement.Idx, void),
 
     /// Whether the declaration is a recursive value, marking each of its
     /// binders `recursive_value` when it is.
@@ -16839,7 +16839,7 @@ pub const ResolvedValueRefTable = struct {
         errdefer allocator.free(by_checked_expr);
         @memset(by_checked_expr, null);
 
-        var recursive_reference_nodes = std.AutoHashMap(u32, void).init(allocator);
+        var recursive_reference_nodes = collections.DenseMap(u32, void).init(allocator);
         defer recursive_reference_nodes.deinit();
         for (module.moduleEnvConst().scheme_uses.items.items) |record| {
             if (record.slot_kind != @backingInt(ModuleEnv.SchemeUseRecord.Slot.recursive_reference)) continue;
@@ -18085,9 +18085,9 @@ fn sealCheckedProcedureTemplateRefs(
     // pushes an evidence scope. Declarations map to their pattern scheme;
     // expression-position functions stored in a containing value map to the
     // pristine scheme instantiated at that construction edge.
-    var local_schemes = std.AutoHashMap(u32, Var).init(allocator);
+    var local_schemes = collections.DenseMap(u32, Var).init(allocator);
     defer local_schemes.deinit();
-    var nested_function_uses = std.AutoHashMap(u32, u32).init(allocator);
+    var nested_function_uses = collections.DenseMap(u32, u32).init(allocator);
     defer nested_function_uses.deinit();
     {
         const types_store = module.typeStoreConst();
@@ -18100,7 +18100,7 @@ fn sealCheckedProcedureTemplateRefs(
         // question—whether let-generalization ran—and a definition whose body
         // defers a dispatch to its caller is instantiated at its uses while
         // that rank settles at `.outermost`.
-        var instantiated_scheme_roots = std.AutoHashMap(Var, void).init(allocator);
+        var instantiated_scheme_roots = collections.DenseMap(Var, void).init(allocator);
         defer instantiated_scheme_roots.deinit();
         for (module.moduleEnvConst().scheme_uses.items.items) |record| {
             switch (@as(ModuleEnv.SchemeUseRecord.Slot, @fromBackingInt(@intCast(record.slot_kind)))) {
@@ -18114,7 +18114,7 @@ fn sealCheckedProcedureTemplateRefs(
 
         // A promoted local function is the root of its own template, whose
         // scheme is the template's; it opens no generalized-local scope.
-        var promoted_patterns = std.AutoHashMap(CIR.Pattern.Idx, void).init(allocator);
+        var promoted_patterns = collections.DenseMap(CIR.Pattern.Idx, void).init(allocator);
         defer promoted_patterns.deinit();
         for (templates.promoted) |promoted| try promoted_patterns.put(promoted.pattern, {});
 
@@ -18437,18 +18437,40 @@ const EvidencePass = struct {
     /// Each dispatcher root's params within one schema, in param order.
     /// Composite scheme requirements are matched by their exact relation
     /// instead, so they are not indexed.
-    const DispatcherParams = std.AutoHashMapUnmanaged(Var, std.ArrayListUnmanaged(u32));
-    const no_dispatcher_params: DispatcherParams = .{};
+    const DispatcherParams = struct {
+        /// Sorted by dispatcher root, then by param index.
+        rows: []const Row = &.{},
+
+        const Row = struct {
+            root: Var,
+            param: u32,
+
+            fn lessThan(_: void, left: Row, right: Row) bool {
+                if (left.root != right.root) return @backingInt(left.root) < @backingInt(right.root);
+                return left.param < right.param;
+            }
+
+            fn orderRoot(root: Var, row: Row) std.math.Order {
+                return std.math.order(@backingInt(root), @backingInt(row.root));
+            }
+        };
+
+        /// The rows of `root`'s params, in param order.
+        fn forRoot(self: DispatcherParams, root: Var) []const Row {
+            const start, const end = std.sort.equalRange(Row, self.rows, root, Row.orderRoot);
+            return self.rows[start..end];
+        }
+    };
     /// One level of an evidence chain: a schema's params and their index.
     const ChainLevel = struct {
         params: []const EvidenceParam,
-        by_dispatcher: *const DispatcherParams,
+        by_dispatcher: DispatcherParams,
 
-        const empty: ChainLevel = .{ .params = &.{}, .by_dispatcher = &no_dispatcher_params };
+        const empty: ChainLevel = .{ .params = &.{}, .by_dispatcher = .{} };
     };
     const SchemeSchema = struct {
         params: []EvidenceParam,
-        by_dispatcher: *const DispatcherParams,
+        by_dispatcher: DispatcherParams,
         /// The nodes `params` name their paths by.
         path_nodes: []const static_dispatch.EvidencePathNode,
         identity_vars: []const Var,
@@ -18487,51 +18509,54 @@ const EvidencePass = struct {
     /// Reuse traversal capacity while giving each schema fresh identity slots.
     identity_writer: canonical_type_keys.TypeWriter,
     /// Value-use record index by source node, including explicit shared uses.
-    value_use_by_node: std.AutoHashMap(u32, u32),
+    value_use_by_node: collections.DenseMap(u32, u32),
     /// dispatch_target record index by the discharged edge's raw fn var.
-    target_by_fn_var: std.AutoHashMap(u32, u32),
+    target_by_fn_var: collections.DenseMap(u32, u32),
     /// Exact generated-codec derivation selected for each checker-authored
     /// source constraint. The raw source var is the durable producer identity;
     /// union-find roots are deliberately not used because two distinct checked
     /// edges may later acquire equal types.
-    generated_codec_by_source: std.AutoHashMap(u64, static_dispatch.GeneratedCodecDerivationId),
+    generated_codec_by_source: collections.DenseMap(Var, GeneratedCodecsByKind),
     /// where_method_use record index by the body dispatch's raw fn var.
     /// The record explicitly maps that callable to its pristine signature.
-    where_method_use_by_fn_var: std.AutoHashMap(u32, u32),
+    where_method_use_by_fn_var: collections.DenseMap(u32, u32),
     /// The same records by the settled root of that raw fn var. Generalized
     /// requirement deduplication unifies same-shape callables through a
     /// committed probe, so a plan may name a callable that is in one class
     /// with a recorded body use without being its raw key; the class is the
     /// equality authority after that probe. First record per root wins.
-    where_method_use_by_fn_root: std.AutoHashMap(Var, u32),
+    where_method_use_by_fn_root: collections.DenseMap(Var, u32),
     /// Source node by checked expr (reverse of `exprIdForSource`).
-    source_by_checked_expr: std.AutoHashMap(u32, u32),
+    source_by_checked_expr: collections.DenseMap(u32, u32),
     /// Generalized local VALUE decls (non-lambda exprs, e.g. an `if` choosing
     /// between closures): scheme param var root -> decl pattern. Monotype
     /// lowers such decls inline at the single type their uses unify to, so a
     /// body plan's obligation resolves through a representative use record.
-    local_value_scheme_by_var: std.AutoHashMap(u32, u32),
+    local_value_scheme_by_var: collections.DenseMap(u32, u32),
     /// First value_use record per looked-up pattern.
-    value_use_record_by_pattern: std.AutoHashMap(u32, u32),
+    value_use_record_by_pattern: collections.DenseMap(u32, u32),
     /// Each scheme-use record's substitution, indexed by the resolved root of
     /// each pair's scheme-side var; the first pair recorded for a root wins.
     /// The store is read-only during this pass, so resolved roots are fixed.
     fresh_by_pair_root: std.AutoHashMapUnmanaged(PairRootKey, Var) = .empty,
     /// Memoized evidence node per dispatch_target record.
-    node_by_record: std.AutoHashMap(u32, static_dispatch.EvidenceNodeId),
+    node_by_record: collections.DenseMap(u32, static_dispatch.EvidenceNodeId),
     /// Hash buckets and collision chains for structurally interned evidence
     /// nodes. Every durable `EvidenceNodeId` is therefore an exact evidence
     /// identity, independent of which checker record requested it.
     evidence_node_buckets: std.AutoHashMap(u64, static_dispatch.EvidenceNodeId),
     evidence_node_next: std.ArrayList(?static_dispatch.EvidenceNodeId),
-    record_in_progress: std.AutoHashMap(u32, void),
+    record_in_progress: collections.DenseMap(u32, void),
     /// Site-evidence dedupe (a checked expr can be reachable from two
     /// templates, e.g. a const body and its entry wrapper).
-    site_seen: std.AutoHashMap(u32, void),
+    site_seen: collections.DenseMap(u32, void),
 
     evidence_nodes: std.ArrayList(static_dispatch.EvidenceNode),
     evidence_refs: std.ArrayList(static_dispatch.CheckedEvidence),
-    callable_contract_buckets: std.AutoHashMapUnmanaged(u64, std.ArrayListUnmanaged(artifact_serialize.Span)) = .{},
+    /// Hash buckets and collision chains for interned callable contract
+    /// vectors: each bucket names its newest row in `callable_contracts`.
+    callable_contract_buckets: std.AutoHashMapUnmanaged(u64, u32) = .empty,
+    callable_contracts: std.ArrayListUnmanaged(CallableContractRow) = .empty,
     site_evidence: std.ArrayList(static_dispatch.SiteEvidenceEntry),
     evidence_params_pool: std.ArrayList(static_dispatch.EvidenceParamRecord),
     evidence_path_nodes: std.ArrayList(static_dispatch.EvidencePathNode),
@@ -18544,6 +18569,9 @@ const EvidencePass = struct {
     /// Solver variables of the scheme whose params are being appended, in
     /// slot order, so each param resolves to its slot.
     scheme_var_scratch: std.ArrayListUnmanaged(Var) = .empty,
+    /// Traversal scratch for `schemeExtendsLabeledTagRow`.
+    labeled_row_visited: collections.DenseMapUnmanaged(Var, void) = .empty,
+    labeled_row_pending: std.ArrayList(Var) = .empty,
 
     enum_scratch: dispatch_evidence.Scratch,
     /// Stable copies of enumerated semantic paths. Evidence resolution may
@@ -18572,6 +18600,16 @@ const EvidencePass = struct {
     current_chain: []const ChainLevel = &.{},
 
     const EvidenceParam = dispatch_evidence.EvidenceParam;
+    /// The generated-codec derivation each kind selected for one
+    /// checker-authored source constraint.
+    const GeneratedCodecsByKind = std.EnumArray(static_dispatch.GeneratedCodecDerivationKind, ?static_dispatch.GeneratedCodecDerivationId);
+    const CallableContractRow = struct {
+        span: artifact_serialize.Span,
+        /// The next older row in the same bucket.
+        next: u32,
+
+        const none = std.math.maxInt(u32);
+    };
 
     fn init(
         allocator: Allocator,
@@ -18614,21 +18652,21 @@ const EvidencePass = struct {
             .platform_requirement_root_evidence = platform_requirement_root_evidence,
             .template_root_evidence = template_root_evidence,
             .types = module.typeStoreConst(),
-            .value_use_by_node = std.AutoHashMap(u32, u32).init(allocator),
-            .target_by_fn_var = std.AutoHashMap(u32, u32).init(allocator),
+            .value_use_by_node = collections.DenseMap(u32, u32).init(allocator),
+            .target_by_fn_var = collections.DenseMap(u32, u32).init(allocator),
             .schemas_by_root = collections.DenseMap(Var, SchemeSchema).init(allocator),
             .identity_writer = canonical_type_keys.TypeWriter.init(allocator, module.typeStoreConst(), module.moduleEnvConst()),
-            .generated_codec_by_source = std.AutoHashMap(u64, static_dispatch.GeneratedCodecDerivationId).init(allocator),
-            .where_method_use_by_fn_var = std.AutoHashMap(u32, u32).init(allocator),
-            .where_method_use_by_fn_root = std.AutoHashMap(Var, u32).init(allocator),
-            .source_by_checked_expr = std.AutoHashMap(u32, u32).init(allocator),
-            .local_value_scheme_by_var = std.AutoHashMap(u32, u32).init(allocator),
-            .value_use_record_by_pattern = std.AutoHashMap(u32, u32).init(allocator),
-            .node_by_record = std.AutoHashMap(u32, static_dispatch.EvidenceNodeId).init(allocator),
+            .generated_codec_by_source = collections.DenseMap(Var, GeneratedCodecsByKind).init(allocator),
+            .where_method_use_by_fn_var = collections.DenseMap(u32, u32).init(allocator),
+            .where_method_use_by_fn_root = collections.DenseMap(Var, u32).init(allocator),
+            .source_by_checked_expr = collections.DenseMap(u32, u32).init(allocator),
+            .local_value_scheme_by_var = collections.DenseMap(u32, u32).init(allocator),
+            .value_use_record_by_pattern = collections.DenseMap(u32, u32).init(allocator),
+            .node_by_record = collections.DenseMap(u32, static_dispatch.EvidenceNodeId).init(allocator),
             .evidence_node_buckets = std.AutoHashMap(u64, static_dispatch.EvidenceNodeId).init(allocator),
             .evidence_node_next = .empty,
-            .record_in_progress = std.AutoHashMap(u32, void).init(allocator),
-            .site_seen = std.AutoHashMap(u32, void).init(allocator),
+            .record_in_progress = collections.DenseMap(u32, void).init(allocator),
+            .site_seen = collections.DenseMap(u32, void).init(allocator),
             .evidence_nodes = .empty,
             .evidence_refs = .empty,
             .site_evidence = .empty,
@@ -18670,9 +18708,8 @@ const EvidencePass = struct {
         self.site_seen.deinit();
         self.evidence_nodes.deinit(self.allocator);
         self.evidence_refs.deinit(self.allocator);
-        var contract_buckets = self.callable_contract_buckets.valueIterator();
-        while (contract_buckets.next()) |bucket| bucket.deinit(self.allocator);
         self.callable_contract_buckets.deinit(self.allocator);
+        self.callable_contracts.deinit(self.allocator);
         self.site_evidence.deinit(self.allocator);
         self.record_spans_by_substitution.deinit(self.allocator);
         self.procedure_value_spans_by_substitution.deinit(self.allocator);
@@ -18684,6 +18721,8 @@ const EvidencePass = struct {
         self.scheme_vars_pool.deinit(self.allocator);
         self.site_substitutions.deinit(self.allocator);
         self.scheme_var_scratch.deinit(self.allocator);
+        self.labeled_row_visited.deinit(self.allocator);
+        self.labeled_row_pending.deinit(self.allocator);
         self.enum_scratch.deinit(self.allocator);
         self.enumerated_path_arena.deinit();
         self.chain_scratch.deinit(self.allocator);
@@ -18705,7 +18744,7 @@ const EvidencePass = struct {
         // Each source-defined procedure template publishes its source
         // binding's scheme: a top-level def's, or a promoted local function
         // binding pattern's.
-        var template_defs = std.AutoHashMap(u32, Var).init(self.allocator);
+        var template_defs = collections.DenseMap(u32, Var).init(self.allocator);
         defer template_defs.deinit();
         for (self.templates.by_def) |entry| {
             try template_defs.put(@backingInt(entry.template.template), ModuleEnv.varFrom(entry.def));
@@ -18991,7 +19030,7 @@ const EvidencePass = struct {
     fn templateSchemeVar(
         self: *EvidencePass,
         template: CheckedProcedureTemplate,
-        template_defs: *const std.AutoHashMap(u32, Var),
+        template_defs: *const collections.DenseMap(u32, Var),
     ) ?Var {
         if (template_defs.get(@backingInt(template.template_id))) |scheme_var| return scheme_var;
         return switch (template.body) {
@@ -19080,14 +19119,14 @@ const EvidencePass = struct {
     /// dispatch's normalized callable does not determine the variable's
     /// instantiation.
     fn schemeExtendsLabeledTagRow(self: *EvidencePass, scheme_var: Var) Allocator.Error!bool {
-        var visited = std.AutoHashMap(Var, void).init(self.allocator);
-        defer visited.deinit();
-        var pending: std.ArrayList(Var) = .empty;
-        defer pending.deinit(self.allocator);
+        const visited = &self.labeled_row_visited;
+        visited.clearRetainingCapacity();
+        const pending = &self.labeled_row_pending;
+        pending.clearRetainingCapacity();
         try pending.append(self.allocator, scheme_var);
         while (pending.pop()) |raw| {
             const resolved = self.types.resolveVar(raw);
-            if ((try visited.getOrPut(resolved.var_)).found_existing) continue;
+            if ((try visited.getOrPut(self.allocator, resolved.var_)).found_existing) continue;
             switch (resolved.desc.content) {
                 .flex, .rigid, .field_presence, .err => {},
                 .alias => |alias| {
@@ -19196,7 +19235,7 @@ const EvidencePass = struct {
     fn templateEvidenceSchemeVar(
         self: *EvidencePass,
         template: CheckedProcedureTemplate,
-        template_defs: *const std.AutoHashMap(u32, Var),
+        template_defs: *const collections.DenseMap(u32, Var),
     ) ?Var {
         if (template_defs.get(@backingInt(template.template_id))) |scheme_var| return scheme_var;
         return switch (template.body) {
@@ -19213,7 +19252,7 @@ const EvidencePass = struct {
     fn templateChainLevel(
         self: *EvidencePass,
         template: CheckedProcedureTemplate,
-        template_defs: *const std.AutoHashMap(u32, Var),
+        template_defs: *const collections.DenseMap(u32, Var),
     ) Allocator.Error!ChainLevel {
         const scheme_var = self.templateEvidenceSchemeVar(template, template_defs) orelse return .empty;
         const schema = try self.schemeSchema(scheme_var);
@@ -19223,7 +19262,7 @@ const EvidencePass = struct {
     fn enumerateTemplateParams(
         self: *EvidencePass,
         template: CheckedProcedureTemplate,
-        template_defs: *const std.AutoHashMap(u32, Var),
+        template_defs: *const collections.DenseMap(u32, Var),
         params: *std.ArrayListUnmanaged(EvidenceParam),
     ) Allocator.Error!void {
         params.clearRetainingCapacity();
@@ -19239,12 +19278,13 @@ const EvidencePass = struct {
                 .parser => .parser,
                 .encoder => .encoder,
             };
-            const key = generatedCodecSourceKey(@fromBackingInt(@intCast(derivation.source_constraint_fn_var)), kind);
-            const entry = try self.generated_codec_by_source.getOrPut(key);
-            if (entry.found_existing) {
+            const source: Var = @fromBackingInt(@intCast(derivation.source_constraint_fn_var));
+            const entry = try self.generated_codec_by_source.getOrPutValue(source, .initFill(null));
+            const slot = entry.value_ptr.getPtr(kind);
+            if (slot.* != null) {
                 checkedArtifactInvariant("duplicate generated codec source constraint identity", .{});
             }
-            entry.value_ptr.* = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
+            slot.* = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         }
         // Records replayed from one source name the same substitution range,
         // whose pairs are indexed once.
@@ -19874,9 +19914,9 @@ const EvidencePass = struct {
         // Composite requirements are matched by their exact scheme relation
         // before structural dispatch, so the index omits them. A shared
         // receiver/method is insufficient.
-        const candidates = level.by_dispatcher.get(dispatcher_root) orelse return null;
         var same_method_fallback: ?u32 = null;
-        for (candidates.items) |k| {
+        for (level.by_dispatcher.forRoot(dispatcher_root)) |candidate| {
+            const k = candidate.param;
             const param = params[k];
             if (try self.names.internMethodIdent(idents, param.constraint.fn_name) != method) continue;
             if (same_method_fallback == null) same_method_fallback = @intCast(k);
@@ -20229,20 +20269,13 @@ const EvidencePass = struct {
         }
     }
 
-    fn generatedCodecSourceKey(
-        constraint_fn_var: Var,
-        kind: static_dispatch.GeneratedCodecDerivationKind,
-    ) u64 {
-        return (@as(u64, @backingInt(kind)) << 32) |
-            @as(u64, @backingInt(constraint_fn_var));
-    }
-
     fn generatedCodecDerivationForSourceConstraint(
         self: *EvidencePass,
         constraint_fn_var: Var,
         expected_kind: static_dispatch.GeneratedCodecDerivationKind,
     ) ?static_dispatch.GeneratedCodecDerivationId {
-        return self.generated_codec_by_source.get(generatedCodecSourceKey(constraint_fn_var, expected_kind));
+        const by_kind = self.generated_codec_by_source.getPtrConst(constraint_fn_var) orelse return null;
+        return by_kind.get(expected_kind);
     }
 
     fn resolveVarObligation(
@@ -21078,11 +21111,18 @@ const EvidencePass = struct {
     fn internCallableContracts(self: *EvidencePass, entries: []const static_dispatch.CheckedEvidence) Allocator.Error!artifact_serialize.Span {
         var hasher = std.hash.Wyhash.init(0);
         for (entries) |entry| std.hash.autoHash(&hasher, entry);
-        const bucket = try self.callable_contract_buckets.getOrPut(self.allocator, hasher.final());
-        if (!bucket.found_existing) bucket.value_ptr.* = .empty;
-        for (bucket.value_ptr.items) |span| {
-            if (span.len != entries.len) continue;
-            const existing = self.evidence_refs.items[span.start..][0..span.len];
+        const bucket_key = hasher.final();
+        const row_index = std.math.cast(u32, self.callable_contracts.items.len) orelse return error.OutOfMemory;
+        if (row_index == CallableContractRow.none) return error.OutOfMemory;
+        try self.callable_contracts.ensureUnusedCapacity(self.allocator, 1);
+        const bucket = try self.callable_contract_buckets.getOrPut(self.allocator, bucket_key);
+        const newest = if (bucket.found_existing) bucket.value_ptr.* else CallableContractRow.none;
+        var cursor = newest;
+        while (cursor != CallableContractRow.none) {
+            const row = self.callable_contracts.items[cursor];
+            cursor = row.next;
+            if (row.span.len != entries.len) continue;
+            const existing = self.evidence_refs.items[row.span.start..][0..row.span.len];
             var equal = true;
             for (existing, entries) |left, right| {
                 if (!std.meta.eql(left, right)) {
@@ -21090,10 +21130,14 @@ const EvidencePass = struct {
                     break;
                 }
             }
-            if (equal) return span;
+            if (equal) return row.span;
         }
-        const span = try self.appendEvidenceRefs(entries);
-        try bucket.value_ptr.append(self.allocator, span);
+        const span = self.appendEvidenceRefs(entries) catch |err| {
+            if (!bucket.found_existing) _ = self.callable_contract_buckets.remove(bucket_key);
+            return err;
+        };
+        self.callable_contracts.appendAssumeCapacity(.{ .span = span, .next = newest });
+        bucket.value_ptr.* = row_index;
         return span;
     }
 
@@ -21674,10 +21718,10 @@ const CheckedTemplateRefCollector = struct {
     /// Generalized-with-obligations local function decls (checked lambda expr
     /// id -> decl pattern var), prebuilt by the seal pass; entering one pushes
     /// an evidence scope.
-    local_schemes: *const std.AutoHashMap(u32, Var),
+    local_schemes: *const collections.DenseMap(u32, Var),
     /// Checked nested function expr -> `SchemeUseRecord` index for the
     /// construction edge that instantiated it.
-    nested_function_uses: *const std.AutoHashMap(u32, u32),
+    nested_function_uses: *const collections.DenseMap(u32, u32),
     value_refs: std.ArrayList(ResolvedValueRefId),
     dispatch_refs: std.ArrayList(static_dispatch.StaticDispatchPlanId),
     iterator_refs: std.ArrayList(static_dispatch.IteratorForPlanId),
@@ -21706,8 +21750,8 @@ const CheckedTemplateRefCollector = struct {
         checked_types: *const CheckedTypePublication,
         checked_bodies: *const CheckedBodyStore,
         static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
-        local_schemes: *const std.AutoHashMap(u32, Var),
-        nested_function_uses: *const std.AutoHashMap(u32, u32),
+        local_schemes: *const collections.DenseMap(u32, Var),
+        nested_function_uses: *const collections.DenseMap(u32, u32),
     ) CheckedTemplateRefCollector {
         return .{
             .allocator = allocator,
@@ -28632,7 +28676,7 @@ const SingleSourceCalls = struct {
         // Private templates: promoted locals, and source definitions that are
         // neither exposed nor methods.
         const module_env = self.module.moduleEnvConst();
-        var public_defs = std.AutoHashMap(CIR.Def.Idx, void).init(allocator);
+        var public_defs = collections.DenseMap(CIR.Def.Idx, void).init(allocator);
         defer public_defs.deinit();
         for (self.exported_defs) |def| try public_defs.put(def, {});
         for (module_env.method_defs.entries.items) |entry| try public_defs.put(entry.value.def_idx, {});
@@ -40262,13 +40306,11 @@ test "issue 11737: identical callable contract vectors share their checked stora
     var pass: EvidencePass = undefined;
     pass.allocator = allocator;
     pass.evidence_refs = .empty;
-    pass.callable_contract_buckets = .{};
+    pass.callable_contract_buckets = .empty;
+    pass.callable_contracts = .empty;
     defer pass.evidence_refs.deinit(allocator);
-    defer {
-        var buckets = pass.callable_contract_buckets.valueIterator();
-        while (buckets.next()) |bucket| bucket.deinit(allocator);
-        pass.callable_contract_buckets.deinit(allocator);
-    }
+    defer pass.callable_contract_buckets.deinit(allocator);
+    defer pass.callable_contracts.deinit(allocator);
     const contract = [_]static_dispatch.CheckedEvidence{.{
         .dispatcher_ty = @fromBackingInt(@intCast(1)),
         .runtime_dictionary = false,
