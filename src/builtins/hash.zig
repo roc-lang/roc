@@ -204,7 +204,19 @@ fn writeLe(comptime T: type, out: []u8, value: T) void {
     std.mem.writeInt(T, out[0..@sizeOf(T)], value, .little);
 }
 
+/// Inputs up to this length (every scalar write) are framed in one stack
+/// buffer and hashed in a single pass.
+const hasher_feed_inline_max = 16;
+
 fn hasherFeed(seed: u64, domain: u8, bytes: []const u8) u64 {
+    if (bytes.len <= hasher_feed_inline_max) {
+        var framed: [1 + 8 + hasher_feed_inline_max]u8 = undefined;
+        framed[0] = domain;
+        writeLe(u64, framed[1..9], @intCast(bytes.len));
+        @memcpy(framed[9..][0..bytes.len], bytes);
+        return Wyhash.hash(seed, framed[0 .. 9 + bytes.len]);
+    }
+
     var len_buf: [8]u8 = undefined;
     writeLe(u64, &len_buf, @intCast(bytes.len));
 
@@ -335,5 +347,19 @@ test "iterative non-divisible update" {
         const iterative_hash = wy.final();
 
         try std.testing.expectEqual(iterative_hash, non_iterative_hash);
+    }
+}
+
+test "hasherFeed frames short inputs the same as the streaming path" {
+    var bytes: [40]u8 = undefined;
+    for (&bytes, 0..) |*byte, index| byte.* = @intCast(index *% 37 +% 11);
+    for (0..bytes.len + 1) |len| {
+        var len_buf: [8]u8 = undefined;
+        writeLe(u64, &len_buf, @intCast(len));
+        var wy = Wyhash.init(0x1234_5678_9abc_def0);
+        wy.update(&.{7});
+        wy.update(&len_buf);
+        wy.update(bytes[0..len]);
+        try std.testing.expectEqual(wy.final(), hasherFeed(0x1234_5678_9abc_def0, 7, bytes[0..len]));
     }
 }
