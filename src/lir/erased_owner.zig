@@ -156,13 +156,15 @@ pub fn resolveProcReuseSources(
     while (try stmts.next()) |current| {
         const stmt = store.getCFStmt(current);
         try owners.noteStmt(store, layouts, stmt);
-        if (stmt == .assign_call_erased and stmt.assign_call_erased.reuse_source != null) {
+        if (stmt == .assign_call_erased and store.stmtRow(stmt.assign_call_erased.data).reuse_source != null) {
             try calls.append(allocator, current);
         }
     }
 
     for (calls.items) |call_id| {
         const call = &store.getCFStmtPtr(call_id).assign_call_erased;
-        call.reuse_source = owners.reuseSource(store, layouts, call.closure);
+        var data = store.stmtRow(call.data);
+        data.reuse_source = owners.reuseSource(store, layouts, data.closure);
+        call.data = try store.addStmtRow(LIR.ErasedCallData, data);
     }
 }

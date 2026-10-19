@@ -12983,6 +12983,7 @@ fn optimizedDbgWarningsForBuild(
         .size, .speed => try build_env.renderOptimizedDbgWarnings(
             ctx.io.stderr(),
             @tagName(opt),
+            @tagName(cli_args.default_dev_opt),
             ctx.reportConfig(.stderr),
         ),
         .dev, .interpreter => 0,

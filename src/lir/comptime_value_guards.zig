@@ -55,7 +55,7 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed:
                 .init_uninitialized, .assign_ref, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => continue,
             };
             const slot = switch (assign.value) {
-                .static_data => |id| id,
+                .static_data => |read| read.id,
                 .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .bytes_literal, .proc_ref => continue,
             };
             const root = program.static_data_values.items[@backingInt(slot)].compile_time_root orelse continue;
@@ -95,12 +95,12 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed:
         const checked_crash = try store.addCFStmt(.{ .crash = .{ .msg = .{ .local = message }, .checked_error = true, .failed_value = value } }, guard_origin);
         const load_message = try store.addCFStmt(.{ .assign_ref = .{
             .target = message,
-            .op = .{ .field = .{ .source = record, .field_idx = @intCast(fields.message_field) } },
+            .op = .field(record, @intCast(fields.message_field)),
             .next = crash,
         } }, guard_origin);
         const load_checked_message = try store.addCFStmt(.{ .assign_ref = .{
             .target = message,
-            .op = .{ .field = .{ .source = record, .field_idx = @intCast(fields.message_field) } },
+            .op = .field(record, @intCast(fields.message_field)),
             .next = checked_crash,
         } }, guard_origin);
         const branch = try store.addCFStmt(.{ .switch_stmt = .{
@@ -114,12 +114,12 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed:
         } }, guard_origin);
         const load_failed = try store.addCFStmt(.{ .assign_ref = .{
             .target = failed,
-            .op = .{ .field = .{ .source = record, .field_idx = @intCast(fields.failed_field) } },
+            .op = .field(record, @intCast(fields.failed_field)),
             .next = branch,
         } }, guard_origin);
         try store.replaceCFStmt(use.stmt, .{ .assign_literal = .{
             .target = record,
-            .value = .{ .static_data = failure_slot },
+            .value = .{ .static_data = .{ .id = failure_slot } },
             .next = load_failed,
         } }, guard_origin);
         try guards.put(use.stmt, .{ .locals = .{ record, failed, message }, .success = success, .crash = crash, .checked_crash = checked_crash });
@@ -250,7 +250,7 @@ fn testSharedGuards(allocator: std.mem.Allocator) (std.mem.Allocator.Error || er
     });
     const target = try program.store.addLocal(.{ .layout_idx = .u8 });
     const ret = try program.store.addCFStmt(.{ .ret = .{ .value = target } }, .test_fixture);
-    const load = try program.store.addCFStmt(.{ .assign_literal = .{ .target = target, .value = .{ .static_data = slot }, .next = ret } }, .test_fixture);
+    const load = try program.store.addCFStmt(.{ .assign_literal = .{ .target = target, .value = .{ .static_data = .{ .id = slot } }, .next = ret } }, .test_fixture);
     const frame = try program.store.addLocalSpan(&.{target});
     var owners: [2]LIR.LirProcSpecId = undefined; // Both entries are assigned by addProcSpec before use.
     for (&owners, 0..) |*owner, i| {
@@ -274,7 +274,7 @@ fn testSharedGuards(allocator: std.mem.Allocator) (std.mem.Allocator.Error || er
     try completeSuccessfulSlot(&program, slot);
     const restored = program.store.getCFStmtImmediate(load).assign_literal;
     try std.testing.expectEqual(target, restored.target);
-    try std.testing.expectEqual(slot, restored.value.static_data);
+    try std.testing.expectEqual(slot, restored.value.static_data.id);
     try std.testing.expectEqual(ret, restored.next);
     try completeSuccessfulSlot(&program, slot);
     for (owners) |owner| {
@@ -343,7 +343,7 @@ fn testCompletedGuards(allocator: std.mem.Allocator) (std.mem.Allocator.Error ||
     for (value_slots, &loads, &owners, 0..) |slot, *load, *owner, i| {
         const target = try program.store.addLocal(.{ .layout_idx = .u8 });
         const ret = try program.store.addCFStmt(.{ .ret = .{ .value = target } }, .test_fixture);
-        load.* = try program.store.addCFStmt(.{ .assign_literal = .{ .target = target, .value = .{ .static_data = slot }, .next = ret } }, .test_fixture);
+        load.* = try program.store.addCFStmt(.{ .assign_literal = .{ .target = target, .value = .{ .static_data = .{ .id = slot } }, .next = ret } }, .test_fixture);
         owner.* = try program.store.addProcSpec(.{ .name = .fromRaw(i), .identity = LIR.ProcIdentity.forTest(@intCast(i + 1)), .args = .empty(), .frame_locals = try program.store.addLocalSpan(&.{target}), .body = load.*, .ret_layout = .u8 }, .none);
     }
     var succeeded_record = @as([32]u8, @splat(0));
@@ -364,12 +364,12 @@ fn testCompletedGuards(allocator: std.mem.Allocator) (std.mem.Allocator.Error ||
     const guard = program.comptime_value_guards.items[0];
     try std.testing.expectEqual(owners[1], guard.owner);
     try std.testing.expectEqual(value_slots[1], guard.value_slot);
-    try std.testing.expect(program.store.getCFStmtImmediate(loads[1]).assign_literal.value.static_data != value_slots[1]);
+    try std.testing.expect(program.store.getCFStmtImmediate(loads[1]).assign_literal.value.static_data.id != value_slots[1]);
     try std.testing.expectEqual(@as(usize, 4), program.store.getLocalSpan(program.store.getProcSpecImmediate(owners[1]).frame_locals).len);
 
     // The successful read is left exactly as lowered.
     const kept = program.store.getCFStmtImmediate(loads[0]).assign_literal;
-    try std.testing.expectEqual(value_slots[0], kept.value.static_data);
+    try std.testing.expectEqual(value_slots[0], kept.value.static_data.id);
     try std.testing.expectEqual(@as(usize, 1), program.store.getLocalSpan(program.store.getProcSpecImmediate(owners[0]).frame_locals).len);
     try std.testing.expectEqual(@as(u64, 0), program.store.getProcSpecImmediate(owners[0]).native_code_revision);
 }

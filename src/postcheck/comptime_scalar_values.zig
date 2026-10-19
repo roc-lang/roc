@@ -49,7 +49,7 @@ const Allocator = std.mem.Allocator;
 /// the emitted code needs, and a scalar literal's layout is a fixed index
 /// that every store shares.
 pub const Construction = union(enum) {
-    literal: LIR.LiteralValue,
+    literal: ScalarLiteral,
     zst,
     /// The empty string.
     empty_str,
@@ -63,6 +63,30 @@ pub const Construction = union(enum) {
         discriminant: u32,
         payload: ?*const Construction,
     },
+};
+
+/// A scalar literal a construction holds. It names nothing in any LIR store,
+/// so a construction one program decoded can be emitted into another.
+pub const ScalarLiteral = union(enum) {
+    i64_literal: struct {
+        value: i64,
+        layout_idx: layout.Idx,
+    },
+    i128_literal: LIR.I128Literal,
+    f64_literal: f64,
+    f32_literal: f32,
+    dec_literal: i128,
+
+    /// The literal as `store` holds it.
+    pub fn toLiteralValue(self: ScalarLiteral, store: *core.LirStore) Allocator.Error!LIR.LiteralValue {
+        return switch (self) {
+            .i64_literal => |int| .{ .i64_literal = .{ .value = int.value, .layout_idx = int.layout_idx } },
+            .i128_literal => |int| .{ .i128_literal = try store.addStmtRow(LIR.I128Literal, int) },
+            .f64_literal => |value| .{ .f64_literal = value },
+            .f32_literal => |value| .{ .f32_literal = value },
+            .dec_literal => |value| .{ .dec_literal = value },
+        };
+    }
 };
 
 /// `count` copies of one construction: the value a `List.repeat` or a
@@ -105,7 +129,6 @@ pub const UniformList = struct {
                             writeDigestWord(hasher, @truncate(@as(u128, @bitCast(value))));
                             writeDigestWord(hasher, @truncate(@as(u128, @bitCast(value)) >> 64));
                         },
-                        .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => base.invariant("a construction's literal was not a scalar", .{}),
                     }
                 },
                 .zst, .empty_str => {},
@@ -231,7 +254,7 @@ pub const CompletedScalarValues = struct {
 
     /// The literal for a root read at `layout_idx`, when the root completed
     /// successfully with a scalar of that layout.
-    pub fn literalFor(self: *const CompletedScalarValues, module: checked.ModuleId, root: LIR.ComptimeProducer, layout_idx: layout.Idx) ?LIR.LiteralValue {
+    pub fn literalFor(self: *const CompletedScalarValues, module: checked.ModuleId, root: LIR.ComptimeProducer, layout_idx: layout.Idx) ?ScalarLiteral {
         const construction = self.constructionFor(module, root, layout_idx) orelse return null;
         return switch (construction) {
             .literal => |literal| literal,
@@ -243,13 +266,12 @@ pub const CompletedScalarValues = struct {
 /// Whether a decoded scalar literal is a value of `layout_idx`: the literal
 /// carries the scalar layout it was decoded at, and scalar layouts are fixed
 /// indices shared by every store.
-fn literalFitsLayout(literal: LIR.LiteralValue, layout_idx: layout.Idx) bool {
+fn literalFitsLayout(literal: ScalarLiteral, layout_idx: layout.Idx) bool {
     return switch (literal) {
         inline .i64_literal, .i128_literal => |int| int.layout_idx == layout_idx,
         .f32_literal => layout_idx == .f32,
         .f64_literal => layout_idx == .f64,
         .dec_literal => layout_idx == .dec,
-        .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => false,
     };
 }
 
@@ -270,7 +292,7 @@ pub fn emit(ctx: anytype, store: *core.LirStore, layouts: *const layout.Store, o
     try pending.append(store.allocator, .{ .target = target, .construction = construction });
     var current = next;
     while (pending.pop()) |part| switch (part.construction) {
-        .literal => |literal| current = try store.addCFStmt(.{ .assign_literal = .{ .target = part.target, .value = literal, .next = current } }, origin),
+        .literal => |literal| current = try store.addCFStmt(.{ .assign_literal = .{ .target = part.target, .value = try literal.toLiteralValue(store), .next = current } }, origin),
         .zst => current = try store.addCFStmt(.{ .assign_struct = .{ .target = part.target, .fields = LIR.LocalSpan.empty(), .next = current } }, origin),
         .empty_str => current = try store.addCFStmt(.{ .assign_literal = .{
             .target = part.target,
@@ -334,7 +356,7 @@ fn emitWithCapacity(ctx: anytype, store: *core.LirStore, origin: LIR.StmtOrigin,
     const build = try store.addCFStmt(.{ .assign_low_level = .{
         .target = target,
         .op = .list_with_capacity,
-        .rc_effect = LIR.LowLevel.list_with_capacity.rcEffect(),
+        .rc_effect = try store.addRcEffect(LIR.LowLevel.list_with_capacity.rcEffect()),
         .args = try store.addLocalSpan(&[_]LIR.LocalId{capacity_local}),
         .next = next,
     } }, origin);
@@ -371,7 +393,7 @@ pub fn emitRepeat(ctx: anytype, store: *core.LirStore, layouts: *const layout.St
         const append = try store.addCFStmt(.{ .assign_low_level = .{
             .target = target,
             .op = .list_append_unsafe,
-            .rc_effect = LIR.LowLevel.list_append_unsafe.rcEffect(),
+            .rc_effect = try store.addRcEffect(LIR.LowLevel.list_append_unsafe.rcEffect()),
             .args = try store.addLocalSpan(&[_]LIR.LocalId{ reserved, element_local }),
             .next = next,
         } }, origin);
@@ -388,7 +410,7 @@ pub fn emitRepeat(ctx: anytype, store: *core.LirStore, layouts: *const layout.St
     const fill = try store.addCFStmt(.{ .assign_low_level = .{
         .target = target,
         .op = .list_append_range_within_unsafe,
-        .rc_effect = LIR.LowLevel.list_append_range_within_unsafe.rcEffect(),
+        .rc_effect = try store.addRcEffect(LIR.LowLevel.list_append_range_within_unsafe.rcEffect()),
         .args = try store.addLocalSpan(&[_]LIR.LocalId{ seeded, zero, rest }),
         .next = next,
     } }, origin);
@@ -397,7 +419,7 @@ pub fn emitRepeat(ctx: anytype, store: *core.LirStore, layouts: *const layout.St
     const seed = try store.addCFStmt(.{ .assign_low_level = .{
         .target = seeded,
         .op = .list_append_unsafe,
-        .rc_effect = LIR.LowLevel.list_append_unsafe.rcEffect(),
+        .rc_effect = try store.addRcEffect(LIR.LowLevel.list_append_unsafe.rcEffect()),
         .args = try store.addLocalSpan(&[_]LIR.LocalId{ reserved, element_local }),
         .next = zero_literal,
     } }, origin);
@@ -411,7 +433,7 @@ fn emitReserveAndElement(ctx: anytype, store: *core.LirStore, layouts: *const la
     const reserve = try store.addCFStmt(.{ .assign_low_level = .{
         .target = reserved,
         .op = .list_with_capacity,
-        .rc_effect = LIR.LowLevel.list_with_capacity.rcEffect(),
+        .rc_effect = try store.addRcEffect(LIR.LowLevel.list_with_capacity.rcEffect()),
         .args = try store.addLocalSpan(&[_]LIR.LocalId{capacity_local}),
         .next = build_element,
     } }, origin);
@@ -713,7 +735,7 @@ fn exportOf(frozen: *const Program.FrozenStaticData, slot: LIR.StaticDataId) ?*c
 
 /// The literal form of a scalar's target bytes, or null for a layout the
 /// LIR has no literal for.
-fn decodeScalar(layout_idx: layout.Idx, bytes: []const u8) ?LIR.LiteralValue {
+fn decodeScalar(layout_idx: layout.Idx, bytes: []const u8) ?ScalarLiteral {
     return switch (layout_idx) {
         .u8 => intLiteral(u8, layout_idx, bytes),
         .i8 => intLiteral(i8, layout_idx, bytes),
@@ -734,7 +756,7 @@ fn decodeScalar(layout_idx: layout.Idx, bytes: []const u8) ?LIR.LiteralValue {
     };
 }
 
-fn intLiteral(comptime Int: type, layout_idx: layout.Idx, bytes: []const u8) ?LIR.LiteralValue {
+fn intLiteral(comptime Int: type, layout_idx: layout.Idx, bytes: []const u8) ?ScalarLiteral {
     const size = @sizeOf(Int);
     if (bytes.len < size) return null;
     const value = std.mem.readInt(Int, bytes[0..size], .little);

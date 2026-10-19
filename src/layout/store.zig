@@ -605,6 +605,7 @@ pub const Store = struct {
         discriminant_size: u8,
         variant_layouts: []const Idx,
     ) std.mem.Allocator.Error!Idx {
+        if (variant_layouts.len > layout_mod.max_tag_union_variants) return error.OutOfMemory;
         const sort_key = self.tagUnionVariantsSortKey(variant_layouts, discriminant_size);
         try self.buildTagUnionInternKeyFromVariants(
             sort_key,
@@ -892,6 +893,7 @@ pub const Store = struct {
 
     fn buildUninternedTagUnionLayout(self: *Self, variant_layouts: []const Idx) std.mem.Allocator.Error!Layout {
         std.debug.assert(variant_layouts.len >= 1);
+        if (variant_layouts.len > layout_mod.max_tag_union_variants) return error.OutOfMemory;
 
         const discriminant_size: u8 = TagUnionData.discriminantSize(variant_layouts.len);
         const m32 = self.tagUnionMetricsAt(variant_layouts, discriminant_size, .u32);
