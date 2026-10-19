@@ -73,6 +73,7 @@ pub fn digestContents(
         .names = names,
         .table = table,
         .keys = checked.CheckedTypeKeys.init(allocator, names, store),
+        .orderer = checked.CheckedIdentityOrderer.init(allocator, names, store),
     };
     defer digester.deinit();
     for (table.generated_codec_derivations, 0..) |*derivation, index| {
@@ -101,9 +102,12 @@ const ContentDigester = struct {
     codec_ordinals: std.AutoHashMapUnmanaged(u32, u32) = .empty,
     evidence_ordinals: std.AutoHashMapUnmanaged(u32, u32) = .empty,
     variable_ordinals: collections.DenseMapUnmanaged(TypeId, u32) = .empty,
-    /// Each root's variables in key order. Checked types are immutable here,
-    /// so the order is computed once per root for every contract.
-    identity_orders: collections.DenseMapUnmanaged(TypeId, []const TypeId) = .empty,
+    /// Each root's variables in key order, as a span of `identity_order_pool`.
+    /// Checked types are immutable here, so the order is computed once per
+    /// root for every contract.
+    identity_orders: collections.DenseMapUnmanaged(TypeId, Span) = .empty,
+    identity_order_pool: std.ArrayList(TypeId) = .empty,
+    orderer: checked.CheckedIdentityOrderer,
     tasks: std.ArrayList(Task) = .empty,
     children: std.ArrayList(Task) = .empty,
 
@@ -114,9 +118,9 @@ const ContentDigester = struct {
         self.codec_ordinals.deinit(self.allocator);
         self.evidence_ordinals.deinit(self.allocator);
         self.variable_ordinals.deinit(self.allocator);
-        var orders = self.identity_orders.valueIterator();
-        while (orders.next()) |order| self.allocator.free(order.*);
         self.identity_orders.deinit(self.allocator);
+        self.identity_order_pool.deinit(self.allocator);
+        self.orderer.deinit();
         self.tasks.deinit(self.allocator);
         self.children.deinit(self.allocator);
     }
@@ -301,9 +305,14 @@ const ContentDigester = struct {
         const entry = try self.identity_orders.getOrPut(self.allocator, ty);
         if (!entry.found_existing) {
             errdefer _ = self.identity_orders.remove(ty);
-            entry.value_ptr.* = try checked.collectCheckedIdentityRootsInKeyOrder(self.allocator, self.store, self.names, ty);
+            const order = try self.orderer.identityRoots(ty);
+            const start = std.math.cast(u32, self.identity_order_pool.items.len) orelse return error.OutOfMemory;
+            const len = std.math.cast(u32, order.len) orelse return error.OutOfMemory;
+            try self.identity_order_pool.appendSlice(self.allocator, order);
+            entry.value_ptr.* = .{ .start = start, .len = len };
         }
-        return entry.value_ptr.*;
+        const span = entry.value_ptr.*;
+        return self.identity_order_pool.items[span.start..][0..span.len];
     }
 
     fn writeText(self: *ContentDigester, text: []const u8) void {

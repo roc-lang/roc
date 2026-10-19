@@ -7692,24 +7692,39 @@ const CheckedTypeKeyAdapter = struct {
     }
 };
 
-/// The identity variables reachable from `root`, in the order its canonical
-/// key encodes them. Caller owns the returned slice.
-pub fn collectCheckedIdentityRootsInKeyOrder(
+/// Computes the identity variables reachable from checked type roots, in the
+/// order their canonical keys encode them, reusing its storage across roots.
+pub const CheckedIdentityOrderer = struct {
     allocator: Allocator,
-    store: *const CheckedTypeStore,
-    names: *const canonical.CanonicalNameStore,
-    root: CheckedTypeId,
-) Allocator.Error![]CheckedTypeId {
-    var adapter = CheckedTypeKeyAdapter.init(allocator, names, store, &.{}, &.{});
-    defer adapter.deinit();
-    var order = std.ArrayListUnmanaged(u32).empty;
-    defer order.deinit(allocator);
-    try type_key_engine.appendIdentityOrder(CheckedTypeKeyAdapter, &adapter, allocator, @backingInt(root), &order);
+    adapter: CheckedTypeKeyAdapter,
+    scratch: type_key_engine.IdentityOrderScratch = .{},
+    order: std.ArrayListUnmanaged(u32) = .empty,
 
-    const roots = try allocator.alloc(CheckedTypeId, order.items.len);
-    for (order.items, roots) |node, *out| out.* = @fromBackingInt(@intCast(node));
-    return roots;
-}
+    pub fn init(
+        allocator: Allocator,
+        names: *const canonical.CanonicalNameStore,
+        store: *const CheckedTypeStore,
+    ) CheckedIdentityOrderer {
+        return .{
+            .allocator = allocator,
+            .adapter = CheckedTypeKeyAdapter.init(allocator, names, store, &.{}, &.{}),
+        };
+    }
+
+    pub fn deinit(self: *CheckedIdentityOrderer) void {
+        self.adapter.deinit();
+        self.scratch.deinit(self.allocator);
+        self.order.deinit(self.allocator);
+    }
+
+    /// The identity variables reachable from `root`, in key order. The slice
+    /// is valid until the next call.
+    pub fn identityRoots(self: *CheckedIdentityOrderer, root: CheckedTypeId) Allocator.Error![]const CheckedTypeId {
+        self.order.clearRetainingCapacity();
+        try type_key_engine.appendIdentityOrder(CheckedTypeKeyAdapter, &self.adapter, self.allocator, &self.scratch, @backingInt(root), &self.order);
+        return @ptrCast(self.order.items);
+    }
+};
 
 fn appendStaticDispatchTypeRoots(
     allocator: Allocator,
@@ -24518,10 +24533,11 @@ pub const PlatformTypeInputs = struct {
         var aliases = std.ArrayList(Alias).empty;
         errdefer aliases.deinit(allocator);
         const env = module.moduleEnvConst();
+        var orderer = CheckedIdentityOrderer.init(allocator, names, &checked_types.store);
+        defer orderer.deinit();
         for (declarations.declarations, rows) |declaration, *row| {
             const root = platformRequiredPayloadForDeclaration(module, checked_types, declaration);
-            const formals = try collectCheckedIdentityRootsInKeyOrder(allocator, &checked_types.store, names, root);
-            defer allocator.free(formals);
+            const formals = try orderer.identityRoots(root);
             const identity_start: u32 = @intCast(identities.items.len);
             try identities.appendSlice(allocator, formals);
             const alias_start: u32 = @intCast(aliases.items.len);
@@ -25313,7 +25329,7 @@ fn platformRequiredPayloadForDeclaration(
 
 /// Per-scheme identity origins for `EnclosingDispatchIdentity`, computed on
 /// first use and pooled. Each set is the key builder's own identity
-/// enumeration of the scheme root (`collectCheckedIdentityRootsInKeyOrder`),
+/// enumeration of the scheme root (`CheckedIdentityOrderer`),
 /// which reaches a where-clause signature through the constrained variable's
 /// callable, normalized through `CheckedTypeStore.identityOrigin` so a
 /// relation-substituted template root names a variable the way a specialized
@@ -25325,6 +25341,7 @@ const EnclosingIdentityIndex = struct {
     /// Identity origins per scheme root; each span indexes `pool`.
     spans_by_root: collections.DenseMap(CheckedTypeId, artifact_serialize.Span),
     pool: std.ArrayList(CheckedTypeId),
+    orderer: CheckedIdentityOrderer,
 
     fn init(
         allocator: Allocator,
@@ -25337,12 +25354,14 @@ const EnclosingIdentityIndex = struct {
             .store = store,
             .spans_by_root = collections.DenseMap(CheckedTypeId, artifact_serialize.Span).init(allocator),
             .pool = .empty,
+            .orderer = CheckedIdentityOrderer.init(allocator, names, store),
         };
     }
 
     fn deinit(self: *EnclosingIdentityIndex) void {
         self.pool.deinit(self.allocator);
         self.spans_by_root.deinit();
+        self.orderer.deinit();
     }
 
     /// Whether the scheme published at `scheme_root` quantifies the identity
@@ -25366,8 +25385,7 @@ const EnclosingIdentityIndex = struct {
         if (self.spans_by_root.get(scheme_root)) |span| return span;
         const start: u32 = @intCast(self.pool.items.len);
         if (self.store.rootContainsIdentityVariables(scheme_root)) {
-            const roots = try collectCheckedIdentityRootsInKeyOrder(self.allocator, self.store, self.names, scheme_root);
-            defer self.allocator.free(roots);
+            const roots = try self.orderer.identityRoots(scheme_root);
             try self.pool.ensureUnusedCapacity(self.allocator, roots.len);
             for (roots) |root| self.pool.appendAssumeCapacity(self.store.identityOrigin(root));
         }
