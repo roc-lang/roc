@@ -1873,10 +1873,9 @@ fn declScopeEnter(self: *Self, scope_idx: AST.DeclIndex.ScopeIdx) std.mem.Alloca
     std.debug.assert(!self.active_decl_scopes.contains(scope_idx));
     try self.active_decl_scopes.put(scope_idx, active_binding);
 
-    var value_iter = parser_scope.value_decls.iterator();
-    while (value_iter.next()) |entry| {
-        const ident = entry.key_ptr.*;
-        const decl_idx = self.forwardVisibleValueDecl(parser_scope, entry.value_ptr.*) orelse continue;
+    for (decl_index.scopeNames(scope_idx, .value)) |name| {
+        const ident = name.ident;
+        const decl_idx = self.forwardVisibleValueDecl(parser_scope, decl_index.scopeNameDecls(name)) orelse continue;
         const previous = self.active_decl_values.get(ident);
         const value_entry_idx = self.active_decl_value_entries.items.len;
         try self.active_decl_value_entries.append(self.env.gpa, .{
@@ -1889,10 +1888,9 @@ fn declScopeEnter(self: *Self, scope_idx: AST.DeclIndex.ScopeIdx) std.mem.Alloca
     }
 
     if (parser_scope.forward_policy == .whole_scope) {
-        var iter = parser_scope.type_decls.iterator();
-        while (iter.next()) |entry| {
-            const ident = entry.key_ptr.*;
-            const first_decl_idx = self.firstUsableParserTypeDecl(entry.value_ptr.*) orelse continue;
+        for (decl_index.scopeNames(scope_idx, .type)) |name| {
+            const ident = name.ident;
+            const first_decl_idx = self.firstUsableParserTypeDecl(decl_index.scopeNameDecls(name)) orelse continue;
             const previous = self.active_decl_types.get(ident);
             const type_entry_idx = self.active_decl_type_entries.items.len;
             try self.active_decl_type_entries.append(self.env.gpa, .{
@@ -1904,10 +1902,9 @@ fn declScopeEnter(self: *Self, scope_idx: AST.DeclIndex.ScopeIdx) std.mem.Alloca
             try self.active_decl_types.put(self.env.gpa, ident, type_entry_idx);
         }
 
-        var import_iter = parser_scope.import_alias_decls.iterator();
-        while (import_iter.next()) |entry| {
-            const ident = entry.key_ptr.*;
-            const decl_idx = entry.value_ptr.first orelse continue;
+        for (decl_index.scopeNames(scope_idx, .import_alias)) |name| {
+            const ident = name.ident;
+            const decl_idx = decl_index.scopeNameDecls(name).first orelse continue;
             const previous = self.active_decl_import_aliases.get(ident);
             const import_entry_idx = self.active_decl_import_alias_entries.items.len;
             try self.active_decl_import_alias_entries.append(self.env.gpa, .{
@@ -2323,8 +2320,8 @@ fn parserTypePathForDependencySegments(
     var maybe_scope: ?AST.DeclIndex.ScopeIdx = from_decl.scope;
     while (maybe_scope) |scope_idx| {
         const scope = decl_index.scopes.items[@backingInt(scope_idx)];
-        if (scope.type_decls.get(segments[0])) |bucket| {
-            var iter = bucket.iter();
+        {
+            var iter = decl_index.scopeDeclsNamed(scope_idx, .type, segments[0]).iter();
             while (iter.next()) |decl_idx| {
                 const candidate = decl_index.decls.items[@backingInt(decl_idx)];
                 if (!self.parserTypeDeclCanPrepare(candidate)) continue;
@@ -2681,8 +2678,8 @@ const AliasCycleContext = struct {
         var maybe_scope: ?AST.DeclIndex.ScopeIdx = from_decl.scope;
         while (maybe_scope) |idx| {
             const scope = decl_index.scopes.items[@backingInt(idx)];
-            if (scope.type_decls.get(ident)) |bucket| {
-                var decl_iter = bucket.iter();
+            {
+                var decl_iter = decl_index.scopeDeclsNamed(idx, .type, ident).iter();
                 while (decl_iter.next()) |decl_idx| {
                     const decl = decl_index.decls.items[@backingInt(decl_idx)];
                     if (!self.can.parserTypeDeclCanPrepare(decl)) continue;
@@ -8268,7 +8265,7 @@ fn canonicalizeNumeralPattern(
             .has_suffix = false,
         } },
         .dec => |value| .{ .dec_literal = .{
-            .value = builtins.dec.RocDec{ .num = value },
+            .value = builtins.dec.RocDec{ .num = value.toI128() },
             .has_suffix = false,
         } },
         .exact => .{ .num_from_numeral_literal = .{} },
@@ -11258,7 +11255,7 @@ fn runExprKernel(
                             .has_suffix = false,
                         } },
                         .dec => |value| CIR.Expr{ .e_dec = .{
-                            .value = builtins.dec.RocDec{ .num = value },
+                            .value = builtins.dec.RocDec{ .num = value.toI128() },
                             .has_suffix = false,
                         } },
                         .exact => CIR.Expr{ .e_num_from_numeral = .{} },
@@ -11327,7 +11324,7 @@ fn runExprKernel(
                         },
                         .dec => |value| blk: {
                             break :blk CIR.Expr{ .e_typed_frac = .{
-                                .value = .{ .bytes = @bitCast(value), .kind = .i128 },
+                                .value = .{ .bytes = value.bytes, .kind = .i128 },
                                 .type_name = type_ident,
                             } };
                         },
@@ -21442,8 +21439,8 @@ const MainFunctionStatus = enum { valid, invalid, not_found };
 /// Reports an error if main! exists but has the wrong arity.
 fn checkMainFunction(self: *Self, report_errors: bool) std.mem.Allocator.Error!MainFunctionStatus {
     const decl_index = &self.parse_ir.decl_index;
-    const module_scope = decl_index.scopes.items[@backingInt(self.moduleParserScopeIdx())];
-    const bucket = module_scope.value_decls.get(self.env.idents.main_bang) orelse return .not_found;
+    const bucket = decl_index.scopeValueDecls(self.moduleParserScopeIdx(), self.env.idents.main_bang);
+    if (bucket.count() == 0) return .not_found;
 
     var iter = bucket.iter();
     while (iter.next()) |decl_idx| {

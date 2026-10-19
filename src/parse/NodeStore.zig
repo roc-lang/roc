@@ -447,10 +447,6 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
         };
     }
     errdefer inline for (0..scratch_kinds.len) |i| scratch[i].deinit();
-    var numeric_literals = try std.ArrayList(NumericLiteral.Stored).initCapacity(gpa, capacity / 8);
-    errdefer numeric_literals.deinit(gpa);
-    var numeric_literal_bytes = try std.ArrayList(u8).initCapacity(gpa, capacity);
-    errdefer numeric_literal_bytes.deinit(gpa);
     var pattern_string_parts = try std.ArrayList(AST.PatternStringPart).initCapacity(gpa, capacity / 8);
     errdefer pattern_string_parts.deinit(gpa);
     var field_access_segments = try std.ArrayList(AST.FieldAccessSegment).initCapacity(gpa, capacity / 4);
@@ -461,8 +457,8 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
         .nodes = nodes,
         .extra_data = extra_data,
         .scratch = scratch,
-        .numeric_literals = numeric_literals,
-        .numeric_literal_bytes = numeric_literal_bytes,
+        .numeric_literals = .empty,
+        .numeric_literal_bytes = .empty,
         .pattern_string_parts = pattern_string_parts,
         .field_access_segments = field_access_segments,
     };
@@ -532,28 +528,28 @@ pub fn addMalformed(store: *NodeStore, comptime T: type, reason: Diagnostic.Tag,
 /// Records parser-owned numeric literal facts and returns the id stored on the AST node.
 pub fn addNumericLiteral(
     store: *NodeStore,
-    text: []const u8,
+    split: NumericLiteral.Split,
     kind: NumericLiteral.Kind,
 ) std.mem.Allocator.Error!NumericLiteral.Idx {
-    // The parse's digit buffers die here once copied into the store, so the
-    // usual literal parses entirely on this frame.
+    // The parse's temporaries die before it returns, so the usual literal
+    // parses entirely on this frame; its digits go straight into the store.
     var parse_buffer: [1024]u8 align(@alignOf(usize)) = undefined;
     var parse_state = std.heap.BufferFirstAllocator.init(&parse_buffer, store.gpa);
-    const parse_allocator = parse_state.allocator();
-    const parsed = try NumericLiteral.parse(parse_allocator, text, kind);
-    defer parsed.deinit(parse_allocator);
+    const idx: NumericLiteral.Idx = @fromBackingInt(std.math.cast(u32, store.numeric_literals.items.len) orelse return error.OutOfMemory);
+    const digits_start = std.math.cast(u32, store.numeric_literal_bytes.items.len) orelse return error.OutOfMemory;
+    try store.numeric_literals.ensureUnusedCapacity(store.gpa, 1);
+    const parsed = try NumericLiteral.parseInto(parse_state.allocator(), &store.numeric_literal_bytes, store.gpa, split.number_text, kind);
+    if (store.numeric_literal_bytes.items.len > std.math.maxInt(u32)) {
+        store.numeric_literal_bytes.shrinkRetainingCapacity(digits_start);
+        return error.OutOfMemory;
+    }
 
-    const digits_start: u32 = @intCast(store.numeric_literal_bytes.items.len);
-    try store.numeric_literal_bytes.appendSlice(store.gpa, parsed.before);
-    try store.numeric_literal_bytes.appendSlice(store.gpa, parsed.after);
-
-    const idx: NumericLiteral.Idx = @fromBackingInt(@intCast(store.numeric_literals.items.len));
-    try store.numeric_literals.append(store.gpa, .{
+    store.numeric_literals.appendAssumeCapacity(.{
         .kind = parsed.kind,
         .compact = parsed.compact,
         .digits_start = digits_start,
-        .before_len = @intCast(parsed.before.len),
-        .after_len = @intCast(parsed.after.len),
+        .before_len = @intCast(parsed.before_len),
+        .after_len = @intCast(parsed.after_len),
         .after_decimal_digit_count = parsed.after_decimal_digit_count,
         .flags = .{
             .is_negative = parsed.is_negative,
@@ -1334,9 +1330,7 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) std.mem.Allocator.Erro
                 .effectful = @intFromBool(f.effectful),
                 .args_len = @intCast(f.args.span.len), // We hope a function has less than 2.147b args
             });
-            const ret_idx = store.extra_data.items.len;
-            try store.extra_data.append(store.gpa, @backingInt(f.ret));
-            node.main_token = @intCast(ret_idx);
+            node.main_token = @backingInt(f.ret);
         },
         .malformed => {
             base.invariant("{s}", .{"Use addMalformed instead"});
@@ -2053,7 +2047,7 @@ pub fn getTypeAnno(store: *const NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.T
             const rhs = @as(AST.TypeAnno.TypeAnnoFnRhs, @bitCast(node.data.rhs));
             return .{ .@"fn" = .{
                 .region = node.region,
-                .ret = @fromBackingInt(@intCast(store.extra_data.items[@as(usize, @intCast(node.main_token))])),
+                .ret = @fromBackingInt(node.main_token),
                 .args = .{ .span = .{
                     .start = node.data.lhs,
                     .len = @intCast(rhs.args_len),
@@ -2540,16 +2534,80 @@ pub fn collectRedundantReturns(store: *const NodeStore) Allocator.Error!std.Dyna
     var pending: std.ArrayList(AST.Expr.Idx) = .empty;
     defer pending.deinit(store.gpa);
 
+    const tags = store.nodes.items.items(.tag);
     // A lambda node keeps its body's index in `main_token`.
-    for (store.nodes.items.items(.tag), store.nodes.items.items(.main_token)) |tag, body| {
+    for (tags, store.nodes.items.items(.main_token)) |tag, body| {
         if (tag == .lambda) try pending.append(store.gpa, @fromBackingInt(body));
     }
     while (pending.pop()) |idx| {
+        // Only these expressions pass a tail position on, so no other node
+        // is decoded.
+        switch (narrowNodeTag(ExprNodeTag, tags[@backingInt(idx)]).?) {
+            .block, .if_then_else, .tuple, .match, .return_expr => {},
+            .int,
+            .frac,
+            .typed_int,
+            .typed_frac,
+            .single_quote,
+            .ident,
+            .tag,
+            .string_part,
+            .string,
+            .typed_string,
+            .typed_multiline_string,
+            .multiline_string,
+            .list,
+            .record,
+            .record_update,
+            .field_access,
+            .method_call,
+            .tuple_access,
+            .arrow_call,
+            .arrow_method_call,
+            .lambda,
+            .apply,
+            .suffix_single_question,
+            .if_without_else,
+            .dbg,
+            .crash,
+            .bin_op,
+            .ellipsis,
+            .for_expr,
+            .for_bang_expr,
+            .break_expr,
+            .malformed,
+            .record_builder,
+            .nominal_record,
+            .nominal_apply,
+            .unary_op,
+            => continue,
+        }
         switch (store.getExpr(idx)) {
             .block => |block| {
                 const statements = store.statementSlice(block.statements);
                 if (statements.len == 0) continue;
                 const last = statements[statements.len - 1];
+                switch (narrowNodeTag(StatementNodeTag, tags[@backingInt(last)]).?) {
+                    .expr, .@"return" => {},
+                    .decl,
+                    .@"var",
+                    .import,
+                    .expect,
+                    .@"for",
+                    .for_bang,
+                    .@"while",
+                    .crash,
+                    .dbg,
+                    .@"break",
+                    .type_decl,
+                    .type_decl_nominal,
+                    .type_decl_opaque,
+                    .type_decl_where_alias,
+                    .type_anno,
+                    .file_import,
+                    .malformed,
+                    => continue,
+                }
                 switch (store.getStatement(last)) {
                     .expr => |expr| try pending.append(store.gpa, expr.expr),
                     .@"return" => |ret| {
@@ -2569,7 +2627,7 @@ pub fn collectRedundantReturns(store: *const NodeStore) Allocator.Error!std.Dyna
                     .type_decl,
                     .type_anno,
                     .malformed,
-                    => {},
+                    => unreachable,
                 }
             },
             .if_then_else => |cond| {
@@ -2625,7 +2683,7 @@ pub fn collectRedundantReturns(store: *const NodeStore) Allocator.Error!std.Dyna
             .@"break",
             .for_expr,
             .malformed,
-            => {},
+            => unreachable,
         }
     }
     return returns;

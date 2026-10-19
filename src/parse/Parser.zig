@@ -38,6 +38,8 @@ scratch_idents: base.Scratch(base.Ident.Idx),
 scratch_nodes: std.ArrayList(Node.Idx),
 /// Worklist of `recordDestructuredValueNames`, kept with its capacity.
 destructured_patterns: std.ArrayList(AST.Pattern.Idx),
+/// Worklist of `recordTypeDependenciesFromAnnoWorklist`, kept with its capacity.
+type_dependency_pending: std.ArrayList(TypeDependencyWalkItem),
 /// Text of the import path being interned, kept with its capacity.
 import_path: std.ArrayList(u8),
 diagnostics: std.ArrayList(AST.Diagnostic),
@@ -112,6 +114,12 @@ pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator) std.mem.Allocator.E
     const estimated_node_count = tokens.tokens.len;
     var store = try NodeStore.initCapacity(gpa, estimated_node_count);
     errdefer store.deinit();
+    var numeric_literal_count: usize = 0;
+    for (tokens.tokens.items(.tag)) |tag| {
+        numeric_literal_count += @intFromBool(tag == .Int or tag == .Float);
+    }
+    try store.numeric_literals.ensureTotalCapacity(gpa, numeric_literal_count);
+    try store.numeric_literal_bytes.ensureTotalCapacity(gpa, numeric_literal_count);
 
     var scratch_idents = try base.Scratch(base.Ident.Idx).init(gpa);
     errdefer scratch_idents.deinit();
@@ -132,6 +140,7 @@ pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator) std.mem.Allocator.E
         .scratch_idents = scratch_idents,
         .scratch_nodes = .empty,
         .destructured_patterns = .empty,
+        .type_dependency_pending = .empty,
         .import_path = .empty,
         .diagnostics = .empty,
         .cached_malformed_node = null,
@@ -145,6 +154,7 @@ pub fn deinit(parser: *Parser) void {
     parser.scratch_idents.deinit();
     parser.scratch_nodes.deinit(parser.gpa);
     parser.destructured_patterns.deinit(parser.gpa);
+    parser.type_dependency_pending.deinit(parser.gpa);
     parser.import_path.deinit(parser.gpa);
     parser.scope_pending_annos.deinit(parser.gpa);
     parser.type_path_stack.deinit(parser.gpa);
@@ -3581,8 +3591,8 @@ fn runExprStatementKernel(
                 if (tok == .Int) {
                     const start = self.pos;
                     self.advance();
-                    const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
-                    const literal = try self.store.addNumericLiteral(self.tokenText(start), .int);
+                    const deprecated = NumericLiteral.splitSource(self.tokenText(start), .int);
+                    const literal = try self.store.addNumericLiteral(deprecated, .int);
                     const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
                     try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
 
@@ -3618,8 +3628,8 @@ fn runExprStatementKernel(
                 if (tok == .Float) {
                     const start = self.pos;
                     self.advance();
-                    const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
-                    const literal = try self.store.addNumericLiteral(self.tokenText(start), .frac);
+                    const deprecated = NumericLiteral.splitSource(self.tokenText(start), .frac);
+                    const literal = try self.store.addNumericLiteral(deprecated, .frac);
                     const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
                     try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
 
@@ -6594,8 +6604,8 @@ fn runExprStatementKernel(
                 if (tok == .Float) {
                     const start = self.pos;
                     self.advance();
-                    const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
-                    const literal = try self.store.addNumericLiteral(self.tokenText(start), .frac);
+                    const deprecated = NumericLiteral.splitSource(self.tokenText(start), .frac);
+                    const literal = try self.store.addNumericLiteral(deprecated, .frac);
                     const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
                     try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
                     if (try self.typeSuffixFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_suffix| {
@@ -6639,8 +6649,8 @@ fn runExprStatementKernel(
                 if (tok == .Int) {
                     const start = self.pos;
                     self.advance();
-                    const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
-                    const literal = try self.store.addNumericLiteral(self.tokenText(start), .int);
+                    const deprecated = NumericLiteral.splitSource(self.tokenText(start), .int);
+                    const literal = try self.store.addNumericLiteral(deprecated, .int);
                     const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
                     try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
                     if (try self.typeSuffixFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_suffix| {
@@ -7312,11 +7322,9 @@ fn recordTypeDependenciesFromAnnoWorklist(
     root: AST.TypeAnno.Idx,
     mode: TypeDependencyWalkMode,
 ) std.mem.Allocator.Error!void {
-    var pending_allocator_state_buffer: [4096]u8 align(@alignOf(usize)) = undefined;
-    var pending_allocator_state = std.heap.BufferFirstAllocator.init(&pending_allocator_state_buffer, self.gpa);
-    const pending_allocator = pending_allocator_state.allocator();
-    var pending: std.ArrayList(TypeDependencyWalkItem) = .empty;
-    defer pending.deinit(pending_allocator);
+    const pending_allocator = self.gpa;
+    const pending = &self.type_dependency_pending;
+    pending.clearRetainingCapacity();
 
     try pending.append(pending_allocator, .{ .anno = root, .mode = mode });
 
@@ -7325,7 +7333,7 @@ fn recordTypeDependenciesFromAnnoWorklist(
         switch (item.mode) {
             .tag_payloads_only => if (anno == .apply) {
                 const args = self.store.typeAnnoSlice(anno.apply.args);
-                try appendTypeDependencyAnnoSlice(pending_allocator, &pending, args, 1, .all);
+                try appendTypeDependencyAnnoSlice(pending_allocator, pending, args, 1, .all);
             },
             .all => switch (anno) {
                 .ty => |ty| {
@@ -7336,18 +7344,18 @@ fn recordTypeDependenciesFromAnnoWorklist(
                 },
                 .apply => |apply| {
                     const args = self.store.typeAnnoSlice(apply.args);
-                    try appendTypeDependencyAnnoSlice(pending_allocator, &pending, args, 0, .all);
+                    try appendTypeDependencyAnnoSlice(pending_allocator, pending, args, 0, .all);
                 },
                 .tag_union => |tag_union| {
                     if (tag_union.ext == .named) {
                         try pending.append(pending_allocator, .{ .anno = tag_union.ext.named.anno, .mode = .all });
                     }
                     const tags = self.store.typeAnnoSlice(tag_union.tags);
-                    try appendTypeDependencyAnnoSlice(pending_allocator, &pending, tags, 0, .tag_payloads_only);
+                    try appendTypeDependencyAnnoSlice(pending_allocator, pending, tags, 0, .tag_payloads_only);
                 },
                 .tuple => |tuple| {
                     const elems = self.store.typeAnnoSlice(tuple.annos);
-                    try appendTypeDependencyAnnoSlice(pending_allocator, &pending, elems, 0, .all);
+                    try appendTypeDependencyAnnoSlice(pending_allocator, pending, elems, 0, .all);
                 },
                 .record => |record| {
                     if (record.ext == .named) {
@@ -7364,7 +7372,7 @@ fn recordTypeDependenciesFromAnnoWorklist(
                 .@"fn" => |func| {
                     try pending.append(pending_allocator, .{ .anno = func.ret, .mode = .all });
                     const args = self.store.typeAnnoSlice(func.args);
-                    try appendTypeDependencyAnnoSlice(pending_allocator, &pending, args, 0, .all);
+                    try appendTypeDependencyAnnoSlice(pending_allocator, pending, args, 0, .all);
                 },
                 .parens => |parens| {
                     try pending.append(pending_allocator, .{ .anno = parens.anno, .mode = .all });

@@ -104,11 +104,27 @@ pub const SmallDecValue = struct {
     denominator_power_of_ten: u8,
 };
 
+/// Compact `Dec` payload: the scaled `i128` as raw bytes, so the payload adds
+/// no 16-byte alignment to every stored literal.
+pub const DecValue = struct {
+    bytes: [16]u8,
+
+    /// Wrap a scaled `Dec` value.
+    pub fn fromI128(value: i128) DecValue {
+        return .{ .bytes = @bitCast(value) };
+    }
+
+    /// Interpret the raw bytes as the scaled `i128`.
+    pub fn toI128(self: DecValue) i128 {
+        return @bitCast(self.bytes);
+    }
+};
+
 /// Memory-efficient parsed payload used when the literal fits a common case.
 pub const Compact = union(enum) {
     int: IntValue,
     small_dec: SmallDecValue,
-    dec: i128,
+    dec: DecValue,
     exact,
     invalid,
 };
@@ -142,25 +158,40 @@ pub const Stored = struct {
     }
 };
 
-/// Parsed numeric literal with owned base-256 digit buffers.
+/// Parsed numeric literal facts whose base-256 digits were appended to a
+/// caller-owned digit buffer: `before_len` digits before the decimal point,
+/// then `after_len` digits after it.
+pub const Parsed = struct {
+    kind: Kind,
+    compact: Compact,
+    before_len: usize,
+    after_len: usize,
+    after_decimal_digit_count: u64,
+    is_negative: bool,
+    had_decimal_point: bool,
+    is_materialized: bool,
+};
+
+/// Parsed numeric literal with an owned base-256 digit buffer.
 pub const Owned = struct {
     kind: Kind,
     compact: Compact,
-    before: []u8,
-    after: []u8,
+    digits: []u8,
+    before: []const u8,
+    after: []const u8,
     after_decimal_digit_count: u64,
     is_negative: bool,
     had_decimal_point: bool,
     is_materialized: bool,
 
-    /// Free owned digit buffers.
+    /// Free the owned digit buffer.
     pub fn deinit(self: Owned, allocator: std.mem.Allocator) void {
-        allocator.free(self.before);
-        allocator.free(self.after);
+        allocator.free(self.digits);
     }
 };
 
-const Split = struct {
+/// A numeric token's text split from its deprecated suffix, if any.
+pub const Split = struct {
     number_text: []const u8,
     deprecated_suffix: DeprecatedSuffix,
 };
@@ -184,48 +215,99 @@ const DecimalParts = struct {
     }
 };
 
+/// Where a parse appends a literal's base-256 digits.
+const DigitOut = struct {
+    list: *std.ArrayList(u8),
+    allocator: Allocator,
+};
+
+/// Exact digit facts of a literal whose digits were appended to a `DigitOut`.
 const Exact = struct {
-    before: []u8,
-    after: []u8,
+    before_len: usize,
+    after_len: usize,
     after_decimal_digit_count: u64,
     is_negative: bool,
     had_decimal_point: bool,
     is_materialized: bool,
-
-    fn deinit(self: Exact, allocator: std.mem.Allocator) void {
-        allocator.free(self.before);
-        allocator.free(self.after);
-    }
 };
 
-/// Parse a numeric token into exact base-256 digit facts and a compact payload when possible.
+/// Parse a numeric token into an owned digit buffer. `parseInto` is the
+/// form that appends the digits to a buffer the caller keeps.
 pub fn parse(allocator: std.mem.Allocator, raw_text: []const u8, kind: Kind) std.mem.Allocator.Error!Owned {
-    const split = splitDeprecatedSuffix(raw_text, kind);
-    const exact = parseExact(allocator, split.number_text, kind) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.InvalidNumeral => return .{
-            .kind = kind,
-            .compact = .invalid,
-            .before = &.{},
-            .after = &.{},
-            .after_decimal_digit_count = 0,
-            .is_negative = false,
-            .had_decimal_point = kind == .frac,
-            .is_materialized = true,
+    var digits: std.ArrayList(u8) = .empty;
+    defer digits.deinit(allocator);
+    const parsed = try parseInto(allocator, &digits, allocator, splitSource(raw_text, kind).number_text, kind);
+    const owned_digits = try digits.toOwnedSlice(allocator);
+    return .{
+        .kind = parsed.kind,
+        .compact = parsed.compact,
+        .digits = owned_digits,
+        .before = owned_digits[0..parsed.before_len],
+        .after = owned_digits[parsed.before_len..][0..parsed.after_len],
+        .after_decimal_digit_count = parsed.after_decimal_digit_count,
+        .is_negative = parsed.is_negative,
+        .had_decimal_point = parsed.had_decimal_point,
+        .is_materialized = parsed.is_materialized,
+    };
+}
+
+/// Parse the suffix-free text of a numeric token into exact base-256 digit
+/// facts and a compact payload when possible. The digits are appended to
+/// `digits`; temporaries come from `scratch`. On error `digits` is unchanged.
+pub fn parseInto(
+    scratch: std.mem.Allocator,
+    digits: *std.ArrayList(u8),
+    digits_allocator: std.mem.Allocator,
+    number_text: []const u8,
+    kind: Kind,
+) std.mem.Allocator.Error!Parsed {
+    const out = DigitOut{ .list = digits, .allocator = digits_allocator };
+    const digits_start = digits.items.len;
+    errdefer digits.shrinkRetainingCapacity(digits_start);
+    const invalid = Parsed{
+        .kind = kind,
+        .compact = .invalid,
+        .before_len = 0,
+        .after_len = 0,
+        .after_decimal_digit_count = 0,
+        .is_negative = false,
+        .had_decimal_point = kind == .frac,
+        .is_materialized = true,
+    };
+    switch (kind) {
+        .int => {
+            const exact = parseExactInteger(scratch, out, number_text) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.InvalidNumeral => return invalid,
+            };
+            return parsedFrom(kind, compactInt(number_text) orelse .exact, exact);
         },
-    };
-    errdefer exact.deinit(allocator);
+        .frac => {
+            if (number_text.len == 0) return invalid;
+            const is_negative = number_text[0] == '-';
+            const first: usize = @intFromBool(is_negative);
+            if (first >= number_text.len) return invalid;
+            const parts = decimalParts(scratch, number_text[first..]) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.InvalidNumeral => return invalid,
+            };
+            defer parts.deinit(scratch);
+            const had_decimal_point = std.mem.findScalar(u8, number_text[first..], '.') != null;
+            const exact = exactDecimal(scratch, out, parts, is_negative, had_decimal_point) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.InvalidNumeral => return invalid,
+            };
+            return parsedFrom(kind, compactFrac(parts, is_negative), exact);
+        },
+    }
+}
 
-    const compact = switch (kind) {
-        .int => compactInt(split.number_text) orelse .exact,
-        .frac => try compactFrac(allocator, split.number_text),
-    };
-
+fn parsedFrom(kind: Kind, compact: Compact, exact: Exact) Parsed {
     return .{
         .kind = kind,
         .compact = compact,
-        .before = exact.before,
-        .after = exact.after,
+        .before_len = exact.before_len,
+        .after_len = exact.after_len,
         .after_decimal_digit_count = exact.after_decimal_digit_count,
         .is_negative = exact.is_negative,
         .had_decimal_point = exact.had_decimal_point,
@@ -233,7 +315,8 @@ pub fn parse(allocator: std.mem.Allocator, raw_text: []const u8, kind: Kind) std
     };
 }
 
-fn splitDeprecatedSuffix(text: []const u8, kind: Kind) Split {
+/// Split a numeric token of `kind` into its number text and deprecated suffix.
+pub fn splitSource(text: []const u8, kind: Kind) Split {
     const end = numberTextEnd(text, kind);
     if (end >= text.len) return .{ .number_text = text, .deprecated_suffix = .none };
     return .{ .number_text = text[0..end], .deprecated_suffix = deprecatedSuffixFromText(text[end..]) };
@@ -360,14 +443,7 @@ fn digitValue(byte: u8) ?u8 {
     };
 }
 
-fn parseExact(allocator: std.mem.Allocator, text: []const u8, kind: Kind) (Allocator.Error || error{InvalidNumeral})!Exact {
-    return switch (kind) {
-        .int => parseExactInteger(allocator, text),
-        .frac => parseExactDecimal(allocator, text),
-    };
-}
-
-fn parseExactInteger(allocator: std.mem.Allocator, text: []const u8) (Allocator.Error || error{InvalidNumeral})!Exact {
+fn parseExactInteger(scratch: std.mem.Allocator, out: DigitOut, text: []const u8) (Allocator.Error || error{InvalidNumeral})!Exact {
     if (text.len == 0) return error.InvalidNumeral;
     const is_negative = text[0] == '-';
     var first_digit: usize = @intFromBool(is_negative);
@@ -379,20 +455,19 @@ fn parseExactInteger(allocator: std.mem.Allocator, text: []const u8) (Allocator.
 
     const magnitude_digits = trimLeadingZeros(text[first_digit..]);
     if (!sourceDigitsMayFitBase256(magnitude_digits, radix)) {
-        return unmaterializedExact(allocator, is_negative, false, 0);
+        return unmaterializedExact(is_negative, false, 0);
     }
 
-    const before = try intDigitsToBase256(allocator, magnitude_digits, radix);
-    errdefer allocator.free(before);
-    if (before.len > max_numeral_digit_bytes) {
-        allocator.free(before);
-        return unmaterializedExact(allocator, is_negative, false, 0);
+    const start = out.list.items.len;
+    const before_len = try intDigitsToBase256(scratch, out, magnitude_digits, radix);
+    if (before_len > max_numeral_digit_bytes) {
+        out.list.shrinkRetainingCapacity(start);
+        return unmaterializedExact(is_negative, false, 0);
     }
-    const after: []u8 = &.{};
 
     return .{
-        .before = before,
-        .after = after,
+        .before_len = before_len,
+        .after_len = 0,
         .after_decimal_digit_count = 0,
         .is_negative = is_negative,
         .had_decimal_point = false,
@@ -400,38 +475,28 @@ fn parseExactInteger(allocator: std.mem.Allocator, text: []const u8) (Allocator.
     };
 }
 
-fn parseExactDecimal(allocator: std.mem.Allocator, text: []const u8) (Allocator.Error || error{InvalidNumeral})!Exact {
-    if (text.len == 0) return error.InvalidNumeral;
-    const is_negative = text[0] == '-';
-    const first: usize = @intFromBool(is_negative);
-    if (first >= text.len) return error.InvalidNumeral;
-    const had_decimal_point = std.mem.findScalar(u8, text[first..], '.') != null;
-
-    const parts = try decimalParts(allocator, text[first..]);
-    defer parts.deinit(allocator);
-
+fn exactDecimal(
+    scratch: std.mem.Allocator,
+    out: DigitOut,
+    parts: DecimalParts,
+    is_negative: bool,
+    had_decimal_point: bool,
+) (Allocator.Error || error{InvalidNumeral})!Exact {
     if (!parts.is_materialized) {
-        return unmaterializedExact(allocator, is_negative, had_decimal_point, parts.after_decimal_digit_count);
+        return unmaterializedExact(is_negative, had_decimal_point, parts.after_decimal_digit_count);
     }
 
-    const before = try decimalDigitsToBase256(allocator, trimLeadingZeros(parts.before));
-    errdefer allocator.free(before);
-    const after = try decimalDigitsToBase256(allocator, parts.after);
-    errdefer allocator.free(after);
-    if (before.len > max_numeral_digit_bytes or after.len > max_numeral_digit_bytes) {
-        return unmaterializedExactAfterFreeing(
-            allocator,
-            is_negative,
-            had_decimal_point,
-            parts.after_decimal_digit_count,
-            before,
-            after,
-        );
+    const start = out.list.items.len;
+    const before_len = try decimalDigitsToBase256(scratch, out, trimLeadingZeros(parts.before));
+    const after_len = try decimalDigitsToBase256(scratch, out, parts.after);
+    if (before_len > max_numeral_digit_bytes or after_len > max_numeral_digit_bytes) {
+        out.list.shrinkRetainingCapacity(start);
+        return unmaterializedExact(is_negative, had_decimal_point, parts.after_decimal_digit_count);
     }
 
     return .{
-        .before = before,
-        .after = after,
+        .before_len = before_len,
+        .after_len = after_len,
         .after_decimal_digit_count = parts.after_decimal_digit_count,
         .is_negative = is_negative,
         .had_decimal_point = had_decimal_point,
@@ -563,35 +628,18 @@ fn decimalParts(allocator: std.mem.Allocator, unsigned_text: []const u8) (Alloca
 }
 
 fn unmaterializedExact(
-    allocator: std.mem.Allocator,
     is_negative: bool,
     had_decimal_point: bool,
     after_decimal_digit_count: u64,
-) std.mem.Allocator.Error!Exact {
-    const before: []u8 = &.{};
-    errdefer allocator.free(before);
-    const after: []u8 = &.{};
+) Exact {
     return .{
-        .before = before,
-        .after = after,
+        .before_len = 0,
+        .after_len = 0,
         .after_decimal_digit_count = after_decimal_digit_count,
         .is_negative = is_negative,
         .had_decimal_point = had_decimal_point,
         .is_materialized = false,
     };
-}
-
-fn unmaterializedExactAfterFreeing(
-    allocator: std.mem.Allocator,
-    is_negative: bool,
-    had_decimal_point: bool,
-    after_decimal_digit_count: u64,
-    before: []u8,
-    after: []u8,
-) std.mem.Allocator.Error!Exact {
-    allocator.free(before);
-    allocator.free(after);
-    return unmaterializedExact(allocator, is_negative, had_decimal_point, after_decimal_digit_count);
 }
 
 fn unmaterializedDecimalParts(
@@ -720,18 +768,9 @@ fn parseUnsignedMagnitude(digits: []const u8, radix: u8) ?u128 {
     return value;
 }
 
-fn compactFrac(
-    allocator: std.mem.Allocator,
-    text: []const u8,
-) std.mem.Allocator.Error!Compact {
-    const parts = decimalParts(allocator, text[@intFromBool(text.len > 0 and text[0] == '-')..]) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.InvalidNumeral => return .invalid,
-    };
-    defer parts.deinit(allocator);
+fn compactFrac(parts: DecimalParts, is_negative: bool) Compact {
     if (!parts.is_materialized) return .exact;
 
-    const is_negative = text.len > 0 and text[0] == '-';
     const trimmed_before = trimLeadingZeros(parts.before);
     const trimmed_after_info = trimTrailingZerosWithCount(parts.after, parts.after_decimal_digit_count);
     const trimmed_after = trimmed_after_info.digits;
@@ -742,7 +781,7 @@ fn compactFrac(
     }
 
     if (decFromParts(trimmed_before, trimmed_after, trimmed_after_count, is_negative)) |dec| {
-        return .{ .dec = dec };
+        return .{ .dec = .fromI128(dec) };
     }
 
     return .exact;
@@ -869,37 +908,41 @@ fn withoutUnderscores(allocator: std.mem.Allocator, text: []const u8) std.mem.Al
     return out;
 }
 
-fn intDigitsToBase256(allocator: std.mem.Allocator, digits: []const u8, radix: u8) (Allocator.Error || error{InvalidNumeral})![]u8 {
+/// Append the base-256 digits of `digits` in `radix`, most significant first,
+/// and return how many were appended.
+fn intDigitsToBase256(scratch: std.mem.Allocator, out: DigitOut, digits: []const u8, radix: u8) (Allocator.Error || error{InvalidNumeral})!usize {
     var bytes_le = std.ArrayList(u8).empty;
-    defer bytes_le.deinit(allocator);
+    defer bytes_le.deinit(scratch);
 
     for (digits) |byte| {
         if (byte == digit_separator) continue;
         const digit = digitValue(byte) orelse return error.InvalidNumeral;
         if (digit >= radix) return error.InvalidNumeral;
-        try appendRadixDigit(&bytes_le, allocator, radix, digit);
+        try appendRadixDigit(&bytes_le, scratch, radix, digit);
     }
 
-    return bytesLeToBe(allocator, bytes_le.items);
+    return appendBytesBe(out, bytes_le.items);
 }
 
-fn decimalDigitsToBase256(allocator: std.mem.Allocator, digits: []const u8) (Allocator.Error || error{InvalidNumeral})![]u8 {
-    if (digits.len == 0) return &.{};
+/// Append the base-256 digits of the decimal `digits`, most significant
+/// first, and return how many were appended.
+fn decimalDigitsToBase256(scratch: std.mem.Allocator, out: DigitOut, digits: []const u8) (Allocator.Error || error{InvalidNumeral})!usize {
+    if (digits.len == 0) return 0;
 
     var limbs_le = std.ArrayList(u32).empty;
-    defer limbs_le.deinit(allocator);
+    defer limbs_le.deinit(scratch);
 
     var index: usize = 0;
     var chunk_len: usize = ((digits.len - 1) % decimal_chunk_digit_count) + 1;
     while (index < digits.len) {
         const chunk_digits = digits[index..][0..chunk_len];
         const chunk_value = try decimalChunkValue(chunk_digits);
-        try appendDecimalChunk(&limbs_le, allocator, decimal_chunk_bases[chunk_len], chunk_value);
+        try appendDecimalChunk(&limbs_le, scratch, decimal_chunk_bases[chunk_len], chunk_value);
         index += chunk_len;
         chunk_len = decimal_chunk_digit_count;
     }
 
-    return limbsLeToBytesBe(allocator, limbs_le.items);
+    return appendLimbsBe(out, limbs_le.items);
 }
 
 const decimal_chunk_digit_count = 9;
@@ -940,20 +983,24 @@ fn appendDecimalChunk(limbs_le: *std.ArrayList(u32), allocator: std.mem.Allocato
     }
 }
 
-fn limbsLeToBytesBe(allocator: std.mem.Allocator, limbs_le: []const u32) std.mem.Allocator.Error![]u8 {
-    const bytes_len = limbs_le.len * @sizeOf(u32);
-    const bytes_le = try allocator.alloc(u8, bytes_len);
-    defer allocator.free(bytes_le);
-
-    for (limbs_le, 0..) |limb, index| {
-        const offset = index * @sizeOf(u32);
-        bytes_le[offset] = @truncate(limb);
-        bytes_le[offset + 1] = @truncate(limb >> 8);
-        bytes_le[offset + 2] = @truncate(limb >> 16);
-        bytes_le[offset + 3] = @truncate(limb >> 24);
+/// Append the bytes of the little-endian `limbs_le` most significant first,
+/// without leading zero bytes, and return how many were appended.
+fn appendLimbsBe(out: DigitOut, limbs_le: []const u32) Allocator.Error!usize {
+    const byteAt = struct {
+        fn f(limbs: []const u32, index: usize) u8 {
+            const shift: u5 = @intCast((index % @sizeOf(u32)) * 8);
+            return @truncate(limbs[index / @sizeOf(u32)] >> shift);
+        }
+    }.f;
+    var len = limbs_le.len * @sizeOf(u32);
+    while (len > 0 and byteAt(limbs_le, len - 1) == 0) len -= 1;
+    try out.list.ensureUnusedCapacity(out.allocator, len);
+    var index = len;
+    while (index > 0) {
+        index -= 1;
+        out.list.appendAssumeCapacity(byteAt(limbs_le, index));
     }
-
-    return bytesLeToBe(allocator, bytes_le);
+    return len;
 }
 
 fn appendRadixDigit(bytes_le: *std.ArrayList(u8), allocator: std.mem.Allocator, radix: u8, digit: u8) std.mem.Allocator.Error!void {
@@ -969,14 +1016,18 @@ fn appendRadixDigit(bytes_le: *std.ArrayList(u8), allocator: std.mem.Allocator, 
     }
 }
 
-fn bytesLeToBe(allocator: std.mem.Allocator, bytes_le: []const u8) std.mem.Allocator.Error![]u8 {
+/// Append `bytes_le` most significant first, without leading zero bytes, and
+/// return how many were appended.
+fn appendBytesBe(out: DigitOut, bytes_le: []const u8) Allocator.Error!usize {
     var len = bytes_le.len;
     while (len > 0 and bytes_le[len - 1] == 0) len -= 1;
-    const out = try allocator.alloc(u8, len);
-    for (out, 0..) |*byte, i| {
-        byte.* = bytes_le[len - 1 - i];
+    try out.list.ensureUnusedCapacity(out.allocator, len);
+    var index = len;
+    while (index > 0) {
+        index -= 1;
+        out.list.appendAssumeCapacity(bytes_le[index]);
     }
-    return out;
+    return len;
 }
 
 fn trimLeadingZeros(digits: []const u8) []const u8 {
@@ -1132,7 +1183,7 @@ test "compact fractional literals preserve counted leading zeros after decimal p
     defer literal.deinit(std.testing.allocator);
 
     try std.testing.expect(literal.compact == .dec);
-    try std.testing.expectEqual(@as(i128, 1_000_000_500_000_000_000), literal.compact.dec);
+    try std.testing.expectEqual(@as(i128, 1_000_000_500_000_000_000), literal.compact.dec.toI128());
     try std.testing.expectEqualSlices(u8, &.{1}, literal.before);
     try std.testing.expectEqualSlices(u8, &.{5}, literal.after);
     try std.testing.expectEqual(@as(u64, 7), literal.after_decimal_digit_count);
