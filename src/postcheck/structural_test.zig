@@ -1074,7 +1074,7 @@ test "Monotype inspect-only unresolved values defer until final graph sealing" {
         "fn emitDraftDeferredInspects(",
         "fn emitDraftStructuralEq(",
     );
-    try expectContains(emit_inspect, "FrozenRuntimeImpossibilityProofEvaluator.init(self.allocator, graph, body_draft)");
+    try expectContains(emit_inspect, "FrozenRuntimeImpossibilityProofEvaluator.init(self.allocator, .{ .graph = graph }, body_draft)");
     try expectContains(emit_inspect, "try graph.finalizesAsUninhabited(boundary.value_node)");
     try expectContains(emit_inspect, "try impossibility_evaluator.holds(boundary.impossibility_proof)");
     try expectContains(emit_inspect, "try ctx.zeroBranchMatchAtTypeCell(boundary.value");
@@ -1089,12 +1089,11 @@ test "Monotype inspect-only unresolved values defer until final graph sealing" {
     );
     try expectContains(deferred_guard, "self.nodeIsProvenUninhabited(boundary.value_node)");
     try expectContains(deferred_guard, "self.activeImpossibilityProofHolds(boundary.impossibility_proof)");
-    const proof_scan = sourceSliceBetween(
-        lower_source,
-        "const ImpossibilityProofScan = struct {",
-        "const PatternUninhabitedScan = struct {",
-    );
-    try expectContains(proof_scan, "active runtime impossibility proof graph contained a cycle");
+    // The active scan and the frozen evaluator are one policy over the proof
+    // graph, differing only in the leaf predicate.
+    try expectContains(deferred_guard, "RuntimeImpossibilityProofEvaluation(ActiveProofLeaf)");
+    try expectContains(lower_source, "const FrozenRuntimeImpossibilityProofEvaluator = RuntimeImpossibilityProofEvaluation(FrozenProofLeaf);");
+    try expectNotContains(lower_source, "const ImpossibilityProofScan = struct {");
 
     const template_body = sourceSliceBetween(
         lower_source,

@@ -14072,8 +14072,8 @@ const Builder = struct {
                 entry.value_ptr.* = prepared.callee;
             }
         }
-        var impossibility_evaluator = try FrozenRuntimeImpossibilityProofEvaluator.init(self.allocator, graph, body_draft);
-        defer impossibility_evaluator.deinit(self.allocator);
+        var impossibility_evaluator = FrozenRuntimeImpossibilityProofEvaluator.init(self.allocator, .{ .graph = graph }, body_draft);
+        defer impossibility_evaluator.deinit();
         for (body_draft.deferred_inspects.items) |boundary| {
             const owner_scope = try body_draft.enterOwner(boundary.owner);
             defer owner_scope.leave();
@@ -14727,8 +14727,8 @@ const Builder = struct {
         try graph.finalizeGeneratedIteratorRepresentations();
         try graph.finalizeGeneratedIteratorIdentities();
         try graph.freezeRelations();
-        var impossibility_evaluator = try FrozenRuntimeImpossibilityProofEvaluator.init(self.allocator, graph, body_draft);
-        defer impossibility_evaluator.deinit(self.allocator);
+        var impossibility_evaluator = FrozenRuntimeImpossibilityProofEvaluator.init(self.allocator, .{ .graph = graph }, body_draft);
+        defer impossibility_evaluator.deinit();
         for (body_draft.runtime_value_demands.items) |demand| {
             if (graph.finalizesAsClosedEmptyTagUnion(demand.node)) {
                 if (try impossibility_evaluator.holds(demand.impossibility_proof)) continue;
@@ -18427,90 +18427,127 @@ fn addRuntimeDemandGuardFrame(
     return try pushRuntimeDemandGuardFrame(draft, existing, address, proof);
 }
 
-const FrozenRuntimeImpossibilityProofEvaluator = struct {
-    allocator: Allocator,
-    graph: *InstGraph,
-    draft: *const BodyDraftStore,
-    memo: []?bool,
-    active: []bool,
+/// Decides whether runtime impossibility proofs hold, memoizing each proof
+/// node it decides. Graph sealing asks of the frozen draft and deferred
+/// preparation asks of the active body, over the same proof graph by the same
+/// rules; they differ only in how a leaf `.node` proof is decided, which `Leaf`
+/// supplies as `nodeHolds`, and in the stage `Leaf.stage` names when a
+/// reservation is still unfilled.
+fn RuntimeImpossibilityProofEvaluation(comptime Leaf: type) type {
+    return struct {
+        const Self = @This();
 
-    fn init(
         allocator: Allocator,
-        graph: *InstGraph,
+        leaf: Leaf,
         draft: *const BodyDraftStore,
-    ) Allocator.Error!FrozenRuntimeImpossibilityProofEvaluator {
-        const memo = try allocator.alloc(?bool, draft.impossibility_proofs.items.len);
-        errdefer allocator.free(memo);
-        @memset(memo, null);
-        const active = try allocator.alloc(bool, draft.impossibility_proofs.items.len);
-        @memset(active, false);
-        return .{ .allocator = allocator, .graph = graph, .draft = draft, .memo = memo, .active = active };
-    }
+        /// Each proof node reached: decided, or still being evaluated.
+        states: collections.DenseMap(RuntimeImpossibilityProofId, State),
 
-    fn deinit(self: *FrozenRuntimeImpossibilityProofEvaluator, allocator: Allocator) void {
-        allocator.free(self.active);
-        allocator.free(self.memo);
-    }
+        const State = enum(u8) { active, holds, fails };
 
-    fn proofSpan(self: *const FrozenRuntimeImpossibilityProofEvaluator, span: DraftSpan(RuntimeImpossibilityProofId)) []const RuntimeImpossibilityProofId {
-        if (span.start > self.draft.impossibility_proof_ids.items.len or
-            span.len > self.draft.impossibility_proof_ids.items.len - span.start)
-        {
-            Common.invariant("runtime impossibility proof span was outside the frozen draft proof store");
+        const Evaluation = AnyAll.Evaluation(RuntimeImpossibilityProofId, Self);
+
+        fn init(allocator: Allocator, leaf: Leaf, draft: *const BodyDraftStore) Self {
+            return .{
+                .allocator = allocator,
+                .leaf = leaf,
+                .draft = draft,
+                .states = collections.DenseMap(RuntimeImpossibilityProofId, State).init(allocator),
+            };
         }
-        return self.draft.impossibility_proof_ids.items[span.start..][0..span.len];
-    }
 
-    fn holds(self: *FrozenRuntimeImpossibilityProofEvaluator, maybe_proof: ?RuntimeImpossibilityProofId) Allocator.Error!bool {
-        return if (maybe_proof) |proof| try self.holdsInner(proof) else false;
-    }
-
-    /// Evaluate a proof graph node, memoizing every node it decides; the
-    /// any/all structure is evaluated on explicit stacks.
-    fn holdsInner(self: *FrozenRuntimeImpossibilityProofEvaluator, proof_id: RuntimeImpossibilityProofId) Allocator.Error!bool {
-        return try Eval.run(self.allocator, self, proof_id);
-    }
-
-    const Eval = collections.AnyAll.Evaluation(RuntimeImpossibilityProofId, FrozenRuntimeImpossibilityProofEvaluator);
-
-    pub fn enter(self: *FrozenRuntimeImpossibilityProofEvaluator, items: Eval.Items, proof_id: RuntimeImpossibilityProofId) Allocator.Error!Eval.Expansion {
-        const index = @backingInt(proof_id);
-        if (index >= self.draft.impossibility_proofs.items.len) {
-            Common.invariant("runtime impossibility proof referenced a missing proof node");
+        fn deinit(self: *Self) void {
+            self.states.deinit();
         }
-        if (self.memo[index]) |result| return .{ .value = result };
-        if (self.active[index]) Common.invariant("runtime impossibility proof graph contained a cycle");
-        const expansion: Eval.Expansion = switch (self.draft.impossibility_proofs.items[index]) {
-            .node => |node| .{ .value = try self.graph.finalizesAsUninhabited(node) },
-            .never => .{ .value = false },
-            .always => .{ .value = true },
-            .pending => Common.invariant("runtime impossibility proof reservation was not filled before graph sealing"),
-            .forward => |child| blk: {
-                try items.add(child);
-                break :blk .{ .group = .all };
-            },
-            .any => |span| blk: {
-                for (self.proofSpan(span)) |child| try items.add(child);
-                break :blk .{ .group = .any };
-            },
-            .all => |span| blk: {
-                for (self.proofSpan(span)) |child| try items.add(child);
-                break :blk .{ .group = .all };
-            },
-        };
-        switch (expansion) {
-            .value => |result| self.memo[index] = result,
-            .group => self.active[index] = true,
-        }
-        return expansion;
-    }
 
-    pub fn exit(self: *FrozenRuntimeImpossibilityProofEvaluator, proof_id: RuntimeImpossibilityProofId, result: ?bool) Allocator.Error!void {
-        const index = @backingInt(proof_id);
-        self.active[index] = false;
-        if (result) |decided| self.memo[index] = decided;
+        fn holds(self: *Self, maybe_proof: ?RuntimeImpossibilityProofId) Allocator.Error!bool {
+            const proof = maybe_proof orelse return false;
+            return try Evaluation.run(self.allocator, self, proof);
+        }
+
+        fn decided(result: bool) State {
+            return if (result) .holds else .fails;
+        }
+
+        fn proofSpan(self: *const Self, span: DraftSpan(RuntimeImpossibilityProofId)) []const RuntimeImpossibilityProofId {
+            const ids = self.draft.impossibility_proof_ids.items;
+            if (span.start > ids.len or span.len > ids.len - span.start) {
+                Common.invariant("runtime impossibility proof span was outside the draft proof store");
+            }
+            return ids[span.start..][0..span.len];
+        }
+
+        pub fn enter(self: *Self, items: Evaluation.Items, proof_id: RuntimeImpossibilityProofId) Allocator.Error!Evaluation.Expansion {
+            const index = @backingInt(proof_id);
+            if (index >= self.draft.impossibility_proofs.items.len) {
+                Common.invariant("runtime impossibility proof referenced a missing proof node");
+            }
+            if (self.states.get(proof_id)) |state| switch (state) {
+                .holds => return .{ .value = true },
+                .fails => return .{ .value = false },
+                .active => Common.invariant("runtime impossibility proof graph contained a cycle"),
+            };
+            const expansion: Evaluation.Expansion = switch (self.draft.impossibility_proofs.items[index]) {
+                .node => |node| .{ .value = try self.leaf.nodeHolds(node) },
+                .never => .{ .value = false },
+                .always => .{ .value = true },
+                .pending => Common.invariant("runtime impossibility proof reservation was not filled " ++ Leaf.stage),
+                // A forward proof holds exactly when its one child does.
+                .forward => |child| blk: {
+                    try items.add(child);
+                    break :blk .{ .group = .all };
+                },
+                .any => |span| blk: {
+                    for (self.proofSpan(span)) |child| try items.add(child);
+                    break :blk .{ .group = .any };
+                },
+                .all => |span| blk: {
+                    for (self.proofSpan(span)) |child| try items.add(child);
+                    break :blk .{ .group = .all };
+                },
+            };
+            try self.states.put(proof_id, switch (expansion) {
+                .value => |result| decided(result),
+                .group => .active,
+            });
+            return expansion;
+        }
+
+        pub fn exit(self: *Self, proof_id: RuntimeImpossibilityProofId, result: ?bool) Allocator.Error!void {
+            if (result) |value| {
+                try self.states.put(proof_id, decided(value));
+            } else {
+                _ = self.states.remove(proof_id);
+            }
+        }
+    };
+}
+
+/// A sealed body's leaf proofs ask whether the frozen graph finalizes the node
+/// as uninhabited.
+const FrozenProofLeaf = struct {
+    graph: *InstGraph,
+
+    const stage = "before graph sealing";
+
+    fn nodeHolds(self: FrozenProofLeaf, node: NodeId) Allocator.Error!bool {
+        return try self.graph.finalizesAsUninhabited(node);
     }
 };
+
+/// An active body's leaf proofs ask whether the body has proven the node
+/// uninhabited so far.
+const ActiveProofLeaf = struct {
+    body: *BodyContext,
+
+    const stage = "during deferred preparation";
+
+    fn nodeHolds(self: ActiveProofLeaf, node: NodeId) Allocator.Error!bool {
+        return try self.body.nodeIsProvenUninhabited(node);
+    }
+};
+
+const FrozenRuntimeImpossibilityProofEvaluator = RuntimeImpossibilityProofEvaluation(FrozenProofLeaf);
 
 const DraftStructuralEqMethodCall = struct {
     boundary: u32,
@@ -23026,18 +23063,6 @@ const BodyContext = struct {
         proof: RuntimeImpossibilityProof,
     ) Allocator.Error!RuntimeImpossibilityProofId {
         return try appendRuntimeImpossibilityProof(self.draft, self.allocator, proof);
-    }
-
-    fn impossibilityProofSpan(
-        self: *BodyContext,
-        span: DraftSpan(RuntimeImpossibilityProofId),
-    ) []const RuntimeImpossibilityProofId {
-        if (span.start > self.draft.impossibility_proof_ids.items.len or
-            span.len > self.draft.impossibility_proof_ids.items.len - span.start)
-        {
-            Common.invariant("runtime impossibility proof span was outside the draft proof store");
-        }
-        return self.draft.impossibility_proof_ids.items[span.start..][0..span.len];
     }
 
     /// A `.node` proof leaf, or null when the node provably can never finalize
@@ -36553,11 +36578,9 @@ const BodyContext = struct {
         self: *BodyContext,
         maybe_proof: ?RuntimeImpossibilityProofId,
     ) Allocator.Error!bool {
-        const proof = maybe_proof orelse return false;
-        var states = collections.DenseMap(RuntimeImpossibilityProofId, ImpossibilityProofScan.State).init(self.allocator);
-        defer states.deinit();
-        var scan = ImpossibilityProofScan{ .body = self, .states = &states };
-        return try ImpossibilityProofScan.Evaluation.run(self.allocator, &scan, proof);
+        var evaluation = RuntimeImpossibilityProofEvaluation(ActiveProofLeaf).init(self.allocator, .{ .body = self }, self.draft);
+        defer evaluation.deinit();
+        return try evaluation.holds(maybe_proof);
     }
 
     const UninhabitedBackingAccess = enum {
@@ -41443,7 +41466,7 @@ const BodyContext = struct {
             return try self.lowerParseNullTryFromState(info, shape_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan);
         }
         if (self.dictEntryShape(shape_ty)) |dict| {
-            return try self.lowerParseDictFromState(dict.key_ty, dict.value_ty, shape_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan);
+            return try self.lowerParseCountedFromState(.{ .dict = .{ .key_ty = dict.key_ty, .value_ty = dict.value_ty } }, shape_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan);
         }
         if (self.setPayloadType(shape_ty)) |payload_ty| {
             return try self.lowerParseSetFromState(payload_ty, shape_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan);
@@ -41461,7 +41484,7 @@ const BodyContext = struct {
             );
         }
         switch (shapeContent(self.typeStore(), shape_ty)) {
-            .list => |elem_ty| return try self.lowerParseListFromState(elem_ty, shape_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan),
+            .list => |elem_ty| return try self.lowerParseCountedFromState(.{ .list = elem_ty }, shape_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan),
             .tuple => |items| {
                 const item_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.typeStore().span(items));
                 defer self.allocator.free(item_tys);
@@ -41753,14 +41776,24 @@ const BodyContext = struct {
         return .{ .ty = init_ty, .expr = init_expr, .local = init_local };
     }
 
+    /// The container a counted parse loop fills: a list's elements, or a
+    /// dict's entries.
+    const CountedParseContainer = union(enum) {
+        list: Type.TypeId,
+        dict: struct { key_ty: Type.TypeId, value_ty: Type.TypeId },
+    };
+
     /// A format that knows its element count up front returns `Counted`, and
     /// the driver then reads exactly that many elements with no further format
-    /// calls and preallocates the list. Otherwise the element loop asks the
-    /// format after every element whether more follow.
-    fn lowerParseListFromState(
+    /// calls and preallocates the container. Otherwise the element loop asks
+    /// the format after every element whether more follow. A dict's entries
+    /// are parsed the way a list's elements are, with a key read before each
+    /// value; the key goes through the key type's own parser rather than being
+    /// routed through a string.
+    fn lowerParseCountedFromState(
         self: *BodyContext,
-        elem_ty: Type.TypeId,
-        list_ty: Type.TypeId,
+        container: CountedParseContainer,
+        container_ty: Type.TypeId,
         encoding_expr: DraftExprId,
         encoding_ty: Type.TypeId,
         state_expr: DraftExprId,
@@ -41774,52 +41807,82 @@ const BodyContext = struct {
         const start_event_ty = try self.parseCountedStartEventType(state_ty);
         const start_try_ty = try self.tryTypeLike(ret_ty, start_event_ty, ret_info.err_ty);
         const start_try = try self.lowerParseFormatMethod(
-            "parse_list_start",
+            switch (container) {
+                .list => "parse_list_start",
+                .dict => "parse_dict_start",
+            },
             &.{ encoding_expr, state_expr },
             &.{ encoding_ty, state_ty },
-            list_ty,
+            container_ty,
             start_try_ty,
         );
         const start_event_local = try self.addLocal(self.builder.symbols.fresh(), start_event_ty);
 
         const cursor_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
-        const list_local = try self.addLocal(self.builder.symbols.fresh(), list_ty);
+        const container_local = try self.addLocal(self.builder.symbols.fresh(), container_ty);
         const ctl = ListLoopCtl{
             .counted_local = try self.addLocal(self.builder.symbols.fresh(), bool_ty),
             .remaining_local = try self.addLocal(self.builder.symbols.fresh(), u64_ty),
             .bool_ty = bool_ty,
             .u64_ty = u64_ty,
         };
-        const loop_body = try self.lowerParseListLoopBody(
-            elem_ty,
-            list_ty,
-            encoding_expr,
-            encoding_ty,
-            state_ty,
-            cursor_local,
-            list_local,
-            ctl,
-            ret_ty,
-            precomputed_plan,
-        );
+        const loop_body = switch (container) {
+            .list => |elem_ty| try self.lowerParseListLoopBody(
+                elem_ty,
+                container_ty,
+                encoding_expr,
+                encoding_ty,
+                state_ty,
+                cursor_local,
+                container_local,
+                ctl,
+                ret_ty,
+                precomputed_plan,
+            ),
+            .dict => |dict| try self.lowerParseDictLoopBody(
+                dict.key_ty,
+                dict.value_ty,
+                container_ty,
+                encoding_expr,
+                encoding_ty,
+                state_ty,
+                cursor_local,
+                container_local,
+                ctl,
+                ret_ty,
+                precomputed_plan,
+            ),
+        };
         const loop_params = [_]BodyTypedLocal{
             .{ .local = cursor_local, .ty = state_ty },
-            .{ .local = list_local, .ty = list_ty },
+            .{ .local = container_local, .ty = container_ty },
             .{ .local = ctl.counted_local, .ty = bool_ty },
             .{ .local = ctl.remaining_local, .ty = u64_ty },
         };
 
-        const start_init = try self.lowerParseCountedStartInit(start_event_local, start_event_ty, state_ty, bool_ty, u64_ty, "list parse Counted start event");
+        const start_init = switch (container) {
+            inline else => |_, kind| try self.lowerParseCountedStartInit(start_event_local, start_event_ty, state_ty, bool_ty, u64_ty, @tagName(kind) ++ " parse Counted start event"),
+        };
         const init_ty = start_init.ty;
         const init_expr = start_init.expr;
         const init_local = start_init.local;
 
-        const remaining_expr = try self.recordPayloadFieldAccess(init_local, init_ty, "remaining");
-        const initial_values = [_]DraftExprId{
-            try self.recordPayloadFieldAccess(init_local, init_ty, "cursor"),
-            try self.lowLevelExpr(.list_with_capacity, &.{remaining_expr}, list_ty),
-            try self.recordPayloadFieldAccess(init_local, init_ty, "counted"),
-            try self.recordPayloadFieldAccess(init_local, init_ty, "remaining"),
+        const initial_values = switch (container) {
+            .list => blk: {
+                const remaining_expr = try self.recordPayloadFieldAccess(init_local, init_ty, "remaining");
+                break :blk [_]DraftExprId{
+                    try self.recordPayloadFieldAccess(init_local, init_ty, "cursor"),
+                    try self.lowLevelExpr(.list_with_capacity, &.{remaining_expr}, container_ty),
+                    try self.recordPayloadFieldAccess(init_local, init_ty, "counted"),
+                    try self.recordPayloadFieldAccess(init_local, init_ty, "remaining"),
+                };
+            },
+            .dict => [_]DraftExprId{
+                try self.recordPayloadFieldAccess(init_local, init_ty, "cursor"),
+                try self.lowerDictWithCapacity(container_ty, try self.recordPayloadFieldAccess(init_local, init_ty, "remaining"), u64_ty),
+                try self.recordPayloadFieldAccess(init_local, init_ty, "counted"),
+                try self.recordPayloadFieldAccess(init_local, init_ty, "remaining"),
+            },
         };
         var loop_expr = try self.addExpr(.{ .ty = ret_ty, .data = .{ .loop_ = .{
             .params = try self.addTypedLocalSpan(&loop_params),
@@ -41845,8 +41908,8 @@ const BodyContext = struct {
         const list_ty = try self.listType(elem_ty);
         const list_parse_ok_ty = try self.parseResultOkType(list_ty, state_ty);
         const list_parse_ret_ty = try self.tryTypeLike(ret_ty, list_parse_ok_ty, ret_info.err_ty);
-        const list_parse = try self.lowerParseListFromState(
-            elem_ty,
+        const list_parse = try self.lowerParseCountedFromState(
+            .{ .list = elem_ty },
             list_ty,
             encoding_expr,
             encoding_ty,
@@ -41863,84 +41926,6 @@ const BodyContext = struct {
         const set_value = try self.lowerSetFromList(set_ty, list_ty, try self.localExpr(list_local, list_ty));
         const ok_body = try self.parseResultOk(ret_ty, set_value, try self.localExpr(rest_local, state_ty), state_ty);
         return try self.sequenceTryRecord(list_parse, list_parse_ret_ty, list_local, value_name, rest_local, rest_name, ok_body, ret_ty);
-    }
-
-    /// A dict's entries are parsed the same way a list's elements are, with a
-    /// key read before each value: `Counted` lets a length-prefixed format
-    /// declare the entry count up front, and the key goes through the key
-    /// type's own parser rather than being routed through a string.
-    fn lowerParseDictFromState(
-        self: *BodyContext,
-        key_ty: Type.TypeId,
-        value_ty: Type.TypeId,
-        dict_ty: Type.TypeId,
-        encoding_expr: DraftExprId,
-        encoding_ty: Type.TypeId,
-        state_expr: DraftExprId,
-        state_ty: Type.TypeId,
-        ret_ty: Type.TypeId,
-        precomputed_plan: ?*const ParserPrecomputedPlan,
-    ) Allocator.Error!DraftExprId {
-        const ret_info = self.tryInfo(ret_ty);
-        const u64_ty = try self.primitiveType(.u64);
-        const bool_ty = try self.primitiveType(.bool);
-        const start_event_ty = try self.parseCountedStartEventType(state_ty);
-        const start_try_ty = try self.tryTypeLike(ret_ty, start_event_ty, ret_info.err_ty);
-        const start_try = try self.lowerParseFormatMethod(
-            "parse_dict_start",
-            &.{ encoding_expr, state_expr },
-            &.{ encoding_ty, state_ty },
-            dict_ty,
-            start_try_ty,
-        );
-        const start_event_local = try self.addLocal(self.builder.symbols.fresh(), start_event_ty);
-
-        const cursor_local = try self.addLocal(self.builder.symbols.fresh(), state_ty);
-        const dict_local = try self.addLocal(self.builder.symbols.fresh(), dict_ty);
-        const ctl = ListLoopCtl{
-            .counted_local = try self.addLocal(self.builder.symbols.fresh(), bool_ty),
-            .remaining_local = try self.addLocal(self.builder.symbols.fresh(), u64_ty),
-            .bool_ty = bool_ty,
-            .u64_ty = u64_ty,
-        };
-        const loop_body = try self.lowerParseDictLoopBody(
-            key_ty,
-            value_ty,
-            dict_ty,
-            encoding_expr,
-            encoding_ty,
-            state_ty,
-            cursor_local,
-            dict_local,
-            ctl,
-            ret_ty,
-            precomputed_plan,
-        );
-        const loop_params = [_]BodyTypedLocal{
-            .{ .local = cursor_local, .ty = state_ty },
-            .{ .local = dict_local, .ty = dict_ty },
-            .{ .local = ctl.counted_local, .ty = bool_ty },
-            .{ .local = ctl.remaining_local, .ty = u64_ty },
-        };
-
-        const start_init = try self.lowerParseCountedStartInit(start_event_local, start_event_ty, state_ty, bool_ty, u64_ty, "dict parse Counted start event");
-        const init_ty = start_init.ty;
-        const init_expr = start_init.expr;
-        const init_local = start_init.local;
-
-        const initial_values = [_]DraftExprId{
-            try self.recordPayloadFieldAccess(init_local, init_ty, "cursor"),
-            try self.lowerDictWithCapacity(dict_ty, try self.recordPayloadFieldAccess(init_local, init_ty, "remaining"), u64_ty),
-            try self.recordPayloadFieldAccess(init_local, init_ty, "counted"),
-            try self.recordPayloadFieldAccess(init_local, init_ty, "remaining"),
-        };
-        var loop_expr = try self.addExpr(.{ .ty = ret_ty, .data = .{ .loop_ = .{
-            .params = try self.addTypedLocalSpan(&loop_params),
-            .initial_values = try self.addExprSpan(&initial_values),
-            .body = loop_body,
-        } } });
-        loop_expr = try self.wrapLet(init_local, init_ty, init_expr, loop_expr, ret_ty);
-        return try self.sequenceTry(start_try, start_try_ty, start_event_local, loop_expr, ret_ty);
     }
 
     fn lowerParseDictLoopBody(
@@ -66582,8 +66567,8 @@ test "frozen runtime impossibility proofs evaluate node constants alternatives a
     try draft.impossibility_proof_ids.appendSlice(gpa, &.{ empty_proof, never_proof });
     const failed_all_proof = try appendRuntimeImpossibilityProof(&draft, gpa, .{ .all = .{ .start = 4, .len = 2 } });
 
-    var evaluator = try FrozenRuntimeImpossibilityProofEvaluator.init(gpa, graph, &draft);
-    defer evaluator.deinit(gpa);
+    var evaluator = FrozenRuntimeImpossibilityProofEvaluator.init(gpa, .{ .graph = graph }, &draft);
+    defer evaluator.deinit();
     try std.testing.expect(try evaluator.holds(empty_proof));
     try std.testing.expect(!try evaluator.holds(inhabited_proof));
     try std.testing.expect(!try evaluator.holds(never_proof));
@@ -68278,66 +68263,6 @@ const NodeUninhabitedScan = struct {
         const hits_before = (body.inhabitation_entered.fetchRemove(root) orelse return).value;
         const answer = result orelse return;
         if (self.unsettled_hits == hits_before) try self.settled().put(body.allocator, root, answer);
-    }
-};
-
-/// Decides whether a runtime impossibility proof holds, memoizing each
-/// proof node's result.
-const ImpossibilityProofScan = struct {
-    body: *BodyContext,
-    /// Each proof node the scan reached: decided, or still being evaluated.
-    states: *collections.DenseMap(RuntimeImpossibilityProofId, State),
-
-    const State = enum(u8) { active, holds, fails };
-
-    const Evaluation = AnyAll.Evaluation(RuntimeImpossibilityProofId, ImpossibilityProofScan);
-
-    fn decided(result: bool) State {
-        return if (result) .holds else .fails;
-    }
-
-    pub fn enter(self: *ImpossibilityProofScan, items: Evaluation.Items, proof_id: RuntimeImpossibilityProofId) Allocator.Error!Evaluation.Expansion {
-        const body = self.body;
-        const index = @backingInt(proof_id);
-        if (index >= body.draft.impossibility_proofs.items.len) {
-            Common.invariant("runtime impossibility proof referenced a missing active proof node");
-        }
-        if (self.states.get(proof_id)) |state| switch (state) {
-            .holds => return .{ .value = true },
-            .fails => return .{ .value = false },
-            .active => Common.invariant("active runtime impossibility proof graph contained a cycle"),
-        };
-        const expansion: Evaluation.Expansion = switch (body.draft.impossibility_proofs.items[index]) {
-            .node => |node| .{ .value = try body.nodeIsProvenUninhabited(node) },
-            .never => .{ .value = false },
-            .always => .{ .value = true },
-            .pending => Common.invariant("runtime impossibility proof reservation was not filled during deferred preparation"),
-            .forward => |child| blk: {
-                try items.add(child);
-                break :blk .{ .group = .any };
-            },
-            .any => |span| blk: {
-                for (body.impossibilityProofSpan(span)) |child| try items.add(child);
-                break :blk .{ .group = .any };
-            },
-            .all => |span| blk: {
-                for (body.impossibilityProofSpan(span)) |child| try items.add(child);
-                break :blk .{ .group = .all };
-            },
-        };
-        try self.states.put(proof_id, switch (expansion) {
-            .value => |result| decided(result),
-            .group => .active,
-        });
-        return expansion;
-    }
-
-    pub fn exit(self: *ImpossibilityProofScan, proof_id: RuntimeImpossibilityProofId, result: ?bool) std.mem.Allocator.Error!void {
-        if (result) |value| {
-            try self.states.put(proof_id, decided(value));
-        } else {
-            _ = self.states.remove(proof_id);
-        }
     }
 };
 
