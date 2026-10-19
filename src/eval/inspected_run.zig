@@ -617,12 +617,20 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
     defer lib.deinit();
     var functions = std.StringHashMap(usize).init(allocator);
     defer functions.deinit();
+    const symbol_prefix = "roc_inspect_";
+    var symbol_name = std.ArrayList(u8).empty;
+    defer symbol_name.deinit(allocator);
     for (program.static_data) |data_export| for (data_export.relocations) |relocation| {
         if (relocation.kind != .function_pointer) continue;
-        const name = try std.fmt.allocPrintSentinel(allocator, "roc_inspect_{s}", .{relocation.target_symbol_name}, 0);
-        defer allocator.free(name);
-        const address = lib.lookup(*const anyopaque, name) orelse return error.LlvmBackendUnavailable;
-        try functions.put(relocation.target_symbol_name, @intFromPtr(address));
+        const entry = try functions.getOrPut(relocation.target_symbol_name);
+        if (entry.found_existing) continue;
+        errdefer _ = functions.remove(relocation.target_symbol_name);
+        symbol_name.clearRetainingCapacity();
+        try symbol_name.ensureTotalCapacity(allocator, symbol_prefix.len + relocation.target_symbol_name.len);
+        symbol_name.appendSliceAssumeCapacity(symbol_prefix);
+        symbol_name.appendSliceAssumeCapacity(relocation.target_symbol_name);
+        const address = lib.lookup(*const anyopaque, symbol_name.items) orelse return error.LlvmBackendUnavailable;
+        entry.value_ptr.* = @intFromPtr(address);
     };
     const Resolver = struct {
         fn resolve(raw: ?*anyopaque, relocation: backend.StaticDataRelocation) ?usize {
