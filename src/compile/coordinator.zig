@@ -4560,25 +4560,31 @@ pub const Coordinator = struct {
         }
 
         // Requirement unification copies platform-owned types into the app's
-        // store, including types that only appear in `requires` signatures. The
-        // platform root's publication is deferred for app builds, so seed the
-        // availability walk with its direct imports and every published module
-        // in the platform package. This makes each requirement owner available
+        // store, including types that only appear in `requires` signatures, so
+        // the availability walk is seeded with the platform root's direct
+        // imports, in the root's import order, and with the root's own artifact
+        // when it has one (a diagnostic-only build publishes it during checking;
+        // an executable build defers that publication). The walk's closure over
+        // their imports and type owners makes each requirement owner available
         // to checking and publication, including owners from external packages.
+        // The seeds, and so the app's method lookup scope, are a function of the
+        // platform's import graph alone: the app is scheduled only after the
+        // platform root completed, so every module in that graph has completed,
+        // and no seed depends on which other platform package modules happen to
+        // have finished checking or the order in which they were discovered.
         var platform_seed_list = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
         defer platform_seed_list.deinit(task_payload_alloc);
         if (platform_surface != null) {
             const platform_root = self.platformRootCandidate() orelse
                 coordinatorInvariant("platform requirement surface has no registered platform root", .{});
+            std.debug.assert(platform_root.mod.completion == .succeeded);
             platform_requirement_imported_envs = try self.buildTypecheckImportedEnvs(platform_root.pkg, platform_root.mod, task_payload_alloc);
             platform_requirement_imported_artifacts = try self.buildTypecheckImportedArtifacts(platform_root.pkg, platform_root.mod, task_payload_alloc);
             for (platform_requirement_imported_artifacts) |platform_import| {
                 try platform_seed_list.append(task_payload_alloc, platform_import.view);
             }
-            for (platform_root.pkg.modules.items) |*platform_mod| {
-                if (platform_mod.checkedArtifact()) |platform_artifact| {
-                    try platform_seed_list.append(task_payload_alloc, check.CheckedArtifact.importedView(platform_artifact));
-                }
+            if (platform_root.mod.checkedArtifact()) |platform_artifact| {
+                try platform_seed_list.append(task_payload_alloc, check.CheckedArtifact.importedView(platform_artifact));
             }
         }
         const available_artifacts = try self.collectTypecheckAvailableArtifactViewsSeeded(task_payload_alloc, imported_artifacts, platform_seed_list.items);
@@ -7925,6 +7931,157 @@ fn writeHostedDistinctnessFixture(tmp_dir: *std.testing.TmpDir) (std.Io.Dir.Crea
         \\}
         ,
     });
+}
+
+/// A platform whose root imports `Left` and `Right`, each of which imports a
+/// leaf module of its own. Every platform module declares a method, so each one
+/// belongs in the method lookup scope of an app that imports none of them.
+fn writeMethodScopeOrderFixture(tmp_dir: *std.testing.TmpDir) (std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError)!void {
+    try tmp_dir.dir.createDirPath(std.testing.io, "app/.roc_scope_platform");
+    const files = [_]struct { rel: []const u8, data: []const u8 }{
+        .{ .rel = "app/main.roc", .data =
+        \\app [main!] { pf: platform "./.roc_scope_platform/main.roc" }
+        \\
+        \\main! = |_args| Ok({})
+        },
+        .{ .rel = "app/.roc_scope_platform/main.roc", .data =
+        \\platform ""
+        \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+        \\    exposes [Left, Right]
+        \\    packages {}
+        \\    provides { "roc_main": main_for_host! }
+        \\
+        \\import Left
+        \\import Right
+        \\
+        \\main_for_host! : List(Str) => I8
+        \\main_for_host! = |args|
+        \\    match main!(args) {
+        \\        Ok({}) => 0
+        \\        Err(Exit(code)) => code
+        \\        Err(_) => 1
+        \\    }
+        },
+        .{ .rel = "app/.roc_scope_platform/Left.roc", .data =
+        \\import LeftLeaf
+        \\
+        \\Left := [Left].{
+        \\    of_leaf : LeftLeaf -> Str
+        \\    of_leaf = |leaf| leaf.label()
+        \\}
+        },
+        .{ .rel = "app/.roc_scope_platform/Right.roc", .data =
+        \\import RightLeaf
+        \\
+        \\Right := [Right].{
+        \\    of_leaf : RightLeaf -> Str
+        \\    of_leaf = |leaf| leaf.label()
+        \\}
+        },
+        .{ .rel = "app/.roc_scope_platform/LeftLeaf.roc", .data =
+        \\LeftLeaf := [LeftLeaf].{
+        \\    label : LeftLeaf -> Str
+        \\    label = |_| "left"
+        \\}
+        },
+        .{ .rel = "app/.roc_scope_platform/RightLeaf.roc", .data =
+        \\RightLeaf := [RightLeaf].{
+        \\    label : RightLeaf -> Str
+        \\    label = |_| "right"
+        \\}
+        },
+    };
+    for (files) |file| {
+        try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = file.rel, .data = file.data });
+    }
+}
+
+const TestTaskOrder = enum { oldest_first, newest_first };
+
+/// Drive the coordinator on this thread, always running the queued task that
+/// `order` selects. Two orders give two different module discovery and
+/// completion orders for the same program.
+fn runCoordinatorInTaskOrder(coord: *Coordinator, order: TestTaskOrder) !void {
+    var held = std.ArrayList(WorkerTask).empty;
+    defer held.deinit(std.testing.allocator);
+    while (!coord.isComplete()) {
+        while (coord.task_channel.tryRecv()) |task| try held.append(std.testing.allocator, task);
+        if (held.items.len == 0) {
+            try std.testing.expect(try coord.tryUnblockAllWaiting());
+            continue;
+        }
+        const task = switch (order) {
+            .oldest_first => held.orderedRemove(0),
+            .newest_first => held.pop().?,
+        };
+        const result = try coord.executeTaskInline(task, coord.inline_worker_allocs.taskAllocators());
+        coord.inline_worker_allocs.resetArena();
+        try coord.handleResult(result);
+    }
+    try std.testing.expectEqual(@as(usize, 0), held.items.len);
+}
+
+/// The app's method lookup scope, as copies of the names of the modules whose
+/// artifacts it lists, in search order. A key no package module owns is the
+/// builtin module's.
+fn appMethodLookupScopeNames(coord: *Coordinator, allocator: Allocator) ![]const []const u8 {
+    const scope = coord.appRootCheckedArtifact().method_lookup_scope.module_ids;
+    const names = try allocator.alloc([]const u8, scope.len);
+    for (scope, names) |key, *name| {
+        name.* = "(builtin)";
+        var pkg_it = coord.packages.iterator();
+        while (pkg_it.next()) |entry| {
+            for (entry.value_ptr.*.modules.items) |*mod| {
+                const artifact = mod.checkedArtifact() orelse continue;
+                if (Coordinator.checkedArtifactKeyEql(artifact.key, key)) name.* = try allocator.dupe(u8, mod.name);
+            }
+        }
+    }
+    return names;
+}
+
+test "app method lookup scope follows the platform import graph, not task completion order" {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try writeMethodScopeOrderFixture(&tmp_dir);
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "app/main.roc", allocator);
+    defer allocator.free(app_path);
+
+    var arena_impl = base.SingleThreadArena.init(allocator);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    var scopes: [2][]const []const u8 = undefined;
+    for (&scopes, [_]TestTaskOrder{ .oldest_first, .newest_first }) |*scope, order| {
+        const roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io);
+        var coord = try Coordinator.init(
+            allocator,
+            .single_threaded,
+            1,
+            roc_target.RocTarget.detectNative(),
+            try sharedBuiltinModules(),
+            build_options.compiler_compatibility_id,
+            null,
+            roc_ctx,
+        );
+        defer coord.deinit();
+
+        try coord.start();
+        try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+        try runCoordinatorInTaskOrder(&coord, order);
+        try std.testing.expect(!coord.hasUserErrors());
+        scope.* = try appMethodLookupScopeNames(&coord, arena);
+    }
+
+    // The availability walk pops its seeds last-first: the platform root's
+    // imports `Right`, then `Left`, each followed by its own imports.
+    const expected = [_][]const u8{ "Right", "RightLeaf", "(builtin)", "Left", "LeftLeaf" };
+    for (scopes) |scope| {
+        try std.testing.expectEqual(expected.len, scope.len);
+        for (expected, scope) |want, got| try std.testing.expectEqualStrings(want, got);
+    }
 }
 
 test "hosted distinctness: identical hosted declarations bound to different platform symbols stay distinct" {
