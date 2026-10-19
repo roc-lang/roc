@@ -2025,12 +2025,11 @@ fn nearDuplicateFnNames(allocator: std.mem.Allocator, source: []const u8) std.me
 test "post-check lowerers define no helper twice with near-identical bodies" {
     // `Builder` / `BodyContext` and `ProcedureBuilder` / `ProcBodyBuilder` are
     // two scopes of one lowering's state. A helper written against one
-    // scope's fields used to get copied into the other, and the copies
-    // drifted: one read a different store, or matched tags by a different
-    // identity, for what was meant to be one query. Shared helpers take the
-    // stores they read as parameters instead, so any name defined twice with
-    // near-identical bodies is either listed here, with its reason, or a new
-    // copy.
+    // scope's fields and copied into the other can drift: one copy reads a
+    // different store, or matches tags by a different identity, for what is
+    // meant to be one query. Shared helpers take the stores they read as
+    // parameters, so any name defined twice with near-identical bodies is
+    // either listed here, with its reason, or a copy to extract.
     const intended_per_scope = [_][]const u8{
         // The const-restorer interface `runConstRestore` walks over: each
         // scope's own expression store, id types, and node bookkeeping.
@@ -2179,8 +2178,8 @@ test "Monotype lowering scopes share one definition of each type-shape, name-imp
         try std.testing.expectEqual(@as(usize, 1), countDefinitions(source, "fn " ++ name ++ "("));
         try expectContains(source, "    fn " ++ name ++ "(\n        self: *Builder,\n        scope: ModuleView,\n        owner_names: *const names.NameStore,");
     }
-    // The restore walker reads shapes through the shared queries rather than
-    // through restorer-specific copies.
+    // The restore walker reads shapes through the shared queries, so the
+    // restorer interface carries no shape queries of its own.
     try expectNotContains(source, "fn constListElemType(");
     try expectNotContains(source, "fn constBoxPayloadType(");
     try expectNotContains(source, "fn constRecordFields(");
