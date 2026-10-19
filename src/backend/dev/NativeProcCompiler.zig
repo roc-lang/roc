@@ -213,9 +213,10 @@ const wave_capacity = 32;
 
 /// Runs the same callback path with or without an executor. Admission stops on
 /// any observed OOM, but all accepted callbacks finish before owners are touched.
-/// Without an executor, every wave runs on `sequential_lane`, which outlives
-/// the waves so lane state carries from one to the next as on a worker.
-fn executeWave(comptime CG: type, allocator: Allocator, jobs: []Job(CG), executor: ?tasks.Executor, sequential_lane: *tasks.LaneState, metrics: *Metrics) Allocator.Error!void {
+/// Without an executor, every wave runs on `sequential_lane` with
+/// `sequential_scratch`, which outlive the waves so lane state and scratch
+/// capacity carry from one to the next as on a worker.
+fn executeWave(comptime CG: type, allocator: Allocator, jobs: []Job(CG), executor: ?tasks.Executor, sequential_lane: *tasks.LaneState, sequential_scratch: *base.SingleThreadArena, metrics: *Metrics) Allocator.Error!void {
     var failed = false;
     if (executor) |exec| {
         var session = exec.begin();
@@ -243,8 +244,7 @@ fn executeWave(comptime CG: type, allocator: Allocator, jobs: []Job(CG), executo
         }
         session.end();
     } else {
-        var scratch = base.SingleThreadArena.init(allocator);
-        defer scratch.deinit();
+        const scratch = sequential_scratch;
         var accepted: usize = 0;
         for (jobs) |*job| {
             if (job.reused) continue;
@@ -298,6 +298,8 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
     errdefer retained.deinit();
     var sequential_lane = tasks.LaneState.init(allocator);
     defer sequential_lane.deinit();
+    var sequential_scratch = base.SingleThreadArena.init(allocator);
+    defer sequential_scratch.deinit();
     // Index immutable backing once; workers capture only reached data. Execution
     // callers leave mutable static roots external, never copied placeholder values.
     std.debug.assert(contract.static_data_readonly or options.constant_exports.len == 0);
@@ -358,7 +360,7 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
                 }
             }
         }
-        try executeWave(CG, allocator, storage[0..count], options.executor, &sequential_lane, &metrics);
+        try executeWave(CG, allocator, storage[0..count], options.executor, &sequential_lane, &sequential_scratch, &metrics);
         for (storage[0..count]) |*job| {
             const fragment = &job.fragment.?;
             try requireHelpers(allocator, fragment, &helper_queue, &helper_seen);
@@ -383,7 +385,7 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
                 job.reused = true;
             }
         }
-        try executeWave(CG, allocator, @as(*[1]Job(CG), @ptrCast(&job)), options.executor, &sequential_lane, &metrics);
+        try executeWave(CG, allocator, @as(*[1]Job(CG), @ptrCast(&job)), options.executor, &sequential_lane, &sequential_scratch, &metrics);
         const fragment = &job.fragment.?;
         try requireHelpers(allocator, fragment, &helper_queue, &helper_seen);
         const name = try Emitter.compiledRcHelperSymbolName(allocator, destination.layout_store, key);
