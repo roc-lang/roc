@@ -364,6 +364,41 @@ pub const CacheManager = struct {
         return contents[placement_pointer_magic.len..].*;
     }
 
+    /// Replace the literal values file of the program root module filed
+    /// under `placement` with `bytes`. A failure leaves the previous file, or
+    /// none, and only costs a later compilation its reuse.
+    pub fn storeLiteralValues(self: *Self, placement: [32]u8, bytes: []const u8) void {
+        if (!self.config.enabled) return;
+        const allocator = self.allocator;
+        const dir = self.config.getLiteralValuesDir(allocator) catch return;
+        defer allocator.free(dir);
+        self.ensureCacheSubdirWith(allocator, placement, dir) catch return;
+        const path = computeCacheFilePathIn(allocator, placement, dir) catch return;
+        defer allocator.free(path);
+        var suffix: [16]u8 = undefined;
+        self.roc_ctx.std_io.random(&suffix);
+        const temp_path = std.fmt.allocPrint(allocator, "{s}.{s}.tmp", .{ path, std.fmt.bytesToHex(suffix, .lower) }) catch return;
+        defer allocator.free(temp_path);
+        self.roc_ctx.writeFile(temp_path, bytes) catch {
+            self.removeFailedTempFile(allocator, temp_path);
+            return;
+        };
+        self.roc_ctx.rename(temp_path, path) catch self.removeFailedTempFile(allocator, temp_path);
+    }
+
+    /// The literal values file `storeLiteralValues` last wrote for
+    /// `placement`, or null when there is none or it is unreadable. Owned.
+    pub fn loadLiteralValues(self: *Self, placement: [32]u8) ?[]u8 {
+        if (!self.config.enabled) return null;
+        const allocator = self.allocator;
+        const dir = self.config.getLiteralValuesDir(allocator) catch return null;
+        defer allocator.free(dir);
+        const path = computeCacheFilePathIn(allocator, placement, dir) catch return null;
+        defer allocator.free(path);
+        if (!self.roc_ctx.fileExists(path)) return null;
+        return self.roc_ctx.readFile(path, allocator) catch null;
+    }
+
     /// Load a checked entry without counting it as a cache lookup: reading a
     /// module's previous entry for value reuse is not a probe of its key.
     pub fn loadCheckedEntryUncounted(self: *Self, cache_key: [32]u8) ?CacheModule.CacheData {

@@ -52,11 +52,38 @@ pub const Inputs = struct {
 
 const domain = "roc.compile_time_value_identity.v1";
 
-/// Compute every root's identity, in root order.
-pub fn compute(allocator: Allocator, inputs: Inputs) Allocator.Error![]CompileTimeRootIdentity {
+/// The definition identity of a definition the module exports, by the
+/// digest of its name.
+pub const ExportIdentity = extern struct {
+    name: [32]u8,
+    value: [32]u8,
+};
+
+/// A module's value identities: its value context, the identities of its
+/// exports, the platform requirements its methods reach, and every root's
+/// identity.
+pub const ModuleIdentities = struct {
+    /// Digest of everything outside its plain definitions that dispatch on
+    /// its types can select or depend on: the module context and the type
+    /// world. A per-program literal root's value identity names a module no
+    /// other module imports by this digest (design.md "Compile-Time Value
+    /// Reuse Across Edits").
+    context: [32]u8,
+    /// Every exported definition's identity, sorted by name digest. Owned.
+    exports: []ExportIdentity,
+    /// The digests of the names of the platform requirements code reachable
+    /// from the module's methods looks up, sorted. Owned.
+    method_requires: [][32]u8,
+    /// The same for the module's exported definitions. Owned.
+    export_requires: [][32]u8,
+    /// Every root's identity, in root order. Owned.
+    roots: []CompileTimeRootIdentity,
+};
+
+/// Compute the module's value context and every root's identity.
+pub fn compute(allocator: Allocator, inputs: Inputs) Allocator.Error!ModuleIdentities {
     const identities = try allocator.alloc(CompileTimeRootIdentity, inputs.roots.len);
     errdefer allocator.free(identities);
-    if (inputs.roots.len == 0) return identities;
 
     var state = try State.init(allocator, inputs);
     defer state.deinit();
@@ -64,13 +91,40 @@ pub fn compute(allocator: Allocator, inputs: Inputs) Allocator.Error![]CompileTi
     try state.mapExpressionOwners();
     const context = state.moduleContext();
     const type_world = try state.typeWorld();
+    const value_context = valueContext(context, type_world);
+    const exports = try state.exportIdentities();
+    errdefer allocator.free(exports);
+    const method_requires = try state.methodRequires();
+    errdefer allocator.free(method_requires);
+    const export_requires = try state.exportRequires();
+    errdefer allocator.free(export_requires);
 
     var ordinals = std.AutoHashMapUnmanaged([32]u8, u32).empty;
     defer ordinals.deinit(allocator);
     for (inputs.roots, identities) |root, *identity| {
         identity.* = try state.rootIdentity(root, context, type_world, &ordinals);
     }
-    return identities;
+    return .{
+        .context = value_context,
+        .exports = exports,
+        .method_requires = method_requires,
+        .export_requires = export_requires,
+        .roots = identities,
+    };
+}
+
+fn valueContext(context: [32]u8, type_world: [32]u8) [32]u8 {
+    var hasher = Sha256.init(.{});
+    hashTag(&hasher, domain);
+    hashTag(&hasher, "value-context");
+    hasher.update(&context);
+    hasher.update(&type_world);
+    return hasher.finalResult();
+}
+
+/// The digest naming a definition or platform requirement called `name`.
+pub fn nameDigest(name: []const u8) [32]u8 {
+    return digestBytes("name", name);
 }
 
 const Owner = union(enum) {
@@ -205,9 +259,10 @@ const State = struct {
             base.invariant("compile-time value identity asked for a definition outside the module's definitions", .{});
     }
 
-    /// A method's identity. A method the module's definition graph does not
-    /// contain (a compiler-created method binding) has no component; its own
-    /// contribution and the definitions its body names identify it.
+    /// A method's or exported definition's identity. A definition the
+    /// module's definition graph does not contain (a compiler-created method
+    /// binding) has no component; its own contribution and the definitions
+    /// its body names identify it.
     fn methodIdentity(self: *State, def_idx: CIR.Def.Idx) Allocator.Error![32]u8 {
         if (self.definition.get(def_idx)) |identity| return identity;
         var hasher = Sha256.init(.{});
@@ -287,12 +342,11 @@ const State = struct {
         hasher.update(&key.compiler_artifact_hash);
         hasher.update(&key.checking_context_identity_hash);
         hasher.update(&key.direct_import_artifact_keys_hash);
+        // A type module's main type is named after the module, so the name
+        // covers it; a type module whose declaration is missing names no
+        // main type at all.
         hashBytes(&hasher, env.module_name);
         hashBytes(&hasher, @tagName(env.module_kind));
-        switch (env.module_kind) {
-            .type_module => |ident| hashBytes(&hasher, env.getIdent(ident)),
-            .default_app, .app, .package, .platform, .hosted, .module, .malformed => {},
-        }
         const deps = env.file_dependencies.items.items;
         hashU32(&hasher, @intCast(deps.len));
         for (deps) |dep| {
@@ -353,6 +407,77 @@ const State = struct {
         hashDigests(&hasher, texts.items);
         hashDigests(&hasher, methods.items);
         return hasher.finalResult();
+    }
+
+    /// The identity of every definition the module exports, sorted by name.
+    fn exportIdentities(self: *State) Allocator.Error![]ExportIdentity {
+        const env = self.inputs.env;
+        const defs = env.store.sliceDefs(env.exports);
+        const exports = try self.allocator.alloc(ExportIdentity, defs.len);
+        errdefer self.allocator.free(exports);
+        for (defs, exports) |def_idx, *entry| entry.* = .{ .name = nameDigest(self.defName(def_idx)), .value = try self.methodIdentity(def_idx) };
+        std.mem.sort(ExportIdentity, exports, {}, struct {
+            fn lessThan(_: void, a: ExportIdentity, b: ExportIdentity) bool {
+                return std.mem.order(u8, &a.name, &b.name) == .lt;
+            }
+        }.lessThan);
+        return exports;
+    }
+
+    /// The platform requirements the code of `starts`, and of every
+    /// definition that code names, looks up, by sorted name digest.
+    fn requiresReachedFrom(self: *State, starts: []const CIR.Def.Idx) Allocator.Error![][32]u8 {
+        const env = self.inputs.env;
+        var names = std.AutoArrayHashMapUnmanaged([32]u8, void).empty;
+        defer names.deinit(self.allocator);
+        const requires = env.requires_types.items.items;
+        if (requires.len == 0) return try self.allocator.alloc([32]u8, 0);
+        var visited = collections.DenseMap(CIR.Def.Idx, void).init(self.allocator);
+        defer visited.deinit();
+        var pending = std.ArrayList(CIR.Def.Idx).empty;
+        defer pending.deinit(self.allocator);
+        try pending.appendSlice(self.allocator, starts);
+        var exprs = std.ArrayList(CIR.Expr.Idx).empty;
+        defer exprs.deinit(self.allocator);
+        while (pending.pop()) |def_idx| {
+            const seen = try visited.getOrPut(def_idx);
+            if (seen.found_existing) continue;
+            const body = env.store.getDef(def_idx).expr;
+            exprs.clearRetainingCapacity();
+            try exprs.append(self.allocator, body);
+            while (exprs.pop()) |expr| {
+                const data = env.store.getExpr(expr);
+                if (data == .e_lookup_required) {
+                    const ident = requires[data.e_lookup_required.requires_idx.toU32()].ident;
+                    try names.put(self.allocator, nameDigest(env.getIdent(ident)), {});
+                }
+                try appendExprChildren(env, expr, &exprs, self.allocator);
+            }
+            self.refs.clearRetainingCapacity();
+            try DependencyGraph.collectNameReferences(env, &self.pattern_to_def, body, &self.refs, &self.expr_stack, &self.seen_defaults, self.allocator);
+            var it = self.refs.keyIterator();
+            while (it.next()) |referenced| try pending.append(self.allocator, referenced.*);
+        }
+        const result = try self.allocator.dupe([32]u8, names.keys());
+        sortDigests(result);
+        return result;
+    }
+
+    /// The platform requirements the module's methods reach: dispatch on its
+    /// types can run them from any module.
+    fn methodRequires(self: *State) Allocator.Error![][32]u8 {
+        const env = self.inputs.env;
+        var starts = std.ArrayList(CIR.Def.Idx).empty;
+        defer starts.deinit(self.allocator);
+        for (env.method_defs.entries.items) |entry| try starts.append(self.allocator, entry.value.def_idx);
+        return self.requiresReachedFrom(starts.items);
+    }
+
+    /// The platform requirements the module's exported definitions reach:
+    /// a module importing this one can run them.
+    fn exportRequires(self: *State) Allocator.Error![][32]u8 {
+        const env = self.inputs.env;
+        return self.requiresReachedFrom(env.store.sliceDefs(env.exports));
     }
 
     fn defName(self: *const State, def_idx: CIR.Def.Idx) []const u8 {

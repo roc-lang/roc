@@ -242,6 +242,25 @@ pub const CtfeReuseStats = struct {
     pending_roots: u32 = 0,
     /// Roots copied from those entries instead of evaluated.
     transplanted_roots: u32 = 0,
+    /// Per-program literal roots evaluated, other than the verifiers of
+    /// restored ones.
+    literal_roots: u32 = 0,
+    /// Literal roots that restored a value the program root module's
+    /// literal values file held.
+    restored_literals: u32 = 0,
+    /// Restored literal roots whose conversion ran and matched.
+    verified_literals: u32 = 0,
+    /// Literal values written to the program root module's file.
+    stored_literals: u32 = 0,
+};
+
+/// The literal values of one program (design.md "Compile-Time Value Reuse
+/// Across Edits").
+const ProgramLiteralValues = struct {
+    placement: [32]u8,
+    /// The program's top modules' names, joined by `+`. Owned.
+    module_name: []const u8,
+    values: *eval.LiteralValues.LiteralValues,
 };
 
 /// A transplant a compiler with runtime safety verifies after finalization,
@@ -1353,6 +1372,9 @@ pub const Coordinator = struct {
     /// safety verify; a test turns it off to exercise the installation an
     /// optimized compiler performs.
     verify_transplants: bool = std.debug.runtime_safety,
+    /// The literal values of each program root module this compilation
+    /// evaluated a program for.
+    program_literal_values: std.ArrayList(ProgramLiteralValues) = .empty,
 
     /// Cross-package dependents: when module (pkg, id) completes, notify these modules
     /// Key is "pkg_name:module_id", value is list of dependent ModuleRefs
@@ -1552,6 +1574,12 @@ pub const Coordinator = struct {
 
         if (self.program_session) |*session| session.deinit();
         self.program_session = null;
+        for (self.program_literal_values.items) |entry| {
+            entry.values.deinit();
+            self.gpa.destroy(entry.values);
+            self.gpa.free(entry.module_name);
+        }
+        self.program_literal_values.deinit(self.gpa);
 
         // Free packages
         // Note: ModuleEnv stores its own allocator (env.gpa), so deinit will use the correct
@@ -2949,17 +2977,25 @@ pub const Coordinator = struct {
         var unfinalized = UnfinalizedReportDestinations{ .coordinator = self, .program_root = root.key };
         defer unfinalized.deinit();
         options.unfinalized_reports = .{ .context = &unfinalized, .module = UnfinalizedReportDestinations.module };
+        const lowering_set: lir.CheckedPipeline.CheckedModuleSet = .{ .root = CheckedArtifact.loweringViewWithRelations(root, relations), .imports = imports.items };
+        const literal_values = try self.programLiteralValues(lowering_set);
+        if (literal_values) |entry| {
+            options.literal_values = entry.values;
+            options.verify_literal_values = self.verify_transplants;
+        }
+        const literal_records_before = if (literal_values) |entry| entry.values.records.items.len else 0;
         std.debug.assert(self.program_session == null);
         self.program_session = try eval.CompileTimeFinalization.finalizeProgram(
             self.gpa,
             ordered_modules.items,
-            .{ .root = CheckedArtifact.loweringViewWithRelations(root, relations), .imports = imports.items },
+            lowering_set,
             program_roots,
             runtime_roots,
             runtime_target,
             options,
         );
         for (transplants.items) |*pending| try eval.CompileTimeReuse.verifyAndInstall(pending.module, &pending.previous, &pending.transplant);
+        if (literal_values) |entry| try self.storeProgramLiteralValues(entry, literal_records_before);
         for (entries.items) |entry| try self.commitPreparedModule(entry.pkg, entry.mod);
         try unfinalized.commit();
     }
@@ -3018,6 +3054,117 @@ pub const Coordinator = struct {
             return;
         }
         try eval.CompileTimeReuse.install(artifact, &previous, &transplant);
+    }
+
+    /// The literal values of the program `lowering` names, loaded from the
+    /// file filed under its placement the first time a program with that
+    /// placement is evaluated. The placement combines the placements of the
+    /// program's top modules (those no other module of it imports), which
+    /// stay the same across edits. Null without an enabled cache, or when a
+    /// top module belongs to no package.
+    fn programLiteralValues(self: *Coordinator, lowering: lir.CheckedPipeline.CheckedModuleSet) CoordinatorError!?ProgramLiteralValues {
+        const manager = self.cache_manager orelse return null;
+        if (!manager.config.enabled) return null;
+        var top = try eval.CompileTimeFinalization.literalTopModules(self.gpa, lowering);
+        defer top.deinit(self.gpa);
+        const Found = struct { placement: [32]u8, name: []const u8 };
+        var found = std.ArrayList(Found).empty;
+        defer found.deinit(self.gpa);
+        for (top.keys()) |key| {
+            const located = located: {
+                var packages = self.packages.iterator();
+                while (packages.next()) |package| {
+                    for (package.value_ptr.*.modules.items) |*mod| {
+                        const artifact = mod.checkedArtifact() orelse continue;
+                        if (std.mem.eql(u8, &artifact.key.bytes, &key) or std.mem.eql(u8, &artifact.codeGenerationKey().bytes, &key))
+                            break :located Found{ .placement = checkedPlacement(package.value_ptr.*, mod), .name = mod.qualified_name };
+                    }
+                }
+                return null;
+            };
+            try found.append(self.gpa, located);
+        }
+        if (found.items.len == 0) return null;
+        std.mem.sort(Found, found.items, {}, struct {
+            fn lessThan(_: void, a: Found, b: Found) bool {
+                return std.mem.order(u8, &a.placement, &b.placement) == .lt;
+            }
+        }.lessThan);
+        var hasher = base.Sha256.init(.{});
+        hasher.update("roc-literal-values-placement\x00");
+        for (found.items) |item| hasher.update(&item.placement);
+        const placement = hasher.finalResult();
+        for (self.program_literal_values.items) |entry| {
+            if (std.mem.eql(u8, &entry.placement, &placement)) return entry;
+        }
+        var name = std.ArrayList(u8).empty;
+        defer name.deinit(self.gpa);
+        for (found.items, 0..) |item, index| {
+            if (index != 0) try name.append(self.gpa, '+');
+            try name.appendSlice(self.gpa, item.name);
+        }
+        const values = try self.gpa.create(eval.LiteralValues.LiteralValues);
+        errdefer self.gpa.destroy(values);
+        values.* = eval.LiteralValues.LiteralValues.init(self.gpa, cache_versioning.entryVersionHash(.literal_values));
+        errdefer values.deinit();
+        if (manager.loadLiteralValues(placement)) |bytes| {
+            defer manager.allocator.free(bytes);
+            try values.load(bytes);
+        }
+        const module_name = try name.toOwnedSlice(self.gpa);
+        errdefer self.gpa.free(module_name);
+        const entry: ProgramLiteralValues = .{ .placement = placement, .module_name = module_name, .values = values };
+        try self.program_literal_values.append(self.gpa, entry);
+        return entry;
+    }
+
+    /// Write the program root module's literal values file, count what the
+    /// finalization did with its literal roots, and trace it.
+    fn storeProgramLiteralValues(self: *Coordinator, entry: ProgramLiteralValues, records_before: usize) CoordinatorError!void {
+        const records = entry.values.records.items[records_before..];
+        var restored: u32 = 0;
+        var verified: u32 = 0;
+        var stored: u32 = 0;
+        for (records) |record| {
+            if (record.outcome == .restored) restored += 1;
+            if (record.verified) verified += 1;
+            if (record.stored) stored += 1;
+        }
+        self.ctfe_reuse_stats.literal_roots += @intCast(records.len);
+        self.ctfe_reuse_stats.restored_literals += restored;
+        self.ctfe_reuse_stats.verified_literals += verified;
+        self.ctfe_reuse_stats.stored_literals += stored;
+        if (eval.CompileTimeReuse.traceEnabled()) self.traceLiteralValues(entry.module_name, records, restored, verified, stored);
+        const manager = self.cache_manager orelse return;
+        const bytes = try entry.values.encode(self.gpa);
+        defer self.gpa.free(bytes);
+        manager.storeLiteralValues(entry.placement, bytes);
+    }
+
+    /// `ROC_CTFE_REUSE_TRACE`: one line per program evaluated, and one per
+    /// literal root.
+    fn traceLiteralValues(self: *Coordinator, module_name: []const u8, records: []const eval.LiteralValues.Record, restored: u32, verified: u32, stored: u32) void {
+        var out = std.Io.Writer.Allocating.init(self.gpa);
+        defer out.deinit();
+        const writer = &out.writer;
+        writer.print("ctfe-reuse literals {s}: {d} of {d} literal roots restored, {d} verified, {d} stored\n", .{
+            module_name,
+            restored,
+            records.len,
+            verified,
+            stored,
+        }) catch return;
+        for (records) |record| {
+            const text = record.text[0..@min(record.text.len, 72)];
+            writer.print("ctfe-reuse literals {s}:   {s}{s}{s} {s}\n", .{
+                module_name,
+                @tagName(record.outcome),
+                if (record.verified) " verified" else "",
+                if (record.stored) " stored" else "",
+                text,
+            }) catch return;
+        }
+        self.roc_ctx.writeStderr(out.written()) catch {};
     }
 
     /// `ROC_CTFE_REUSE_TRACE`: one line per module that found its previous
@@ -7310,8 +7457,12 @@ const ReuseRun = struct {
     /// The app module's stored `I64` constants, by name, as evaluated or
     /// transplanted.
     values: []?i64,
+    /// What each per-program literal root did, with its source owned.
+    literals: []eval.LiteralValues.Record,
 
     fn deinit(self: *ReuseRun, allocator: Allocator) void {
+        for (self.literals) |literal| allocator.free(literal.text);
+        allocator.free(self.literals);
         for (self.names) |name| allocator.free(name);
         allocator.free(self.names);
         allocator.free(self.identities);
@@ -7334,6 +7485,18 @@ const ReuseRun = struct {
     fn value(self: *const ReuseRun, name: []const u8) ?i64 {
         return self.values[self.index(name)];
     }
+
+    /// The literal root whose source is `text`.
+    fn literalRoot(self: *const ReuseRun, text: []const u8) eval.LiteralValues.Record {
+        for (self.literals) |candidate| {
+            if (std.mem.eql(u8, candidate.text, text)) return candidate;
+        }
+        std.debug.panic("no literal root {s}", .{text});
+    }
+
+    fn literalIdentity(self: *const ReuseRun, text: []const u8) [32]u8 {
+        return self.literalRoot(text).identity orelse std.debug.panic("literal root {s} has no value identity", .{text});
+    }
 };
 
 fn compileForReuse(allocator: Allocator, cache_dir: []const u8, app_path: []const u8) CheckedModuleCacheRunError!ReuseRun {
@@ -7341,6 +7504,12 @@ fn compileForReuse(allocator: Allocator, cache_dir: []const u8, app_path: []cons
 }
 
 fn compileForReuseVerifying(allocator: Allocator, cache_dir: []const u8, app_path: []const u8, verify: bool) CheckedModuleCacheRunError!ReuseRun {
+    return compileForReuseWith(allocator, cache_dir, app_path, verify, null);
+}
+
+/// Compile the app, and, given a runtime target, build its runtime program
+/// from the evaluation's specialization.
+fn compileForReuseWith(allocator: Allocator, cache_dir: []const u8, app_path: []const u8, verify: bool, runtime: ?lir.CheckedPipeline.TargetConfig) CheckedModuleCacheRunError!ReuseRun {
     var stderr_capture: StderrCapture = .{ .allocator = allocator };
     defer stderr_capture.bytes.deinit(allocator);
     var roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io);
@@ -7366,8 +7535,18 @@ fn compileForReuseVerifying(allocator: Allocator, cache_dir: []const u8, app_pat
     try coord.discoverAppFromPath(arena_impl.allocator(), .{ .entry_path = app_path });
     try coord.coordinatorLoop();
     try std.testing.expect(!coord.hasUserErrors());
+    if (runtime) |target| coord.runtime_lowering = .{ .target = target };
     try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
+    if (runtime) |target| {
+        const session = &coord.program_session.?;
+        var lowered = session.takeRuntime(allocator, session.runtime_roots, target) catch |err| switch (err) {
+            error.HostedFunctionNotBound => return error.TestUnexpectedResult,
+            else => |other| return other,
+        };
+        defer lowered.deinit();
+        if (session.runtime_roots.requests.len != lowered.lir_result.root_procs.items.len) return error.TestUnexpectedResult;
+    }
 
     const app = coord.appRootCheckedArtifact();
     const env = app.moduleEnvConst();
@@ -7397,6 +7576,21 @@ fn compileForReuseVerifying(allocator: Allocator, cache_dir: []const u8, app_pat
         }
         try values.append(allocator, stored);
     }
+    var literals = std.ArrayList(eval.LiteralValues.Record).empty;
+    errdefer {
+        for (literals.items) |literal| allocator.free(literal.text);
+        literals.deinit(allocator);
+    }
+    for (coord.program_literal_values.items) |entry| {
+        for (entry.values.records.items) |record| {
+            var copy = record;
+            copy.text = try allocator.dupe(u8, record.text);
+            literals.append(allocator, copy) catch |err| {
+                allocator.free(copy.text);
+                return err;
+            };
+        }
+    }
     const stderr = try stderr_capture.bytes.toOwnedSlice(allocator);
     errdefer allocator.free(stderr);
     return .{
@@ -7405,6 +7599,7 @@ fn compileForReuseVerifying(allocator: Allocator, cache_dir: []const u8, app_pat
         .names = try names.toOwnedSlice(allocator),
         .identities = try identities.toOwnedSlice(allocator),
         .values = try values.toOwnedSlice(allocator),
+        .literals = try literals.toOwnedSlice(allocator),
     };
 }
 
@@ -7587,6 +7782,299 @@ test "compile-time values installed before evaluation read, store and replay lik
     defer verified.deinit(allocator);
     try std.testing.expectEqual(verified.stats.pending_roots - 1, verified.stats.transplanted_roots);
     try std.testing.expectEqualStrings(first.stderr, verified.stderr);
+}
+
+const literal_reuse_platform =
+    \\platform ""
+    \\    requires {} { answer : I64 -> I64 }
+    \\    exposes []
+    \\    packages {}
+    \\    provides { "roc_entry": entry }
+    \\entry : {} -> I64
+    \\entry = |_| answer(0)
+;
+
+/// A module whose literal type converts through a method of its phantom
+/// type parameter, as roc-pg's `Sql(schema, params, row)` does.
+const literal_reuse_lit =
+    \\Lit(schema) := { text : Str }.{
+    \\    from_quote : Str -> Try(Lit(schema), [BadQuotedBytes(Str)])
+    \\        where [schema.tail : {} -> Str]
+    \\    from_quote = |text| {
+    \\        Schema : schema
+    \\        Ok({ text: Str.concat(text, Schema.tail({})) })
+    \\    }
+    \\    size : Lit(schema) -> I64
+    \\    size = |lit| Str.count_utf8_bytes(lit.text).to_i64_wrap()
+    \\}
+    \\
+;
+
+/// A literal type whose conversion makes an observation, so its values are
+/// never stored.
+const literal_reuse_loud =
+    \\Loud := { text : Str }.{
+    \\    from_quote : Str -> Try(Loud, [BadQuotedBytes(Str)])
+    \\    from_quote = |text| {
+    \\        dbg text
+    \\        Ok({ text: text })
+    \\    }
+    \\    size : Loud -> I64
+    \\    size = |loud| Str.count_utf8_bytes(loud.text).to_i64_wrap()
+    \\}
+    \\
+;
+
+/// An app whose runtime code converts three custom literals per program:
+/// each generic function's literal is converted at the type its caller
+/// gives it, so each is a literal root of the program rather than of a
+/// checked module. Every call depends on `answer`'s argument, so no call is
+/// a hoisted constant whose stored value would stand for the literals. `Lit(Schema)`'s conversion reaches an app method that
+/// reads a compile-time root.
+const literal_reuse_app =
+    \\app [answer] { pf: platform "./platform.roc" }
+    \\
+    \\import Lit
+    \\import Loud
+    \\
+    \\suffix = "!"
+    \\unrelated = 7.I64
+    \\
+    \\Schema := [].{
+    \\    tail : {} -> Str
+    \\    tail = |{}| suffix
+    \\}
+    \\
+    \\Other := [].{
+    \\    tail : {} -> Str
+    \\    tail = |{}| "?"
+    \\}
+    \\
+    \\first : I64 -> a where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]
+    \\first = |_| "alpha"
+    \\
+    \\second : I64 -> a where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]
+    \\second = |_| "beta"
+    \\
+    \\third : I64 -> a where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]
+    \\third = |_| "gamma"
+    \\
+    \\answer = |n| {
+    \\    w1 : Lit(Schema)
+    \\    w1 = first(n)
+    \\    w2 : Lit(Schema)
+    \\    w2 = second(n)
+    \\    loud : Loud
+    \\    loud = third(n)
+    \\    w1.size() + w2.size() + loud.size() + n
+    \\}
+    \\
+    \\total = answer(0)
+    \\
+;
+
+fn writeLiteralReuseFixture(tmp: *std.testing.TmpDir, app: []const u8) (std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError)!void {
+    try tmp.dir.createDirPath(std.testing.io, "cache");
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "platform.roc", .data = literal_reuse_platform });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Lit.roc", .data = literal_reuse_lit });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Loud.roc", .data = literal_reuse_loud });
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = app });
+}
+
+test "a literal root's value identity changes exactly with what decides its value" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try writeLiteralReuseFixture(&tmp, literal_reuse_app);
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+    const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+    defer allocator.free(app);
+
+    var original = try compileForReuse(allocator, cache, app);
+    defer original.deinit(allocator);
+    try std.testing.expect(original.literalRoot("\"alpha\"").stored);
+    // The observing conversion still has a value identity; it is never
+    // stored.
+    try std.testing.expect(!original.literalRoot("\"gamma\"").stored);
+
+    const Edit = struct {
+        file: []const u8 = "app.roc",
+        from: []const u8,
+        to: []const u8,
+        /// Literal roots by their source before and after the edit.
+        changed: []const [2][]const u8,
+        unchanged: []const []const u8,
+    };
+    const edits = [_]Edit{
+        // An unrelated definition changes no literal root's identity.
+        .{ .from = "unrelated = 7.I64", .to = "unrelated = 8.I64", .changed = &.{}, .unchanged = &.{ "\"alpha\"", "\"beta\"", "\"gamma\"" } },
+        // Another literal changes only its own.
+        .{ .from = "\"beta\"", .to = "\"betb\"", .changed = &.{.{ "\"beta\"", "\"betb\"" }}, .unchanged = &.{ "\"alpha\"", "\"gamma\"" } },
+        // Its bytes change it.
+        .{ .from = "\"alpha\"", .to = "\"alphx\"", .changed = &.{.{ "\"alpha\"", "\"alphx\"" }}, .unchanged = &.{ "\"beta\"", "\"gamma\"" } },
+        // The type it is converted at changes it.
+        .{ .from = "w1 : Lit(Schema)", .to = "w1 : Lit(Other)", .changed = &.{.{ "\"alpha\"", "\"alpha\"" }}, .unchanged = &.{ "\"beta\"", "\"gamma\"" } },
+        // The code of its conversion changes it, as any edit of a module the
+        // program's top modules import changes every literal root's.
+        .{ .file = "Lit.roc", .from = "Str.concat(text, Schema.tail({}))", .to = "Str.concat(Schema.tail({}), text)", .changed = &.{ .{ "\"alpha\"", "\"alpha\"" }, .{ "\"beta\"", "\"beta\"" }, .{ "\"gamma\"", "\"gamma\"" } }, .unchanged = &.{} },
+        // The app method its conversion reaches changes it.
+        .{ .from = "tail = |{}| suffix", .to = "tail = |{}| Str.concat(suffix, \"\")", .changed = &.{ .{ "\"alpha\"", "\"alpha\"" }, .{ "\"beta\"", "\"beta\"" } }, .unchanged = &.{} },
+        // A root its conversion reads changes it.
+        .{ .from = "suffix = \"!\"", .to = "suffix = \"?\"", .changed = &.{ .{ "\"alpha\"", "\"alpha\"" }, .{ "\"beta\"", "\"beta\"" } }, .unchanged = &.{} },
+        // Comments change nothing.
+        .{ .from = "unrelated = 7.I64\n", .to = "unrelated = 7.I64\n# a comment\n", .changed = &.{}, .unchanged = &.{ "\"alpha\"", "\"beta\"", "\"gamma\"" } },
+    };
+    for (edits) |edit| {
+        const source = if (std.mem.eql(u8, edit.file, "Lit.roc")) literal_reuse_lit else literal_reuse_app;
+        const edited = try std.mem.replaceOwned(u8, allocator, source, edit.from, edit.to);
+        defer allocator.free(edited);
+        try std.testing.expect(!std.mem.eql(u8, edited, source));
+        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = edit.file, .data = edited });
+        var run = try compileForReuse(allocator, cache, app);
+        defer run.deinit(allocator);
+        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = edit.file, .data = source });
+        for (edit.changed) |pair| try std.testing.expect(!std.mem.eql(u8, &original.literalIdentity(pair[0]), &run.literalIdentity(pair[1])));
+        for (edit.unchanged) |text| try std.testing.expectEqualSlices(u8, &original.literalIdentity(text), &run.literalIdentity(text));
+    }
+}
+
+fn expectLiteralOutcome(run: *const ReuseRun, text: []const u8, outcome: eval.LiteralValues.Record.Outcome) !void {
+    try std.testing.expectEqual(outcome, run.literalRoot(text).outcome);
+}
+
+test "an edited program restores the literal values its edit leaves unchanged" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try writeLiteralReuseFixture(&tmp, literal_reuse_app);
+    try tmp.dir.createDirPath(std.testing.io, "cold");
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+    const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+    defer allocator.free(app);
+
+    var first = try compileForReuse(allocator, cache, app);
+    defer first.deinit(allocator);
+    try std.testing.expectEqual(@as(u32, 0), first.stats.restored_literals);
+    try std.testing.expectEqual(@as(u32, 2), first.stats.stored_literals);
+    // "alpha!" + "beta!" + "gamma"
+    try std.testing.expectEqual(@as(?i64, 16), first.value("total"));
+
+    // A comment changes the module's cache key and no literal's identity:
+    // both stored values are restored, and the compilation reports what a
+    // cold compilation of the edited source does.
+    const commented = literal_reuse_app ++ "# a trailing comment\n";
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = commented });
+    var warm = try compileForReuse(allocator, cache, app);
+    defer warm.deinit(allocator);
+    try std.testing.expectEqual(@as(u32, 2), warm.stats.restored_literals);
+    try std.testing.expectEqual(if (std.debug.runtime_safety) @as(u32, 2) else 0, warm.stats.verified_literals);
+    try expectLiteralOutcome(&warm, "\"alpha\"", .restored);
+    try expectLiteralOutcome(&warm, "\"beta\"", .restored);
+    try expectLiteralOutcome(&warm, "\"gamma\"", .converted);
+    const cold_cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cold", allocator);
+    defer allocator.free(cold_cache);
+    var cold = try compileForReuse(allocator, cold_cache, app);
+    defer cold.deinit(allocator);
+    try std.testing.expectEqual(@as(u32, 0), cold.stats.restored_literals);
+    try std.testing.expectEqualStrings(cold.stderr, warm.stderr);
+    try std.testing.expectEqual(cold.value("total"), warm.value("total"));
+
+    // Editing one literal converts exactly that one again.
+    const edited = try std.mem.replaceOwned(u8, allocator, commented, "\"beta\"", "\"betas\"");
+    defer allocator.free(edited);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = edited });
+    var partial = try compileForReuse(allocator, cache, app);
+    defer partial.deinit(allocator);
+    try std.testing.expectEqual(@as(u32, 1), partial.stats.restored_literals);
+    try expectLiteralOutcome(&partial, "\"alpha\"", .restored);
+    try expectLiteralOutcome(&partial, "\"betas\"", .converted);
+    try std.testing.expect(partial.literalRoot("\"betas\"").stored);
+    try std.testing.expectEqual(@as(?i64, 17), partial.value("total"));
+
+    // The file now holds only the current program's literals: going back
+    // to the first literals restores alpha and converts beta again. (A
+    // source an earlier compilation checked is a cache hit, which evaluates
+    // no literal root.)
+    const reverted = literal_reuse_app ++ "# another comment\n";
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = reverted });
+    var back = try compileForReuse(allocator, cache, app);
+    defer back.deinit(allocator);
+    try expectLiteralOutcome(&back, "\"alpha\"", .restored);
+    try expectLiteralOutcome(&back, "\"beta\"", .converted);
+    try std.testing.expectEqualStrings(first.stderr, back.stderr);
+    try std.testing.expectEqual(@as(?i64, 16), back.value("total"));
+}
+
+test "restored literal values read and replay like converted ones without verification" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try writeLiteralReuseFixture(&tmp, literal_reuse_app);
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+    const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+    defer allocator.free(app);
+
+    var first = try compileForReuseVerifying(allocator, cache, app, false);
+    defer first.deinit(allocator);
+    // A compiler without runtime safety restores without converting: the
+    // program reads the restored values and reports what converting does.
+    const edited = try std.mem.replaceOwned(u8, allocator, literal_reuse_app, "unrelated = 7.I64", "unrelated = 9.I64");
+    defer allocator.free(edited);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = edited });
+    var restored = try compileForReuseVerifying(allocator, cache, app, false);
+    defer restored.deinit(allocator);
+    try std.testing.expectEqual(@as(u32, 2), restored.stats.restored_literals);
+    try std.testing.expectEqual(@as(u32, 0), restored.stats.verified_literals);
+    try std.testing.expectEqualStrings(first.stderr, restored.stderr);
+    try std.testing.expectEqual(first.value("total"), restored.value("total"));
+
+    // The rewritten file is itself a complete one: a verifying compilation
+    // of a further edit agrees with every value it restores.
+    const further = try std.mem.replaceOwned(u8, allocator, literal_reuse_app, "unrelated = 7.I64", "unrelated = 10.I64");
+    defer allocator.free(further);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = further });
+    var verified = try compileForReuseVerifying(allocator, cache, app, true);
+    defer verified.deinit(allocator);
+    try std.testing.expectEqual(@as(u32, 2), verified.stats.restored_literals);
+    try std.testing.expectEqual(@as(u32, 2), verified.stats.verified_literals);
+    try std.testing.expectEqualStrings(first.stderr, verified.stderr);
+}
+
+test "a build restores the literal values an earlier build stored and runs the restored values" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try writeLiteralReuseFixture(&tmp, literal_reuse_app);
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+    const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+    defer allocator.free(app);
+    const target: lir.CheckedPipeline.TargetConfig = .{
+        .inline_mode = .wrappers,
+        .spec_constr_clone_inlining = .iterator_fusion,
+        .proc_debug_names = true,
+    };
+
+    var first = try compileForReuseWith(allocator, cache, app, std.debug.runtime_safety, target);
+    defer first.deinit(allocator);
+    try std.testing.expectEqual(@as(u32, 2), first.stats.stored_literals);
+    // A build demands only what its program reads, and the restored values
+    // demand the roots their conversions read, so it evaluates, reports and
+    // runs what the first build did.
+    for ([_]bool{ std.debug.runtime_safety, false }, 0..) |verify, index| {
+        const edited = try std.fmt.allocPrint(allocator, "{s}# edit {d}\n", .{ literal_reuse_app, index });
+        defer allocator.free(edited);
+        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = edited });
+        var warm = try compileForReuseWith(allocator, cache, app, verify, target);
+        defer warm.deinit(allocator);
+        try std.testing.expectEqual(@as(u32, 2), warm.stats.restored_literals);
+        try std.testing.expectEqual(if (verify) @as(u32, 2) else 0, warm.stats.verified_literals);
+        try std.testing.expectEqualStrings(first.stderr, warm.stderr);
+        try std.testing.expectEqual(first.value("total"), warm.value("total"));
+    }
 }
 
 test "issue 11389 pairing cache retains exported constants and debug observations" {

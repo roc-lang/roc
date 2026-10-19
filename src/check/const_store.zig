@@ -1526,6 +1526,54 @@ pub const ConstStore = struct {
         return true;
     }
 
+    /// Whether the value graph at `root` of a store read from outside the
+    /// running compiler is well formed and holds no function value: every
+    /// node, child, blob and name range it reaches is inside the store.
+    pub fn validValueGraph(self: *const ConstStore, root: ConstNodeId) Allocator.Error!bool {
+        var seen = std.AutoHashMap(u32, void).init(self.allocator);
+        defer seen.deinit();
+        var pending = std.ArrayList(u32).empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, @backingInt(root));
+        while (pending.pop()) |raw| {
+            if (raw >= self.values.items.len) return false;
+            const entry = try seen.getOrPut(raw);
+            if (entry.found_existing) continue;
+            switch (self.values.items[raw]) {
+                .pending, .fn_value => return false,
+                .zst, .scalar => {},
+                .str, .crash, .checked_error => |str| if (!self.validBlob(str)) return false,
+                .box => |payload| try pending.append(self.allocator, @backingInt(payload)),
+                .nominal => |nominal| try pending.append(self.allocator, @backingInt(nominal.backing)),
+                .list => |list| switch (list) {
+                    .nodes => |range| if (!try self.appendValidRange(&pending, range)) return false,
+                    .packed_bytes => |packed_list| if (!self.validBlob(packed_list.bytes)) return false,
+                    .empty => {},
+                },
+                .tuple, .record => |range| if (!try self.appendValidRange(&pending, range)) return false,
+                .tag => |tag| {
+                    if (@as(u64, tag.tag_name.start) + tag.tag_name.len > self.tag_name_pool.items.len) return false;
+                    if (!try self.appendValidRange(&pending, tag.payloads)) return false;
+                },
+            }
+        }
+        return true;
+    }
+
+    fn validBlob(self: *const ConstStore, blob: ConstBlob) bool {
+        const index = @backingInt(blob.data);
+        if (index >= self.blob_views.items.len) return false;
+        const view = self.blob_views.items[index];
+        if (@as(u64, view.start) + view.len > self.blob_backing.items.len) return false;
+        return @as(u64, blob.offset) + blob.len <= view.len;
+    }
+
+    fn appendValidRange(self: *const ConstStore, pending: *std.ArrayList(u32), range: ConstRange) Allocator.Error!bool {
+        if (@as(u64, range.start) + range.len > self.node_pool.items.len) return false;
+        for (self.nodeSlice(range)) |child| try pending.append(self.allocator, @backingInt(child));
+        return true;
+    }
+
     /// Structural equality of two value graphs: scalars bitwise, blob and tag
     /// bytes, children in order, and named types by declaring module. A named
     /// type's checked occurrence (`named_type.ty`) is provenance, not value

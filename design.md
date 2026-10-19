@@ -2467,7 +2467,9 @@ edit can affect. Reuse is a cache optimization with no observable effect. A
 reused value is the value evaluation computes, its root reads are the reads
 evaluation records, and its `dbg` observations are the observations
 evaluation makes, so a compilation reports, stores and runs exactly what it
-would without the previous entry.
+would without the previous entry. Per-program literal roots, which belong to
+no checked module, are reused the same way from a file their program keeps
+(below).
 
 **Value identity.** Each compile-time root carries a value identity
 (`CompileTimeRootIdentity.value`), a digest computed when the checked module
@@ -2581,9 +2583,76 @@ compiler writes. A root the compilation did not demand is installed from the
 copy directly. Optimized compilers perform no evaluation or comparison for a
 transplanted root.
 
+**Per-program literal roots.** A literal whose conversion depends on its
+instance is converted per program, as a literal root of the specialization
+that gives it a concrete type ("Demand-Driven Compile-Time Specialization"),
+so no checked module entry holds its value. The program keeps those values
+instead, in one literal values file filed in the `literals` cache family
+under the placements of the program's top modules, the modules of the
+lowering no other module of it imports (`eval/literal_values.zig`). Each entry
+holds a literal root's value identity, its value graph, and the compile-time
+roots its evaluation read, each named by its module (a top module by its
+value context, any other by its checked key), its site, and the value
+identity it had.
+
+A literal root's value identity is computed by Monotype when the root
+commits, from the committed program alone:
+
+- The program context: every top module's value context
+  (`CompileTimeRootIdentityTable.valueContext`: its module context and its
+  type world), the checked key of every other module of the lowering, and
+  the definition identity of every definition a top module exports for a
+  platform requirement that code reachable from a module's methods, or from
+  an imported module's exports, looks up (`method_requires`,
+  `export_requires`). A module that some module of the program imports is
+  named by its key, which that importer's value context covers too. A top
+  module's code is reached only through dispatch on its types, which its type
+  world covers with every method and what each names, and through the
+  platform requirements it provides, which the export identities cover.
+- The literal: its module (a top module by its value context, any other by
+  key and expression), its kind, and its source bytes.
+- Its type: the committed Monotype type of the literal's value, with a top
+  module's types named by their top-level declaration, whose source that
+  module's type world covers, and every other type by its declaring module and
+  declaration. A type holding a function or an erased value, or naming a top
+  module's type or field default that is not a top-level declaration, has no
+  value identity, and the literal root is never stored.
+
+When a literal root commits with a value identity that names an entry, and
+every root the entry read still has the value identity it had at its site,
+the root's definition becomes the restore expression of the stored value,
+under a definition identity naming that value, and records the entry's reads
+as restored reads, so the program demands what the conversion demanded. The
+root keeps its id and slot: its reads, and their representation evidence,
+call the restored definition, and evaluation runs it in place of the
+conversion. The conversion's specializations, already requested, lower in
+Monotype, but no root reaches them, so no later stage lowers, compiles or
+runs them.
+
+After evaluation, the file is rewritten with this compilation's literal roots:
+each restored root's entry carries over, and each converted root with a value
+identity is stored when it completed without a `dbg` or `expect` observation,
+its value graph names no type a top module declares (its stored named types
+would name a version of that module), and every root it read has a value
+identity naming everything that root depends on. A root of a platform module,
+which can read what the app provides for the platform's requirements, or of a
+platform/app composition has none. A failed literal root is never stored, so
+its next compilation converts and reports it again. A missing, swept,
+unreadable or version-mismatched file restores nothing.
+
+Compilers with runtime safety verify every restored literal root: the
+conversion stays the definition of a literal root of its own, a verifier,
+which evaluation runs beside the restored root; the verifier must complete
+without an observation, with a value graph equal to the stored one, having
+read exactly the roots the stored value read. The program reads the restored
+root, so a compiler with runtime safety exercises the restore an optimized
+compiler performs.
+
 `ROC_CTFE_REUSE_TRACE` (a developer diagnostic) prints, for each module that
 found a previous entry, how many roots were transplanted, and one line per
-transplanted root.
+transplanted root; and, for each program evaluated with a literal values file,
+how many literal roots were restored, verified and stored, and one line per
+literal root.
 
 ## Builtins Build Their Own Tag Unions
 

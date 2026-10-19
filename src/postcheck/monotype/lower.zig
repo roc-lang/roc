@@ -323,6 +323,16 @@ pub const Options = struct {
     /// whose completed value the specialization reads. The consumer that
     /// asks for this evaluates every literal root the program registers.
     literal_roots: bool = false,
+    /// With `literal_roots`, the literal values an earlier compilation of the
+    /// program stored: a literal root whose value identity names one restores
+    /// it instead of running its conversion (design.md "Compile-Time Value
+    /// Reuse Across Edits"). Literal roots carry value identities exactly
+    /// when this is set.
+    literal_values: ?Common.LiteralValueLookup = null,
+    /// With `literal_values`, keep each restored literal root's conversion as
+    /// a literal root of its own, which evaluation runs to verify the stored
+    /// value.
+    verify_literal_values: bool = false,
     /// Whether an interface request may replay a completed summary instead of
     /// expanding its callee's relations. A replay is a faithful stand-in for a
     /// fresh expansion, so this never changes the lowered program. Always on
@@ -354,9 +364,26 @@ pub const ComptimeDemand = struct {
     /// How many compile-time roots the program declared; `root_reads.len`
     /// of them became program roots.
     declared_root_count: usize = 0,
+    /// Each literal root of the program, by id: the checked roots its
+    /// definition reads, directly or through the code it reaches, its value
+    /// identity, and how the program evaluates it.
+    literals: []LiteralRootDemand = &.{},
+
+    pub const LiteralRootDemand = struct {
+        reads: Common.Span(EntryRoot),
+        /// Names the root's value across compilations; null when nothing
+        /// can name it (design.md "Compile-Time Value Reuse Across Edits").
+        identity: ?[32]u8,
+        reuse: Common.LiteralRootReuse,
+    };
 
     pub fn rootReads(self: *const ComptimeDemand, index: usize) []const EntryRoot {
         const span = self.root_reads[index];
+        return self.reads[span.start..][0..span.len];
+    }
+
+    pub fn literalReads(self: *const ComptimeDemand, id: Common.LiteralRootId) []const EntryRoot {
+        const span = self.literals[@backingInt(id)].reads;
         return self.reads[span.start..][0..span.len];
     }
 
@@ -364,6 +391,7 @@ pub const ComptimeDemand = struct {
         self.allocator.free(self.root_reads);
         self.allocator.free(self.reads);
         self.allocator.free(self.stored);
+        self.allocator.free(self.literals);
         self.* = .{ .allocator = self.allocator };
     }
 };
@@ -961,6 +989,18 @@ const DeclaredRoot = struct {
     validation: bool,
 };
 
+/// A program literal root's value identity and how the program evaluates it.
+const LiteralReuseRow = struct {
+    identity: ?[32]u8 = null,
+    reuse: Common.LiteralRootReuse = .converted,
+};
+
+/// A compile-time root's site within the module whose checked key it holds.
+const LiteralReadSite = struct {
+    module: [32]u8,
+    site: [32]u8,
+};
+
 /// A committed expression that stands for a compile-time root's value
 /// without reading it through a slot: it restores the value an earlier
 /// compilation stored, or, in a program that does not evaluate the root,
@@ -1528,6 +1568,7 @@ const ModuleViewData = struct {
     const_store: *const checked.ConstStore,
     interface_capabilities: *const checked.ModuleInterfaceCapabilities,
     compile_time_root_reads: *const checked.CompileTimeRootReadTable,
+    compile_time_root_identities: *const checked.CompileTimeRootIdentityTable,
 };
 
 const ConstNode = struct {
@@ -5056,6 +5097,28 @@ const Builder = struct {
     static_data_literals: bool,
     comptime_value_reads: bool,
     literal_roots: bool,
+    /// See `Options.literal_values`. Coordinator-only.
+    literal_values: ?Common.LiteralValueLookup = null,
+    verify_literal_values: bool = false,
+    /// Each program literal root's value identity and reuse, by id, for the
+    /// literal roots `settleLiteralRoots` has seen.
+    literal_reuse: std.ArrayList(LiteralReuseRow) = .empty,
+    /// The program's literal value context, once computed; see
+    /// `literalProgramContext`.
+    literal_program_context: ??[32]u8 = null,
+    /// See `literalTopModules`; outer null until computed.
+    literal_top_modules: ??std.AutoHashMapUnmanaged([32]u8, [32]u8) = null,
+    /// Top-level statements of each top module whose types a literal value
+    /// identity named, by module key.
+    literal_top_statements: std.AutoHashMapUnmanaged([32]u8, std.AutoHashMapUnmanaged(u32, void)) = .empty,
+    /// Compile-time roots by module and site, for the modules whose roots a
+    /// stored literal value's reads were looked up in.
+    literal_read_sites: std.AutoHashMapUnmanaged(LiteralReadSite, u32) = .empty,
+    literal_read_site_modules: std.AutoHashMapUnmanaged([32]u8, void) = .empty,
+    /// The view each restored literal value is read through: the literal
+    /// value store's const store, under a key naming it apart from every
+    /// module.
+    literal_store_view: ?*ModuleViewData = null,
     replay_interface_summaries: base.TestSwitch(true),
     declared_comptime_root_functions: DeclaredComptimeRootFunctions,
     borrowed_comptime_root_functions: ?*const DeclaredComptimeRootFunctions = null,
@@ -5349,6 +5412,8 @@ const Builder = struct {
             .static_data_literals = options.static_data_literals,
             .comptime_value_reads = options.comptime_value_reads,
             .literal_roots = options.literal_roots,
+            .literal_values = if (options.literal_roots) options.literal_values else null,
+            .verify_literal_values = options.verify_literal_values,
             .replay_interface_summaries = options.replay_interface_summaries,
             .declared_comptime_root_functions = DeclaredComptimeRootFunctions.init(allocator),
             .demand_driven_comptime_roots = options.demand_driven_comptime_roots,
@@ -5600,6 +5665,14 @@ const Builder = struct {
         self.cached_fn_reads.deinit(self.allocator);
         self.spec_key_aliases.deinit(self.allocator);
         self.comptime_demand.deinit(self.allocator);
+        self.literal_reuse.deinit(self.allocator);
+        if (self.literal_top_modules) |*known| if (known.*) |*map| map.deinit(self.allocator);
+        var top_statements = self.literal_top_statements.valueIterator();
+        while (top_statements.next()) |statements| statements.deinit(self.allocator);
+        self.literal_top_statements.deinit(self.allocator);
+        self.literal_read_sites.deinit(self.allocator);
+        self.literal_read_site_modules.deinit(self.allocator);
+        if (self.literal_store_view) |view| self.allocator.destroy(view);
         self.module_index.deinit();
         self.spec_job_task_buffers.deinit(self.allocator);
         self.unshared_summary_domains.deinit(self.allocator);
@@ -6259,6 +6332,7 @@ const Builder = struct {
     /// it from every consumer.
     fn orderComptimeRoots(self: *Builder) Allocator.Error!void {
         if (!self.comptime_value_reads) return;
+        try self.settleLiteralRoots();
         const state = &self.comptime_demand;
         const view = self.program.view();
         try state.index(self.allocator, self, view);
@@ -6296,11 +6370,436 @@ const Builder = struct {
             }
             if (self.parked_root_jobs.count() != 0) Common.invariant("parked compile-time root body belonged to no declared root");
         }
+        const literal_view = self.program.view();
+        const literals = try self.allocator.alloc(ComptimeDemand.LiteralRootDemand, literal_view.literal_roots.len);
+        output.literals = literals;
+        for (literal_view.literal_roots, literals, 0..) |root, *literal, index| {
+            const start = reads.items.len;
+            for (try state.rootReads(self.allocator, literal_view, ComptimeDemandState.defItem(root.def))) |read| try reads.append(self.allocator, state.roots.items[read]);
+            const row: LiteralReuseRow = if (index < self.literal_reuse.items.len) self.literal_reuse.items[index] else .{};
+            literal.* = .{
+                .reads = .{ .start = @intCast(start), .len = @intCast(reads.items.len - start) },
+                .identity = row.identity,
+                .reuse = row.reuse,
+            };
+        }
         output.root_reads = try root_reads.toOwnedSlice(self.allocator);
         output.reads = try reads.toOwnedSlice(self.allocator);
         output.stored = try state.storedRoots(self.allocator);
         output.declared_root_count = self.declared_roots.items.len;
         if (self.comptime_demand_out) |out| out.* = output else output.deinit();
+    }
+
+    /// Give every literal root committed since the last call its value
+    /// identity, and restore the value of each one the literal value store
+    /// holds whose reads still have the value identities they had, so the
+    /// program runs no conversion for it (design.md "Compile-Time Value
+    /// Reuse Across Edits"). The restored root's definition becomes the
+    /// value's restore expression, under an identity naming the stored value,
+    /// so every read of the root and its representation evidence call it.
+    /// With `verify_literal_values`, the conversion stays the definition of a
+    /// literal root of its own that evaluation compares with the stored value.
+    fn settleLiteralRoots(self: *Builder) Allocator.Error!void {
+        const store = self.literal_values orelse return;
+        var index = self.literal_reuse.items.len;
+        while (index < self.program.literal_roots.len()) : (index += 1) {
+            if (index < self.literal_reuse.items.len) continue;
+            const id: Common.LiteralRootId = @fromBackingInt(@intCast(index));
+            const identity = try self.literalValueIdentity(id);
+            try self.literal_reuse.append(self.allocator, .{ .identity = identity });
+            const known = identity orelse continue;
+            const hit = store.lookup(known) orelse continue;
+            if (!try self.literalValueReadsApply(hit.reads)) continue;
+            try self.restoreLiteralRoot(id, known, hit);
+        }
+    }
+
+    fn restoreLiteralRoot(self: *Builder, id: Common.LiteralRootId, identity: [32]u8, hit: Common.LiteralValueHit) Allocator.Error!void {
+        const root = self.program.literal_roots.get(@backingInt(id));
+        const conversion = self.program.getDef(root.def);
+        if (self.verify_literal_values) {
+            var kept = conversion;
+            kept.symbol = self.symbols.fresh();
+            const kept_def = try self.program.addDef(kept);
+            const verifier = try self.program.addLiteralRoot(.{ .def = kept_def, .module = root.module, .site = root.site });
+            if (@backingInt(verifier) != self.literal_reuse.items.len) Common.invariant("literal root verifier was not the next literal root");
+            try self.literal_reuse.append(self.allocator, .{ .identity = identity, .reuse = .{ .verifies = id } });
+        }
+        const destination = ProgramTypeDestination.begin(self);
+        defer destination.end();
+        const saved_graph = self.active_graph;
+        const saved_draft = self.active_body_draft;
+        self.active_graph = null;
+        self.active_body_draft = null;
+        defer {
+            self.active_graph = saved_graph;
+            self.active_body_draft = saved_draft;
+        }
+        const owner = self.moduleForId(root.module);
+        const body = try self.restoreConstNodeAtType(try self.literalStoreView(hit.store), owner, hit.root, conversion.ret);
+        for (hit.reads) |read| {
+            const current = self.literalValueReadRoot(read) orelse Common.invariant("an applied literal value read a root it no longer names");
+            try self.recordRestoredRootRead(body, current.module, current.root);
+        }
+        var restored = conversion;
+        restored.body = .{ .roc = body };
+        restored.root_identity = literalRestoreIdentity(identity);
+        self.program.setDef(root.def, restored);
+        self.literal_reuse.items[@backingInt(id)].reuse = .restored;
+    }
+
+    /// The view a stored literal value restores through: the literal value
+    /// store's const store under a key derived from it, so its blobs and
+    /// restore cache entries are named apart from every module's constants.
+    /// Restoring a value holding no function reads nothing else of a view.
+    fn literalStoreView(self: *Builder, store: *const check.ConstStore.ConstStore) Allocator.Error!ModuleView {
+        if (self.literal_store_view) |view| {
+            if (view.const_store != store) Common.invariant("one lowering restored literal values from two stores");
+            return view;
+        }
+        const view = try self.allocator.create(ModuleViewData);
+        view.* = self.rootModuleView().*;
+        view.const_store = store;
+        var hasher = TypeDigestHasher.init();
+        hasher.update("roc.monotype.literal-value-store.v1");
+        hasher.update(&view.key.bytes);
+        view.key = .{ .bytes = hasher.finalResult() };
+        view.code_generation_key = null;
+        self.literal_store_view = view;
+        return view;
+    }
+
+    /// The identity of a definition restoring the stored value of a literal
+    /// root whose value identity is `identity`.
+    fn literalRestoreIdentity(identity: [32]u8) names.TypeDigest {
+        var hasher = TypeDigestHasher.init();
+        hasher.update("roc.monotype.literal-value-restore.v1");
+        hasher.update(&identity);
+        return .{ .bytes = hasher.finalResult() };
+    }
+
+    /// Whether every root a stored literal value read is still named by its
+    /// site and still has the value identity it had.
+    fn literalValueReadsApply(self: *Builder, reads: []const Common.LiteralValueRead) Allocator.Error!bool {
+        for (reads) |read| {
+            const view = self.literalValueReadModule(read) orelse return false;
+            try self.indexLiteralReadSites(view);
+            if (self.literalValueReadRoot(read) == null) return false;
+        }
+        return true;
+    }
+
+    fn literalValueReadModule(self: *Builder, read: Common.LiteralValueRead) ?ModuleView {
+        if (!read.in_top_module) return self.moduleForKeyBytes(read.module);
+        const top = self.literal_top_modules.?.?;
+        var it = top.iterator();
+        while (it.next()) |entry| {
+            if (std.mem.eql(u8, entry.value_ptr, &read.module)) return self.moduleForKeyBytes(entry.key_ptr.*);
+        }
+        return null;
+    }
+
+    /// The current root a stored literal value's read names, once its
+    /// module's sites are indexed.
+    fn literalValueReadRoot(self: *Builder, read: Common.LiteralValueRead) ?EntryRoot {
+        const view = self.literalValueReadModule(read) orelse return null;
+        const raw = self.literal_read_sites.get(.{ .module = view.key.bytes, .site = read.site }) orelse return null;
+        const identity = view.compile_time_root_identities.rows[raw];
+        if (!std.mem.eql(u8, &identity.value, &read.value)) return null;
+        return .{ .module = view.key, .root = @fromBackingInt(raw) };
+    }
+
+    fn indexLiteralReadSites(self: *Builder, view: ModuleView) Allocator.Error!void {
+        const entry = try self.literal_read_site_modules.getOrPut(self.allocator, view.key.bytes);
+        if (entry.found_existing) return;
+        for (view.compile_time_root_identities.rows, 0..) |identity, raw| {
+            const site = try self.literal_read_sites.getOrPut(self.allocator, .{ .module = view.key.bytes, .site = identity.site });
+            if (!site.found_existing) site.value_ptr.* = @intCast(raw);
+        }
+    }
+
+    /// The modules of the lowering no other module of it imports, by key,
+    /// each with its value context. Their keys change with every edit of
+    /// their source, so literal value identities name them by value context;
+    /// every other module's key is named by an importer's value context too,
+    /// so its key names it. Null when a top module has no value context.
+    fn literalTopModules(self: *Builder) Allocator.Error!?*const std.AutoHashMapUnmanaged([32]u8, [32]u8) {
+        if (self.literal_top_modules) |*known| return if (known.*) |*map| map else null;
+        var imported = std.AutoHashMapUnmanaged([32]u8, void).empty;
+        defer imported.deinit(self.allocator);
+        for (self.root_view.direct_import_artifact_keys) |key| try imported.put(self.allocator, key.bytes, {});
+        for (self.modules.imports) |view| for (view.direct_import_artifact_keys) |key| try imported.put(self.allocator, key.bytes, {});
+        for (self.modules.root.relation_modules) |view| for (view.direct_import_artifact_keys) |key| try imported.put(self.allocator, key.bytes, {});
+        var top = std.AutoHashMapUnmanaged([32]u8, [32]u8).empty;
+        errdefer top.deinit(self.allocator);
+        for (self.moduleViews()) |*view| {
+            if (imported.contains(view.key.bytes)) continue;
+            const context = view.compile_time_root_identities.valueContext() orelse {
+                top.deinit(self.allocator);
+                self.literal_top_modules = @as(?std.AutoHashMapUnmanaged([32]u8, [32]u8), null);
+                return null;
+            };
+            try top.put(self.allocator, view.key.bytes, context);
+        }
+        self.literal_top_modules = top;
+        return &self.literal_top_modules.?.?;
+    }
+
+    /// Everything a per-program literal root's value can depend on beyond
+    /// the literal and its type: each module of the lowering, a top module
+    /// (`literalTopModules`) by its value context and every other module by
+    /// its checked key, and the identity of every definition a top module
+    /// exports for a platform requirement that code reachable from a
+    /// module's methods, or from an imported module's exports, looks up.
+    /// Null when a top module has no value context.
+    fn literalProgramContext(self: *Builder) Allocator.Error!?[32]u8 {
+        if (self.literal_program_context) |known| return known;
+        const top = (try self.literalTopModules()) orelse {
+            self.literal_program_context = @as(?[32]u8, null);
+            return null;
+        };
+        var names_list = std.ArrayList([33]u8).empty;
+        defer names_list.deinit(self.allocator);
+        for (self.program.view().lowering_modules) |module| {
+            var name: [33]u8 = undefined;
+            if (top.get(module.bytes)) |context| {
+                name[0] = 1;
+                name[1..].* = context;
+            } else {
+                name[0] = 0;
+                name[1..].* = module.bytes;
+            }
+            try names_list.append(self.allocator, name);
+        }
+        std.mem.sort([33]u8, names_list.items, {}, struct {
+            fn lessThan(_: void, a: [33]u8, b: [33]u8) bool {
+                return std.mem.order(u8, &a, &b) == .lt;
+            }
+        }.lessThan);
+        // Code reachable from a module's methods, or from an imported
+        // module's exports, can look up platform requirements, which run
+        // definitions a top module exports and no value context covers:
+        // those definitions' identities.
+        var required = std.ArrayList([64]u8).empty;
+        defer required.deinit(self.allocator);
+        for (self.moduleViews()) |*requirer| {
+            const identities = requirer.compile_time_root_identities;
+            const export_requires = if (top.contains(requirer.key.bytes)) &[_][32]u8{} else identities.export_requires;
+            for ([_][]const [32]u8{ identities.method_requires, export_requires }) |requirements| for (requirements) |name| {
+                var providers = top.keyIterator();
+                while (providers.next()) |provider_key| {
+                    const provider = self.moduleForKeyBytes(provider_key.*) orelse Common.invariant("a top module of the lowering had no view");
+                    for (provider.compile_time_root_identities.exports) |exported| {
+                        if (!std.mem.eql(u8, &exported.name, &name)) continue;
+                        var pair: [64]u8 = undefined;
+                        pair[0..32].* = exported.name;
+                        pair[32..].* = exported.value;
+                        try required.append(self.allocator, pair);
+                    }
+                }
+            };
+        }
+        std.mem.sort([64]u8, required.items, {}, struct {
+            fn lessThan(_: void, a: [64]u8, b: [64]u8) bool {
+                return std.mem.order(u8, &a, &b) == .lt;
+            }
+        }.lessThan);
+        var hasher = TypeDigestHasher.init();
+        hasher.update("roc.literal-value.program-context.v1");
+        hashU32(&hasher, @intCast(names_list.items.len));
+        for (names_list.items) |name| hasher.update(&name);
+        hashU32(&hasher, @intCast(required.items.len));
+        for (required.items) |pair| hasher.update(&pair);
+        const digest = hasher.finalResult();
+        self.literal_program_context = @as(?[32]u8, digest);
+        return digest;
+    }
+
+    /// The value identity of a literal root: the program context, the
+    /// literal's module (a top module by its value context, any other by key
+    /// and expression), its kind and source bytes, and its type. Null when
+    /// its type holds a function or names something no edit-stable identity
+    /// covers.
+    fn literalValueIdentity(self: *Builder, id: Common.LiteralRootId) Allocator.Error!?[32]u8 {
+        const context = (try self.literalProgramContext()) orelse return null;
+        const top = (try self.literalTopModules()).?;
+        const root = self.program.literal_roots.get(@backingInt(id));
+        const def = self.program.getDef(root.def);
+        const type_digest = (try self.literalTypeDigest(def.ret)) orelse return null;
+        const view = self.moduleForId(root.module);
+        const region = view.bodies.expr(@fromBackingInt(root.site.checked_expr)).source_region;
+        const text = view.module_env.getSourceAll()[region.start.offset..region.end.offset];
+        var hasher = TypeDigestHasher.init();
+        hasher.update("roc.literal-value.identity.v1");
+        hasher.update(&context);
+        if (top.get(root.module.bytes)) |module_context| {
+            hasher.update("top-module");
+            hasher.update(&module_context);
+        } else {
+            hasher.update("module");
+            hasher.update(&root.module.bytes);
+            hashU32(&hasher, root.site.checked_expr);
+        }
+        hasher.update(@tagName(root.site.kind));
+        hashU32(&hasher, @intCast(text.len));
+        hasher.update(text);
+        hasher.update(&type_digest);
+        return hasher.finalResult();
+    }
+
+    /// A digest of a literal root's type that every compilation of the
+    /// program with the same program context computes alike: the root
+    /// module's own types named by their top-level declaration, every other
+    /// type by its declaring module and declaration. Null for a type holding
+    /// a function or an erased value, or naming a root-module type or field
+    /// default that is not a top-level declaration.
+    fn literalTypeDigest(self: *Builder, root_ty: Type.TypeId) Allocator.Error!?[32]u8 {
+        const types = self.program.types.view();
+        const program_names = &self.program.names;
+        const top = (try self.literalTopModules()).?;
+        var visited = collections.DenseMap(Type.TypeId, u32).init(self.allocator);
+        defer visited.deinit();
+        var stack = std.ArrayList(Type.TypeId).empty;
+        defer stack.deinit(self.allocator);
+        var children = std.ArrayList(Type.TypeId).empty;
+        defer children.deinit(self.allocator);
+        var hasher = TypeDigestHasher.init();
+        hasher.update("roc.literal-value.type.v1");
+        try stack.append(self.allocator, root_ty);
+        var next_position: u32 = 0;
+        while (stack.pop()) |ty| {
+            if (visited.get(ty)) |position| {
+                hasher.update("seen");
+                hashU32(&hasher, position);
+                continue;
+            }
+            try visited.put(ty, next_position);
+            next_position += 1;
+            children.clearRetainingCapacity();
+            switch (types.get(ty)) {
+                .func, .erased => return null,
+                .zst => hasher.update("zst"),
+                .primitive => |primitive| {
+                    hasher.update("primitive");
+                    hasher.update(@tagName(primitive));
+                },
+                .list => |elem| {
+                    hasher.update("list");
+                    try children.append(self.allocator, elem);
+                },
+                .box => |payload| {
+                    hasher.update("box");
+                    try children.append(self.allocator, payload);
+                },
+                .tuple => |items| {
+                    hasher.update("tuple");
+                    try children.appendSlice(self.allocator, types.span(items));
+                },
+                .record => |fields| {
+                    hasher.update("record");
+                    for (types.fieldSpan(fields)) |field| {
+                        if (field.kind_state != .resolved) return null;
+                        const label = program_names.recordFieldLabelText(field.name);
+                        hashU32(&hasher, @intCast(label.len));
+                        hasher.update(label);
+                        if (field.default) |default| {
+                            const module = program_names.moduleIdentityBytes(default.module);
+                            const declaring = self.moduleForIdentityHash(module) orelse return null;
+                            if (top.contains(declaring.key.bytes)) return null;
+                            hasher.update("default");
+                            hasher.update(module);
+                            hashU32(&hasher, default.expr_node);
+                        }
+                        try children.append(self.allocator, field.ty);
+                        if (field.value_ty) |value_ty| {
+                            hasher.update("value-type");
+                            try children.append(self.allocator, value_ty);
+                        }
+                    }
+                },
+                .tag_union => |tags| {
+                    hasher.update("tag-union");
+                    for (types.tagSpan(tags)) |tag| {
+                        for ([_][]const u8{ program_names.tagLabelText(tag.name), program_names.tagLabelText(tag.checked_name) }) |label| {
+                            hashU32(&hasher, @intCast(label.len));
+                            hasher.update(label);
+                        }
+                        hashU32(&hasher, @intCast(types.span(tag.payloads).len));
+                        try children.appendSlice(self.allocator, types.span(tag.payloads));
+                    }
+                },
+                .named => |named| {
+                    hasher.update("named");
+                    const module = program_names.moduleIdentityBytes(named.def.module);
+                    const type_name = program_names.typeNameText(named.def.type_name);
+                    if (top.get(named.named_type.module.bytes)) |module_context| {
+                        const statement = named.def.source_decl orelse return null;
+                        const declaring = self.moduleForKeyBytes(named.named_type.module.bytes) orelse return null;
+                        const text = (try self.literalTopStatementText(declaring, statement)) orelse return null;
+                        hasher.update("top-module");
+                        hasher.update(&module_context);
+                        hashU32(&hasher, @intCast(text.len));
+                        hasher.update(text);
+                    } else {
+                        hasher.update(&named.named_type.module.bytes);
+                        hasher.update(module);
+                        hashU32(&hasher, named.def.source_decl orelse std.math.maxInt(u32));
+                    }
+                    hashU32(&hasher, @intCast(type_name.len));
+                    hasher.update(type_name);
+                    if (named.def.generated) |generated| {
+                        hasher.update("generated");
+                        hasher.update(&generated.bytes);
+                    }
+                    hasher.update(@tagName(named.def.iterator_representation));
+                    hasher.update(@tagName(named.def.iterator_kind));
+                    hashU32(&hasher, named.def.iterator_depth);
+                    hasher.update(@tagName(named.kind));
+                    if (named.builtin_owner) |owner| hasher.update(@tagName(owner));
+                    hashU32(&hasher, @intCast(types.span(named.args).len));
+                    try children.appendSlice(self.allocator, types.span(named.args));
+                    for (types.declaredFieldSpan(named.declared_order)) |declared| switch (declared) {
+                        .named => |label| {
+                            const text = program_names.recordFieldLabelText(label);
+                            hasher.update("declared");
+                            hashU32(&hasher, @intCast(text.len));
+                            hasher.update(text);
+                        },
+                        .padding => |padding| {
+                            hasher.update("padding");
+                            try children.append(self.allocator, padding);
+                        },
+                    };
+                    if (named.backing) |backing| {
+                        hasher.update("backing");
+                        hasher.update(@tagName(backing.use));
+                        hasher.update(@tagName(backing.authority));
+                        try children.append(self.allocator, backing.ty);
+                    }
+                },
+            }
+            hashU32(&hasher, @intCast(children.items.len));
+            var child_index = children.items.len;
+            while (child_index > 0) {
+                child_index -= 1;
+                try stack.append(self.allocator, children.items[child_index]);
+            }
+        }
+        return hasher.finalResult();
+    }
+
+    /// The source of a top-level statement of a top module, or null when
+    /// `statement` is not one.
+    fn literalTopStatementText(self: *Builder, view: ModuleView, statement: u32) Allocator.Error!?[]const u8 {
+        const env = view.module_env;
+        const entry = try self.literal_top_statements.getOrPut(self.allocator, view.key.bytes);
+        if (!entry.found_existing) {
+            entry.value_ptr.* = .empty;
+            for (env.store.sliceStatements(env.all_statements)) |idx| try entry.value_ptr.put(self.allocator, @backingInt(idx), {});
+        }
+        if (!entry.value_ptr.contains(statement)) return null;
+        const region = env.store.getStatementRegion(@fromBackingInt(statement));
+        return env.getSourceAll()[region.start.offset..region.end.offset];
     }
 
     /// Every key of a request a record served through its solved view, when
@@ -8762,6 +9261,7 @@ const Builder = struct {
     /// drain.
     fn advanceComptimeDemand(self: *Builder) Allocator.Error!bool {
         if (!self.demand_driven_comptime_roots) return false;
+        try self.settleLiteralRoots();
         const state = &self.comptime_demand;
         const view = self.program.view();
         try state.index(self.allocator, self, view);
@@ -14883,6 +15383,7 @@ const Builder = struct {
         verifyDraftTemplateSpecsResolved(body_draft);
         try self.finalizeDraftNestedSpecs(body_draft, body_ids);
         self.markDiscoveryFns(body_draft, commit_extent);
+        try self.settleLiteralRoots();
         var returned_ids = body_ids;
         returned_ids.fn_slots = &.{};
         returned_ids.def_ids = &.{};
@@ -14943,6 +15444,7 @@ const Builder = struct {
         verifyDraftTemplateSpecsResolved(body_draft);
         try self.finalizeDraftNestedSpecs(body_draft, body_ids);
         self.markDiscoveryFns(body_draft, commit_extent);
+        try self.settleLiteralRoots();
         var returned_ids = body_ids;
         returned_ids.fn_slots = &.{};
         returned_ids.def_ids = &.{};
@@ -67695,6 +68197,7 @@ fn moduleViewData(view: checked.ImportedModuleView) ModuleViewData {
         .const_store = view.const_store,
         .interface_capabilities = view.interface_capabilities,
         .compile_time_root_reads = view.compile_time_root_reads,
+        .compile_time_root_identities = view.compile_time_root_identities,
     };
 }
 

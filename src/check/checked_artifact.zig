@@ -33064,13 +33064,29 @@ pub const CompileTimeRootReadTable = struct {
 /// Value Reuse Across Edits").
 pub const CompileTimeRootIdentity = value_identity.CompileTimeRootIdentity;
 
-/// Every compile-time root's value identity and site, dense by root id,
-/// computed when the module is published. Empty for a module with no roots.
+/// Every compile-time root's value identity and site, dense by root id, and
+/// the module's value context, computed when the module is published.
 pub const CompileTimeRootIdentityTable = struct {
     rows: []const CompileTimeRootIdentity = &.{},
+    /// The module's value context (`value_identity.ModuleIdentities.context`):
+    /// one digest in every published module, none in a table that was never
+    /// computed.
+    context: []const [32]u8 = &.{},
+    /// The identities of the module's exported definitions, sorted by name.
+    exports: []const value_identity.ExportIdentity = &.{},
+    /// The platform requirements code reachable from its methods looks up,
+    /// by name digest.
+    method_requires: []const [32]u8 = &.{},
+    /// The platform requirements code reachable from its exported
+    /// definitions looks up, by name digest.
+    export_requires: []const [32]u8 = &.{},
 
     pub const Serialized = extern struct {
         rows: SerializedSlice(CompileTimeRootIdentity) = .{},
+        context: SerializedSlice([32]u8) = .{},
+        exports: SerializedSlice(value_identity.ExportIdentity) = .{},
+        method_requires: SerializedSlice([32]u8) = .{},
+        export_requires: SerializedSlice([32]u8) = .{},
         const Serde = artifact_serialize.SliceStoreSerde(CompileTimeRootIdentityTable, @This());
         pub const serialize = Serde.serialize;
         pub const deserialize = Serde.deserialize;
@@ -33078,6 +33094,12 @@ pub const CompileTimeRootIdentityTable = struct {
 
     pub fn validate(self: CompileTimeRootIdentityTable, root_count: usize) error{CorruptArtifact}!void {
         if (self.rows.len != 0 and self.rows.len != root_count) return error.CorruptArtifact;
+        if (self.context.len > 1) return error.CorruptArtifact;
+    }
+
+    /// The module's value context, when it was computed.
+    pub fn valueContext(self: CompileTimeRootIdentityTable) ?[32]u8 {
+        return if (self.context.len == 1) self.context[0] else null;
     }
 
     pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
@@ -33418,9 +33440,10 @@ pub const CheckedModuleArtifact = struct {
             // plans add one, and state merge plans one more. Promoted local
             // procedure templates and callable contract types add one each,
             // and the single-source-call template list one more. Nested procedure runtime captures add one. The
-            // compile-time root read table adds its rows and refs, and the
-            // root identity and portability columns one each.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 236);
+            // compile-time root read table adds its rows and refs, the root
+            // identity table its rows, value context, exports and method and
+            // export requirements, and the portability column one more.
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 240);
         }
 
         /// Every field but the inline POD `key` and `module_identity`: the
@@ -35392,6 +35415,7 @@ pub const ImportedModuleView = struct {
     interface_capabilities: *const ModuleInterfaceCapabilities,
     const_store: *const ConstStore,
     compile_time_root_reads: *const CompileTimeRootReadTable = &no_compile_time_root_reads,
+    compile_time_root_identities: *const CompileTimeRootIdentityTable = &no_compile_time_root_identities,
 
     /// The keys of the modules this module imports directly.
     pub fn directImportKeys(self: ImportedModuleView) []const CheckedModuleArtifactKey {
@@ -35400,6 +35424,7 @@ pub const ImportedModuleView = struct {
 };
 
 const no_compile_time_root_reads: CompileTimeRootReadTable = .{};
+const no_compile_time_root_identities: CompileTimeRootIdentityTable = .{};
 
 /// Public `LoweringModuleView` declaration.
 pub const LoweringModuleView = struct {
@@ -35448,6 +35473,7 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .interface_capabilities = &artifact.interface_capabilities,
         .const_store = &artifact.const_store,
         .compile_time_root_reads = &artifact.compile_time_root_reads,
+        .compile_time_root_identities = &artifact.compile_time_root_identities,
     };
 }
 
@@ -37062,7 +37088,7 @@ pub fn publishFromTypedModule(
     template_iterator_refs.deinit(allocator);
     plan_build_data.deinit(allocator);
 
-    var compile_time_root_identities = CompileTimeRootIdentityTable{ .rows = try value_identity.compute(allocator, .{
+    const module_identities = try value_identity.compute(allocator, .{
         .env = module.moduleEnvConst(),
         .names = &canonical_names,
         .types = checked_types.view(),
@@ -37070,8 +37096,15 @@ pub fn publishFromTypedModule(
         .top_level_values = &top_level_values,
         .key = artifact_key,
         .own_identity = module_identity.stable_hash,
-    }) };
+    });
+    var compile_time_root_identities = CompileTimeRootIdentityTable{
+        .rows = module_identities.roots,
+        .exports = module_identities.exports,
+        .method_requires = module_identities.method_requires,
+        .export_requires = module_identities.export_requires,
+    };
     errdefer compile_time_root_identities.deinit(allocator);
+    compile_time_root_identities.context = try allocator.dupe([32]u8, &.{module_identities.context});
 
     var provided_exports = try ProvidedExportTable.fromModule(
         allocator,
@@ -39595,8 +39628,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x9B, 0x14, 0xE0, 0xCD, 0xF6, 0xBB, 0x61, 0x95, 0x74, 0x9E, 0x8A, 0x67, 0xEB, 0x79, 0xFF, 0x75,
-        0x5A, 0x0E, 0x11, 0xB4, 0xC8, 0x93, 0xDC, 0xC7, 0x63, 0xDE, 0x8B, 0x71, 0xF7, 0x4B, 0x53, 0xDA,
+        0xED, 0x30, 0xC3, 0x6D, 0xA5, 0x33, 0xFF, 0x1F, 0x80, 0x71, 0xCA, 0x4F, 0x38, 0x68, 0x36, 0x82,
+        0xDC, 0xBE, 0x2A, 0x33, 0x11, 0x8F, 0x31, 0xF6, 0xA9, 0x5A, 0xC0, 0xDA, 0x6C, 0x9F, 0xD7, 0xA5,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

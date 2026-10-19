@@ -24,6 +24,11 @@ const SingleUseInline = @import("single_use_inline.zig");
 pub const CompletedScalarValues = postcheck.ComptimeScalarValues.CompletedScalarValues;
 /// Which runtime specializations compile-time evaluation must lower.
 pub const LiteralDemand = postcheck.LiteralDemand;
+/// See `postcheck.Common.LiteralValueLookup`.
+pub const LiteralValueLookup = postcheck.Common.LiteralValueLookup;
+pub const LiteralValueHit = postcheck.Common.LiteralValueHit;
+pub const LiteralValueRead = postcheck.Common.LiteralValueRead;
+pub const LiteralRootReuse = postcheck.Common.LiteralRootReuse;
 const TagReachability = @import("tag_reachability.zig");
 const ReachableProcs = @import("reachable_procs.zig");
 const DebugPrint = @import("debug_print.zig");
@@ -163,6 +168,13 @@ pub const TargetConfig = struct {
     spec_comptime_reads: bool = false,
     /// The compilation session evaluates the program's literal roots.
     literal_roots: bool = false,
+    /// With `literal_roots`, the literal values an earlier compilation of the
+    /// program stored, which literal roots restore instead of converting
+    /// (design.md "Compile-Time Value Reuse Across Edits").
+    literal_values: ?postcheck.Common.LiteralValueLookup = null,
+    /// With `literal_values`, keep each restored literal root's conversion as
+    /// a literal root that evaluation runs to verify the stored value.
+    verify_literal_values: bool = false,
     inline_mode: InlineMode = .none,
     /// Direct-call inlining scope for SpecConstr's value-aware clones.
     /// Optimized builds use `.all_calls`; dev builds use `.iterator_fusion`
@@ -1488,6 +1500,8 @@ pub fn prepareCheckedModulesMonotype(
                 .spec_comptime_reads_out = if (target.spec_comptime_reads) &spec_comptime_reads else null,
                 .spec_key_aliases_out = &spec_key_aliases,
                 .literal_roots = target.literal_roots,
+                .literal_values = target.literal_values,
+                .verify_literal_values = target.verify_literal_values,
                 .replay_interface_summaries = target.replay_interface_summaries,
                 .target_usize = target.target_usize,
                 .inline_expects = if (target.comptime_value_reads) .shared else switch (target.inline_expects) {
