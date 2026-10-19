@@ -6603,6 +6603,25 @@ const ProcedureBuilder = struct {
             try self.result.root_metadata.append(self.allocator, metadata);
         }
         try self.runProcJobs();
+        try self.orderLiteralRoots();
+    }
+
+    /// Boxy evaluates its literal roots in declaration order: a conversion
+    /// may reach an earlier literal through the dictionary entry its generic
+    /// code is given, so each root reads the one declared before it.
+    fn orderLiteralRoots(self: *ProcedureBuilder) Allocator.Error!void {
+        const roots = self.result.literal_roots.items;
+        if (roots.len < 2) return;
+        for (roots[1..], roots[0 .. roots.len - 1]) |*root, previous| {
+            const reads = try self.allocator.alloc(LirProgram.CtfeDemandRead, 1);
+            reads[0] = .{
+                .module = previous.module,
+                .producer = .{ .literal = previous.id },
+                .region = previous.demand.origin_region orelse boxyLowerInvariant("literal root omitted its source region"),
+                .loc = previous.demand.origin_loc orelse boxyLowerInvariant("literal root omitted its source location"),
+            };
+            root.demand.reads = reads;
+        }
     }
 
     /// Descriptor templates remain mutable graph reservations while lowering
@@ -7292,6 +7311,16 @@ const ProcedureBuilder = struct {
     /// The identity of one of a literal conversion's compile-time slots. Boxy
     /// procedures are program-local, so the code that reads a slot is too, and
     /// the slot is named by its literal conversion and its role in the program.
+    /// The kind of checked literal conversion a literal root's site names.
+    fn checkedLiteralKind(data: anytype) LIR.LiteralRejectionKind {
+        return switch (data) {
+            .numeral => .numeral,
+            .str_from_quote => .quote,
+            .interpolation => .interpolation,
+            .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => boxyLowerInvariant("literal root did not name a checked literal conversion"),
+        };
+    }
+
     fn literalSlotIdentity(module: [32]u8, index: u32, role: enum { failure, value }) [32]u8 {
         var hasher = base.TypeDigestHasher.init();
         hasher.update("roc.static-value.boxy-literal.v1");
@@ -7342,9 +7371,25 @@ const ProcedureBuilder = struct {
         const ret = try self.result.store.addCFStmt(.{ .ret = .{ .value = value } }, origin);
         const read = try self.result.store.addCFStmt(.{ .assign_literal = .{ .target = value, .value = .{ .static_data = value_slot }, .next = ret } }, origin);
         const symbol = self.symbols.fresh();
+        // The accessor is the slot's declared materializer. A Boxy value's
+        // representation is its layout, so the layout's digest names both.
+        const layout_digest = try self.result.layouts.contentDigest(ret_layout);
+        const materialization_producer: @FieldType(LirProgram.RootMaterialization, "producer") = .{ .literal = .{
+            .checked_expr = @backingInt(site.source.expr),
+            .kind = checkedLiteralKind(expr.data),
+            .conversion_identity = literalSlotIdentity(site.source.module.bytes, index, .value),
+        } };
+        const materialization_identity = LirProgram.rootMaterializationIdentity(site.source.module.bytes, materialization_producer, layout_digest, layout_digest);
         const accessor_id = try self.result.store.addProcSpec(.{
             .name = lirSymbol(symbol),
-            .identity = LIR.ProcIdentity.programLocal("boxy", @backingInt(symbol)),
+            .identity = materialization_identity,
+            .root_materialization = .{
+                .module = site.source.module.bytes,
+                .producer = materialization_producer,
+                .representation_digest = layout_digest,
+                .layout_digest = layout_digest,
+                .wrapper_identity = materialization_identity.bytes,
+            },
             .args = .empty(),
             .frame_locals = try self.result.store.addLocalSpan(accessor.frame_locals.items),
             .body = read,
@@ -7453,18 +7498,16 @@ const ProcedureBuilder = struct {
         self.result.literal_roots.items[index] = .{
             .module = module.key,
             .id = @fromBackingInt(index),
-            .site = .{ .owner = owner, .checked_expr = @backingInt(site.source.expr), .kind = switch (expr.data) {
-                .numeral => .numeral,
-                .str_from_quote => .quote,
-                .interpolation => .interpolation,
-                .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => boxyLowerInvariant("literal root did not name a checked literal conversion"),
-            } },
+            .site = .{ .owner = owner, .checked_expr = @backingInt(site.source.expr), .kind = checkedLiteralKind(expr.data) },
             .proc = proc_id,
             .ret_layout = ret_layout,
             .plan = constant_plan,
             .value_slot = value_slot,
-            // The conversion's demand originates at its literal.
-            .demand = .{ .origin_region = expr.source_region, .origin_loc = origin.loc },
+            // The conversion's demand originates at its literal. Boxy
+            // literals are materialized after checking finalization has
+            // completed every compile-time value the program holds, so a
+            // conversion reads no value still to be evaluated.
+            .demand = .{ .complete = true, .origin_region = expr.source_region, .origin_loc = origin.loc },
         };
     }
 

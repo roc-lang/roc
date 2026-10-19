@@ -3177,6 +3177,7 @@ pub const Store = struct {
                 try sink.writeBytes("named");
                 if (named.def.site) {
                     try sink.writeBytes("site");
+                    try sinkOptionalU32(sink, named.def.source_decl);
                 } else {
                     const declaration: ?[32]u8 = if (mode == .declaration) if (named.def.source_decl) |source_decl|
                         declarations.?.nominal(name_store.moduleIdentityBytes(named.def.module), source_decl)

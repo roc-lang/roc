@@ -456,6 +456,7 @@ const CustomCase = enum {
     shared_early_object_cache,
     ctfe_cache_publication,
     demand_ctfe_diagnostics,
+    ctfe_static_cache_runtime,
     issue_11627_static_data_names_cache,
     issue_10733_wasm_boxy_dev_sealed_object,
     issue_12029_wasm_boxy_tail_calls,
@@ -3054,6 +3055,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "shared early object cache preserves relation identity and LLVM source bodies", .timeout_ms = 600_000, .body = .{ .custom = .shared_early_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "CTFE check publication is additive across dev and LLVM builds", .timeout_ms = 600_000, .body = .{ .custom = .ctfe_cache_publication } },
     .{ .id = 0, .suite = .subcommands, .name = "demand CTFE: runtime specialization preserves check and build diagnostics", .timeout_ms = 600_000, .body = .{ .custom = .demand_ctfe_diagnostics } },
+    .{ .id = 0, .suite = .subcommands, .name = "CTFE static cache: a helper read at compile time and at runtime prints the same result uncached, cold and warm", .timeout_ms = 600_000, .body = .{ .custom = .ctfe_static_cache_runtime } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11826: a warm dev build keeps the ARC ownership variants of the cold build", .timeout_ms = 600_000, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .custom = .issue_11826_cache_ownership_variants } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12241: writing to a list read from a top-level constant allocates the same in cold, warm, and uncached builds", .timeout_ms = 600_000, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .custom = .issue_12241_cached_constant_insert } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12294: reading a top-level list of boxed capturing closures allocates the same in cold, warm, and uncached builds", .timeout_ms = 600_000, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .custom = .issue_12294_cached_capturing_closures } },
@@ -4993,6 +4995,7 @@ fn runCustomCase(
         .shared_early_object_cache => customSharedEarlyObjectCache(io, allocator, &env, &timer, timeout_ms),
         .ctfe_cache_publication => customCtfeCachePublication(io, allocator, &env, &timer, timeout_ms),
         .demand_ctfe_diagnostics => customDemandCtfeDiagnostics(io, allocator, &env, &timer, timeout_ms),
+        .ctfe_static_cache_runtime => customCtfeStaticCacheRuntime(io, allocator, &env, &timer, timeout_ms),
         .issue_11627_static_data_names_cache => customIssue11627StaticDataNamesCache(io, allocator, &env, &timer, timeout_ms),
         .native_build_pack_hits => customNativeBuildPackHits(io, allocator, &env, &timer, timeout_ms),
         .early_ctfe_cache => customEarlyCtfeCache(io, allocator, &env, &timer, timeout_ms),
@@ -17339,16 +17342,16 @@ fn customDemandCtfeDiagnostics(
     timer: *harness.Timer,
     timeout_ms: u64,
 ) ?TestResult {
-    const fixtures = [_]struct { name: []const u8, diagnostic: []const u8 }{
-        .{ .name = "RejectedNumeral.roc", .diagnostic = "invalid number" },
-        .{ .name = "NestedLiteral.roc", .diagnostic = "invalid string" },
-        .{ .name = "RejectedDispatch.roc", .diagnostic = "describe" },
-        .{ .name = "EmpiricalMatch.roc", .diagnostic = "discovered empirically" },
-        .{ .name = "UnusedTopLevelExpect.roc", .diagnostic = "This expect failed during compile-time evaluation." },
+    const fixtures = [_]struct { path: []const u8, diagnostic: []const u8 }{
+        .{ .path = "test/cli/demand_ctfe/RejectedNumeral.roc", .diagnostic = "invalid number" },
+        .{ .path = "test/cli/demand_ctfe/NestedLiteral.roc", .diagnostic = "invalid string" },
+        .{ .path = "test/cli/demand_ctfe/RejectedDispatch.roc", .diagnostic = "describe" },
+        .{ .path = "test/cli/demand_ctfe/EmpiricalMatch.roc", .diagnostic = "This match expression doesn't cover all possible cases." },
+        .{ .path = "test/cli/demand_ctfe/UnusedTopLevelExpect.roc", .diagnostic = "This expect failed during compile-time evaluation." },
     };
-    for (fixtures) |fixture| {
-        const path = std.fmt.allocPrint(allocator, "test/cli/demand_ctfe/{s}", .{fixture.name}) catch |err|
-            return customInfraFailure(allocator, timer, "failed to allocate demand fixture path: {}", .{err});
+    for (fixtures) |entry| {
+        const fixture = .{ .name = std.fs.path.basename(entry.path), .diagnostic = entry.diagnostic };
+        const path = entry.path;
         var app: []const u8 = undefined;
         if (stageEditableApp(io, allocator, env, timer, .{
             .dir_name = fixture.name,
@@ -17396,6 +17399,23 @@ fn customDemandCtfeDiagnostics(
                 baseline = reports;
             }
         }
+    }
+    // A literal in a generic definition nothing instantiates is never
+    // converted, so it reports nothing.
+    var uninstantiated_app: []const u8 = undefined;
+    if (stageEditableApp(io, allocator, env, timer, .{
+        .dir_name = "demand-uninstantiated",
+        .platform = "test/fx-open/platform/main.roc",
+        .platform_spelling = "../../fx-open/platform/main.roc",
+        .sources = &.{"test/cli/demand_ctfe/UninstantiatedLiteral.roc"},
+        .app_name = "UninstantiatedLiteral.roc",
+    }, &uninstantiated_app)) |failure| return failure;
+    for (0..2) |_| {
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = &.{ "check", "--no-color" },
+            .roc_file = uninstantiated_app,
+            .stderr_exact = "",
+        })) |failure| return failure;
     }
     var runtime_app: []const u8 = undefined;
     if (stageEditableApp(io, allocator, env, timer, .{
@@ -17535,4 +17555,58 @@ test "named pack offer requires the exact procedure field" {
     try std.testing.expect(hasNamedPackOffer("offer aabb ccdd Closed.total\n", "Closed.total"));
     try std.testing.expect(!hasNamedPackOffer("offer aabb ccdd Closed.total_extra\n", "Closed.total"));
     try std.testing.expect(!hasNamedPackOffer("lookup monotype key=aabb hit=yes Closed.total\n", "Closed.total"));
+}
+
+/// A helper that reads a checked constant runs while evaluating a constant and
+/// at runtime. Uncached, cold and warm dev builds of each app share one cache
+/// and must all link and print the same result.
+fn customCtfeStaticCacheRuntime(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const apps = [_]struct { path: []const u8, stdout: []const u8 }{
+        .{ .path = "test/cli/ctfe_static_cache/CompileTimeAndRuntime.roc", .stdout = "237\n" },
+        .{ .path = "test/cli/ctfe_static_cache/RuntimeSeed.roc", .stdout = "472\n" },
+    };
+    for (apps) |entry| {
+        const name = std.fs.path.basename(entry.path);
+        var app: []const u8 = undefined;
+        if (stageEditableApp(io, allocator, env, timer, .{
+            .dir_name = name,
+            .platform = "test/fx/platform/main.roc",
+            .platform_spelling = "../../fx/platform/main.roc",
+            .sources = &.{ "test/cli/ctfe_static_cache/Static.roc", entry.path },
+            .app_name = name,
+        }, &app)) |failure| return failure;
+        const cache = std.fmt.allocPrint(allocator, "{s}/static-cache-{s}", .{ env.dirs.work_dir, name }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate cache root: {}", .{err});
+        var isolated = CaseEnv{
+            .dirs = env.dirs,
+            .env_map = env.env_map.clone(allocator) catch |err|
+                return customInfraFailure(allocator, timer, "failed to clone the environment: {}", .{err}),
+        };
+        defer isolated.env_map.deinit();
+        isolated.env_map.put("ROC_CACHE_DIR", cache) catch |err|
+            return customInfraFailure(allocator, timer, "failed to isolate the cache: {}", .{err});
+        for ([_][]const u8{ "uncached", "cold", "warm" }) |label| {
+            const exe = std.fmt.allocPrint(allocator, "{s}/static-{s}-{s}", .{ env.dirs.work_dir, name, label }) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate executable path: {}", .{err});
+            const out_arg = outputArg(allocator, exe) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate output argument: {}", .{err});
+            const uncached = std.mem.eql(u8, label, "uncached");
+            if (runRocAndCheck(io, allocator, &isolated, timer, timeout_ms, .{
+                .args = if (uncached) &.{ "build", "--opt=dev", "--no-cache", "--no-color", out_arg } else &.{ "build", "--opt=dev", "--no-color", out_arg },
+                .roc_file = app,
+            })) |failure| return failure;
+            if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{
+                .args = &.{},
+                .stdin = "ab\n",
+                .stdout_exact = entry.stdout,
+            })) |failure| return failure;
+        }
+    }
+    return null;
 }
