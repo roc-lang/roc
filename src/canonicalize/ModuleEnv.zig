@@ -2625,6 +2625,40 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try self.addOwnedSourceRegionTo(&report, region_info, .warning_highlight, filename);
             break :blk report;
         },
+        .var_in_binder_pattern => |data| blk: {
+            const ident_name = self.getIdent(data.ident);
+            const region_info = self.calcRegionInfo(data.region);
+            var report = try Report.init(allocator, switch (data.position) {
+                .match_branch => "Var In Match Pattern",
+                .for_loop => "Var In For Pattern",
+            }, "", .runtime_error);
+            const owned_ident = try report.addOwnedString(ident_name);
+
+            try report.headline.addReflowingText(switch (data.position) {
+                .match_branch => "This match branch pattern binds ",
+                .for_loop => "This for loop pattern binds ",
+            });
+            try report.headline.addUnqualifiedSymbol(owned_ident);
+            try report.headline.addReflowingText(", but a pattern here cannot bind a ");
+            try report.headline.addKeyword("var");
+            try report.headline.addReflowingText(".");
+
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Only an assignment with ");
+            try report.document.addInlineCode("=");
+            try report.document.addReflowingText(" changes a ");
+            try report.document.addKeyword("var");
+            try report.document.addReflowingText(". Bind a name without ");
+            try report.document.addInlineCode("$");
+            try report.document.addReflowingText(" here, and assign it to the ");
+            try report.document.addKeyword("var");
+            try report.document.addReflowingText(" with ");
+            try report.document.addInlineCode("=");
+            try report.document.addReflowingText(" if it should change.");
+
+            break :blk report;
+        },
         .empty_tuple => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 

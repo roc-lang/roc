@@ -1189,13 +1189,12 @@ checker recovery. The recovery rules:
   belongs to the pattern alone, and a use of the name, such as a method call
   on it, adds no report of its own. A `var` name a destructure reassigns
   belongs to its own declaration and is left alone.
-- A `match` owns each branch pattern's relation to the scrutinee, but
-  neither class it relates: the scrutinee's class is shared with whatever
-  produced it, and a pattern that reassigns a `var` is that var's own
-  declaration pattern, whose class every use of the var shares. A rejected
-  relation reports, poisons neither side, and retires the `match`; the
-  branch patterns after it are checked for their own errors but not related
-  to the scrutinee.
+- A `match` owns each branch pattern's relation to the scrutinee, but it
+  only consults the scrutinee, whose class is shared with whatever produced
+  it. A rejected relation reports, poisons neither side, and retires the
+  `match`; the branch patterns after it are checked for their own errors but
+  not related to the scrutinee. A branch pattern never binds a `var`
+  (canonicalization rejects one), so the pattern's class is its own.
 - A pattern can also be rejected by a judgment made after its check: a
   literal pattern whose conversion fails, or a record-destructure binder that
   the kind-directed judgment cannot relate to its field (a closed nested
@@ -3418,8 +3417,9 @@ Reassigning such a var directly inside an `expect` body is a compile error. (Onl
 inline `expect`s can see one, since `var` is not allowed at the top level.) This
 covers both `$x = ...` and structural reassignments such as `($x, y) = ...`.
 Reassigning a var declared inside the `expect` body is allowed at any depth,
-including inside loops written within it. A `for` or `match` binder that reuses
-an outer var's name is not a reassignment and is allowed.
+including inside loops written within it. A `for` or `match` pattern never binds
+a var anywhere (canonicalization reports `var_in_binder_pattern`), so it cannot
+reassign one either.
 
 Inside a lambda nested within an `expect`, `return`, `break`, and `?` have their
 ordinary meaning, since leaving the lambda does not leave the `expect`.

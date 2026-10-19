@@ -31434,13 +31434,11 @@ fn beginMatchBranch(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env)
     return self.requestMatchBranchValue(task, state, branch);
 }
 
-/// Relate a branch pattern to the scrutinee. The match owns this relation but
-/// neither class: the scrutinee's is shared with whatever produced it, and a
-/// pattern that reassigns a `var` is that var's own declaration pattern, whose
-/// class every use of the var shares. A rejection therefore poisons neither
-/// side; it retires the match, and the later patterns are not related, since
-/// the rejected relation may already have written part of the scrutinee's
-/// type, and a later pattern would be judged against that.
+/// Relate a branch pattern to the scrutinee. The match only consults the
+/// scrutinee, whose class is shared with whatever produced it, so a rejection
+/// poisons neither side; it retires the match, and the later patterns are not
+/// related, since the rejected relation may already have written part of the
+/// scrutinee's type, and a later pattern would be judged against that.
 fn relateBranchPatternToScrutinee(
     self: *Self,
     state: *MatchCheck,
