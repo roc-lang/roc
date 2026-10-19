@@ -8,7 +8,6 @@ const base = @import("base");
 const CIR = @import("can").CIR;
 const ModuleEnv = @import("can").ModuleEnv;
 const types_mod = @import("types").types;
-const CheckedArtifact = @import("check").CheckedArtifact;
 
 const DocModel = @import("DocModel.zig");
 const render_type = @import("render_type.zig");
@@ -149,8 +148,6 @@ pub const ExtractOptions = struct {
     /// Every exact public type projection in the generated package docs,
     /// sorted once with `sortPublicTypeProjections` before extraction.
     public_types: []const PublicTypeProjection = &.{},
-    /// Checked import identities for resolving external annotation references.
-    checked_artifact: ?*const CheckedArtifact.CheckedModuleArtifact = null,
 };
 
 /// A borrowed mapping from one exact source type to its public docs namespace.
@@ -179,7 +176,6 @@ fn publicTypeProjectionLessThan(_: void, a: PublicTypeProjection, b: PublicTypeP
 const PublicReferenceRouting = struct {
     current: ?PublicTypeProjection,
     all: []const PublicTypeProjection,
-    checked_artifact: ?*const CheckedArtifact.CheckedModuleArtifact,
 };
 
 /// Extract documentation for all exported definitions in a module.
@@ -255,7 +251,6 @@ pub fn extractModuleDocsWithOptions(
     const reference_routing = PublicReferenceRouting{
         .current = options.public_type,
         .all = options.public_types,
-        .checked_artifact = options.checked_artifact,
     };
 
     const documented_region: ?base.Region = if (documentedRootDecl(module_env, options.public_type)) |root|
@@ -647,7 +642,6 @@ fn projectedTypeReference(
     module_env: *const ModuleEnv,
     current_projection: ?PublicTypeProjection,
     public_types: []const PublicTypeProjection,
-    checked_artifact: ?*const CheckedArtifact.CheckedModuleArtifact,
     base_ref: TypeAnno.LocalOrExternal,
 ) ?PublicTypeProjection {
     if (current_projection == null and public_types.len == 0) return null;
@@ -657,12 +651,9 @@ fn projectedTypeReference(
             (module_env.contentIdentityHash() orelse unreachable).*,
             local.decl_idx,
         },
-        .external => |external| external_blk: {
-            const artifact = checked_artifact orelse unreachable;
-            const import_index = @backingInt(external.module_idx);
-            if (import_index >= artifact.checking_context_identity.imports.len) unreachable;
-            const import_key = artifact.checking_context_identity.imports[import_index].artifact_key orelse unreachable;
-            break :external_blk .{ import_key.module_identity_hash, @as(CIR.Statement.Idx, @fromBackingInt(@intCast(external.target_node_idx))) };
+        .external => |external| .{
+            module_env.moduleIdentityHash(module_env.importIdentity(external.module_idx) orelse unreachable).*,
+            @as(CIR.Statement.Idx, @fromBackingInt(@intCast(external.target_node_idx))),
         },
         .external_identity => |external| .{
             module_env.moduleIdentityHash(external.module_identity).*,
@@ -732,7 +723,6 @@ fn annotatedTypeReferenceDisplay(
         module_env,
         routing.current,
         routing.all,
-        routing.checked_artifact,
         base_ref,
     )) |projection| {
         const statement = typeReferenceStatement(base_ref) orelse unreachable;
@@ -3132,7 +3122,7 @@ test "issue 11592: inferred nested function tag payloads stay compact" {
     const result = try store.freshFromContent(.{ .structure = .{ .tag_union = .{ .tags = tags, .ext = closed } } });
     const inner = try store.freshFromContent(.{ .structure = .{ .fn_pure = .{ .args = try store.appendVars(&.{b}), .ret = result } } });
     const outer = try store.freshFromContent(.{ .structure = .{ .fn_pure = .{ .args = try store.appendVars(&.{a}), .ret = inner } } });
-    const doc = (try extractDocType(gpa, &store, &env, "Test", .{ .current = null, .all = &.{}, .checked_artifact = null }, outer)).?;
+    const doc = (try extractDocType(gpa, &store, &env, "Test", .{ .current = null, .all = &.{} }, outer)).?;
     defer {
         doc.deinit(gpa);
         gpa.destroy(doc);

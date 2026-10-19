@@ -84,6 +84,7 @@ pub fn testModuleEnv() *can.ModuleEnv {
 pub fn minimalCheckedModule(allocator: Allocator) checked.CheckedModuleArtifact {
     return .{
         .key = moduleKey(1),
+        .source_hash = @as([32]u8, @splat(0)),
         .canonical_names = names.CanonicalNameStore.init(allocator),
         .module_identity = testModuleIdentity(),
         .checking_context_identity = .{},

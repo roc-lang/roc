@@ -92,9 +92,9 @@ pub fn run(
         defer source_files.deinit(allocator);
         var seen_source_files = std.StringHashMapUnmanaged(void){};
         defer seen_source_files.deinit(allocator);
-        try appendSourceFile(&source_files, &seen_source_files, allocator, Plan.moduleViewFromCheckedModule(modules.root.module));
-        for (modules.imports) |imported| try appendSourceFile(&source_files, &seen_source_files, allocator, Plan.moduleViewFromImported(imported));
-        for (modules.root.relation_modules) |relation| try appendSourceFile(&source_files, &seen_source_files, allocator, Plan.moduleViewFromImported(relation));
+        try appendSourceFile(&source_files, &seen_source_files, allocator, modules.root.module.moduleEnvConst(), modules.root.module.module_identity);
+        for (modules.imports) |imported| try appendSourceFile(&source_files, &seen_source_files, allocator, imported.module_env, imported.module_identity);
+        for (modules.root.relation_modules) |relation| try appendSourceFile(&source_files, &seen_source_files, allocator, relation.module_env, relation.module_identity);
         try result.store.setSourceFiles(source_files.items);
     }
 
@@ -125,16 +125,17 @@ fn appendSourceFile(
     files: *std.ArrayList(base.SourceFileEntry),
     seen: *std.StringHashMapUnmanaged(void),
     allocator: Allocator,
-    module: Plan.ModuleView,
+    module_env: *const can.ModuleEnv,
+    module_identity: checked.ModuleIdentity,
 ) Allocator.Error!void {
-    const qualified_name = module.module_env.?.qualifiedModuleName();
+    const qualified_name = module_env.qualifiedModuleName();
     const entry = try seen.getOrPut(allocator, qualified_name);
     if (entry.found_existing) return;
     errdefer _ = seen.remove(qualified_name);
     try files.append(allocator, .{
-        .name = module.module_env.?.module_name,
+        .name = module_env.module_name,
         .qualified_name = qualified_name,
-        .module_identity = module.key.module_identity_hash,
+        .module_identity = module_identity.stable_hash,
     });
 }
 
@@ -44615,6 +44616,7 @@ test "boxy lowerer returns an empty LIR program for an empty plan" {
     defer module_env.deinit();
     var artifact = checked.CheckedModuleArtifact{
         .key = .{},
+        .source_hash = @as([32]u8, @splat(0)),
         .canonical_names = canonical_names,
         .module_identity = .{
             .module_idx = 0,

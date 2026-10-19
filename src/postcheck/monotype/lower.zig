@@ -5381,6 +5381,7 @@ const Builder = struct {
 
     const SourceFileSeed = struct {
         key: checked.ModuleId,
+        module_identity: [32]u8,
         name: []const u8,
         qualified_name: []const u8,
 
@@ -5427,6 +5428,7 @@ const Builder = struct {
         gop.value_ptr.* = @intCast(seeds.items.len);
         seeds.appendAssumeCapacity(.{
             .key = view.key,
+            .module_identity = view.module_identity.stable_hash,
             .name = view.module_env.module_name,
             .qualified_name = view.module_env.qualifiedModuleName(),
         });
@@ -5455,7 +5457,7 @@ const Builder = struct {
             const id = try self.program.addSourceFile(.{
                 .name = seed.name,
                 .qualified_name = seed.qualified_name,
-                .module_identity = seed.key.module_identity_hash,
+                .module_identity = seed.module_identity,
             });
             if (id != index) Common.invariant("Monotype program source file id did not match its sorted position");
             self.source_file_ids.getPtr(seed.key.bytes).?.* = id;

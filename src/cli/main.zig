@@ -19686,7 +19686,7 @@ fn generateDocs(
                 .public_name = module_info.name,
                 .package_name = build_env.displayNameForPackage(module_info.package_name),
                 .source_env = module_info.semantic.env,
-                .source_identity = &artifact.key.module_identity_hash,
+                .source_identity = &artifact.module_identity.stable_hash,
                 .source_decl = source_decl,
                 .public_order = module_info.public_order,
             });
@@ -19706,12 +19706,11 @@ fn generateDocs(
                 .public_name = module_info.name,
                 .package_name = sched_pkg_name,
                 .source_env = module_info.semantic.env,
-                .source_identity = &(module_info.semantic.checked_artifact orelse unreachable).key.module_identity_hash,
+                .source_identity = &(module_info.semantic.checked_artifact orelse unreachable).module_identity.stable_hash,
                 .source_decl = source_decl,
                 .public_order = module_info.public_order,
             } else null,
             .public_types = public_type_projections.items,
-            .checked_artifact = module_info.semantic.checked_artifact,
         }) catch |err| {
             std.debug.print("Warning: failed to extract docs for module {s}: {}\n", .{ module_info.name, err });
             extract_failed += 1;
@@ -19786,9 +19785,7 @@ fn generateBuiltinDocs(ctx: *CliCtx, base_output_dir: []const u8, with_lang_ref:
         errdefer ctx.gpa.free(modules);
         // The builtin is documented as a standalone root type module, whose
         // display package name is `module` (see `BuildEnv.displayNameForPackage`).
-        modules[0] = try docs.extract.extractModuleDocsWithOptions(ctx.gpa, builtin_modules.builtin_module.env, "module", "Builtin.roc", .{
-            .checked_artifact = &builtin_modules.checked_artifact,
-        });
+        modules[0] = try docs.extract.extractModuleDocsWithOptions(ctx.gpa, builtin_modules.builtin_module.env, "module", "Builtin.roc", .{});
         errdefer modules[0].deinit(ctx.gpa);
         break :package_docs docs.DocModel.PackageDocs{ .name = try ctx.gpa.dupe(u8, "Builtin"), .modules = modules };
     };

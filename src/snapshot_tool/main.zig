@@ -3486,7 +3486,7 @@ fn processDocsSnapshot(
                 .public_name = mod.name,
                 .package_name = build_env.displayNameForPackage(mod.package_name),
                 .source_env = mod.semantic.env,
-                .source_identity = &artifact.key.module_identity_hash,
+                .source_identity = &artifact.module_identity.stable_hash,
                 .source_decl = source_decl,
                 .public_order = mod.public_order,
             });
@@ -3504,12 +3504,11 @@ fn processDocsSnapshot(
                 .public_name = mod.name,
                 .package_name = display_pkg_name,
                 .source_env = mod.semantic.env,
-                .source_identity = &(mod.semantic.checked_artifact orelse unreachable).key.module_identity_hash,
+                .source_identity = &(mod.semantic.checked_artifact orelse unreachable).module_identity.stable_hash,
                 .source_decl = source_decl,
                 .public_order = mod.public_order,
             } else null,
             .public_types = public_type_projections.items,
-            .checked_artifact = mod.semantic.checked_artifact,
         }) catch |err| {
             std.log.err("Failed to extract docs from module {s}: {}", .{ mod.name, err });
             continue;
