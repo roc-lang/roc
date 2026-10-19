@@ -365,9 +365,25 @@ fn checkOperandSpan(program: *const Ast.Program, fn_id: Ast.FnId, operand_span: 
     return null;
 }
 
-const DefMap = []?Ast.FnId;
-const NestedDefMap = []?Ast.FnId;
-const FnMap = []?Ast.FnId;
+/// A lifted function id or none, at the width of one id; `Program` never
+/// gives a function the sentinel id.
+const MaybeFnId = enum(u32) {
+    none = std.math.maxInt(u32),
+    _,
+
+    fn of(fn_id: Ast.FnId) MaybeFnId {
+        return @fromBackingInt(@backingInt(fn_id));
+    }
+
+    fn get(self: MaybeFnId) ?Ast.FnId {
+        if (self == .none) return null;
+        return @fromBackingInt(@backingInt(self));
+    }
+};
+
+const DefMap = []MaybeFnId;
+const NestedDefMap = []MaybeFnId;
+const FnMap = []MaybeFnId;
 
 const MonoFnBody = struct {
     args: Mono.Span(Mono.TypedLocal),
@@ -378,8 +394,8 @@ const Lifter = struct {
     allocator: Allocator,
     source: Mono.ProgramView,
     output: *Ast.Program,
-    expr_done: []bool,
-    stmt_done: []bool,
+    expr_done: std.DynamicBitSetUnmanaged,
+    stmt_done: std.DynamicBitSetUnmanaged,
     def_map: DefMap,
     nested_def_map: NestedDefMap,
     fn_map: FnMap,
@@ -392,16 +408,16 @@ const Lifter = struct {
     /// is rewritten, so it never depends on lifting order or rewrite-collapsed
     /// nodes. Every later stage reads this rather than re-deriving captures by
     /// walking (possibly already-rewritten) bodies.
-    fn_captures: []std.ArrayList(Ast.TypedLocal),
+    fn_captures: []const []const Ast.TypedLocal,
+    /// The one buffer every `fn_captures` row lies in.
+    fn_capture_rows: []const Ast.TypedLocal,
 
     fn init(allocator: Allocator, source: Mono.ProgramView, output: *Ast.Program) Allocator.Error!Lifter {
-        const expr_done = try allocator.alloc(bool, output.exprCount());
-        errdefer allocator.free(expr_done);
-        @memset(expr_done, false);
+        var expr_done = try std.DynamicBitSetUnmanaged.initEmpty(allocator, output.exprCount());
+        errdefer expr_done.deinit(allocator);
 
-        const stmt_done = try allocator.alloc(bool, output.stmtCount());
-        errdefer allocator.free(stmt_done);
-        @memset(stmt_done, false);
+        var stmt_done = try std.DynamicBitSetUnmanaged.initEmpty(allocator, output.stmtCount());
+        errdefer stmt_done.deinit(allocator);
 
         return .{
             .allocator = allocator,
@@ -417,42 +433,43 @@ const Lifter = struct {
             .initialized_fns = collections.DenseMap(Ast.FnId, void).init(allocator),
             .symbols = .{ .next = source.next_symbol },
             .fn_captures = &.{},
+            .fn_capture_rows = &.{},
         };
     }
 
     fn deinit(self: *Lifter) void {
-        for (self.fn_captures) |*captures| captures.deinit(self.allocator);
-        if (self.fn_captures.len > 0) self.allocator.free(self.fn_captures);
+        self.allocator.free(self.fn_capture_rows);
+        self.allocator.free(self.fn_captures);
         self.initialized_fns.deinit();
         self.nested_fn_ids.deinit();
         self.fn_bodies.deinit(self.allocator);
         if (self.fn_map.len > 0) self.allocator.free(self.fn_map);
         if (self.nested_def_map.len > 0) self.allocator.free(self.nested_def_map);
         if (self.def_map.len > 0) self.allocator.free(self.def_map);
-        self.allocator.free(self.stmt_done);
-        self.allocator.free(self.expr_done);
+        self.stmt_done.deinit(self.allocator);
+        self.expr_done.deinit(self.allocator);
     }
 
     fn lowerDefsAndRoots(self: *Lifter) Allocator.Error!void {
-        self.fn_map = try self.allocator.alloc(?Ast.FnId, self.source.fns.len);
-        @memset(self.fn_map, null);
+        self.fn_map = try self.allocator.alloc(MaybeFnId, self.source.fns.len);
+        @memset(self.fn_map, .none);
 
-        self.def_map = try self.allocator.alloc(?Ast.FnId, self.source.defs.len);
-        @memset(self.def_map, null);
+        self.def_map = try self.allocator.alloc(MaybeFnId, self.source.defs.len);
+        @memset(self.def_map, .none);
 
         for (self.source.defs, 0..) |def, index| {
             const fn_id = try self.output.reserveFnSlot();
             try self.fn_bodies.append(self.allocator, .{ .args = def.args, .body = def.body });
-            self.def_map[index] = fn_id;
+            self.def_map[index] = .of(fn_id);
             if (def.fn_id) |source_fn_id| self.registerFn(source_fn_id, fn_id);
         }
 
-        self.nested_def_map = try self.allocator.alloc(?Ast.FnId, self.source.nested_defs.len);
-        @memset(self.nested_def_map, null);
+        self.nested_def_map = try self.allocator.alloc(MaybeFnId, self.source.nested_defs.len);
+        @memset(self.nested_def_map, .none);
         for (self.source.nested_defs, 0..) |def, index| {
             const fn_id = try self.output.reserveFnSlot();
             try self.fn_bodies.append(self.allocator, .{ .args = def.args, .body = .{ .roc = def.body } });
-            self.nested_def_map[index] = fn_id;
+            self.nested_def_map[index] = .of(fn_id);
             try self.nested_fn_ids.put(fn_id, {});
             self.registerFn(def.fn_id, fn_id);
         }
@@ -460,12 +477,12 @@ const Lifter = struct {
         try self.computeCaptureFixpoint();
 
         for (self.source.defs, 0..) |def, index| {
-            try self.lowerTopLevelDef(self.def_map[index] orelse
+            try self.lowerTopLevelDef(self.def_map[index].get() orelse
                 Common.invariant("Monotype definition was not reserved before lifting"), def);
         }
 
         for (self.source.nested_defs, 0..) |def, index| {
-            try self.lowerNestedDef(self.nested_def_map[index] orelse
+            try self.lowerNestedDef(self.nested_def_map[index].get() orelse
                 Common.invariant("Monotype nested definition was not reserved before lifting"), def);
         }
 
@@ -480,7 +497,7 @@ const Lifter = struct {
         for (self.source.roots) |root| {
             const raw = @backingInt(root.def);
             if (raw >= self.def_map.len) Common.invariant("Monotype root references a missing definition");
-            const fn_id = self.def_map[raw] orelse
+            const fn_id = self.def_map[raw].get() orelse
                 Common.invariant("Monotype root definition was not lifted");
             try self.output.addRoot(.{
                 .fn_id = fn_id,
@@ -493,7 +510,7 @@ const Lifter = struct {
         for (self.source.literal_roots) |root| {
             const raw = @backingInt(root.def);
             if (raw >= self.def_map.len) Common.invariant("Monotype literal root references a missing definition");
-            const fn_id = self.def_map[raw] orelse
+            const fn_id = self.def_map[raw].get() orelse
                 Common.invariant("Monotype literal root definition was not lifted");
             try self.output.addLiteralRoot(.{
                 .fn_id = fn_id,
@@ -506,7 +523,7 @@ const Lifter = struct {
             const fn_id = if (request.def) |def| blk: {
                 const raw = @backingInt(def);
                 if (raw >= self.def_map.len) Common.invariant("Monotype static data layout request references a missing definition");
-                break :blk self.def_map[raw] orelse
+                break :blk self.def_map[raw].get() orelse
                     Common.invariant("Monotype static data layout request definition was not lifted");
             } else null;
             try self.output.addLayoutRequest(.{
@@ -529,7 +546,7 @@ const Lifter = struct {
     }
 
     fn lowerTopLevelDef(self: *Lifter, fn_id: Ast.FnId, def: Mono.Def) Allocator.Error!void {
-        if (self.fn_captures[@backingInt(fn_id)].items.len != 0) {
+        if (self.fn_captures[@backingInt(fn_id)].len != 0) {
             Common.invariant("top-level Monotype definition has free locals after checked closure collection");
         }
 
@@ -566,7 +583,7 @@ const Lifter = struct {
         const outer_shapes = self.output.beginFnShapes(fn_id);
         try self.rewriteExpr(def.body);
         const shapes = self.output.finishFnShapes(outer_shapes);
-        const capture_span = try self.output.addTypedLocalSpan(self.fn_captures[@backingInt(fn_id)].items);
+        const capture_span = try self.output.addTypedLocalSpan(self.fn_captures[@backingInt(fn_id)]);
         var source = self.nestedSource(def.fn_id, def.fn_def);
         source.frozen_fn = def.fn_id;
         self.output.setFn(fn_id, .{
@@ -643,8 +660,8 @@ const Lifter = struct {
 
     fn pushRewriteStmtWork(self: *Lifter, work: *std.ArrayList(RewriteWork), stmt_id: Mono.StmtId) Allocator.Error!void {
         const index = @backingInt(stmt_id);
-        if (self.stmt_done[index]) return;
-        self.stmt_done[index] = true;
+        if (self.stmt_done.isSet(index)) return;
+        self.stmt_done.set(index);
 
         const stmt = self.output.getStmt(stmt_id);
         self.output.noteStmtShapes(stmt);
@@ -662,8 +679,8 @@ const Lifter = struct {
 
     fn pushRewriteExprWork(self: *Lifter, work: *std.ArrayList(RewriteWork), expr_id: Mono.ExprId) Allocator.Error!void {
         const index = @backingInt(expr_id);
-        if (self.expr_done[index]) return;
-        self.expr_done[index] = true;
+        if (self.expr_done.isSet(index)) return;
+        self.expr_done.set(index);
 
         const output = self.output;
         const expr = output.getExpr(expr_id);
@@ -755,7 +772,7 @@ const Lifter = struct {
             .def_ref => |def_id| {
                 const raw = @backingInt(def_id);
                 if (raw >= self.def_map.len) Common.invariant("Monotype definition reference was outside the definition table");
-                const fn_id = self.def_map[raw] orelse
+                const fn_id = self.def_map[raw].get() orelse
                     Common.invariant("Monotype definition reference reached lifting before its function was registered");
                 const captures = try self.captureExprSpanForFn(fn_id, expr_id);
                 output.setExprData(expr_id, .{ .fn_ref = .{
@@ -975,11 +992,11 @@ const Lifter = struct {
     fn reserveFn(self: *Lifter, mono_fn_id: Mono.FnId) Allocator.Error!Ast.FnId {
         const raw = @backingInt(mono_fn_id);
         if (raw >= self.fn_map.len) Common.invariant("Monotype lambda referenced a missing function specialization");
-        if (self.fn_map[raw]) |existing| return existing;
+        if (self.fn_map[raw].get()) |existing| return existing;
 
         const fn_id = try self.output.reserveFnSlot();
         try self.fn_bodies.append(self.allocator, null);
-        self.fn_map[raw] = fn_id;
+        self.fn_map[raw] = .of(fn_id);
         return fn_id;
     }
 
@@ -1005,31 +1022,41 @@ const Lifter = struct {
         try graph.solve();
 
         const count = self.output.fnCount();
-        self.fn_captures = try allocateCaptureTable(self.allocator, count);
-        for (0..count) |index| {
-            try self.fn_captures[index].appendSlice(self.allocator, graph.states[index].captures.items);
+        var total: usize = 0;
+        for (graph.states[0..count]) |state| total += state.captures.items.len;
+        const rows = try self.allocator.alloc(Ast.TypedLocal, total);
+        errdefer self.allocator.free(rows);
+        const table = try self.allocator.alloc([]const Ast.TypedLocal, count);
+        var start: usize = 0;
+        for (graph.states[0..count], table) |state, *captures| {
+            const end = start + state.captures.items.len;
+            @memcpy(rows[start..end], state.captures.items);
+            captures.* = rows[start..end];
+            start = end;
         }
+        self.fn_capture_rows = rows;
+        self.fn_captures = table;
     }
 
     fn registerFn(self: *Lifter, mono_fn_id: Mono.FnId, fn_id: Ast.FnId) void {
         const raw = @backingInt(mono_fn_id);
         if (raw >= self.fn_map.len) Common.invariant("Monotype definition referenced a missing function specialization");
-        if (self.fn_map[raw]) |existing| {
+        if (self.fn_map[raw].get()) |existing| {
             if (existing != fn_id) Common.invariant("Monotype function specialization was assigned two lifted function ids");
             return;
         }
-        self.fn_map[raw] = fn_id;
+        self.fn_map[raw] = .of(fn_id);
     }
 
     fn liftedFn(self: *Lifter, mono_fn_id: Mono.FnId) Ast.FnId {
         const raw = @backingInt(mono_fn_id);
         if (raw >= self.fn_map.len) Common.invariant("Monotype expression referenced a missing function specialization");
-        return self.fn_map[raw] orelse
+        return self.fn_map[raw].get() orelse
             Common.invariant("Monotype expression referenced a function specialization before lifting registered it");
     }
 
     fn captureExprSpanForFn(self: *Lifter, fn_id: Ast.FnId, call_expr: Mono.ExprId) Allocator.Error!Ast.Span(Ast.CaptureOperand) {
-        return try self.captureOperandSpanForSlots(self.fn_captures[@backingInt(fn_id)].items, &.{}, call_expr);
+        return try self.captureOperandSpanForSlots(self.fn_captures[@backingInt(fn_id)], &.{}, call_expr);
     }
 
     /// Build the keyed capture operand span for a function reference. `slots`
@@ -1075,7 +1102,7 @@ const Lifter = struct {
         call_expr: Mono.ExprId,
     ) Allocator.Error!Ast.Span(Ast.CaptureOperand) {
         const explicit = self.output.fnDefCaptureSpan(explicit_span);
-        return try self.captureOperandSpanForSlots(self.fn_captures[@backingInt(fn_id)].items, explicit, call_expr);
+        return try self.captureOperandSpanForSlots(self.fn_captures[@backingInt(fn_id)], explicit, call_expr);
     }
 
     fn defSource(self: *Lifter, mono_fn_id: Mono.FnId, expected: ?Mono.FnTemplate) ?Mono.FnTemplate {
@@ -1096,12 +1123,6 @@ const Lifter = struct {
         return source;
     }
 };
-
-fn allocateCaptureTable(allocator: Allocator, count: usize) Allocator.Error![]std.ArrayList(Ast.TypedLocal) {
-    const captures = try allocator.alloc(std.ArrayList(Ast.TypedLocal), count);
-    for (captures) |*capture| capture.* = .empty;
-    return captures;
-}
 
 /// Find the lift-boundary operand explicitly keyed to capture `slot`.
 ///
@@ -1182,7 +1203,7 @@ fn rebuildCaptureOperandSpan(
 /// mutation (spec_constr, inlining) reshapes capture sets.
 fn finalizeProgramFunctionReferenceCaptures(
     program: *Ast.Program,
-    fn_captures: []std.ArrayList(Ast.TypedLocal),
+    fn_captures: []const []const Ast.TypedLocal,
 ) Allocator.Error!void {
     var walker = CaptureSet.initForProgram(program.allocator, program, fn_captures);
     defer walker.deinit();
@@ -1330,7 +1351,7 @@ const CaptureSet = struct {
     allocator: Allocator,
     lifter: ?*Lifter,
     program: *Ast.Program,
-    fn_captures: []std.ArrayList(Ast.TypedLocal),
+    fn_captures: []const []const Ast.TypedLocal,
     items: std.ArrayList(Ast.TypedLocal),
     seen: collections.DenseMap(Mono.LocalId, void),
     finalize_operands: bool,
@@ -1350,7 +1371,7 @@ const CaptureSet = struct {
     fn initForProgram(
         allocator: Allocator,
         program: *Ast.Program,
-        fn_captures: []std.ArrayList(Ast.TypedLocal),
+        fn_captures: []const []const Ast.TypedLocal,
     ) CaptureSet {
         return .{
             .allocator = allocator,
@@ -1480,7 +1501,7 @@ const CaptureSet = struct {
             try rebuildCaptureOperandSpan(
                 self.program,
                 fn_ref.captures,
-                self.fn_captures[fn_index].items,
+                self.fn_captures[fn_index],
                 expr_id,
                 bound,
             )
@@ -1511,7 +1532,7 @@ const CaptureSet = struct {
         const finalized = try rebuildCaptureOperandSpan(
             self.program,
             call.captures,
-            self.fn_captures[fn_index].items,
+            self.fn_captures[fn_index],
             expr_id,
             bound,
         );
@@ -1537,7 +1558,7 @@ const CaptureSet = struct {
         // lambda), and every one has a fixpoint entry. An out-of-range id
         // means an earlier stage produced a call target the fixpoint never saw.
         if (raw >= self.fn_captures.len) Common.invariant("capture collection referenced a function without a solved capture set");
-        for (self.fn_captures[raw].items) |capture| {
+        for (self.fn_captures[raw]) |capture| {
             try self.addIfFree(capture.local, caller_bound);
         }
     }
@@ -1550,7 +1571,7 @@ const CaptureSet = struct {
     ) Allocator.Error!void {
         const raw = @backingInt(fn_id);
         if (raw >= self.fn_captures.len) Common.invariant("capture collection referenced a function without a solved capture set");
-        for (self.fn_captures[raw].items) |capture| {
+        for (self.fn_captures[raw]) |capture| {
             if (explicitProvidesCaptureSlot(self.program, explicit, capture)) continue;
             try self.addIfFree(capture.local, caller_bound);
         }

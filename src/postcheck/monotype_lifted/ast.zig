@@ -970,16 +970,24 @@ pub const Program = struct {
         for (self.local_names.unsafeRawItemsForView()[start..]) |name| name.deinit(self.allocator);
     }
 
+    /// The id the next function takes. The largest `u32` is never a
+    /// function id, so it can mark an absent one.
+    fn nextFnId(self: *const Program) std.mem.Allocator.Error!FnId {
+        const raw = std.math.cast(u32, self.fns.len()) orelse return error.OutOfMemory;
+        if (raw == std.math.maxInt(u32)) return error.OutOfMemory;
+        return @fromBackingInt(raw);
+    }
+
     pub fn addFn(self: *Program, fn_: Fn) std.mem.Allocator.Error!FnId {
         std.debug.assert(self.body_prefix == null);
-        const id: FnId = @fromBackingInt(@intCast(@as(u32, @intCast(self.fns.len()))));
+        const id = try self.nextFnId();
         try self.fns.append(self.allocator, fn_);
         return id;
     }
 
     pub fn reserveFnSlot(self: *Program) std.mem.Allocator.Error!FnId {
         std.debug.assert(self.body_prefix == null);
-        const id: FnId = @fromBackingInt(@intCast(@as(u32, @intCast(self.fns.len()))));
+        const id = try self.nextFnId();
         try self.fns.append(self.allocator, undefined);
         return id;
     }

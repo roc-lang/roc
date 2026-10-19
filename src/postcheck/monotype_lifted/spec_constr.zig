@@ -1526,6 +1526,10 @@ const Pass = struct {
         if (admission) |snapshot| {
             for (snapshot, 0..) |*entry, raw| entry.* = self.newSpecAdmission(raw);
         }
+        // Task scratch for the inline path, emptied after each task and kept
+        // with its capacity for the next.
+        var serial_scratch = collections.SingleThreadArena.init(self.allocator);
+        defer serial_scratch.deinit();
         var next_fn: usize = 0;
         while (next_fn < fn_count) {
             var work: [wave_capacity]Work = undefined;
@@ -1581,9 +1585,8 @@ const Pass = struct {
                 if (failure) |err| return err;
             } else {
                 for (work[0..count]) |*item| {
-                    var scratch = collections.SingleThreadArena.init(self.allocator);
-                    defer scratch.deinit();
-                    try item.execute(self.allocator, scratch.allocator());
+                    defer _ = serial_scratch.reset(.retain_capacity);
+                    try item.execute(self.allocator, serial_scratch.allocator());
                 }
             }
             if (self.options.metrics_out) |metrics| {
