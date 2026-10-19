@@ -3755,6 +3755,61 @@ const HostedBindingView = struct {
     names: *const names.NameStore,
 };
 
+/// Heap boxes of one type that their users released, handed out again before
+/// any new box is allocated.
+fn BoxPool(comptime T: type) type {
+    return struct {
+        const Self = @This();
+        spare: std.ArrayList(*T) = .empty,
+
+        fn create(self: *Self, allocator: Allocator) Allocator.Error!*T {
+            return self.spare.pop() orelse try allocator.create(T);
+        }
+
+        /// Keep `box` for reuse; a full pool whose growth fails frees it.
+        fn destroy(self: *Self, allocator: Allocator, box: *T) void {
+            self.spare.append(allocator, box) catch allocator.destroy(box);
+        }
+
+        fn deinit(self: *Self, allocator: Allocator) void {
+            for (self.spare.items) |box| allocator.destroy(box);
+            self.spare.deinit(allocator);
+        }
+    };
+}
+
+/// See `Builder.task_storage`. Every body context of a builder allocates with
+/// the builder's allocator, so any context may release what another took.
+const TaskStorage = struct {
+    inst_frames: std.ArrayList(std.ArrayList(BodyContext.InstFrame)) = .empty,
+    contexts: BoxPool(BodyContext) = .{},
+    blocks: BoxPool(BodyContext.BlockTask) = .{},
+    nested_fns: BoxPool(BodyContext.NestedFnTask) = .{},
+    hosted_evidence: BoxPool(BodyContext.HostedEvidenceTask) = .{},
+    loops: BoxPool(BodyContext.LoopTask) = .{},
+    iterator_dispatches: BoxPool(BodyContext.IteratorDispatchTask) = .{},
+    nominals: BoxPool(BodyContext.InstNominalTask) = .{},
+    declared_orders: BoxPool(BodyContext.InstDeclaredOrderTask) = .{},
+    decl_backings: BoxPool(BodyContext.InstDeclBackingTask) = .{},
+
+    const info = @typeInfo(TaskStorage).@"struct";
+
+    fn pool(self: *TaskStorage, comptime T: type) *BoxPool(T) {
+        inline for (info.field_names, info.field_types) |name, FieldType| {
+            if (FieldType == BoxPool(T)) return &@field(self, name);
+        }
+        @compileError("no box pool holds " ++ @typeName(T));
+    }
+
+    fn deinit(self: *TaskStorage, allocator: Allocator) void {
+        for (self.inst_frames.items) |*frames| frames.deinit(allocator);
+        self.inst_frames.deinit(allocator);
+        inline for (info.field_names, info.field_types) |name, FieldType| {
+            if (FieldType != @TypeOf(self.inst_frames)) @field(self, name).deinit(allocator);
+        }
+    }
+};
+
 /// A context's binder relations, shared by the nested contexts it creates
 /// (`BodyContext.nestedRelationBase`): a context relating each binder's type
 /// to its local, and which local each binder was related to.
@@ -3784,7 +3839,14 @@ const BinderMap = struct {
     values: Map,
     binder_count: usize,
 
-    const Entry = struct { binder: checked.PatternBinderId, local: DraftLocalId };
+    const Entry = struct {
+        binder: checked.PatternBinderId,
+        local: DraftLocalId,
+
+        fn binderLessThan(_: void, left: Entry, right: Entry) bool {
+            return @backingInt(left.binder) < @backingInt(right.binder);
+        }
+    };
     const Iterator = struct {
         inner: Map.Iterator,
         fn next(self: *Iterator) ?Entry {
@@ -3845,11 +3907,7 @@ const BinderMap = struct {
         const entries = try allocator.alloc(Entry, self.count());
         var iter = self.iterator();
         for (entries) |*entry| entry.* = iter.next().?;
-        std.mem.sort(Entry, entries, {}, struct {
-            fn lessThan(_: void, left: Entry, right: Entry) bool {
-                return @backingInt(left.binder) < @backingInt(right.binder);
-            }
-        }.lessThan);
+        std.mem.sort(Entry, entries, {}, Entry.binderLessThan);
         return entries;
     }
 };
@@ -5044,6 +5102,13 @@ const Builder = struct {
     /// pages kept: a body's keys are scattered over a large graph, so a fresh
     /// map would open new pages for nearly every entry.
     body_memo_pool: std.ArrayList(BodyContext.Memos) = .empty,
+    /// Instantiation frame stacks, boxed tasks, and boxed child contexts that
+    /// body contexts released, kept for the next context to take.
+    task_storage: TaskStorage = .{},
+    /// Scratch for lexical-context digests, which are built and hashed
+    /// without reentering lowering.
+    lexical_binder_scratch: std.ArrayList(LexicalBinderEntry) = .empty,
+    local_proc_context_scratch: std.ArrayList(DraftCodecLocalProcContext) = .empty,
     field_kind_scope_pool: std.ArrayList(*collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind)) = .empty,
     /// The object cache consulted for closed specializations, if any.
     spec_cache: ?Common.SpecCacheLookup,
@@ -5580,6 +5645,9 @@ const Builder = struct {
         self.node_map_pool.deinit(self.allocator);
         for (self.body_memo_pool.items) |*memos| memos.deinit(self.allocator);
         self.body_memo_pool.deinit(self.allocator);
+        self.task_storage.deinit(self.allocator);
+        self.lexical_binder_scratch.deinit(self.allocator);
+        self.local_proc_context_scratch.deinit(self.allocator);
         for (self.field_kind_scope_pool.items) |scope| {
             scope.deinit();
             self.allocator.destroy(scope);
@@ -22126,7 +22194,6 @@ const BodyContext = struct {
     codec_support_path: collections.DenseMap(Type.TypeId, void),
     /// Frame stacks of finished instantiation runs, reused by later runs so
     /// a deep type does not regrow a stack for every instantiation.
-    spare_inst_frames: std.ArrayListUnmanaged(std.ArrayList(InstFrame)) = .empty,
     inspect_defs: std.AutoHashMap(GeneratedHelperDefAddress, DraftGeneratedHelperDefEntry),
     equality_defs: std.AutoHashMap(GeneratedHelperDefAddress, DraftGeneratedHelperDefEntry),
     hash_defs: std.AutoHashMap(GeneratedHelperDefAddress, DraftGeneratedHelperDefEntry),
@@ -23157,7 +23224,6 @@ const BodyContext = struct {
         self.hash_expansion_stack.deinit();
         self.equality_expansion_stack.deinit();
         self.codec_support_path.deinit();
-        self.deinitSpareInstFrames();
         self.codec_contract_expansion_stack.deinit(self.allocator);
         self.instantiated_codec_calls.deinit(self.allocator);
         self.related_constructors.deinit(self.allocator);
@@ -24884,26 +24950,22 @@ const BodyContext = struct {
     /// them over. The relations belong to the binder environment, so a fresh
     /// environment (`enterFreshBinderEnvironment`) starts without them.
     fn nestedRelationBase(self: *BodyContext) Allocator.Error!*NestedRelationBase {
-        const entries = try self.binders.sortedEntries(self.allocator);
-        defer self.allocator.free(entries);
         if (self.nested_relation_base) |existing| {
             if (!moduleBytesEqual(existing.ctx.view.key.bytes, self.view.key.bytes)) {
                 Common.invariant("nested binder relations outlived their binder environment's module");
             }
-            var current: usize = 0;
-            var stale = false;
-            for (entries) |entry| {
-                const local = existing.related.get(entry.binder) orelse continue;
-                if (local != entry.local) {
-                    stale = true;
-                    break;
-                }
-                current += 1;
-            }
-            if (!stale and current == existing.related.count()) {
-                for (entries) |entry| {
-                    if (existing.related.contains(entry.binder)) continue;
-                    try existing.relate(entry);
+            // The relations still hold exactly when every related binder is
+            // bound to the same local; the environment's other binders are
+            // the new ones.
+            var related = existing.related.iterator();
+            const current = while (related.next()) |entry| {
+                if (self.binders.get(entry.key_ptr.*) != entry.value_ptr.*) break false;
+            } else true;
+            if (current) {
+                if (self.binders.count() != existing.related.count()) {
+                    const unrelated = try self.unrelatedBinderEntries(existing);
+                    defer self.allocator.free(unrelated);
+                    for (unrelated) |entry| try existing.relate(entry);
                 }
                 return existing;
             }
@@ -24917,8 +24979,26 @@ const BodyContext = struct {
         };
         self.nested_relation_base = relation_base;
         relation_base.ctx.relation_variables = &relation_base.variables;
+        const entries = try self.unrelatedBinderEntries(relation_base);
+        defer self.allocator.free(entries);
         for (entries) |entry| try relation_base.relate(entry);
         return relation_base;
+    }
+
+    /// The environment's binders `relation_base` has not related, in binder
+    /// order, which is the order relations are made in.
+    fn unrelatedBinderEntries(self: *BodyContext, relation_base: *const NestedRelationBase) Allocator.Error![]BinderMap.Entry {
+        const entries = try self.allocator.alloc(BinderMap.Entry, self.binders.count() - relation_base.related.count());
+        var filled: usize = 0;
+        var binders = self.binders.iterator();
+        while (binders.next()) |entry| {
+            if (relation_base.related.contains(entry.binder)) continue;
+            entries[filled] = entry;
+            filled += 1;
+        }
+        std.debug.assert(filled == entries.len);
+        std.mem.sort(BinderMap.Entry, entries, {}, BinderMap.Entry.binderLessThan);
+        return entries;
     }
 
     /// The lexical binder environment a context set aside to lower a closed
@@ -25069,7 +25149,12 @@ const BodyContext = struct {
         const binders = try self.captureLexicalBinderEntries();
         errdefer self.allocator.free(binders);
         const local_procs = try self.allocator.alloc(DraftCodecLocalProcContext, self.local_proc_contexts.count());
-        errdefer self.allocator.free(local_procs);
+        self.fillLocalProcContexts(local_procs);
+        return .{ .view = self.view.key.bytes, .binders = binders, .local_procs = local_procs };
+    }
+
+    /// Every visible local procedure context, in declaration order.
+    fn fillLocalProcContexts(self: *BodyContext, local_procs: []DraftCodecLocalProcContext) void {
         var initialized: usize = 0;
         var iter = self.local_proc_contexts.iterator();
         while (iter.next()) |entry| {
@@ -25079,21 +25164,26 @@ const BodyContext = struct {
             };
             initialized += 1;
         }
+        std.debug.assert(initialized == local_procs.len);
         sortCodecLocalProcContexts(local_procs);
-        return .{ .view = self.view.key.bytes, .binders = binders, .local_procs = local_procs };
     }
 
+    /// The digest of `captureCodecLexicalContext`'s result, built in the
+    /// builder's scratch lists.
     fn codecLexicalContextKey(self: *BodyContext) Allocator.Error!names.TypeDigest {
-        const lexical = try self.captureCodecLexicalContext();
-        defer self.allocator.free(lexical.binders);
-        defer self.allocator.free(lexical.local_procs);
+        const binders = &self.builder.lexical_binder_scratch;
+        try binders.resize(self.builder.allocator, self.binders.count() + self.typed_binders.count());
+        self.fillLexicalBinderEntries(binders.items);
+        const local_procs = &self.builder.local_proc_context_scratch;
+        try local_procs.resize(self.builder.allocator, self.local_proc_contexts.count());
+        self.fillLocalProcContexts(local_procs.items);
 
-        const binder_key = lexicalContextKeyFromEntries(self.current_fn_key, lexical.binders);
+        const binder_key = lexicalContextKeyFromEntries(self.current_fn_key, binders.items);
         var hasher = TypeDigestHasher.init();
         hasher.update("roc.monotype.codec_lexical_context");
-        hasher.update(&lexical.view);
+        hasher.update(&self.view.key.bytes);
         hasher.update(&binder_key.bytes);
-        for (lexical.local_procs) |proc| {
+        for (local_procs.items) |proc| {
             hasher.update(&proc.declaration.module);
             hashU32(&hasher, @backingInt(proc.declaration.binder));
             hashU32(&hasher, @backingInt(proc.declaration.expr));
@@ -25192,25 +25282,15 @@ const BodyContext = struct {
         if (self.restored_local_proc_scope) |restored| return restored.source_context_digest;
         if (self.local_proc_contexts.count() == 0) return null;
 
-        const addresses = try self.allocator.alloc(DraftLocalProcAddress, self.local_proc_contexts.count());
-        defer self.allocator.free(addresses);
-        var index: usize = 0;
-        var iter = self.local_proc_contexts.keyIterator();
-        while (iter.next()) |address| : (index += 1) addresses[index] = address.*;
-        std.mem.sort(DraftLocalProcAddress, addresses, {}, struct {
-            fn lessThan(_: void, left: DraftLocalProcAddress, right: DraftLocalProcAddress) bool {
-                const module_order = std.mem.order(u8, &left.module, &right.module);
-                if (module_order != .eq) return module_order == .lt;
-                if (left.binder != right.binder) return @backingInt(left.binder) < @backingInt(right.binder);
-                return @backingInt(left.expr) < @backingInt(right.expr);
-            }
-        }.lessThan);
+        const local_procs = &self.builder.local_proc_context_scratch;
+        try local_procs.resize(self.builder.allocator, self.local_proc_contexts.count());
+        self.fillLocalProcContexts(local_procs.items);
 
         var hasher = TypeDigestHasher.init();
         hasher.update("roc.monotype.local_proc_contexts.v4");
-        for (addresses) |address| {
-            const context_id = self.local_proc_contexts.get(address) orelse
-                Common.invariant("local procedure context disappeared while its digest was produced");
+        for (local_procs.items) |local_proc| {
+            const address = local_proc.declaration;
+            const context_id = local_proc.context;
             const context = self.validateLocalProcContext(context_id, address.module, address.binder, address.expr, null);
             hasher.update(&address.module);
             hashU32(&hasher, @backingInt(address.binder));
@@ -25336,11 +25416,13 @@ const BodyContext = struct {
     }
 
     fn captureLexicalBinderEntries(self: *BodyContext) Allocator.Error![]LexicalBinderEntry {
-        const count = self.binders.count() + self.typed_binders.count();
-        if (count == 0) return try self.allocator.alloc(LexicalBinderEntry, 0);
+        const entries = try self.allocator.alloc(LexicalBinderEntry, self.binders.count() + self.typed_binders.count());
+        self.fillLexicalBinderEntries(entries);
+        return entries;
+    }
 
-        const entries = try self.allocator.alloc(LexicalBinderEntry, count);
-
+    /// Every visible binder and typed binder, sorted for digest stability.
+    fn fillLexicalBinderEntries(self: *BodyContext, entries: []LexicalBinderEntry) void {
         var index: usize = 0;
         var iter = self.binders.iterator();
         while (iter.next()) |entry| {
@@ -25362,9 +25444,8 @@ const BodyContext = struct {
             };
             index += 1;
         }
-
+        std.debug.assert(index == entries.len);
         sortLexicalBinderEntries(entries);
-        return entries;
     }
 
     fn lexicalContextKeyFromEntries(base_key: names.TypeDigest, entries: []const LexicalBinderEntry) names.TypeDigest {
@@ -26264,18 +26345,14 @@ const BodyContext = struct {
         self.builder.body_memo_pool.append(self.builder.allocator, memos) catch memos.deinit(self.builder.allocator);
     }
 
-    fn deinitSpareInstFrames(self: *BodyContext) void {
-        for (self.spare_inst_frames.items) |*frames| frames.deinit(self.allocator);
-        self.spare_inst_frames.deinit(self.allocator);
-    }
-
     fn runInst(self: *BodyContext, root: InstTask) Allocator.Error!InstResult {
         // Reserve the slot this run's stack returns to before taking one.
-        try self.spare_inst_frames.ensureUnusedCapacity(self.allocator, 1);
-        var frames: std.ArrayList(InstFrame) = self.spare_inst_frames.pop() orelse .empty;
+        const spare = &self.builder.task_storage.inst_frames;
+        try spare.ensureUnusedCapacity(self.allocator, 1);
+        var frames: std.ArrayList(InstFrame) = spare.pop() orelse .empty;
         defer {
             frames.clearRetainingCapacity();
-            self.spare_inst_frames.appendAssumeCapacity(frames);
+            spare.appendAssumeCapacity(frames);
         }
         errdefer {
             // Scopes nest, so the innermost frame releases first.
@@ -26328,14 +26405,14 @@ const BodyContext = struct {
     }
 
     inline fn boxInstTask(self: *BodyContext, comptime T: type, task: T) Allocator.Error!*T {
-        const boxed = try self.allocator.create(T);
+        const boxed = try self.builder.task_storage.pool(T).create(self.allocator);
         boxed.* = task;
         return boxed;
     }
 
     fn destroyInstTaskBox(self: *BodyContext, task: InstTask) void {
         switch (task) {
-            inline .nominal, .declared_order, .decl_backing => |boxed| self.allocator.destroy(boxed),
+            inline .nominal, .declared_order, .decl_backing => |boxed| self.builder.task_storage.pool(@TypeOf(boxed.*)).destroy(self.allocator, boxed),
             .node, .slice, .fields, .tags => {},
         }
     }
@@ -30177,8 +30254,9 @@ const BodyContext = struct {
     /// A context for instantiating a callee's checked type in the caller's
     /// graph, owned by the computation that creates it.
     fn createCallContext(self: *BodyContext) Allocator.Error!*BodyContext {
-        const call_ctx = try self.allocator.create(BodyContext);
-        errdefer self.allocator.destroy(call_ctx);
+        const contexts = &self.builder.task_storage.contexts;
+        const call_ctx = try contexts.create(self.allocator);
+        errdefer contexts.destroy(self.allocator, call_ctx);
         call_ctx.* = try BodyContext.initWithMethodScope(self.allocator, self.builder, self.view, self.method_scope, self.owner_template, self.graph, self.draft);
         call_ctx.evidence = self.evidence;
         call_ctx.owner_context_fn_key = self.owner_context_fn_key;
@@ -30191,7 +30269,7 @@ const BodyContext = struct {
 
     fn destroyCallContext(self: *BodyContext, call_ctx: *BodyContext) void {
         call_ctx.deinit();
-        self.allocator.destroy(call_ctx);
+        self.builder.task_storage.contexts.destroy(self.allocator, call_ctx);
     }
 
     fn stepEvidence(self: *BodyContext, frame: *EvidenceFrame, input: ?EvidenceResult) Allocator.Error!EvidenceStep {
@@ -31895,7 +31973,7 @@ const BodyContext = struct {
     fn releaseIfTask(self: *BodyContext, task: *IfTask) void {
         if (task.branch_ctx) |branch_ctx| {
             branch_ctx.deinit();
-            self.allocator.destroy(branch_ctx);
+            self.builder.task_storage.contexts.destroy(self.allocator, branch_ctx);
             task.branch_ctx = null;
         }
         self.allocator.free(task.branches);
@@ -31905,8 +31983,9 @@ const BodyContext = struct {
     }
 
     fn createBranchContext(self: *BodyContext) Allocator.Error!*BodyContext {
-        const branch_ctx = try self.allocator.create(BodyContext);
-        errdefer self.allocator.destroy(branch_ctx);
+        const contexts = &self.builder.task_storage.contexts;
+        const branch_ctx = try contexts.create(self.allocator);
+        errdefer contexts.destroy(self.allocator, branch_ctx);
         branch_ctx.* = try self.childContext(self.current_fn_key);
         return branch_ctx;
     }
@@ -31914,7 +31993,7 @@ const BodyContext = struct {
     fn destroyBranchContext(self: *BodyContext, slot: *?*BodyContext) void {
         const branch_ctx = slot.* orelse return;
         branch_ctx.deinit();
-        self.allocator.destroy(branch_ctx);
+        self.builder.task_storage.contexts.destroy(self.allocator, branch_ctx);
         slot.* = null;
     }
 
@@ -32095,7 +32174,7 @@ const BodyContext = struct {
     fn releaseMatchTask(self: *BodyContext, task: *MatchTask) void {
         for (task.pending.items) |entry| {
             entry.ctx.deinit();
-            self.allocator.destroy(entry.ctx);
+            self.builder.task_storage.contexts.destroy(self.allocator, entry.ctx);
         }
         task.pending.deinit(self.allocator);
         task.pending = .empty;
@@ -33592,7 +33671,7 @@ const BodyContext = struct {
     };
 
     fn iteratorDispatchStep(self: *BodyContext, task: IteratorDispatchTask) Allocator.Error!LowerStep {
-        const boxed = try self.allocator.create(IteratorDispatchTask);
+        const boxed = try self.builder.task_storage.pool(IteratorDispatchTask).create(self.allocator);
         boxed.* = task;
         return requestLowerTask(self, .{ .iterator_dispatch = boxed });
     }
@@ -33904,9 +33983,13 @@ const BodyContext = struct {
     /// `task` stored by `ctx`'s allocator, for a `LowerTask` variant that
     /// holds it by pointer; finishing or releasing its frame frees it.
     fn boxLowerTask(ctx: *BodyContext, comptime T: type, task: T) Allocator.Error!*T {
-        const boxed = try ctx.allocator.create(T);
+        const boxed = try ctx.builder.task_storage.pool(T).create(ctx.allocator);
         boxed.* = task;
         return boxed;
+    }
+
+    fn destroyLowerTaskBox(ctx: *BodyContext, task: anytype) void {
+        ctx.builder.task_storage.pool(@TypeOf(task.*)).destroy(ctx.allocator, task);
     }
 
     fn requestLowerTask(ctx: *BodyContext, task: LowerTask) LowerStep {
@@ -34307,18 +34390,18 @@ const BodyContext = struct {
             .constructor => |*task| self.releaseConstructorTask(task),
             .block => |task| {
                 self.releaseBlockTask(task);
-                self.allocator.destroy(task);
+                self.destroyLowerTaskBox(task);
             },
             .if_task => |*task| self.releaseIfTask(task),
             .match_task => |*task| self.releaseMatchTask(task),
             .nested_fn => |task| {
                 self.releaseNestedFnTask(task);
-                self.allocator.destroy(task);
+                self.destroyLowerTaskBox(task);
             },
             .hosted_evidence => |task| {
                 releaseEvidenceFrames(&task.frames);
                 task.frames.deinit(self.allocator);
-                self.allocator.destroy(task);
+                self.destroyLowerTaskBox(task);
             },
             .draft_callables => |*task| {
                 self.allocator.free(task.drafts);
@@ -34330,11 +34413,11 @@ const BodyContext = struct {
             .statement => |*task| self.releaseStatementTask(task),
             .loop => |task| {
                 self.releaseLoopTask(task);
-                self.allocator.destroy(task);
+                self.destroyLowerTaskBox(task);
             },
             .iterator_dispatch => |task| {
                 self.releaseIteratorDispatchTask(task);
-                self.allocator.destroy(task);
+                self.destroyLowerTaskBox(task);
             },
             .materialize => |*task| self.releaseMaterializeTask(task),
             .branch_body, .return_value, .inspected, .divergent, .field_access, .str, .direct_structural, .inspect_only => {},
@@ -66894,8 +66977,8 @@ test "monotype sameType keeps failed alias alternatives out of recursion stack" 
     builder.program = &program;
     builder.active_body_draft = null;
     var ctx: BodyContext = undefined;
-    ctx.spare_inst_frames = .empty;
-    defer ctx.deinitSpareInstFrames();
+    builder.task_storage = .{};
+    defer builder.task_storage.deinit(ctx.allocator);
     ctx.allocator = std.testing.allocator;
     ctx.builder = &builder;
     ctx.graph = graph;
@@ -66938,8 +67021,8 @@ test "body context inspects graph-owned types despite program TypeId collisions"
     builder.bool_ty = program_ty;
     builder.timing = null;
     var ctx: BodyContext = undefined;
-    ctx.spare_inst_frames = .empty;
-    defer ctx.deinitSpareInstFrames();
+    builder.task_storage = .{};
+    defer builder.task_storage.deinit(ctx.allocator);
     ctx.allocator = gpa;
     ctx.builder = &builder;
     ctx.graph = graph;
@@ -67076,8 +67159,6 @@ test "graph constructor representation follows aliases and preserves nominal lay
     }));
 
     var ctx: BodyContext = undefined;
-    ctx.spare_inst_frames = .empty;
-    defer ctx.deinitSpareInstFrames();
     ctx.graph = graph;
     try std.testing.expectEqual(structural, (try ctx.constructorRepresentationNode(structural)));
     try std.testing.expectEqual(structural, (try ctx.constructorRepresentationNode(alias)));
@@ -67122,8 +67203,8 @@ test "issue 11288: root substitutions share lexical cells and isolate separate i
     builder.diagnostics = null;
     builder.active_spec_job_diagnostics = null;
     var ctx: BodyContext = undefined;
-    ctx.spare_inst_frames = .empty;
-    defer ctx.deinitSpareInstFrames();
+    builder.task_storage = .{};
+    defer builder.task_storage.deinit(ctx.allocator);
     ctx.allocator = gpa;
     ctx.builder = &builder;
     ctx.graph = graph;
@@ -67234,8 +67315,6 @@ test "issue 11265: forwarded evidence compares methods in their owning name stor
         .vector = &.{ .{ .structural = .{ .derivation = .encoder } }, .checked_error, .{ .structural = .{ .derivation = .parser } } },
     };
     var ctx: BodyContext = undefined;
-    ctx.spare_inst_frames = .empty;
-    defer ctx.deinitSpareInstFrames();
     ctx.graph = graph;
     ctx.evidence = frame;
 
@@ -70895,8 +70974,8 @@ test "issue 11362: checked instantiation reserves only recursive node identities
     builder.diagnostics = &diagnostics;
     builder.active_spec_job_diagnostics = null;
     var ctx: BodyContext = undefined;
-    ctx.spare_inst_frames = .empty;
-    defer ctx.deinitSpareInstFrames();
+    builder.task_storage = .{};
+    defer builder.task_storage.deinit(ctx.allocator);
     ctx.allocator = gpa;
     ctx.builder = &builder;
     ctx.graph = graph;
@@ -70977,8 +71056,8 @@ test "issue 11362: allocation failure removes active checked instantiation marke
             builder.diagnostics = null;
             builder.active_spec_job_diagnostics = null;
             var ctx: BodyContext = undefined;
-            ctx.spare_inst_frames = .empty;
-            defer ctx.deinitSpareInstFrames();
+            builder.task_storage = .{};
+            defer builder.task_storage.deinit(ctx.allocator);
             ctx.allocator = allocator;
             ctx.builder = &builder;
             ctx.graph = graph;
@@ -71131,8 +71210,8 @@ fn testLazyCheckedInstantiationAliases(gpa: Allocator) (Allocator.Error || error
     builder.diagnostics = &diagnostics;
     builder.active_spec_job_diagnostics = null;
     var ctx: BodyContext = undefined;
-    ctx.spare_inst_frames = .empty;
-    defer ctx.deinitSpareInstFrames();
+    builder.task_storage = .{};
+    defer builder.task_storage.deinit(ctx.allocator);
     ctx.allocator = gpa;
     ctx.builder = &builder;
     ctx.graph = graph;
@@ -71227,8 +71306,8 @@ test "issue 11362: checked instantiation allocates placeholders only for recursi
     builder.diagnostics = null;
     builder.active_spec_job_diagnostics = null;
     var ctx: BodyContext = undefined;
-    ctx.spare_inst_frames = .empty;
-    defer ctx.deinitSpareInstFrames();
+    builder.task_storage = .{};
+    defer builder.task_storage.deinit(ctx.allocator);
     ctx.allocator = gpa;
     ctx.builder = &builder;
     ctx.graph = graph;
@@ -71294,8 +71373,8 @@ test "issue 11362: allocation failure removes checked instantiation markers" {
             builder.diagnostics = null;
             builder.active_spec_job_diagnostics = null;
             var ctx: BodyContext = undefined;
-            ctx.spare_inst_frames = .empty;
-            defer ctx.deinitSpareInstFrames();
+            builder.task_storage = .{};
+            defer builder.task_storage.deinit(ctx.allocator);
             ctx.allocator = allocator;
             ctx.builder = &builder;
             ctx.graph = graph;
@@ -71355,8 +71434,8 @@ fn testLazyCheckedInstantiation(allocator: Allocator, recursive: bool) (Allocato
     builder.diagnostics = &diagnostics;
     builder.active_spec_job_diagnostics = null;
     var ctx: BodyContext = undefined;
-    ctx.spare_inst_frames = .empty;
-    defer ctx.deinitSpareInstFrames();
+    builder.task_storage = .{};
+    defer builder.task_storage.deinit(ctx.allocator);
     ctx.allocator = allocator;
     ctx.builder = &builder;
     ctx.graph = graph;
@@ -71473,8 +71552,8 @@ test "lazy checked instantiation allocates only recursive placeholders and clear
             builder.diagnostics = null;
             builder.active_spec_job_diagnostics = null;
             var ctx: BodyContext = undefined;
-            ctx.spare_inst_frames = .empty;
-            defer ctx.deinitSpareInstFrames();
+            builder.task_storage = .{};
+            defer builder.task_storage.deinit(ctx.allocator);
             ctx.allocator = gpa;
             ctx.builder = &builder;
             ctx.graph = graph;
@@ -71542,8 +71621,8 @@ test "lazy checked placeholders obey closed and innermost declaration scopes" {
     builder.diagnostics = null;
     builder.active_spec_job_diagnostics = null;
     var ctx: BodyContext = undefined;
-    ctx.spare_inst_frames = .empty;
-    defer ctx.deinitSpareInstFrames();
+    builder.task_storage = .{};
+    defer builder.task_storage.deinit(ctx.allocator);
     ctx.graph = graph;
     var ctx_view: ModuleViewData = undefined;
     ctx.view = &ctx_view;
@@ -71749,8 +71828,8 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     builder.app_module_identity = null;
     builder.program = &program;
     var ctx: BodyContext = undefined;
-    ctx.spare_inst_frames = .empty;
-    defer ctx.deinitSpareInstFrames();
+    builder.task_storage = .{};
+    defer builder.task_storage.deinit(ctx.allocator);
     ctx.allocator = gpa;
     ctx.builder = &builder;
     ctx.graph = graph;
