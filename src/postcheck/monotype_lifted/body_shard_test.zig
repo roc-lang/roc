@@ -174,7 +174,7 @@ fn body(p: *Ast.Program, ids: PrefixIds, fn_id: Ast.FnId, symbol: u32, join: u32
     const ty = ids.ty;
     const frozen = ids.expression;
     const local = try p.addLocalWithBinder(@fromBackingInt(@intCast(symbol)), ty, @fromBackingInt(@intCast(7)));
-    try p.setLocalName(local, "private_local");
+    p.setLocalNameId(local, p.localNameId(ids.local));
     const other = try p.addLocal(@fromBackingInt(@intCast(4)), ty);
     const text = try p.addStringLiteral("private string");
     const scope = try p.addInlineScope(.{
@@ -322,10 +322,14 @@ fn equalPrograms(expected: *const Ast.Program, expected_ids: PrefixIds, actual: 
             !std.mem.eql(u8, field_name, "types") and
             !std.mem.eql(u8, field_name, "proc_debug_names") and
             !std.mem.eql(u8, field_name, "next_symbol") and
-            !std.mem.eql(u8, field_name, "string_literals"))
+            !std.mem.eql(u8, field_name, "string_literals") and
+            !std.mem.eql(u8, field_name, "local_name_table"))
         {
             try testing.expectEqualDeep(@field(a, field_name), @field(b, field_name));
         }
+    }
+    for (a.local_names) |name| {
+        try testing.expectEqualStrings(a.local_name_table.text(name), b.local_name_table.text(name));
     }
     try testing.expectEqual(a.string_literals.len, b.string_literals.len);
     for (a.string_literals, b.string_literals) |left, right| {

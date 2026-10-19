@@ -130,6 +130,97 @@ pub const PackedListLiteral = struct {
 /// Span into one of this IR's flat side tables.
 pub const Span = Common.Span;
 
+/// Source-level name of a local, interned in a `LocalNameTable`.
+pub const LocalNameId = enum(u32) {
+    /// A compiler-generated temporary with no source-level name.
+    none = std.math.maxInt(u32),
+    _,
+};
+
+/// Interned source-level local names. Monotype produces the table and later
+/// stages read it. Specialization gives many locals the same binder name, so
+/// each distinct name is stored once.
+pub const LocalNameTable = struct {
+    bytes: std.ArrayList(u8) = .empty,
+    spans: std.ArrayList(TextSpan) = .empty,
+    index: std.HashMapUnmanaged(LocalNameId, void, IdContext, std.hash_map.default_max_load_percentage) = .empty,
+
+    const TextSpan = struct { start: u32, len: u32 };
+
+    const IdContext = struct {
+        table: *const LocalNameTable,
+
+        pub fn hash(ctx: IdContext, id: LocalNameId) u64 {
+            return std.hash.Wyhash.hash(0, ctx.table.text(id));
+        }
+
+        pub fn eql(_: IdContext, a: LocalNameId, b: LocalNameId) bool {
+            return a == b;
+        }
+    };
+
+    const TextContext = struct {
+        table: *const LocalNameTable,
+
+        pub fn hash(_: TextContext, name: []const u8) u64 {
+            return std.hash.Wyhash.hash(0, name);
+        }
+
+        pub fn eql(ctx: TextContext, name: []const u8, id: LocalNameId) bool {
+            return std.mem.eql(u8, name, ctx.table.text(id));
+        }
+    };
+
+    /// The id of `name`, adding it when absent. An empty name is `none`.
+    pub fn intern(self: *LocalNameTable, allocator: std.mem.Allocator, name: []const u8) std.mem.Allocator.Error!LocalNameId {
+        if (name.len == 0) return .none;
+        const entry = try self.index.getOrPutContextAdapted(
+            allocator,
+            name,
+            TextContext{ .table = self },
+            IdContext{ .table = self },
+        );
+        if (entry.found_existing) return entry.key_ptr.*;
+        errdefer self.index.removeByPtr(entry.key_ptr);
+        if (self.spans.items.len >= @backingInt(LocalNameId.none)) return error.OutOfMemory;
+        const start = std.math.cast(u32, self.bytes.items.len) orelse return error.OutOfMemory;
+        const len = std.math.cast(u32, name.len) orelse return error.OutOfMemory;
+        try self.spans.ensureUnusedCapacity(allocator, 1);
+        try self.bytes.appendSlice(allocator, name);
+        const id: LocalNameId = @fromBackingInt(@intCast(self.spans.items.len));
+        self.spans.appendAssumeCapacity(.{ .start = start, .len = len });
+        entry.key_ptr.* = id;
+        return id;
+    }
+
+    /// The text of `id`; empty for `none`.
+    pub fn text(self: *const LocalNameTable, id: LocalNameId) []const u8 {
+        if (id == .none) return "";
+        const span = self.spans.items[@backingInt(id)];
+        return self.bytes.items[span.start .. span.start + span.len];
+    }
+
+    pub fn clone(self: *const LocalNameTable, allocator: std.mem.Allocator) std.mem.Allocator.Error!LocalNameTable {
+        var bytes = try self.bytes.clone(allocator);
+        errdefer bytes.deinit(allocator);
+        var spans = try self.spans.clone(allocator);
+        errdefer spans.deinit(allocator);
+        var result: LocalNameTable = .{ .bytes = bytes, .spans = spans };
+        try result.index.ensureTotalCapacityContext(allocator, @intCast(spans.items.len), IdContext{ .table = &result });
+        for (0..spans.items.len) |index| {
+            result.index.putAssumeCapacityNoClobberContext(@fromBackingInt(@intCast(index)), {}, IdContext{ .table = &result });
+        }
+        return result;
+    }
+
+    pub fn deinit(self: *LocalNameTable, allocator: std.mem.Allocator) void {
+        self.index.deinit(allocator);
+        self.spans.deinit(allocator);
+        self.bytes.deinit(allocator);
+        self.* = .{};
+    }
+};
+
 /// Checked function definition used by a Monotype function template.
 pub const FnDef = union(enum(u8)) {
     local_template: names.ProcTemplate,
@@ -1648,7 +1739,8 @@ pub const ProgramView = struct {
     expr_regions: []const base.Region,
     stmt_locs: []const base.SourceLoc,
     stmt_regions: []const base.Region,
-    local_names: []const []const u8,
+    local_names: []const LocalNameId,
+    local_name_table: *const LocalNameTable,
     next_symbol: u32,
 
     pub fn getComptimeValueRoot(self: ProgramView, id: Common.ComptimeValueRootId) Common.ComptimeValueRoot {
@@ -1841,9 +1933,11 @@ pub const ProgramBuilder = struct {
     stmt_locs: ProgramList(base.SourceLoc, "stmt_locs"),
     /// Checked source region per statement, parallel to `stmts`.
     stmt_regions: ProgramList(base.Region, "stmt_regions"),
-    /// Source-level name per local, parallel to `locals` (empty for
-    /// compiler-generated temporaries; owned by this program).
-    local_names: ProgramList([]const u8, "local_names"),
+    /// Source-level name per local, parallel to `locals` (`none` for
+    /// compiler-generated temporaries).
+    local_names: ProgramList(LocalNameId, "local_names"),
+    /// Text of every `LocalNameId` in `local_names`.
+    local_name_table: LocalNameTable,
     /// Ambient location recorded by `addExpr`/`addStmt`. Lowering sets this on
     /// entry to each source node, so synthetic glue nodes inherit the location
     /// of the source node they were derived from.
@@ -1895,6 +1989,7 @@ pub const ProgramBuilder = struct {
             .stmt_locs = .empty,
             .stmt_regions = .empty,
             .local_names = .empty,
+            .local_name_table = .{},
             .current_loc = base.SourceLoc.none,
             .current_region = base.Region.zero(),
         };
@@ -1937,13 +2032,8 @@ pub const ProgramBuilder = struct {
         for (self.comptime_sites.unsafeRawItemsForView()) |site| {
             try result.comptime_sites.append(allocator, site);
         }
-        for (self.local_names.unsafeRawItemsForView()) |name| {
-            const copied = try allocator.dupe(u8, name);
-            result.local_names.append(allocator, copied) catch |err| {
-                allocator.free(copied);
-                return err;
-            };
-        }
+        try result.local_names.appendSlice(allocator, self.local_names.unsafeRawItemsForView());
+        result.local_name_table = try self.local_name_table.clone(allocator);
         result.next_symbol = self.next_symbol;
         result.current_loc = self.current_loc;
         result.current_region = self.current_region;
@@ -1951,9 +2041,7 @@ pub const ProgramBuilder = struct {
     }
 
     pub fn deinit(self: *ProgramBuilder) void {
-        for (self.local_names.unsafeRawItemsForView()) |name| {
-            if (name.len > 0) self.allocator.free(name);
-        }
+        self.local_name_table.deinit(self.allocator);
         self.local_names.deinit(self.allocator);
         self.stmt_regions.deinit(self.allocator);
         self.stmt_locs.deinit(self.allocator);
@@ -2139,6 +2227,7 @@ pub const ProgramBuilder = struct {
             .stmt_locs = self.stmt_locs.unsafeRawItemsForView(),
             .stmt_regions = self.stmt_regions.unsafeRawItemsForView(),
             .local_names = self.local_names.unsafeRawItemsForView(),
+            .local_name_table = &self.local_name_table,
             .next_symbol = self.next_symbol,
         };
     }
@@ -2339,7 +2428,7 @@ pub const ProgramBuilder = struct {
             .capture_id = checked_capture_id,
             .checked_capture_id = checked_capture_id,
         });
-        try self.local_names.append(self.allocator, "");
+        try self.local_names.append(self.allocator, .none);
         return id;
     }
 
@@ -2353,17 +2442,15 @@ pub const ProgramBuilder = struct {
         local.checked_capture_id = checked_id;
     }
 
-    /// Record the source-level name of a local (dupes; empty means none).
+    /// Record the source-level name of a local (empty means none).
     pub fn setLocalName(self: *ProgramBuilder, id: LocalId, name: []const u8) std.mem.Allocator.Error!void {
         if (name.len == 0) return;
-        const slot = self.local_names.getPtrImmediate(@backingInt(id));
-        if (slot.len > 0) self.allocator.free(slot.*);
-        slot.* = try self.allocator.dupe(u8, name);
+        self.local_names.getPtrImmediate(@backingInt(id)).* = try self.local_name_table.intern(self.allocator, name);
     }
 
     /// Source-level name of a local; empty for compiler-generated temporaries.
     pub fn localName(self: *const ProgramBuilder, id: LocalId) []const u8 {
-        return self.local_names.unsafeRawItemsForView()[@backingInt(id)];
+        return self.local_name_table.text(self.local_names.unsafeRawItemsForView()[@backingInt(id)]);
     }
 
     pub fn localCount(self: *const ProgramBuilder) usize {

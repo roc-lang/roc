@@ -270,7 +270,8 @@ pub const ProgramView = struct {
     inline_scopes: []const InlineScope,
     expr_inline_scopes: []const InlineScopeId,
     stmt_inline_scopes: []const InlineScopeId,
-    local_names: []const []const u8,
+    local_names: []const Mono.LocalNameId,
+    local_name_table: *const Mono.LocalNameTable,
 
     pub fn getComptimeValueRoot(self: ProgramView, id: Common.ComptimeValueRootId) Common.ComptimeValueRoot {
         return self.comptime_value_roots[@backingInt(id)];
@@ -301,7 +302,7 @@ pub const ProgramView = struct {
     }
 
     pub fn localName(self: ProgramView, id: LocalId) []const u8 {
-        return self.local_names[@backingInt(id)];
+        return self.local_name_table.text(self.local_names[@backingInt(id)]);
     }
 
     /// The CaptureId of a local. Every local that participates in a capture set
@@ -486,9 +487,12 @@ pub const Program = struct {
     expr_inline_scopes: ProgramList(InlineScopeId, "expr_inline_scopes"),
     /// Virtual inline scope per statement, parallel to `stmts`.
     stmt_inline_scopes: ProgramList(InlineScopeId, "stmt_inline_scopes"),
-    /// Source-level name per local, parallel to `locals` (empty for
+    /// Source-level name per local, parallel to `locals` (`none` for
     /// compiler-generated temporaries; moved from Monotype).
-    local_names: ProgramList([]const u8, "local_names"),
+    local_names: ProgramList(Mono.LocalNameId, "local_names"),
+    /// Text of every `LocalNameId`, moved from Monotype. A body shard reads
+    /// its source program's table.
+    local_name_table: Mono.LocalNameTable = .{},
     /// Ambient location recorded by `addExpr`/`addStmt`. Passes that add
     /// nodes set this so synthetic nodes inherit a source location.
     current_loc: base.SourceLoc,
@@ -512,6 +516,7 @@ pub const Program = struct {
         result.shapes = .{};
         result.shapes_owner = null;
         result.proc_debug_names = ProcDebugNameMap.init(allocator);
+        result.local_name_table = .{};
         result.current_loc = self.current_loc;
         result.current_region = self.current_region;
         result.current_inline_scope = self.current_inline_scope;
@@ -638,7 +643,7 @@ pub const Program = struct {
         inline_scopes: std.ArrayList(InlineScope),
         expr_inline_scopes: std.ArrayList(InlineScopeId),
         stmt_inline_scopes: std.ArrayList(InlineScopeId),
-        local_names: std.ArrayList([]const u8),
+        local_names: std.ArrayList(Mono.LocalNameId),
         static_data_values: std.ArrayList(StaticDataValue),
         comptime_sites: std.ArrayList(ComptimeSite),
         next_symbol: u32,
@@ -688,7 +693,7 @@ pub const Program = struct {
             .inline_scopes = ProgramList(InlineScope, "inline_scopes").fromArrayList(inline_scopes),
             .expr_inline_scopes = ProgramList(InlineScopeId, "expr_inline_scopes").fromArrayList(expr_inline_scopes),
             .stmt_inline_scopes = ProgramList(InlineScopeId, "stmt_inline_scopes").fromArrayList(stmt_inline_scopes),
-            .local_names = ProgramList([]const u8, "local_names").fromArrayList(local_names),
+            .local_names = ProgramList(Mono.LocalNameId, "local_names").fromArrayList(local_names),
             .current_loc = base.SourceLoc.none,
             .current_region = base.Region.zero(),
             .current_inline_scope = InlineScopeId.none,
@@ -696,9 +701,7 @@ pub const Program = struct {
     }
 
     pub fn deinit(self: *Program) void {
-        for (self.local_names.unsafeRawItemsForView()) |name| {
-            if (name.len > 0) self.allocator.free(name);
-        }
+        self.local_name_table.deinit(self.allocator);
         self.local_names.deinit(self.allocator);
         self.stmt_inline_scopes.deinit(self.allocator);
         self.expr_inline_scopes.deinit(self.allocator);
@@ -794,6 +797,7 @@ pub const Program = struct {
             .expr_inline_scopes = self.expr_inline_scopes.unsafeRawItemsForView(),
             .stmt_inline_scopes = self.stmt_inline_scopes.unsafeRawItemsForView(),
             .local_names = self.local_names.unsafeRawItemsForView(),
+            .local_name_table = self.localNameTable(),
         };
     }
 
@@ -851,7 +855,6 @@ pub const Program = struct {
     /// a retry or the next analysis walk.
     pub fn rewindSpecConstrAnalysis(self: *Program, virtual_mark: SpecConstrAnalysisMark) void {
         const mark = self.ownedAnalysisMark(virtual_mark);
-        self.freeAnalysisLocalNames(mark.local_names);
         self.freeAnalysisStrings(mark.string_literals);
         self.string_literals.restoreLen(mark.string_literals);
         self.fn_def_captures.restoreLen(mark.fn_def_captures);
@@ -885,7 +888,6 @@ pub const Program = struct {
     /// by its temporary nodes.
     pub fn finishSpecConstrAnalysis(self: *Program, virtual_mark: SpecConstrAnalysisMark) void {
         const mark = self.ownedAnalysisMark(virtual_mark);
-        self.freeAnalysisLocalNames(mark.local_names);
         self.freeAnalysisStrings(mark.string_literals);
         self.string_literals.shrinkAndFree(self.allocator, mark.string_literals);
         self.fn_def_captures.shrinkAndFree(self.allocator, mark.fn_def_captures);
@@ -931,12 +933,6 @@ pub const Program = struct {
 
     fn freeAnalysisStrings(self: *Program, start: usize) void {
         for (self.string_literals.unsafeRawItemsForView()[start..]) |literal| literal.deinit(self.allocator);
-    }
-
-    fn freeAnalysisLocalNames(self: *Program, start: usize) void {
-        for (self.local_names.unsafeRawItemsForView()[start..]) |name| {
-            if (name.len > 0) self.allocator.free(name);
-        }
     }
 
     pub fn addFn(self: *Program, fn_: Fn) std.mem.Allocator.Error!FnId {
@@ -1137,16 +1133,28 @@ pub const Program = struct {
 
     /// Source-level name of a local; empty for compiler-generated temporaries.
     pub fn localName(self: *const Program, id: LocalId) []const u8 {
+        return self.localNameTable().text(self.localNameId(id));
+    }
+
+    pub fn localNameId(self: *const Program, id: LocalId) Mono.LocalNameId {
         return self.row("local_names", @backingInt(id));
     }
 
-    /// Replace a suffix local's diagnostic name with independently owned bytes.
+    fn localNameTable(self: *const Program) *const Mono.LocalNameTable {
+        if (self.body_prefix) |prefix| return prefix.source.localNameTable();
+        return &self.local_name_table;
+    }
+
+    /// Give a suffix local an already interned diagnostic name.
+    pub fn setLocalNameId(self: *Program, id: LocalId, name: Mono.LocalNameId) void {
+        self.local_names.set(self.ownedIndex("local_names", @backingInt(id)), name);
+    }
+
+    /// Intern and record a local's diagnostic name. A body shard reads its
+    /// source program's table, so only an unsharded program interns.
     pub fn setLocalName(self: *Program, id: LocalId, text: []const u8) std.mem.Allocator.Error!void {
-        const index = self.ownedIndex("local_names", @backingInt(id));
-        const owned = if (text.len == 0) "" else try self.allocator.dupe(u8, text);
-        const old = self.local_names.get(index);
-        if (old.len > 0) self.allocator.free(old);
-        self.local_names.set(index, owned);
+        if (self.body_prefix != null) Common.invariant("a body shard interned a local name");
+        self.setLocalNameId(id, try self.local_name_table.intern(self.allocator, text));
     }
 
     pub fn sourceFiles(self: *const Program) []const base.SourceFileEntry {
@@ -1612,7 +1620,7 @@ pub const Program = struct {
             .capture_id = checked_capture_id,
             .checked_capture_id = checked_capture_id,
         });
-        try self.local_names.append(self.allocator, "");
+        try self.local_names.append(self.allocator, .none);
         return id;
     }
 
@@ -1654,7 +1662,7 @@ pub const Program = struct {
             .checked_capture_id = checked_capture_id,
             .capture_kind = capture_kind,
         });
-        try self.local_names.append(self.allocator, "");
+        try self.local_names.append(self.allocator, .none);
         return id;
     }
 
