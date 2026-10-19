@@ -930,10 +930,13 @@ const BinderIdentity = struct {
     digest: names.TypeDigest,
 };
 
+/// A dense slot for one binder identity, scoped to one `Subst`'s contents.
+const BinderSlot = enum(u32) { _ };
+
 const BindingTarget = union(enum) {
     local: Ast.LocalId,
-    binder: BinderIdentity,
-    alias: BinderIdentity,
+    binder: BinderSlot,
+    alias: BinderSlot,
 };
 
 const BindingChange = struct {
@@ -5239,9 +5242,9 @@ const Pass = struct {
 /// scope's writes can be unwound at its boundary.
 ///
 /// The exact-local map is keyed by `LocalId`. The other two maps are keyed by
-/// `BinderIdentity`—the checked pattern binder together with the digest of the
-/// local's monomorphic type, so two locals that share a binder but were
-/// monomorphized at different types stay distinct bindings. `binder_aliases`
+/// the dense slot of a `BinderIdentity`—the checked pattern binder together
+/// with the digest of the local's monomorphic type, so two locals that share a
+/// binder but were monomorphized at different types stay distinct bindings. `binder_aliases`
 /// resolves every binder-equivalent local while cloning, for opaque and
 /// structural values alike. `binder_subst` exposes only known structure and
 /// loop-carried values to specialization decisions. Keeping those indexes
@@ -5249,8 +5252,8 @@ const Pass = struct {
 /// an opaque binding into constructor evidence.
 const Subst = struct {
     exact: collections.DenseMap(Ast.LocalId, Value),
-    binder_subst: std.AutoHashMap(BinderIdentity, Value),
-    binder_aliases: std.AutoHashMap(BinderIdentity, Value),
+    binder_subst: collections.DenseMap(BinderSlot, Value),
+    binder_aliases: collections.DenseMap(BinderSlot, Value),
     /// Binder identities carried by an enclosing loop being cloned, with a
     /// nesting refcount. A carried variable's value must survive every `let`
     /// scope inside the loop body: the state-merge lowering binds a merged
@@ -5259,16 +5262,25 @@ const Subst = struct {
     /// binder. Cloning a `let` value floats any update to a carried binder past its
     /// own restore so a later reference resolves to the merged value rather
     /// than the loop-entry value pinned at loop setup.
-    loop_carried_binders: std.AutoHashMap(BinderIdentity, u32),
+    loop_carried_binders: collections.DenseMap(BinderSlot, u32),
+    /// The slot of each binder identity met so far: each binder heads a chain
+    /// of the slots for the types it was met at, almost always one.
+    binder_heads: collections.DenseMap(check.CheckedModule.PatternBinderId, u32),
+    binder_slots: std.ArrayList(SlotNode),
     changes: std.ArrayList(BindingChange),
     allocator: Allocator,
+
+    const no_slot: u32 = std.math.maxInt(u32);
+    const SlotNode = struct { identity: BinderIdentity, next: u32 };
 
     fn init(allocator: Allocator) Subst {
         return .{
             .exact = collections.DenseMap(Ast.LocalId, Value).init(allocator),
-            .binder_subst = std.AutoHashMap(BinderIdentity, Value).init(allocator),
-            .binder_aliases = std.AutoHashMap(BinderIdentity, Value).init(allocator),
-            .loop_carried_binders = std.AutoHashMap(BinderIdentity, u32).init(allocator),
+            .binder_subst = collections.DenseMap(BinderSlot, Value).init(allocator),
+            .binder_aliases = collections.DenseMap(BinderSlot, Value).init(allocator),
+            .loop_carried_binders = collections.DenseMap(BinderSlot, u32).init(allocator),
+            .binder_heads = collections.DenseMap(check.CheckedModule.PatternBinderId, u32).init(allocator),
+            .binder_slots = .empty,
             .changes = .empty,
             .allocator = allocator,
         };
@@ -5276,6 +5288,8 @@ const Subst = struct {
 
     fn deinit(self: *Subst) void {
         self.changes.deinit(self.allocator);
+        self.binder_slots.deinit(self.allocator);
+        self.binder_heads.deinit();
         self.loop_carried_binders.deinit();
         self.binder_aliases.deinit();
         self.binder_subst.deinit();
@@ -5285,6 +5299,8 @@ const Subst = struct {
     /// Forget every substitution while keeping the tables' capacity.
     fn clearRetainingCapacity(self: *Subst) void {
         self.changes.clearRetainingCapacity();
+        self.binder_slots.clearRetainingCapacity();
+        self.binder_heads.clearRetainingCapacity();
         self.loop_carried_binders.clearRetainingCapacity();
         self.binder_aliases.clearRetainingCapacity();
         self.binder_subst.clearRetainingCapacity();
@@ -5307,12 +5323,38 @@ const Subst = struct {
         };
     }
 
+    /// The slot of `identity`, or null when this substitution has never
+    /// written under it.
+    fn slotOf(self: *const Subst, identity: BinderIdentity) ?BinderSlot {
+        var cursor = self.binder_heads.get(identity.binder) orelse return null;
+        while (cursor != no_slot) {
+            const node = self.binder_slots.items[cursor];
+            if (std.mem.eql(u8, &node.identity.digest.bytes, &identity.digest.bytes)) return @fromBackingInt(cursor);
+            cursor = node.next;
+        }
+        return null;
+    }
+
+    fn internSlot(self: *Subst, identity: BinderIdentity) Allocator.Error!BinderSlot {
+        if (self.slotOf(identity)) |slot| return slot;
+        const index = std.math.cast(u32, self.binder_slots.items.len) orelse return error.OutOfMemory;
+        if (index == no_slot) return error.OutOfMemory;
+        try self.binder_slots.ensureUnusedCapacity(self.allocator, 1);
+        const head = try self.binder_heads.getOrPut(identity.binder);
+        const next = if (head.found_existing) head.value_ptr.* else no_slot;
+        head.value_ptr.* = index;
+        self.binder_slots.appendAssumeCapacity(.{ .identity = identity, .next = next });
+        return @fromBackingInt(index);
+    }
+
     /// Resolve a local to its known value through the exact-local map, then the
     /// binder-wide map.
     fn get(self: *const Subst, program: *Ast.Program, local: Ast.LocalId) ?Value {
         if (self.exact.get(local)) |value| return value;
         if (binderIdentityOf(program, local)) |identity| {
-            if (self.binder_subst.get(identity)) |value| return value;
+            if (self.slotOf(identity)) |slot| {
+                if (self.binder_subst.get(slot)) |value| return value;
+            }
         }
         return null;
     }
@@ -5322,7 +5364,9 @@ const Subst = struct {
     fn getForClone(self: *const Subst, program: *Ast.Program, local: Ast.LocalId) ?Value {
         if (self.exact.get(local)) |value| return value;
         if (binderIdentityOf(program, local)) |identity| {
-            if (self.binder_aliases.get(identity)) |value| return value;
+            if (self.slotOf(identity)) |slot| {
+                if (self.binder_aliases.get(slot)) |value| return value;
+            }
         }
         return null;
     }
@@ -5344,8 +5388,9 @@ const Subst = struct {
         try self.putExact(local, value);
 
         const identity = binderIdentityOf(program, local) orelse return;
-        try self.putAlias(identity, value);
-        const subst_binder = self.isLoopCarried(identity) or switch (value) {
+        const slot = try self.internSlot(identity);
+        try self.putAliasSlot(slot, value);
+        const subst_binder = self.loop_carried_binders.contains(slot) or switch (value) {
             .tag,
             .record,
             .tuple,
@@ -5358,12 +5403,7 @@ const Subst = struct {
             => false,
         };
         if (!subst_binder) return;
-        const previous_binder = self.binder_subst.get(identity);
-        try self.changes.append(self.allocator, .{
-            .key = .{ .binder = identity },
-            .previous = previous_binder,
-        });
-        try self.binder_subst.put(identity, value);
+        try self.putBinderSlot(slot, value);
     }
 
     /// Install a substitution for one exact local id without touching its
@@ -5382,18 +5422,27 @@ const Subst = struct {
         try self.exact.put(local, value);
     }
 
-    fn putAlias(self: *Subst, identity: BinderIdentity, value: Value) Allocator.Error!void {
-        const previous = self.binder_aliases.get(identity);
+    fn putAliasSlot(self: *Subst, slot: BinderSlot, value: Value) Allocator.Error!void {
+        const previous = self.binder_aliases.get(slot);
         try self.changes.append(self.allocator, .{
-            .key = .{ .alias = identity },
+            .key = .{ .alias = slot },
             .previous = previous,
         });
-        try self.binder_aliases.put(identity, value);
+        try self.binder_aliases.put(slot, value);
+    }
+
+    fn putBinderSlot(self: *Subst, slot: BinderSlot, value: Value) Allocator.Error!void {
+        const previous = self.binder_subst.get(slot);
+        try self.changes.append(self.allocator, .{
+            .key = .{ .binder = slot },
+            .previous = previous,
+        });
+        try self.binder_subst.put(slot, value);
     }
 
     fn putLocalAlias(self: *Subst, program: *Ast.Program, local: Ast.LocalId, value: Value) Allocator.Error!void {
         const identity = binderIdentityOf(program, local) orelse return;
-        try self.putAlias(identity, value);
+        try self.putAliasSlot(try self.internSlot(identity), value);
     }
 
     /// Install a binder-wide substitution for a loop-carried slot. Reassigned
@@ -5404,13 +5453,9 @@ const Subst = struct {
     /// pre-loop local and capture recomputation turns the vanished binding into
     /// a phantom root argument.
     fn putLoopCarried(self: *Subst, identity: BinderIdentity, value: Value) Allocator.Error!void {
-        try self.putAlias(identity, value);
-        const previous = self.binder_subst.get(identity);
-        try self.changes.append(self.allocator, .{
-            .key = .{ .binder = identity },
-            .previous = previous,
-        });
-        try self.binder_subst.put(identity, value);
+        const slot = try self.internSlot(identity);
+        try self.putAliasSlot(slot, value);
+        try self.putBinderSlot(slot, value);
     }
 
     /// Remove the pre-loop `binder_subst` value for the variable carried by a
@@ -5424,33 +5469,29 @@ const Subst = struct {
     fn dropCarriedBinder(self: *Subst, program: *Ast.Program, initial: Ast.ExprId) Allocator.Error!?BinderIdentity {
         const local = localExpr(program, initial) orelse return null;
         const identity = binderIdentityOf(program, local) orelse return null;
-        if (self.binder_subst.get(identity)) |previous| {
+        const slot = self.slotOf(identity) orelse return identity;
+        if (self.binder_subst.get(slot)) |previous| {
             try self.changes.append(self.allocator, .{
-                .key = .{ .binder = identity },
+                .key = .{ .binder = slot },
                 .previous = previous,
             });
-            _ = self.binder_subst.remove(identity);
+            _ = self.binder_subst.remove(slot);
         }
-        if (self.binder_aliases.get(identity)) |previous| {
+        if (self.binder_aliases.get(slot)) |previous| {
             try self.changes.append(self.allocator, .{
-                .key = .{ .alias = identity },
+                .key = .{ .alias = slot },
                 .previous = previous,
             });
-            _ = self.binder_aliases.remove(identity);
+            _ = self.binder_aliases.remove(slot);
         }
         return identity;
-    }
-
-    /// Whether an enclosing loop currently carries this binder.
-    fn isLoopCarried(self: *const Subst, identity: BinderIdentity) bool {
-        return self.loop_carried_binders.contains(identity);
     }
 
     /// Register a binder as carried by a loop being cloned. Nested loops that
     /// carry the same binder are counted so the marker survives until the
     /// outermost such loop finishes.
     fn markLoopCarried(self: *Subst, identity: BinderIdentity) Allocator.Error!void {
-        const entry = try self.loop_carried_binders.getOrPut(identity);
+        const entry = try self.loop_carried_binders.getOrPut(try self.internSlot(identity));
         if (entry.found_existing) {
             entry.value_ptr.* += 1;
         } else {
@@ -5460,9 +5501,10 @@ const Subst = struct {
 
     /// Drop one registration of a carried binder, removing it at zero.
     fn unmarkLoopCarried(self: *Subst, identity: BinderIdentity) void {
-        const entry = self.loop_carried_binders.getPtr(identity) orelse return;
+        const slot = self.slotOf(identity) orelse return;
+        const entry = self.loop_carried_binders.getPtr(slot) orelse return;
         if (entry.* <= 1) {
-            _ = self.loop_carried_binders.remove(identity);
+            _ = self.loop_carried_binders.remove(slot);
         } else {
             entry.* -= 1;
         }
@@ -5476,26 +5518,29 @@ const Subst = struct {
     /// (an arm boundary or the loop clone itself) still unwinds it.
     fn restoreFloatingLoopCarries(self: *Subst, start: usize) Allocator.Error!void {
         if (self.loop_carried_binders.count() == 0) return self.restore(start);
-        var floated = std.ArrayList(struct { identity: BinderIdentity, value: Value }).empty;
+        var floated = std.ArrayList(struct { slot: BinderSlot, value: Value }).empty;
         defer floated.deinit(self.allocator);
         for (self.changes.items[start..]) |change| {
-            const identity = switch (change.key) {
-                .binder => |identity| identity,
+            const slot = switch (change.key) {
+                .binder => |slot| slot,
                 .local, .alias => continue,
             };
-            if (!self.isLoopCarried(identity)) continue;
-            const value = self.binder_subst.get(identity) orelse continue;
+            if (!self.loop_carried_binders.contains(slot)) continue;
+            const value = self.binder_subst.get(slot) orelse continue;
             var seen = false;
             for (floated.items) |entry| {
-                if (std.meta.eql(entry.identity, identity)) {
+                if (entry.slot == slot) {
                     seen = true;
                     break;
                 }
             }
-            if (!seen) try floated.append(self.allocator, .{ .identity = identity, .value = value });
+            if (!seen) try floated.append(self.allocator, .{ .slot = slot, .value = value });
         }
         self.restore(start);
-        for (floated.items) |entry| try self.putLoopCarried(entry.identity, entry.value);
+        for (floated.items) |entry| {
+            try self.putAliasSlot(entry.slot, entry.value);
+            try self.putBinderSlot(entry.slot, entry.value);
+        }
     }
 
     fn restore(self: *Subst, start: usize) void {
@@ -5511,18 +5556,18 @@ const Subst = struct {
                         _ = self.exact.remove(local);
                     }
                 },
-                .binder => |identity| {
+                .binder => |slot| {
                     if (change.previous) |previous| {
-                        self.binder_subst.putAssumeCapacity(identity, previous);
+                        self.binder_subst.putAssumeCapacity(slot, previous);
                     } else {
-                        _ = self.binder_subst.remove(identity);
+                        _ = self.binder_subst.remove(slot);
                     }
                 },
-                .alias => |identity| {
+                .alias => |slot| {
                     if (change.previous) |previous| {
-                        self.binder_aliases.putAssumeCapacity(identity, previous);
+                        self.binder_aliases.putAssumeCapacity(slot, previous);
                     } else {
-                        _ = self.binder_aliases.remove(identity);
+                        _ = self.binder_aliases.remove(slot);
                     }
                 },
             }
