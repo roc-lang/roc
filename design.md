@@ -598,8 +598,8 @@ a build writes.
 
 A pack entry's code is a function of the procedure alone: every reference
 from it into code placed with it, and every reference by identity to code
-placed elsewhere, holds no displacement in the stored bytes
-(`LirCodeGen.normalizeArtifactRefSite`), since placement patches each again.
+placed elsewhere, holds no displacement in the stored bytes, since placement
+patches each again.
 Two programs that compile one procedure therefore store the same bytes for it
 however their buffers were laid out, which is what lets a dev build take
 compile-time evaluation's code for a procedure as its own (tested by
@@ -2090,8 +2090,8 @@ parked, unparked, and upgraded requests, and never-run stubs.
 A runtime build fills the object cache with packs of dev code; compile-time
 evaluation reads them. A command that only checks fills it too: compile-time
 evaluation runs a dev build's code, so once checking completes with no error,
-the CLI files the code evaluation ran, lifted from each stage's image
-(`CompletedStages.artifacts`) with one copy of each procedure, as one pack of
+the CLI files the code evaluation ran, lifted from each stage's image with
+one copy of each procedure, as one pack of
 its keyed closed specializations, under the same withholding rules as a
 runtime pack: an entry whose closure names a program-local symbol it does not
 carry, or still converts a literal, is not offered. A completed value the
@@ -2136,7 +2136,7 @@ and compile-time code calls nothing in the compiler. Compile-time evaluation
 compiles its procedures as a dev build's object code, so a procedure's code
 in evaluation is the code a build links, and links that code into its own
 image (`HostSplice`): the program's static data, the slots evaluation
-publishes completed values into included, is placed in a writable region at
+writes completed values into included, is placed in a writable region at
 the end of the image, where object code's PC-relative data references reach
 it. Immutable carried data is captured only from referenced export closure
 using one prepared catalog. Native procedure code ownership
@@ -21913,7 +21913,7 @@ an object-cache pack and back into another program's image):
   means more than a crash at its statement (`LIR.FailureMeaning`): code
   checking rejected, a literal conversion rejecting its literal, an
   exhaustiveness failure at a checked site, or a read of a compile-time value
-  whose producer failed. Meanings name checked modules by artifact key and
+  whose producer failed. Meanings name checked modules by checked module key and
   checked ids, never program-local statement ids or numbering, so cached code
   reports its failures exactly like freshly compiled code. `LirStore`
   derives a failing statement's meaning (`failureMeaning`); code generation
@@ -22582,7 +22582,7 @@ Producers are grouped into the strongly connected groups of that graph, and
 each group gets a level one past the deepest level it reads. The roots of one
 level are independent pure computations and run together, each module's
 checked roots as one batch on the post-check executor's lanes, then each
-literal root. Every root of a level publishes its value or failure before the
+literal root. Every root of a level records its value or failure before the
 next level starts. A batch's results are committed and reported in the
 batch's root order, so output does not depend on scheduling.
 
