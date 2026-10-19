@@ -720,14 +720,14 @@ test "dense ID hash map lint recognizes qualified and multiline keys" {
     ;
 
     const first = std.mem.find(u8, source, "HashMap(").?;
-    try std.testing.expectEqualStrings("Ast.LocalId", denseIdHashMapKey(source, first).?);
+    try std.testing.expectEqualStrings("Ast.LocalId", denseIdHashMapKey(source, first + "HashMap(".len).?);
 
     const second = std.mem.findPos(u8, source, first + 1, "HashMap(").?;
-    try std.testing.expectEqualStrings("NodeId", denseIdHashMapKey(source, second).?);
+    try std.testing.expectEqualStrings("NodeId", denseIdHashMapKey(source, second + "HashMap(".len).?);
 
     const third = std.mem.findPos(u8, source, second + 1, "HashMap(").?;
-    try std.testing.expect(denseIdHashMapKey(source, third) == null);
+    try std.testing.expect(denseIdHashMapKey(source, third + "HashMap(".len) == null);
 
     const fourth = std.mem.findPos(u8, source, third + 1, "HashMap(").?;
-    try std.testing.expect(denseIdHashMapKey(source, fourth) == null);
+    try std.testing.expect(denseIdHashMapKey(source, fourth + "HashMap(".len) == null);
 }
