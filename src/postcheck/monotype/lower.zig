@@ -4130,6 +4130,9 @@ pub const DemandCounters = struct {
     upgraded: u64 = 0,
     /// Parked specializations completed as never-run stubs.
     stubs: u64 = 0,
+    /// Parked requests whose specialization an earlier compilation settled
+    /// (design.md "Discovery Summaries"); each is counted in `parked` too.
+    summarized: u64 = 0,
 };
 
 /// Bound running plus completed-but-unaccepted jobs. Extra slots let free
@@ -8042,6 +8045,22 @@ const Builder = struct {
                         self.traceDemand("park", reservation.fn_id);
                         return reservation.def;
                     }
+                    // An earlier compilation lowered this specialization's
+                    // closure, from modules this lowering has at the same
+                    // keys, and evaluated every literal root it registered
+                    // without an error or a message: the closure registers
+                    // the same roots with the same outcomes now, so it is
+                    // parked like a request the analysis proves reaches no
+                    // literal root.
+                    if (template.target != .hosted and fn_template.cached == null) if (fn_template.spec_key) |key| {
+                        if (self.discoverySettled(key.bytes)) {
+                            try self.parked_spec_jobs.put(self.allocator, reservation.fn_id, job);
+                            self.demand_counters.parked += 1;
+                            self.demand_counters.summarized += 1;
+                            self.traceDemand("summarized", reservation.fn_id);
+                            return reservation.def;
+                        }
+                    };
                     try self.beginDiscoverySpec(reservation.fn_id);
                 }
                 try self.enqueueSpecJob(job);
@@ -8744,6 +8763,7 @@ const Builder = struct {
     fn discoveryTemplate(template: Ast.FnTemplate) Ast.FnTemplate {
         var marked = template;
         marked.discovery = true;
+        marked.discovery_key = template.spec_key orelse template.discovery_key;
         marked.spec_key = null;
         marked.procedure_keyed_by_layout = false;
         return marked;
@@ -8808,6 +8828,20 @@ const Builder = struct {
     /// Why a specialization's body is lowered, as the coordinator knows it now.
     fn specDemand(self: *const Builder, fn_id: Ast.FnId) Demand {
         return if (self.discovery_specs.contains(fn_id)) .discovery else .evaluation;
+    }
+
+    /// Whether the object cache holds a discovery summary of the
+    /// specialization `key` names whose every recorded module is a module of
+    /// this lowering at the same key.
+    fn discoverySettled(self: *Builder, key: [32]u8) bool {
+        const cache = self.spec_cache orelse return false;
+        for (cache.discoverySettlements(key)) |settlement| {
+            const present = for (settlement.modules) |module| {
+                if (self.moduleForKeyBytes(module) == null) break false;
+            } else true;
+            if (present) return true;
+        }
+        return false;
     }
 
     fn beginDiscoverySpec(self: *Builder, fn_id: Ast.FnId) Allocator.Error!void {
@@ -8965,7 +8999,10 @@ const Builder = struct {
             const fn_data = self.programFunctionShape(job.fn_ty, "parked procedure specialization type was not a function");
             const args = try self.typedLocalsForArgs(self.program.types.span(fn_data.args));
             const body = try self.program.addExpr(.{ .ty = fn_data.ret, .data = .{ .crash = message } });
-            const stub_template = discoveryTemplate(job.fn_template);
+            // A never-run stub is not its specialization's discovery body,
+            // so it settles nothing.
+            var stub_template = discoveryTemplate(job.fn_template);
+            stub_template.discovery_key = null;
             self.program.setDef(job.reservation.def, .{
                 .symbol = job.reservation.symbol,
                 .fn_def = stub_template,

@@ -2085,6 +2085,32 @@ the program roots offered, the discovery roots kept, the analysis's
 templates, source and reaching templates, and custom literal types, and the discovery bodies,
 parked, unparked, and upgraded requests, and never-run stubs.
 
+#### Discovery Summaries
+
+A check whose evaluation succeeds settles the discovery of every keyed
+specialization it lowered: every literal root the specialization's closure
+registered converted without an error, and evaluation printed nothing a later
+compilation would have to repeat. Once checking reports no error, the CLI
+files a discovery summary for each such specialization beside the root
+module's packs (`DiscoverySummary.collect`): the key the body was reserved
+under (`Mono.FnTemplate.discovery_key` for a discovery body) and the checked
+keys of the modules its closure's code comes from, closed over the lifted
+program's calls and function references, including a literal root's
+conversion through the read that names it. A body the compilation did not
+lower (a parked stub or an object-cache entry) outside the app can reach the
+app through a platform requirement, so a closure holding one records the app
+module's key too. That set covers everything the closure can reach: a
+function names code only in its module's import closure, which the module's
+checked key covers, and a function value a body receives comes from code
+already in the closure.
+
+A later discovery request whose key has a summary, every recorded module of
+which this lowering has at the same key, is parked exactly like a request the
+literal-demand analysis proves reaches no literal root: the same closure
+would register the same literal roots with the same outcomes. An evaluation
+request still unparks it. `--timings` counts these under "Summarized
+requests", which are included in the parked requests.
+
 #### Compile-Time Object Packs
 
 A runtime build fills the object cache with packs of dev code; compile-time

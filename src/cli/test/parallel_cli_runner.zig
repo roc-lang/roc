@@ -444,6 +444,7 @@ const CustomCase = enum {
     native_build_pack_hits,
     early_ctfe_cache,
     check_compile_time_pack,
+    discovery_summaries,
     literal_root_rejected_every_build,
     issue_11673_callable_cache,
     issue_11678_recursive_callback_cache,
@@ -584,6 +585,7 @@ const dev_diagnostics_cases = [_]CustomCase{
     .issue_11826_cache_ownership_variants,
     .cache_fingerprints_agree,
     .check_compile_time_pack,
+    .discovery_summaries,
     .optimized_multi_module_compiles_once,
     .glue_plugin_cache_hit,
 };
@@ -3057,6 +3059,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev serves closed specializations from a previous build's packs", .timeout_ms = 600_000, .body = .{ .custom = .native_build_pack_hits } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build early CTFE cache skips Monotype bodies on an app-only rebuild", .timeout_ms = 600_000, .body = .{ .custom = .early_ctfe_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check reuses the compile-time pack an earlier check published", .timeout_ms = 600_000, .body = .{ .custom = .check_compile_time_pack } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc check parks settled discovery and still reports an edited literal", .timeout_ms = 600_000, .body = .{ .custom = .discovery_summaries } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build reports a specialization's rejected literal on every build, cached or not", .timeout_ms = 600_000, .body = .{ .custom = .literal_root_rejected_every_build } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build reports a rejected literal whose type holds a callable", .body = .{ .command = .{ .args = &.{ "build", "--no-cache" }, .roc_file = "test/cli/literal_root_rejected/CallableLiteral.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "invalid string" }}, .occurrences = &.{.{ .stream = .stderr, .text = "invalid string", .count = 1 }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build macOS output basename does not affect bytes", .body = .{ .custom = .macos_output_basename_reproducible } },
@@ -4989,6 +4992,7 @@ fn runCustomCase(
         .native_build_pack_hits => customNativeBuildPackHits(io, allocator, &env, &timer, timeout_ms),
         .early_ctfe_cache => customEarlyCtfeCache(io, allocator, &env, &timer, timeout_ms),
         .check_compile_time_pack => customCheckCompileTimePack(io, allocator, &env, &timer, timeout_ms),
+        .discovery_summaries => customDiscoverySummaries(io, allocator, &env, &timer, timeout_ms),
         .literal_root_rejected_every_build => customLiteralRootRejectedEveryBuild(io, allocator, &env, &timer, timeout_ms),
         .issue_10733_wasm_boxy_dev_sealed_object => customIssue10733WasmBoxyDevSealedObject(io, allocator, &env, &timer, timeout_ms),
         .issue_12029_wasm_boxy_tail_calls => customIssue12029WasmBoxyTailCalls(io, allocator, &env, &timer, timeout_ms),
@@ -9639,6 +9643,97 @@ const EditableApp = struct {
 /// later check that must evaluate the app's roots again, after an app-only
 /// edit and with no build ever run, splices that code: its Monotype skips the
 /// cached bodies, and both checks report the same compile-time debug output.
+/// A clean check settles the discovery of the specializations it lowered
+/// (design.md "Discovery Summaries"): a later check with the same modules
+/// parks one, a check after an edit that makes a literal invalid still
+/// reports it, and a build after the checks splices their compile-time pack
+/// and runs correctly.
+fn customDiscoverySummaries(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    var app: []const u8 = undefined;
+    if (stageEditableApp(io, allocator, env, timer, .{
+        .dir_name = "discovery_summaries",
+        .platform = "test/fx-open/platform/main.roc",
+        .platform_spelling = "../../fx-open/platform/main.roc",
+        .sources = &.{ "test/cli/discovery_summary/Query.roc", "test/cli/discovery_summary/main.roc" },
+        .app_name = "main.roc",
+    }, &app)) |failure| return failure;
+    const query_path = std.fs.path.join(allocator, &.{ std.fs.path.dirname(app).?, "Query.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the query module path: {}", .{err});
+    const source = std.Io.Dir.cwd().readFileAlloc(io, app, allocator, .limited(1024 * 1024)) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read the app: {}", .{err});
+    const query_source = std.Io.Dir.cwd().readFileAlloc(io, query_path, allocator, .limited(1024 * 1024)) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read the query module: {}", .{err});
+
+    var summarized: [2]u64 = undefined;
+    for (&summarized, 0..) |*count, index| {
+        // Each check sees an edited app, so it evaluates the app again.
+        const edited = std.fmt.allocPrint(allocator, "{s}\n# check {d}\n", .{ source, index }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate the edited app: {}", .{err});
+        std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app, .data = edited }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to write {s}: {}", .{ app, err });
+        const check_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a check");
+        const checked = runRocInEnv(io, allocator, env, &.{ "check", "--timings", "--no-color" }, app, .relative, &.{}, null, check_timeout) catch |err|
+            return customInfraFailure(allocator, timer, "check spawn error: {}", .{err});
+        if (!processSucceeded(checked.term) or std.mem.find(u8, checked.stderr, "panic") != null) {
+            return failureFromRun(allocator, timer, checked, "check did not succeed");
+        }
+        count.* = timingCounter(checked.stderr, "Shared Demand-driven specialization", "Summarized requests") orelse
+            return failureFromRun(allocator, timer, checked, "check did not report summarized requests");
+        if (index == 0) {
+            const discovered = timingCounter(checked.stderr, "Shared Demand-driven specialization", "Discovery bodies") orelse
+                return failureFromRun(allocator, timer, checked, "check did not report discovery bodies");
+            if (discovered == 0) return failureFromRun(allocator, timer, checked, "the first check lowered no discovery body");
+        }
+    }
+    if (summarized[0] != 0) return customInfraFailure(allocator, timer, "the first check parked {d} requests through summaries it could not have", .{summarized[0]});
+    if (summarized[1] == 0) return customInfraFailure(allocator, timer, "the second check parked no request through the first check's summaries", .{});
+
+    // An invalid literal in a module the summaries recorded is still found.
+    const rejecting = std.mem.replaceOwned(u8, allocator, query_source, "\"SELECT 1\"", "\"DROP 1\"") catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the edited query module: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = query_path, .data = rejecting }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write {s}: {}", .{ query_path, err });
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "check", "--no-color" },
+        .roc_file = app,
+        .file_path_mode = .relative,
+        .exit = .{ .code = 1 },
+        .contains = &.{.{ .stream = .stderr, .text = "rejected query" }},
+    })) |failure| return failure;
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = query_path, .data = query_source }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write {s}: {}", .{ query_path, err });
+
+    // A build after the checks splices their compile-time pack.
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "check", "--no-color" },
+        .roc_file = app,
+        .file_path_mode = .relative,
+        .stderr_exact = "",
+    })) |failure| return failure;
+    const exe = std.fmt.allocPrint(allocator, "{s}/discovery_summaries_app", .{env.dirs.work_dir}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the executable path: {}", .{err});
+    const out_arg = outputArg(allocator, exe) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the output argument: {}", .{err});
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "build", "--opt=dev", "--no-color", out_arg },
+        .roc_file = app,
+        .file_path_mode = .relative,
+        .stderr_exact = "",
+    })) |failure| return failure;
+    return runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{ exe, "one" }, env.dirs.work_dir, .{
+        .args = &.{},
+        .stdout_exact = "SELECT 1SELECT 1\nSELECT 1SELECT 1\n",
+        .stderr_exact = "",
+    });
+}
+
 fn customCheckCompileTimePack(
     io: std.Io,
     allocator: Allocator,

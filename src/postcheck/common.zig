@@ -430,6 +430,14 @@ pub fn procIdentityCacheKey(identity: [32]u8) [32]u8 {
     return hasher.finalResult();
 }
 
+/// One recorded discovery outcome of a specialization (design.md "Discovery
+/// Summaries"): an earlier compilation lowered the specialization's closure,
+/// whose bodies came from the modules with these checked keys, and evaluated
+/// every literal root it registered without an error or a message.
+pub const DiscoverySettlement = struct {
+    modules: []const [32]u8,
+};
+
 /// The object cache's answer for a specialization key, asked when Monotype
 /// reserves the specialization and before its body exists. The consumer that
 /// owns the cache supplies the context and the lookup.
@@ -438,6 +446,13 @@ pub const SpecCacheLookup = struct {
     /// `accept_linked`: whether the asking consumer's code is linked, so a
     /// linked-object entry (`SpecCacheHit.c_abi_entry`) can serve it.
     find: *const fn (context: *anyopaque, key: [32]u8, accept_linked: bool) ?SpecCacheHit,
+    /// The discovery outcomes recorded for a specialization key.
+    find_discovery: ?*const fn (context: *anyopaque, key: [32]u8) []const DiscoverySettlement = null,
+
+    pub fn discoverySettlements(self: SpecCacheLookup, key: [32]u8) []const DiscoverySettlement {
+        const find = self.find_discovery orelse return &.{};
+        return find(self.context, key);
+    }
 
     /// Session capability identity, not a persistent cache key. Equal providers
     /// expose the same immutable offer and artifact collection to both readers.

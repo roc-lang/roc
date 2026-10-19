@@ -486,6 +486,10 @@ pub const CompletedStages = struct {
     /// Each stage's code as object-cache artifacts, when the evaluation
     /// writes to an object cache.
     artifacts: std.ArrayList(backend.dev.ProcArtifact.Set) = .empty,
+    /// The discovery summaries of the evaluation's program (design.md
+    /// "Discovery Summaries"); null when the evaluation produced a message a
+    /// later compilation that skipped its bodies would not repeat.
+    discovery_summaries: ?lir.CheckedPipeline.DiscoverySummary.Summaries = null,
 
     const ComptimeRootOwner = @typeInfo(@FieldType(LirProgram.StaticDataValue, "compile_time_root")).optional.child;
     const SlotKey = struct {
@@ -517,6 +521,7 @@ pub const CompletedStages = struct {
         if (self.spec_comptime_reads) |*reads| reads.deinit();
         for (self.artifacts.items) |*set| set.deinit();
         self.artifacts.deinit(self.allocator);
+        if (self.discovery_summaries) |*summaries| summaries.deinit();
         self.* = undefined;
     }
 
@@ -531,6 +536,11 @@ pub const CompletedStages = struct {
     /// The stages' programs, in evaluation order.
     pub fn programs(self: *const CompletedStages) []const *const lir.CheckedPipeline.LoweredProgram {
         return self.stages.items;
+    }
+
+    /// The discovery summaries a compilation that reports no error publishes.
+    pub fn discoverySummaries(self: *const CompletedStages) []const lir.CheckedPipeline.DiscoverySummary.Summary {
+        return if (self.discovery_summaries) |summaries| summaries.items else &.{};
     }
 
     /// The specializations' compile-time reads, when this evaluation's
@@ -1093,6 +1103,14 @@ pub fn finalizeProgram(
                 .observers = lir.CheckedPipeline.Observers.fromTarget(host_target),
                 .lir_policy = host_lir_policy,
             }, compile_time_root_count, evaluation_options);
+            // Every literal root the program registered is evaluated now;
+            // its outcome is settled unless evaluation printed a message.
+            const fresh_message = for (debug_events.events.items) |event| {
+                if (event.fresh) break true;
+            } else false;
+            if (options.object_cache != null and !fresh_message) {
+                completed.?.discovery_summaries = try lir.CheckedPipeline.DiscoverySummary.collect(allocator, &prepared.program.lifted);
+            }
             if (!shares_solved) {
                 // The specializations' compile-time reads outlive the
                 // Solved program: the object cache writes them beside the
