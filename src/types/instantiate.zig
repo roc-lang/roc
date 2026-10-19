@@ -354,6 +354,9 @@ const TagUnionFrame = struct {
 ///
 /// This type does not own any of it's fields – it's a convenience wrapper to
 /// making threading it's field through all the copy steps easier
+/// Rigid variable name -> the var each occurrence of that rigid becomes.
+pub const RigidSubstitutions = @import("collections").DenseMapUnmanaged(Ident.Idx, Var);
+
 pub const Instantiator = struct {
     // not owned
     store: *TypesStore,
@@ -531,7 +534,7 @@ pub const Instantiator = struct {
         /// In this mode, all rigids  we be substituted with values in the provided map.
         /// If a rigid var is not in the map, then that variable will be set to
         /// `.err` & in debug mode it will error
-        substitute_rigids: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
+        substitute_rigids: *RigidSubstitutions,
 
         /// In this mode, rigids present in the provided map are substituted,
         /// and any other rigids are instantiated as fresh rigid variables.

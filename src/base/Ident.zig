@@ -140,6 +140,17 @@ pub const Idx = packed struct(u32) {
         return self.eql(NONE);
     }
 
+    /// Direct-column index for this identifier: its bits, attributes included,
+    /// so that `fromDenseIndex` restores it exactly.
+    pub fn denseIndex(self: Idx) usize {
+        return @as(u32, @bitCast(self));
+    }
+
+    /// The identifier whose `denseIndex` is `dense_index`.
+    pub fn fromDenseIndex(dense_index: usize) Idx {
+        return @bitCast(@as(u32, @intCast(dense_index)));
+    }
+
     /// Custom formatter for std.fmt - allows printing with `{}`
     pub fn format(
         self: Idx,

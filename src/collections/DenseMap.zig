@@ -596,15 +596,24 @@ pub fn DenseMapPool(comptime K: type, comptime V: type) type {
     };
 }
 
+/// Whether `K` is a packed struct ID that supplies its own bijection to a
+/// dense index (`denseIndex` / `fromDenseIndex`).
+fn isPackedDenseKey(comptime K: type) bool {
+    const type_info = @typeInfo(K);
+    return type_info == .@"struct" and type_info.@"struct".layout == .@"packed" and
+        @hasDecl(K, "denseIndex") and @hasDecl(K, "fromDenseIndex");
+}
+
 fn assertDenseKey(comptime K: type) void {
     const type_info = @typeInfo(K);
-    if (type_info != .int and type_info != .@"enum") {
-        @compileError("DenseMap keys must be integer or enum IDs, not " ++ @typeName(K));
+    if (type_info != .int and type_info != .@"enum" and !isPackedDenseKey(K)) {
+        @compileError("DenseMap keys must be integer or enum IDs, or packed IDs with a dense index bijection, not " ++ @typeName(K));
     }
 }
 
 fn keyIndex(key: anytype) usize {
     const K = @TypeOf(key);
+    if (comptime isPackedDenseKey(K)) return key.denseIndex();
     if (comptime @typeInfo(K) == .@"enum" and @hasDecl(K, "denseIndex")) return key.denseIndex();
     if (comptime @typeInfo(K) == .int) return @intCast(key);
     if (comptime @typeInfo(K) == .@"enum") return @intCast(@backingInt(key));
@@ -612,6 +621,7 @@ fn keyIndex(key: anytype) usize {
 }
 
 fn keyFromIndex(comptime K: type, index: usize) K {
+    if (comptime isPackedDenseKey(K)) return K.fromDenseIndex(index);
     if (comptime @typeInfo(K) == .@"enum" and @hasDecl(K, "fromDenseIndex")) return K.fromDenseIndex(index);
     if (comptime @typeInfo(K) == .int) return @intCast(index);
     if (comptime @typeInfo(K) == .@"enum") return @fromBackingInt(@intCast(index));

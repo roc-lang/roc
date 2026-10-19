@@ -50,6 +50,7 @@ const FlatType = types_mod.FlatType;
 const Rank = types_mod.Rank;
 const Polarity = types_mod.Polarity;
 const Instantiator = types_mod.instantiate.Instantiator;
+const RigidSubstitutions = types_mod.instantiate.RigidSubstitutions;
 const PolarityVarBehavior = Instantiator.PolarityVarBehavior;
 const Generalizer = types_mod.generalize.Generalizer;
 const VarPool = types_mod.generalize.VarPool;
@@ -266,11 +267,11 @@ check_activity_pool: std.ArrayList(std.ArrayList(CheckActivity)) = .empty,
 /// moves a frame an outer step is still working on.
 pattern_frame_pool: std.ArrayList(std.ArrayList(PatternCheckFrame)) = .empty,
 /// A map from one var to another. Used to apply type arguments in instantiation
-rigid_var_substitutions: std.AutoHashMapUnmanaged(Ident.Idx, Var) = .empty,
+rigid_var_substitutions: RigidSubstitutions = .empty,
 /// The receiver and parameter substitutions of the most recently finished
 /// `declareWhereAliasConstraints`, kept with their capacity for the next one.
 /// A call that starts while another is in progress finds it empty.
-where_alias_substitutions: std.AutoHashMapUnmanaged(Ident.Idx, Var) = .empty,
+where_alias_substitutions: RigidSubstitutions = .empty,
 /// Storage of the most recently finished `normalizeRowUnion`, kept with its
 /// capacity for the next one. Relating labels can normalize another row,
 /// which then finds it empty and allocates its own.
@@ -279,6 +280,9 @@ row_union_scratch: RowUnionScratch = .{},
 /// `deduplicateGeneralizedDispatchRequirements`, kept like
 /// `row_union_scratch`; null until the first one finishes.
 dispatch_dedup_scratch: ?DispatchDedupScratch = null,
+/// The use positions of the most recently finished static-dispatch drain,
+/// kept like `row_union_scratch`.
+use_positions_scratch: UsePositions = .{},
 /// The slot images of the most recently finished `relatePredeclaredUse`, kept
 /// like `row_union_scratch`; null until the first one finishes.
 predeclared_use_images: ?collections.DenseMap(Var, Var) = null,
@@ -289,7 +293,7 @@ where_constraint_representatives: std.AutoHashMapUnmanaged(Ident.Idx, u32) = .em
 /// Header rigid vars for the currently-processed type declaration.
 /// Used to resolve rigid vars in local type decl bodies that were not
 /// rewritten as rigid_var_lookup during canonicalization.
-type_decl_rigid_vars: std.AutoHashMapUnmanaged(Ident.Idx, Var) = .empty,
+type_decl_rigid_vars: RigidSubstitutions = .empty,
 /// Default expressions recorded at annotation/type-decl materialization and
 /// CHECKED at finalize (design.md "Defaulted Fields"): materialization can
 /// run before check order exists (type-decl generation, scheme
@@ -914,7 +918,7 @@ relation_operand_pool: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty,
 /// The relation under which each erroneous value expression or binder in
 /// `erroneous_value_exprs` and `erroneous_value_patterns` was made
 /// erroneous, by raw node index (`ErroneousCause`).
-erroneous_causes: std.AutoHashMapUnmanaged(u32, ErroneousCause) = .empty,
+erroneous_causes: collections.DenseMapUnmanaged(u32, ErroneousCause) = .empty,
 /// Patterns of value bindings whose annotation writes a type variable the
 /// binding cannot quantify (design.md "Value Bindings Generalize By
 /// Expression"). The annotation is reported and not applied, so the binding
@@ -1581,6 +1585,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .where_alias_substitutions = .scratch,
     .row_union_scratch = .scratch,
     .dispatch_dedup_scratch = .scratch,
+    .use_positions_scratch = .scratch,
     .predeclared_use_images = .scratch,
     .where_constraint_representatives = .scratch,
     .type_decl_rigid_vars = .lexical,
@@ -5029,15 +5034,16 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
     else
         null;
     const top_level_equivalent = semantically_eligible and !frame.has_contextual_dependency;
-    const can_be_root = top_level_equivalent and self.exprCanBeHoisted(expr, .root);
-    const can_cover_children = top_level_equivalent and self.exprCanBeHoisted(expr, .cover);
     const selection_allowed = frame.hoist_position.allowsSelection();
+    const roles = if (top_level_equivalent)
+        self.exprHoistRoles(expr, frame.binding_rhs and selection_allowed)
+    else
+        HoistRoles.none;
+    const can_be_root = roles.root;
+    const can_cover_children = roles.cover;
     const binding_rhs_can_cover_children = frame.binding_rhs and
-        top_level_equivalent and
         selection_allowed and
-        self.exprCanBeHoisted(expr, .binding_root) and
-        !isFunctionDef(&self.cir.store, self.cir.store.getExpr(expr)) and
-        !self.varIsFunctionType(ModuleEnv.varFrom(expr));
+        roles.binding_root;
     const current_covers_children = (can_cover_children and !frame.binding_rhs) or binding_rhs_can_cover_children;
     // Any eligible binding RHS suppresses smaller expression candidates, but
     // only a pattern that can publish that RHS as a binding root may become a
@@ -5373,8 +5379,6 @@ fn recordHoistBindingCandidate(
     if (!completed.hoist_position.allowsSelection() or !completed.top_level_equivalent) return;
     if (!self.patternCanOwnHoistedBindingRoot(pattern)) return;
     if (!self.exprCanBeHoisted(expr, .binding_root)) return;
-    if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(expr))) return;
-    if (self.varIsFunctionType(ModuleEnv.varFrom(expr))) return;
 
     const entry = try self.hoist_binding_candidates.getOrPut(self.gpa, pattern);
     const had_existing = entry.found_existing;
@@ -5410,8 +5414,6 @@ fn recordHoistPatternProvenance(
     if (builtin.mode == .debug) std.debug.assert(completed.hoist_position == hoist_position);
     if (!completed.hoist_position.allowsSelection() or !completed.top_level_equivalent) return;
     if (!self.exprCanBeHoisted(expr, .binding_root)) return;
-    if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(expr))) return;
-    if (self.varIsFunctionType(ModuleEnv.varFrom(expr))) return;
 
     switch (self.cir.store.getPattern(pattern)) {
         .assign, .var_assign => {},
@@ -6661,8 +6663,26 @@ fn patternIsTopLevel(self: *Self, pattern: CIR.Pattern.Idx) bool {
 const HoistRole = enum { root, cover, binding_root };
 
 fn exprCanBeHoisted(self: *Self, expr: CIR.Expr.Idx, comptime role: HoistRole) bool {
-    if (self.hoistExprInvalidated(expr)) return false;
-    if (self.varIsFunctionType(ModuleEnv.varFrom(expr))) return false;
+    return @field(self.exprHoistRoles(expr, role == .binding_root), @tagName(role));
+}
+
+/// Which hoist roles an expression can take. A function definition or a
+/// function-typed expression takes none. `binding_root` is computed only when
+/// `want_binding_root` is set; it is false otherwise.
+const HoistRoles = struct {
+    root: bool,
+    cover: bool,
+    binding_root: bool,
+
+    const none: HoistRoles = .{ .root = false, .cover = false, .binding_root = false };
+    const all: HoistRoles = .{ .root = true, .cover = true, .binding_root = true };
+    const binding_root_only: HoistRoles = .{ .root = false, .cover = false, .binding_root = true };
+    const root_only: HoistRoles = .{ .root = true, .cover = false, .binding_root = false };
+};
+
+fn exprHoistRoles(self: *Self, expr: CIR.Expr.Idx, want_binding_root: bool) HoistRoles {
+    if (self.hoistExprInvalidated(expr)) return .none;
+    if (self.varIsFunctionType(ModuleEnv.varFrom(expr))) return .none;
     return switch (self.cir.store.getExpr(expr)) {
         .e_lookup_local,
         .e_lookup_external,
@@ -6680,7 +6700,7 @@ fn exprCanBeHoisted(self: *Self, expr: CIR.Expr.Idx, comptime role: HoistRole) b
         .e_empty_list,
         .e_empty_record,
         .e_zero_argument_tag,
-        => role == .binding_root,
+        => .binding_root_only,
         .e_lookup_required,
         .e_runtime_error,
         .e_ellipsis,
@@ -6690,17 +6710,25 @@ fn exprCanBeHoisted(self: *Self, expr: CIR.Expr.Idx, comptime role: HoistRole) b
         .e_closure,
         .e_lambda,
         .e_hosted_lambda,
-        => false,
+        => .none,
         .e_num,
         .e_num_from_numeral,
         .e_typed_num_from_numeral,
-        => role == .binding_root and !self.exprHasDedicatedLiteralConversionRoot(expr),
-        .e_str => |str| switch (role) {
-            .binding_root => !self.exprHasDedicatedLiteralConversionRoot(expr),
-            .root, .cover => self.stringHasInterpolation(str.span),
+        => .{
+            .root = false,
+            .cover = false,
+            .binding_root = want_binding_root and !self.exprHasDedicatedLiteralConversionRoot(expr),
         },
-        .e_method_call => |call| !self.methodCallPreservesIteratorSourceInput(expr, call),
-        .e_dispatch_call => |call| !self.methodCallPreservesIteratorSourceInput(expr, call),
+        .e_str => |str| blk: {
+            const interpolated = self.stringHasInterpolation(str.span);
+            break :blk .{
+                .root = interpolated,
+                .cover = interpolated,
+                .binding_root = want_binding_root and !self.exprHasDedicatedLiteralConversionRoot(expr),
+            };
+        },
+        .e_method_call => |call| if (self.methodCallPreservesIteratorSourceInput(expr, call)) .none else .all,
+        .e_dispatch_call => |call| if (self.methodCallPreservesIteratorSourceInput(expr, call)) .none else .all,
         .e_list,
         .e_tuple,
         .e_block,
@@ -6721,7 +6749,7 @@ fn exprCanBeHoisted(self: *Self, expr: CIR.Expr.Idx, comptime role: HoistRole) b
         .e_type_method_call,
         .e_type_dispatch_call,
         .e_tuple_access,
-        => true,
+        => .all,
         .e_dbg,
         .e_expect_err,
         .e_expect,
@@ -6729,7 +6757,7 @@ fn exprCanBeHoisted(self: *Self, expr: CIR.Expr.Idx, comptime role: HoistRole) b
         .e_return,
         .e_break,
         .e_run_low_level,
-        => role == .root,
+        => .root_only,
         .e_deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
     };
 }
@@ -10177,7 +10205,7 @@ fn instantiateVarOrphanFlexed(
 fn instantiateVarWithSubsPolarized(
     self: *Self,
     var_to_instantiate: Var,
-    subs: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
+    subs: *RigidSubstitutions,
     env: *Env,
     region_behavior: InstantiateRegionBehavior,
     polarity_behavior: PolarityVarBehavior,
@@ -10195,7 +10223,7 @@ fn instantiateVarWithSubsPolarizedFromScheme(
     self: *Self,
     var_to_instantiate: Var,
     scheme_source: Var,
-    subs: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
+    subs: *RigidSubstitutions,
     env: *Env,
     region_behavior: InstantiateRegionBehavior,
     polarity_behavior: PolarityVarBehavior,
@@ -13236,8 +13264,8 @@ fn hoistSelectionInvariant(comptime message: []const u8) noreturn {
 }
 
 const HoistedRootKeepOracle = struct {
-    pattern_roots: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, u32) = .{},
-    expr_roots: std.AutoHashMapUnmanaged(CIR.Expr.Idx, u32) = .{},
+    pattern_roots: collections.DenseMapUnmanaged(CIR.Pattern.Idx, u32) = .empty,
+    expr_roots: collections.DenseMapUnmanaged(CIR.Expr.Idx, u32) = .empty,
     keep_roots: []const bool,
     current_root_index: usize = 0,
 
@@ -13248,14 +13276,14 @@ const HoistedRootKeepOracle = struct {
     ) Allocator.Error!HoistedRootKeepOracle {
         var oracle = HoistedRootKeepOracle{ .keep_roots = keep_roots };
         errdefer oracle.deinit(allocator);
-        try oracle.pattern_roots.ensureTotalCapacity(allocator, @intCast(roots.len));
-        try oracle.expr_roots.ensureTotalCapacity(allocator, @intCast(roots.len));
+        try oracle.pattern_roots.ensureTotalCapacity(allocator, roots.len);
+        try oracle.expr_roots.ensureTotalCapacity(allocator, roots.len);
 
         for (roots, 0..) |root, i| {
             const root_index: u32 = @intCast(i);
             switch (root.body) {
                 .expr => {
-                    const entry = oracle.expr_roots.getOrPutAssumeCapacity(root.expr);
+                    const entry = try oracle.expr_roots.getOrPut(allocator, root.expr);
                     if (entry.found_existing) hoistSelectionInvariant("duplicate selected hoisted expression root");
                     entry.value_ptr.* = root_index;
                 },
@@ -13263,7 +13291,7 @@ const HoistedRootKeepOracle = struct {
                 .pattern_validation, .valueless_binding => {},
             }
             if (root.pattern) |pattern| {
-                const entry = oracle.pattern_roots.getOrPutAssumeCapacity(pattern);
+                const entry = try oracle.pattern_roots.getOrPut(allocator, pattern);
                 if (entry.found_existing) hoistSelectionInvariant("duplicate selected hoisted binding root");
                 entry.value_ptr.* = root_index;
             }
@@ -22399,7 +22427,7 @@ fn whereAliasReferenceArgs(self: *Self, alias: std.meta.fieldInfo(CIR.WhereClaus
 fn instantiateWhereAliasConstraint(
     self: *Self,
     constraint: StaticDispatchConstraint,
-    subs: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
+    subs: *RigidSubstitutions,
     region: Region,
     env: *Env,
 ) std.mem.Allocator.Error!StaticDispatchConstraint {
@@ -22557,7 +22585,7 @@ const DeclGenFrame = struct {
     mode: union(enum) {
         ensure: struct {
             anno_scope: collections.ScopedBitSet.Scope,
-            outer_type_decl_rigid_vars: std.AutoHashMapUnmanaged(Ident.Idx, Var),
+            outer_type_decl_rigid_vars: RigidSubstitutions,
         },
         direct,
     },
@@ -26542,7 +26570,7 @@ fn beginExprCheckFrame(
     if (frame.is_binding_rhs) {
         frame.binding_pattern = binding_rhs_pattern;
         if (binding_rhs_pattern) |pattern_idx| {
-            if (self.cir.store.getPattern(pattern_idx) == .underscore) {
+            if (self.cir.store.nodes.fieldItem(.tag, ModuleEnv.nodeIdxFrom(pattern_idx)) == .pattern_underscore) {
                 self.discarded_binding_rhs_expr = expr_idx;
             }
         }
@@ -36999,13 +37027,21 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
     //    target's OWN interior dispatches without node ambiguity (a
     //    dispatch_target record's node_idx may be a foreign module's CIR
     //    index and is never compared against local nodes here).
-    for (self.cir.scheme_uses.items.items, 0..) |record, record_index| {
+    // Records are linked from the last, so each node's chain runs in record order.
+    const scheme_use_records = self.cir.scheme_uses.items.items;
+    evidence.next_node_scheme_use = try self.gpa.alloc(?u32, scheme_use_records.len);
+    var record_cursor = scheme_use_records.len;
+    while (record_cursor > 0) {
+        record_cursor -= 1;
+        const record = scheme_use_records[record_cursor];
+        const record_index: u32 = @intCast(record_cursor);
+        evidence.next_node_scheme_use[record_index] = null;
         const slot: ModuleEnv.SchemeUseRecord.Slot = @fromBackingInt(@intCast(record.slot_kind));
         switch (slot) {
             .value_use, .nested_function_use => {
                 const entry = try evidence.node_to_scheme_uses.getOrPut(self.gpa, record.node_idx);
-                if (!entry.found_existing) entry.value_ptr.* = .empty;
-                try entry.value_ptr.append(self.gpa, @intCast(record_index));
+                evidence.next_node_scheme_use[record_index] = if (entry.found_existing) entry.value_ptr.* else null;
+                entry.value_ptr.* = record_index;
             },
             .dispatch_target => {
                 // Keyed by the discharged constraint's raw fn var, which is
@@ -37019,7 +37055,7 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
                         .{record.slot_data},
                     );
                 }
-                entry.value_ptr.* = @intCast(record_index);
+                entry.value_ptr.* = record_index;
             },
             // A shared use copies no vars (it shares the in-flight
             // definition's), so it has no fresh pairs to seed; the walk
@@ -37031,11 +37067,16 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
             .where_method_use => {},
         }
     }
-    for (self.dispatch_target_instantiations.items, 0..) |instantiation, index| {
-        const resolved = self.types.resolveVar(instantiation.constraint_fn_var).var_;
+    const instantiations = self.dispatch_target_instantiations.items;
+    evidence.next_instantiation = try self.gpa.alloc(?u32, instantiations.len);
+    var instantiation_cursor = instantiations.len;
+    while (instantiation_cursor > 0) {
+        instantiation_cursor -= 1;
+        const index: u32 = @intCast(instantiation_cursor);
+        const resolved = self.types.resolveVar(instantiations[instantiation_cursor].constraint_fn_var).var_;
         const entry = try evidence.instantiations_by_var.getOrPut(self.gpa, resolved);
-        if (!entry.found_existing) entry.value_ptr.* = .empty;
-        try entry.value_ptr.append(self.gpa, @intCast(index));
+        evidence.next_instantiation[index] = if (entry.found_existing) entry.value_ptr.* else null;
+        entry.value_ptr.* = index;
     }
 
     var recursion_scratch: DefaultRecursionScratch = .{};
@@ -37324,26 +37365,29 @@ const DefaultWalkEvidence = struct {
     omitted_defaults_by_expr: collections.DenseMap(CIR.Expr.Idx, u32),
     next_omitted_default: []?u32,
     pattern_to_def_expr: collections.DenseMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx) = .empty,
-    /// Local instantiating node -> scheme-use record indices
-    /// (`value_use`/`nested_function_use` slots only).
-    node_to_scheme_uses: std.AutoHashMapUnmanaged(u32, std.ArrayListUnmanaged(u32)) = .empty,
+    /// Local instantiating node -> its first scheme-use record index
+    /// (`value_use`/`nested_function_use` slots only); `next_node_scheme_use`
+    /// links each record to the node's next one, in record order.
+    node_to_scheme_uses: collections.DenseMapUnmanaged(u32, u32) = .empty,
+    next_node_scheme_use: []?u32 = &.{},
     /// Discharged constraint's raw fn var -> its `dispatch_target`
     /// scheme-use record index.
-    dispatch_scheme_uses: std.AutoHashMapUnmanaged(u32, u32) = .empty,
-    /// Resolved constraint fn var -> `dispatch_target_instantiations` indices.
-    instantiations_by_var: collections.DenseMapUnmanaged(Var, std.ArrayListUnmanaged(u32)) = .empty,
+    dispatch_scheme_uses: collections.DenseMapUnmanaged(u32, u32) = .empty,
+    /// Resolved constraint fn var -> its first `dispatch_target_instantiations`
+    /// index; `next_instantiation` links each instantiation to the var's next
+    /// one, in instantiation order.
+    instantiations_by_var: collections.DenseMapUnmanaged(Var, u32) = .empty,
+    next_instantiation: []?u32 = &.{},
 
     fn deinit(evidence: *DefaultWalkEvidence, gpa: std.mem.Allocator) void {
         evidence.omitted_defaults_by_expr.deinit();
         gpa.free(evidence.next_omitted_default);
         evidence.pattern_to_def_expr.deinit(gpa);
-        var node_lists = evidence.node_to_scheme_uses.valueIterator();
-        while (node_lists.next()) |list| list.deinit(gpa);
         evidence.node_to_scheme_uses.deinit(gpa);
+        gpa.free(evidence.next_node_scheme_use);
         evidence.dispatch_scheme_uses.deinit(gpa);
-        var inst_lists = evidence.instantiations_by_var.valueIterator();
-        while (inst_lists.next()) |list| list.deinit(gpa);
         evidence.instantiations_by_var.deinit(gpa);
+        gpa.free(evidence.next_instantiation);
     }
 };
 
@@ -37366,11 +37410,11 @@ const DefaultWalkEvidence = struct {
 /// walk and kept across the module's pending defaults.
 const DefaultRecursionScratch = struct {
     expr_work: std.ArrayList(CIR.Expr.Idx) = .empty,
-    visited_defaults: std.AutoHashMapUnmanaged(u32, void) = .empty,
+    visited_defaults: collections.DenseMapUnmanaged(u32, void) = .empty,
     visited_exprs: collections.DenseMapUnmanaged(CIR.Expr.Idx, void) = .empty,
     seed_work: std.ArrayList(Var) = .empty,
     visited_seed_vars: collections.DenseMapUnmanaged(Var, void) = .empty,
-    visited_instantiations: std.AutoHashMapUnmanaged(u32, void) = .empty,
+    visited_instantiations: collections.DenseMapUnmanaged(u32, void) = .empty,
     invoked_work: std.ArrayList(CIR.Expr.Idx) = .empty,
     visited_invoked: collections.DenseMapUnmanaged(CIR.Expr.Idx, void) = .empty,
     local_pattern_to_expr: collections.DenseMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx) = .empty,
@@ -37451,8 +37495,9 @@ fn defaultMaterializationIsRecursive(
             const resolved_seed = self.types.resolveVar(seed_var).var_;
             const seen_seed = try visited_seed_vars.getOrPut(self.gpa, resolved_seed);
             if (seen_seed.found_existing) continue;
-            const inst_indices = evidence.instantiations_by_var.get(resolved_seed) orelse continue;
-            for (inst_indices.items) |inst_index| {
+            var next_inst = evidence.instantiations_by_var.get(resolved_seed);
+            while (next_inst) |inst_index| {
+                next_inst = evidence.next_instantiation[inst_index];
                 const seen_inst = try visited_instantiations.getOrPut(self.gpa, inst_index);
                 if (seen_inst.found_existing) continue;
                 const instantiation = self.dispatch_target_instantiations.items[inst_index];
@@ -37598,13 +37643,13 @@ fn defaultMaterializationIsRecursive(
         // This is how a dispatch performed INSIDE an instantiated scheme
         // body—local or foreign—reaches its stamped target: the body-side
         // dispatch node carries the pristine scheme's var, never the copy.
-        if (evidence.node_to_scheme_uses.get(@backingInt(expr_idx))) |record_indices| {
-            for (record_indices.items) |record_index| {
-                const record = self.cir.scheme_uses.items.items[record_index];
-                const pairs = self.cir.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
-                for (pairs) |pair| {
-                    try seed_work.append(self.gpa, @fromBackingInt(@intCast(pair.fresh_var)));
-                }
+        var next_record = evidence.node_to_scheme_uses.get(@backingInt(expr_idx));
+        while (next_record) |record_index| {
+            next_record = evidence.next_node_scheme_use[record_index];
+            const record = self.cir.scheme_uses.items.items[record_index];
+            const pairs = self.cir.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
+            for (pairs) |pair| {
+                try seed_work.append(self.gpa, @fromBackingInt(@intCast(pair.fresh_var)));
             }
         }
         const expr = self.cir.store.getExpr(expr_idx);
@@ -37924,7 +37969,7 @@ fn appendOmittedDefaultDependencies(
     evidence: *const DefaultWalkEvidence,
     self_module: base.ModuleIdentity.Idx,
     target_expr_node: u32,
-    visited_defaults: *std.AutoHashMapUnmanaged(u32, void),
+    visited_defaults: *collections.DenseMapUnmanaged(u32, void),
     expr_work: *std.ArrayList(CIR.Expr.Idx),
 ) std.mem.Allocator.Error!bool {
     var next = evidence.omitted_defaults_by_expr.get(record_expr);
@@ -45418,19 +45463,61 @@ fn excludeOtherEntryUses(self: *Self, entry: DeferredConstraintCheck, use_idx: u
 }
 
 /// Record `position` under every use with a relation in `entry`.
+/// The queue positions of each use's relations during one static-dispatch
+/// drain: each use's positions, in queue order, are a chain through `links`.
+const UsePositions = struct {
+    chains: collections.DenseMapUnmanaged(u32, Chain) = .empty,
+    links: std.ArrayListUnmanaged(Link) = .empty,
+
+    const none = std.math.maxInt(u32);
+    const Chain = struct { first: u32, last: u32 };
+    const Link = struct { position: usize, next: u32 };
+
+    pub fn deinit(self: *UsePositions, gpa: Allocator) void {
+        self.chains.deinit(gpa);
+        self.links.deinit(gpa);
+    }
+
+    fn clearRetainingCapacity(self: *UsePositions) void {
+        self.chains.clearRetainingCapacity();
+        self.links.clearRetainingCapacity();
+    }
+
+    fn append(self: *UsePositions, gpa: Allocator, use_idx: u32, position: usize) Allocator.Error!void {
+        const link = std.math.cast(u32, self.links.items.len) orelse return error.OutOfMemory;
+        if (link == none) return error.OutOfMemory;
+        try self.links.ensureUnusedCapacity(gpa, 1);
+        const chain = try self.chains.getOrPut(gpa, use_idx);
+        if (chain.found_existing) {
+            if (self.links.items[chain.value_ptr.last].position == position) return;
+            self.links.items[chain.value_ptr.last].next = link;
+            chain.value_ptr.last = link;
+        } else {
+            chain.value_ptr.* = .{ .first = link, .last = link };
+        }
+        self.links.appendAssumeCapacity(.{ .position = position, .next = none });
+    }
+
+    /// The link after `consumed`, the last link of `use_idx`'s chain already
+    /// read (`none` before the first), or null at the chain's current end.
+    fn nextLink(self: *const UsePositions, use_idx: u32, consumed: u32) ?u32 {
+        const link = if (consumed == none)
+            (self.chains.get(use_idx) orelse return null).first
+        else
+            self.links.items[consumed].next;
+        return if (link == none) null else link;
+    }
+};
+
 fn indexDeferredEntryUses(
     self: *Self,
-    use_positions: *std.AutoHashMapUnmanaged(u32, std.ArrayListUnmanaged(usize)),
+    use_positions: *UsePositions,
     entry: DeferredConstraintCheck,
     position: usize,
 ) Allocator.Error!void {
     for (self.types.sliceStaticDispatchConstraints(entry.constraints)) |constraint| {
         const use_idx = self.use_instance_by_fn_var.get(constraint.fn_var) orelse continue;
-        const list = try use_positions.getOrPut(self.gpa, use_idx);
-        if (!list.found_existing) list.value_ptr.* = .empty;
-        const items = list.value_ptr.items;
-        if (items.len != 0 and items[items.len - 1] == position) continue;
-        try list.value_ptr.append(self.gpa, position);
+        try use_positions.append(self.gpa, use_idx, position);
     }
 }
 
@@ -46801,18 +46888,19 @@ fn resumeStaticDispatchDrain(
     const drain_relation = try self.enterRelation(.none);
     // The use whose relations are settling (design.md "a use's relations
     // settle as one unit"): the queue position of its first processed
-    // relation, and how far it has consumed its positions in `use_positions`.
-    var settling: ?struct { use: u32, first: usize, next: usize } = null;
+    // relation, and the last of its links in `use_positions` it has consumed.
+    var settling: ?struct { use: u32, first: usize, consumed: u32 } = null;
     const settling_before = self.settling_use;
     defer self.settling_use = settling_before;
     // The queue positions of each use's relations, indexed the first time a
     // settling use needs positions past `indexed_to`, so every entry is
     // looked at once.
-    var use_positions: std.AutoHashMapUnmanaged(u32, std.ArrayListUnmanaged(usize)) = .empty;
+    var use_positions = self.use_positions_scratch;
+    self.use_positions_scratch = .{};
     defer {
-        var lists = use_positions.valueIterator();
-        while (lists.next()) |list| list.deinit(self.gpa);
-        use_positions.deinit(self.gpa);
+        use_positions.clearRetainingCapacity();
+        self.use_positions_scratch.deinit(self.gpa);
+        self.use_positions_scratch = use_positions;
     }
     var indexed_to: usize = drain.index;
     while (true) {
@@ -46822,15 +46910,13 @@ fn resumeStaticDispatchDrain(
             while (indexed_to < entries.len) : (indexed_to += 1) {
                 try self.indexDeferredEntryUses(&use_positions, entries[indexed_to], indexed_to);
             }
-            if (use_positions.getPtr(active.use)) |positions| {
-                while (active.next < positions.items.len) {
-                    const position = positions.items[active.next];
-                    active.next += 1;
-                    if (position <= active.first or self.use_settled_entries.contains(position)) continue;
-                    try self.use_settled_entries.put(self.gpa, position, {});
-                    self.excludeOtherEntryUses(entries[position], active.use);
-                    break :pick position;
-                }
+            while (use_positions.nextLink(active.use, active.consumed)) |link| {
+                const position = use_positions.links.items[link].position;
+                active.consumed = link;
+                if (position <= active.first or self.use_settled_entries.contains(position)) continue;
+                try self.use_settled_entries.put(self.gpa, position, {});
+                self.excludeOtherEntryUses(entries[position], active.use);
+                break :pick position;
             }
             try self.finishUseSettling(active.use);
             settling = null;
@@ -46845,7 +46931,7 @@ fn resumeStaticDispatchDrain(
                 .skip => continue,
                 .process => {},
                 .settle => |use_idx| {
-                    settling = .{ .use = use_idx, .first = index, .next = 0 };
+                    settling = .{ .use = use_idx, .first = index, .consumed = UsePositions.none };
                     self.settling_use = use_idx;
                 },
             };
