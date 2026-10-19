@@ -22,6 +22,7 @@ const JoinPointSpan = lir_defs.JoinPointSpan;
 const InlineScope = lir_defs.InlineScope;
 const InlineScopeId = lir_defs.InlineScopeId;
 const OriginKind = lir_defs.OriginKind;
+const StoredOriginKind = lir_defs.StoredOriginKind;
 const StmtOrigin = lir_defs.StmtOrigin;
 const LirProcSpec = lir_defs.LirProcSpec;
 const LirProcSpecId = lir_defs.LirProcSpecId;
@@ -256,7 +257,7 @@ const ProcRewrite = struct {
     cf_stmt_locs: RewriteRows(base.SourceLoc, "cf_stmt_locs") = .{},
     cf_stmt_regions: RewriteRows(base.Region, "cf_stmt_regions") = .{},
     cf_stmt_inline_scopes: RewriteRows(InlineScopeId, "cf_stmt_inline_scopes") = .{},
-    cf_stmt_origin_kinds: RewriteRows(OriginKind, "cf_stmt_origin_kinds") = .{},
+    cf_stmt_origin_kinds: RewriteRows(StoredOriginKind, "cf_stmt_origin_kinds") = .{},
     cf_switch_branches: RewriteColumn(CFSwitchBranch, "cf_switch_branches") = .{},
     str_match_arms: RewriteColumn(StrMatchArm, "str_match_arms") = .{},
     join_points: RewriteColumn(JoinPoint, "join_points") = .{},
@@ -641,6 +642,7 @@ fn relocateBodyValue(comptime T: type, value: T, prefix: BodyPrefix, bases: Body
         return if (raw < bases.join_point_id_first_fresh) value else @fromBackingInt(@intCast(bases.join_point_id_base + raw));
     }
     if (T == InlineScopeId) return value;
+    if (T == StoredOriginKind) return relocateBodyValue(OriginKind, value.unpack(), prefix, bases).pack();
     if (T == LocalSpan) return if (value.len == 0) value else .{ .start = movedIndex(value.start, prefix.local_ids, bases.local_ids), .len = value.len };
     if (T == CFSwitchBranchSpan) return if (value.len == 0) value else .{ .start = movedIndex(value.start, prefix.cf_switch_branches, bases.cf_switch_branches), .len = value.len };
     if (T == StrMatchStepSpan) return if (value.len == 0) value else .{ .start = movedIndex(value.start, prefix.str_match_steps, bases.str_match_steps), .len = value.len };
@@ -825,7 +827,7 @@ pub fn appendBodyShardWithJoinRelocation(
     }
     for (source.cf_stmt_origin_kinds.unsafeRawItemsForView()[source_prefix.cf_stmts..]) |kind| {
         self.cf_stmt_origin_kinds.appendAssumeCapacity(
-            relocateBodyValue(OriginKind, kind, prefix, bases),
+            relocateBodyValue(StoredOriginKind, kind, prefix, bases),
         );
     }
 
@@ -891,7 +893,7 @@ cf_stmt_inline_scopes: GuardedList.List(InlineScopeId, "LirStore.cf_stmt_inline_
 /// Why each statement exists, parallel to `cf_stmts`. Together with
 /// `cf_stmt_locs`, `cf_stmt_regions`, and `cf_stmt_inline_scopes` this forms
 /// the statement's `StmtOrigin` (see `stmtOrigin`).
-cf_stmt_origin_kinds: GuardedList.List(OriginKind, "LirStore.cf_stmt_origin_kinds"),
+cf_stmt_origin_kinds: GuardedList.List(StoredOriginKind, "LirStore.cf_stmt_origin_kinds"),
 /// Interned virtual source-frame graph.
 inline_scopes: GuardedList.List(InlineScope, "LirStore.inline_scopes"),
 /// Immutable coordinator storage visible to a body worker. A null pointer
@@ -1237,14 +1239,14 @@ pub fn stmtOriginKind(self: *const Self, id: CFStmtId) OriginKind {
     const index = @backingInt(id);
     if (self.proc_rewrite) |*rewrite| {
         if (rewrite.cf_stmts.keys.lookup(index)) |private| {
-            if (rewrite.cf_stmt_origin_kinds.owned(private)) return rewrite.cf_stmt_origin_kinds.rows.get(private);
+            if (rewrite.cf_stmt_origin_kinds.owned(private)) return rewrite.cf_stmt_origin_kinds.rows.get(private).unpack();
         }
     }
     if (self.body_coordinator) |coordinator| {
         if (index < self.body_prefix.cf_stmts) return coordinator.stmtOriginKind(id);
-        return self.cf_stmt_origin_kinds.get(index - self.body_prefix.cf_stmts);
+        return self.cf_stmt_origin_kinds.get(index - self.body_prefix.cf_stmts).unpack();
     }
-    return self.cf_stmt_origin_kinds.get(index);
+    return self.cf_stmt_origin_kinds.get(index).unpack();
 }
 
 /// Complete provenance of a statement. Rewrites and copies pass this value to
@@ -1614,7 +1616,7 @@ pub fn addCFStmt(self: *Self, stmt: CFStmt, origin: StmtOrigin) Allocator.Error!
     self.cf_stmt_locs.appendAssumeCapacity(origin.loc);
     self.cf_stmt_regions.appendAssumeCapacity(origin.region);
     self.cf_stmt_inline_scopes.appendAssumeCapacity(origin.inline_scope);
-    self.cf_stmt_origin_kinds.appendAssumeCapacity(origin.kind);
+    self.cf_stmt_origin_kinds.appendAssumeCapacity(origin.kind.pack());
     self.noteStmtShapes(stmt);
     const id: CFStmtId = @fromBackingInt(@intCast(@as(u32, @intCast(idx))));
     if (self.tail_call_builder) |builder| try builder.record(id, stmt);
@@ -1634,14 +1636,14 @@ pub fn replaceCFStmt(self: *Self, id: CFStmtId, stmt: CFStmt, origin: StmtOrigin
             rewrite.cf_stmt_locs.rows.getPtrImmediate(rewrite.cf_stmt_locs.mark(&rewrite.cf_stmts.keys, coordinator, index, 1)).* = origin.loc;
             rewrite.cf_stmt_regions.rows.getPtrImmediate(rewrite.cf_stmt_regions.mark(&rewrite.cf_stmts.keys, coordinator, index, 1)).* = origin.region;
             rewrite.cf_stmt_inline_scopes.rows.getPtrImmediate(rewrite.cf_stmt_inline_scopes.mark(&rewrite.cf_stmts.keys, coordinator, index, 1)).* = origin.inline_scope;
-            rewrite.cf_stmt_origin_kinds.rows.getPtrImmediate(rewrite.cf_stmt_origin_kinds.mark(&rewrite.cf_stmts.keys, coordinator, index, 1)).* = origin.kind;
+            rewrite.cf_stmt_origin_kinds.rows.getPtrImmediate(rewrite.cf_stmt_origin_kinds.mark(&rewrite.cf_stmts.keys, coordinator, index, 1)).* = origin.kind.pack();
         } else if (!std.meta.eql(self.stmtOrigin(id), origin)) self.assertBodyMetadataImmutable();
     } else {
         const own = index - if (self.body_coordinator != null) self.body_prefix.cf_stmts else 0;
         self.cf_stmt_locs.getPtrImmediate(own).* = origin.loc;
         self.cf_stmt_regions.getPtrImmediate(own).* = origin.region;
         self.cf_stmt_inline_scopes.getPtrImmediate(own).* = origin.inline_scope;
-        self.cf_stmt_origin_kinds.getPtrImmediate(own).* = origin.kind;
+        self.cf_stmt_origin_kinds.getPtrImmediate(own).* = origin.kind.pack();
     }
     if (self.tail_call_builder) |builder| try builder.record(id, stmt);
 }

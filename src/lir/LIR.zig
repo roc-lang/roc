@@ -350,6 +350,36 @@ pub const OriginKind = union(enum(u8)) {
     pub const ArcLocal = struct {
         subject_local: LocalId,
     };
+
+    /// This kind in its eight-byte stored form.
+    pub fn pack(self: OriginKind) StoredOriginKind {
+        return switch (self) {
+            .arc_incref, .arc_decref => |rc| .{ .tag = std.meta.activeTag(self), .reason = @backingInt(rc.reason), .subject_local = @backingInt(rc.subject_local) },
+            .arc_dismantle => |glue| .{ .tag = .arc_dismantle, .subject_local = @backingInt(glue.subject_local) },
+            .source, .lowering_glue, .derived, .scaffold, .join_scalarize, .box_reuse, .return_slot, .str_append_fuse, .loop_append_promote, .tag_case_fusion, .forwarding_join_inline, .comptime_value_guard, .trmc, .range_prove => .{ .tag = std.meta.activeTag(self) },
+        };
+    }
+};
+
+/// A statement's `OriginKind` as its provenance column stores it: the tag,
+/// the RC reason and the subject local in eight bytes. Kinds without a
+/// reason or subject store zero for them, so every byte is defined.
+pub const StoredOriginKind = extern struct {
+    tag: std.meta.Tag(OriginKind),
+    /// An `RcReason` for `arc_incref` and `arc_decref`.
+    reason: u8 = 0,
+    padding: [2]u8 = .{ 0, 0 },
+    /// A `LocalId` for the ARC kinds.
+    subject_local: u32 = 0,
+
+    pub fn unpack(self: StoredOriginKind) OriginKind {
+        return switch (self.tag) {
+            .arc_incref => .{ .arc_incref = .{ .subject_local = @fromBackingInt(self.subject_local), .reason = @fromBackingInt(self.reason) } },
+            .arc_decref => .{ .arc_decref = .{ .subject_local = @fromBackingInt(self.subject_local), .reason = @fromBackingInt(self.reason) } },
+            .arc_dismantle => .{ .arc_dismantle = .{ .subject_local = @fromBackingInt(self.subject_local) } },
+            inline .source, .lowering_glue, .derived, .scaffold, .join_scalarize, .box_reuse, .return_slot, .str_append_fuse, .loop_append_promote, .tag_case_fusion, .forwarding_join_inline, .comptime_value_guard, .trmc, .range_prove => |tag| tag,
+        };
+    }
 };
 
 /// Solver decision that produced an ARC RC statement. Every value names the
@@ -437,6 +467,7 @@ pub const RcReason = enum(u8) {
 comptime {
     std.debug.assert(@sizeOf(RcReason) == 1);
     std.debug.assert(@sizeOf(OriginKind) == 12);
+    std.debug.assert(@sizeOf(StoredOriginKind) == 8);
 }
 
 /// Identifier of a compile-time-observed control-flow site.

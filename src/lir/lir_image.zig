@@ -67,7 +67,7 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 ///      side tables carry only what lowering produces.
 /// v45: layout representation fields are sized for practice, and resolved list
 ///      layouts are plain layout indices.
-pub const FORMAT_VERSION: u32 = 49;
+pub const FORMAT_VERSION: u32 = 50;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
@@ -266,7 +266,7 @@ pub const LirStoreImage = extern struct {
             .cf_stmt_locs = try guardedListFromRef(base.SourceLoc, "LirStore.cf_stmt_locs", base_ptr, image_size, self.cf_stmt_locs),
             .cf_stmt_regions = try guardedListFromRef(base.Region, "LirStore.cf_stmt_regions", base_ptr, image_size, self.cf_stmt_regions),
             .cf_stmt_inline_scopes = try guardedListFromRef(LIR.InlineScopeId, "LirStore.cf_stmt_inline_scopes", base_ptr, image_size, self.cf_stmt_inline_scopes),
-            .cf_stmt_origin_kinds = try guardedListFromRef(LIR.OriginKind, "LirStore.cf_stmt_origin_kinds", base_ptr, image_size, self.cf_stmt_origin_kinds),
+            .cf_stmt_origin_kinds = try guardedListFromRef(LIR.StoredOriginKind, "LirStore.cf_stmt_origin_kinds", base_ptr, image_size, self.cf_stmt_origin_kinds),
             .inline_scopes = try guardedListFromRef(LIR.InlineScope, "LirStore.inline_scopes", base_ptr, image_size, self.inline_scopes),
             .body_coordinator = null,
             .body_prefix = std.mem.zeroes(LirStore.BodyPrefix),
