@@ -351,6 +351,15 @@ pub const ProgramSession = struct {
         self.* = undefined;
     }
 
+    /// The compile-time reads of the specializations compile-time
+    /// evaluation lowered: its own, or, while a runtime consumer is still to
+    /// continue the same Solved program, that program's.
+    pub fn specComptimeReads(self: *const ProgramSession) ?*const lir.CheckedPipeline.SpecComptimeReads {
+        if (self.completed) |*completed| if (completed.specComptimeReads()) |reads| return reads;
+        const prepared = if (self.runtime_prepared) |*prepared| prepared else return null;
+        return if (prepared.spec_comptime_reads) |*reads| reads else null;
+    }
+
     pub fn takeRuntime(
         self: *ProgramSession,
         allocator: Allocator,
@@ -1530,6 +1539,11 @@ fn evaluateStaged(
     defer completed_values.deinit(allocator);
     var stage_producers = std.ArrayList(usize).empty;
     defer stage_producers.deinit(allocator);
+    // Where each failed producer failed. A later stage reading a failed
+    // value reports the failure there, so every stage's program starts with
+    // the origins the stages before it published.
+    var failure_origins = std.AutoHashMapUnmanaged(StaticSlotEnvironment.ProducerOriginKey, lir.LIR.ComptimeFailureOrigin).empty;
+    defer failure_origins.deinit(allocator);
     for (0..groups.level_count) |level| {
         stage_roots.clearRetainingCapacity();
         stage_literals.clearRetainingCapacity();
@@ -1571,8 +1585,13 @@ fn evaluateStaged(
         var program_storage = try initEvaluationProgram(ProgramPtr, allocator, lowering_modules, stage, .dev_object, options);
         defer program_storage.deinit();
         const program = program_storage.ptr();
+        const slots = if (ProgramPtr == *DevProgram) &program.slots else program.slotEnvironment();
+        var inherited = failure_origins.iterator();
+        while (inherited.next()) |entry| try slots.producer_origins.put(slots.allocator, entry.key_ptr.*, entry.value_ptr.*);
         try evaluation.enterStage(stage, program, stage_roots.items);
         try evaluation.evaluateLevel(&groups, level);
+        var stage_origins = slots.producer_origins.iterator();
+        while (stage_origins.next()) |entry| try failure_origins.put(allocator, entry.key_ptr.*, entry.value_ptr.*);
         // The stage's image holds the values it read and the ones it
         // completed.
         const frozen = try program.freezeCompleted();

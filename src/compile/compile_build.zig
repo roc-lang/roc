@@ -21,6 +21,13 @@ const lir = @import("lir");
 const unbundle = if (is_freestanding) struct {} else @import("unbundle");
 const CoreCtx = @import("ctx").CoreCtx;
 
+/// Asks a build, once its executable program is checked and before it is
+/// evaluated, whether that exact program's runtime output is recorded.
+pub const RuntimeOutputProbe = struct {
+    context: *anyopaque,
+    cached: *const fn (*anyopaque, *const check.CheckedArtifact.CheckedModuleArtifact) Allocator.Error!bool,
+};
+
 /// Runtime demand fixed before post-check finalization. Explicit plans may be
 /// declared from prepared checked modules after the frontend completes.
 pub const RuntimeLoweringConfig = struct {
@@ -226,6 +233,7 @@ pub const BuildEnv = struct {
     // Actor model coordinator (owns all mutable compilation state)
     coordinator: ?*Coordinator = null,
     runtime_lowering: ?RuntimeLoweringConfig = null,
+    runtime_output_probe: ?RuntimeOutputProbe = null,
     /// Instrumentation only; never participates in checked or object identity.
     detailed_monotype_diagnostics: bool = false,
     /// See `eval.CompileTimeFinalization.CompileTimeObjectCache`.
@@ -874,6 +882,7 @@ pub const BuildEnv = struct {
         coord.enable_hosted_transform = true;
         coord.setWatchInputTracking(self.track_watch_inputs);
         coord.runtime_lowering = self.runtime_lowering;
+        coord.runtime_output_probe = self.runtime_output_probe;
         coord.setDetailedLoweringTiming(self.detailed_lowering_timing);
         coord.compile_time_object_cache = self.compile_time_object_cache;
         if (self.detailed_monotype_diagnostics) coord.ctfe_timing.lowering.enableDetailedMonotypeBody();
@@ -903,6 +912,18 @@ pub const BuildEnv = struct {
         self.compile_time_object_cache_owner = owner;
     }
 
+    pub fn setRuntimeOutputProbe(self: *BuildEnv, probe: RuntimeOutputProbe) void {
+        if (self.coordinator) |coordinator| coordinator.runtime_output_probe = probe;
+        self.runtime_output_probe = probe;
+    }
+
+    /// Whether checked-program finalization found the program's runtime
+    /// output recorded and so lowered no runtime program.
+    pub fn runtimeOutputCached(self: *const BuildEnv) bool {
+        const coordinator = self.coordinator orelse return false;
+        return coordinator.runtime_output_cached;
+    }
+
     pub fn setRuntimeLowering(self: *BuildEnv, config: RuntimeLoweringConfig) void {
         if (self.coordinator) |coordinator| {
             std.debug.assert(coordinator.program_session == null);
@@ -917,6 +938,14 @@ pub const BuildEnv = struct {
         if (self.runtime_lowering == null) return null;
         const coordinator = self.coordinator orelse unreachable;
         return if (coordinator.program_session) |*session| session else unreachable;
+    }
+
+    /// The compile-time reads of the specializations compile-time
+    /// evaluation lowered, while its program session retains them.
+    pub fn compileTimeSpecReads(self: *BuildEnv) ?*const lir.CheckedPipeline.SpecComptimeReads {
+        const coordinator = self.coordinator orelse return null;
+        const session = if (coordinator.program_session) |*session| session else return null;
+        return session.specComptimeReads();
     }
 
     /// The programs compile-time evaluation lowered and completed, while
