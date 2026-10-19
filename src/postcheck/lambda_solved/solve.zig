@@ -3413,11 +3413,9 @@ const Solver = struct {
     }
 
     fn labelAt(comptime Name: type, types: *const Type.Store, span: Type.Span, position: usize) Name {
-        return switch (Name) {
-            Type.names.TagNameId => types.tagItem(span, position).name,
-            Type.names.RecordFieldNameId => types.fieldItem(span, position).name,
-            else => @compileError("row labels are tag or record field names"),
-        };
+        if (Name == Type.names.TagNameId) return types.tagItem(span, position).name;
+        if (Name == Type.names.RecordFieldNameId) return types.fieldItem(span, position).name;
+        @compileError("row labels are tag or record field names");
     }
 
     /// Label positions of one stored row: the row itself when it is short

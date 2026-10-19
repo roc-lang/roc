@@ -350,7 +350,7 @@ pub const Store = struct {
         while (true) {
             switch (self.vars.items[@backingInt(current)]) {
                 .link => |target| current = target,
-                else => return current,
+                .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .func, .lambda_set, .erased, .zst, .mono => return current,
             }
         }
     }
@@ -369,7 +369,7 @@ pub const Store = struct {
         while (current != root_id) {
             const next = switch (self.vars.items[@backingInt(current)]) {
                 .link => |target| target,
-                else => break,
+                .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .func, .lambda_set, .erased, .zst, .mono => break,
             };
             self.setLink(current, root_id);
             current = next;
@@ -505,7 +505,7 @@ pub const Store = struct {
             while (true) {
                 switch (self.vars[@backingInt(current)]) {
                     .link => |target| current = target,
-                    else => return current,
+                    .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .func, .lambda_set, .erased, .zst, .mono => return current,
                 }
             }
         }

@@ -581,18 +581,16 @@ pub const Program = struct {
     }
 
     fn spanField(comptime T: type) []const u8 {
-        return switch (T) {
-            ExprId => "expr_ids",
-            PatId => "pat_ids",
-            StmtId => "stmt_ids",
-            TypedLocal => "typed_locals",
-            FieldExpr => "field_exprs",
-            CaptureOperand => "capture_operands",
-            RecordDestruct => "record_destructs",
-            Branch => "branches",
-            IfBranch => "if_branches",
-            else => @compileError("no program span stores " ++ @typeName(T)),
-        };
+        if (T == ExprId) return "expr_ids";
+        if (T == PatId) return "pat_ids";
+        if (T == StmtId) return "stmt_ids";
+        if (T == TypedLocal) return "typed_locals";
+        if (T == FieldExpr) return "field_exprs";
+        if (T == CaptureOperand) return "capture_operands";
+        if (T == RecordDestruct) return "record_destructs";
+        if (T == Branch) return "branches";
+        if (T == IfBranch) return "if_branches";
+        @compileError("no program span stores " ++ @typeName(T));
     }
 
     fn appendBodySpan(self: *Program, comptime T: type, comptime field: []const u8, values: []const T) std.mem.Allocator.Error!Span(T) {
