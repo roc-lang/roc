@@ -365,12 +365,21 @@ pub const MonoLlvmCodeGen = struct {
     static_data_symbols: std.StringHashMap(LlvmBuilder.Constant),
     /// Distinguishes callable exports from independent modules in one JIT library.
     static_symbol_prefix: []const u8 = "",
-    /// Emit an object-cache pack's object: every procedure, static datum,
-    /// and helper is internal to the object, and each entrypoint is a weak
-    /// C-ABI entry, so the object links beside the program and beside other
-    /// packs' objects (two of which may export the same entry) without any
-    /// other name in common.
+    /// Emit an object-cache pack's object: every procedure and helper is
+    /// internal to the object, each constant is weak data under its content
+    /// name (`pack_data_names`), and each entrypoint is a weak C-ABI entry,
+    /// so the object links beside the program and beside other packs'
+    /// objects, which may define the same entries and constants.
     object_cache_pack: bool = false,
+    /// By static-data export row, the content name an object-cache pack's
+    /// object defines each export under (`ProcArtifact.ContentNames.
+    /// initObjectData`); a host-visible export keeps its own name and stays
+    /// internal to the object.
+    pack_data_names: []const []const u8 = &.{},
+    /// The variable defining each static-data export of an object-cache
+    /// pack, by export row, declared before any procedure and initialized
+    /// once every procedure its code pointers name is declared.
+    pack_data_variables: std.ArrayList(LlvmBuilder.Variable.Index) = .empty,
     runtime_error_func: ?LlvmBuilder.Function.Index = null,
     rc_helpers: std.AutoHashMap(u64, RcHelperEntry),
     /// Atomic helpers required by relocations in the separately emitted
@@ -665,6 +674,7 @@ pub const MonoLlvmCodeGen = struct {
         self.static_data_export_rows.deinit();
         self.clearStaticDataSymbols();
         self.static_data_symbols.deinit();
+        self.pack_data_variables.deinit(self.allocator);
         self.rc_helpers.deinit();
         self.boxy_capture_drop_helpers.deinit();
         self.boxy_dict_thunks.deinit();
@@ -961,9 +971,10 @@ pub const MonoLlvmCodeGen = struct {
             if (self.target.ofmt == .elf) try self.embedGdbScript(&builder);
         }
 
-        if (self.object_cache_pack) try self.definePackStaticData();
+        if (self.object_cache_pack) try self.declarePackStaticData();
         const procs = self.store.getProcSpecs();
         try self.compileAllProcSpecs(procs);
+        if (self.object_cache_pack) try self.initializePackStaticData();
         for (self.static_data_rc_helpers) |helper_key| {
             _ = try self.declareRcHelper(helper_key, .atomic);
         }
@@ -9182,7 +9193,9 @@ pub const MonoLlvmCodeGen = struct {
         if (self.static_data_globals.get(raw_id)) |value| return value;
 
         const builder = self.builder orelse return error.CompilationFailed;
-        if (self.static_data_export_rows.get(raw_id)) |row| {
+        // A pack's object reads its own definition of every export.
+        const export_row = if (self.object_cache_pack) null else self.static_data_export_rows.get(raw_id);
+        if (export_row) |row| {
             const data_export = self.static_data_exports[row];
             if (data_export.symbol_offset == 0 and data_export.bytes.len >= size) {
                 if (try self.frozenExportConstant(data_export)) |initializer| {
@@ -9207,9 +9220,10 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     /// The image of a frozen export as a constant: its bytes, with each
-    /// address relocation replaced by the target symbol's address plus the
-    /// addend. Null when a relocation has no constant expression here: a
-    /// function pointer, or a pointer field the target's word alignment
+    /// relocation replaced by the target's address plus the addend. Null when
+    /// a relocation has no constant expression here: a function pointer
+    /// outside an object-cache pack, whose object defines every function its
+    /// constants point at, or a pointer field the target's word alignment
     /// cannot place in a packed struct.
     fn frozenExportConstant(self: *MonoLlvmCodeGen, data_export: lir.Program.StaticDataExport) Error!?LlvmBuilder.Constant {
         const image = (try self.frozenExportImage(data_export, true)) orelse return null;
@@ -9232,7 +9246,7 @@ pub const MonoLlvmCodeGen = struct {
         }
         const word: usize = self.targetWordSize();
         for (data_export.relocations) |relocation| {
-            if (relocation.kind != .address or relocation.rc_helper != null) return null;
+            if (relocation.kind == .function_pointer and !self.object_cache_pack) return null;
             if (relocation.offset % word != 0 or relocation.offset > data_export.bytes.len or word > data_export.bytes.len - relocation.offset) return null;
         }
         const sorted = self.allocator.dupe(lir.Program.StaticDataRelocation, data_export.relocations) catch return error.OutOfMemory;
@@ -9258,7 +9272,10 @@ pub const MonoLlvmCodeGen = struct {
                 if (with_value) try field_values.append(self.allocator, chunk);
             }
             if (with_value) {
-                const target = try self.staticDataSymbol(relocation.target_symbol_name);
+                const target = switch (relocation.kind) {
+                    .address => try self.staticDataSymbol(relocation.target_symbol_name),
+                    .function_pointer => try self.packFunctionPointer(relocation),
+                };
                 const addend = builder.intConst(.i64, relocation.addend) catch return error.OutOfMemory;
                 const address = builder.gepConst(.normal, .i8, target, null, &.{addend}) catch return error.OutOfMemory;
                 try field_values.append(self.allocator, address);
@@ -9278,34 +9295,76 @@ pub const MonoLlvmCodeGen = struct {
         };
     }
 
-    /// Define every static-data export inside an object-cache pack's object
-    /// as an internal constant, so the object carries the data its code
-    /// reads and links beside any other object without a name in common.
-    /// Every export is declared before any is initialized, so constants that
-    /// point at one another resolve. An export whose image has no constant
-    /// form here (a code pointer, or a pointer field off word alignment)
-    /// fails the pack, which is then not written.
-    fn definePackStaticData(self: *MonoLlvmCodeGen) Error!void {
+    /// Declare every static-data export inside an object-cache pack's object
+    /// as a constant, so the object carries the data its code reads. Each
+    /// export its program named for itself is weak data under its content
+    /// name, which every pack that carries the same constant defines alike,
+    /// so the link keeps one; its symbol marks the datum's first byte, and
+    /// the object addresses the export `symbol_offset` bytes in. A
+    /// host-visible export is internal to the object. Exports with the same
+    /// content share one definition. Every export is declared before any is
+    /// initialized, so constants that point at one another resolve. An
+    /// export whose image has no constant form here (a pointer field off
+    /// word alignment) fails the pack, which is then not written.
+    fn declarePackStaticData(self: *MonoLlvmCodeGen) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
-        const variables = self.allocator.alloc(LlvmBuilder.Variable.Index, self.static_data_exports.len) catch return error.OutOfMemory;
-        defer self.allocator.free(variables);
-        for (self.static_data_exports, variables, 0..) |data_export, *variable, row| {
+        if (self.pack_data_names.len != self.static_data_exports.len) {
+            llvmInvariantFmt("an object-cache pack named {d} of its {d} static-data exports", .{ self.pack_data_names.len, self.static_data_exports.len });
+        }
+        self.pack_data_variables.clearRetainingCapacity();
+        try self.pack_data_variables.ensureTotalCapacity(self.allocator, self.static_data_exports.len);
+        var by_content = std.StringHashMap(LlvmBuilder.Variable.Index).init(self.allocator);
+        defer by_content.deinit();
+        for (self.static_data_exports, self.pack_data_names, 0..) |data_export, content_name, row| {
             const image = (try self.frozenExportImage(data_export, false)) orelse return error.CompilationFailed;
-            const name = builder.strtabStringFmt(".roc.pack_data.{d}", .{row}) catch return error.OutOfMemory;
-            variable.* = builder.addVariable(name, image.ty, .default) catch return error.OutOfMemory;
-            variable.ptrConst(builder).global.setLinkage(.internal, builder);
-            variable.setMutability(.constant, builder);
-            variable.setAlignment(LlvmBuilder.Alignment.fromByteUnits(@max(data_export.alignment, 1)), builder);
+            const shared = if (data_export.is_exported) null else try by_content.getOrPut(content_name);
+            const variable = if (shared != null and shared.?.found_existing) shared.?.value_ptr.* else declare: {
+                const name = if (data_export.is_exported)
+                    builder.strtabStringFmt(".roc.pack_data.{d}", .{row}) catch return error.OutOfMemory
+                else
+                    builder.strtabString(content_name) catch return error.OutOfMemory;
+                const variable = builder.addVariable(name, image.ty, .default) catch return error.OutOfMemory;
+                variable.ptrConst(builder).global.setLinkage(if (data_export.is_exported) .internal else .weak_odr, builder);
+                variable.setMutability(.constant, builder);
+                variable.setAlignment(LlvmBuilder.Alignment.fromByteUnits(@max(data_export.alignment, 1)), builder);
+                if (shared) |entry| entry.value_ptr.* = variable;
+                break :declare variable;
+            };
+            self.pack_data_variables.appendAssumeCapacity(variable);
             const offset = builder.intConst(.i64, data_export.symbol_offset) catch return error.OutOfMemory;
             const address = builder.gepConst(.normal, .i8, variable.toConst(builder), null, &.{offset}) catch return error.OutOfMemory;
             const key = self.allocator.dupe(u8, data_export.symbol_name) catch return error.OutOfMemory;
             errdefer self.allocator.free(key);
             try self.static_data_symbols.put(key, address);
         }
-        for (self.static_data_exports, variables) |data_export, variable| {
+    }
+
+    /// Initialize the exports `declarePackStaticData` declared, once every
+    /// procedure their code pointers name is declared.
+    fn initializePackStaticData(self: *MonoLlvmCodeGen) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        for (self.static_data_exports, self.pack_data_variables.items) |data_export, variable| {
+            if (variable.ptrConst(builder).init != .no_init) continue;
             const initializer = (try self.frozenExportConstant(data_export)) orelse return error.CompilationFailed;
             variable.setInitializer(initializer, builder) catch return error.OutOfMemory;
         }
+    }
+
+    /// The function a code pointer in an object-cache pack's constant names,
+    /// which the pack's object defines: the procedure of an erased callable
+    /// or procedure reference, or the refcount helper an erased callable
+    /// drops its capture with.
+    fn packFunctionPointer(self: *MonoLlvmCodeGen, relocation: lir.Program.StaticDataRelocation) Error!LlvmBuilder.Constant {
+        const builder = self.builder orelse return error.CompilationFailed;
+        if (relocation.rc_helper) |helper| {
+            const function = (try self.declareRcHelper(helper, .atomic)) orelse
+                llvmInvariantFmt("a static code pointer named the no-op refcount helper {x}", .{helper.encode()});
+            return function.toConst(builder);
+        }
+        const proc_id = relocation.procedure orelse
+            llvmInvariantFmt("static code pointer {s} names no procedure", .{relocation.target_symbol_name});
+        const function = self.proc_registry.get(@backingInt(proc_id)) orelse return error.CompilationFailed;
+        return function.toConst(builder);
     }
 
     /// Declares a readonly-object symbol once and returns its address.
@@ -14072,6 +14131,63 @@ test "static-data slots with constant images are internal constants and function
     const callable = builder.variables.items[builder.variables.items.len - 1];
     try std.testing.expectEqual(.external, callable.global.ptrConst(&builder).linkage);
     try std.testing.expect(callable.init == .no_init);
+}
+
+test "object-cache pack constants are weak data under their content names and point at the object's own functions" {
+    const allocator = std.testing.allocator;
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u64);
+    defer layouts.deinit();
+    const proc = try store.addProcSpec(.{ .name = .fromRaw(1), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .ret_layout = .bool }, .none);
+    const helper: layout.RcHelperKey = .{ .op = .decref, .layout_idx = .str };
+    const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = .aarch64, .os_tag = .macos });
+    var codegen = MonoLlvmCodeGen.initForLinkedObject(allocator, &store, &.{}, &.{}, &.{}, target);
+    defer codegen.deinit();
+    codegen.layout_store = &layouts;
+    codegen.object_cache_pack = true;
+    const node = [_]lir.Program.StaticDataRelocation{.{ .offset = 8, .target_symbol_name = "roc__d0_1", .target = .{ .data_symbol = @fromBackingInt(1) } }};
+    const callable = [_]lir.Program.StaticDataRelocation{
+        .{ .offset = 0, .target_symbol_name = "roc__p1", .kind = .function_pointer, .procedure = proc },
+        .{ .offset = 8, .target_symbol_name = "roc__rc_decref_str", .kind = .function_pointer, .rc_helper = helper },
+    };
+    var exports = [_]lir.Program.StaticDataExport{
+        .{ .symbol_name = "roc__d0", .value_id = @fromBackingInt(2), .bytes = &(@as([16]u8, @splat(0))), .alignment = 8, .is_exported = false, .relocations = &node },
+        .{ .symbol_name = "roc__d0_1", .bytes = &(@as([16]u8, @splat(1))), .symbol_offset = 8, .alignment = 8, .is_exported = false },
+        .{ .symbol_name = "roc__d1", .value_id = @fromBackingInt(1), .bytes = &(@as([16]u8, @splat(0))), .alignment = 8, .is_exported = false, .relocations = &callable },
+        .{ .symbol_name = "roc__answer", .bytes = &(@as([8]u8, @splat(2))), .alignment = 8 },
+        .{ .symbol_name = "roc__d2", .bytes = &(@as([16]u8, @splat(1))), .symbol_offset = 8, .alignment = 8, .is_exported = false },
+    };
+    const names = [_][]const u8{ "roc__hnode_parent", "roc__hnode", "roc__hcallable", "roc__answer", "roc__hnode" };
+    codegen.pack_data_names = &names;
+    try codegen.setStaticDataExports(&exports);
+    var builder = try codegen.createBuilder("pack_constants");
+    defer builder.deinit();
+    codegen.builder = &builder;
+    defer codegen.builder = null;
+
+    try codegen.declarePackStaticData();
+    try codegen.declareProcSpec(proc, store.getProcSpec(proc));
+    try codegen.initializePackStaticData();
+    const variables = codegen.pack_data_variables.items;
+    try std.testing.expectEqual(exports.len, variables.len);
+    for (variables, names, exports) |variable, name, data_export| {
+        const global = variable.ptrConst(&builder).global;
+        if (!data_export.is_exported) try std.testing.expectEqualStrings(name, global.name(&builder).slice(&builder).?);
+        try std.testing.expectEqual(if (data_export.is_exported) LlvmBuilder.Linkage.internal else .weak_odr, global.ptrConst(&builder).linkage);
+        try std.testing.expectEqual(.constant, variable.ptrConst(&builder).mutability);
+        try std.testing.expect(variable.ptrConst(&builder).init != .no_init);
+    }
+    // Exports with the same content share one definition.
+    try std.testing.expectEqual(variables[1], variables[4]);
+    // The code pointers name the procedure and the helper the object defines.
+    try std.testing.expect(codegen.rc_helpers.count() == 1);
+
+    // Code reads a slot through the pack's own definition, never a copy.
+    const variable_count = builder.variables.items.len;
+    _ = try codegen.staticDataGlobal(@fromBackingInt(2), 16);
+    _ = try codegen.staticDataGlobal(@fromBackingInt(1), 16);
+    try std.testing.expectEqual(variable_count, builder.variables.items.len);
 }
 
 test "frozen relocation offsets are bounded before host indexing for either target width" {
