@@ -8515,8 +8515,8 @@ fn compileModulePack(
 /// program for each package module. Missing or evicted packs are rebuilt.
 fn preparePackageDevPacks(ctx: *CliCtx, build_env: *BuildEnv, runtime_packs: ?*pack_store.LoadedPacks) (Allocator.Error || error{NativeCompilationFailed})!void {
     if (comptime !backend.host_lir_codegen_available) return;
-    const owner = build_env.compile_time_object_cache_owner orelse return;
-    if (!build_env.executable_artifacts_finalized) return;
+    const owner = build_env.compile_time_object_cache_owner orelse return tracePackageDevPacksSkipped("no object cache");
+    if (!build_env.executable_artifacts_finalized) return tracePackageDevPacksSkipped("checked program not finalized");
     const has_url_package = found: {
         var packages = build_env.packages.valueIterator();
         while (packages.next()) |package| {
@@ -8524,7 +8524,7 @@ fn preparePackageDevPacks(ctx: *CliCtx, build_env: *BuildEnv, runtime_packs: ?*p
         }
         break :found false;
     };
-    if (!has_url_package) return;
+    if (!has_url_package) return tracePackageDevPacksSkipped("no URL package");
     const cache: *CompileTimeObjectCache = @ptrCast(@alignCast(owner.context));
     const root_artifact = build_env.executableRootCheckedArtifact();
     const imports = try build_env.collectImportedArtifactViews(ctx.gpa, root_artifact);
@@ -8538,6 +8538,10 @@ fn preparePackageDevPacks(ctx: *CliCtx, build_env: *BuildEnv, runtime_packs: ?*p
             return error.NativeCompilationFailed;
         },
     };
+}
+
+fn tracePackageDevPacksSkipped(reason: []const u8) void {
+    if (devDiagnosticEnv("ROC_PACK_TRACE") != null) std.debug.print("package dev packs skipped: {s}\n", .{reason});
 }
 
 fn writePackageDevPacksToStore(
@@ -8559,6 +8563,9 @@ fn writePackageDevPacksToStore(
         const artifact = if (index == artifacts.len) root_artifact else artifacts[index];
         if (app_artifact) |app| if (std.meta.eql(artifact.key, app.key)) continue;
         const placement = build_env.packPlacementForArtifactKey(artifact.key) orelse continue;
+        if (devDiagnosticEnv("ROC_PACK_TRACE") != null) {
+            std.debug.print("dev pack candidate {s} ({s})\n", .{ artifact.canonical_names.moduleNameText(artifact.module_identity.module_name), @tagName(placement.origin) });
+        }
         if (placement.origin != .pkg) continue;
         if (try store.has(placement.origin, placement.identity, artifact.codeGenerationKey().bytes)) continue;
         const roots = try lir.PackProgram.closedExportRoots(ctx.gpa, artifact);
