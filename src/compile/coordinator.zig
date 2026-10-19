@@ -684,7 +684,7 @@ pub const ModuleState = struct {
     /// Local imports (module IDs within same package)
     imports: std.ArrayList(LocalImportEdge),
     /// External imports (qualified names like "pf.Stdout")
-    external_imports: std.ArrayList([]const u8),
+    external_imports: std.ArrayList(ExternalImportEdge),
     /// Import identities that import resolution rejected for this module.
     /// Recorded once, where the rejection is reported, and replayed to
     /// canonicalization as explicit rejected outcomes. A rejected import never
@@ -693,6 +693,8 @@ pub const ModuleState = struct {
     rejected_imports: std.ArrayList([]const u8),
     /// Modules that depend on this one (for waking dependents)
     dependents: std.ArrayList(ModuleId),
+    /// Modules in other packages whose external imports select this one.
+    external_dependents: std.ArrayList(ModuleRef),
     /// Transitive local imports known for this module.
     reachable_local_imports: std.bit_set.DynamicBitSetUnmanaged,
     /// Diagnostic reports
@@ -714,9 +716,10 @@ pub const ModuleState = struct {
             .phase = .Parse,
             .completion = .pending,
             .imports = std.ArrayList(LocalImportEdge).empty,
-            .external_imports = std.ArrayList([]const u8).empty,
+            .external_imports = std.ArrayList(ExternalImportEdge).empty,
             .rejected_imports = std.ArrayList([]const u8).empty,
             .dependents = std.ArrayList(ModuleId).empty,
+            .external_dependents = std.ArrayList(ModuleRef).empty,
             .reachable_local_imports = .{},
             .reports = std.ArrayList(Report).empty,
             .depth = std.math.maxInt(u32),
@@ -847,8 +850,8 @@ pub const ModuleState = struct {
         }
         for (self.imports.items) |edge| gpa.free(edge.import_name);
         self.imports.deinit(gpa);
-        for (self.external_imports.items) |imp| {
-            gpa.free(imp);
+        for (self.external_imports.items) |edge| {
+            gpa.free(edge.import_name);
         }
         self.external_imports.deinit(gpa);
         for (self.rejected_imports.items) |imp| {
@@ -856,6 +859,7 @@ pub const ModuleState = struct {
         }
         self.rejected_imports.deinit(gpa);
         self.dependents.deinit(gpa);
+        self.external_dependents.deinit(gpa);
         self.reachable_local_imports.deinit(gpa);
         for (self.reports.items) |*rep| {
             rep.deinit();
@@ -1249,10 +1253,35 @@ const CacheEntryDirs = struct {
     }
 };
 
-/// A reference to a module in a specific package
+/// A reference to a module in a specific package. Package states live for
+/// the coordinator's lifetime at stable addresses, so a reference reaches its
+/// module without a package-name lookup.
 pub const ModuleRef = struct {
-    pkg_name: []const u8,
+    pkg: *PackageState,
     module_id: ModuleId,
+
+    fn module(self: ModuleRef) *ModuleState {
+        return self.pkg.getModule(self.module_id) orelse
+            Coordinator.coordinatorInvariant("module reference named missing module {d} in package '{s}'", .{ self.module_id, self.pkg.name });
+    }
+};
+
+/// A package-qualified import (`pf.Stdout`) a module registered, with the
+/// module it resolved to when the import was discovered.
+pub const ExternalImportEdge = struct {
+    /// Owned import spelling.
+    import_name: []const u8,
+    /// Null when the qualifier or public name selects no module, which the
+    /// import-resolution drain reports.
+    target: ?ExternalImportTarget,
+};
+
+/// The module and public target an external import selects. Public targets
+/// are immutable once their package's public module map is registered, which
+/// precedes every external import of that package.
+pub const ExternalImportTarget = struct {
+    module: ModuleRef,
+    public_target: *const PublicModuleTarget,
 };
 
 /// Coordinator manages all compilation state and coordinates workers
@@ -1354,10 +1383,6 @@ pub const Coordinator = struct {
 
     /// Entry directories of the caches `cache_manager` holds, resolved once.
     cache_entry_dirs: CacheEntryDirs,
-
-    /// Cross-package dependents: when module (pkg, id) completes, notify these modules
-    /// Key is "pkg_name:module_id", value is list of dependent ModuleRefs
-    cross_package_dependents: std.StringHashMap(std.ArrayList(ModuleRef)),
 
     /// Exact-key index for checked artifacts published during this build. This
     /// does not own artifacts; it points at the module storage that owns them.
@@ -1488,7 +1513,6 @@ pub const Coordinator = struct {
             .compiler_version = compiler_version,
             .cache_manager = cache_manager,
             .cache_entry_dirs = cache_entry_dirs,
-            .cross_package_dependents = std.StringHashMap(std.ArrayList(ModuleRef)).init(gpa),
             .checked_artifact_index = std.AutoHashMap([32]u8, ModuleRef).init(gpa),
             .retired_checked_artifacts = std.ArrayList(RetiredCheckedArtifact).empty,
             .enable_hosted_transform = false,
@@ -1585,14 +1609,6 @@ pub const Coordinator = struct {
 
         // Free task channel
         self.task_channel.deinit();
-
-        // Free cross-package dependents
-        var cpd_it = self.cross_package_dependents.iterator();
-        while (cpd_it.next()) |entry| {
-            self.gpa.free(entry.key_ptr.*); // Free the "pkg:id" key string
-            entry.value_ptr.deinit(self.gpa);
-        }
-        self.cross_package_dependents.deinit();
 
         self.checked_artifact_index.deinit();
         self.cache_entry_dirs.deinit(self.gpa);
@@ -1831,7 +1847,7 @@ pub const Coordinator = struct {
             opts.entry_path,
             &app_pkg.modules.items[app_module_id].reports,
         ) catch |err| {
-            try self.completeModulesWithFailure(&.{.{ .pkg_name = app_pkg.name, .module_id = app_module_id }});
+            try self.completeModulesWithFailure(&.{.{ .pkg = app_pkg, .module_id = app_module_id }});
             return err;
         };
 
@@ -2423,27 +2439,16 @@ pub const Coordinator = struct {
             }
             return null;
         };
-        const pkg = self.packages.get(location.pkg_name) orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("compile.coordinator checked artifact registry points at missing package {s}", .{location.pkg_name});
-            }
-            unreachable;
-        };
-        const mod = pkg.getModule(location.module_id) orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("compile.coordinator checked artifact registry points at missing module {d} in package {s}", .{ location.module_id, location.pkg_name });
-            }
-            unreachable;
-        };
+        const mod = location.module();
         const artifact = mod.checkedArtifact() orelse {
             if (builtin.mode == .debug) {
-                base.invariant("compile.coordinator checked artifact registry points at unpublished module {s}:{d}", .{ location.pkg_name, location.module_id });
+                base.invariant("compile.coordinator checked artifact registry points at unpublished module {s}:{d}", .{ location.pkg.name, location.module_id });
             }
             unreachable;
         };
         if (!std.mem.eql(u8, &artifact.key.bytes, &key.bytes)) {
             if (builtin.mode == .debug) {
-                base.invariant("compile.coordinator checked artifact registry returned stale key for {s}:{d}", .{ location.pkg_name, location.module_id });
+                base.invariant("compile.coordinator checked artifact registry returned stale key for {s}:{d}", .{ location.pkg.name, location.module_id });
             }
             unreachable;
         }
@@ -2469,7 +2474,7 @@ pub const Coordinator = struct {
             unreachable;
         };
         try self.checked_artifact_index.put(artifact.key.bytes, .{
-            .pkg_name = pkg.name,
+            .pkg = pkg,
             .module_id = module_id,
         });
     }
@@ -2481,7 +2486,7 @@ pub const Coordinator = struct {
         const module_id = moduleIdForPtr(pkg, mod) orelse
             coordinatorInvariant("could not locate checked artifact module {s} in package {s}", .{ mod.name, pkg.name });
         self.checked_artifact_index.putAssumeCapacity(artifact.key.bytes, .{
-            .pkg_name = pkg.name,
+            .pkg = pkg,
             .module_id = module_id,
         });
     }
@@ -2731,9 +2736,9 @@ pub const Coordinator = struct {
                                     // Print external imports and their readiness
                                     if (mod.external_imports.items.len > 0) {
                                         std.debug.print("      ext_imports ({}):", .{mod.external_imports.items.len});
-                                        for (mod.external_imports.items) |ext_name| {
-                                            const ready = self.isExternalReady(pkg.name, ext_name);
-                                            std.debug.print(" {s}(ready={})", .{ ext_name, ready });
+                                        for (mod.external_imports.items) |edge| {
+                                            const ready = externalEdgeReadiness(edge) != .waiting;
+                                            std.debug.print(" {s}(ready={})", .{ edge.import_name, ready });
                                         }
                                         std.debug.print("\n", .{});
                                     }
@@ -3010,10 +3015,7 @@ pub const Coordinator = struct {
         fn moduleState(coord: *Coordinator, key: CheckedArtifact.ModuleId) *ModuleState {
             const location = coord.checked_artifact_index.get(key.bytes) orelse
                 coordinatorInvariant("compile-time report named a checked module the coordinator does not hold", .{});
-            const pkg = coord.packages.get(location.pkg_name) orelse
-                coordinatorInvariant("checked artifact registry points at missing package {s}", .{location.pkg_name});
-            return pkg.getModule(location.module_id) orelse
-                coordinatorInvariant("checked artifact registry points at missing module {d}", .{location.module_id});
+            return location.module();
         }
 
         fn module(context: *anyopaque, key: CheckedArtifact.ModuleId) Allocator.Error!eval.CompileTimeFinalization.ReportDestination {
@@ -3871,7 +3873,7 @@ pub const Coordinator = struct {
         for (mod.dependents.items) |dep_id| {
             try self.tryUnblock(pkg, dep_id);
         }
-        try self.wakeCrossPackageDependents(pkg.name, module_id);
+        try self.wakeExternalDependents(mod);
         try self.wakeAppsWaitingOnPlatformRequirements();
     }
 
@@ -3933,13 +3935,8 @@ pub const Coordinator = struct {
         var next: usize = 0;
         while (next < work.items.len) : (next += 1) {
             const module_ref = work.items[next];
-            const pkg = self.packages.get(module_ref.pkg_name) orelse
-                coordinatorInvariant("failed completion named missing package '{s}'", .{module_ref.pkg_name});
-            const mod = pkg.getModule(module_ref.module_id) orelse
-                coordinatorInvariant(
-                    "failed completion named missing module {d} in package '{s}'",
-                    .{ module_ref.module_id, module_ref.pkg_name },
-                );
+            const pkg = module_ref.pkg;
+            const mod = module_ref.module();
 
             switch (mod.completion) {
                 .failed => continue,
@@ -3964,16 +3961,12 @@ pub const Coordinator = struct {
 
             for (mod.dependents.items) |dependent_id| {
                 try work.append(self.gpa, .{
-                    .pkg_name = pkg.name,
+                    .pkg = pkg,
                     .module_id = dependent_id,
                 });
             }
 
-            const cross_key = try std.fmt.allocPrint(self.gpa, "{s}:{d}", .{ pkg.name, module_ref.module_id });
-            defer self.gpa.free(cross_key);
-            if (self.cross_package_dependents.get(cross_key)) |dependents| {
-                try work.appendSlice(self.gpa, dependents.items);
-            }
+            try work.appendSlice(self.gpa, mod.external_dependents.items);
 
             const is_platform_root = self.platform_root_package_name != null and
                 std.mem.eql(u8, pkg.name, self.platform_root_package_name.?) and
@@ -3986,7 +3979,7 @@ pub const Coordinator = struct {
                     const app_root_id = app_pkg.root_module_id orelse
                         coordinatorInvariant("registered app package '{s}' had no root module", .{app_package_name});
                     try work.append(self.gpa, .{
-                        .pkg_name = app_pkg.name,
+                        .pkg = app_pkg,
                         .module_id = app_root_id,
                     });
                 }
@@ -4100,7 +4093,7 @@ pub const Coordinator = struct {
         // A source-policy failure is stronger than ordinary recoverable syntax
         // errors: no independent root or dependency metadata may be executed.
         if (result.cached_ast.source_rejected) {
-            try self.completeModulesWithFailure(&.{.{ .pkg_name = result.package_name, .module_id = result.module_id }});
+            try self.completeModulesWithFailure(&.{.{ .pkg = pkg, .module_id = result.module_id }});
             return;
         }
 
@@ -4167,7 +4160,7 @@ pub const Coordinator = struct {
             if (try self.validateImportSourcePath(pkg, mod.name, mod.path)) |problem| {
                 try self.appendInvalidImportReport(mod, mod.path, mod.name, problem);
                 try self.completeModulesWithFailure(&.{.{
-                    .pkg_name = pkg.name,
+                    .pkg = pkg,
                     .module_id = module_id,
                 }});
                 return .halted;
@@ -4238,18 +4231,15 @@ pub const Coordinator = struct {
                 try self.recordRejectedImport(current_mod, ext_imp.import_name);
                 continue;
             }
-            try current_mod.external_imports.append(self.gpa, try self.gpa.dupe(u8, ext_imp.import_name));
-
-            const qualified = base.module_path.parseQualifiedImport(ext_imp.import_name) orelse continue;
-            const target_pkg_name = pkg.shorthands.get(qualified.qualifier) orelse continue;
-            const target_pkg = self.packages.get(target_pkg_name) orelse continue;
-            const target_module_id = target_pkg.getPublicModuleId(qualified.module) orelse continue;
-            try self.registerCrossPackageDependent(
-                target_pkg_name,
-                target_module_id,
-                package_name,
-                module_id,
-            );
+            const target = self.resolveExternalImport(pkg, ext_imp.import_name);
+            const import_name = try self.gpa.dupe(u8, ext_imp.import_name);
+            current_mod.external_imports.append(self.gpa, .{ .import_name = import_name, .target = target }) catch |err| {
+                self.gpa.free(import_name);
+                return err;
+            };
+            if (target) |selected| {
+                try selected.module.module().external_dependents.append(self.gpa, .{ .pkg = pkg, .module_id = module_id });
+            }
         }
 
         const mod_after_imports = registeredModule(pkg, package_name, module_id, module_name, "after registering imports");
@@ -4703,7 +4693,7 @@ pub const Coordinator = struct {
         errdefer if (platform_requirement_owner_envs.len > 0) task_payload_alloc.free(platform_requirement_owner_envs);
         if (platform_surface) |*surface| surface.owner_modules = platform_requirement_owner_envs;
 
-        const deferred_imports = try self.buildCanonicalizeImports(pkg, mod, task_payload_alloc);
+        const deferred_imports = try buildCanonicalizeImports(pkg, mod, task_payload_alloc);
         errdefer task_payload_alloc.free(deferred_imports);
         const missing_public_types = if (pkg.root_module_id == module_id)
             try buildMissingPublicTypes(pkg, task_payload_alloc)
@@ -4907,7 +4897,7 @@ pub const Coordinator = struct {
             );
             try candidate.reports.append(self.gpa, rep);
             try cycle_members.append(self.gpa, .{
-                .pkg_name = pkg.name,
+                .pkg = pkg,
                 .module_id = candidate_id,
             });
         }
@@ -4919,7 +4909,6 @@ pub const Coordinator = struct {
     }
 
     fn buildCanonicalizeImports(
-        self: *Coordinator,
         pkg: *PackageState,
         mod: *ModuleState,
         allocator: Allocator,
@@ -4944,14 +4933,15 @@ pub const Coordinator = struct {
                 .resolution = .{ .available = .{ .module_env = env } },
             });
         }
-        for (mod.external_imports.items) |ext_name| {
-            switch (self.externalImportReadiness(pkg.name, ext_name)) {
+        for (mod.external_imports.items) |edge| {
+            const ext_name = edge.import_name;
+            switch (externalEdgeReadiness(edge)) {
                 .unresolved => continue,
                 .succeeded => {
-                    const ext_env = self.getExternalEnv(pkg.name, ext_name) orelse
+                    const target = edge.target.?;
+                    const ext_env = target.module.module().moduleEnv() orelse
                         coordinatorInvariant("successful external import '{s}' had no module environment", .{ext_name});
-                    const public_target = self.getExternalPublicTarget(pkg.name, ext_name) orelse
-                        coordinatorInvariant("successful external import '{s}' had no public target", .{ext_name});
+                    const public_target = target.public_target.*;
                     const selected_type_decl: ?CIR.Statement.Idx = switch (public_target.selection) {
                         .type_decl => |statement| statement,
                         .whole_module => null,
@@ -5198,7 +5188,7 @@ pub const Coordinator = struct {
                 .succeeded => {},
                 .failed => {
                     try self.completeModulesWithFailure(&.{.{
-                        .pkg_name = pkg.name,
+                        .pkg = pkg,
                         .module_id = module_id,
                     }});
                     return;
@@ -5207,18 +5197,18 @@ pub const Coordinator = struct {
         }
 
         // Check external imports
-        for (mod.external_imports.items) |ext_name| {
-            switch (self.externalImportReadiness(pkg.name, ext_name)) {
+        for (mod.external_imports.items) |edge| {
+            switch (externalEdgeReadiness(edge)) {
                 .unresolved, .succeeded => {},
                 .waiting => {
                     if (comptime trace_build) {
-                        std.debug.print("[COORD] UNBLOCK WAIT: pkg={s} module={s} waiting on external {s}\n", .{ pkg.name, mod.name, ext_name });
+                        std.debug.print("[COORD] UNBLOCK WAIT: pkg={s} module={s} waiting on external {s}\n", .{ pkg.name, mod.name, edge.import_name });
                     }
                     return;
                 },
                 .failed => {
                     try self.completeModulesWithFailure(&.{.{
-                        .pkg_name = pkg.name,
+                        .pkg = pkg,
                         .module_id = module_id,
                     }});
                     return;
@@ -5365,58 +5355,35 @@ pub const Coordinator = struct {
         return null;
     }
 
-    /// Register a cross-package dependent: when target module completes, wake source module
-    fn registerCrossPackageDependent(
-        self: *Coordinator,
-        target_pkg: []const u8,
-        target_module_id: ModuleId,
-        source_pkg: []const u8,
-        source_module_id: ModuleId,
-    ) Allocator.Error!void {
-        if (comptime trace_build) {
-            std.debug.print("[COORD] REGISTER CROSS-PKG DEP: {s}:{} depends on {s}:{}\n", .{ source_pkg, source_module_id, target_pkg, target_module_id });
-        }
-
-        // Build key: "pkg_name:module_id"
-        const key = try std.fmt.allocPrint(self.gpa, "{s}:{d}", .{ target_pkg, target_module_id });
-        errdefer self.gpa.free(key);
-
-        const gop = try self.cross_package_dependents.getOrPut(key);
-        if (!gop.found_existing) {
-            gop.value_ptr.* = std.ArrayList(ModuleRef).empty;
-        } else {
-            // Key already existed, free our duplicate
-            self.gpa.free(key);
-        }
-
-        // Add the source module as a dependent
-        try gop.value_ptr.append(self.gpa, .{
-            .pkg_name = source_pkg,
-            .module_id = source_module_id,
-        });
+    /// The module an external import of `source` selects, resolved through
+    /// the source package's shorthands and the target package's public modules.
+    fn resolveExternalImport(self: *Coordinator, source: *PackageState, import_name: []const u8) ?ExternalImportTarget {
+        const qualified = base.module_path.parseQualifiedImport(import_name) orelse return null;
+        const target_pkg_name = source.shorthands.get(qualified.qualifier) orelse return null;
+        const target_pkg = self.packages.get(target_pkg_name) orelse return null;
+        const public_target = target_pkg.public_module_targets.getPtr(qualified.module) orelse return null;
+        const module_id = target_pkg.module_names.get(public_target.logicalModule()) orelse return null;
+        return .{
+            .module = .{ .pkg = target_pkg, .module_id = module_id },
+            .public_target = public_target,
+        };
     }
 
-    /// Wake all cross-package dependents of a successfully completed module.
-    fn wakeCrossPackageDependents(self: *Coordinator, pkg_name: []const u8, module_id: ModuleId) Allocator.Error!void {
-        // Build key
-        var key_buf: [256]u8 = undefined;
-        const key = std.fmt.bufPrint(&key_buf, "{s}:{d}", .{ pkg_name, module_id }) catch return;
+    /// Wake every module in another package whose external import selects the
+    /// module that just completed successfully.
+    fn wakeExternalDependents(self: *Coordinator, mod: *const ModuleState) Allocator.Error!void {
+        for (mod.external_dependents.items) |dependent| {
+            try self.tryUnblock(dependent.pkg, dependent.module_id);
+        }
+    }
 
-        const dependents = self.cross_package_dependents.get(key) orelse {
-            if (comptime trace_build) {
-                std.debug.print("[COORD] WAKE CROSS-PKG: {s}:{} has no dependents\n", .{ pkg_name, module_id });
-            }
-            return;
+    fn externalEdgeReadiness(edge: ExternalImportEdge) DependencyReadiness {
+        const target = edge.target orelse return .unresolved;
+        return switch (target.module.module().completion) {
+            .pending => .waiting,
+            .succeeded => .succeeded,
+            .failed => .failed,
         };
-
-        if (comptime trace_build) {
-            std.debug.print("[COORD] WAKE CROSS-PKG: {s}:{} waking {} dependents\n", .{ pkg_name, module_id, dependents.items.len });
-        }
-
-        for (dependents.items) |dep_ref| {
-            const dep_pkg = self.packages.get(dep_ref.pkg_name) orelse continue;
-            try self.tryUnblock(dep_pkg, dep_ref.module_id);
-        }
     }
 
     fn externalImportReadiness(self: *Coordinator, source_pkg: []const u8, import_name: []const u8) DependencyReadiness {
@@ -5454,14 +5421,6 @@ pub const Coordinator = struct {
             semantic.env
         else
             null;
-    }
-
-    fn getExternalPublicTarget(self: *Coordinator, source_pkg: []const u8, import_name: []const u8) ?PublicModuleTarget {
-        const qualified = base.module_path.parseQualifiedImport(import_name) orelse return null;
-        const source = self.packages.get(source_pkg) orelse return null;
-        const target_pkg_name = source.shorthands.get(qualified.qualifier) orelse return null;
-        const target_pkg = self.packages.get(target_pkg_name) orelse return null;
-        return target_pkg.getPublicModuleTarget(qualified.module);
     }
 
     pub fn getExternalArtifact(self: *Coordinator, source_pkg: []const u8, import_name: []const u8) ?*const check.CheckedArtifact.CheckedModuleArtifact {
@@ -10436,8 +10395,8 @@ test "Coordinator CI failure scenario - app with platform cross-package imports"
 
     // Set up external imports for app.expect_with_main -> pf.Stdout, pf.Stderr
     const app_mod = app_pkg.getModule(app_mod_id).?;
-    try app_mod.external_imports.append(allocator, try allocator.dupe(u8, "pf.Stdout"));
-    try app_mod.external_imports.append(allocator, try allocator.dupe(u8, "pf.Stderr"));
+    try app_mod.external_imports.append(allocator, .{ .import_name = try allocator.dupe(u8, "pf.Stdout"), .target = coord.resolveExternalImport(app_pkg, "pf.Stdout") });
+    try app_mod.external_imports.append(allocator, .{ .import_name = try allocator.dupe(u8, "pf.Stderr"), .target = coord.resolveExternalImport(app_pkg, "pf.Stderr") });
     app_mod.phase = .WaitingOnImports;
 
     // Register pf.main as dependent of its local imports

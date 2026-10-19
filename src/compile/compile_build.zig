@@ -3290,9 +3290,8 @@ pub const BuildEnv = struct {
     ) ?PackPlacement {
         const coord = self.coordinator orelse return null;
         const location = coord.checked_artifact_index.get(key.bytes) orelse return null;
-        const pkg = self.packages.get(location.pkg_name) orelse return null;
-        const coord_pkg = coord.packages.get(location.pkg_name) orelse return null;
-        const module = coord_pkg.getModule(location.module_id) orelse return null;
+        const pkg = self.packages.get(location.pkg.name) orelse return null;
+        const module = location.pkg.getModule(location.module_id) orelse return null;
         var hasher = base.Sha256.init(.{});
         if (pkg.url) |url| {
             hasher.update("pkg\x00");
