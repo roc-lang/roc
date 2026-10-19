@@ -34,6 +34,9 @@ pub const Var = enum {
     dev_artifact_roundtrip,
     /// Append one record to the named file per in-process LLVM object compile.
     test_llvm_object_compile_count_file,
+    /// `off` never starts a dev build's tier 2 object build, and `wait` waits
+    /// for it before the dev build returns.
+    background_objects,
 
     /// The variable's name in the environment.
     pub fn envName(comptime self: Var) [:0]const u8 {
@@ -47,6 +50,7 @@ pub const Var = enum {
             .dev_pack_hits => "ROC_DEV_PACK_HITS",
             .dev_artifact_roundtrip => "ROC_DEV_ARTIFACT_ROUNDTRIP",
             .test_llvm_object_compile_count_file => "ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE",
+            .background_objects => "ROC_BACKGROUND_OBJECTS",
         };
     }
 };

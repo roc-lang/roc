@@ -1906,8 +1906,8 @@ pub fn build(b: *std.Build) void {
         \\/// Whether this compiler honors the developer-diagnostic environment
         \\/// variables (`ROC_LIR_DUMP`, `ROC_SPEC_CENSUS`, `ROC_PACK_TRACE`,
         \\/// `ROC_PACK_STATS`, `ROC_CTFE_DEMAND_TRACE`, `ROC_DEV_PACK_OBJECTS`,
-        \\/// `ROC_DEV_PACK_HITS`, `ROC_DEV_ARTIFACT_ROUNDTRIP` and
-        \\/// `ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE`). Each executable reads its
+        \\/// `ROC_DEV_PACK_HITS`, `ROC_DEV_ARTIFACT_ROUNDTRIP`,
+        \\/// `ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE` and `ROC_BACKGROUND_OBJECTS`). Each executable reads its
         \\/// own optimize mode: a Debug compiler always does, and any other build
         \\/// only with `-Ddev-diagnostics`, so a release compiler reads none of
         \\/// them and carries none of their code.

@@ -8646,13 +8646,14 @@ fn compileModuleObjectPack(
     return try objectPackBytes(ctx, &lowered, pack.static_data_exports, candidates.items, target);
 }
 
-/// How a dev build compiles its tier 2 entries with LLVM, from
-/// `ROC_BACKGROUND_OBJECTS`: `off` never, `wait` before the build returns,
-/// and otherwise in a detached process the build does not wait for.
+/// How a dev build compiles its tier 2 entries with LLVM: `off` never, `wait`
+/// before the build returns, and `detached` in a process the build does not
+/// wait for. Only a compiler that reads developer diagnostics takes `off` or
+/// `wait`, from `ROC_BACKGROUND_OBJECTS`; every other compiler is `detached`.
 const Tier2ObjectMode = enum { off, wait, detached };
 
 fn tier2ObjectMode() Tier2ObjectMode {
-    const value = std.mem.span(std.c.getenv("ROC_BACKGROUND_OBJECTS") orelse return .detached);
+    const value = dev_diagnostics.get(.background_objects) orelse return .detached;
     if (std.mem.eql(u8, value, "off")) return .off;
     if (std.mem.eql(u8, value, "wait")) return .wait;
     return .detached;

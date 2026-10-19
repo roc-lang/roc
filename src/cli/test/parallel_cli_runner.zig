@@ -586,6 +586,15 @@ const dev_diagnostics_cases = [_]CustomCase{
     .check_compile_time_pack,
     .optimized_multi_module_compiles_once,
     .glue_plugin_cache_hit,
+    .proc_identity_object_cache,
+    .tier2_object_cache,
+    .edited_lambda_object_cache,
+    .edited_method_object_cache,
+    .edited_nominal_object_cache,
+    .linked_object_pack,
+    .run_object_cache,
+    .spliced_procedure_debug_lines,
+    .boxed_closure_object_cache,
 };
 
 /// Cases that check a compiler without developer diagnostics ignores their
@@ -4016,7 +4025,8 @@ fn buildCaseEnv(io: std.Io, allocator: Allocator) CliRunnerError!CaseEnv {
     try env_map.put("ZIG_LOCAL_CACHE_DIR", dirs.zig_local_cache_dir);
     try env_map.put("ROC_INSTALL_DIR", dirs.install_dir);
     // A dev build's detached tier 2 object build would outlive its case;
-    // the case that covers it waits for it.
+    // the case that covers it waits for it. Only a compiler with developer
+    // diagnostics honors this.
     try env_map.put("ROC_BACKGROUND_OBJECTS", "off");
     try util.putIsolatedTempEnv(&env_map, dirs.temp_dir);
 
