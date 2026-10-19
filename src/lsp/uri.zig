@@ -29,6 +29,18 @@ fn percentDecode(allocator: std.mem.Allocator, input: []const u8) Allocator.Erro
     return out.toOwnedSlice(allocator);
 }
 
+/// Whether `c` may appear unescaped in a URI path: RFC 3986 `pchar` (unreserved,
+/// sub-delims, `:` and `@`) or the `/` segment separator. Every other byte,
+/// including each byte of a non-ASCII character, is percent-encoded.
+fn isPathChar(c: u8) bool {
+    return switch (c) {
+        'A'...'Z', 'a'...'z', '0'...'9', '-', '.', '_', '~' => true,
+        '!', '$', '&', '\'', '(', ')', '*', '+', ',', ';', '=' => true,
+        ':', '@', '/' => true,
+        else => false,
+    };
+}
+
 fn percentEncode(allocator: std.mem.Allocator, input: []const u8) Allocator.Error![]u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
@@ -36,8 +48,7 @@ fn percentEncode(allocator: std.mem.Allocator, input: []const u8) Allocator.Erro
     for (input) |ch| {
         // Convert Windows backslashes to forward slashes for URIs
         const c = if (builtin.os.tag == .windows and ch == '\\') '/' else ch;
-        const needs_escape = c <= 0x20 or c == '#' or c == '%' or c == '?';
-        if (needs_escape) {
+        if (!isPathChar(c)) {
             var buf: [3]u8 = .{ '%', 0, 0 };
             const hi = std.fmt.digitToChar((c >> 4) & 0xF, .upper);
             const lo = std.fmt.digitToChar(c & 0xF, .upper);
@@ -79,7 +90,7 @@ pub fn uriToPath(allocator: std.mem.Allocator, uri: []const u8) Allocator.Error!
     return decoded;
 }
 
-/// Convert a filesystem path into a `file://` URI (best-effort encoding).
+/// Convert a filesystem path into a `file://` URI.
 pub fn pathToUri(allocator: std.mem.Allocator, path: []const u8) Allocator.Error![]u8 {
     const encoded_path = try percentEncode(allocator, path);
     defer allocator.free(encoded_path);

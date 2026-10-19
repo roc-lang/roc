@@ -16,6 +16,7 @@ const document_symbol_handler = @import("lsp").handlers.document_symbol;
 pub const TestSyntaxDriver = struct {
     allocator: std.mem.Allocator,
     check_calls: usize = 0,
+    close_calls: usize = 0,
     imported_module_calls: usize = 0,
     hover_calls: usize = 0,
     definition_calls: usize = 0,
@@ -86,6 +87,10 @@ pub const TestSyntaxDriver = struct {
     ) CheckError![]Diagnostics.PublishDiagnostics {
         self.check_calls += 1;
         return try self.allocator.alloc(Diagnostics.PublishDiagnostics, 0);
+    }
+
+    pub fn closeDocument(self: *TestSyntaxDriver, _: []const u8) void {
+        self.close_calls += 1;
     }
 
     pub fn getCheckedModuleForDocument(_: *TestSyntaxDriver, _: []const u8, _: []const u8) std.mem.Allocator.Error!?CheckedModule {
