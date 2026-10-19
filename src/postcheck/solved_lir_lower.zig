@@ -824,8 +824,9 @@ const Lowerer = struct {
     const_type_map: collections.DenseMap(Type.TypeId, const_store.ConstTypeId),
     callable_source_fn_map: collections.DenseMap(Type.TypeId, SolvedType.TypeVarId),
     static_initializer_map: std.AutoHashMap(StaticInitializerRequest, LIR.StaticDataId),
-    /// The fresh-form procedure of each static list of copies, by slot.
-    uniform_constructors: collections.DenseMap(LIR.StaticDataId, LIR.LirProcSpecId),
+    /// The fresh-form procedure of each static list of copies, by the
+    /// identity naming what it builds.
+    uniform_constructors: std.AutoHashMap(LIR.ProcIdentity, LIR.LirProcSpecId),
     comptime_value_map: std.AutoHashMap(ComptimeValueRequest, LIR.StaticDataId),
     /// Whether a root-slot read at one type takes its root's slot value
     /// as stored, per (root type, read type) pair.
@@ -1108,7 +1109,7 @@ const Lowerer = struct {
             .const_type_map = collections.DenseMap(Type.TypeId, const_store.ConstTypeId).init(allocator),
             .callable_source_fn_map = collections.DenseMap(Type.TypeId, SolvedType.TypeVarId).init(allocator),
             .static_initializer_map = std.AutoHashMap(StaticInitializerRequest, LIR.StaticDataId).init(allocator),
-            .uniform_constructors = collections.DenseMap(LIR.StaticDataId, LIR.LirProcSpecId).init(allocator),
+            .uniform_constructors = std.AutoHashMap(LIR.ProcIdentity, LIR.LirProcSpecId).init(allocator),
             .comptime_value_map = std.AutoHashMap(ComptimeValueRequest, LIR.StaticDataId).init(allocator),
             .comptime_root_slots = std.AutoHashMap(ComptimeRootKey, ComptimeRootSlot).init(allocator),
             .static_initializer_queue = .empty,
@@ -1324,7 +1325,7 @@ const Lowerer = struct {
         self.packed_plans = collections.DenseMap(layout.Idx, lir_core.PackedData.Plan).init(self.allocator);
         self.packed_literals = std.AutoHashMap(PackedLiteralKey, LIR.ListLiteral).init(self.allocator);
         self.static_initializer_map = std.AutoHashMap(StaticInitializerRequest, LIR.StaticDataId).init(self.allocator);
-        self.uniform_constructors = collections.DenseMap(LIR.StaticDataId, LIR.LirProcSpecId).init(self.allocator);
+        self.uniform_constructors = std.AutoHashMap(LIR.ProcIdentity, LIR.LirProcSpecId).init(self.allocator);
         self.comptime_value_map = std.AutoHashMap(ComptimeValueRequest, LIR.StaticDataId).init(self.allocator);
         self.comptime_read_shares_root = .empty;
         self.comptime_root_slots = std.AutoHashMap(ComptimeRootKey, ComptimeRootSlot).init(self.allocator);
@@ -5824,7 +5825,7 @@ const Lowerer = struct {
         var list_len: ?u64 = null;
         if (runtime_values) |values| {
             if (values.uniformListFor(root.module, root.root)) |uniform| {
-                fresh_alternative = try self.uniformListConstructor(where, id, uniform, layout_idx);
+                fresh_alternative = try self.uniformListConstructor(where, uniform, layout_idx);
                 if (fresh_alternative != null) list_len = uniform.count;
             }
         }
@@ -5837,11 +5838,12 @@ const Lowerer = struct {
         } }, where.source());
     }
 
-    /// The argument-free procedure that builds the list of copies held in
-    /// slot `id` fresh, created on its first use. Null when the value does
-    /// not fit `layout_idx` as a list.
-    fn uniformListConstructor(self: *Lowerer, where: LowerSite, id: LIR.StaticDataId, uniform: postcheck_values.UniformList, layout_idx: layout.Idx) Common.LowerError!?LIR.LirProcSpecId {
-        if (self.uniform_constructors.get(id)) |proc| return proc;
+    /// The argument-free procedure that builds a static list of copies
+    /// fresh, created on the first use of its content. Null when the value
+    /// does not fit `layout_idx` as a list.
+    fn uniformListConstructor(self: *Lowerer, where: LowerSite, uniform: postcheck_values.UniformList, layout_idx: layout.Idx) Common.LowerError!?LIR.LirProcSpecId {
+        const identity = try self.uniformListConstructorIdentity(uniform, layout_idx);
+        if (self.uniform_constructors.get(identity)) |proc| return proc;
         if (uniform.count > std.math.maxInt(i64)) return null;
         const store = &self.result.store;
         var new_locals: std.ArrayList(LIR.LocalId) = .empty;
@@ -5860,7 +5862,7 @@ const Lowerer = struct {
         const body = try postcheck_values.emitRepeat(context, store, &self.result.layouts, origin, value, uniform.element, @intCast(uniform.count), ret) orelse return null;
         const proc = try store.addProcSpec(.{
             .name = lirSymbol(self.symbols.fresh()),
-            .identity = try self.uniformListConstructorIdentity(id, layout_idx),
+            .identity = identity,
             .args = LIR.LocalSpan.empty(),
             .frame_locals = try store.addLocalSpan(new_locals.items),
             .join_points = LIR.JoinPointSpan.empty(),
@@ -5869,7 +5871,7 @@ const Lowerer = struct {
             .abi = .roc,
         }, where.loc);
         if (store.procNeedsStackProbe(&self.result.layouts, store.getProcSpec(proc))) store.getProcSpecPtr(proc).stack_probe = .required;
-        try self.uniform_constructors.put(id, proc);
+        try self.uniform_constructors.put(identity, proc);
         return proc;
     }
 
@@ -5884,17 +5886,16 @@ const Lowerer = struct {
         }
     };
 
-    /// Identity of a fresh-form procedure: it builds the value of one
-    /// static-data slot at one layout within this program, and is never
-    /// shared across programs.
-    fn uniformListConstructorIdentity(self: *Lowerer, id: LIR.StaticDataId, layout_idx: layout.Idx) std.mem.Allocator.Error!LIR.ProcIdentity {
-        var digests = try layout.Digests.init(self.allocator, &self.result.layouts);
-        defer digests.deinit();
+    /// A fresh-form procedure is emitted and carried in object-cache packs
+    /// like any procedure, and a spliced procedure takes the place of the
+    /// program's own procedure with its identity, so the identity names
+    /// what the procedure builds in every program: the list's layout and
+    /// content, by digests no program's numbering enters.
+    fn uniformListConstructorIdentity(self: *Lowerer, uniform: postcheck_values.UniformList, layout_idx: layout.Idx) std.mem.Allocator.Error!LIR.ProcIdentity {
         var hasher = base.TypeDigestHasher.init();
-        hasher.update("roc.proc.uniform-list-constructor.v2");
-        hasher.update(&try digests.get(layout_idx));
-        const slot: u32 = @backingInt(id);
-        hasher.update(&[_]u8{ @truncate(slot), @truncate(slot >> 8), @truncate(slot >> 16), @truncate(slot >> 24) });
+        hasher.update("roc.proc.uniform-list-constructor.v3");
+        hasher.update(&try self.result.layouts.contentDigest(layout_idx));
+        try uniform.writeDigest(self.allocator, &hasher);
         return .{ .bytes = hasher.finalResult() };
     }
 
@@ -7186,7 +7187,7 @@ const Lowerer = struct {
             var fresh_alternative: ?LIR.LirProcSpecId = null;
             var list_len: ?u64 = null;
             if (try self.uniformListOfExpr(arena.allocator(), candidate.runtime_expr, ty, layout_idx)) |uniform| {
-                fresh_alternative = try self.uniformListConstructor(where, id, uniform, layout_idx);
+                fresh_alternative = try self.uniformListConstructor(where, uniform, layout_idx);
                 if (fresh_alternative != null) list_len = uniform.count;
             }
             return .{ .ret = try self.result.store.addCFStmt(.{ .assign_literal = .{

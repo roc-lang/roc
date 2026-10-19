@@ -48593,28 +48593,6 @@ fn builtinNumKindFromNominalType(self: *const Self, nominal_type: types_mod.Nomi
     return self.builtinNumKindFromBuiltinSourceDecl(nominal_type.sourceDeclOptional());
 }
 
-fn varResolvesToBuiltinScalarNominal(self: *const Self, var_: Var) bool {
-    const resolved = self.types.resolveThroughAliases(var_);
-    return switch (resolved.desc.content) {
-        .structure => |structure| switch (structure) {
-            .nominal_type => |nominal| self.nominalIsBuiltinBoolType(nominal) or
-                self.nominalIsBuiltinStrType(nominal) or
-                (self.builtinNumKindFromNominalType(nominal) != null),
-            .record,
-            .tuple,
-            .fn_pure,
-            .fn_effectful,
-            .fn_unbound,
-            .empty_record,
-            .tag_union,
-            .empty_tag_union,
-            => false,
-        },
-        .alias => unreachable,
-        .flex, .rigid, .field_presence, .err => false,
-    };
-}
-
 fn nominalIsBuiltinStrType(self: *const Self, nominal_type: types_mod.NominalType) bool {
     if (!nominal_type.originIsBuiltin()) return false;
     if (nominal_type.sourceDeclOptional()) |source_decl| {
@@ -55461,17 +55439,6 @@ fn stepDerivedEncodeNominal(
     }
     if (self.builtinNumKindFromNominalType(nominal)) |num_kind| {
         return .{ .done = try self.validateEncodeFormatMethod(encoding_var, state_var, nominal_var, specDeclForNumKind(BuiltinEncodeSpecDecl, num_kind), err_var, constraint, env, region) };
-    }
-    // A user opaque over a builtin scalar (`Money := F64`, `Username := Str`) validates its derived
-    // encoder through the backing scalar, threading the same err_var: error-row unification then
-    // rejects a fallible backing (F32/F64) exactly as a bare scalar is, and passes an infallible one
-    // (Str/Bool/int/Dec), instead of slipping through to a lowering panic.
-    // `varResolvesToBuiltinScalarNominal` admits only ground scalars, so the declaration's backing
-    // template equals the instance here and is safe to unify directly.
-    if (self.nominalDeclBackingTemplate(nominal)) |backing_var| {
-        if (self.varResolvesToBuiltinScalarNominal(backing_var)) {
-            return component(backing_var);
-        }
     }
     if (self.nominalBuiltinPayloadVar(nominal, .list)) |payload_var| {
         if (derivedCodecFailed(try self.validateEncodeFormatMethod(encoding_var, state_var, nominal_var, .list, err_var, constraint, env, region))) |result| return .{ .done = result };

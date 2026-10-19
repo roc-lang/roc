@@ -281,6 +281,20 @@ pub const Store = struct {
     root_meta_trail: std.ArrayListUnmanaged(RootMetaUndo) = .empty,
     union_rank_trail: std.ArrayListUnmanaged(UnionRankUndo) = .empty,
 
+    /// Descriptors no slot names any more: a class merge keeps one side's
+    /// descriptor and orphans the other's. The next class created takes the
+    /// most recently freed one (and its `root_metas` entry) instead of
+    /// appending, so the descriptor store does not grow with dead entries.
+    /// Runtime-only: never serialized, cloned, or relocated.
+    free_descs: std.ArrayListUnmanaged(DescStore.Idx) = .empty,
+    /// How many entries at the end of `free_descs` the open probe has
+    /// reissued. A probe takes without removing, so that rollback can hand
+    /// them back by forgetting the count; commit removes them.
+    probe_taken_descs: u32 = 0,
+    /// Descriptors orphaned while a probe is open. Rollback restores the slots
+    /// that named them, so they are freed only when the probe commits.
+    pending_free_descs: std.ArrayListUnmanaged(DescStore.Idx) = .empty,
+
     /// Every static-dispatch relation the unifier folded into a retained
     /// same-name relation, by raw constraint function var. Checking publishes
     /// these so a folded relation's dispatch names the retained relation's
@@ -372,6 +386,8 @@ pub const Store = struct {
         self.desc_trail.deinit(self.gpa);
         self.root_meta_trail.deinit(self.gpa);
         self.union_rank_trail.deinit(self.gpa);
+        self.free_descs.deinit(self.gpa);
+        self.pending_free_descs.deinit(self.gpa);
     }
 
     /// Clone this store into fresh owned memory.
@@ -529,6 +545,8 @@ pub const Store = struct {
 
         // Probes never nest; catch it loudly if that invariant is ever broken.
         std.debug.assert(!self.savepoint_active);
+        std.debug.assert(self.pending_free_descs.items.len == 0);
+        std.debug.assert(self.probe_taken_descs == 0);
         self.savepoint_active = true;
         self.savepoint_baseline_slots = @intCast(self.slots.backing.len());
         self.savepoint_baseline_descs = @intCast(self.descs.backing.items.len);
@@ -549,6 +567,13 @@ pub const Store = struct {
         self.root_meta_trail.shrinkRetainingCapacity(savepoint.root_meta_trail_len);
         self.union_rank_trail.shrinkRetainingCapacity(savepoint.union_rank_trail_len);
         self.savepoint_active = false;
+        // The descriptors the probe reissued stay reissued, and its merges
+        // are kept, so the descriptors they orphaned are dead for good.
+        // `freeDesc` reserved their room on the free list.
+        self.free_descs.items.len -= self.probe_taken_descs;
+        self.probe_taken_descs = 0;
+        for (self.pending_free_descs.items) |desc_idx| self.recycleDesc(desc_idx);
+        self.pending_free_descs.clearRetainingCapacity();
 
         if (savepoint_verification == .clone_crosscheck) {
             if (savepoint.verify_clone) |*vclone| {
@@ -623,6 +648,12 @@ pub const Store = struct {
         self.interpolation_parts.items.shrinkRetainingCapacity(savepoint.interpolation_parts_len);
         self.static_dispatch_constraints.items.shrinkRetainingCapacity(savepoint.static_dispatch_constraints_len);
         self.static_dispatch_relation_merges.shrinkRetainingCapacity(savepoint.static_dispatch_relation_merges_len);
+
+        // The probe's merges are undone, so nothing they orphaned is dead,
+        // and every descriptor the probe took from the free list is dead
+        // again: it was never removed, only counted as taken.
+        self.pending_free_descs.clearRetainingCapacity();
+        self.probe_taken_descs = 0;
 
         // Back to not speculating; savepoint_baseline_* are dead until the next create.
         self.savepoint_active = false;
@@ -738,10 +769,18 @@ pub const Store = struct {
         return self.union_ranks.get(unionRankIdx(Self.varToSlotIdx(storage_var))).*;
     }
 
-    /// Append one descriptor and its structural root metadata atomically with
+    /// Create one descriptor and its structural root metadata atomically with
     /// respect to allocation failure. The two stores always use identical
-    /// indices.
+    /// indices. A descriptor a merge freed is reused before the stores grow.
     fn appendClass(self: *Self, desc: Desc, checked_var: Var) Allocator.Error!DescStore.Idx {
+        if (self.takeFreeDesc()) |desc_idx| {
+            // Inside a probe the freed descriptor predates it (frees made
+            // during the probe are pending), so both writes journal and
+            // rollback restores them.
+            try self.setDescUnguarded(desc_idx, desc);
+            try self.setRootMeta(desc_idx, .{ .checked_var = checked_var });
+            return desc_idx;
+        }
         const next_len = @as(usize, self.descs.backing.len()) + 1;
         try self.descs.backing.ensureTotalCapacity(self.gpa, next_len);
         try self.root_metas.ensureTotalCapacity(self.gpa, next_len);
@@ -752,6 +791,44 @@ pub const Store = struct {
         });
         std.debug.assert(@backingInt(meta_idx) == @backingInt(desc_idx));
         return desc_idx;
+    }
+
+    /// The most recently freed descriptor not yet reissued, if any. Outside
+    /// a probe it leaves the free list; inside one it is only counted as
+    /// taken, so rollback can hand it back.
+    fn takeFreeDesc(self: *Self) ?DescStore.Idx {
+        if (!self.savepoint_active) return self.free_descs.pop();
+        const available = self.free_descs.items.len - self.probe_taken_descs;
+        if (available == 0) return null;
+        self.probe_taken_descs += 1;
+        return self.free_descs.items[available - 1];
+    }
+
+    /// Free the descriptor `former_root` named until the write that orphaned
+    /// it: no slot names it any more, so the next class created may take it.
+    /// While a probe is open the free waits for the probe to commit, since
+    /// rollback would restore `former_root`'s slot.
+    fn freeDesc(self: *Self, desc_idx: DescStore.Idx, former_root: Var) Allocator.Error!void {
+        std.debug.assert(!std.meta.eql(self.slots.get(Self.varToSlotIdx(former_root)), Slot{ .root = desc_idx }));
+        if (self.savepoint_active) {
+            // Reserve the free-list room now so committing never fails.
+            try self.free_descs.ensureUnusedCapacity(self.gpa, self.pending_free_descs.items.len + 1);
+            try self.pending_free_descs.append(self.gpa, desc_idx);
+            return;
+        }
+        try self.free_descs.ensureUnusedCapacity(self.gpa, 1);
+        self.recycleDesc(desc_idx);
+    }
+
+    /// Put a dead descriptor on the free list, forgetting everything the
+    /// store itself remembers about it by index: a settled mark, a watch,
+    /// and a frozen anchor. The caller has reserved the list's room.
+    fn recycleDesc(self: *Self, desc_idx: DescStore.Idx) void {
+        const index: u32 = @backingInt(desc_idx);
+        if (index < self.settled_descs.bits.bit_length) self.settled_descs.bits.unset(index);
+        if (index < self.class_watch.watched.bit_length) self.class_watch.watched.unset(index);
+        if (self.descs.get(desc_idx).flags.frozen) _ = self.frozen_anchors.remove(desc_idx);
+        self.free_descs.appendAssumeCapacity(desc_idx);
     }
 
     fn getRootMeta(self: *const Self, desc_idx: DescStore.Idx) RootMeta {
@@ -816,14 +893,22 @@ pub const Store = struct {
 
     /// Create a new variable with the provided content assuming there is capacity
     pub fn appendFromContentAssumeCapacity(self: *Self, content: Content, rank: Rank) Var {
+        std.debug.assert(!self.savepoint_active);
         const slot_idx: SlotStore.Idx = @fromBackingInt(@intCast(@as(u32, @intCast(self.slots.backing.len()))));
         const checked_var = Self.slotIdxToVar(slot_idx);
-        const desc_idx = self.descs.appendAssumeCapacity(.{
-            .content = content,
-            .rank = rank,
-        });
-        const meta_idx = self.root_metas.appendAssumeCapacity(.{ .checked_var = checked_var });
-        std.debug.assert(@backingInt(meta_idx) == @backingInt(desc_idx));
+        const desc: Desc = .{ .content = content, .rank = rank };
+        const desc_idx = if (self.free_descs.pop()) |freed| reused: {
+            // Nothing watches or settles a freed descriptor, and no probe is
+            // open, so the raw writes need no notes and no journal.
+            self.descs.set(freed, desc);
+            self.root_metas.set(rootMetaIdx(freed), .{ .checked_var = checked_var });
+            break :reused freed;
+        } else appended: {
+            const appended = self.descs.appendAssumeCapacity(desc);
+            const meta_idx = self.root_metas.appendAssumeCapacity(.{ .checked_var = checked_var });
+            std.debug.assert(@backingInt(meta_idx) == @backingInt(appended));
+            break :appended appended;
+        };
         const inserted_slot_idx = self.slots.appendAssumeCapacity(.{ .root = desc_idx });
         const rank_idx = self.union_ranks.appendAssumeCapacity(0);
         std.debug.assert(inserted_slot_idx == slot_idx);
@@ -931,6 +1016,9 @@ pub const Store = struct {
             });
         }
         try self.setSlot(Self.varToSlotIdx(target_var), .{ .root = desc_idx });
+        // A storage root takes its whole subtree to the fresh flex, so its
+        // old descriptor is orphaned; a redirect leaves the remainder on it.
+        if (target_var == storage.storage_var) try self.freeDesc(storage.desc_idx, storage.storage_var);
     }
 
     /// Set a type variable to the provided content
@@ -1209,6 +1297,7 @@ pub const Store = struct {
             redirect_storage.desc_idx,
             redirect_storage.meta.checked_var,
         );
+        try self.freeDesc(target_storage.desc_idx, target_storage.storage_var);
     }
 
     // make builtin types //
@@ -1948,6 +2037,7 @@ pub const Store = struct {
         self.relinking_compared_classes = true;
         defer self.relinking_compared_classes = false;
         try self.linkStorageRoots(a_data, b_data, b_data.desc_idx, b_data.meta.checked_var);
+        try self.freeDesc(a_data.desc_idx, a_data.storage_var);
         const nothing_changed = self.settled_descs.list.items.len == settled_before and settled_before != 0;
         if (nothing_changed and ((a_settled and a_kept) or (b_settled and b_kept))) {
             try self.settled_descs.insert(self.gpa, b_data.desc_idx);
@@ -1968,6 +2058,7 @@ pub const Store = struct {
             base.invariant("a rejected dispatch callable was related to a frozen type class", .{});
         }
         try self.linkStorageRoots(a, b, frozen.desc_idx, b.meta.checked_var);
+        try self.freeDesc(other.desc_idx, other.storage_var);
     }
 
     /// Poison a failed unification at its two queried occurrences.
@@ -2038,6 +2129,9 @@ pub const Store = struct {
         }
 
         try self.linkStorageRoots(a, b, b.desc_idx, b.meta.checked_var);
+        // Only a class that joined the error class whole loses its
+        // descriptor; a detached occurrence already shares `b`'s.
+        if (a.desc_idx != b.desc_idx) try self.freeDesc(a.desc_idx, a.storage_var);
     }
 
     /// Poison one occurrence the way `poisonOnMismatch` poisons each operand:
@@ -2619,6 +2713,234 @@ test "a merge with a frozen class keeps its descriptor and the second operand's 
     try store.union_(later, class.use, .{ .content = .{ .flex = Flex.init() }, .rank = @fromBackingInt(3) });
     try expectFrozenEmptyRecord(&store, later);
     try std.testing.expectEqual(class.use, store.resolveVar(class.anchor).var_);
+}
+
+/// The descriptor index `var_`'s storage root names.
+fn storageDescIdx(store: *const Store, var_: Var) DescStore.Idx {
+    return store.resolveStorageRoot(var_).desc_idx;
+}
+
+/// Whether some slot names `desc_idx`.
+fn descIsNamed(store: *const Store, desc_idx: DescStore.Idx) bool {
+    for (store.slots.backing.items.items) |slot| {
+        switch (slot) {
+            .root => |named| if (named == desc_idx) return true,
+            .redirect => {},
+        }
+    }
+    return false;
+}
+
+test "a merge frees the losing descriptor and the next class takes it" {
+    const gpa = std.testing.allocator;
+    var store = try Store.init(gpa);
+    defer store.deinit();
+
+    const a = try store.fresh();
+    const b = try store.fresh();
+    const a_desc = storageDescIdx(&store, a);
+    const b_desc = storageDescIdx(&store, b);
+    const descs_before = store.descs.backing.len();
+    try store.union_(a, b, .{ .content = .{ .flex = Flex.init() }, .rank = Rank.outermost });
+
+    try std.testing.expectEqual(b_desc, store.resolveVar(a).desc_idx);
+    try std.testing.expect(!descIsNamed(&store, a_desc));
+    try std.testing.expectEqualSlices(DescStore.Idx, &.{a_desc}, store.free_descs.items);
+
+    const c = try store.freshFromContent(.{ .structure = .empty_record });
+    try std.testing.expectEqual(a_desc, store.resolveVar(c).desc_idx);
+    try std.testing.expectEqual(c, store.resolveVar(c).var_);
+    try std.testing.expectEqual(Content{ .structure = .empty_record }, store.resolveVar(c).desc.content);
+    try std.testing.expectEqual(descs_before, store.descs.backing.len());
+    try std.testing.expectEqual(@as(usize, 0), store.free_descs.items.len);
+    try std.testing.expectEqual(Content{ .flex = Flex.init() }, store.resolveVar(a).desc.content);
+}
+
+test "the bulk fill takes freed descriptors before growing" {
+    const gpa = std.testing.allocator;
+    var store = try Store.init(gpa);
+    defer store.deinit();
+
+    const a = try store.fresh();
+    const b = try store.fresh();
+    const a_desc = storageDescIdx(&store, a);
+    try store.union_(a, b, .{ .content = .{ .flex = Flex.init() }, .rank = Rank.outermost });
+    const descs_before = store.descs.backing.len();
+
+    try store.ensureTotalCapacity(store.len() + 2);
+    const c = store.appendFromContentAssumeCapacity(.{ .structure = .empty_record }, Rank.outermost);
+    const d = store.appendFromContentAssumeCapacity(.{ .flex = Flex.init() }, Rank.outermost);
+    try std.testing.expectEqual(a_desc, store.resolveVar(c).desc_idx);
+    try std.testing.expectEqual(c, store.resolveVar(c).var_);
+    try std.testing.expectEqual(Content{ .structure = .empty_record }, store.resolveVar(c).desc.content);
+    try std.testing.expectEqual(descs_before + 1, store.descs.backing.len());
+    try std.testing.expectEqual(d, store.resolveVar(d).var_);
+}
+
+test "a recycled descriptor is neither settled nor watched" {
+    const gpa = std.testing.allocator;
+    var store = try Store.init(gpa);
+    defer store.deinit();
+
+    const settled = try store.freshFromContent(.{ .structure = .empty_record });
+    try store.markSettled(&.{settled});
+    const settled_desc = storageDescIdx(&store, settled);
+    const other = try store.freshFromContent(.{ .structure = .empty_record });
+    // `settled`'s content is kept, so the merged class stays settled while
+    // `settled`'s own descriptor dies.
+    try store.union_(settled, other, .{ .content = .{ .structure = .empty_record }, .rank = Rank.outermost });
+    try std.testing.expect(store.isSettled(other));
+    try std.testing.expect(!store.settled_descs.contains(settled_desc));
+
+    const reissued = try store.fresh();
+    try std.testing.expectEqual(settled_desc, store.resolveVar(reissued).desc_idx);
+    try std.testing.expect(!store.isSettled(reissued));
+    const index: u32 = @backingInt(settled_desc);
+    try std.testing.expect(!(index < store.class_watch.watched.bit_length and store.class_watch.watched.isSet(index)));
+}
+
+test "a merge of two frozen classes drops the dead descriptor's anchor" {
+    const gpa = std.testing.allocator;
+    var store = try Store.init(gpa);
+    defer store.deinit();
+
+    const first = try frozenClassWithUse(&store);
+    const second = try frozenClassWithUse(&store);
+    const first_desc = storageDescIdx(&store, first.anchor);
+    const second_desc = storageDescIdx(&store, second.anchor);
+    try std.testing.expectEqual(@as(usize, 2), store.frozen_anchors.count());
+
+    try store.union_(first.use, second.use, .{ .content = .{ .structure = .empty_record }, .rank = Rank.outermost });
+    try std.testing.expectEqual(second_desc, store.resolveVar(first.anchor).desc_idx);
+    try std.testing.expect(!store.frozen_anchors.contains(first_desc));
+    try std.testing.expectEqual(second.anchor, store.frozen_anchors.get(second_desc).?);
+    try std.testing.expectEqual(first_desc, store.free_descs.items[store.free_descs.items.len - 1]);
+
+    // The reissued descriptor is an ordinary class: not frozen, not anchored.
+    const reissued = try store.fresh();
+    try std.testing.expectEqual(first_desc, store.resolveVar(reissued).desc_idx);
+    try std.testing.expect(!store.resolveVar(reissued).desc.flags.frozen);
+    try store.setVarContent(reissued, .{ .structure = .empty_record });
+    try std.testing.expectEqual(Content{ .structure = .empty_record }, store.resolveVar(reissued).desc.content);
+    try expectFrozenEmptyRecord(&store, first.use);
+
+    try store.thawFrozenClasses();
+    try std.testing.expect(!store.resolveVar(first.use).desc.flags.frozen);
+    try std.testing.expectEqual(Content{ .structure = .empty_record }, store.resolveVar(reissued).desc.content);
+}
+
+test "a mismatch that poisons a whole class frees its descriptor" {
+    const gpa = std.testing.allocator;
+    var store = try Store.init(gpa);
+    defer store.deinit();
+
+    const a = try store.freshFromContent(.{ .structure = .empty_record });
+    const b = try store.freshFromContent(.{ .structure = .empty_tag_union });
+    const a_desc = storageDescIdx(&store, a);
+    try store.poisonOnMismatch(a, b);
+    try std.testing.expect(store.resolveVar(a).desc.content == .err);
+    try std.testing.expect(store.resolveVar(b).desc.content == .err);
+    try std.testing.expect(!descIsNamed(&store, a_desc));
+    try std.testing.expectEqualSlices(DescStore.Idx, &.{a_desc}, store.free_descs.items);
+
+    // A detached occurrence keeps its binding's descriptor live.
+    const binding = try store.freshFromContent(.{ .structure = .empty_record });
+    const occurrence = try store.fresh();
+    try store.union_(occurrence, binding, .{ .content = .{ .structure = .empty_record }, .rank = Rank.outermost });
+    const binding_desc = store.resolveVar(binding).desc_idx;
+    const other = try store.freshFromContent(.{ .structure = .empty_tag_union });
+    const free_before = store.free_descs.items.len;
+    try store.poisonOnMismatch(occurrence, other);
+    try std.testing.expectEqual(binding_desc, store.resolveVar(binding).desc_idx);
+    try std.testing.expectEqual(Content{ .structure = .empty_record }, store.resolveVar(binding).desc.content);
+    try std.testing.expect(store.resolveVar(occurrence).desc.content == .err);
+    try std.testing.expectEqual(free_before, store.free_descs.items.len);
+}
+
+test "resetting a storage root to unbound frees its old descriptor" {
+    const gpa = std.testing.allocator;
+    var store = try Store.init(gpa);
+    defer store.deinit();
+
+    const root = try store.freshFromContent(.{ .structure = .empty_record });
+    const root_desc = storageDescIdx(&store, root);
+    try store.resetVarToUnbound(root, Rank.outermost);
+    try std.testing.expect(store.resolveVar(root).desc.content == .flex);
+    try std.testing.expect(!descIsNamed(&store, root_desc));
+    try std.testing.expectEqualSlices(DescStore.Idx, &.{root_desc}, store.free_descs.items);
+
+    // A redirect leaves the remainder of its class on the old descriptor;
+    // its fresh flex takes the freed one.
+    const a = try store.fresh();
+    const b = try store.freshFromContent(.{ .structure = .empty_record });
+    try store.union_(a, b, .{ .content = .{ .structure = .empty_record }, .rank = Rank.outermost });
+    const kept_desc = store.resolveVar(b).desc_idx;
+    try std.testing.expectEqual(@as(usize, 1), store.free_descs.items.len);
+    const freed = store.free_descs.items[0];
+    const redirect = if (store.resolveStorageRoot(a).storage_var == a) b else a;
+    try store.resetVarToUnbound(redirect, Rank.outermost);
+    try std.testing.expect(store.resolveVar(redirect).desc.content == .flex);
+    try std.testing.expectEqual(freed, store.resolveVar(redirect).desc_idx);
+    try std.testing.expect(descIsNamed(&store, kept_desc));
+    try std.testing.expectEqual(@as(usize, 0), store.free_descs.items.len);
+}
+
+test "a probe frees nothing until it commits and rollback restores the free list" {
+    const gpa = std.testing.allocator;
+    var store = try Store.init(gpa);
+    defer store.deinit();
+
+    // A class the probes merge away, and two descriptors freed before them.
+    const d = try store.freshFromContent(.{ .structure = .empty_record });
+    const d_desc = store.resolveVar(d).desc_idx;
+    const a = try store.fresh();
+    const b = try store.fresh();
+    const c = try store.fresh();
+    try store.union_(a, b, .{ .content = .{ .flex = Flex.init() }, .rank = Rank.outermost });
+    try store.union_(b, c, .{ .content = .{ .flex = Flex.init() }, .rank = Rank.outermost });
+    try std.testing.expectEqual(@as(usize, 2), store.free_descs.items.len);
+    const free_before = try gpa.dupe(DescStore.Idx, store.free_descs.items);
+    defer gpa.free(free_before);
+    const descs_before = store.descs.backing.len();
+
+    // A rolled-back probe: a fresh var takes a freed descriptor and the
+    // merge inside orphans a pre-probe descriptor. Rollback puts the
+    // descriptor and the free list back (the verifying savepoint also
+    // cross-checks every descriptor against a full copy).
+    {
+        var savepoint = try store.createSavepointVerifying();
+        const e = try store.fresh();
+        try std.testing.expectEqual(free_before[1], store.resolveVar(e).desc_idx);
+        try std.testing.expectEqual(@as(u32, 1), store.probe_taken_descs);
+        try store.union_(d, a, .{ .content = .{ .flex = Flex.init() }, .rank = Rank.outermost });
+        try std.testing.expectEqualSlices(DescStore.Idx, free_before, store.free_descs.items);
+        try std.testing.expectEqualSlices(DescStore.Idx, &.{d_desc}, store.pending_free_descs.items);
+        store.rollbackToSavepoint(&savepoint);
+        try std.testing.expectEqualSlices(DescStore.Idx, free_before, store.free_descs.items);
+        try std.testing.expectEqual(@as(u32, 0), store.probe_taken_descs);
+        try std.testing.expectEqual(@as(usize, 0), store.pending_free_descs.items.len);
+        try std.testing.expectEqual(d_desc, store.resolveVar(d).desc_idx);
+        try std.testing.expectEqual(Content{ .structure = .empty_record }, store.resolveVar(d).desc.content);
+        try std.testing.expectEqual(descs_before, store.descs.backing.len());
+    }
+
+    // A committed probe keeps its merge, so the orphan is freed at commit,
+    // and the descriptor the probe took stays taken.
+    {
+        var savepoint = try store.createSavepoint();
+        const e = try store.fresh();
+        const e_desc = store.resolveVar(e).desc_idx;
+        try std.testing.expectEqual(free_before[1], e_desc);
+        try store.union_(d, a, .{ .content = .{ .flex = Flex.init() }, .rank = Rank.outermost });
+        store.commitSavepoint(&savepoint);
+        try std.testing.expectEqualSlices(DescStore.Idx, &.{ free_before[0], d_desc }, store.free_descs.items);
+        try std.testing.expectEqual(@as(usize, 0), store.pending_free_descs.items.len);
+        try std.testing.expectEqual(e_desc, store.resolveVar(e).desc_idx);
+        try std.testing.expect(!descIsNamed(&store, d_desc));
+        try std.testing.expectEqual(store.resolveVar(a).desc_idx, store.resolveVar(d).desc_idx);
+        try std.testing.expectEqual(descs_before, store.descs.backing.len());
+        for (store.free_descs.items) |freed| try std.testing.expect(!descIsNamed(&store, freed));
+    }
 }
 
 test "poisoning a frozen class's checked representative detaches it alone" {

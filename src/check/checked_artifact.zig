@@ -10661,10 +10661,27 @@ pub const CheckedStrPatternStep = struct {
 /// pattern-binder pool.
 pub const CheckedLoopMutations = struct {
     binders: CheckedBodyRange,
+    /// For a `for` expression's loop, the expression's state merge plan: its
+    /// iterable's binders, then the loop's. Nothing reads it for any other
+    /// loop.
+    state_merge: ?StateMergePlanId = null,
 };
 
 /// Dense identity in a checked body's loop mutation table.
 pub const LoopMutationPlanId = enum(u32) { _ };
+
+/// The binders a control-flow expression or an expression statement
+/// reassigns anywhere inside it, in source order with each binder's first
+/// occurrence kept, as a range of the body's pattern-binder pool. Monotype
+/// threads exactly these binders through the construct as explicit state.
+/// An `expect` body can reassign only vars declared inside it, so the set is
+/// the same whether or not inline expects run.
+pub const CheckedStateMerge = struct {
+    binders: CheckedBodyRange,
+};
+
+/// Dense identity in a checked body's state merge table.
+pub const StateMergePlanId = enum(u32) { _ };
 
 /// Condition-driven loop statement. The condition runs on every iteration,
 /// so its mutations belong to the loop's published mutation plan.
@@ -10847,11 +10864,13 @@ pub const CheckedExprData = union(enum) {
         is_try_suffix: bool,
         skip_exhaustiveness: bool,
         comptime_site_kind: CheckedComptimeSiteKind,
+        state_merge: ?StateMergePlanId = null,
     },
     if_: struct {
         branches: []const CheckedIfBranch,
         final_else: CheckedExprId,
         warn_unused_branches: bool,
+        state_merge: ?StateMergePlanId = null,
     },
     call: struct {
         func: CheckedExprId,
@@ -11218,6 +11237,9 @@ pub const StoredCheckedStatement = struct {
     diverges: bool = false,
     /// Whether this statement diverges when inline expects are omitted.
     diverges_without_inline_expects: bool = false,
+    /// For an expression statement, the binders its expression reassigns.
+    /// Null for every other statement.
+    state_merge: ?StateMergePlanId = null,
 };
 
 /// Runtime treatment of checked `expect` nodes for producer-recorded
@@ -11290,6 +11312,7 @@ pub const CheckedBodyStoreView = struct {
     statement_id_pool: []const CheckedStatementId = &.{},
     pattern_binder_id_pool: []const PatternBinderId = &.{},
     loop_mutations: []const CheckedLoopMutations = &.{},
+    state_merges: []const CheckedStateMerge = &.{},
     record_expr_field_pool: []const CheckedRecordExprField = &.{},
     record_unset_label_pool: []const canonical.RecordFieldLabelId = &.{},
     field_access_segment_pool: []const CheckedFieldAccessSegment = &.{},
@@ -11322,6 +11345,29 @@ pub const CheckedBodyStoreView = struct {
 
     pub fn loopMutations(self: CheckedBodyStoreView, id: LoopMutationPlanId) CheckedLoopMutations {
         return self.loop_mutations[@backingInt(id)];
+    }
+
+    /// The binders a state merge plan names.
+    pub fn stateMergeBinders(self: CheckedBodyStoreView, id: StateMergePlanId) []const PatternBinderId {
+        const range = self.state_merges[@backingInt(id)].binders;
+        return self.pattern_binder_id_pool[range.start..][0..range.len];
+    }
+
+    /// The state merge plan of an `if`, `match`, or `for` expression.
+    pub fn exprStateMerge(self: CheckedBodyStoreView, id: CheckedExprId) StateMergePlanId {
+        const plan = switch (self.stored_exprs[@backingInt(id)].data) {
+            inline .if_, .match_ => |payload| payload.state_merge,
+            .for_ => |for_| self.loopMutations(for_.mutations orelse checkedArtifactInvariant("checked loop omitted its mutation plan", .{})).state_merge,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .hosted_lambda, .run_low_level => checkedArtifactInvariant("state merge plan requested for an expression that is not control flow", .{}),
+        };
+        return plan orelse checkedArtifactInvariant("checked control-flow expression omitted its state merge plan", .{});
+    }
+
+    /// The state merge plan of an expression statement.
+    pub fn exprStatementStateMerge(self: CheckedBodyStoreView, id: CheckedStatementId) StateMergePlanId {
+        const stored = self.stored_statements[@backingInt(id)];
+        if (stored.data != .expr) checkedArtifactInvariant("state merge plan requested for a statement that is not an expression statement", .{});
+        return stored.state_merge orelse checkedArtifactInvariant("checked expression statement omitted its state merge plan", .{});
     }
 
     pub fn exprCount(self: CheckedBodyStoreView) usize {
@@ -11938,9 +11984,11 @@ const CheckedSourceNodes = struct {
     }
 };
 
-/// Publish loop mutation summaries once; nested loops reuse their published
-/// ranges instead of revisiting bodies for each enclosing loop.
-const CheckedLoopMutationPublisher = struct {
+/// Publish loop mutation and state merge plans once. A walk that reaches a
+/// nested loop, control-flow expression, or expression statement reuses that
+/// construct's published range instead of revisiting its parts, so each
+/// checked node is walked only by its nearest enclosing plan owner.
+const CheckedReassignmentPublisher = struct {
     allocator: Allocator,
     store: *CheckedBodyStore,
     dispatch_operands: []const []const CheckedExprId,
@@ -11949,38 +11997,74 @@ const CheckedLoopMutationPublisher = struct {
     positions: []usize = &.{},
 
     fn publish(allocator: Allocator, store: *CheckedBodyStore, dispatch_operands: []const []const CheckedExprId) Allocator.Error!void {
-        // Mutation-free modules need no traversal or binder-sized scratch.
+        // Reassignment-free modules need no traversal or binder-sized scratch.
         if (store.pattern_binder_id_pool.items.len == 0) {
-            var empty_plan: ?LoopMutationPlanId = null;
-            for (store.stored_exprs.items) |*expr| if (expr.data == .for_) {
-                if (empty_plan == null) empty_plan = try store.appendLoopMutations(allocator, .{ .binders = .{} });
-                expr.data.for_.mutations = empty_plan;
+            var empty_loop: ?LoopMutationPlanId = null;
+            var empty_state: ?StateMergePlanId = null;
+            for (store.stored_exprs.items) |*expr| switch (expr.data) {
+                .for_ => |*for_| {
+                    if (empty_state == null) empty_state = try store.appendStateMerge(allocator, .{ .binders = .{} });
+                    if (empty_loop == null) empty_loop = try store.appendLoopMutations(allocator, .{ .binders = .{}, .state_merge = empty_state });
+                    for_.mutations = empty_loop;
+                },
+                inline .if_, .match_ => |*payload| {
+                    if (empty_state == null) empty_state = try store.appendStateMerge(allocator, .{ .binders = .{} });
+                    payload.state_merge = empty_state;
+                },
+                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .hosted_lambda, .run_low_level => {},
             };
             for (store.stored_statements.items) |*stmt| switch (stmt.data) {
                 inline .for_, .while_, .infinite_loop, .breakable_loop => |*loop_| {
-                    if (empty_plan == null) empty_plan = try store.appendLoopMutations(allocator, .{ .binders = .{} });
-                    loop_.mutations = empty_plan;
+                    if (empty_state == null) empty_state = try store.appendStateMerge(allocator, .{ .binders = .{} });
+                    if (empty_loop == null) empty_loop = try store.appendLoopMutations(allocator, .{ .binders = .{}, .state_merge = empty_state });
+                    loop_.mutations = empty_loop;
                 },
-                .pending, .decl, .promoted_proc, .var_, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => {},
+                .expr => {
+                    if (empty_state == null) empty_state = try store.appendStateMerge(allocator, .{ .binders = .{} });
+                    stmt.state_merge = empty_state;
+                },
+                .pending, .decl, .promoted_proc, .var_, .var_uninitialized, .reassign, .crash, .dbg, .expect, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => {},
             };
             return;
         }
-        var self = CheckedLoopMutationPublisher{ .allocator = allocator, .store = store, .dispatch_operands = dispatch_operands };
+        var self = CheckedReassignmentPublisher{ .allocator = allocator, .store = store, .dispatch_operands = dispatch_operands };
         defer self.scratch.deinit(allocator);
         defer self.work.deinit(allocator);
         defer allocator.free(self.positions);
-        for (store.stored_exprs.items, 0..) |expr, index| if (expr.data == .for_) {
-            try self.publishLoop(.{ .expr = @fromBackingInt(@intCast(index)) });
-        };
-        for (store.stored_statements.items, 0..) |stmt, index| switch (stmt.data) {
-            .for_, .while_, .infinite_loop, .breakable_loop => try self.publishLoop(.{ .statement = @fromBackingInt(@intCast(index)) }),
-            .pending, .decl, .promoted_proc, .var_, .var_uninitialized, .reassign, .crash, .dbg, .expr, .expect, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => {},
-        };
+        for (store.stored_exprs.items, 0..) |expr, index| {
+            const id: CheckedExprId = @fromBackingInt(@intCast(index));
+            switch (expr.data) {
+                .for_ => {
+                    try self.publishPlan(.{ .loop = .{ .expr = id } });
+                    try self.publishPlan(.{ .state = id });
+                },
+                .if_, .match_ => try self.publishPlan(.{ .state = id }),
+                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .hosted_lambda, .run_low_level => {},
+            }
+        }
+        for (store.stored_statements.items, 0..) |stmt, index| {
+            const id: CheckedStatementId = @fromBackingInt(@intCast(index));
+            switch (stmt.data) {
+                .for_, .while_, .infinite_loop, .breakable_loop => try self.publishPlan(.{ .loop = .{ .statement = id } }),
+                .expr => try self.publishPlan(.{ .expr_statement = id }),
+                .pending, .decl, .promoted_proc, .var_, .var_uninitialized, .reassign, .crash, .dbg, .expect, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => {},
+            }
+        }
     }
 
     const LoopRef = union(enum) {
         expr: CheckedExprId,
         statement: CheckedStatementId,
+    };
+
+    /// A construct that owns a published binder range.
+    const PlanRef = union(enum) {
+        /// A loop's mutations: its condition and body.
+        loop: LoopRef,
+        /// An `if`, `match`, or `for` expression's state merge.
+        state: CheckedExprId,
+        /// An expression statement's state merge.
+        expr_statement: CheckedStatementId,
     };
 
     const LoopFields = struct {
@@ -12000,13 +12084,16 @@ const CheckedLoopMutationPublisher = struct {
     const Work = union(enum) {
         expr: CheckedExprId,
         statement: CheckedStatementId,
-        /// A loop reached from an enclosing loop's body.
-        nested_loop: LoopRef,
-        /// Deduplicate and publish a loop whose mutations were collected
-        /// above `scratch_start`; a nested loop then contributes its plan to
-        /// the enclosing loop.
-        finish_loop: struct { loop: LoopRef, scratch_start: usize, nested: bool },
-        append_binders: CheckedLoopMutations,
+        /// A plan owner reached from an enclosing walk: its binders join the
+        /// walk, publishing its plan first when it has none yet.
+        nested: PlanRef,
+        /// Deduplicate and publish a plan whose binders were collected above
+        /// `scratch_start`; a nested plan then contributes to its encloser.
+        finish: struct { plan: PlanRef, scratch_start: usize, nested: bool },
+        /// An expression statement whose expression is control flow shares
+        /// that expression's plan once it is published.
+        share_state: struct { statement: CheckedStatementId, expr: CheckedExprId },
+        append_binders: CheckedBodyRange,
     };
 
     fn loopFields(self: *@This(), ref: LoopRef) LoopFields {
@@ -12023,62 +12110,123 @@ const CheckedLoopMutationPublisher = struct {
         }
     }
 
+    /// Where a control-flow expression's state merge plan is recorded: in
+    /// its payload, or for a `for` expression in its loop's record, which
+    /// exists once the loop's plan is published.
+    fn stateField(self: *@This(), id: CheckedExprId) ?*?StateMergePlanId {
+        return switch (self.store.stored_exprs.items[@backingInt(id)].data) {
+            inline .if_, .match_ => |*payload| &payload.state_merge,
+            .for_ => |for_| &self.store.loop_mutations.items[@backingInt(for_.mutations orelse return null)].state_merge,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .hosted_lambda, .run_low_level => checkedArtifactInvariant("state merge publication referenced an expression that is not control flow", .{}),
+        };
+    }
+
+    /// The expression of an expression statement.
+    fn statementExpr(self: *@This(), id: CheckedStatementId) CheckedExprId {
+        return switch (self.store.stored_statements.items[@backingInt(id)].data) {
+            .expr => |expr| expr,
+            .pending, .decl, .promoted_proc, .var_, .var_uninitialized, .reassign, .crash, .dbg, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => checkedArtifactInvariant("state merge publication referenced a statement that is not an expression statement", .{}),
+        };
+    }
+
+    fn ownsStateMerge(self: *@This(), id: CheckedExprId) bool {
+        return switch (self.store.stored_exprs.items[@backingInt(id)].data) {
+            .if_, .match_, .for_ => true,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .hosted_lambda, .run_low_level => false,
+        };
+    }
+
+    /// The published range of a plan owner, if it has one yet.
+    fn publishedRange(self: *@This(), plan: PlanRef) ?CheckedBodyRange {
+        return switch (plan) {
+            .loop => |loop| if (self.loopFields(loop).mutations.*) |id| self.store.loopMutations(id).binders else null,
+            .state => |expr| if ((self.stateField(expr) orelse return null).*) |id| self.store.state_merges.items[@backingInt(id)].binders else null,
+            .expr_statement => |statement| if (self.store.stored_statements.items[@backingInt(statement)].state_merge) |id| self.store.state_merges.items[@backingInt(id)].binders else null,
+        };
+    }
+
     fn push(self: *@This(), work: Work) Allocator.Error!void {
         try self.work.append(self.allocator, work);
     }
 
-    fn publishLoop(self: *@This(), ref: LoopRef) Allocator.Error!void {
-        if (self.loopFields(ref).mutations.* != null) return;
-        try self.beginLoop(ref, false);
+    fn publishPlan(self: *@This(), plan: PlanRef) Allocator.Error!void {
+        if (self.publishedRange(plan) != null) return;
+        if (plan == .expr_statement) {
+            const expr = self.statementExpr(plan.expr_statement);
+            if (self.ownsStateMerge(expr)) {
+                try self.push(.{ .share_state = .{ .statement = plan.expr_statement, .expr = expr } });
+                if (self.publishedRange(.{ .state = expr }) == null) try self.begin(.{ .state = expr }, false);
+                return self.drain();
+            }
+        }
+        try self.begin(plan, false);
+        try self.drain();
+    }
+
+    fn drain(self: *@This()) Allocator.Error!void {
         while (self.work.pop()) |work| switch (work) {
             .expr => |id| try self.visitExpr(id),
             .statement => |id| try self.visitStatement(id),
-            .nested_loop => |loop| {
-                const fields = self.loopFields(loop);
-                if (fields.mutations.*) |published| {
-                    try self.pushLoopContribution(self.store.loopMutations(published), fields.iterable);
-                } else {
-                    try self.beginLoop(loop, true);
-                }
+            .nested => |plan| try self.visitNested(plan),
+            .finish => |item| {
+                const range = try self.finish(item.plan, item.scratch_start);
+                if (item.nested) try self.pushContribution(item.plan, range);
             },
-            .finish_loop => |item| {
-                const mutations = try self.finishLoop(item.loop, item.scratch_start);
-                if (item.nested) {
-                    try self.pushLoopContribution(mutations, self.loopFields(item.loop).iterable);
-                }
+            .share_state => |item| {
+                self.store.stored_statements.items[@backingInt(item.statement)].state_merge = self.stateField(item.expr).?.*.?;
             },
-            .append_binders => |mutations| {
-                const range = mutations.binders;
+            .append_binders => |range| {
                 try self.scratch.appendSlice(self.allocator, self.store.pattern_binder_id_pool.items[range.start..][0..range.len]);
             },
         };
     }
 
-    /// Collect an unpublished loop's condition and body into a fresh scratch
+    fn visitNested(self: *@This(), plan: PlanRef) Allocator.Error!void {
+        if (self.publishedRange(plan)) |range| return self.pushContribution(plan, range);
+        if (plan == .expr_statement) {
+            const expr = self.statementExpr(plan.expr_statement);
+            if (self.ownsStateMerge(expr)) {
+                try self.push(.{ .share_state = .{ .statement = plan.expr_statement, .expr = expr } });
+                return self.visitNested(.{ .state = expr });
+            }
+        }
+        try self.begin(plan, true);
+    }
+
+    /// What a plan owner adds to an enclosing walk: a `for` loop's iterable
+    /// evaluates in the enclosing context, then its published binders.
+    fn pushContribution(self: *@This(), plan: PlanRef, range: CheckedBodyRange) Allocator.Error!void {
+        try self.push(.{ .append_binders = range });
+        switch (plan) {
+            .loop => |loop| if (self.loopFields(loop).iterable) |iterable| try self.push(.{ .expr = iterable }),
+            .state, .expr_statement => {},
+        }
+    }
+
+    /// Collect an unpublished plan owner's parts into a fresh scratch
     /// region, then finish it.
-    fn beginLoop(self: *@This(), ref: LoopRef, nested: bool) Allocator.Error!void {
+    fn begin(self: *@This(), plan: PlanRef, nested: bool) Allocator.Error!void {
         if (self.positions.len == 0) {
             self.positions = try self.allocator.alloc(usize, self.store.pattern_binders.items.len);
             @memset(self.positions, std.math.maxInt(usize));
         }
-        const fields = self.loopFields(ref);
-        try self.push(.{ .finish_loop = .{ .loop = ref, .scratch_start = self.scratch.items.len, .nested = nested } });
-        try self.push(.{ .expr = fields.body });
-        if (fields.cond) |cond| try self.push(.{ .expr = cond });
+        try self.push(.{ .finish = .{ .plan = plan, .scratch_start = self.scratch.items.len, .nested = nested } });
+        switch (plan) {
+            .loop => |loop| {
+                const fields = self.loopFields(loop);
+                try self.push(.{ .expr = fields.body });
+                if (fields.cond) |cond| try self.push(.{ .expr = cond });
+            },
+            .state => |expr| try self.pushExprParts(expr),
+            .expr_statement => |statement| try self.push(.{ .expr = self.statementExpr(statement) }),
+        }
     }
 
-    /// An enclosing loop sees a nested `for` loop's iterable in its own
-    /// context, then the nested loop's published mutations.
-    fn pushLoopContribution(self: *@This(), mutations: CheckedLoopMutations, iterable: ?CheckedExprId) Allocator.Error!void {
-        try self.push(.{ .append_binders = mutations });
-        if (iterable) |expr| try self.push(.{ .expr = expr });
-    }
-
-    fn finishLoop(self: *@This(), ref: LoopRef, start: usize) Allocator.Error!CheckedLoopMutations {
+    fn finish(self: *@This(), plan: PlanRef, start: usize) Allocator.Error!CheckedBodyRange {
         defer self.scratch.shrinkRetainingCapacity(start);
 
-        // Nested loops publish before this deduplication begins, so one dense
-        // position table serves every loop without per-loop clearing or hashing.
+        // Nested plans publish before this deduplication begins, so one dense
+        // position table serves every plan without per-plan clearing or hashing.
         var end = start;
         const count = self.scratch.items.len;
         for (start..count) |i| {
@@ -12095,11 +12243,20 @@ const CheckedLoopMutationPublisher = struct {
         };
         const binders_start: u32 = @intCast(self.store.pattern_binder_id_pool.items.len);
         try self.store.pattern_binder_id_pool.appendSlice(self.allocator, self.scratch.items[start..end]);
-        const result: CheckedLoopMutations = .{
-            .binders = .{ .start = binders_start, .len = @as(u32, @intCast(self.store.pattern_binder_id_pool.items.len)) - binders_start },
+        const range: CheckedBodyRange = .{
+            .start = binders_start,
+            .len = @as(u32, @intCast(self.store.pattern_binder_id_pool.items.len)) - binders_start,
         };
-        self.loopFields(ref).mutations.* = try self.store.appendLoopMutations(self.allocator, result);
-        return result;
+        switch (plan) {
+            .loop => |loop| self.loopFields(loop).mutations.* = try self.store.appendLoopMutations(self.allocator, .{ .binders = range }),
+            .state => |expr| {
+                // A `for` expression's walk published its loop's plan first.
+                const field = self.stateField(expr) orelse checkedArtifactInvariant("for expression state merge finished before its loop plan", .{});
+                field.* = try self.store.appendStateMerge(self.allocator, .{ .binders = range });
+            },
+            .expr_statement => |statement| self.store.stored_statements.items[@backingInt(statement)].state_merge = try self.store.appendStateMerge(self.allocator, .{ .binders = range }),
+        }
+        return range;
     }
 
     /// Children are pushed in source order between `beginChildren` and
@@ -12116,7 +12273,14 @@ const CheckedLoopMutationPublisher = struct {
         try self.push(.{ .expr = id });
     }
 
+    /// An expression reached by a walk: a control-flow expression contributes
+    /// its own plan, and any other expression contributes its parts.
     fn visitExpr(self: *@This(), id: CheckedExprId) Allocator.Error!void {
+        if (self.ownsStateMerge(id)) return self.push(.{ .nested = .{ .state = id } });
+        try self.pushExprParts(id);
+    }
+
+    fn pushExprParts(self: *@This(), id: CheckedExprId) Allocator.Error!void {
         const data = self.store.expr(id).data;
         const children = self.beginChildren();
         defer self.endChildren(children);
@@ -12158,7 +12322,7 @@ const CheckedLoopMutationPublisher = struct {
             .unary_minus, .unary_not, .dbg => |child| try self.pushExpr(child),
             // An expect body can only reassign vars declared inside it
             // (canonicalization rejects the rest), so it carries no state
-            // through an enclosing loop.
+            // through an enclosing construct.
             .expect => {},
             .expect_err => |child| try self.pushExpr(child.expr),
             .field_access => |field| try self.pushExpr(field.receiver),
@@ -12179,7 +12343,8 @@ const CheckedLoopMutationPublisher = struct {
             },
             .tuple_access => |access| try self.pushExpr(access.tuple),
             .return_ => |ret| try self.pushExpr(ret.expr),
-            .for_ => try self.push(.{ .nested_loop = .{ .expr = id } }),
+            // A `for` expression's iterable, then its loop's mutations.
+            .for_ => try self.push(.{ .nested = .{ .loop = .{ .expr = id } } }),
             .run_low_level => |low| for (low.args) |arg| try self.pushExpr(arg),
             // A lambda's body executes at invocation, not at this expression.
             .lambda,
@@ -12204,7 +12369,7 @@ const CheckedLoopMutationPublisher = struct {
             .dispatch_call, .method_eq, .type_dispatch_call => {
                 for (self.dispatch_operands[@backingInt(id)]) |operand| try self.pushExpr(operand);
             },
-            .pending => checkedArtifactInvariant("pending expression in loop mutation publication", .{}),
+            .pending => checkedArtifactInvariant("pending expression in reassignment publication", .{}),
         }
     }
 
@@ -12216,12 +12381,13 @@ const CheckedLoopMutationPublisher = struct {
                 try self.scratch.appendSlice(self.allocator, reassign.reassigned_binders);
                 try self.pushExpr(reassign.expr);
             },
-            .dbg, .expr => |child| try self.pushExpr(child),
+            .dbg => |child| try self.pushExpr(child),
+            .expr => try self.push(.{ .nested = .{ .expr_statement = id } }),
             .expect => {},
-            .for_, .while_, .infinite_loop, .breakable_loop => try self.push(.{ .nested_loop = .{ .statement = id } }),
+            .for_, .while_, .infinite_loop, .breakable_loop => try self.push(.{ .nested = .{ .loop = .{ .statement = id } } }),
             .return_ => |ret| try self.pushExpr(ret.expr),
             .promoted_proc, .var_uninitialized, .crash, .break_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => {},
-            .pending => checkedArtifactInvariant("pending statement in loop mutation publication", .{}),
+            .pending => checkedArtifactInvariant("pending statement in reassignment publication", .{}),
         }
     }
 };
@@ -12245,6 +12411,7 @@ pub const CheckedBodyStore = struct {
     /// Flat pool of `PatternBinderId`s backing reassign reassigned_binders.
     pattern_binder_id_pool: std.ArrayList(PatternBinderId) = .empty,
     loop_mutations: std.ArrayList(CheckedLoopMutations) = .empty,
+    state_merges: std.ArrayList(CheckedStateMerge) = .empty,
     /// Flat pool of record expression fields backing record payloads.
     record_expr_field_pool: std.ArrayList(CheckedRecordExprField) = .empty,
     record_unset_label_pool: std.ArrayList(canonical.RecordFieldLabelId) = .empty,
@@ -12602,6 +12769,7 @@ pub const CheckedBodyStore = struct {
             .statement_id_pool = self.statement_id_pool.items,
             .pattern_binder_id_pool = self.pattern_binder_id_pool.items,
             .loop_mutations = self.loop_mutations.items,
+            .state_merges = self.state_merges.items,
             .record_expr_field_pool = self.record_expr_field_pool.items,
             .record_unset_label_pool = self.record_unset_label_pool.items,
             .field_access_segment_pool = self.field_access_segment_pool.items,
@@ -12765,6 +12933,12 @@ pub const CheckedBodyStore = struct {
     fn appendLoopMutations(self: *CheckedBodyStore, allocator: Allocator, mutations: CheckedLoopMutations) Allocator.Error!LoopMutationPlanId {
         const id: LoopMutationPlanId = @fromBackingInt(@intCast(@as(u32, @intCast(self.loop_mutations.items.len))));
         try self.loop_mutations.append(allocator, mutations);
+        return id;
+    }
+
+    fn appendStateMerge(self: *CheckedBodyStore, allocator: Allocator, merge: CheckedStateMerge) Allocator.Error!StateMergePlanId {
+        const id: StateMergePlanId = @fromBackingInt(@intCast(@as(u32, @intCast(self.state_merges.items.len))));
+        try self.state_merges.append(allocator, merge);
         return id;
     }
 
@@ -13248,6 +13422,7 @@ pub const CheckedBodyStore = struct {
         statement_id_pool: SerializedSlice(CheckedStatementId) = .{},
         pattern_binder_id_pool: SerializedSlice(PatternBinderId) = .{},
         loop_mutations: SerializedSlice(CheckedLoopMutations) = .{},
+        state_merges: SerializedSlice(CheckedStateMerge) = .{},
         record_expr_field_pool: SerializedSlice(CheckedRecordExprField) = .{},
         record_unset_label_pool: SerializedSlice(canonical.RecordFieldLabelId) = .{},
         field_access_segment_pool: SerializedSlice(CheckedFieldAccessSegment) = .{},
@@ -13264,9 +13439,9 @@ pub const CheckedBodyStore = struct {
         record_omitted_defaults: SerializedSlice(CheckedRecordOmittedDefault) = .{},
 
         comptime {
-            // 25 SerializedSlice fields → 25 base-pointer fixups, independent of
+            // 26 SerializedSlice fields → 26 base-pointer fixups, independent of
             // stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 25);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 26);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(CheckedBodyStore, @This());
@@ -15883,7 +16058,9 @@ fn verifyCheckedExprDataComplete(
             std.debug.assert(for_.mutations != null);
             const range = checked_bodies.loopMutations(for_.mutations.?).binders;
             std.debug.assert(@as(usize, range.start) + range.len <= checked_bodies.pattern_binder_id_pool.items.len);
+            std.debug.assert(checked_bodies.loopMutations(for_.mutations.?).state_merge != null);
         },
+        inline .match_, .if_ => |payload| std.debug.assert(payload.state_merge != null),
         .field_access => |field_access| {
             if (field_access.segments.len == 0) {
                 checkedArtifactInvariant("checked field-access path had no stored segments", .{});
@@ -15904,7 +16081,7 @@ fn verifyCheckedExprDataComplete(
                 }
             }
         },
-        .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .hosted_lambda, .run_low_level => {},
+        .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .hosted_lambda, .run_low_level => {},
         .row_coerce => |coerce| {
             if (@backingInt(coerce.value) >= checked_bodies.exprCount()) {
                 checkedArtifactInvariant("checked row coercion value expression was out of range", .{});
@@ -32927,11 +33104,11 @@ pub const CheckedModuleArtifact = struct {
             // add three pointers beyond the current-main count, and the
             // record-unset label pool one more. Ordered debug entries and their
             // byte pool add two explicit relocation pointers. Loop mutation
-            // plans add one. Promoted local procedure templates and callable
-            // contract types add one each, and the single-source-call template
-            // list one more. Nested procedure runtime captures add one. The
+            // plans add one, and state merge plans one more. Promoted local
+            // procedure templates and callable contract types add one each,
+            // and the single-source-call template list one more. Nested procedure runtime captures add one. The
             // compile-time root read table adds its rows and refs.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 233);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 234);
         }
 
         /// Every field but the inline POD `key` and `module_identity`: the
@@ -34409,6 +34586,7 @@ pub const CheckedModuleArtifact = struct {
         for (self.checked_bodies.stored_statements.items, 0..) |statement, i| {
             std.debug.assert(@backingInt(statement.id) == i);
             verifyCheckedStatementDataComplete(statement.data);
+            std.debug.assert((statement.data == .expr) == (statement.state_merge != null));
         }
 
         for (self.checked_const_bodies.bodies, 0..) |body, i| {
@@ -36465,7 +36643,7 @@ pub fn publishFromTypedModule(
 
     const dispatch_operands = try checkedDispatchOperands(allocator, checked_bodies.exprCount(), &static_dispatch_plans, null);
     defer freeCheckedDispatchOperands(allocator, dispatch_operands);
-    try CheckedLoopMutationPublisher.publish(allocator, checked_bodies, dispatch_operands);
+    try CheckedReassignmentPublisher.publish(allocator, checked_bodies, dispatch_operands);
     _ = try checked_bodies.publishDiagnosticErrorFacts(allocator, checked_types, dispatch_operands, null);
 
     var template_iterator_refs = TemplateIteratorRefs{};
@@ -38355,7 +38533,7 @@ fn fixtureTableIndex(comptime index: u32) u32 {
     return index;
 }
 
-test "loop mutation plans preserve expect mode, dispatch operands, nesting, condition loops and serialization" {
+test "loop mutation and state merge plans preserve expect mode, dispatch operands, nesting, condition loops and serialization" {
     // Loop-only metadata must not widen the expression union's existing call payload.
     try std.testing.expect(@sizeOf(@TypeOf(@as(StoredCheckedExprData, undefined).for_)) <= @sizeOf(@TypeOf(@as(StoredCheckedExprData, undefined).call)));
     const gpa = std.testing.allocator;
@@ -38392,6 +38570,10 @@ test "loop mutation plans preserve expect mode, dispatch operands, nesting, cond
         Fixture.expression(9, .{ .block = .{ .statements = &.{@fromBackingInt(@intCast(7))}, .final_expr = e0 } }),
         Fixture.expression(10, .{ .block = .{ .statements = &.{@fromBackingInt(@intCast(fixtureTableIndex(0)))}, .final_expr = e0 } }),
         Fixture.expression(11, .{ .for_ = .{ .pattern = p0, .expr = e0, .body = @fromBackingInt(@intCast(9)), .plan = null } }),
+        // A branch reassigns b1 then b0, and the final else's condition loop
+        // carries b0 then b2.
+        Fixture.expression(12, .{ .if_ = .{ .branches = &.{.{ .cond = @fromBackingInt(@intCast(1)), .body = @fromBackingInt(@intCast(4)) }}, .final_else = @fromBackingInt(@intCast(9)), .warn_unused_branches = false } }),
+        Fixture.expression(13, .{ .match_ = .{ .cond = @fromBackingInt(@intCast(12)), .branches = &.{.{ .value = @fromBackingInt(@intCast(10)), .guard = null }}, .is_try_suffix = false, .skip_exhaustiveness = false, .comptime_site_kind = .match } }),
     });
     try store.commitStatements(gpa, &.{
         Fixture.statement(0, .{ .reassign = .{ .pattern = p0, .expr = e0, .reassigned_binders = &.{b0} } }),
@@ -38403,9 +38585,10 @@ test "loop mutation plans preserve expect mode, dispatch operands, nesting, cond
         Fixture.statement(6, .{ .for_ = .{ .pattern = p0, .expr = e0, .body = @fromBackingInt(@intCast(5)), .plan = null } }),
         // The condition runs every iteration, so its mutation joins the body's.
         Fixture.statement(7, .{ .while_ = .{ .cond = @fromBackingInt(@intCast(10)), .body = @fromBackingInt(@intCast(6)) } }),
+        Fixture.statement(8, .{ .expr = @fromBackingInt(@intCast(13)) }),
     });
-    const operands = [_][]const CheckedExprId{ &.{}, &.{}, &.{}, &.{}, &.{}, &.{}, &.{}, &.{@fromBackingInt(@intCast(4))}, &.{}, &.{}, &.{}, &.{} };
-    try CheckedLoopMutationPublisher.publish(gpa, &store, &operands);
+    const operands = [_][]const CheckedExprId{ &.{}, &.{}, &.{}, &.{}, &.{}, &.{}, &.{}, &.{@fromBackingInt(@intCast(4))}, &.{}, &.{}, &.{}, &.{}, &.{}, &.{} };
+    try CheckedReassignmentPublisher.publish(gpa, &store, &operands);
 
     var arena = base.SingleThreadArena.init(gpa);
     defer arena.deinit();
@@ -38438,6 +38621,19 @@ test "loop mutation plans preserve expect mode, dispatch operands, nesting, cond
             const pool = body.pattern_binder_id_pool.items;
             try std.testing.expectEqualSlices(PatternBinderId, &.{ b0, b2 }, pool[plan.binders.start..][0..plan.binders.len]);
         }
+
+        const bodies = body.view();
+        // A `for` expression's state is its iterable's then its loop's.
+        try std.testing.expectEqualSlices(PatternBinderId, &.{b0}, bodies.stateMergeBinders(bodies.exprStateMerge(@fromBackingInt(@intCast(5)))));
+        try std.testing.expectEqualSlices(PatternBinderId, &.{ b0, b2 }, bodies.stateMergeBinders(bodies.exprStateMerge(@fromBackingInt(@intCast(11)))));
+        // Expression statements over an expect or a lambda reassign nothing.
+        try std.testing.expectEqualSlices(PatternBinderId, &.{}, bodies.stateMergeBinders(bodies.exprStatementStateMerge(@fromBackingInt(@intCast(3)))));
+        try std.testing.expectEqualSlices(PatternBinderId, &.{}, bodies.stateMergeBinders(bodies.exprStatementStateMerge(@fromBackingInt(@intCast(4)))));
+        // Binders keep their first occurrence in source order.
+        try std.testing.expectEqualSlices(PatternBinderId, &.{ b1, b0, b2 }, bodies.stateMergeBinders(bodies.exprStateMerge(@fromBackingInt(@intCast(12)))));
+        try std.testing.expectEqualSlices(PatternBinderId, &.{ b1, b0, b2 }, bodies.stateMergeBinders(bodies.exprStateMerge(@fromBackingInt(@intCast(13)))));
+        // An expression statement over control flow shares that expression's plan.
+        try std.testing.expectEqual(bodies.exprStateMerge(@fromBackingInt(@intCast(13))), bodies.exprStatementStateMerge(@fromBackingInt(@intCast(8))));
     }
 }
 
@@ -39074,8 +39270,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x22, 0xB9, 0xB1, 0xFE, 0xC0, 0x0F, 0x94, 0x12, 0x58, 0x00, 0xF0, 0x05, 0x7A, 0x5E, 0xA3, 0xE5,
-        0x88, 0xB8, 0x94, 0x90, 0xAC, 0x70, 0xD1, 0x52, 0x11, 0x80, 0x7F, 0xDF, 0x63, 0x09, 0x1B, 0x43,
+        0x27, 0xD2, 0x87, 0xBA, 0xA0, 0xA3, 0x55, 0x97, 0x97, 0xC6, 0xED, 0xFE, 0x9F, 0x53, 0xFD, 0x9D,
+        0x64, 0xCD, 0x82, 0x09, 0xCB, 0x43, 0x88, 0xE1, 0x74, 0x70, 0xAB, 0x03, 0xA9, 0xA5, 0x54, 0xF5,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

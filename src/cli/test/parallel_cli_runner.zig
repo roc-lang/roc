@@ -448,6 +448,7 @@ const CustomCase = enum {
     issue_11673_callable_cache,
     issue_11678_recursive_callback_cache,
     issue_11710_shared_object_cache,
+    issue_12220_shared_object_cache_literals,
     issue_11826_cache_ownership_variants,
     issue_12241_cached_constant_insert,
     issue_12294_cached_capturing_closures,
@@ -594,11 +595,11 @@ fn devDiagnosticsSkip(custom: CustomCase) ?[]const u8 {
     }
     return null;
 }
-/// How a forced-ICE report spells the module paths of test/cli/ice_context.
-/// The runner joins its working directory to the test's forward-slash path,
-/// and the compiler joins an imported module's file name with the host's
-/// separator.
-const ice_main_path_tail = std.fs.path.sep_str ++ "test/cli/ice_context/Main.roc)";
+/// How a forced-ICE report spells the module paths of test/cli/ice_context,
+/// relative to the working directory. The root module's path is the test's
+/// forward-slash path as written on the command line, and the compiler joins
+/// an imported module's file name with the host's separator.
+const ice_main_path_tail = "(test/cli/ice_context/Main.roc)";
 const ice_helper_path_tail = "ice_context" ++ std.fs.path.sep_str ++ "Helper.roc)";
 
 /// A single CLI test operation—one matrix cell of work.
@@ -2398,6 +2399,9 @@ const subcommand_cases = [_]CliCase{
     // An import naming a file that does not exist stops the build before any
     // checked artifact exists, so `roc run` must stop at the reported error
     // instead of going on to lower a root it never checked.
+    // `roc` on a file that does not exist reports it once, with the path the
+    // working directory names it by.
+    .{ .id = 0, .suite = .subcommands, .name = "roc run reports a missing root file once", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/does_not_exist.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "I could not find the file test" ++ std.fs.path.sep_str ++ "cli" ++ std.fs.path.sep_str ++ "does_not_exist.roc.", .wrapped = true }}, .occurrences = &.{.{ .stream = .stderr, .text = "file not found", .count = 1 }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11126: roc run stops at a missing imported module", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/issue_11126_missing_module_import/app.roc", .exit = .failure, .contains = &.{.{ .stream = .stderr, .text = "file not found", .wrapped = true }}, .not_contains = &.{ .{ .stream = .stderr, .text = "executable root has no checked artifact" }, .{ .stream = .stderr, .text = "invariant violated" }, .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "SIGSEGV" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11126: default app stops at a missing import", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/issue_11126_missing_module_import/default.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "file not found", .wrapped = true }}, .occurrences = &.{.{ .stream = .stderr, .text = "FileNotFound", .count = 1 }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11126: cache-enabled single-worker run stops at a missing import", .body = .{ .command = .{ .args = &.{"--jobs=1"}, .roc_file = "test/cli/issue_11126_missing_module_import/app.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "file not found", .wrapped = true }}, .occurrences = &.{.{ .stream = .stderr, .text = "FileNotFound", .count = 1 }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
@@ -2762,12 +2766,12 @@ const subcommand_cases = [_]CliCase{
     // A Debug compiler started with ROC_DEBUG_FORCE_ICE panics on purpose in
     // the named phase; its crash report names that phase's work, the thread,
     // and the reproducing command ahead of the panic message.
-    .{ .id = 0, .suite = .subcommands, .name = "ICE report: parse names the module on the main thread", .skip = forced_ice_skip, .body = .{ .command = .{ .args = &.{ "check", "-j1", "--no-cache" }, .roc_file = "test/cli/ice_context/Main.roc", .env = &.{.{ .name = "ROC_DEBUG_FORCE_ICE", .value = "parse:Main" }}, .exit = .panic, .contains = &.{ .{ .stream = .stderr, .text = "Roc hit an internal compiler error." }, .{ .stream = .stderr, .text = " (main), outermost first:\n  parse         module Main (" }, .{ .stream = .stderr, .text = ice_main_path_tail }, .{ .stream = .stderr, .text = "\nReproduce with:\n  cd " }, .{ .stream = .stderr, .text = " check -j1 --no-cache " }, .{ .stream = .stderr, .text = "forced internal compiler error requested by ROC_DEBUG_FORCE_ICE=parse:Main" } } } } },
-    .{ .id = 0, .suite = .subcommands, .name = "ICE report: canonicalize names the imported module", .skip = forced_ice_skip, .body = .{ .command = .{ .args = &.{ "check", "-j1", "--no-cache" }, .roc_file = "test/cli/ice_context/Main.roc", .env = &.{.{ .name = "ROC_DEBUG_FORCE_ICE", .value = "canonicalize:Helper" }}, .exit = .panic, .contains = &.{ .{ .stream = .stderr, .text = "outermost first:\n  canonicalize  module Helper (" }, .{ .stream = .stderr, .text = ice_helper_path_tail ++ "\n" }, .{ .stream = .stderr, .text = "\nReproduce with:\n" } } } } },
-    .{ .id = 0, .suite = .subcommands, .name = "ICE report: type-check on a worker names only that worker's module", .skip = forced_ice_skip, .body = .{ .command = .{ .args = &.{ "check", "-j4", "--no-cache" }, .roc_file = "test/cli/ice_context/Main.roc", .env = &.{.{ .name = "ROC_DEBUG_FORCE_ICE", .value = "type_check:Helper" }}, .exit = .panic, .contains = &.{ .{ .stream = .stderr, .text = " (compile worker " }, .{ .stream = .stderr, .text = "outermost first:\n  type-check    module Helper (" }, .{ .stream = .stderr, .text = ice_helper_path_tail ++ "\n\nReproduce with:\n" } }, .not_contains = &.{.{ .stream = .stderr, .text = "module Main" }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "ICE report: post-check names the stage", .skip = forced_ice_skip, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/ice_context/Main.roc", .env = &.{.{ .name = "ROC_DEBUG_FORCE_ICE", .value = "post_check:lir_passes" }}, .exit = .panic, .contains = &.{ .{ .stream = .stderr, .text = "\n  post-check    lir_passes\n" }, .{ .stream = .stderr, .text = " --opt=interpreter --no-cache " } } } } },
-    .{ .id = 0, .suite = .subcommands, .name = "ICE report: codegen names the backend and proc", .skip = forced_ice_skip, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/ice_context/Main.roc", .env = &.{.{ .name = "ROC_DEBUG_FORCE_ICE", .value = "codegen" }}, .exit = .panic, .contains = &.{.{ .stream = .stderr, .text = "\n  codegen       dev backend, proc " }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "ICE report: interpret names the proc", .skip = forced_ice_skip, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/ice_context/Main.roc", .env = &.{.{ .name = "ROC_DEBUG_FORCE_ICE", .value = "interpret" }}, .exit = .panic, .contains = &.{.{ .stream = .stderr, .text = "\n  interpret     proc " }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "ICE report: parse names the module on the main thread", .skip = forced_ice_skip, .body = .{ .command = .{ .file_path_mode = .relative, .args = &.{ "check", "-j1", "--no-cache" }, .roc_file = "test/cli/ice_context/Main.roc", .env = &.{.{ .name = "ROC_DEBUG_FORCE_ICE", .value = "parse:Main" }}, .exit = .panic, .contains = &.{ .{ .stream = .stderr, .text = "Roc hit an internal compiler error." }, .{ .stream = .stderr, .text = " (main), outermost first:\n  parse         module Main (" }, .{ .stream = .stderr, .text = ice_main_path_tail }, .{ .stream = .stderr, .text = "\nReproduce with:\n  " }, .{ .stream = .stderr, .text = " check -j1 --no-cache " }, .{ .stream = .stderr, .text = "forced internal compiler error requested by ROC_DEBUG_FORCE_ICE=parse:Main" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "ICE report: canonicalize names the imported module", .skip = forced_ice_skip, .body = .{ .command = .{ .file_path_mode = .relative, .args = &.{ "check", "-j1", "--no-cache" }, .roc_file = "test/cli/ice_context/Main.roc", .env = &.{.{ .name = "ROC_DEBUG_FORCE_ICE", .value = "canonicalize:Helper" }}, .exit = .panic, .contains = &.{ .{ .stream = .stderr, .text = "outermost first:\n  canonicalize  module Helper (" }, .{ .stream = .stderr, .text = ice_helper_path_tail ++ "\n" }, .{ .stream = .stderr, .text = "\nReproduce with:\n" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "ICE report: type-check on a worker names only that worker's module", .skip = forced_ice_skip, .body = .{ .command = .{ .file_path_mode = .relative, .args = &.{ "check", "-j4", "--no-cache" }, .roc_file = "test/cli/ice_context/Main.roc", .env = &.{.{ .name = "ROC_DEBUG_FORCE_ICE", .value = "type_check:Helper" }}, .exit = .panic, .contains = &.{ .{ .stream = .stderr, .text = " (compile worker " }, .{ .stream = .stderr, .text = "outermost first:\n  type-check    module Helper (" }, .{ .stream = .stderr, .text = ice_helper_path_tail ++ "\n\nReproduce with:\n" } }, .not_contains = &.{.{ .stream = .stderr, .text = "module Main" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "ICE report: post-check names the stage", .skip = forced_ice_skip, .body = .{ .command = .{ .file_path_mode = .relative, .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/ice_context/Main.roc", .env = &.{.{ .name = "ROC_DEBUG_FORCE_ICE", .value = "post_check:lir_passes" }}, .exit = .panic, .contains = &.{ .{ .stream = .stderr, .text = "\n  post-check    lir_passes\n" }, .{ .stream = .stderr, .text = " --opt=interpreter --no-cache " } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "ICE report: codegen names the backend and proc", .skip = forced_ice_skip, .body = .{ .command = .{ .file_path_mode = .relative, .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/ice_context/Main.roc", .env = &.{.{ .name = "ROC_DEBUG_FORCE_ICE", .value = "codegen" }}, .exit = .panic, .contains = &.{.{ .stream = .stderr, .text = "\n  codegen       dev backend, proc " }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "ICE report: interpret names the proc", .skip = forced_ice_skip, .body = .{ .command = .{ .file_path_mode = .relative, .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/ice_context/Main.roc", .env = &.{.{ .name = "ROC_DEBUG_FORCE_ICE", .value = "interpret" }}, .exit = .panic, .contains = &.{.{ .stream = .stderr, .text = "\n  interpret     proc " }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "annotation-only decls in a non-platform type module are not flagged as effectful", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/AnnoOnlyNotEffectful.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{.{ .stream = .stderr, .text = "declaration has no value" }}, .not_contains = &.{.{ .stream = .stderr, .text = "effectful function name" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10766: calling an annotation-only declaration reports it instead of crashing post-check", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/Issue10766CalledAnnotationOnly.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{.{ .stream = .stderr, .text = "declaration has no value" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "instantiation unified a primitive type with a non-primitive type" }, .{ .stream = .stderr, .text = "reached unreachable code" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10766: referencing an annotation-only value reports it instead of crashing post-check", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/Issue10766AnnotationOnlyValue.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{.{ .stream = .stderr, .text = "declaration has no value" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "instantiation function read had a non-function node" }, .{ .stream = .stderr, .text = "reached unreachable code" } } } } },
@@ -3125,6 +3129,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 11673: imported callable identity survives cold warm and sibling builds", .timeout_ms = 600_000, .body = .{ .custom = .issue_11673_callable_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11678: cached recursive callbacks retain method result rows", .timeout_ms = 600_000, .body = .{ .custom = .issue_11678_recursive_callback_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11710: shared object cache serves a second app's dev build", .timeout_ms = 600_000, .body = .{ .custom = .issue_11710_shared_object_cache } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12220: shared object cache keeps each module's list literals in a second app's dev build", .timeout_ms = 600_000, .body = .{ .custom = .issue_12220_shared_object_cache_literals } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: every program compiles an offered procedure to the same LIR", .timeout_ms = 600_000, .body = .{ .custom = .cache_fingerprints_agree } },
     .{ .id = 0, .suite = .subcommands, .name = "shared early object cache preserves relation identity and LLVM source bodies", .timeout_ms = 600_000, .body = .{ .custom = .shared_early_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11826: a warm dev build keeps the ARC ownership variants of the cold build", .timeout_ms = 600_000, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .custom = .issue_11826_cache_ownership_variants } },
@@ -3379,6 +3384,8 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc test covers JSON null container edge cases", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/JsonEncodeNullContainerEdgeCases.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test covers JSON nested container edge cases", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/JsonEncodeNestedContainerEdgeCases.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test derives opaque JSON parse and encode methods", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/JsonEncodeOpaqueDerivation.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test encodes nominals through their own JSON codecs", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/JsonNominalCodecLayers.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "boxy roc test encodes nominals through their own JSON codecs", .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--no-cache" }, .roc_file = "test/cli/JsonNominalCodecLayers.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test supports top-level parser construction", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/ParserTopLevelConstructor.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "boxy roc test supports top-level parser construction", .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--no-cache" }, .roc_file = "test/cli/ParserTopLevelConstructor.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test supports stored top-level parser value", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/ParserTopLevelStoredParser.roc", .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
@@ -4821,6 +4828,15 @@ fn glueArgsContainOpt(args: []const []const u8) bool {
     return false;
 }
 
+/// The checks for a run of an external tool (a disassembler or debug-info
+/// dumper) a case inspects a build with: it finished and succeeded. Its output
+/// is the tool's own, which names files however the tool does, so the report
+/// rules `checkCommandExpectation` applies to compiler output do not apply.
+fn checkToolRun(allocator: Allocator, result: std.process.RunResult) ?[]const u8 {
+    if (processTimedOut(result.stderr)) return "child command timed out";
+    return checkExitExpectation(allocator, result, .success);
+}
+
 fn checkCommandExpectation(
     allocator: Allocator,
     result: std.process.RunResult,
@@ -4830,6 +4846,15 @@ fn checkCommandExpectation(
     if (processTimedOut(result.stderr)) return "child command timed out";
 
     if (checkExitExpectation(allocator, result, command.exit)) |message| return message;
+
+    // Every command runs inside the project root, so reports name its files by
+    // relative paths. The project root's absolute path in the output means a
+    // report printed an absolute path.
+    for ([_]Stream{ .stdout, .stderr }) |stream| {
+        if (std.mem.find(u8, streamBytes(result, stream), project_root_path) != null) {
+            return std.fmt.allocPrint(allocator, "{s} contained the absolute path {s}; reports must show relative paths", .{ streamLabel(stream), project_root_path }) catch "output contained an absolute path";
+        }
+    }
 
     if (command.stdout_exact) |expected| {
         if (!std.mem.eql(u8, expected, result.stdout)) {
@@ -5038,6 +5063,7 @@ fn runCustomCase(
         .issue_11673_callable_cache => customIssue11673CallableCache(io, allocator, &env, &timer, timeout_ms),
         .issue_11678_recursive_callback_cache => customIssue11678RecursiveCallbackCache(io, allocator, &env, &timer, timeout_ms),
         .issue_11710_shared_object_cache => customIssue11710SharedObjectCache(io, allocator, &env, &timer, timeout_ms),
+        .issue_12220_shared_object_cache_literals => customIssue12220SharedObjectCacheLiterals(io, allocator, &env, &timer, timeout_ms),
         .issue_11826_cache_ownership_variants => customIssue11826CacheOwnershipVariants(io, allocator, &env, &timer, timeout_ms),
         .issue_12241_cached_constant_insert => customIssue12241CachedConstantInsert(io, allocator, &env, &timer, timeout_ms),
         .issue_12294_cached_capturing_closures => customIssue12294CachedCapturingClosures(io, allocator, &env, &timer, timeout_ms),
@@ -7298,7 +7324,7 @@ fn customDefaultPlatformLinuxDisassembly(
     if (objdump_result == null) {
         return .{ .status = .skip, .phase = .run, .duration_ns = timer.read(), .run_ns = timer.read(), .message = "llvm-objdump unavailable on this Linux runner" };
     }
-    if (checkCommandExpectation(allocator, objdump_result.?, .{ .args = &.{} })) |message| {
+    if (checkToolRun(allocator, objdump_result.?)) |message| {
         return failureFromRun(allocator, timer, objdump_result.?, message);
     }
 
@@ -8560,7 +8586,7 @@ fn customSplicedProcedureDebugLines(
             return customInfraFailure(allocator, timer, "objdump spawn error: {}", .{err});
         const decoded = dumped orelse
             return .{ .status = .skip, .phase = .run, .duration_ns = timer.read(), .run_ns = timer.read(), .message = "objdump unavailable on this Linux runner" };
-        if (checkCommandExpectation(allocator, decoded, .{ .args = &.{} })) |message| {
+        if (checkToolRun(allocator, decoded)) |message| {
             return failureFromRun(allocator, timer, decoded, message);
         }
         lines[index] = decodedSourceLines(allocator, decoded.stdout, "Elem") catch |err|
@@ -9277,6 +9303,47 @@ fn customIssue11710SharedObjectCache(
             if (countAfterMarker(built.stderr[hits_at + hits_marker.len ..]) == 0) {
                 return failureFromRun(allocator, timer, built, "Repro's cached build did not consume Primer's object pack");
             }
+        }
+        if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{
+            .args = &.{},
+            .stdout_exact = build.stdout_exact,
+        })) |failure| return failure;
+    }
+    return null;
+}
+
+// Repro for https://github.com/roc-lang/roc/issues/12220: Zeros.frame and
+// Dash.frame differ only in the list literal they append. Primer calls only
+// Dash and builds into the object cache first; Repro calls both and builds
+// against that cache. Repro's pure result must be the same bytes its uncached
+// build prints, whatever an earlier app's build left in the cache.
+fn customIssue12220SharedObjectCacheLiterals(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const primer = "test/cli/issue_12220_shared_object_cache/Primer.roc";
+    const repro = "test/cli/issue_12220_shared_object_cache/Repro.roc";
+    const expected = "[1, 0, 0, 0, 0, 5, 1, 45, 2]\n";
+    const builds = [_]struct { roc_file: []const u8, exe_name: []const u8, cache: bool, stdout_exact: []const u8 }{
+        .{ .roc_file = repro, .exe_name = "repro_uncached", .cache = false, .stdout_exact = expected },
+        .{ .roc_file = primer, .exe_name = "primer", .cache = true, .stdout_exact = "[1, 45, 2]\n" },
+        .{ .roc_file = repro, .exe_name = "repro_cached", .cache = true, .stdout_exact = expected },
+    };
+    for (builds) |build| {
+        const exe = std.fmt.allocPrint(allocator, "{s}/issue_12220_{s}", .{ env.dirs.work_dir, build.exe_name }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+        const out_arg = outputArg(allocator, exe) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output argument: {}", .{err});
+        const build_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a build");
+        const build_args: []const []const u8 = if (build.cache) &.{ "build", "--opt=dev", out_arg } else &.{ "build", "--no-cache", "--opt=dev", out_arg };
+        const built = runRocInEnv(io, allocator, env, build_args, build.roc_file, .relative, &.{}, null, build_timeout) catch |err|
+            return customInfraFailure(allocator, timer, "build spawn error: {}", .{err});
+        if (!processSucceeded(built.term) or std.mem.find(u8, built.stdout, "successfully building") == null or std.mem.find(u8, built.stderr, "panic") != null) {
+            return failureFromRun(allocator, timer, built, "dev build did not succeed on the shared object cache");
         }
         if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{
             .args = &.{},
@@ -13215,7 +13282,9 @@ fn customBundleIssue11608OutputDirCrossDevice(io: std.Io, allocator: Allocator, 
         return failureFromRun(allocator, timer, bundle_result, "roc bundle did not report a created file");
     const created_rest = bundle_result.stdout[created_idx + created_prefix.len ..];
     const created_eol = std.mem.find(u8, created_rest, "\n") orelse created_rest.len;
-    const created_path = std.mem.trim(u8, created_rest[0..created_eol], " \r");
+    // roc names the archive relative to the directory it ran in.
+    const created_path = std.fs.path.resolve(allocator, &.{ package_dir, std.mem.trim(u8, created_rest[0..created_eol], " \r") }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate created path: {}", .{err});
     if (!std.mem.eql(u8, std.fs.path.dirname(created_path) orelse "", out_dir_final)) {
         return customFailure(allocator, timer, "roc bundle reported the archive at '{s}' instead of inside the requested output dir '{s}'", .{ created_path, out_dir_final });
     }
@@ -13314,7 +13383,9 @@ fn customInstallRunRoundtrip(io: std.Io, allocator: Allocator, env: *const CaseE
         return failureFromRun(allocator, timer, bundle_result, "roc bundle did not report a created file");
     const created_rest = bundle_result.stdout[created_idx + created_prefix.len ..];
     const created_eol = std.mem.find(u8, created_rest, "\n") orelse created_rest.len;
-    const bundle_path = std.mem.trim(u8, created_rest[0..created_eol], " \r");
+    // roc names the archive relative to the directory it ran in.
+    const bundle_path = std.fs.path.resolve(allocator, &.{ app_dir, std.mem.trim(u8, created_rest[0..created_eol], " \r") }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate bundle path: {}", .{err});
     const bundle_filename = std.fs.path.basename(bundle_path);
 
     const bundle_bytes = std.Io.Dir.cwd().readFileAlloc(io, bundle_path, allocator, .unlimited) catch |err|
@@ -13431,7 +13502,9 @@ fn customInstallGlueRoundtrip(io: std.Io, allocator: Allocator, env: *const Case
         return failureFromRun(allocator, timer, bundle_result, "roc bundle did not report a created file");
     const created_rest = bundle_result.stdout[created_idx + created_prefix.len ..];
     const created_eol = std.mem.find(u8, created_rest, "\n") orelse created_rest.len;
-    const bundle_path = std.mem.trim(u8, created_rest[0..created_eol], " \r");
+    // roc names the archive relative to the directory it ran in.
+    const bundle_path = std.fs.path.resolve(allocator, &.{ spec_dir, std.mem.trim(u8, created_rest[0..created_eol], " \r") }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate bundle path: {}", .{err});
     const bundle_filename = std.fs.path.basename(bundle_path);
 
     const bundle_bytes = std.Io.Dir.cwd().readFileAlloc(io, bundle_path, allocator, .unlimited) catch |err|
@@ -13610,7 +13683,9 @@ fn customInstallHashMismatch(io: std.Io, allocator: Allocator, env: *const CaseE
         return failureFromRun(allocator, timer, bundle_result, "roc bundle did not report a created file");
     const created_rest = bundle_result.stdout[created_idx + created_prefix.len ..];
     const created_eol = std.mem.find(u8, created_rest, "\n") orelse created_rest.len;
-    const bundle_path = std.mem.trim(u8, created_rest[0..created_eol], " \r");
+    // roc names the archive relative to the directory it ran in.
+    const bundle_path = std.fs.path.resolve(allocator, &.{ app_dir, std.mem.trim(u8, created_rest[0..created_eol], " \r") }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate bundle path: {}", .{err});
 
     const bundle_bytes = std.Io.Dir.cwd().readFileAlloc(io, bundle_path, allocator, .unlimited) catch |err|
         return customInfraFailure(allocator, timer, "failed to read bundle {s}: {}", .{ bundle_path, err });

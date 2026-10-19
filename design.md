@@ -1856,8 +1856,8 @@ An expect never changes state outside its own body (see "Control Flow and Var
 Writes Inside `expect`"), so the shared Monotype lowers it as a plain `expect` statement whose
 condition is an ordinary expression. Running or omitting it changes no variable
 the continuation reads, so target LIR lowering selects run/omit per consumer
-without any merge. Checked loop mutation plans and Monotype state merges
-likewise never look inside expect bodies.
+without any merge. Checked loop mutation and state merge plans likewise
+never look inside expect bodies, so both expect modes read the same plans.
 
 Compile-time evaluation is a function of the checked program alone. Every
 command that finalizes checking specializes the same roots, every checked
@@ -3477,6 +3477,28 @@ the retained storage root adopts the second class's descriptor and records the
 second checked representative. This preserves the unifier's descriptor merge
 destination and externally observable survivor while allowing the storage
 tree to remain balanced.
+
+Every merge of two distinct storage roots leaves one descriptor that no slot
+names: the side whose descriptor the merge did not keep (ordinary union, union
+with a frozen class, mismatch poisoning of a class that joins the error class
+whole, a declared solver-mutating redirect, and resetting a storage root to an
+unbound flex). The store recycles that descriptor rather than leaving it dead:
+it goes on a free list, and the next class created takes the most recently
+freed descriptor index (and its root-metadata entry) before the descriptor
+store grows. Freeing forgets everything the store remembers about the
+descriptor by index—its settled mark, its class watch, and its frozen
+anchor—so a reissued index carries nothing from the class that died. Reuse is
+last-in-first-out, so the indices a module's check produces, and the bytes
+written to its cache, stay deterministic. The free list is runtime-only: a
+loaded store starts with none, and nothing outside the store may hold a
+descriptor index across a merge, since the index may name another class once
+reused. While a savepoint is open a merge does not free its orphan, because
+rollback restores the slot that named it; the orphan waits on a pending list
+that commit frees and rollback discards. A probe may still reissue descriptors
+from the free list: those predate the probe, so the writes that reissue them
+journal like any other pre-probe write, and the probe only counts them as
+taken rather than removing them, so commit removes them and rollback forgets
+the count.
 
 `resolveVar` returns the checked representative and class descriptor;
 storage-root traversal is a private store operation. Consequently a checked
@@ -13593,11 +13615,19 @@ function argument may have exposed an overlap in its return row.
 
 Procedure-use roots and ordinary specialization bodies can lower concurrently
 because their results cross the worker boundary as sealed, graph-free drafts.
-Each executor lane owns a private cumulative type/name domain. Ordinary bodies
+Each executor lane owns a private cumulative type/name domain, which the
+coordinator reads in place rather than copying. A completed task's shard
+carries prefix views of the lane's stores at the task's end. The lane never
+moves or rewrites a row below a captured boundary: its stores grow into fresh
+backings, and each replaced backing stays alive until the coordinator has
+absorbed a later epoch of that lane, after which no view reaches it. The
+coordinator's view of a lane is its latest absorbed epoch's views plus the
+cumulative relocation into the program. Digest caches are not part of a view,
+since the lane keeps filling them; the program computes its own. Ordinary bodies
 stream through a bounded executor session: the coordinator accepts completed
 shards strictly in request order and immediately makes discovered requests
 available to free lanes. Running and completed-but-unaccepted tasks share the
-same bounded window. Each immutable lane suffix is absorbed even when its body
+same bounded window. Each immutable lane epoch is absorbed even when its body
 is discarded after an earlier shard committed its reservation, preserving cumulative lane ids.
 The pending FIFO is a reusable geometrically growing ring. Dispatch consumes
 its head without moving the undispatched suffix; ordered acceptance never
@@ -13624,7 +13654,13 @@ which matches the type/name snapshot. Patricia branches preserve all prior
 keys when splitting; full keys and exact evidence/constraint comparisons
 resolve collisions. Entries and their evidence remain alive until workers have
 joined. This keeps memo reuse concurrent without exposing mutable hash-table
-storage or making results depend on completion order. Global identities are still
+storage or making results depend on completion order. A lane replays a
+coordinator entry in place, in the program's store domain: each settled leaf
+and name crosses through the lane's cumulative program-to-workspace relocation
+as instantiation reaches it, and matching a request relocates only the
+request's leaves. A lane keeps copies only of the summaries it produced,
+until the coordinator shares them through a table one of the lane's tasks
+reads; the coordinator's table then answers for them. Global identities are still
 assigned solely by ordered coordinator commit. Root kinds
 that reserve durable identities or write directly to the final program remain
 serial barriers until they have the same sealed-draft boundary. A template
@@ -14008,9 +14044,10 @@ repeats, never what it lowers. The pins are the compile tests "interface
 summary replay of an open request leaf lowers like a fresh expansion within
 one body" and "... across bodies", which lower one program with and without
 summary replay and require identical specialization identities and LIR. The
-coordinator and each executor lane own cumulative tables. Frozen inputs borrow
-the coordinator table read-only; ordered commit relocates interned type leaves
-and interned names.
+coordinator owns the cumulative table; each executor lane holds only its own
+summaries the coordinator has not yet shared back to it. Frozen inputs
+borrow the coordinator table read-only; ordered commit relocates interned type
+leaves and interned names.
 Settled leaves across each completed batch share one type import and interning
 transaction. Cache insertion retains worker leaves before their transaction ends;
 coordinator leaves already belong to permanent storage and need no extra sealing.
@@ -14733,6 +14770,19 @@ Only binders in scope at loop entry become carried state. Every iteration and
 exit transports that state explicitly. An expression-form loop produces unit
 after binding its exit state, and enclosing branch results must be constructed
 inside the scope of those bindings. Discarding unit never discards mutations.
+
+Monotype threads reassigned binders through `if`, `match`, `for`, and
+expression statements as explicit state, and checked output records those
+binders the same way. Every `if`, `match`, and `for` expression and every
+expression statement references a state merge plan: the binders reassigned
+anywhere inside it, in source order with each binder's first occurrence kept,
+excluding nested function bodies and `expect` bodies. A `for` expression's
+plan is its iterable's binders followed by its loop's. One pass over the
+checked bodies records loop and state merge plans together, reusing each
+nested construct's plan instead of revisiting its parts, and an expression
+statement over control flow shares that expression's plan. Monotype reads
+these plans and keeps no memo of its own, so parallel lanes never each
+recompute them.
 
 Monotype normally preserves source control structure, but compiler-generated
 algorithms may introduce typed `join_point` and `jump` expressions when their
@@ -19120,6 +19170,13 @@ no use for. Which form a
 read takes is therefore a question of where its value reaches, and the
 uniqueness analysis answers it.
 
+The fresh procedure's identity is the list's layout and content (the count
+and the item's construction) and nothing a program numbers, so reads of equal
+lists share one procedure. A pack carries the procedure with any code that
+calls it, and a spliced procedure replaces the program's own procedure of the
+same identity, so an identity that named a program's static-data slot would
+let one list's build stand in for another's.
+
 Every such read is a candidate birth. Alongside the born bit and its parameter
 conditions, the settlement carries each local's *origins*: the candidates its
 born value derives from, flowing over the same pure aliases, join edges,
@@ -21857,11 +21914,15 @@ work queue. The finalizer still commits stored values, diagnostics, coverage
 updates, and root completion in sorted request order.
 
 Each root job owns its compile-time host state: `RocOps`, a root-local arena for
-Roc allocations, allocation tracking needed by RocOps, branch-hit records,
-expect/dbg/crash event lists, failure region state, a call-region stack, a crash
-boundary, and its result buffer. Roc runtime allocations are arena allocations
-and are bulk-freed after the result has been copied into `ConstStore`. Host
-events and failure state stay root-local until deterministic replay.
+Roc allocations, branch-hit records, expect/dbg/crash event lists, failure
+region state, a call-region stack, a crash boundary, and its result buffer. Roc
+runtime allocations are arena allocations and are bulk-freed after the result
+has been copied into `ConstStore`. Each allocation carries its length in a
+fixed-size header before the bytes handed to Roc, so reallocation reads the old
+length from the header and deallocation is free; the host keeps no per-pointer
+table, whose cost would grow with the allocations a root has ever held rather
+than with the ones it holds. Host events and failure state stay root-local
+until deterministic replay.
 
 A crash or empirical exhaustiveness failure in one root records that root's
 result and must not change the result of any other root in the same batch. Root
