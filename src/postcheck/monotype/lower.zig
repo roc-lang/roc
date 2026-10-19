@@ -15434,7 +15434,6 @@ const Builder = struct {
         missing_tag: Type.Tag,
         present_tag: Type.Tag,
     };
-
 };
 
 fn optionalFieldSlotForType(
