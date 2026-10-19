@@ -785,6 +785,10 @@ call_operand_type_error_exprs: std.ArrayListUnmanaged(bool),
 /// publishes them as the runtime error's `evaluated` operands.
 retired_operand_sequences: collections.DenseMap(CIR.Expr.Idx, RetiredOperandSequence),
 retired_operand_pool: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty,
+/// The kept operands of the most recently finished
+/// `replaceExprWithRuntimeErrorAfterOperands`, kept with their capacity like
+/// `row_union_scratch`.
+kept_operands_scratch: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty,
 /// Annotations that describe host-boundary values (hosted lambdas and
 /// `provides` defs). Their rows are generated as written—implicit polarity
 /// opening does not apply across the host boundary. Populated once per check
@@ -915,7 +919,8 @@ loop_dispatch_iterables: collections.DenseMap(Var, CIR.Expr.Idx),
 problem_owners: std.ArrayListUnmanaged(problem.RelationOwner) = .empty,
 /// The values each relation-owning expression reads, captured when its
 /// checking begins (`recordRelationOperands`), since a rejected expression is
-/// later replaced by a runtime error. Ranges into `relation_operand_pool`.
+/// later replaced by a runtime error. Ranges into `relation_operand_pool` or
+/// the CIR store's spans (`relationOperandValues`).
 relation_operands: collections.DenseMapUnmanaged(CIR.Expr.Idx, RelationOperands) = .empty,
 relation_operand_pool: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty,
 /// The relation under which each erroneous value expression or binder in
@@ -1715,6 +1720,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .call_operand_type_error_exprs = .keyed,
     .retired_operand_sequences = .keyed,
     .retired_operand_pool = .keyed,
+    .kept_operands_scratch = .scratch,
     .host_boundary_annotations = .input,
     .implicit_open_exts = .keyed,
     .bounding_annotation = .lexical,
@@ -14658,8 +14664,15 @@ fn replaceExprWithRuntimeErrorAfterOperands(
         (self.cir.store.getExpr(recorded[0]) == .e_runtime_error or self.erroneous_value_exprs.contains(recorded[0])) and
         !self.retired_operand_sequences.contains(recorded[0]));
     if (evaluates_nothing) return try self.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
-    const kept = try self.gpa.dupe(CIR.Expr.Idx, recorded[0..kept_len]);
-    defer self.gpa.free(kept);
+    var kept_operands = self.kept_operands_scratch;
+    self.kept_operands_scratch = .empty;
+    defer {
+        kept_operands.clearRetainingCapacity();
+        self.kept_operands_scratch.deinit(self.gpa);
+        self.kept_operands_scratch = kept_operands;
+    }
+    try kept_operands.appendSlice(self.gpa, recorded[0..kept_len]);
+    const kept = kept_operands.items;
     var work: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty;
     defer work.deinit(self.gpa);
     try self.visitExprChildren(expr_idx, KeptOperandInvalidationVisitor{ .checker = self, .work = &work, .kept = kept });
@@ -15071,7 +15084,7 @@ fn replaceRejectedOperationWithRuntimeError(
     if (!dispatches_on_operands) return try self.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
     const start: u32 = @intCast(self.retired_operand_pool.items.len);
     defer self.retired_operand_pool.shrinkRetainingCapacity(start);
-    try self.appendEvaluationOperands(expr_idx);
+    try self.appendEvaluationOperands(expr_idx, &self.retired_operand_pool);
     const len: u32 = @intCast(self.retired_operand_pool.items.len - start);
     if (len == 0) return try self.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
     try self.replaceExprWithRuntimeErrorAfterOperands(expr_idx, diagnostic_idx, .{ .start = start, .len = len });
@@ -31803,7 +31816,7 @@ const RetiredOperandSequence = struct { start: u32, len: u32 };
 /// no erroneous operand records nothing.
 fn recordRetiredOperandSequence(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!void {
     const start: u32 = @intCast(self.retired_operand_pool.items.len);
-    try self.appendEvaluationOperands(expr_idx);
+    try self.appendEvaluationOperands(expr_idx, &self.retired_operand_pool);
     const operands = self.retired_operand_pool.items[start..];
     const erroneous_index = for (operands, 0..) |operand, index| {
         if (try self.operandIsErroneousValue(operand)) break index;
@@ -31824,12 +31837,11 @@ fn operandIsErroneousValue(self: *Self, operand: CIR.Expr.Idx) Allocator.Error!b
     return self.cir.store.getExpr(operand) == .e_lookup_local and try self.valueIsErroneous(operand);
 }
 
-/// Append an expression's operands to `retired_operand_pool` in the order
-/// evaluation runs them. Only expressions that evaluate all of their operands
-/// before using any of them have operands here.
-fn appendEvaluationOperands(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!void {
+/// Append an expression's operands to `pool` in the order evaluation runs
+/// them. Only expressions that evaluate all of their operands before using
+/// any of them have operands here.
+fn appendEvaluationOperands(self: *Self, expr_idx: CIR.Expr.Idx, pool: *std.ArrayListUnmanaged(CIR.Expr.Idx)) Allocator.Error!void {
     const store = &self.cir.store;
-    const pool = &self.retired_operand_pool;
     switch (store.getExpr(expr_idx)) {
         .e_call => |call| {
             try pool.append(self.gpa, call.func);
@@ -35640,6 +35652,10 @@ fn exprStepRelation(expr_idx: CIR.Expr.Idx, expr: CIR.Expr) problem.RelationOwne
 const RelationOperands = struct {
     start: u32,
     len: u32,
+    /// The values are the CIR store's expression span `start`/`len` (a list
+    /// literal's items or a call's arguments) rather than a run of
+    /// `relation_operand_pool`.
+    in_store: bool,
     /// Checking retires the expression itself when one of these is erroneous
     /// (`retireCallLikeExprWithErroneousOperands`), so its own value is then
     /// erroneous too.
@@ -35716,7 +35732,7 @@ fn recordRelationOperands(self: *Self, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) A
     const pool = &self.relation_operand_pool;
     const start: u32 = @intCast(pool.items.len);
     switch (expr) {
-        .e_list => |list| try pool.appendSlice(self.gpa, self.cir.store.sliceExpr(list.elems)),
+        .e_list => |list| return self.recordStoreRelationOperands(expr_idx, list.elems, retired_with_operands),
         .e_if => |if_| {
             for (self.cir.store.sliceIfBranches(if_.branches)) |branch_idx| {
                 try pool.append(self.gpa, self.cir.store.getIfBranch(branch_idx).body);
@@ -35728,7 +35744,7 @@ fn recordRelationOperands(self: *Self, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) A
         },
         // A call relates its arguments to its callee's instantiated type; the
         // callee is the relation's other side, not a value it reads.
-        .e_call => |call| try pool.appendSlice(self.gpa, self.cir.store.sliceExpr(call.args)),
+        .e_call => |call| return self.recordStoreRelationOperands(expr_idx, call.args, retired_with_operands),
         .e_run_low_level,
         .e_method_call,
         .e_dispatch_call,
@@ -35745,12 +35761,7 @@ fn recordRelationOperands(self: *Self, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) A
         .e_str,
         .e_field_access,
         .e_tuple_access,
-        => {
-            const scratch_start = self.retired_operand_pool.items.len;
-            defer self.retired_operand_pool.shrinkRetainingCapacity(scratch_start);
-            try self.appendEvaluationOperands(expr_idx);
-            try pool.appendSlice(self.gpa, self.retired_operand_pool.items[scratch_start..]);
-        },
+        => try self.appendEvaluationOperands(expr_idx, pool),
         .e_tuple,
         .e_tag,
         .e_nominal,
@@ -35795,8 +35806,25 @@ fn recordRelationOperands(self: *Self, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) A
     try self.relation_operands.put(self.gpa, expr_idx, .{
         .start = start,
         .len = @as(u32, @intCast(pool.items.len)) - start,
+        .in_store = false,
         .retired_with_operands = retired_with_operands,
     });
+}
+
+fn recordStoreRelationOperands(self: *Self, expr_idx: CIR.Expr.Idx, span: CIR.Expr.Span, retired_with_operands: bool) Allocator.Error!void {
+    try self.relation_operands.put(self.gpa, expr_idx, .{
+        .start = span.span.start,
+        .len = span.span.len,
+        .in_store = true,
+        .retired_with_operands = retired_with_operands,
+    });
+}
+
+/// The values a relation-owning expression reads, as `recordRelationOperands`
+/// captured them.
+fn relationOperandValues(self: *const Self, operands: RelationOperands) []const CIR.Expr.Idx {
+    if (operands.in_store) return self.cir.store.sliceExpr(.{ .span = .{ .start = operands.start, .len = operands.len } });
+    return self.relation_operand_pool.items[operands.start..][0..operands.len];
 }
 
 /// The settled-state facts `settledValueCause` reads.
@@ -35855,10 +35883,9 @@ fn relationIsVoid(self: *Self, owner: problem.RelationOwner, settled: *SettledVa
         .none => return false,
         .value => return ErroneousCause.erroneousTo((try self.settledValueCause(expr_idx, settled)).through_name, owner),
         .operands, .list_prefix => {
-            const operands = self.relation_operands.get(expr_idx) orelse return false;
+            const operands = self.relationOperandValues(self.relation_operands.get(expr_idx) orelse return false);
             const len = if (owner.kind == .list_prefix) owner.index + 1 else operands.len;
-            for (0..len) |offset| {
-                const operand = self.relation_operand_pool.items[operands.start + offset];
+            for (operands[0..len]) |operand| {
                 if (ErroneousCause.erroneousTo((try self.settledValueCause(operand, settled)).through_name, owner)) return true;
             }
             return false;
@@ -35868,12 +35895,11 @@ fn relationIsVoid(self: *Self, owner: problem.RelationOwner, settled: *SettledVa
             // an erroneous earlier branch joins nothing, so the relation reads
             // an erroneous value only when the branch itself is one or every
             // earlier branch is.
-            const operands = self.relation_operands.get(expr_idx) orelse return false;
-            const branch_value = self.relation_operand_pool.items[operands.start + owner.index];
+            const operands = self.relationOperandValues(self.relation_operands.get(expr_idx) orelse return false);
+            const branch_value = operands[owner.index];
             if (ErroneousCause.erroneousTo((try self.settledValueCause(branch_value, settled)).through_name, owner)) return true;
             if (owner.index == 0) return false;
-            for (0..owner.index) |earlier| {
-                const earlier_value = self.relation_operand_pool.items[operands.start + earlier];
+            for (operands[0..owner.index]) |earlier_value| {
                 if (!ErroneousCause.erroneousTo((try self.settledValueCause(earlier_value, settled)).through_name, owner)) return false;
             }
             return true;
@@ -35971,7 +35997,7 @@ fn settledCauseSources(self: *const Self, expr_idx: CIR.Expr.Idx, settled: *cons
     const none: SettledCauseSources = .{ .values = &.{}, .is_name = false, .unlinked_pattern = null };
     const operands = self.relation_operands.get(expr_idx) orelse return none;
     if (!operands.retired_with_operands) return none;
-    return .{ .values = self.relation_operand_pool.items[operands.start..][0..operands.len], .is_name = false, .unlinked_pattern = null };
+    return .{ .values = self.relationOperandValues(operands), .is_name = false, .unlinked_pattern = null };
 }
 
 /// A use of a name reads its value through that name's own binder pattern,
@@ -37123,19 +37149,18 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
 
     // Diagnose every cycle against the original checked expressions before
     // applying error recovery; poisoning one side of a mutual cycle must not
-    // hide the other side's cycle from this judgment.
-    const omitted_defaults = try self.gpa.dupe(
-        ModuleEnv.RecordOmittedDefault,
-        self.cir.record_omitted_defaults.items.items,
-    );
-    defer self.gpa.free(omitted_defaults);
+    // hide the other side's cycle from this judgment. Retiring a default
+    // drops omission entries, so the retirements read the table as it stood
+    // before the first one, copied only when one happens.
+    var omitted_defaults: ?[]ModuleEnv.RecordOmittedDefault = null;
+    defer if (omitted_defaults) |entries| self.gpa.free(entries);
 
     for (recursive_defaults.items) |pending| {
         _ = try self.problems.appendProblem(.{ .recursive_default_value = .{
             .region = self.cir.store.getExprRegion(pending.default_expr),
             .field_name = pending.field_name,
         } });
-        try self.retireRejectedDefault(pending, omitted_defaults);
+        try self.retireRejectedDefault(pending, try self.omittedDefaultsBeforeRetirement(&omitted_defaults));
     }
 
     // A default rejected by an earlier judgment (effectful, parameter-
@@ -37146,11 +37171,23 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
     // postcheck lowering invariant violation.
     for (self.pending_default_checks.items) |pending| {
         if (!self.defaultWasRejected(pending)) continue;
-        try self.retireRejectedDefault(pending, omitted_defaults);
+        try self.retireRejectedDefault(pending, try self.omittedDefaultsBeforeRetirement(&omitted_defaults));
     }
 
     self.pending_default_checks.clearRetainingCapacity();
     self.rejected_default_exprs.clearRetainingCapacity();
+}
+
+/// The omission table as it stood before `checkDefaultRestrictions` retired
+/// any default, copied on the first call.
+fn omittedDefaultsBeforeRetirement(
+    self: *Self,
+    copy: *?[]ModuleEnv.RecordOmittedDefault,
+) Allocator.Error![]const ModuleEnv.RecordOmittedDefault {
+    if (copy.*) |entries| return entries;
+    const entries = try self.gpa.dupe(ModuleEnv.RecordOmittedDefault, self.cir.record_omitted_defaults.items.items);
+    copy.* = entries;
+    return entries;
 }
 
 /// Whether this default was rejected by an earlier judgment with its
