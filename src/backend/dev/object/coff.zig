@@ -212,27 +212,36 @@ pub fn splitNestedFunctions(
     allocator: Allocator,
     functions: []const FunctionInfo,
 ) Allocator.Error![]FunctionInfo {
+    var result: std.ArrayList(FunctionInfo) = .empty;
+    errdefer result.deinit(allocator);
+    // Ranges are cut into fragments in place: sorting puts enclosing ranges
+    // first, and ranges only ever nest or sit apart, so the ranges still open
+    // at a range's start are exactly the ones enclosing it, innermost on top.
+    // Each open range's next fragment starts at its cursor, and fragments come
+    // out in ascending order.
+    const Open = struct { function: FunctionInfo, cursor: u32 };
+    var open: std.ArrayList(Open) = .empty;
+    defer open.deinit(allocator);
     const sorted = try allocator.dupe(FunctionInfo, functions);
     defer allocator.free(sorted);
     std.mem.sort(FunctionInfo, sorted, {}, functionRangeLessThan);
-
-    var result: std.ArrayList(FunctionInfo) = .empty;
-    errdefer result.deinit(allocator);
-
-    for (sorted, 0..) |function, i| {
-        // Every range that starts inside this one is nested in it: the sort
-        // puts enclosing ranges first, and ranges only ever nest or sit apart.
-        var cursor = function.start_offset;
-        for (sorted[i + 1 ..]) |inner| {
-            if (inner.start_offset >= function.end_offset) break;
-            if (inner.end_offset <= cursor) continue;
-            try appendFunctionFragment(allocator, &result, function, cursor, inner.start_offset);
-            cursor = inner.end_offset;
+    for (sorted) |function| {
+        while (open.items.len > 0 and open.items[open.items.len - 1].function.end_offset <= function.start_offset) {
+            const done = open.pop().?;
+            try appendFunctionFragment(allocator, &result, done.function, done.cursor, done.function.end_offset);
         }
-        try appendFunctionFragment(allocator, &result, function, cursor, function.end_offset);
+        if (open.items.len > 0) {
+            const enclosing = &open.items[open.items.len - 1];
+            if (function.end_offset > enclosing.cursor) {
+                try appendFunctionFragment(allocator, &result, enclosing.function, enclosing.cursor, function.start_offset);
+                enclosing.cursor = function.end_offset;
+            }
+        }
+        try open.append(allocator, .{ .function = function, .cursor = function.start_offset });
     }
-
-    std.mem.sort(FunctionInfo, result.items, {}, functionRangeLessThan);
+    while (open.pop()) |done| {
+        try appendFunctionFragment(allocator, &result, done.function, done.cursor, done.function.end_offset);
+    }
     return result.toOwnedSlice(allocator);
 }
 
