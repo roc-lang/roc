@@ -7,9 +7,6 @@
 //! - x86_64: Linux (System V ABI), macOS (System V ABI), Windows (Fastcall)
 //! - aarch64: Linux and macOS (AAPCS64)
 
-/// Exact procedure-local stack lifetime and slot planning.
-pub const StackPlan = @import("StackPlan.zig");
-
 const std = @import("std");
 const builtin = @import("builtin");
 
