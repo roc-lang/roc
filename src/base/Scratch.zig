@@ -19,6 +19,11 @@ pub fn Scratch(comptime T: type) type {
             };
         }
 
+        /// A scratch that allocates nothing until its first append.
+        pub fn initEmpty(gpa: std.mem.Allocator) Self {
+            return .{ .items = ArrayList.init(gpa) };
+        }
+
         pub fn deinit(self: *Self) void {
             self.items.deinit();
         }

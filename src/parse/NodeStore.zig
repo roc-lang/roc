@@ -439,18 +439,10 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
     errdefer nodes.deinit(gpa);
     var extra_data = try std.ArrayList(u32).initCapacity(gpa, capacity / 2);
     errdefer extra_data.deinit(gpa);
+    // Many scratch kinds (platform targets, requires entries, symbol maps)
+    // occur only in some headers, so each buffer grows on its first use.
     var scratch: Scratches = undefined;
-    inline for (0..scratch_kinds.len) |i| {
-        scratch[i] = @TypeOf(scratch[i]).init(gpa) catch |err| {
-            inline for (0..i) |j| scratch[j].deinit();
-            return err;
-        };
-    }
-    errdefer inline for (0..scratch_kinds.len) |i| scratch[i].deinit();
-    var pattern_string_parts = try std.ArrayList(AST.PatternStringPart).initCapacity(gpa, capacity / 8);
-    errdefer pattern_string_parts.deinit(gpa);
-    var field_access_segments = try std.ArrayList(AST.FieldAccessSegment).initCapacity(gpa, capacity / 4);
-    errdefer field_access_segments.deinit(gpa);
+    inline for (0..scratch_kinds.len) |i| scratch[i] = @TypeOf(scratch[i]).initEmpty(gpa);
 
     var store: NodeStore = .{
         .gpa = gpa,
@@ -459,8 +451,8 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
         .scratch = scratch,
         .numeric_literals = .empty,
         .numeric_literal_bytes = .empty,
-        .pattern_string_parts = pattern_string_parts,
-        .field_access_segments = field_access_segments,
+        .pattern_string_parts = .empty,
+        .field_access_segments = .empty,
     };
 
     const expected_idx = store.nodes.items.len;

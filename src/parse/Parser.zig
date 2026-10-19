@@ -115,11 +115,17 @@ pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator) std.mem.Allocator.E
     var store = try NodeStore.initCapacity(gpa, estimated_node_count);
     errdefer store.deinit();
     var numeric_literal_count: usize = 0;
+    // Each field-access segment is one `.field` or `.?field` token.
+    var field_segment_count: usize = 0;
     for (tokens.tokens.items(.tag)) |tag| {
         numeric_literal_count += @intFromBool(tag == .Int or tag == .Float);
+        const tag_int = @backingInt(tag);
+        field_segment_count += @intFromBool((tag_int >= @backingInt(Token.Tag.DotLowerIdent) and tag_int <= @backingInt(Token.Tag.NoSpaceDotLowerIdent)) or
+            (tag_int >= @backingInt(Token.Tag.DotQuestionLowerIdent) and tag_int <= @backingInt(Token.Tag.NoSpaceDotQuestionLowerIdent)));
     }
     try store.numeric_literals.ensureTotalCapacity(gpa, numeric_literal_count);
     try store.numeric_literal_bytes.ensureTotalCapacity(gpa, numeric_literal_count);
+    try store.field_access_segments.ensureTotalCapacity(gpa, field_segment_count);
 
     var scratch_idents = try base.Scratch(base.Ident.Idx).init(gpa);
     errdefer scratch_idents.deinit();
