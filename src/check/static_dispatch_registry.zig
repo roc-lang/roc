@@ -2117,16 +2117,25 @@ fn pushOperands(comptime T: type, pool: *std.ArrayList(T), allocator: Allocator,
     return artifact_serialize.appendSpan(artifact_serialize.Span, T, pool, allocator, ops);
 }
 
-fn sortedFromMap(allocator: Allocator, map: anytype) Allocator.Error![]PlanKV {
-    const out = try allocator.alloc(PlanKV, map.count());
-    errdefer allocator.free(out);
-    var it = map.iterator();
-    var i: usize = 0;
-    while (it.next()) |entry| : (i += 1) {
-        out[i] = .{ .key = @backingInt(entry.key_ptr.*), .val = @backingInt(entry.value_ptr.*) };
+/// Take `entries` as a slice sorted by key. A key recorded more than once
+/// keeps the value recorded last.
+fn sortedPlanKVs(allocator: Allocator, entries: *std.ArrayListUnmanaged(PlanKV)) Allocator.Error![]PlanKV {
+    const items = entries.items;
+    if (!std.sort.isSorted(PlanKV, items, {}, planKvLessThan)) {
+        // The sort is stable, so equal keys stay in recording order.
+        std.mem.sort(PlanKV, items, {}, planKvLessThan);
     }
-    std.mem.sort(PlanKV, out, {}, planKvLessThan);
-    return out;
+    var len: usize = 0;
+    for (items) |entry| {
+        if (len > 0 and items[len - 1].key == entry.key) {
+            items[len - 1] = entry;
+        } else {
+            items[len] = entry;
+            len += 1;
+        }
+    }
+    entries.shrinkRetainingCapacity(len);
+    return entries.toOwnedSlice(allocator);
 }
 
 /// Resolved static-dispatch plans for a checked module: the per-call-site plans, the
@@ -2230,12 +2239,14 @@ pub const StaticDispatchPlanTable = struct {
         errdefer operand_pool.deinit(allocator);
         var iter_operand_pool = std.ArrayList(IteratorDispatchOperand).empty;
         errdefer iter_operand_pool.deinit(allocator);
-        var by_expr: std.AutoHashMapUnmanaged(CIR.Expr.Idx, StaticDispatchPlanId) = .{};
-        errdefer by_expr.deinit(allocator);
-        var numeral_by_node: std.AutoHashMapUnmanaged(CIR.Node.Idx, StaticDispatchPlanId) = .{};
-        errdefer numeral_by_node.deinit(allocator);
-        var quote_by_node: std.AutoHashMapUnmanaged(CIR.Node.Idx, StaticDispatchPlanId) = .{};
-        errdefer quote_by_node.deinit(allocator);
+        // Each source node -> plan index is recorded as it is planned and
+        // ordered by key once every plan is known.
+        var by_expr: std.ArrayListUnmanaged(PlanKV) = .empty;
+        defer by_expr.deinit(allocator);
+        var numeral_by_node: std.ArrayListUnmanaged(PlanKV) = .empty;
+        defer numeral_by_node.deinit(allocator);
+        var quote_by_node: std.ArrayListUnmanaged(PlanKV) = .empty;
+        defer quote_by_node.deinit(allocator);
         var iterator_for_plans = std.ArrayList(IteratorForPlan).empty;
         errdefer iterator_for_plans.deinit(allocator);
         var generated_codec_derivations = std.ArrayList(GeneratedCodecDerivation).empty;
@@ -2258,8 +2269,8 @@ pub const StaticDispatchPlanTable = struct {
                 .rest_field = try names.internRecordFieldLabel("rest"),
             };
         }
-        var iterator_for_by_node: std.AutoHashMapUnmanaged(CIR.Node.Idx, IteratorForPlanId) = .{};
-        errdefer iterator_for_by_node.deinit(allocator);
+        var iterator_for_by_node: std.ArrayListUnmanaged(PlanKV) = .empty;
+        defer iterator_for_by_node.deinit(allocator);
 
         var constraint_index = try StaticDispatchConstraintIndex.fromModule(allocator, module, checked_bodies);
         defer constraint_index.deinit(allocator);
@@ -2284,13 +2295,7 @@ pub const StaticDispatchPlanTable = struct {
                 .e_dispatch_call => {
                     const dispatch_call = expr.data.e_dispatch_call;
                     const explicit_args = module.sliceExpr(dispatch_call.args);
-                    const args = try allocator.alloc(StaticDispatchOperand, explicit_args.len + 1);
-                    defer allocator.free(args);
-                    args[0] = .{ .checked_expr = checkedExprIdForSource(checked_bodies, dispatch_call.receiver) };
-                    for (explicit_args, 0..) |arg, i| {
-                        args[i + 1] = .{ .checked_expr = checkedExprIdForSource(checked_bodies, arg) };
-                    }
-                    const ar = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, args);
+                    const ar = try pushExprOperands(&operand_pool, allocator, checked_bodies, dispatch_call.receiver, explicit_args);
 
                     try plans.append(allocator, .{
                         .expr = checked_expr,
@@ -2332,9 +2337,7 @@ pub const StaticDispatchPlanTable = struct {
                 },
                 .e_type_dispatch_call => {
                     const dispatch_call = expr.data.e_type_dispatch_call;
-                    const args = try staticDispatchOperandsForSlice(allocator, checked_bodies, module.sliceExpr(dispatch_call.args));
-                    defer allocator.free(args);
-                    const ar = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, args);
+                    const ar = try pushExprOperands(&operand_pool, allocator, checked_bodies, null, module.sliceExpr(dispatch_call.args));
 
                     try plans.append(allocator, .{
                         .expr = checked_expr,
@@ -2352,9 +2355,7 @@ pub const StaticDispatchPlanTable = struct {
                 },
                 .e_method_eq => {
                     const eq = expr.data.e_method_eq;
-                    const args = try staticDispatchOperandsForSlice(allocator, checked_bodies, &.{ eq.lhs, eq.rhs });
-                    defer allocator.free(args);
-                    const ar = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, args);
+                    const ar = try pushExprOperands(&operand_pool, allocator, checked_bodies, eq.lhs, &.{eq.rhs});
 
                     try plans.append(allocator, .{
                         .expr = checked_expr,
@@ -2380,36 +2381,42 @@ pub const StaticDispatchPlanTable = struct {
                     });
                 },
             }
-            try by_expr.put(allocator, expr_idx, plan_id);
+            try by_expr.append(allocator, .{ .key = @backingInt(expr_idx), .val = @backingInt(plan_id) });
         }
 
         const module_env = module.moduleEnvConst();
         const checked_type_view = checked_types.store.view();
         var subject_scratch = @TypeOf(checked_type_view).EqualityScratch.init(allocator);
         defer subject_scratch.deinit();
+        // Roles are keyed by the type a subject denotes, so subjects
+        // spelled through different transparent aliases share a role.
+        // Canonical keys retain alias identity and cannot bucket them.
+        const GeneratedCodecRoleKey = struct {
+            method: canonical.MethodNameId,
+            has_subject: bool,
+            subject_bucket: u64,
+        };
+        const no_role_candidate = std.math.maxInt(u32);
+        const GeneratedCodecRoleCandidate = struct {
+            subject_ty: ?CheckedTypeId,
+            role: u32,
+            next: u32 = no_role_candidate,
+        };
+        // A role key's candidates, chained through `role_candidate_pool` in
+        // the order they were added.
+        const GeneratedCodecRoleChain = struct { first: u32, last: u32 };
+        var role_candidates: std.AutoHashMapUnmanaged(GeneratedCodecRoleKey, GeneratedCodecRoleChain) = .empty;
+        defer role_candidates.deinit(allocator);
+        var role_candidate_pool: std.ArrayListUnmanaged(GeneratedCodecRoleCandidate) = .empty;
+        defer role_candidate_pool.deinit(allocator);
+        var next_role_by_method = collections.DenseMap(canonical.MethodNameId, u32).init(allocator);
+        defer next_role_by_method.deinit();
         for (module_env.generated_codec_derivations.items.items) |derivation| {
             const source_calls = module_env.generated_codec_calls.items.items[derivation.calls_start..][0..derivation.calls_len];
             const calls_start: u32 = @intCast(generated_codec_calls.items.len);
-            // Roles are keyed by the type a subject denotes, so subjects
-            // spelled through different transparent aliases share a role.
-            // Canonical keys retain alias identity and cannot bucket them.
-            const GeneratedCodecRoleKey = struct {
-                method: canonical.MethodNameId,
-                has_subject: bool,
-                subject_bucket: u64,
-            };
-            const GeneratedCodecRoleCandidate = struct {
-                subject_ty: ?CheckedTypeId,
-                role: u32,
-            };
-            var role_candidates = std.AutoHashMap(GeneratedCodecRoleKey, std.ArrayListUnmanaged(GeneratedCodecRoleCandidate)).init(allocator);
-            defer {
-                var candidate_lists = role_candidates.valueIterator();
-                while (candidate_lists.next()) |list| list.deinit(allocator);
-                role_candidates.deinit();
-            }
-            var next_role_by_method = collections.DenseMap(canonical.MethodNameId, u32).init(allocator);
-            defer next_role_by_method.deinit();
+            role_candidates.clearRetainingCapacity();
+            role_candidate_pool.clearRetainingCapacity();
+            next_role_by_method.clearRetainingCapacity();
             for (source_calls) |call| {
                 const method = try names.internMethodIdent(module.identStoreConst(), @bitCast(call.method_ident));
                 const dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, @fromBackingInt(@intCast(call.dispatcher_var)));
@@ -2423,10 +2430,12 @@ pub const StaticDispatchPlanTable = struct {
                     .has_subject = subject_ty != null,
                     .subject_bucket = if (subject_ty) |subject| checked_type_view.aliasTransparentBucketKey(subject) else 0,
                 };
-                const candidates_entry = try role_candidates.getOrPut(role_key);
-                if (!candidates_entry.found_existing) candidates_entry.value_ptr.* = .empty;
+                const candidates_entry = try role_candidates.getOrPut(allocator, role_key);
+                if (!candidates_entry.found_existing) candidates_entry.value_ptr.* = .{ .first = no_role_candidate, .last = no_role_candidate };
                 var method_role: ?u32 = null;
-                for (candidates_entry.value_ptr.items) |candidate| {
+                var candidate_index = candidates_entry.value_ptr.first;
+                while (candidate_index != no_role_candidate) : (candidate_index = role_candidate_pool.items[candidate_index].next) {
+                    const candidate = role_candidate_pool.items[candidate_index];
                     if (subject_ty == null) {
                         method_role = candidate.role;
                         break;
@@ -2443,10 +2452,18 @@ pub const StaticDispatchPlanTable = struct {
                     if (!next_entry.found_existing) next_entry.value_ptr.* = 0;
                     method_role = next_entry.value_ptr.*;
                     next_entry.value_ptr.* += 1;
-                    try candidates_entry.value_ptr.append(allocator, .{
+                    const added = std.math.cast(u32, role_candidate_pool.items.len) orelse return error.OutOfMemory;
+                    try role_candidate_pool.append(allocator, .{
                         .subject_ty = subject_ty,
                         .role = method_role.?,
                     });
+                    const chain = candidates_entry.value_ptr;
+                    if (chain.last == no_role_candidate) {
+                        chain.first = added;
+                    } else {
+                        role_candidate_pool.items[chain.last].next = added;
+                    }
+                    chain.last = added;
                 }
                 try generated_codec_calls.append(allocator, .{
                     .method = method,
@@ -2541,7 +2558,7 @@ pub const StaticDispatchPlanTable = struct {
                 .target_selected_by_checking = numeral_plan.dispatchResolution() != .specialization_dispatch,
                 .literal_kind = .numeral,
             });
-            try numeral_by_node.put(allocator, node, plan_id);
+            try numeral_by_node.append(allocator, .{ .key = @backingInt(node), .val = @backingInt(plan_id) });
         }
 
         for (module_env.store.literalDispatchPlans()) |quote_plan| {
@@ -2598,7 +2615,7 @@ pub const StaticDispatchPlanTable = struct {
                 .target_selected_by_checking = quote_plan.dispatchResolution() != .specialization_dispatch,
                 .literal_kind = .quote,
             });
-            try quote_by_node.put(allocator, node, plan_id);
+            try quote_by_node.append(allocator, .{ .key = @backingInt(node), .val = @backingInt(plan_id) });
         }
 
         // Only custom/generalized literal patterns have these synthesized
@@ -2696,23 +2713,19 @@ pub const StaticDispatchPlanTable = struct {
                     .next_fn_var = @fromBackingInt(@intCast(for_plan.next_fn_var)),
                 });
             }
-            try iterator_for_by_node.put(allocator, for_node_idx, iterator_for_id);
+            try iterator_for_by_node.append(allocator, .{ .key = @backingInt(for_node_idx), .val = @backingInt(iterator_for_id) });
         }
 
-        // Convert the construction-time hashmaps into sorted, relocatable
-        // PlanKV slices (transform D), then release the maps.
-        const by_expr_sorted = try sortedFromMap(allocator, by_expr);
+        // Order the recorded entries into sorted, relocatable PlanKV slices
+        // (transform D).
+        const by_expr_sorted = try sortedPlanKVs(allocator, &by_expr);
         errdefer allocator.free(by_expr_sorted);
-        const numeral_sorted = try sortedFromMap(allocator, numeral_by_node);
+        const numeral_sorted = try sortedPlanKVs(allocator, &numeral_by_node);
         errdefer allocator.free(numeral_sorted);
-        const quote_sorted = try sortedFromMap(allocator, quote_by_node);
+        const quote_sorted = try sortedPlanKVs(allocator, &quote_by_node);
         errdefer allocator.free(quote_sorted);
-        const iterator_for_sorted = try sortedFromMap(allocator, iterator_for_by_node);
+        const iterator_for_sorted = try sortedPlanKVs(allocator, &iterator_for_by_node);
         errdefer allocator.free(iterator_for_sorted);
-        by_expr.deinit(allocator);
-        numeral_by_node.deinit(allocator);
-        quote_by_node.deinit(allocator);
-        iterator_for_by_node.deinit(allocator);
 
         build_data.* = .{
             .plan_sources = try plan_sources.toOwnedSlice(allocator),
@@ -2897,11 +2910,11 @@ pub const PlanTableBuildData = struct {
 
 const StaticDispatchConstraintIndex = struct {
     constraints: []const types.StaticDispatchConstraint = &.{},
-    by_fn_var: std.AutoHashMapUnmanaged(Var, u32) = .{},
+    by_fn_var: collections.DenseMapUnmanaged(Var, u32) = .empty,
 
     fn fromModule(allocator: Allocator, module: TypedCIR.Module, checked_bodies: anytype) Allocator.Error!StaticDispatchConstraintIndex {
         const store = module.typeStoreConst();
-        var live_fn_vars: std.AutoHashMapUnmanaged(Var, void) = .{};
+        var live_fn_vars: collections.DenseMapUnmanaged(Var, void) = .empty;
         defer live_fn_vars.deinit(allocator);
 
         var node_idx: u32 = 0;
@@ -2931,7 +2944,7 @@ const StaticDispatchConstraintIndex = struct {
         };
         errdefer index.deinit(allocator);
 
-        try index.by_fn_var.ensureTotalCapacity(allocator, @intCast(live_fn_vars.count()));
+        try index.by_fn_var.ensureTotalCapacity(allocator, live_fn_vars.count());
         for (index.constraints, 0..) |constraint, i| {
             if (!live_fn_vars.contains(constraint.fn_var)) continue;
             const entry = try index.by_fn_var.getOrPut(allocator, constraint.fn_var);
@@ -3279,18 +3292,23 @@ fn checkedTypeIdForVar(
     };
 }
 
-fn staticDispatchOperandsForSlice(
+/// Append one checked-expression operand per source expression, `first`
+/// (when present) before `rest`, directly to `pool`.
+fn pushExprOperands(
+    pool: *std.ArrayList(StaticDispatchOperand),
     allocator: Allocator,
     checked_bodies: anytype,
-    exprs: []const CIR.Expr.Idx,
-) Allocator.Error![]const StaticDispatchOperand {
-    if (exprs.len == 0) return &.{};
-    const out = try allocator.alloc(StaticDispatchOperand, exprs.len);
-    errdefer allocator.free(out);
-    for (exprs, 0..) |expr, i| {
-        out[i] = .{ .checked_expr = checkedExprIdForSource(checked_bodies, expr) };
-    }
-    return out;
+    first: ?CIR.Expr.Idx,
+    rest: []const CIR.Expr.Idx,
+) Allocator.Error!artifact_serialize.Span {
+    const count = rest.len + @intFromBool(first != null);
+    if (count == 0) return .{ .start = 0, .len = 0 };
+    const start = std.math.cast(u32, pool.items.len) orelse return error.OutOfMemory;
+    const len = std.math.cast(u32, count) orelse return error.OutOfMemory;
+    try pool.ensureUnusedCapacity(allocator, count);
+    if (first) |expr| pool.appendAssumeCapacity(.{ .checked_expr = checkedExprIdForSource(checked_bodies, expr) });
+    for (rest) |expr| pool.appendAssumeCapacity(.{ .checked_expr = checkedExprIdForSource(checked_bodies, expr) });
+    return .{ .start = start, .len = len };
 }
 
 fn zeroPayloadTagIdent(module: TypedCIR.Module, expr_idx: CIR.Expr.Idx) ?Ident.Idx {
