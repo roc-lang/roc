@@ -14137,7 +14137,7 @@ test "object-cache pack constants are weak data under their content names and po
         .{ .offset = 8, .target_symbol_name = "roc__rc_decref_str", .kind = .function_pointer, .rc_helper = helper },
     };
     var exports = [_]lir.Program.StaticDataExport{
-        .{ .symbol_name = "roc__d0", .value_id = @fromBackingInt(0), .bytes = &(@as([16]u8, @splat(0))), .alignment = 8, .is_exported = false, .relocations = &node },
+        .{ .symbol_name = "roc__d0", .value_id = @fromBackingInt(2), .bytes = &(@as([16]u8, @splat(0))), .alignment = 8, .is_exported = false, .relocations = &node },
         .{ .symbol_name = "roc__d0_1", .bytes = &(@as([16]u8, @splat(1))), .symbol_offset = 8, .alignment = 8, .is_exported = false },
         .{ .symbol_name = "roc__d1", .value_id = @fromBackingInt(1), .bytes = &(@as([16]u8, @splat(0))), .alignment = 8, .is_exported = false, .relocations = &callable },
         .{ .symbol_name = "roc__answer", .bytes = &(@as([8]u8, @splat(2))), .alignment = 8 },
@@ -14170,7 +14170,7 @@ test "object-cache pack constants are weak data under their content names and po
 
     // Code reads a slot through the pack's own definition, never a copy.
     const variable_count = builder.variables.items.len;
-    _ = try codegen.staticDataGlobal(@fromBackingInt(0), 16);
+    _ = try codegen.staticDataGlobal(@fromBackingInt(2), 16);
     _ = try codegen.staticDataGlobal(@fromBackingInt(1), 16);
     try std.testing.expectEqual(variable_count, builder.variables.items.len);
 }
