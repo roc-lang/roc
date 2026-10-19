@@ -219,9 +219,11 @@ test "object cache loading owns decoded packs and commits both indexes atomicall
             try std.testing.expectEqual(@as(usize, 1), packs.packs.items.len);
             packs.indexPacks() catch |err|
                 return rejected(&packs, expected_key, err);
-            const hit = packs.specCacheLookup().lookup(expected_key, false) orelse return error.TestUnexpectedResult;
+            const hit = packs.specCacheLookup().lookup(expected_key, .dev_code) orelse return error.TestUnexpectedResult;
             try std.testing.expectEqualSlices(u8, &expected_identity.bytes, &hit.identity);
             try std.testing.expectEqual(@as(u64, 1), hit.rc_borrowed_params);
+            // A consumer that cannot splice is never served dev artifacts.
+            try std.testing.expect(packs.specCacheLookup().lookup(expected_key, .linked_objects) == null);
             const located = packs.spliceSource().find(packs.spliceSource().context, expected_key) orelse return error.TestUnexpectedResult;
             try std.testing.expectEqual(expected_identity, located.set.artifacts[located.index].kind.proc);
         }
@@ -231,7 +233,7 @@ test "object cache loading owns decoded packs and commits both indexes atomicall
             try std.testing.expectEqual(err, packs.failure.?);
             try std.testing.expect(packs.state == .unavailable);
             try std.testing.expectError(err, packs.indexPacks());
-            try std.testing.expect(packs.specCacheLookup().lookup(key_to_find, false) == null);
+            try std.testing.expect(packs.specCacheLookup().lookup(key_to_find, .dev_code) == null);
             const splice = packs.spliceSource();
             try std.testing.expect(splice.find(splice.context, key_to_find) == null);
             try std.testing.expectEqual(@as(u64, 0), packs.hits);
@@ -263,7 +265,7 @@ test "object cache loading owns decoded packs and commits both indexes atomicall
     defer malformed.deinit();
     try std.testing.expectError(error.MalformedPack, malformed.loadDirInto(io, malformed_path, .cache_offers));
     try std.testing.expectEqual(error.MalformedPack, malformed.failure.?);
-    try std.testing.expect(malformed.specCacheLookup().lookup(key, false) == null);
+    try std.testing.expect(malformed.specCacheLookup().lookup(key, .dev_code) == null);
     try std.testing.expect(malformed.spliceSource().find(malformed.spliceSource().context, key) == null);
 }
 
@@ -461,7 +463,9 @@ test "the cache sweep finds and ages the packs the store writes" {
 /// What a lazily loaded store needs once checking has produced the module
 /// set: the store and the modules in view.
 pub const Pending = struct {
-    store: *const Store,
+    /// Dev packs, whose artifacts are spliced; null for a consumer whose
+    /// emitter cannot splice them, which only object packs serve.
+    store: ?*const Store,
     /// LLVM-compiled object packs of URL-package modules
     /// (`PackFile.ObjectPack`), which only a consumer whose code is linked
     /// takes.
@@ -891,7 +895,7 @@ pub const LoadedPacks = struct {
     }
 
     fn loadPendingDiscovery(self: *LoadedPacks, pending: Pending, root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact) LoadError!void {
-        const store = pending.store;
+        const store = pending.store orelse return;
         if (pending.build_env.packPlacementForArtifactKey(root_artifact.key)) |placement| {
             try store.loadIdentityDiscovery(pending.io, self, placement.origin, placement.identity);
         }
@@ -910,7 +914,7 @@ pub const LoadedPacks = struct {
     }
 
     fn loadPending(self: *LoadedPacks, pending: Pending, root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact) LoadError!void {
-        const store = pending.store;
+        const store = pending.store orelse return;
         if (pending.build_env.packPlacementForArtifactKey(root_artifact.key)) |placement| {
             try store.loadIdentity(pending.io, self, placement.origin, placement.identity);
         }
@@ -966,13 +970,24 @@ pub const LoadedPacks = struct {
         return try objects.toOwnedSlice(allocator);
     }
 
-    fn findSpec(context: *anyopaque, key: [32]u8, accept_linked: bool) ?Common.SpecCacheHit {
+    /// Every object pack that served a specialization, in load order, for a
+    /// program that composes their objects into its own.
+    pub fn linkedObjectPacks(self: *const LoadedPacks, allocator: Allocator) Allocator.Error![]const *const PackFile.ObjectPack {
+        var packs = std.ArrayList(*const PackFile.ObjectPack).empty;
+        errdefer packs.deinit(allocator);
+        for (self.object_packs.items, self.object_packs_used.items) |*pack, used| {
+            if (used) try packs.append(allocator, pack);
+        }
+        return try packs.toOwnedSlice(allocator);
+    }
+
+    fn findSpec(context: *anyopaque, key: [32]u8, takes: Common.SpecCacheTakes) ?Common.SpecCacheHit {
         const self: *LoadedPacks = @ptrCast(@alignCast(context));
         self.ensureLoaded();
         if (self.state != .ready) return null;
         // An optimized object serves a consumer whose code is linked ahead
         // of the dev artifacts of the same specialization.
-        if (accept_linked) {
+        if (takes.takesLinkedObjects()) {
             self.ensureLinkedLoaded();
             if (self.linked_specs.get(key)) |offer| {
                 self.object_packs_used.items[offer.pack] = true;
@@ -980,6 +995,7 @@ pub const LoadedPacks = struct {
                 return offer.hit;
             }
         }
+        if (!takes.takesDevCode()) return null;
         const hit = self.specs.get(key) orelse return null;
         self.hits += 1;
         return hit;
