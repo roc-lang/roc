@@ -1375,18 +1375,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
         .licenses => {
             try ctx.io.stdout().writeAll(legalDetailsFileContent);
         },
-        .problem => |problem| {
-            try switch (problem) {
-                .missing_flag_value => |details| ctx.io.stderr().print("Error: no value was supplied for {s}\n", .{details.flag}),
-                .unexpected_argument => |details| ctx.io.stderr().print("Error: roc {s} received an unexpected argument: `{s}`\n", .{ details.cmd, details.arg }),
-                .invalid_flag_value => |details| ctx.io.stderr().print("Error: `{s}` is not a valid value for {s}. The valid options are {s}\n", .{ details.value, details.flag, details.valid_options }),
-                .shorthand_requires_run => |details| ctx.io.stderr().print(
-                    "Error: `{s}` looks like an installed shorthand, and running one requires the `run` subcommand: `roc run {s}`\nIf you meant a local file named `{s}`, write it as `./{s}` instead.\n",
-                    .{ details.name, details.name, details.name, details.name },
-                ),
-            };
-            return error.InvalidArguments;
-        },
+        .problem => |problem| ctx.fail(.{ .invalid_arguments = problem }),
     }) catch |err| {
         // Commands report by recording a problem and returning `CliError`, and
         // a few print straight to stderr instead. Either way the user has been
