@@ -740,11 +740,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// identity; a second pack holding the same procedure splices nothing.
         spliced_proc_starts: std.AutoHashMap(lir.ProcIdentity, usize),
 
-        /// Map from JoinPointId to list of jumps that target it (for patching)
-        join_point_jumps: std.AutoHashMap(u32, std.ArrayList(JumpRecord)),
+        /// Each declared join point's pending jumps, chained through
+        /// `join_jump_records` in emission order.
+        join_point_jumps: collections.DenseMap(u32, JumpChain),
+        join_jump_records: std.ArrayList(JumpRecord),
 
         /// Map from JoinPointId to parameters (for rebinding to correct stack slots)
         join_point_params: collections.DenseMap(u32, LocalSpan),
+
+        /// The other set of procedure tables (see `ProcScope`): empty outside
+        /// `compileProcSpec`, and the caller's tables inside it.
+        spare_proc_scope: ProcScope,
+        in_proc_scope: bool = false,
 
         /// Tracks positions of BL/CALL instructions to compiled nested proc_specs.
         /// When deferred-prologue compilation shifts a proc body (extract, prepend prologue,
@@ -770,6 +777,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// teardown, which is emitted after the body once the callee-saved
         /// set and frame size are known.
         tail_exit_patches: std.ArrayList(usize),
+
+        /// States of the control statements being generated (see `StmtState`).
+        stmt_states: std.ArrayList(StmtState) = .empty,
+        /// Pending jumps of the control statements being generated. Each
+        /// statement's jumps follow those of the statements it is nested in.
+        cf_patches: std.ArrayList(usize) = .empty,
+
+        /// Whether two layouts are interchangeable, by layout pair (see
+        /// `layoutsInterchangeable`), and the walk's reusable storage.
+        interchangeable_layouts: std.AutoHashMapUnmanaged(u64, bool) = .empty,
+        interchange_seen: std.AutoHashMapUnmanaged(u64, void) = .empty,
+        interchange_pending: std.ArrayList(LayoutPair) = .empty,
+
+        /// A deferred prologue's bytes on their way in front of their body.
+        prologue_scratch: std.ArrayList(u8) = .empty,
+        /// ABI lowering of the C-ABI call being generated.
+        abi_arena: base.SingleThreadArena,
 
         /// Bytes of incoming argument block the proc being compiled owns and
         /// removes when it returns.
@@ -900,6 +924,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Scratch buffer for parameter register counts during lambda param binding
         scratch_param_num_regs: base.Scratch(u8),
+
+        const LayoutPair = struct { a: layout.Idx, b: layout.Idx };
 
         /// Pre-computed argument info to avoid generating expressions twice
         const ArgInfo = struct {
@@ -1071,6 +1097,60 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         pub const JumpRecord = struct {
             /// Offset of the jump instruction
             location: usize,
+            /// The next jump to the same join point, or `no_jump`.
+            next: u32,
+        };
+
+        /// The first and last of a join point's jumps in `join_jump_records`.
+        pub const JumpChain = struct {
+            first: u32 = no_jump,
+            last: u32 = no_jump,
+        };
+
+        const no_jump = std.math.maxInt(u32);
+
+        /// The tables one procedure's compilation binds. `compileProcSpec`
+        /// exchanges the generator's tables with `spare_proc_scope` for the
+        /// procedure's duration, so the caller's survive it unchanged and
+        /// both sets keep their capacity from procedure to procedure.
+        const ProcScope = struct {
+            local_locations: collections.DenseMap(u32, ValueLocation),
+            stack_alloca_slots: collections.DenseMap(LocalId, i32),
+            local_location_undo: std.ArrayList(LocalLocationUndo) = .empty,
+            stmt_locations: collections.DenseMap(u32, usize),
+            join_point_jumps: collections.DenseMap(u32, JumpChain),
+            join_jump_records: std.ArrayList(JumpRecord) = .empty,
+            join_point_params: collections.DenseMap(u32, LocalSpan),
+
+            fn init(allocator: Allocator) ProcScope {
+                return .{
+                    .local_locations = .init(allocator),
+                    .stack_alloca_slots = .init(allocator),
+                    .stmt_locations = .init(allocator),
+                    .join_point_jumps = .init(allocator),
+                    .join_point_params = .init(allocator),
+                };
+            }
+
+            fn deinit(scope: *ProcScope, allocator: Allocator) void {
+                scope.local_locations.deinit();
+                scope.stack_alloca_slots.deinit();
+                scope.local_location_undo.deinit(allocator);
+                scope.stmt_locations.deinit();
+                scope.join_point_jumps.deinit();
+                scope.join_jump_records.deinit(allocator);
+                scope.join_point_params.deinit();
+            }
+
+            fn clearRetainingCapacity(scope: *ProcScope) void {
+                scope.local_locations.clearRetainingCapacity();
+                scope.stack_alloca_slots.clearRetainingCapacity();
+                scope.local_location_undo.clearRetainingCapacity();
+                scope.stmt_locations.clearRetainingCapacity();
+                scope.join_point_jumps.clearRetainingCapacity();
+                scope.join_jump_records.clearRetainingCapacity();
+                scope.join_point_params.clearRetainingCapacity();
+            }
         };
 
         /// Byte width of a scalar value on the stack.
@@ -1128,6 +1208,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             kind: builtins.simd.Kind,
         };
 
+        /// A 128-bit immediate as its low and high words.
+        pub const Immediate128 = struct {
+            low: u64,
+            high: u64,
+
+            pub fn of(value: i128) Immediate128 {
+                const bits: u128 = @bitCast(value);
+                return .{ .low = @truncate(bits), .high = @truncate(bits >> 64) };
+            }
+
+            pub fn get(self: Immediate128) i128 {
+                return @bitCast((@as(u128, self.high) << 64) | self.low);
+            }
+        };
+
         /// Where a value is stored
         pub const ValueLocation = union(enum) {
             /// Value is in a general-purpose register
@@ -1164,8 +1259,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             immediate_f32: f32,
             /// Immediate F64 value, retained at its actual Roc precision.
             immediate_f64: f64,
-            /// Immediate 128-bit value
-            immediate_i128: i128,
+            /// Immediate 128-bit value, held as two words so the location
+            /// keeps word alignment.
+            immediate_i128: Immediate128,
             /// Code path that never produces a value (crash/runtime_error).
             /// A trap instruction has been emitted; execution will never reach here.
             noreturn: void,
@@ -1290,12 +1386,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .code_refs = std.ArrayList(CodeRef).empty,
                 .spliced_helper_offsets = std.StringHashMap(usize).init(allocator),
                 .spliced_proc_starts = std.AutoHashMap(lir.ProcIdentity, usize).init(allocator),
-                .join_point_jumps = std.AutoHashMap(u32, std.ArrayList(JumpRecord)).init(allocator),
+                .join_point_jumps = collections.DenseMap(u32, JumpChain).init(allocator),
+                .join_jump_records = .empty,
+                .spare_proc_scope = ProcScope.init(allocator),
                 .join_point_params = collections.DenseMap(u32, LocalSpan).init(allocator),
                 .internal_call_patches = std.ArrayList(InternalCallPatch).empty,
                 .internal_addr_patches = std.ArrayList(InternalAddrPatch).empty,
                 .early_return_patches = std.ArrayList(usize).empty,
                 .tail_exit_patches = std.ArrayList(usize).empty,
+                .abi_arena = base.SingleThreadArena.init(allocator),
                 .scratch_arg_locs = scratch_arg_locs,
                 .scratch_arg_infos = scratch_arg_infos,
                 .scratch_pass_by_ptr = scratch_pass_by_ptr,
@@ -1378,17 +1477,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.message_pool_runs.deinit(self.allocator);
             self.message_pool_index.deinit(self.allocator);
             self.message_pool.deinit(self.allocator);
-            // Clean up the nested ArrayLists in join_point_jumps
-            var it = self.join_point_jumps.valueIterator();
-            while (it.next()) |list| {
-                list.deinit(self.allocator);
-            }
             self.join_point_jumps.deinit();
+            self.join_jump_records.deinit(self.allocator);
             self.join_point_params.deinit();
+            self.spare_proc_scope.deinit(self.allocator);
             self.internal_call_patches.deinit(self.allocator);
             self.internal_addr_patches.deinit(self.allocator);
             self.early_return_patches.deinit(self.allocator);
             self.tail_exit_patches.deinit(self.allocator);
+            self.prologue_scratch.deinit(self.allocator);
+            self.interchangeable_layouts.deinit(self.allocator);
+            self.interchange_seen.deinit(self.allocator);
+            self.interchange_pending.deinit(self.allocator);
+            self.stmt_states.deinit(self.allocator);
+            self.cf_patches.deinit(self.allocator);
+            self.abi_arena.deinit();
             self.scratch_arg_locs.deinit();
             self.scratch_arg_infos.deinit();
             self.scratch_pass_by_ptr.deinit();
@@ -1431,17 +1534,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.message_pool.clearRetainingCapacity();
             self.message_pool_placed_len = 0;
             self.image_finished = false;
-            // Clear nested ArrayLists
-            var it = self.join_point_jumps.valueIterator();
-            while (it.next()) |list| {
-                list.clearRetainingCapacity();
-            }
             self.join_point_jumps.clearRetainingCapacity();
+            self.join_jump_records.clearRetainingCapacity();
             self.join_point_params.clearRetainingCapacity();
             self.internal_call_patches.clearRetainingCapacity();
             self.internal_addr_patches.clearRetainingCapacity();
             self.early_return_patches.clearRetainingCapacity();
             self.tail_exit_patches.clearRetainingCapacity();
+            self.stmt_states.clearRetainingCapacity();
+            self.cf_patches.clearRetainingCapacity();
+            self.interchangeable_layouts.clearRetainingCapacity();
         }
 
         fn clearSymbolCaches(self: *Self) void {
@@ -1453,15 +1555,47 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.hosted_symbols.clearRetainingCapacity();
         }
 
-        fn deinitJoinPointJumpsMap(
-            self: *Self,
-            map: *std.AutoHashMap(u32, std.ArrayList(JumpRecord)),
-        ) void {
-            var it = map.valueIterator();
-            while (it.next()) |list| {
-                list.deinit(self.allocator);
-            }
-            map.deinit();
+        /// Exchange the generator's procedure tables with `spare_proc_scope`.
+        fn swapProcScope(self: *Self) void {
+            const spare = &self.spare_proc_scope;
+            std.mem.swap(@TypeOf(self.local_locations), &self.local_locations, &spare.local_locations);
+            std.mem.swap(@TypeOf(self.stack_alloca_slots), &self.stack_alloca_slots, &spare.stack_alloca_slots);
+            std.mem.swap(@TypeOf(self.local_location_undo), &self.local_location_undo, &spare.local_location_undo);
+            std.mem.swap(@TypeOf(self.stmt_locations), &self.stmt_locations, &spare.stmt_locations);
+            std.mem.swap(@TypeOf(self.join_point_jumps), &self.join_point_jumps, &spare.join_point_jumps);
+            std.mem.swap(@TypeOf(self.join_jump_records), &self.join_jump_records, &spare.join_jump_records);
+            std.mem.swap(@TypeOf(self.join_point_params), &self.join_point_params, &spare.join_point_params);
+        }
+
+        /// Give the procedure about to be compiled empty tables, keeping the
+        /// caller's aside.
+        fn enterProcScope(self: *Self) void {
+            std.debug.assert(!self.in_proc_scope);
+            self.in_proc_scope = true;
+            self.swapProcScope();
+        }
+
+        /// Hand the caller's tables back and empty the procedure's.
+        fn leaveProcScope(self: *Self) void {
+            std.debug.assert(self.in_proc_scope);
+            self.in_proc_scope = false;
+            self.swapProcScope();
+            self.spare_proc_scope.clearRetainingCapacity();
+        }
+
+        /// Move the prologue emitted from `prologue_at` to the end of the code
+        /// buffer in front of the body that starts at `body_start`, and
+        /// return its size. A prologue's bytes do not depend on where they
+        /// are emitted.
+        fn placeDeferredPrologue(self: *Self, body_start: usize, prologue_at: usize) Allocator.Error!usize {
+            const buf = &self.codegen.emit.buf;
+            std.debug.assert(body_start <= prologue_at and prologue_at <= buf.items.len);
+            const prologue_size = buf.items.len - prologue_at;
+            self.prologue_scratch.clearRetainingCapacity();
+            try self.prologue_scratch.appendSlice(self.allocator, buf.items[prologue_at..]);
+            buf.shrinkRetainingCapacity(prologue_at);
+            buf.insertSliceAssumeCapacity(body_start, self.prologue_scratch.items);
+            return prologue_size;
         }
 
         fn recordUnwindFunction(
@@ -1491,14 +1625,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         const LocalLocationUndo = struct {
             key: u32,
-            prev: ?ValueLocation,
+            /// Whether the key was bound before; `prev` is its location then.
+            was_bound: bool,
+            prev: ValueLocation,
         };
 
         /// All binding changes, including vector spills, pass through this journal.
         fn setLocalLocation(self: *Self, key: u32, value: ValueLocation) Allocator.Error!void {
+            const prev = self.local_locations.get(key);
             try self.local_location_undo.append(self.allocator, .{
                 .key = key,
-                .prev = self.local_locations.get(key),
+                .was_bound = prev != null,
+                .prev = prev orelse undefined,
             });
             errdefer _ = self.local_location_undo.pop();
             try self.local_locations.put(key, value);
@@ -1523,10 +1661,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             std.debug.assert(snapshot.undo_mark <= self.local_location_undo.items.len);
             while (self.local_location_undo.items.len > snapshot.undo_mark) {
                 const undo = self.local_location_undo.pop().?;
-                if (undo.prev) |prev| {
+                if (undo.was_bound) {
                     // A replacement never removed the key, so replay cannot allocate.
                     std.debug.assert(self.local_locations.contains(undo.key));
-                    self.local_locations.putAssumeCapacity(undo.key, prev);
+                    self.local_locations.putAssumeCapacity(undo.key, undo.prev);
                 } else {
                     const removed = self.local_locations.remove(undo.key);
                     std.debug.assert(removed);
@@ -1538,11 +1676,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn clearFunctionControlFlowState(self: *Self) void {
             self.stmt_locations.clearRetainingCapacity();
-            var it = self.join_point_jumps.valueIterator();
-            while (it.next()) |list| {
-                list.clearRetainingCapacity();
-            }
             self.join_point_jumps.clearRetainingCapacity();
+            self.join_jump_records.clearRetainingCapacity();
             self.join_point_params.clearRetainingCapacity();
         }
 
@@ -1643,13 +1778,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const body_end = self.codegen.currentOffset();
 
-            // Prepend prologue: copy body out, emit prologue with exact size, re-append body
-            const body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return error.OutOfMemory;
-            defer self.allocator.free(body_bytes);
-
-            self.codegen.emit.buf.shrinkRetainingCapacity(body_start);
-
-            const prologue_start = self.codegen.currentOffset();
+            // The prologue's size is known only now: emit it after the body, then
+            // move it in front.
+            const prologue_start = body_start;
+            const prologue_at = self.codegen.currentOffset();
             var root_stack_alloc: u32 = 0;
             var root_frame_size: u32 = 0;
             if (comptime target.toCpuArch() == .x86_64) {
@@ -1666,10 +1798,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 root_stack_alloc = actual_locals;
                 root_frame_size = frame_builder.actual_stack_alloc;
             }
-            const prologue_size = self.codegen.currentOffset() - prologue_start;
-
-            // Re-append body + epilogue
-            self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return error.OutOfMemory;
+            const prologue_size = try self.placeDeferredPrologue(body_start, prologue_at);
 
             // Adjust relocation offsets for the prepended prologue
             for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
@@ -2229,7 +2358,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             // Dec/i128 index - just load the low 64 bits as U64
                             try self.codegen.emitLoadStack(.w64, index_reg, off);
                         },
-                        .immediate_i128 => |val| {
+                        .immediate_i128 => |imm| {
+                            const val = imm.get();
                             // i128 immediate - truncate to 64 bits for index
                             const low: u64 = @truncate(@as(u128, @bitCast(val)));
                             try self.codegen.emitLoadImm(index_reg, @bitCast(low));
@@ -5133,7 +5263,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             switch (loc) {
                 .stack_i128 => |offset| try self.codegen.emitLoadStackV128(result, offset),
                 .stack => |stack_loc| try self.codegen.emitLoadStackV128(result, stack_loc.offset),
-                .immediate_i128 => |value| {
+                .immediate_i128 => |imm| {
+                    const value = imm.get();
                     self.codegen.freeFloat(result);
                     const materialized = try self.materializeVectorConstant(@bitCast(value), 0);
                     return .{ .vector_reg = .{ .reg = materialized.reg, .kind = kind } };
@@ -7958,7 +8089,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Generate code for an i128 literal
         fn generateI128Literal(_: *Self, val: i128) Allocator.Error!ValueLocation {
             // Return as immediate - will be materialized when needed
-            return .{ .immediate_i128 = val };
+            return .{ .immediate_i128 = .of(val) };
         }
 
         fn generateStaticDataLiteral(self: *Self, id: lir.LIR.StaticDataId, target_layout: layout.Idx) Allocator.Error!ValueLocation {
@@ -8376,7 +8507,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             signedness: std.builtin.Signedness,
         ) Allocator.Error!void {
             switch (loc) {
-                .immediate_i128 => |val| {
+                .immediate_i128 => |imm| {
+                    const val = imm.get();
                     const low: u64 = @truncate(@as(u128, @bitCast(val)));
                     const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
                     const reg = try self.allocTempGeneral();
@@ -8575,9 +8707,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn ensureStableLocationsForStmtLocals(self: *Self, root: CFStmtId) Allocator.Error!void {
             const indexes = try self.stackPlanIndexes();
-            var plan = StackPlan.initWithLocalIndices(indexes.allocator, indexes.local_indices);
-            indexes.local_indices = .empty;
-            defer indexes.local_indices = plan.deinitKeepingLocalIndices();
+            var plan = indexes.takePlan();
+            defer indexes.keepPlan(&plan);
             // Every planned statement is in `work`, so it empties the indexes.
             var work: std.ArrayList(CFStmtId) = .empty;
             defer {
@@ -8835,7 +8966,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             for (plan.slots.items, offsets) |slot, *offset| offset.* = self.codegen.allocStackSlot(slot.size);
             for (plan.values.items, 0..) |v, i| {
                 if (plan.representative(@intCast(i)) != i or self.local_locations.contains(localKey(v.local))) continue;
-                const loc = if (v.slot) |slot|
+                const loc = if (v.slotIndex()) |slot|
                     self.stackLocationForLayout(self.localLayout(v.local), offsets[slot])
                 else blk: {
                     std.debug.assert(self.getLayoutSize(self.localLayout(v.local)) == 0);
@@ -10795,7 +10926,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const low_reg, const high_reg = try self.allocTempGenerals(2);
 
             switch (loc) {
-                .immediate_i128 => |val| {
+                .immediate_i128 => |imm| {
+                    const val = imm.get();
                     const low: u64 = @truncate(@as(u128, @bitCast(val)));
                     const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
                     try self.codegen.emitLoadImm(low_reg, @bitCast(low));
@@ -13153,12 +13285,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.codegen.patchJump(early_return_patch, body_epilogue_offset);
             const body_end = self.codegen.currentOffset();
 
-            const body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return error.OutOfMemory;
-            defer self.allocator.free(body_bytes);
-
-            self.codegen.emit.buf.shrinkRetainingCapacity(body_start);
-
-            const final_offset = self.codegen.currentOffset();
+            // The prologue's size is known only now: emit it after the body, then
+            // move it in front.
+            const final_offset = body_start;
+            const prologue_at = self.codegen.currentOffset();
             const helper_stack_alloc: u32 = if (comptime target.toCpuArch() == .x86_64)
                 @intCast(-self.codegen.stack_offset - CodeGen.CALLEE_SAVED_AREA_SIZE)
             else
@@ -13173,12 +13303,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 _ = try frame_builder.emitPrologue(&self.codegen.emit);
                 break :blk frame_builder.actual_stack_alloc;
             };
-            const prologue_size = self.codegen.currentOffset() - final_offset;
+            const prologue_size = try self.placeDeferredPrologue(body_start, prologue_at);
             const helper_prologue_size: u32 = @intCast(prologue_size);
             const helper_callee_saved_mask = self.codegen.callee_saved_used;
             const helper_epilogue_offset: u32 = @intCast(body_epilogue_offset - body_start + prologue_size);
-
-            self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return error.OutOfMemory;
 
             for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
                 reloc.adjustOffset(prologue_size);
@@ -14047,8 +14175,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // Every argument is frozen to a slot of this frame first, so no
             // later step reads a value an earlier step has overwritten.
-            const frozen_args = try self.allocator.alloc(FrozenCallArg, arg_infos.len);
-            defer self.allocator.free(frozen_args);
+            var frozen_sfa_buffer: [8 * @sizeOf(FrozenCallArg)]u8 align(@alignOf(FrozenCallArg)) = undefined;
+            var frozen_sfa = std.heap.BufferFirstAllocator.init(&frozen_sfa_buffer, self.allocator);
+            const frozen_alloc = frozen_sfa.allocator();
+            const frozen_args = try frozen_alloc.alloc(FrozenCallArg, arg_infos.len);
+            defer frozen_alloc.free(frozen_args);
             for (arg_infos, 0..) |info, i| {
                 frozen_args[i] = if (info.num_regs == 0)
                     .{ .stack_offset = 0, .num_regs = 0, .pass_by_ptr = false }
@@ -14833,8 +14964,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const ret_size = self.getLayoutSize(ret_layout);
             const ret_slot = self.codegen.allocStackSlot(if (ret_size == 0) 8 else ret_size);
 
-            const arg_offsets = try self.allocator.alloc(u32, arg_layouts.len);
-            defer self.allocator.free(arg_offsets);
+            // The call's ABI lowering lives in the generator's arena until
+            // the next C-ABI call.
+            _ = self.abi_arena.reset(.retain_capacity);
+            const abi_alloc = self.abi_arena.allocator();
+            const arg_offsets = try abi_alloc.alloc(u32, arg_layouts.len);
             var total_args_size: u32 = 0;
             for (arg_layouts, arg_offsets) |arg_layout, *arg_offset| {
                 const runtime_layout = self.runtimeRepresentationLayoutIdx(arg_layout);
@@ -14899,10 +15033,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .x86_64_windows
             else
                 .x86_64_sysv;
-            var arena_state = base.SingleThreadArena.init(self.allocator);
-            defer arena_state.deinit();
-            const lowered = layout.abi.lower(arena_state.allocator(), self.layout_store, abi_target, arg_layouts, ret_layout, false) catch return error.OutOfMemory;
-            const physical = layout.abi.assignPhysicalArgs(arena_state.allocator(), self.layout_store, abi_target, lowered, arg_layouts) catch return error.OutOfMemory;
+            const lowered = layout.abi.lower(abi_alloc, self.layout_store, abi_target, arg_layouts, ret_layout, false) catch return error.OutOfMemory;
+            const physical = layout.abi.assignPhysicalArgs(abi_alloc, self.layout_store, abi_target, lowered, arg_layouts) catch return error.OutOfMemory;
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
@@ -15260,7 +15392,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .immediate_i64 => |val| {
                     try self.codegen.emitLoadImm(target_reg, val);
                 },
-                .immediate_i128 => |val| {
+                .immediate_i128 => |imm| {
+                    const val = imm.get();
                     // Only load low 64 bits into single register
                     const low: i64 = @truncate(val);
                     try self.codegen.emitLoadImm(target_reg, low);
@@ -15362,7 +15495,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             return switch (arg_loc) {
                 .stack_i128 => true,
-                .immediate_i128 => |v| immediateI128NeedsWideAbi(v),
+                .immediate_i128 => |imm| immediateI128NeedsWideAbi(imm.get()),
                 .general_reg,
                 .float_reg,
                 .vector_reg,
@@ -15457,7 +15590,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.codegen.emitLoadImm(temp_reg, val);
                     try self.emitStore(.w64, stack_ptr, stack_offset, temp_reg);
                 },
-                .immediate_i128 => |val| {
+                .immediate_i128 => |imm| {
+                    const val = imm.get();
                     const low: u64 = @truncate(@as(u128, @bitCast(val)));
                     const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
                     try self.codegen.emitLoadImm(temp_reg, @bitCast(low));
@@ -15520,16 +15654,32 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// of corresponding components reachable from them must. A pair is
         /// assumed interchangeable while it is being checked, so recursive
         /// layouts terminate, and pairs are checked from a worklist.
+        fn layoutPairKey(a: layout.Idx, b: layout.Idx) u64 {
+            return (@as(u64, @backingInt(a)) << 32) | @as(u64, @backingInt(b));
+        }
+
         fn layoutsInterchangeable(
             self: *Self,
             root_a: layout.Idx,
             root_b: layout.Idx,
         ) Allocator.Error!bool {
-            const Pair = struct { a: layout.Idx, b: layout.Idx };
-            var seen = std.AutoHashMap(u64, void).init(self.allocator);
-            defer seen.deinit();
-            var pending = std.ArrayList(Pair).empty;
-            defer pending.deinit(self.allocator);
+            if (root_a == root_b) return true;
+            const root_key = layoutPairKey(root_a, root_b);
+            if (self.interchangeable_layouts.get(root_key)) |known| return known;
+            const result = try self.walkLayoutsInterchangeable(root_a, root_b);
+            try self.interchangeable_layouts.put(self.allocator, root_key, result);
+            return result;
+        }
+
+        fn walkLayoutsInterchangeable(
+            self: *Self,
+            root_a: layout.Idx,
+            root_b: layout.Idx,
+        ) Allocator.Error!bool {
+            const seen = &self.interchange_seen;
+            seen.clearRetainingCapacity();
+            const pending = &self.interchange_pending;
+            pending.clearRetainingCapacity();
             try pending.append(self.allocator, .{ .a = root_a, .b = root_b });
 
             const ls = self.layout_store;
@@ -15543,8 +15693,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 if (a_layout.tag != b_layout.tag) return false;
                 if (ls.layoutSize(a_layout) != ls.layoutSize(b_layout)) return false;
 
-                const key = (@as(u64, @backingInt(a)) << 32) | @as(u64, @backingInt(b));
-                if ((try seen.getOrPut(key)).found_existing) continue;
+                if ((try seen.getOrPut(self.allocator, layoutPairKey(a, b))).found_existing) continue;
 
                 switch (a_layout.tag) {
                     .scalar => if (!std.meta.eql(a_layout.getScalar(), b_layout.getScalar())) return false,
@@ -15595,10 +15744,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.boxy_runtime_used = true;
             if (boxy_fn.paramAbiSizes()) |sizes| {
                 builder.packStackArgsForCAbi(sizes);
-            } else if (builtin.mode == .debug and Builder.packs_stack_args and builder.stack_args.items.len > 0) {
+            } else if (builtin.mode == .debug and Builder.packs_stack_args and builder.stackArgs().len > 0) {
                 base.invariant(
                     "Dev/codegen invariant violated: {s} overflowed {d} arguments onto the stack without declared parameter ABI sizes",
-                    .{ boxy_fn.symbolName(), builder.stack_args.items.len },
+                    .{ boxy_fn.symbolName(), builder.stackArgs().len },
                 );
             }
             switch (self.generation_mode) {
@@ -16296,8 +16445,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const result_desc_slot: ?i32 = if (assign.result_desc) |ref| try self.boxyDescRefToSlot(ref) else null;
 
             const ArgPlan = struct { value_off: ?i32, layout: layout.Idx, desc_slot: ?i32 };
-            const arg_plans = try self.allocator.alloc(ArgPlan, arg_locals.len);
-            defer self.allocator.free(arg_plans);
+            var plans_sfa_buffer: [8 * (@sizeOf(ArgPlan) + @sizeOf(?i32))]u8 align(@alignOf(ArgPlan)) = undefined;
+            var plans_sfa = std.heap.BufferFirstAllocator.init(&plans_sfa_buffer, self.allocator);
+            const plans_alloc = plans_sfa.allocator();
+            const arg_plans = try plans_alloc.alloc(ArgPlan, arg_locals.len);
+            defer plans_alloc.free(arg_plans);
             for (0..GuardedList.borrowLen(arg_locals)) |i| {
                 const arg_local = GuardedList.at(arg_locals, i);
                 const desc_local = GuardedList.at(arg_desc_locals, i);
@@ -16307,8 +16459,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .desc_slot = try self.boxyLocalBytesOffset(desc_local),
                 };
             }
-            const hidden_offs = try self.allocator.alloc(?i32, hidden_locals.len);
-            defer self.allocator.free(hidden_offs);
+            const hidden_offs = try plans_alloc.alloc(?i32, hidden_locals.len);
+            defer plans_alloc.free(hidden_offs);
             for (0..GuardedList.borrowLen(hidden_locals)) |i| {
                 hidden_offs[i] = try self.boxyLocalBytesOffset(GuardedList.at(hidden_locals, i));
             }
@@ -16562,7 +16714,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.codegen.freeGeneral(temp);
                     break :blk slot;
                 },
-                .immediate_i128 => |val| blk: {
+                .immediate_i128 => |imm| blk: {
+                    const val = imm.get();
                     // Store 128-bit immediate to stack
                     const slot = self.codegen.allocStackSlot(16);
                     const temp = try self.allocTempGeneral();
@@ -16590,7 +16743,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.codegen.emitLoadImm(reg, val);
                     return reg;
                 },
-                .immediate_i128 => |val| {
+                .immediate_i128 => |imm| {
+                    const val = imm.get();
                     // Only load low 64 bits
                     const reg = try self.allocTempGeneral();
                     const low: i64 = @truncate(val);
@@ -16716,7 +16870,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     => loc,
                 },
                 .f32 => switch (loc) {
-                    inline .immediate_i64, .immediate_i128 => |v| .{ .immediate_f32 = @floatFromInt(v) },
+                    .immediate_i64 => |v| .{ .immediate_f32 = @floatFromInt(v) },
+                    .immediate_i128 => |imm| .{ .immediate_f32 = @floatFromInt(imm.get()) },
                     .immediate_f64 => base.invariant("LIR/codegen invariant violated: F64 immediate used for F32 layout without an explicit conversion", .{}),
                     .general_reg,
                     .float_reg,
@@ -16730,7 +16885,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     => loc,
                 },
                 .f64 => switch (loc) {
-                    inline .immediate_i64, .immediate_i128 => |v| .{ .immediate_f64 = @floatFromInt(v) },
+                    .immediate_i64 => |v| .{ .immediate_f64 = @floatFromInt(v) },
+                    .immediate_i128 => |imm| .{ .immediate_f64 = @floatFromInt(imm.get()) },
                     .immediate_f32 => base.invariant("LIR/codegen invariant violated: F32 immediate used for F64 layout without an explicit conversion", .{}),
                     .general_reg,
                     .float_reg,
@@ -16744,7 +16900,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     => loc,
                 },
                 .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => switch (loc) {
-                    .immediate_i128 => |v| .{ .immediate_i64 = @truncate(v) },
+                    .immediate_i128 => |imm| .{ .immediate_i64 = @truncate(imm.get()) },
                     .general_reg,
                     .float_reg,
                     .vector_reg,
@@ -16759,7 +16915,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     => loc,
                 },
                 .i128, .u128, .dec => switch (loc) {
-                    .immediate_i64 => |v| .{ .immediate_i128 = v },
+                    .immediate_i64 => |v| .{ .immediate_i128 = .of(v) },
                     .general_reg,
                     .float_reg,
                     .vector_reg,
@@ -17150,7 +17306,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Store 128-bit value to memory at [ptr_reg]
         fn storeI128ToMem(self: *Self, ptr_reg: GeneralReg, loc: ValueLocation) Allocator.Error!void {
             switch (loc) {
-                .immediate_i128 => |val| {
+                .immediate_i128 => |imm| {
+                    const val = imm.get();
                     // Store low 64 bits, then high 64 bits
                     const low: u64 = @truncate(@as(u128, @bitCast(val)));
                     const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
@@ -17264,7 +17421,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.codegen.freeGeneral(reg);
                     return;
                 },
-                .immediate_i128 => |val| {
+                .immediate_i128 => |imm| {
+                    const val = imm.get();
                     const low: u64 = @truncate(@as(u128, @bitCast(val)));
                     const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
                     const reg = try self.allocTempGeneral();
@@ -18205,12 +18363,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn compileProcSpec(self: *Self, proc_id: lir.LIR.LirProcSpecId, proc: LirProcSpec) Allocator.Error!void {
             const ice = base.ice_context.enter(.{ .phase = .codegen, .stage = "dev backend", .proc = self.store.iceContextProc(proc_id) });
             defer ice.leave();
-            const saved_alloca_slots = self.stack_alloca_slots;
-            self.stack_alloca_slots = collections.DenseMap(LocalId, i32).init(self.allocator);
-            defer {
-                self.stack_alloca_slots.deinit();
-                self.stack_alloca_slots = saved_alloca_slots;
-            }
             const key: u32 = @backingInt(proc_id);
             const stack_probe_required = proc.stack_probe == .required;
             // Save current state - procedure has its own scope that shouldn't pollute caller
@@ -18234,28 +18386,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const saved_vector_local_by_reg = self.vector_local_by_reg;
             const saved_vector_local_mask = self.vector_local_mask;
             // The caller's control-flow and location tables move aside for
-            // the procedure's scope rather than being copied: the procedure
-            // starts from empty tables either way, and the swap below hands
-            // the caller's originals back.
-            var saved_local_locations = self.local_locations;
-            self.local_locations = collections.DenseMap(u32, ValueLocation).init(self.allocator);
-            defer saved_local_locations.deinit();
-            const saved_local_location_undo = try self.allocator.dupe(LocalLocationUndo, self.local_location_undo.items);
-            defer {
-                // Clearing the procedure scope retains at least the caller's capacity.
-                self.local_location_undo.clearRetainingCapacity();
-                self.local_location_undo.appendSliceAssumeCapacity(saved_local_location_undo);
-                self.allocator.free(saved_local_location_undo);
-            }
-            var saved_stmt_locations = self.stmt_locations;
-            self.stmt_locations = collections.DenseMap(u32, usize).init(self.allocator);
-            defer saved_stmt_locations.deinit();
-            var saved_join_point_jumps = self.join_point_jumps;
-            self.join_point_jumps = std.AutoHashMap(u32, std.ArrayList(JumpRecord)).init(self.allocator);
-            defer self.deinitJoinPointJumpsMap(&saved_join_point_jumps);
-            var saved_join_point_params = self.join_point_params;
-            self.join_point_params = collections.DenseMap(u32, LocalSpan).init(self.allocator);
-            defer saved_join_point_params.deinit();
+            // the procedure's scope; `leaveProcScope` hands them back.
+            self.enterProcScope();
 
             // Clear state for procedure's scope
             self.clearLocalLocationsRetainingCapacity();
@@ -18347,14 +18479,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.current_stmt_id = saved_current_stmt_id;
                 self.vector_local_by_reg = saved_vector_local_by_reg;
                 self.vector_local_mask = saved_vector_local_mask;
-                // Restore the saved maps by swapping them back into place. This
-                // cannot allocate (so it is safe in an errdefer that cannot
-                // propagate errors): the mutated maps end up in the saved_*
-                // locals, which their own defers deinit.
-                std.mem.swap(@TypeOf(self.local_locations), &self.local_locations, &saved_local_locations);
-                std.mem.swap(@TypeOf(self.stmt_locations), &self.stmt_locations, &saved_stmt_locations);
-                std.mem.swap(@TypeOf(self.join_point_jumps), &self.join_point_jumps, &saved_join_point_jumps);
-                std.mem.swap(@TypeOf(self.join_point_params), &self.join_point_params, &saved_join_point_params);
+                // Restoring the caller's tables cannot allocate, so it is
+                // safe in an errdefer that cannot propagate errors. A failure
+                // after the procedure finished finds them restored already.
+                if (self.in_proc_scope) self.leaveProcScope();
                 self.early_return_ret_layout = saved_early_return_ret_layout;
                 self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
             }
@@ -18467,16 +18595,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // PHASE 2: Extract body and prepend prologue.
             {
-                // Save body bytes
-                const body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return error.OutOfMemory;
-                defer self.allocator.free(body_bytes);
-
-                // Truncate buffer back to body_start
-                self.codegen.emit.buf.shrinkRetainingCapacity(body_start);
-
-                // Emit the prologue using DeferredFrameBuilder (now knows callee_saved_used).
-                // Pass only the actual locals size—the builder adds callee-saved space internally.
-                const prologue_start = self.codegen.currentOffset();
+                // The prologue's size is known only now: emit it after the body, then
+                // move it in front.
+                const prologue_start = body_start;
+                const prologue_at = self.codegen.currentOffset();
                 const actual_locals: u32 = if (comptime target.toCpuArch() == .x86_64)
                     @intCast(-self.codegen.stack_offset - CodeGen.CALLEE_SAVED_AREA_SIZE)
                 else
@@ -18495,10 +18617,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     _ = try frame_builder.emitPrologue(&self.codegen.emit);
                     break :blk frame_builder.actual_stack_alloc;
                 };
-                const prologue_size = self.codegen.currentOffset() - prologue_start;
-
-                // Re-append body
-                self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return error.OutOfMemory;
+                const prologue_size = try self.placeDeferredPrologue(body_start, prologue_at);
 
                 // PHASE 3: Adjust relocation offsets
                 for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
@@ -18589,12 +18708,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.current_proc_frame_locals = saved_current_proc_frame_locals;
             self.current_proc_args = saved_current_proc_args;
             self.current_stmt_id = saved_current_stmt_id;
-            std.mem.swap(@TypeOf(self.local_locations), &self.local_locations, &saved_local_locations);
+            self.leaveProcScope();
             self.vector_local_by_reg = saved_vector_local_by_reg;
             self.vector_local_mask = saved_vector_local_mask;
-            std.mem.swap(@TypeOf(self.stmt_locations), &self.stmt_locations, &saved_stmt_locations);
-            std.mem.swap(@TypeOf(self.join_point_jumps), &self.join_point_jumps, &saved_join_point_jumps);
-            std.mem.swap(@TypeOf(self.join_point_params), &self.join_point_params, &saved_join_point_params);
 
             try self.registerAssembledProc(proc.identity, self.proc_registry.get(key).?.code_start);
             try self.maybeDrainRcHelpers();
@@ -18877,7 +18993,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .stack_i128, .stack_str => |off| off,
                     .stack => |s| s.offset,
                     .list_stack => |li| li.struct_offset,
-                    .immediate_i128 => |val| blk: {
+                    .immediate_i128 => |imm| blk: {
+                        const val = imm.get();
                         const slot = self.codegen.allocStackSlot(@intCast(size));
                         const low: u64 = @truncate(@as(u128, @bitCast(val)));
                         const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
@@ -19125,8 +19242,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 ));
             }
 
-            const frozen_args = try self.allocator.alloc(FrozenCallArg, arg_infos.len);
-            defer self.allocator.free(frozen_args);
+            var frozen_sfa_buffer: [8 * @sizeOf(FrozenCallArg)]u8 align(@alignOf(FrozenCallArg)) = undefined;
+            var frozen_sfa = std.heap.BufferFirstAllocator.init(&frozen_sfa_buffer, self.allocator);
+            const frozen_alloc = frozen_sfa.allocator();
+            const frozen_args = try frozen_alloc.alloc(FrozenCallArg, arg_infos.len);
+            defer frozen_alloc.free(frozen_args);
             for (arg_infos, 0..) |info, i| {
                 if (info.num_regs == 0) {
                     frozen_args[i] = .{
@@ -19745,7 +19865,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                         try self.codegen.emitLoadStack(.w64, ret_reg_0, s.offset);
                                         try self.codegen.emitLoadStack(.w64, ret_reg_1, s.offset + 8);
                                     },
-                                    .immediate_i128 => |val| {
+                                    .immediate_i128 => |imm| {
+                                        const val = imm.get();
                                         const low: i64 = @truncate(val);
                                         const high: i64 = @truncate(val >> 64);
                                         try self.codegen.emitLoadImm(ret_reg_0, low);
@@ -19840,7 +19961,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                         try self.codegen.emitLoadStack(.w64, ret_reg_0, s.offset);
                                         try self.codegen.emitLoadStack(.w64, ret_reg_1, s.offset + 8);
                                     },
-                                    .immediate_i128 => |val| {
+                                    .immediate_i128 => |imm| {
+                                        const val = imm.get();
                                         const low: i64 = @truncate(val);
                                         const high: i64 = @truncate(val >> 64);
                                         try self.codegen.emitLoadImm(ret_reg_0, low);
@@ -19870,7 +19992,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             const stack_offset: i32 = switch (loc) {
                                 .stack => |s| s.offset,
                                 .stack_i128 => |off| off,
-                                .immediate_i128 => |val| blk: {
+                                .immediate_i128 => |imm| blk: {
+                                    const val = imm.get();
                                     const temp = self.codegen.allocStackSlot(16);
                                     try self.codegen.emitLoadImm(ret_reg_0, @truncate(val));
                                     try self.codegen.emitLoadImm(ret_reg_1, @truncate(val >> 64));
@@ -20091,15 +20214,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.freeGenerals(.{ temp_reg, ptr_reg });
         }
 
-        /// Generate code for a control flow statement
         // Per-switch state shared across the explicit-stack continuations that
-        // emit a multi-arm switch. Heap-allocated so every continuation that
-        // touches the same switch references one instance; freed by `switch_end`.
+        // emit a multi-arm switch. Every continuation that touches the same
+        // switch names one entry of `stmt_states`; `switch_end` pops it.
         const SwitchState = struct {
             owner: CFStmtId,
             cond: LocalId,
             switch_env: StmtEnvSnapshot,
-            end_patches: std.ArrayList(usize),
+            /// Where the branches' end jumps start in `cf_patches`.
+            end_patches: u32,
             branches: lir.LirStore.StoreSpanBorrow(lir.CFSwitchBranch, "cf_switch_branches"),
             default_branch: CFStmtId,
             index: usize,
@@ -20115,7 +20238,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         const StrMatchState = struct {
             owner: CFStmtId,
             before_env: StmtEnvSnapshot,
-            miss_patches: std.ArrayList(usize),
+            /// Where the match's miss jumps start in `cf_patches`.
+            miss_patches: u32,
             on_miss: CFStmtId,
             end_patch: usize,
         };
@@ -20132,8 +20256,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             arms: lir.LirStore.StoreSpanBorrow(LIR.StrMatchArm, "str_match_arms"),
             on_miss: CFStmtId,
             index: usize,
-            miss_patches: std.ArrayList(usize),
-            end_patches: std.ArrayList(usize),
+            /// Where the arms' end jumps start in `cf_patches`; the current
+            /// arm's miss jumps follow them.
+            end_patches: u32,
+        };
+        /// The state of one control statement whose continuations are on the
+        /// statement work stack. Control statements nest, so their states
+        /// form a stack: a state is pushed by its statement and popped by its
+        /// last continuation, after every state pushed inside it.
+        const StmtState = union(enum) {
+            switch_n: SwitchState,
+            switch1: SwitchState1,
+            str_match: StrMatchState,
+            str_match_set: StrMatchSetState,
         };
         // Work item for the explicit statement-generation stack. `node` generates
         // one statement; the remaining variants are continuations that emit the
@@ -20142,18 +20277,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             node: CFStmtId,
             join_body: struct { owner: CFStmtId, jp_key: u32, body: CFStmtId },
             join_patch: struct { owner: CFStmtId, jp_key: u32, skip_patch: usize, join_location: usize },
-            switch_branch: *SwitchState,
-            switch_branch_after: struct { state: *SwitchState, skip_patch: usize },
-            switch_default: *SwitchState,
-            switch_end: *SwitchState,
-            switch1_after_branch: *SwitchState1,
-            switch1_end: *SwitchState1,
-            str_match_after_match: *StrMatchState,
-            str_match_end: *StrMatchState,
-            str_match_set_arm: *StrMatchSetState,
-            str_match_set_after_arm: *StrMatchSetState,
-            str_match_set_miss: *StrMatchSetState,
-            str_match_set_end: *StrMatchSetState,
+            // The remaining variants name their statement's entry in `stmt_states`.
+            switch_branch: u32,
+            switch_branch_after: struct { state: u32, skip_patch: usize },
+            switch_default: u32,
+            switch_end: u32,
+            switch1_after_branch: u32,
+            switch1_end: u32,
+            str_match_after_match: u32,
+            str_match_end: u32,
+            str_match_set_arm: u32,
+            str_match_set_after_arm: u32,
+            str_match_set_miss: u32,
+            str_match_set_end: u32,
         };
 
         // Every work item finishes its native scratch accesses before another
@@ -20184,6 +20320,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn generateStmt(self: *Self, root_stmt_id: CFStmtId) Allocator.Error!void {
             const saved_outer_stmt_id = self.current_stmt_id;
             defer self.current_stmt_id = saved_outer_stmt_id;
+            const outer_stmt_states = self.stmt_states.items.len;
+            const outer_cf_patches = self.cf_patches.items.len;
+            errdefer {
+                self.stmt_states.shrinkRetainingCapacity(outer_stmt_states);
+                self.cf_patches.shrinkRetainingCapacity(outer_cf_patches);
+            }
 
             // Most control-flow graphs are shallow, so keep the work stack in a
             // small on-stack buffer and only spill to the heap for deep nesting.
@@ -20337,14 +20479,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .boxy_tag_match => |tag_match| {
                             const miss_patch = try self.generateBoxyTagMatch(tag_match);
                             const branch_env = try self.captureStmtEnv();
-                            const state = try self.allocator.create(SwitchState1);
-                            state.* = .{
+                            const state = try self.pushStmtState(.{ .switch1 = .{
                                 .owner = stmt_id,
                                 .switch_env = branch_env,
                                 .else_patch = miss_patch,
                                 .default_branch = tag_match.on_miss,
                                 .end_patch = 0,
-                            };
+                            } });
                             try work.append(wa, .{ .switch1_after_branch = state });
                             try work.append(wa, .{ .node = tag_match.on_match });
                         },
@@ -20546,7 +20687,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             const jp_key = @backingInt(j.id);
                             try self.registerJoinPointParams(j.id, j.params);
                             if (!self.join_point_jumps.contains(jp_key)) {
-                                try self.join_point_jumps.put(jp_key, std.ArrayList(JumpRecord).empty);
+                                try self.join_point_jumps.put(jp_key, .{});
                             }
                             try self.spillAllVectorLocals();
                             // Emit the remainder first, then (via join_body) the join body,
@@ -20560,7 +20701,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                             const jp_key = @backingInt(jmp.target);
                             if (self.join_point_jumps.getPtr(jp_key)) |jumps| {
-                                try jumps.append(self.allocator, .{ .location = jump_location });
+                                const record: u32 = std.math.cast(u32, self.join_jump_records.items.len) orelse return error.OutOfMemory;
+                                try self.join_jump_records.append(self.allocator, .{ .location = jump_location, .next = no_jump });
+                                if (jumps.last == no_jump) {
+                                    jumps.first = record;
+                                } else {
+                                    self.join_jump_records.items[jumps.last].next = record;
+                                }
+                                jumps.last = record;
                             }
                         },
 
@@ -20622,27 +20770,25 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 self.codegen.freeGeneral(cond_reg);
                                 self.restoreStmtEnv(&switch_env);
 
-                                const state = try self.allocator.create(SwitchState1);
-                                state.* = .{
+                                const state = try self.pushStmtState(.{ .switch1 = .{
                                     .owner = stmt_id,
                                     .switch_env = switch_env,
                                     .else_patch = else_patch,
                                     .default_branch = sw.default_branch,
                                     .end_patch = 0,
-                                };
+                                } });
                                 try work.append(wa, .{ .switch1_after_branch = state });
                                 try work.append(wa, .{ .node = branch.body });
                             } else {
-                                const state = try self.allocator.create(SwitchState);
-                                state.* = .{
+                                const state = try self.pushStmtState(.{ .switch_n = .{
                                     .owner = stmt_id,
                                     .cond = sw.cond,
                                     .switch_env = switch_env,
-                                    .end_patches = std.ArrayList(usize).empty,
+                                    .end_patches = try self.cfPatchMark(),
                                     .branches = branches,
                                     .default_branch = sw.default_branch,
                                     .index = 0,
-                                };
+                                } });
                                 if (branches.len == 0) {
                                     try work.append(wa, .{ .switch_default = state });
                                 } else {
@@ -20668,29 +20814,28 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             self.freeGenerals(.{ compare_reg, cond_reg });
                             self.restoreStmtEnv(&switch_env);
 
-                            const state = try self.allocator.create(SwitchState1);
-                            state.* = .{
+                            const state = try self.pushStmtState(.{ .switch1 = .{
                                 .owner = stmt_id,
                                 .switch_env = switch_env,
                                 .else_patch = else_patch,
                                 .default_branch = sw.uninitialized_branch,
                                 .end_patch = 0,
-                            };
+                            } });
                             try work.append(wa, .{ .switch1_after_branch = state });
                             try work.append(wa, .{ .node = sw.initialized_branch });
                         },
 
                         .str_match => |str_match| {
                             const before_env = try self.captureStmtEnv();
-                            const miss_patches = try self.generateStrMatch(str_match);
-                            const state = try self.allocator.create(StrMatchState);
-                            state.* = .{
+                            const miss_patches = try self.cfPatchMark();
+                            try self.generateStrMatch(str_match);
+                            const state = try self.pushStmtState(.{ .str_match = .{
                                 .owner = stmt_id,
                                 .before_env = before_env,
                                 .miss_patches = miss_patches,
                                 .on_miss = str_match.on_miss,
                                 .end_patch = 0,
-                            };
+                            } });
                             try work.append(wa, .{ .str_match_after_match = state });
                             try work.append(wa, .{ .node = str_match.on_match });
                         },
@@ -20698,17 +20843,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .str_match_set => |str_match_set| {
                             const arms = self.store.getStrMatchArms(str_match_set.arms);
                             const before_env = try self.captureStmtEnv();
-                            const state = try self.allocator.create(StrMatchSetState);
-                            state.* = .{
+                            const state = try self.pushStmtState(.{ .str_match_set = .{
                                 .owner = stmt_id,
                                 .before_env = before_env,
                                 .source = str_match_set.source,
                                 .arms = arms,
                                 .on_miss = str_match_set.on_miss,
                                 .index = 0,
-                                .miss_patches = std.ArrayList(usize).empty,
-                                .end_patches = std.ArrayList(usize).empty,
-                            };
+                                .end_patches = try self.cfPatchMark(),
+                            } });
                             try work.append(wa, .{ .str_match_set_arm = state });
                         },
 
@@ -20820,13 +20963,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     self.current_stmt_id = c.owner;
                     try self.codegen.patchJump(c.skip_patch, self.codegen.currentOffset());
                     if (self.join_point_jumps.get(c.jp_key)) |jumps| {
-                        for (jumps.items) |jump_record| {
-                            try self.codegen.patchJump(jump_record.location, c.join_location);
+                        var record = jumps.first;
+                        while (record != no_jump) : (record = self.join_jump_records.items[record].next) {
+                            try self.codegen.patchJump(self.join_jump_records.items[record].location, c.join_location);
                         }
                     }
                 },
 
-                .switch_branch => |state| {
+                .switch_branch => |state_index| {
+                    const state = &self.stmt_states.items[state_index].switch_n;
                     self.current_stmt_id = state.owner;
                     self.restoreStmtEnv(&state.switch_env);
                     const cond_loc = try self.emitValueLocal(state.cond);
@@ -20835,79 +20980,86 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.emitCmpImm(cond_reg, @bitCast(branch.value));
                     const skip_patch = try self.emitJumpIfNotEqual();
                     self.codegen.freeGeneral(cond_reg);
-                    try work.append(wa, .{ .switch_branch_after = .{ .state = state, .skip_patch = skip_patch } });
+                    try work.append(wa, .{ .switch_branch_after = .{ .state = state_index, .skip_patch = skip_patch } });
                     try work.append(wa, .{ .node = branch.body });
                 },
 
                 .switch_branch_after => |c| {
-                    const state = c.state;
+                    const state = &self.stmt_states.items[c.state].switch_n;
                     self.current_stmt_id = state.owner;
                     const end_patch = try self.codegen.emitJump();
-                    try state.end_patches.append(self.allocator, end_patch);
+                    try self.cf_patches.append(self.allocator, end_patch);
                     try self.codegen.patchJump(c.skip_patch, self.codegen.currentOffset());
                     state.index += 1;
                     if (state.index < state.branches.len) {
-                        try work.append(wa, .{ .switch_branch = state });
+                        try work.append(wa, .{ .switch_branch = c.state });
                     } else {
-                        try work.append(wa, .{ .switch_default = state });
+                        try work.append(wa, .{ .switch_default = c.state });
                     }
                 },
 
-                .switch_default => |state| {
+                .switch_default => |state_index| {
+                    const state = &self.stmt_states.items[state_index].switch_n;
                     self.current_stmt_id = state.owner;
                     self.restoreStmtEnv(&state.switch_env);
-                    try work.append(wa, .{ .switch_end = state });
+                    try work.append(wa, .{ .switch_end = state_index });
                     try work.append(wa, .{ .node = state.default_branch });
                 },
 
-                .switch_end => |state| {
+                .switch_end => |state_index| {
+                    const state = &self.stmt_states.items[state_index].switch_n;
                     self.current_stmt_id = state.owner;
                     const end_offset = self.codegen.currentOffset();
-                    for (state.end_patches.items) |patch| {
+                    for (self.cf_patches.items[state.end_patches..]) |patch| {
                         try self.codegen.patchJump(patch, end_offset);
                     }
                     self.restoreStmtEnv(&state.switch_env);
-                    state.end_patches.deinit(self.allocator);
-                    self.allocator.destroy(state);
+                    self.cf_patches.shrinkRetainingCapacity(state.end_patches);
+                    self.popStmtState(state_index);
                 },
 
-                .switch1_after_branch => |state| {
+                .switch1_after_branch => |state_index| {
+                    const state = &self.stmt_states.items[state_index].switch1;
                     self.current_stmt_id = state.owner;
                     state.end_patch = try self.codegen.emitJump();
                     try self.codegen.patchJump(state.else_patch, self.codegen.currentOffset());
                     self.restoreStmtEnv(&state.switch_env);
-                    try work.append(wa, .{ .switch1_end = state });
+                    try work.append(wa, .{ .switch1_end = state_index });
                     try work.append(wa, .{ .node = state.default_branch });
                 },
 
-                .switch1_end => |state| {
+                .switch1_end => |state_index| {
+                    const state = &self.stmt_states.items[state_index].switch1;
                     self.current_stmt_id = state.owner;
                     try self.codegen.patchJump(state.end_patch, self.codegen.currentOffset());
                     self.restoreStmtEnv(&state.switch_env);
-                    self.allocator.destroy(state);
+                    self.popStmtState(state_index);
                 },
 
-                .str_match_after_match => |state| {
+                .str_match_after_match => |state_index| {
+                    const state = &self.stmt_states.items[state_index].str_match;
                     self.current_stmt_id = state.owner;
                     state.end_patch = try self.codegen.emitJump();
                     const miss_offset = self.codegen.currentOffset();
-                    for (state.miss_patches.items) |patch| {
+                    for (self.cf_patches.items[state.miss_patches..]) |patch| {
                         try self.codegen.patchJump(patch, miss_offset);
                     }
+                    self.cf_patches.shrinkRetainingCapacity(state.miss_patches);
                     self.restoreStmtEnv(&state.before_env);
-                    try work.append(wa, .{ .str_match_end = state });
+                    try work.append(wa, .{ .str_match_end = state_index });
                     try work.append(wa, .{ .node = state.on_miss });
                 },
 
-                .str_match_end => |state| {
+                .str_match_end => |state_index| {
+                    const state = &self.stmt_states.items[state_index].str_match;
                     self.current_stmt_id = state.owner;
                     try self.codegen.patchJump(state.end_patch, self.codegen.currentOffset());
                     self.restoreStmtEnv(&state.before_env);
-                    state.miss_patches.deinit(self.allocator);
-                    self.allocator.destroy(state);
+                    self.popStmtState(state_index);
                 },
 
-                .str_match_set_arm => |state| {
+                .str_match_set_arm => |state_index| {
+                    const state = &self.stmt_states.items[state_index].str_match_set;
                     self.current_stmt_id = state.owner;
                     self.restoreStmtEnv(&state.before_env);
                     if (builtin.mode == .debug and state.index >= state.arms.len) {
@@ -20915,59 +21067,81 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                     const arm = GuardedList.at(state.arms, state.index);
                     const source = try self.emitStrMatchSourceRegs(state.source);
-                    state.miss_patches = try self.generateStrMatchWithSource(arm, source);
+                    // The arm's miss jumps follow the end jumps of the arms before it.
+                    try self.generateStrMatchWithSource(arm, source);
                     self.freeGenerals(.{ source.allocation, source.is_small, source.len, source.bytes });
-                    try work.append(wa, .{ .str_match_set_after_arm = state });
+                    try work.append(wa, .{ .str_match_set_after_arm = state_index });
                     try work.append(wa, .{ .node = arm.on_match });
                 },
 
-                .str_match_set_after_arm => |state| {
+                .str_match_set_after_arm => |state_index| {
+                    const state = &self.stmt_states.items[state_index].str_match_set;
                     self.current_stmt_id = state.owner;
-                    try state.end_patches.append(self.allocator, try self.codegen.emitJump());
+                    const end_patch = try self.codegen.emitJump();
                     const next_arm_offset = self.codegen.currentOffset();
-                    for (state.miss_patches.items) |patch| {
+                    const miss_patches = state.end_patches + state.index;
+                    for (self.cf_patches.items[miss_patches..]) |patch| {
                         try self.codegen.patchJump(patch, next_arm_offset);
                     }
-                    state.miss_patches.deinit(self.allocator);
-                    state.miss_patches = std.ArrayList(usize).empty;
+                    self.cf_patches.shrinkRetainingCapacity(miss_patches);
+                    try self.cf_patches.append(self.allocator, end_patch);
                     state.index += 1;
                     self.restoreStmtEnv(&state.before_env);
                     if (state.index < state.arms.len) {
-                        try work.append(wa, .{ .str_match_set_arm = state });
+                        try work.append(wa, .{ .str_match_set_arm = state_index });
                     } else {
-                        try work.append(wa, .{ .str_match_set_miss = state });
+                        try work.append(wa, .{ .str_match_set_miss = state_index });
                     }
                 },
 
-                .str_match_set_miss => |state| {
+                .str_match_set_miss => |state_index| {
+                    const state = &self.stmt_states.items[state_index].str_match_set;
                     self.current_stmt_id = state.owner;
                     self.restoreStmtEnv(&state.before_env);
-                    try work.append(wa, .{ .str_match_set_end = state });
+                    try work.append(wa, .{ .str_match_set_end = state_index });
                     try work.append(wa, .{ .node = state.on_miss });
                 },
 
-                .str_match_set_end => |state| {
+                .str_match_set_end => |state_index| {
+                    const state = &self.stmt_states.items[state_index].str_match_set;
                     self.current_stmt_id = state.owner;
                     const end_offset = self.codegen.currentOffset();
-                    for (state.end_patches.items) |patch| {
+                    for (self.cf_patches.items[state.end_patches..]) |patch| {
                         try self.codegen.patchJump(patch, end_offset);
                     }
                     self.restoreStmtEnv(&state.before_env);
-                    state.miss_patches.deinit(self.allocator);
-                    state.end_patches.deinit(self.allocator);
-                    self.allocator.destroy(state);
+                    self.cf_patches.shrinkRetainingCapacity(state.end_patches);
+                    self.popStmtState(state_index);
                 },
             };
         }
 
-        fn generateStrMatch(self: *Self, str_match: anytype) Allocator.Error!std.ArrayList(usize) {
+        /// Push a control statement's state and return its index.
+        fn pushStmtState(self: *Self, state: StmtState) Allocator.Error!u32 {
+            const index = std.math.cast(u32, self.stmt_states.items.len) orelse return error.OutOfMemory;
+            try self.stmt_states.append(self.allocator, state);
+            return index;
+        }
+
+        /// Pop the state of the innermost control statement, `index`.
+        fn popStmtState(self: *Self, index: u32) void {
+            std.debug.assert(index + 1 == self.stmt_states.items.len);
+            self.stmt_states.items.len = index;
+        }
+
+        /// The current end of `cf_patches`, where a statement's patches start.
+        fn cfPatchMark(self: *Self) Allocator.Error!u32 {
+            return std.math.cast(u32, self.cf_patches.items.len) orelse error.OutOfMemory;
+        }
+
+        fn generateStrMatch(self: *Self, str_match: anytype) Allocator.Error!void {
             const source = try self.emitStrMatchSourceRegs(str_match.source);
             defer self.codegen.freeGeneral(source.allocation);
             defer self.codegen.freeGeneral(source.is_small);
             defer self.codegen.freeGeneral(source.len);
             defer self.codegen.freeGeneral(source.bytes);
 
-            return try self.generateStrMatchWithSource(str_match, source);
+            try self.generateStrMatchWithSource(str_match, source);
         }
 
         fn emitStrMatchSourceRegs(self: *Self, source: LIR.LocalId) Allocator.Error!StrMatchSourceRegs {
@@ -21002,20 +21176,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return regs;
         }
 
-        fn generateStrMatchWithSource(self: *Self, str_match: anytype, source: StrMatchSourceRegs) Allocator.Error!std.ArrayList(usize) {
-            var miss_patches = std.ArrayList(usize).empty;
-            errdefer miss_patches.deinit(self.allocator);
+        /// Emit the match's checks, appending each jump taken on a miss to
+        /// `cf_patches`.
+        fn generateStrMatchWithSource(self: *Self, str_match: anytype, source: StrMatchSourceRegs) Allocator.Error!void {
+            const miss_patches = &self.cf_patches;
 
             const steps = self.store.getStrMatchSteps(str_match.steps);
-            var capture_offsets = std.ArrayList(?i32).empty;
-            defer capture_offsets.deinit(self.allocator);
-            try capture_offsets.ensureTotalCapacity(self.allocator, steps.len);
+            var capture_sfa_buffer: [8 * @sizeOf(?i32)]u8 align(@alignOf(?i32)) = undefined;
+            var capture_sfa = std.heap.BufferFirstAllocator.init(&capture_sfa_buffer, self.allocator);
+            const capture_alloc = capture_sfa.allocator();
+            const capture_offsets = try capture_alloc.alloc(?i32, steps.len);
+            defer capture_alloc.free(capture_offsets);
             for (0..steps.len) |step_index| {
                 const step = GuardedList.at(steps, step_index);
-                switch (step.capture) {
-                    .discard => try capture_offsets.append(self.allocator, null),
-                    .view => try capture_offsets.append(self.allocator, self.codegen.allocStackSlot(roc_str_size)),
-                }
+                capture_offsets[step_index] = switch (step.capture) {
+                    .discard => null,
+                    .view => self.codegen.allocStackSlot(roc_str_size),
+                };
             }
 
             const cursor_reg = try self.allocTempGeneral();
@@ -21024,8 +21201,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const prefix = self.store.getStringLiteral(str_match.prefix);
             if (prefix.len > 0) {
-                try self.emitCheckBytesAvailable(cursor_reg, source.len, prefix.len, &miss_patches);
-                try self.emitCompareLiteralAtPtr(source.bytes, prefix, &miss_patches);
+                try self.emitCheckBytesAvailable(cursor_reg, source.len, prefix.len, miss_patches);
+                try self.emitCompareLiteralAtPtr(source.bytes, prefix, miss_patches);
                 try self.emitAddUsizeImm(cursor_reg, cursor_reg, prefix.len);
             }
 
@@ -21039,16 +21216,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const is_final_tail_capture = str_match.end == .tail and step_i + 1 == steps.len and delimiter.len == 0;
 
                 if (is_final_tail_capture) {
-                    if (capture_offsets.items[step_i]) |capture_offset| {
+                    if (capture_offsets[step_i]) |capture_offset| {
                         try self.emitStoreStrCapture(capture_offset, source.bytes, source.allocation, source.is_small, capture_start_reg, source.len);
                     }
                     try self.emitMovRegReg(cursor_reg, source.len);
                     continue;
                 }
 
-                try self.emitFindDelimiter(source.bytes, source.len, cursor_reg, delimiter, &miss_patches);
+                try self.emitFindDelimiter(source.bytes, source.len, cursor_reg, delimiter, miss_patches);
 
-                if (capture_offsets.items[step_i]) |capture_offset| {
+                if (capture_offsets[step_i]) |capture_offset| {
                     try self.emitStoreStrCapture(capture_offset, source.bytes, source.allocation, source.is_small, capture_start_reg, cursor_reg);
                 }
 
@@ -21070,9 +21247,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // successful arms copy out of scratch before its region ends.
             for (0..steps.len) |i| switch (GuardedList.at(steps, i).capture) {
                 .discard => {},
-                .view => |local| try self.bindAssignedLocal(local, .{ .stack_str = capture_offsets.items[i].? }),
+                .view => |local| try self.bindAssignedLocal(local, .{ .stack_str = capture_offsets[i].? }),
             };
-            return miss_patches;
         }
 
         fn emitLoadStrSourceShape(
@@ -21950,21 +22126,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
 
                 const body_end = self.codegen.currentOffset();
-                const body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return error.OutOfMemory;
-                defer self.allocator.free(body_bytes);
-
-                self.codegen.emit.buf.shrinkRetainingCapacity(body_start);
-
-                const prologue_start_x86 = self.codegen.currentOffset();
+                // The prologue's size is known only now: emit it after the body, then
+                // move it in front.
+                const prologue_start_x86 = body_start;
+                const prologue_at = self.codegen.currentOffset();
                 try self.codegen.emitPrologueWithAlloc(actual_locals_x86);
-                const prologue_size_x86 = self.codegen.currentOffset() - prologue_start_x86;
+                const prologue_size_x86 = try self.placeDeferredPrologue(body_start, prologue_at);
 
                 prologue_size = @intCast(prologue_size_x86);
                 stack_alloc = actual_locals_x86;
                 frame_size = actual_locals_x86;
                 callee_saved_mask = self.codegen.callee_saved_used;
-
-                self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return error.OutOfMemory;
 
                 for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
                     reloc.adjustOffset(prologue_size_x86);
@@ -22079,21 +22251,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
 
                 const body_end = self.codegen.currentOffset();
-                const body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return error.OutOfMemory;
-                defer self.allocator.free(body_bytes);
-
-                self.codegen.emit.buf.shrinkRetainingCapacity(body_start);
-
-                const prologue_start = self.codegen.currentOffset();
+                // The prologue's size is known only now: emit it after the body, then
+                // move it in front.
+                const prologue_start = body_start;
+                const prologue_at = self.codegen.currentOffset();
                 {
                     var frame_builder = CodeGen.DeferredFrameBuilder.init();
                     frame_builder.setCalleeSavedMask(self.codegen.callee_saved_used);
                     frame_builder.setStackSize(actual_locals);
                     _ = try frame_builder.emitPrologue(&self.codegen.emit);
                 }
-                const prologue_size_val = self.codegen.currentOffset() - prologue_start;
-
-                self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return error.OutOfMemory;
+                const prologue_size_val = try self.placeDeferredPrologue(body_start, prologue_at);
 
                 for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
                     reloc.adjustOffset(prologue_size_val);
@@ -22142,16 +22310,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
 
                 const body_end = self.codegen.currentOffset();
-                const body_bytes = self.allocator.dupe(u8, self.codegen.emit.buf.items[body_start..body_end]) catch return error.OutOfMemory;
-                defer self.allocator.free(body_bytes);
-
-                self.codegen.emit.buf.shrinkRetainingCapacity(body_start);
-
-                const prologue_start_x86 = self.codegen.currentOffset();
+                // The prologue's size is known only now: emit it after the body, then
+                // move it in front.
+                const prologue_start_x86 = body_start;
+                const prologue_at = self.codegen.currentOffset();
                 try self.codegen.emitPrologueWithAlloc(actual_locals_x86);
-                const prologue_size_x86 = self.codegen.currentOffset() - prologue_start_x86;
-
-                self.codegen.emit.buf.appendSlice(self.allocator, body_bytes) catch return error.OutOfMemory;
+                const prologue_size_x86 = try self.placeDeferredPrologue(body_start, prologue_at);
 
                 for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
                     reloc.adjustOffset(prologue_size_x86);

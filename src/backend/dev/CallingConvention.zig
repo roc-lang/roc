@@ -156,9 +156,13 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// defined when every stack argument was placed that way.
         implicit_stack_arg_count: usize = 0,
         stack_arg_size: u32 = 0,
-        /// Independently copied outgoing stack pieces. Aggregates are
-        /// decomposed into naturally sized 1/2/4/8-byte copies.
-        stack_args: std.ArrayListUnmanaged(StackArg) = .empty,
+        /// Independently copied outgoing stack pieces (see `stackArgs`).
+        /// Aggregates are decomposed into naturally sized 1/2/4/8-byte
+        /// copies. Most calls need only a few, which stay inline; a call
+        /// needing more moves them all to `stack_args_spilled`.
+        stack_args_inline: [inline_stack_arg_count]StackArg = undefined,
+        stack_args_inline_len: u8 = 0,
+        stack_args_spilled: std.ArrayListUnmanaged(StackArg) = .empty,
         return_by_ptr: bool = false,
         /// RBP-relative offset where R12 is saved (only used on Windows x64)
         /// Set via saveR12 before adding arguments that might clobber R12
@@ -190,7 +194,17 @@ pub fn CallBuilder(comptime EmitType: type) type {
         }
 
         pub fn deinit(self: *Self) void {
-            self.stack_args.deinit(self.emit.allocator);
+            self.stack_args_spilled.deinit(self.emit.allocator);
+        }
+
+        const inline_stack_arg_count = 8;
+
+        /// The outgoing stack pieces added so far, in order.
+        pub fn stackArgs(self: *Self) []StackArg {
+            return if (self.stack_args_spilled.capacity == 0)
+                self.stack_args_inline[0..self.stack_args_inline_len]
+            else
+                self.stack_args_spilled.items;
         }
 
         /// Set up return by pointer (for large return types)
@@ -315,7 +329,19 @@ pub fn CallBuilder(comptime EmitType: type) type {
 
         fn addStackArg(self: *Self, byte_offset: u32, size: u8, src: ArgSource) Allocator.Error!void {
             std.debug.assert(size == 1 or size == 2 or size == 4 or size == 8);
-            try self.stack_args.append(self.emit.allocator, .{ .byte_offset = byte_offset, .size = size, .src = src });
+            const arg: StackArg = .{ .byte_offset = byte_offset, .size = size, .src = src };
+            if (self.stack_args_spilled.capacity == 0) {
+                if (self.stack_args_inline_len < inline_stack_arg_count) {
+                    self.stack_args_inline[self.stack_args_inline_len] = arg;
+                    self.stack_args_inline_len += 1;
+                } else {
+                    try self.stack_args_spilled.ensureTotalCapacity(self.emit.allocator, 2 * inline_stack_arg_count);
+                    self.stack_args_spilled.appendSliceAssumeCapacity(&self.stack_args_inline);
+                    self.stack_args_spilled.appendAssumeCapacity(arg);
+                }
+            } else {
+                try self.stack_args_spilled.append(self.emit.allocator, arg);
+            }
             self.stack_arg_size = @max(self.stack_arg_size, byte_offset + size);
         }
 
@@ -337,15 +363,15 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// entrypoints are.
         pub fn packStackArgsForCAbi(self: *Self, param_abi_sizes: []const u8) void {
             if (comptime !target_packs_stack_args) return;
-            if (self.stack_args.items.len == 0) return;
-            std.debug.assert(self.stack_args.items.len == self.implicit_stack_arg_count);
+            if (self.stackArgs().len == 0) return;
+            std.debug.assert(self.stackArgs().len == self.implicit_stack_arg_count);
             std.debug.assert(self.float_arg_index == 0);
 
-            const first_stack_param = param_abi_sizes.len - self.stack_args.items.len;
+            const first_stack_param = param_abi_sizes.len - self.stackArgs().len;
             std.debug.assert(first_stack_param == CC_EMIT.PARAM_REGS.len);
 
             var cursor: u32 = 0;
-            for (self.stack_args.items, 0..) |*arg, i| {
+            for (self.stackArgs(), 0..) |*arg, i| {
                 const size = param_abi_sizes[first_stack_param + i];
                 std.debug.assert(size == 1 or size == 2 or size == 4 or size == 8);
                 // A pointer-valued argument is always a full eightbyte, so a
@@ -697,7 +723,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
             if (comptime !is_x86_64) return;
 
             // Check if any stack arg needs SCRATCH_REG as a temp
-            const needs_scratch = for (self.stack_args.items) |arg| {
+            const needs_scratch = for (self.stackArgs()) |arg| {
                 if (arg.src != .from_reg) break true;
             } else false;
             if (!needs_scratch) return;
@@ -882,7 +908,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
             // Assert stack is 16-byte aligned
             std.debug.assert(total_space % 16 == 0);
             // Assert shadow space is included when we have stack args
-            std.debug.assert(self.stack_args.items.len == 0 or total_space >= CC_EMIT.SHADOW_SPACE + self.stack_arg_size);
+            std.debug.assert(self.stackArgs().len == 0 or total_space >= CC_EMIT.SHADOW_SPACE + self.stack_arg_size);
 
             if (comptime is_x86_64) {
                 // Save SCRATCH_REG if it conflicts with stack arg processing
@@ -897,7 +923,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
                 // because the parallel move may clobber registers that stack args
                 // source from (e.g., rhs operand in RCX/RDX when those are also
                 // param register destinations for the first 4 args).
-                for (self.stack_args.items) |arg| {
+                for (self.stackArgs()) |arg| {
                     try self.emitStackArgX86(arg);
                 }
             } else if (comptime is_aarch64) {
@@ -906,7 +932,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     try self.adjustStackPointerAarch64(.down, total_space);
                 }
 
-                for (self.stack_args.items) |arg| {
+                for (self.stackArgs()) |arg| {
                     try self.emitStackArgAarch64(arg);
                 }
             }
@@ -2096,14 +2122,14 @@ test "aarch64 outgoing stack assignments preserve compact byte offsets" {
     try builder.addStackMemArgAt(2, .FP, -16, 2, .none);
     try builder.addStackMemArgAt(4, .FP, -24, 4, .none);
 
-    try std.testing.expectEqual(@as(usize, 3), builder.stack_args.items.len);
+    try std.testing.expectEqual(@as(usize, 3), builder.stackArgs().len);
     try std.testing.expectEqual(@as(u32, 8), builder.stack_arg_size);
-    try std.testing.expectEqual(@as(u32, 0), builder.stack_args.items[0].byte_offset);
-    try std.testing.expectEqual(@as(u8, 1), builder.stack_args.items[0].size);
-    try std.testing.expectEqual(@as(u32, 2), builder.stack_args.items[1].byte_offset);
-    try std.testing.expectEqual(@as(u8, 2), builder.stack_args.items[1].size);
-    try std.testing.expectEqual(@as(u32, 4), builder.stack_args.items[2].byte_offset);
-    try std.testing.expectEqual(@as(u8, 4), builder.stack_args.items[2].size);
+    try std.testing.expectEqual(@as(u32, 0), builder.stackArgs()[0].byte_offset);
+    try std.testing.expectEqual(@as(u8, 1), builder.stackArgs()[0].size);
+    try std.testing.expectEqual(@as(u32, 2), builder.stackArgs()[1].byte_offset);
+    try std.testing.expectEqual(@as(u8, 2), builder.stackArgs()[1].size);
+    try std.testing.expectEqual(@as(u32, 4), builder.stackArgs()[2].byte_offset);
+    try std.testing.expectEqual(@as(u8, 4), builder.stackArgs()[2].size);
 
     try builder.call(0x12345678);
 }
@@ -2454,7 +2480,7 @@ test "x86_64 by-value stack arguments of any size copy every piece" {
     defer builder.deinit();
     // A 64 KiB aggregate passed in memory is 8,192 eightbyte copies.
     try builder.addStackMemArgAt(0, .RBP, -65536, 65536, .none);
-    try std.testing.expectEqual(@as(usize, 8192), builder.stack_args.items.len);
+    try std.testing.expectEqual(@as(usize, 8192), builder.stackArgs().len);
     try std.testing.expectEqual(@as(u32, 65536), builder.stack_arg_size);
     try builder.call(0x12345678);
 }
@@ -2470,7 +2496,7 @@ test "aarch64 outgoing stack areas beyond 12-bit immediates adjust SP exactly" {
     var builder = try Builder.init(&emit, &stack_offset);
     defer builder.deinit();
     try builder.addStackMemArgAt(0, .FP, -65536, 65536, .none);
-    try std.testing.expectEqual(@as(usize, 8192), builder.stack_args.items.len);
+    try std.testing.expectEqual(@as(usize, 8192), builder.stackArgs().len);
     try builder.call(0x12345678);
 
     // `sub sp, sp, #16, lsl #12` reserves the 65,536-byte area in one step.

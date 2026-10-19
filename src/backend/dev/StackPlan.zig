@@ -10,14 +10,30 @@ const none = std.math.maxInt(u32);
 const Self = @This();
 
 allocator: Allocator,
-/// Each local's index in `values`, by local id, or `none`. Planning hands one
-/// column from plan to plan (see `Indexes`).
+/// Each local's index in `values`, by local id, or `none`.
 local_indices: std.ArrayList(u32) = .empty,
 values: std.ArrayList(Value) = .empty,
 nodes: std.ArrayList(Node) = .empty,
 edges: std.ArrayList(Edge) = .empty,
 accesses: std.ArrayList(Access) = .empty,
 slots: std.ArrayList(Slot) = .empty,
+/// Every value's live ranges, one contiguous run per value.
+ranges: std.ArrayList(Range) = .empty,
+
+// Solving's working storage, kept with the plan so a plan reused for the
+// next procedure (see `Indexes`) allocates only past its earlier sizes.
+blocks: std.ArrayList(Block) = .empty,
+block_states: std.ArrayList(BlockState) = .empty,
+loop_epochs: std.ArrayList(u32) = .empty,
+units: std.ArrayList(Unit) = .empty,
+write_loops: std.ArrayList(u32) = .empty,
+slot_order: std.ArrayList(u32) = .empty,
+size_classes: std.ArrayList(SizeClass) = .empty,
+/// Each slot size's class in `size_classes`. Sizes are structural keys, not
+/// compiler identities.
+class_of_size: std.AutoHashMapUnmanaged(u32, u32) = .empty,
+reservations: std.ArrayList(Reservations) = .empty,
+reservation_nodes: std.ArrayList(Reservations.Node) = .empty,
 
 /// Indexes from store ids to a procedure's plan, which planning keeps empty
 /// between procedures. A procedure's statement, join, and local ids can be
@@ -25,21 +41,40 @@ slots: std.ArrayList(Slot) = .empty,
 /// procedure a worker plans, and each procedure costs only its own entries.
 pub const Indexes = struct {
     allocator: Allocator,
-    /// A plan's local indices (see `Self.local_indices`).
-    local_indices: std.ArrayList(u32) = .empty,
+    /// The plan storage handed from procedure to procedure (see `takePlan`).
+    plan: Self,
     /// Each planned statement's node, by statement id, or `none`.
     node_of_stmt: std.ArrayList(u32) = .empty,
     /// Each declared join's body.
     joins: collections.DenseMap(lir.LIR.JoinPointId, lir.CFStmtId),
 
     pub fn init(allocator: Allocator) Indexes {
-        return .{ .allocator = allocator, .joins = collections.DenseMap(lir.LIR.JoinPointId, lir.CFStmtId).init(allocator) };
+        return .{
+            .allocator = allocator,
+            .plan = Self.init(allocator),
+            .joins = collections.DenseMap(lir.LIR.JoinPointId, lir.CFStmtId).init(allocator),
+        };
     }
 
     pub fn deinit(self: *Indexes) void {
-        self.local_indices.deinit(self.allocator);
+        self.plan.deinit();
         self.node_of_stmt.deinit(self.allocator);
         self.joins.deinit();
+    }
+
+    /// An empty plan holding the storage of the procedures planned before.
+    pub fn takePlan(self: *Indexes) Self {
+        const plan = self.plan;
+        self.plan = Self.init(self.allocator);
+        return plan;
+    }
+
+    /// Empty `plan` and keep its storage for the next procedure.
+    pub fn keepPlan(self: *Indexes, plan: *Self) void {
+        plan.clearRetainingCapacity();
+        self.plan.deinit();
+        self.plan = plan.*;
+        plan.* = Self.init(self.allocator);
     }
 
     /// The node planned for `stmt`.
@@ -75,8 +110,16 @@ pub const Value = struct {
     definitions: u32 = 0,
     mutable: bool = false,
     size: u32 = 0,
-    slot: ?u32 = null,
-    ranges: Ranges = .{},
+    /// The value's physical slot, or `none`.
+    slot: u32 = none,
+    /// The value's run in `ranges`.
+    range_start: u32 = 0,
+    range_len: u32 = 0,
+
+    /// The value's physical slot.
+    pub fn slotIndex(self: Value) ?u32 {
+        return if (self.slot == none) null else self.slot;
+    }
 };
 const Node = struct {
     succ: u32 = none,
@@ -90,38 +133,10 @@ const Edge = struct { from: u32, to: u32, next_succ: u32, next_pred: u32 };
 const Access = struct { node: u32, value: u32, read: bool, write: bool };
 const Block = struct { first: u32, start: u32, end: u32 };
 const Range = struct { start: u32, end: u32 };
-// Most locals have one interval. Keep it inline so a long straight-line
-// procedure never performs one heap allocation per temporary or stack slot.
-const Ranges = struct {
-    single: [1]Range = undefined,
-    single_len: usize = 0,
-    multiple: std.ArrayList(Range) = .empty,
-
-    fn items(self: *const Ranges) []const Range {
-        return if (self.multiple.capacity == 0) self.single[0..self.single_len] else self.multiple.items;
-    }
-    fn mutableItems(self: *Ranges) []Range {
-        return if (self.multiple.capacity == 0) self.single[0..self.single_len] else self.multiple.items;
-    }
-    fn truncate(self: *Ranges, len: usize) void {
-        if (self.multiple.capacity == 0) self.single_len = len else self.multiple.items.len = len;
-    }
-    fn append(self: *Ranges, allocator: Allocator, range: Range) Allocator.Error!void {
-        if (self.multiple.capacity == 0) {
-            if (self.single_len == 0) {
-                self.single[0] = range;
-                self.single_len = 1;
-                return;
-            }
-            try self.multiple.ensureTotalCapacity(allocator, 2);
-            self.multiple.appendAssumeCapacity(self.single[0]);
-        }
-        try self.multiple.append(allocator, range);
-    }
-    fn deinit(self: *Ranges, allocator: Allocator) void {
-        self.multiple.deinit(allocator);
-    }
-};
+const BlockState = struct { epoch: u32 = none, last_write: ?u32 = null, propagated: bool = false };
+/// A unit of propagation: a block, or a loop that writes the value nowhere
+/// and so holds it at every position or at none.
+const Unit = struct { loop: bool, index: u32 };
 /// A physical slot's size.
 pub const Slot = struct {
     size: u32,
@@ -136,30 +151,45 @@ fn rangeOrder(a: Range, b: Range) std.math.Order {
 pub fn init(allocator: Allocator) Self {
     return .{ .allocator = allocator };
 }
-/// A plan indexing its locals in `local_indices`, which holds no entries.
-pub fn initWithLocalIndices(allocator: Allocator, local_indices: std.ArrayList(u32)) Self {
-    return .{ .allocator = allocator, .local_indices = local_indices };
-}
-/// Release all procedure-owned analysis storage.
+/// Release all storage.
 pub fn deinit(self: *Self) void {
-    self.local_indices.deinit(self.allocator);
-    self.deinitAnalysis();
+    const a = self.allocator;
+    self.local_indices.deinit(a);
+    self.values.deinit(a);
+    self.nodes.deinit(a);
+    self.edges.deinit(a);
+    self.accesses.deinit(a);
+    self.slots.deinit(a);
+    self.ranges.deinit(a);
+    self.blocks.deinit(a);
+    self.block_states.deinit(a);
+    self.loop_epochs.deinit(a);
+    self.units.deinit(a);
+    self.write_loops.deinit(a);
+    self.slot_order.deinit(a);
+    for (self.size_classes.items) |*class| class.deinit(a);
+    self.size_classes.deinit(a);
+    self.class_of_size.deinit(a);
+    self.reservations.deinit(a);
+    self.reservation_nodes.deinit(a);
 }
-/// Release the analysis storage and return the local index column holding
-/// no entries, for the next plan.
-pub fn deinitKeepingLocalIndices(self: *Self) std.ArrayList(u32) {
+/// Empty the plan for another procedure, keeping its storage.
+pub fn clearRetainingCapacity(self: *Self) void {
     for (self.values.items) |v| self.local_indices.items[@backingInt(v.local)] = none;
-    const local_indices = self.local_indices;
-    self.deinitAnalysis();
-    return local_indices;
+    self.values.clearRetainingCapacity();
+    self.nodes.clearRetainingCapacity();
+    self.edges.clearRetainingCapacity();
+    self.accesses.clearRetainingCapacity();
+    self.slots.clearRetainingCapacity();
+    self.ranges.clearRetainingCapacity();
+    // `size_classes` keeps its entries (and their storage) past the classes
+    // in use; `assignSlots` empties each class it takes into use.
+    self.class_of_size.clearRetainingCapacity();
 }
-fn deinitAnalysis(self: *Self) void {
-    for (self.values.items) |*v| v.ranges.deinit(self.allocator);
-    self.values.deinit(self.allocator);
-    self.nodes.deinit(self.allocator);
-    self.edges.deinit(self.allocator);
-    self.accesses.deinit(self.allocator);
-    self.slots.deinit(self.allocator);
+/// The live ranges of value `index`, sorted and disjoint once solved.
+pub fn valueRanges(self: *const Self, index: u32) []const Range {
+    const v = self.values.items[index];
+    return self.ranges.items[v.range_start..][0..v.range_len];
 }
 /// Intern a local in the compact procedure domain.
 pub fn local(self: *Self, id: lir.LocalId) Allocator.Error!u32 {
@@ -239,18 +269,19 @@ fn accessLess(self: *Self, a: Access, b: Access) bool {
 fn rangeLess(_: void, a: Range, b: Range) bool {
     return a.start < b.start;
 }
-fn compactRanges(ranges: *Ranges) void {
-    std.mem.sort(Range, ranges.mutableItems(), {}, rangeLess);
+/// Sort and merge `ranges` in place; returns how many remain.
+fn compactRanges(ranges: []Range) usize {
+    std.mem.sort(Range, ranges, {}, rangeLess);
     var count: usize = 0;
-    for (ranges.items()) |r| {
-        if (count > 0 and r.start <= ranges.items()[count - 1].end) {
-            ranges.mutableItems()[count - 1].end = @max(r.end, ranges.items()[count - 1].end);
+    for (ranges) |r| {
+        if (count > 0 and r.start <= ranges[count - 1].end) {
+            ranges[count - 1].end = @max(r.end, ranges[count - 1].end);
         } else {
-            ranges.mutableItems()[count] = r;
+            ranges[count] = r;
             count += 1;
         }
     }
-    ranges.truncate(count);
+    return count;
 }
 /// The block graph of a procedure, its loop-nesting forest, and each loop's
 /// position coverage.
@@ -483,7 +514,7 @@ const BlockStructure = struct {
     }
 
     /// Append every position a loop's blocks cover.
-    fn appendCoverage(self: *const BlockStructure, allocator: Allocator, loop: u32, blocks: []const Block, ranges: *Ranges) Allocator.Error!void {
+    fn appendCoverage(self: *const BlockStructure, allocator: Allocator, loop: u32, blocks: []const Block, ranges: *std.ArrayList(Range)) Allocator.Error!void {
         if (self.contiguous[loop]) {
             try ranges.append(allocator, .{ .start = self.first_position[loop], .end = self.end_position[loop] });
             return;
@@ -541,17 +572,17 @@ fn lastNodeOf(self: *const Self, block: Block) u32 {
 /// Solve exact read-before-write lifetimes and assign reusable physical slots.
 /// `size == 0` values have externally assigned storage or no represented bytes.
 pub fn solve(self: *Self) Allocator.Error!void {
-    var blocks: std.ArrayList(Block) = .empty;
-    defer blocks.deinit(self.allocator);
+    const blocks = &self.blocks;
+    blocks.clearRetainingCapacity();
     var position: u32 = 0;
     for (self.nodes.items, 0..) |n, i| {
         if (n.block != none) continue;
         if (n.pred_count == 1 and self.nodes.items[self.edges.items[n.pred].from].succ_count == 1) continue;
-        try self.appendBlock(&blocks, @intCast(i), &position);
+        try self.appendBlock(blocks, @intCast(i), &position);
     }
     // A component consisting entirely of a cycle has no distinguished entry.
     for (self.nodes.items, 0..) |n, i| if (n.block == none) {
-        try self.appendBlock(&blocks, @intCast(i), &position);
+        try self.appendBlock(blocks, @intCast(i), &position);
     };
     for (self.accesses.items) |*a| {
         const root = self.representative(a.value);
@@ -565,20 +596,18 @@ pub fn solve(self: *Self) Allocator.Error!void {
     var structure = try BlockStructure.init(self, blocks.items);
     defer structure.deinit(self.allocator);
     std.mem.sort(Access, self.accesses.items, self, accessLess);
-    const BlockState = struct { epoch: u32 = none, last_write: ?u32 = null, propagated: bool = false };
-    const states = try self.allocator.alloc(BlockState, blocks.items.len);
-    defer self.allocator.free(states);
+    try self.block_states.resize(self.allocator, blocks.items.len);
+    const states = self.block_states.items;
     @memset(states, .{});
-    const loop_epochs = try self.allocator.alloc(u32, structure.forest.loops.len);
-    defer self.allocator.free(loop_epochs);
+    try self.loop_epochs.resize(self.allocator, structure.forest.loops.len);
+    const loop_epochs = self.loop_epochs.items;
     @memset(loop_epochs, none);
-    // A unit of propagation: a block, or a loop that writes the value nowhere
-    // and so holds it at every position or at none.
-    const Unit = struct { loop: bool, index: u32 };
-    var work: std.ArrayList(Unit) = .empty;
-    defer work.deinit(self.allocator);
-    var write_loops: std.ArrayList(u32) = .empty;
-    defer write_loops.deinit(self.allocator);
+    const work = &self.units;
+    work.clearRetainingCapacity();
+    const write_loops = &self.write_loops;
+    write_loops.clearRetainingCapacity();
+    const ranges = &self.ranges;
+    std.debug.assert(ranges.items.len == 0);
     var begin: usize = 0;
     while (begin < self.accesses.items.len) {
         const value = self.accesses.items[begin].value;
@@ -586,7 +615,7 @@ pub fn solve(self: *Self) Allocator.Error!void {
         while (end < self.accesses.items.len and self.accesses.items[end].value == value) : (end += 1) {}
         defer begin = end;
         if (self.values.items[value].size == 0) continue;
-        const ranges = &self.values.items[value].ranges;
+        const range_start = ranges.items.len;
 
         // The loop-tree positions of the loops holding the value's writes:
         // a loop is transparent to the value when none lies within it.
@@ -659,7 +688,11 @@ pub fn solve(self: *Self) Allocator.Error!void {
                 if (state.last_write == null) try work.append(self.allocator, .{ .loop = false, .index = pred });
             }
         }
-        compactRanges(ranges);
+        const range_len = compactRanges(ranges.items[range_start..]);
+        ranges.shrinkRetainingCapacity(range_start + range_len);
+        const v = &self.values.items[value];
+        v.range_start = std.math.cast(u32, range_start) orelse return error.OutOfMemory;
+        v.range_len = std.math.cast(u32, range_len) orelse return error.OutOfMemory;
     }
     try self.assignSlots();
 }
@@ -670,46 +703,52 @@ fn busyOrder(_: void, a: Busy, b: Busy) std.math.Order {
 const SizeClass = struct {
     busy: std.PriorityQueue(Busy, void, busyOrder),
     available: std.ArrayList(u32) = .empty,
+
+    fn deinit(self: *SizeClass, allocator: Allocator) void {
+        self.busy.deinit(allocator);
+        self.available.deinit(allocator);
+    }
 };
 fn valueLess(self: *Self, a: u32, b: u32) bool {
-    const x = self.values.items[a].ranges.items()[0].start;
-    const y = self.values.items[b].ranges.items()[0].start;
+    const x = self.valueRanges(a)[0].start;
+    const y = self.valueRanges(b)[0].start;
     return if (x == y) a < b else x < y;
 }
 fn assignSlots(self: *Self) Allocator.Error!void {
-    var order: std.ArrayList(u32) = .empty;
-    defer order.deinit(self.allocator);
-    for (self.values.items, 0..) |v, i| if (v.ranges.items().len != 0) {
+    const order = &self.slot_order;
+    order.clearRetainingCapacity();
+    for (self.values.items, 0..) |v, i| if (v.range_len != 0) {
         try order.append(self.allocator, @intCast(i));
     };
     std.mem.sort(u32, order.items, self, valueLess);
-    // Sizes are structural keys, not compiler identities.
-    var classes = std.AutoHashMap(u32, SizeClass).init(self.allocator);
-    defer {
-        var it = classes.valueIterator();
-        while (it.next()) |c| {
-            c.busy.deinit(self.allocator);
-            c.available.deinit(self.allocator);
-        }
-        classes.deinit();
-    }
+    std.debug.assert(self.class_of_size.count() == 0);
     // Each slot's reservations. Every live range of every ordered value gets
-    // exactly one node, so the nodes are one allocation that lives only
-    // while slots are assigned.
-    var reservations: std.ArrayList(Reservations) = .empty;
-    defer reservations.deinit(self.allocator);
+    // exactly one node, so the nodes are one block that lives only while
+    // slots are assigned.
+    const reservations = &self.reservations;
+    reservations.clearRetainingCapacity();
     var node_count: usize = 0;
-    for (order.items) |index| node_count += self.values.items[index].ranges.items().len;
-    const nodes = try self.allocator.alloc(Reservations.Node, node_count);
-    defer self.allocator.free(nodes);
+    for (order.items) |index| node_count += self.values.items[index].range_len;
+    try self.reservation_nodes.resize(self.allocator, node_count);
+    const nodes = self.reservation_nodes.items;
     var next_node: usize = 0;
     for (order.items) |index| {
         const value = &self.values.items[index];
-        const ranges = value.ranges.items();
+        const ranges = self.valueRanges(index);
         const start = ranges[0].start;
-        const entry = try classes.getOrPut(value.size);
-        if (!entry.found_existing) entry.value_ptr.* = .{ .busy = std.PriorityQueue(Busy, void, busyOrder).initContext({}) };
-        const class = entry.value_ptr;
+        const entry = try self.class_of_size.getOrPut(self.allocator, value.size);
+        if (!entry.found_existing) {
+            // Classes past those in use hold an earlier procedure's storage.
+            const class_index = self.class_of_size.count() - 1;
+            if (class_index == self.size_classes.items.len) {
+                try self.size_classes.append(self.allocator, .{ .busy = std.PriorityQueue(Busy, void, busyOrder).initContext({}) });
+            } else {
+                self.size_classes.items[class_index].busy.clearRetainingCapacity();
+                self.size_classes.items[class_index].available.clearRetainingCapacity();
+            }
+            entry.value_ptr.* = std.math.cast(u32, class_index) orelse return error.OutOfMemory;
+        }
+        const class = &self.size_classes.items[entry.value_ptr.*];
         while (class.busy.peek()) |busy| {
             if (busy.end > start) break;
             _ = class.busy.pop();
@@ -843,7 +882,7 @@ test "stack plan matches exact liveness on generated typed scalar graphs" {
             const occupied = live_in[i] | live_out[i] | writes[i];
             for (0..locals_count) |v| {
                 var planned_live = false;
-                for (plan.values.items[v].ranges.items()) |range| {
+                for (plan.valueRanges(@intCast(v))) |range| {
                     const pos = plan.nodes.items[i].position;
                     planned_live = planned_live or (range.start <= pos and pos < range.end);
                 }
@@ -907,7 +946,7 @@ test "stack plan uses linear interval storage for a wide straight-line block" {
     }
     try plan.solve();
     try std.testing.expectEqual(@as(usize, count), plan.slots.items.len);
-    for (plan.values.items) |v| try std.testing.expectEqual(@as(usize, 1), v.ranges.items().len);
+    for (plan.values.items) |v| try std.testing.expectEqual(@as(u32, 1), v.range_len);
 }
 
 fn checkLifetimeHoles(allocator: Allocator) (Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
