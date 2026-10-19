@@ -563,6 +563,38 @@ pub const Program = struct {
         return @field(self, field).borrowSpan(start, span_.len);
     }
 
+    /// The rows of `span_` when it lies in the frozen source a body shard
+    /// borrows; null for a span the program owns. The frozen source never
+    /// changes while the shard is queried, so these rows stay valid across
+    /// appends to the shard.
+    pub fn frozenSpanRows(self: *const Program, comptime T: type, span_: Span(T)) ?[]const T {
+        const field = comptime spanField(T);
+        if (span_.len == 0) return &.{};
+        if (span_.start >= self.prefixLen(field)) return null;
+        std.debug.assert(span_.len <= self.prefixLen(field) - span_.start);
+        return @field(self.body_prefix.?.source, field).unsafeRawItemsForView()[span_.start..][0..span_.len];
+    }
+
+    /// Borrow the rows of any program span.
+    pub fn spanRows(self: *const Program, comptime T: type, span_: Span(T)) ProgramSpanBorrow(T, spanField(T)) {
+        return self.bodySpan(T, comptime spanField(T), span_);
+    }
+
+    fn spanField(comptime T: type) []const u8 {
+        return switch (T) {
+            ExprId => "expr_ids",
+            PatId => "pat_ids",
+            StmtId => "stmt_ids",
+            TypedLocal => "typed_locals",
+            FieldExpr => "field_exprs",
+            CaptureOperand => "capture_operands",
+            RecordDestruct => "record_destructs",
+            Branch => "branches",
+            IfBranch => "if_branches",
+            else => @compileError("no program span stores " ++ @typeName(T)),
+        };
+    }
+
     fn appendBodySpan(self: *Program, comptime T: type, comptime field: []const u8, values: []const T) std.mem.Allocator.Error!Span(T) {
         var span_ = try Common.appendSpan(T, &@field(self, field), self.allocator, values);
         span_.start += @intCast(self.prefixLen(field));
