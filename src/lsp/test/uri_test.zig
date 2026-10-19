@@ -4,7 +4,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const uri = @import("lsp").uri;
 
-fn expectPathUri(path: []const u8, expected: []const u8) !void {
+fn expectPathUri(path: []const u8, expected: []const u8) (std.mem.Allocator.Error || error{TestExpectedEqual})!void {
     const allocator = std.testing.allocator;
     const actual = try uri.pathToUri(allocator, path);
     defer allocator.free(actual);
