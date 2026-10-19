@@ -5615,7 +5615,7 @@ const Inserter = struct {
             inline .str_match, .str_match_set => |match| try uses.append(gpa, match.source),
             .boxy_tag_match => |tag_match| {
                 try uses.append(gpa, tag_match.source);
-                if (tag_match.source_desc.localOrNull()) |local| try uses.append(gpa, local);
+                if (self.store.stmtRow(tag_match.source_desc).localOrNull()) |local| try uses.append(gpa, local);
             },
             .assign_literal,
             .init_uninitialized,
