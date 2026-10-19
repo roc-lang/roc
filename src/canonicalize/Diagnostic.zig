@@ -52,6 +52,12 @@ pub const Diagnostic = union(enum) {
         mutable,
     };
 
+    /// A pattern position whose binders can never be `var`s.
+    pub const VarBinderPosition = enum(u1) {
+        match_branch,
+        for_loop,
+    };
+
     not_implemented: struct {
         feature: StringLiteral.Idx,
         region: Region,
@@ -224,6 +230,14 @@ pub const Diagnostic = union(enum) {
     binding_name_does_not_match_mutability: struct {
         ident: Ident.Idx,
         mutability: BindingMutability,
+        region: Region,
+    },
+    /// A `match` branch pattern or a `for` pattern binds a `var` name. Only an
+    /// assignment with `=` changes a var's value, so these patterns cannot
+    /// bind one.
+    var_in_binder_pattern: struct {
+        ident: Ident.Idx,
+        position: VarBinderPosition,
         region: Region,
     },
     type_redeclared: struct {
@@ -549,6 +563,7 @@ pub const Diagnostic = union(enum) {
             .var_across_function_boundary => |d| d.region,
             .shadowing_warning => |d| d.region,
             .binding_name_does_not_match_mutability => |d| d.region,
+            .var_in_binder_pattern => |d| d.region,
             .type_redeclared => |d| d.redeclared_region,
             .file_import_not_found => |d| d.region,
             .file_import_io_error => |d| d.region,

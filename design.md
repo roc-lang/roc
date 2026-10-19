@@ -1203,6 +1203,12 @@ checker recovery. The recovery rules:
   belongs to the pattern alone, and a use of the name, such as a method call
   on it, adds no report of its own. A `var` name a destructure reassigns
   belongs to its own declaration and is left alone.
+- A `match` owns each branch pattern's relation to the scrutinee, but it
+  only consults the scrutinee, whose class is shared with whatever produced
+  it. A rejected relation reports, poisons neither side, and retires the
+  `match`; the branch patterns after it are checked for their own errors but
+  not related to the scrutinee. A branch pattern never binds a `var`
+  (canonicalization rejects one), so the pattern's class is its own.
 - A pattern can also be rejected by a judgment made after its check: a
   literal pattern whose conversion fails, or a record-destructure binder that
   the kind-directed judgment cannot relate to its field (a closed nested
@@ -3425,8 +3431,9 @@ Reassigning such a var directly inside an `expect` body is a compile error. (Onl
 inline `expect`s can see one, since `var` is not allowed at the top level.) This
 covers both `$x = ...` and structural reassignments such as `($x, y) = ...`.
 Reassigning a var declared inside the `expect` body is allowed at any depth,
-including inside loops written within it. A `for` or `match` binder that reuses
-an outer var's name is not a reassignment and is allowed.
+including inside loops written within it. A `for` or `match` pattern never binds
+a var anywhere (canonicalization reports `var_in_binder_pattern`), so it cannot
+reassign one either.
 
 Inside a lambda nested within an `expect`, `return`, `break`, and `?` have their
 ordinary meaning, since leaving the lambda does not leave the `expect`.
@@ -3627,9 +3634,9 @@ variable. When the scrutinee is already erroneous, the patterns unify against a
 shared fresh variable instead, so a disagreement between two patterns is still
 reported at the pattern that disagrees rather than surfacing later as an
 unexplained branch-body mismatch. The scrutinee's own error is not re-reported,
-the patterns are never related back to it, and the first disagreement poisons
-the shared variable so later patterns short-circuit exactly as they do when the
-scrutinee carries the relation.
+the patterns are never related back to it, and after the first disagreement
+later patterns are not related, exactly as when the scrutinee carries the
+relation.
 
 A scrutinee that always crashes (`...`, `crash`, or a block or `if` whose
 every result crashes) relates no branch pattern at all: no value ever reaches

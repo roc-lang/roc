@@ -480,6 +480,7 @@ const copied_diagnostic_shapes = [_]DiagnosticShape{
     .{ .cir = "invalid_main_type_rename_in_exposing", .tag = .diag_invalid_main_type_rename_in_exposing, .payload = "diag_two_idents", .names = &.{ "type_name", "alias" } },
     .{ .cir = "shadowing_warning", .tag = .diag_shadowing_warning, .payload = "diag_ident_with_region", .names = &.{ "ident", "original_region" } },
     .{ .cir = "binding_name_does_not_match_mutability", .tag = .diag_binding_name_does_not_match_mutability, .payload = "diag_two_idents", .names = &.{ "ident", "mutability" } },
+    .{ .cir = "var_in_binder_pattern", .tag = .diag_var_in_binder_pattern, .payload = "diag_two_idents", .names = &.{ "ident", "position" } },
     .{ .cir = "type_redeclared", .tag = .diag_type_redeclared, .payload = "diag_ident_with_region", .names = &.{ "name", "original_region" } },
     .{ .cir = "undeclared_type", .tag = .diag_undeclared_type, .payload = "diag_single_ident", .names = &.{"name"} },
     .{ .cir = "type_alias_but_needed_nominal", .tag = .diag_type_alias_but_needed_nominal, .payload = "diag_single_ident", .names = &.{"name"} },
@@ -693,6 +694,7 @@ const DiagnosticNodeTag = enum {
     diag_var_across_function_boundary,
     diag_shadowing_warning,
     diag_binding_name_does_not_match_mutability,
+    diag_var_in_binder_pattern,
     diag_type_redeclared,
     diag_undeclared_type,
     diag_type_alias_but_needed_nominal,
@@ -1232,7 +1234,7 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 95;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 96;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 59;
 /// Count of the statement nodes in the ModuleEnv
@@ -5264,6 +5266,7 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
         .var_across_function_boundary,
         .shadowing_warning,
         .binding_name_does_not_match_mutability,
+        .var_in_binder_pattern,
         .type_redeclared,
         .file_import_not_found,
         .file_import_io_error,
@@ -5429,6 +5432,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_var_across_function_boundary,
         .diag_shadowing_warning,
         .diag_binding_name_does_not_match_mutability,
+        .diag_var_in_binder_pattern,
         .diag_type_redeclared,
         .diag_undeclared_type,
         .diag_type_alias_but_needed_nominal,
