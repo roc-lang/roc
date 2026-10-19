@@ -62,6 +62,45 @@ pub const WorkerPlanId = enum(u32) { _ };
 pub const DescriptorRequirementId = enum(u32) { _ };
 /// Stable index of an explicit runtime dictionary requirement.
 pub const DictionaryRequirementId = enum(u32) { _ };
+
+/// A `T` id or none, at the id's own width. The id domain's largest value
+/// means none: no plan table counts that many rows.
+fn OptionalId(comptime T: type) type {
+    return enum(u32) {
+        none = std.math.maxInt(u32),
+        _,
+
+        const Self = @This();
+
+        pub fn of(value: T) Self {
+            const raw: u32 = switch (@typeInfo(T)) {
+                .int => value,
+                else => @backingInt(value),
+            };
+            std.debug.assert(raw != std.math.maxInt(u32));
+            return @fromBackingInt(raw);
+        }
+
+        pub fn fromOptional(value: ?T) Self {
+            return if (value) |present| of(present) else .none;
+        }
+
+        pub fn get(self: Self) ?T {
+            if (self == .none) return null;
+            return switch (@typeInfo(T)) {
+                .int => @backingInt(self),
+                else => @fromBackingInt(@backingInt(self)),
+            };
+        }
+    };
+}
+
+/// A representation's runtime descriptor requirement, when it has one.
+pub const OptionalDescriptorRequirementId = OptionalId(DescriptorRequirementId);
+/// A representation id, when one applies.
+pub const OptionalTypeRepId = OptionalId(TypeRepId);
+/// A presence slot's `#Present` discriminant, when the representation is one.
+pub const OptionalDiscriminant = OptionalId(u32);
 /// Dense index of one checked module among those a program plan names. The
 /// plan's `module_keys` holds each module's checked key, so plan rows name a
 /// module in four bytes and compare and hash it as one integer.
@@ -405,12 +444,12 @@ pub const TypeRepresentation = struct {
     record_field_order: RecordFieldOrder = .structural,
     nominal_backing_arg_substitutions: NominalBackingSubstitutions = .{},
     dictionaries: Span = .{},
-    descriptor: ?DescriptorRequirementId = null,
+    descriptor: OptionalDescriptorRequirementId = .none,
     /// For a bare `.dynamic = .flex` representation, the representation its
     /// checked variable seals to (numeric default, row default, or the empty
     /// tag union) when no enclosing worker quantifies it. A static descriptor
     /// for an unbound flex describes this representation's payload.
-    sealed_default: ?TypeRepId = null,
+    sealed_default: OptionalTypeRepId = .none,
     /// Set when this planned representation transitively stores at least one
     /// dynamic child whose ownership is descriptor-defined. Lowering consumes
     /// `contains_dynamic` directly; committed layouts are not an input.
@@ -419,7 +458,7 @@ pub const TypeRepresentation = struct {
     /// storage convention used for an optional or still-parametric field kind.
     /// The discriminant is explicit so later stages never infer the field's
     /// presence kind from tag names or representation shape.
-    presence_slot_present_discriminant: ?u32 = null,
+    presence_slot_present_discriminant: OptionalDiscriminant = .none,
     /// The source nominal type declared itself opaque: inspect must not
     /// reveal the backing structure.
     inspect_opaque: bool = false,
@@ -1664,7 +1703,7 @@ pub const ProgramPlan = struct {
             if (rep.kind == .dynamic) {
                 if (derivedEnvActual(bindings, rep_id)) |actual| {
                     try pending.append(visited.allocator, actual);
-                } else if (rep.sealed_default) |sealed| {
+                } else if (rep.sealed_default.get()) |sealed| {
                     try pending.append(visited.allocator, sealed);
                 } else if (rep.tag_variants.len == 0) {
                     return true;
@@ -2481,7 +2520,7 @@ const LiteralPlanner = struct {
                 .primitive, .empty_record, .empty_tag_union => return try self.leafTerm(source, rep_id),
                 .in_progress, .dynamic, .bool_tag_union, .erased_callable, .alias, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .tag_union => {},
             }
-            const term = if (rep.sealed_default) |sealed|
+            const term = if (rep.sealed_default.get()) |sealed|
                 try self.leafTerm(source, sealed)
             else
                 try self.graph.terms.intern(.{ .variable = @backingInt(rep_id) });
@@ -9508,7 +9547,7 @@ const Builder = struct {
                     // Slot tags carry their payload descriptor through enclosing
                     // records even when this particular payload is concrete.
                     .contains_dynamic = true,
-                    .presence_slot_present_discriminant = 1,
+                    .presence_slot_present_discriminant = .of(1),
                 };
                 return .{ .done = slot.rep_id };
             },
@@ -10156,7 +10195,7 @@ const Builder = struct {
                 // unquantified one seals to its default, and its dispatches
                 // then resolve against that default.
                 if (dynamic.sealed_default) |variable| {
-                    rep.sealed_default = @fromBackingInt(@intCast(@as(u32, @intCast(self.plan.representations.items.len))));
+                    rep.sealed_default = .of(@fromBackingInt(@intCast(@as(u32, @intCast(self.plan.representations.items.len)))));
                     try self.plan.representations.append(self.allocator, .{
                         .source_type = dynamic.source_type,
                         .kind = variableDefaultKind(variable),
@@ -11769,7 +11808,7 @@ const Builder = struct {
     fn materializeDescriptorRequirements(self: *Builder) Allocator.Error!void {
         for (self.plan.representations.items, 0..) |*rep, index| {
             if (!rep.contains_dynamic) continue;
-            if (rep.descriptor != null) continue;
+            if (rep.descriptor.get() != null) continue;
             const reason = descriptorReason(rep.kind) orelse continue;
             const id: DescriptorRequirementId = @fromBackingInt(@intCast(@as(u32, @intCast(self.plan.descriptors.items.len))));
             try self.plan.descriptors.append(self.allocator, .{
@@ -11777,7 +11816,7 @@ const Builder = struct {
                 .rep = @fromBackingInt(@intCast(@as(u32, @intCast(index)))),
                 .reason = reason,
             });
-            rep.descriptor = id;
+            rep.descriptor = .of(id);
         }
     }
 
@@ -11785,7 +11824,7 @@ const Builder = struct {
     /// hidden descriptor.
     fn isDescriptorLeaf(self: *const Builder, rep_id: TypeRepId) bool {
         const rep = self.plan.representations.items[@backingInt(rep_id)];
-        if (rep.descriptor == null or rep.sealed_default != null) return false;
+        if (rep.descriptor.get() == null or rep.sealed_default.get() != null) return false;
         return (rep.kind == .dynamic and rep.children.len == 0 and rep.tag_variants.len == 0) or
             self.plan.repIsOpenRecord(rep_id);
     }
@@ -11830,7 +11869,7 @@ const Builder = struct {
         seen: *collections.DenseMap(TypeRepId, void),
     ) Allocator.Error!void {
         if ((try seen.getOrPut(rep_id)).found_existing) return;
-        if (self.plan.repIsOpenRecord(rep_id) and self.plan.representations.items[@backingInt(rep_id)].descriptor != null) {
+        if (self.plan.repIsOpenRecord(rep_id) and self.plan.representations.items[@backingInt(rep_id)].descriptor.get() != null) {
             const identity = self.repQuery().descriptorArgumentIdentityRep(rep_id);
             for (out.items) |existing| {
                 if (self.repQuery().descriptorArgumentIdentityRep(existing) == identity) break;
@@ -12492,7 +12531,7 @@ const Builder = struct {
                     const rep_id = self.plan.repForSourceType(source_type) orelse
                         boxyPlanInvariant("checked literal evidence dispatcher type was not analyzed for its worker body");
                     const rep = self.plan.representations.items[@backingInt(rep_id)];
-                    const desc = rep.descriptor orelse continue;
+                    const desc = rep.descriptor.get() orelse continue;
                     // A runtime dictionary supplies this dispatcher's methods, but
                     // a literal at its type still encodes itself against its
                     // descriptor. When the signature does not already describe
@@ -13975,7 +14014,7 @@ const Builder = struct {
                 // A formal position holds its use's actual, and a sealed
                 // variable its sealed type.
                 if (walk.actualFor(rep_id)) |actual| return try actions.append(self.allocator, .{ .visit = actual });
-                if (rep.sealed_default) |sealed| return try actions.append(self.allocator, .{ .visit = sealed });
+                if (rep.sealed_default.get()) |sealed| return try actions.append(self.allocator, .{ .visit = sealed });
                 // Only a frame that quantifies the variable binds its scheme
                 // dictionary; any other frame sees the variable at its closed
                 // default.
@@ -14663,7 +14702,7 @@ const Builder = struct {
         while (pending.pop()) |rep_id| {
             if ((try visited.getOrPut(self.allocator, rep_id)).found_existing) continue;
             const rep = self.plan.representations.items[@backingInt(rep_id)];
-            if (rep.kind == .dynamic and rep.sealed_default == null and
+            if (rep.kind == .dynamic and rep.sealed_default.get() == null and
                 rep.children.len == 0 and rep.tag_variants.len == 0)
             {
                 _ = try self.sharedVariableClosedRep(rep_id, .no_caller);
@@ -14805,7 +14844,7 @@ const Builder = struct {
     fn rootInstantiationRep(self: *Builder, rep_id: TypeRepId) Allocator.Error!TypeRepId {
         const rep = self.plan.representations.items[@backingInt(rep_id)];
         if (rep.kind != .dynamic or rep.children.len != 0) return rep_id;
-        if (rep.sealed_default) |sealed| return sealed;
+        if (rep.sealed_default.get()) |sealed| return sealed;
         const source_type = rep.source_type;
         const variable = switch (self.moduleForId(source_type.module).checked_types.payload(source_type.ty)) {
             .flex, .rigid => |variable| variable,
@@ -17338,9 +17377,9 @@ const Builder = struct {
             if (rep_entry.found_existing) continue;
 
             const rep = self.plan.representations.items[@backingInt(rep_id)];
-            if (rep.descriptor) |desc| {
+            if (rep.descriptor.get()) |desc| {
                 const identity_rep = self.repQuery().descriptorArgumentIdentityRep(rep_id);
-                const identity_desc = self.plan.representations.items[@backingInt(identity_rep)].descriptor orelse desc;
+                const identity_desc = self.plan.representations.items[@backingInt(identity_rep)].descriptor.get() orelse desc;
                 const desc_entry = try seen_descs.getOrPut(identity_desc);
                 if (!desc_entry.found_existing) {
                     try pending.append(self.allocator, .{
@@ -17496,7 +17535,7 @@ const Builder = struct {
 
         const worker_rep = self.plan.representations.items[@backingInt(worker_rep_id)];
 
-        if (worker_rep.descriptor) |worker_desc| {
+        if (worker_rep.descriptor.get()) |worker_desc| {
             const worker_identity = self.repQuery().descriptorArgumentIdentityRep(worker_rep_id);
             const identity_entry = try walk.seen_descriptor_reps.getOrPut(worker_identity);
             if (!identity_entry.found_existing) {
@@ -17679,7 +17718,7 @@ const Builder = struct {
                         }
                         if (self.workerPresenceSlotPayloadMatchesUnwrappedCallRep(worker_rep_id, aligned_call_rep_id, worker_child)) break :target aligned_call_rep_id;
                         if (try self.repQuery().workerChildCanMatchUnwrappedCallRep(worker_rep_id, worker_child)) break :target aligned_call_rep_id;
-                        if (worker_child.role == .tag_ext and call_children.len == 0 and call_rep.descriptor != null) break :target aligned_call_rep_id;
+                        if (worker_child.role == .tag_ext and call_children.len == 0 and call_rep.descriptor.get() != null) break :target aligned_call_rep_id;
                         boxyPlanInvariant("boxy direct call hidden descriptor mapping saw mismatched child roles");
                     };
                     return try self.enterCallDescriptorRep(walk, frames, worker_child.rep, target);
@@ -18767,7 +18806,7 @@ const Builder = struct {
 
     fn repIsUnboundVariable(self: *const Builder, rep_id: TypeRepId) bool {
         const rep = self.plan.representations.items[@backingInt(rep_id)];
-        return rep.sealed_default == null and self.repIsBareVariable(rep_id);
+        return rep.sealed_default.get() == null and self.repIsBareVariable(rep_id);
     }
 
     fn repIsBareVariable(self: *const Builder, rep_id: TypeRepId) bool {
@@ -18954,7 +18993,7 @@ const Builder = struct {
     /// Whether an unquantified variable seals to the empty tag union, so no
     /// value of its type exists and its dispatches follow the unpinned rule.
     fn repSealsUninhabited(self: *const Builder, rep: TypeRepresentation) bool {
-        const sealed = rep.sealed_default orelse return false;
+        const sealed = rep.sealed_default.get() orelse return false;
         return self.plan.representations.items[@backingInt(sealed)].kind == .empty_tag_union;
     }
 
@@ -19132,8 +19171,8 @@ const Builder = struct {
             }
             _ = frames.pop();
             var copy = rep;
-            copy.descriptor = null;
-            copy.sealed_default = null;
+            copy.descriptor = .none;
+            copy.sealed_default = .none;
             copy.contains_dynamic = false;
             const children_start: u32 = @intCast(self.plan.children.items.len);
             // Read by index: appending grows the child table.
@@ -19514,9 +19553,9 @@ const Builder = struct {
     /// slot's `Present` payload, so the call side of the slot is the presence
     /// slot over that payload.
     fn callPresenceSlotForWorkerSlot(self: *Builder, worker_rep_id: TypeRepId, call_rep_id: TypeRepId) Allocator.Error!TypeRepId {
-        if (self.plan.representations.items[@backingInt(worker_rep_id)].presence_slot_present_discriminant == null) return call_rep_id;
+        if (self.plan.representations.items[@backingInt(worker_rep_id)].presence_slot_present_discriminant.get() == null) return call_rep_id;
         const call_rep = self.plan.representations.items[@backingInt(call_rep_id)];
-        if (call_rep.presence_slot_present_discriminant != null) return call_rep_id;
+        if (call_rep.presence_slot_present_discriminant.get() != null) return call_rep_id;
         return try self.optionalSlotRepresentation(self.moduleForId(call_rep.source_type.module), call_rep.source_type.ty);
     }
 
@@ -19527,9 +19566,9 @@ const Builder = struct {
         worker_child: RepChild,
     ) bool {
         const worker_rep = self.plan.representations.items[@backingInt(worker_rep_id)];
-        const present_discriminant = worker_rep.presence_slot_present_discriminant orelse return false;
+        const present_discriminant = worker_rep.presence_slot_present_discriminant.get() orelse return false;
         const call_rep = self.plan.representations.items[@backingInt(call_rep_id)];
-        if (call_rep.presence_slot_present_discriminant != null) return false;
+        if (call_rep.presence_slot_present_discriminant.get() != null) return false;
 
         const variants = self.plan.tagVariantSlice(worker_rep.tag_variants);
         const present_index: usize = present_discriminant;
@@ -19559,7 +19598,7 @@ const Builder = struct {
 
     fn presenceSlotPayloadRep(self: *const Builder, rep_id: TypeRepId) ?TypeRepId {
         const rep = self.plan.representations.items[@backingInt(rep_id)];
-        const present_discriminant = rep.presence_slot_present_discriminant orelse return null;
+        const present_discriminant = rep.presence_slot_present_discriminant.get() orelse return null;
         const variants = self.plan.tagVariantSlice(rep.tag_variants);
         const present_index: usize = present_discriminant;
         if (present_index >= variants.len) {
@@ -20968,7 +21007,7 @@ pub const RepQuery = struct {
         defer seen.deinit();
         return try self.repSubtreeAny(rep_id, &seen, {}, struct {
             fn found(_: void, query: RepQuery, candidate: TypeRepId) bool {
-                return query.rep(candidate).descriptor != null;
+                return query.rep(candidate).descriptor.get() != null;
             }
         }.found);
     }
@@ -23297,7 +23336,7 @@ test "boxy planner classifies constrained variables as dynamic with descriptor a
     const rep = plan.representations.items[@backingInt(plan.root_reps.items[0])];
     try std.testing.expectEqual(RepresentationKind{ .dynamic = .flex }, rep.kind);
     try std.testing.expect(rep.contains_dynamic);
-    try std.testing.expect(rep.descriptor != null);
+    try std.testing.expect(rep.descriptor.get() != null);
     try std.testing.expectEqual(@as(usize, 1), plan.dictionarySlice(rep.dictionaries).len);
     try std.testing.expectEqual(@as(usize, 1), plan.descriptors.items.len);
     try std.testing.expectEqual(DescriptorReason.dynamic_payload, plan.descriptors.items[0].reason);
@@ -23505,7 +23544,7 @@ test "boxy planner keeps checked specialization defaults dynamically represented
     const rep = plan.representations.items[@backingInt(plan.root_reps.items[0])];
     try std.testing.expectEqual(RepresentationKind{ .dynamic = .flex }, rep.kind);
     try std.testing.expect(rep.contains_dynamic);
-    try std.testing.expect(rep.descriptor != null);
+    try std.testing.expect(rep.descriptor.get() != null);
     try std.testing.expectEqual(@as(usize, 1), plan.dictionarySlice(rep.dictionaries).len);
 }
 
@@ -23652,9 +23691,9 @@ test "direct call metadata uses instantiated nominal arguments inside generalize
     try builder.plan.representations.appendSlice(gpa, &.{
         .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(fixtureTableIndex(0)))), .kind = .{ .nominal = .transparent }, .children = .{ .start = 0, .len = 2 }, .nominal_backing_arg_substitutions = worker_substitutions },
         .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(1))), .kind = .tuple, .children = .{ .start = 2, .len = 1 } },
-        .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(2))), .kind = .{ .dynamic = .flex }, .descriptor = @fromBackingInt(@intCast(fixtureTableIndex(0))), .dictionaries = .{ .start = 0, .len = 1 }, .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(2))), .kind = .{ .dynamic = .flex }, .descriptor = .of(@fromBackingInt(@intCast(fixtureTableIndex(0)))), .dictionaries = .{ .start = 0, .len = 1 }, .contains_dynamic = true },
         .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(3))), .kind = .{ .nominal = .transparent }, .children = .{ .start = 3, .len = 2 }, .nominal_backing_arg_substitutions = call_substitutions },
-        .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(4))), .kind = .{ .dynamic = .flex }, .descriptor = @fromBackingInt(@intCast(1)), .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(4))), .kind = .{ .dynamic = .flex }, .descriptor = .of(@fromBackingInt(@intCast(1))), .contains_dynamic = true },
         .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(5))), .kind = .{ .primitive = .str } },
     });
 
@@ -23766,9 +23805,9 @@ test "direct call descriptors use operand nominal substitutions over generic cal
     try builder.plan.representations.appendSlice(gpa, &.{
         .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(fixtureTableIndex(0)))), .kind = .{ .nominal = .builtin_other }, .children = .{ .start = 0, .len = 2 }, .nominal_backing_arg_substitutions = worker_substitutions },
         .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(1))), .kind = .tuple, .children = .{ .start = 2, .len = 1 } },
-        .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(2))), .kind = .{ .dynamic = .rigid }, .descriptor = @fromBackingInt(@intCast(fixtureTableIndex(0))), .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(2))), .kind = .{ .dynamic = .rigid }, .descriptor = .of(@fromBackingInt(@intCast(fixtureTableIndex(0)))), .contains_dynamic = true },
         .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(3))), .kind = .{ .nominal = .builtin_other }, .children = .{ .start = 3, .len = 2 }, .nominal_backing_arg_substitutions = call_substitutions },
-        .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(4))), .kind = .{ .dynamic = .rigid }, .descriptor = @fromBackingInt(@intCast(1)), .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(4))), .kind = .{ .dynamic = .rigid }, .descriptor = .of(@fromBackingInt(@intCast(1))), .contains_dynamic = true },
         .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(5))), .kind = .{ .nominal = .builtin_other }, .children = .{ .start = 5, .len = 2 }, .nominal_backing_arg_substitutions = operand_substitutions },
         .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(6))), .kind = .{ .primitive = .str } },
         .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(7))), .kind = .{ .dynamic = .rigid }, .contains_dynamic = true },
@@ -23845,15 +23884,15 @@ fn expectNominalResultArgumentSource(alias_argument: bool) (Allocator.Error || e
     const worker_substitutions = try testNominalSubstitution(&builder.plan, formal, worker_elem);
     const call_substitutions = try testNominalSubstitution(&builder.plan, formal, call_elem);
     try builder.plan.representations.appendSlice(gpa, &.{
-        .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(fixtureTableIndex(0)))), .kind = .{ .dynamic = .rigid }, .descriptor = @fromBackingInt(@intCast(fixtureTableIndex(0))), .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(fixtureTableIndex(0)))), .kind = .{ .dynamic = .rigid }, .descriptor = .of(@fromBackingInt(@intCast(fixtureTableIndex(0)))), .contains_dynamic = true },
         .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(1))), .kind = .list, .children = .{ .start = 0, .len = 1 }, .contains_dynamic = true },
-        .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(2))), .kind = .{ .dynamic = .rigid }, .descriptor = @fromBackingInt(@intCast(1)), .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(2))), .kind = .{ .dynamic = .rigid }, .descriptor = .of(@fromBackingInt(@intCast(1))), .contains_dynamic = true },
         .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(3))), .kind = .tuple, .children = .{ .start = 1, .len = 1 }, .contains_dynamic = true },
         .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(4))), .kind = .{ .nominal = .transparent }, .children = .{ .start = 2, .len = 2 }, .nominal_backing_arg_substitutions = worker_substitutions, .contains_dynamic = true },
-        .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(5))), .kind = .{ .dynamic = .rigid }, .descriptor = @fromBackingInt(@intCast(2)), .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(5))), .kind = .{ .dynamic = .rigid }, .descriptor = .of(@fromBackingInt(@intCast(2))), .contains_dynamic = true },
         .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(6))), .kind = .list, .children = .{ .start = 4, .len = 1 }, .contains_dynamic = true },
         .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(7))), .kind = .{ .nominal = .transparent }, .children = .{ .start = 5, .len = 2 }, .nominal_backing_arg_substitutions = call_substitutions, .contains_dynamic = true },
-        .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(8))), .kind = .{ .dynamic = .rigid }, .descriptor = @fromBackingInt(@intCast(3)), .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(8))), .kind = .{ .dynamic = .rigid }, .descriptor = .of(@fromBackingInt(@intCast(3))), .contains_dynamic = true },
         .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(9))), .kind = .list, .children = .{ .start = 7, .len = 1 }, .contains_dynamic = true },
         .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(10))), .kind = .alias, .children = .{ .start = 8, .len = 1 }, .contains_dynamic = true },
     });
@@ -23901,10 +23940,10 @@ test "nominal formal descriptor requests preserve the fixed parameter list for c
                 .{ .role = .{ .nominal_arg = 0 }, .source_type = rootTypeRef(@fromBackingInt(@intCast(3))), .rep = call_arg },
             });
             try builder.plan.representations.appendSlice(gpa, &.{
-                .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(fixtureTableIndex(0)))), .kind = .{ .dynamic = .rigid }, .descriptor = @fromBackingInt(@intCast(fixtureTableIndex(0))), .contains_dynamic = true },
-                .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(1))), .kind = .{ .dynamic = .rigid }, .descriptor = @fromBackingInt(@intCast(1)), .contains_dynamic = true },
+                .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(fixtureTableIndex(0)))), .kind = .{ .dynamic = .rigid }, .descriptor = .of(@fromBackingInt(@intCast(fixtureTableIndex(0)))), .contains_dynamic = true },
+                .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(1))), .kind = .{ .dynamic = .rigid }, .descriptor = .of(@fromBackingInt(@intCast(1))), .contains_dynamic = true },
                 .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(2))), .kind = .{ .nominal = .transparent }, .children = .{ .start = 0, .len = 1 }, .nominal_backing_arg_substitutions = worker_bindings, .contains_dynamic = true },
-                .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(3))), .kind = if (concrete) .{ .primitive = .str } else .{ .dynamic = .rigid }, .descriptor = if (concrete) null else @fromBackingInt(@intCast(2)), .contains_dynamic = !concrete },
+                .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(3))), .kind = if (concrete) .{ .primitive = .str } else .{ .dynamic = .rigid }, .descriptor = if (concrete) .none else .of(@fromBackingInt(@intCast(2))), .contains_dynamic = !concrete },
                 .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(4))), .kind = .{ .nominal = .transparent }, .children = .{ .start = 1, .len = 1 }, .nominal_backing_arg_substitutions = call_bindings, .contains_dynamic = !concrete },
             });
             const all_params = [_]HiddenDescriptorParam{
@@ -24100,9 +24139,9 @@ test "dictionary method hidden descriptors preserve exact implementation substit
     try builder.plan.representations.appendSlice(gpa, &.{
         .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(fixtureTableIndex(0)))), .kind = .list },
         .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(1))), .kind = .{ .primitive = .str } },
-        .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(2))), .kind = .{ .dynamic = .flex }, .descriptor = @fromBackingInt(@intCast(fixtureTableIndex(0))), .contains_dynamic = true },
-        .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(3))), .kind = .{ .dynamic = .flex }, .descriptor = @fromBackingInt(@intCast(1)), .contains_dynamic = true },
-        .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(4))), .kind = .{ .dynamic = .flex }, .descriptor = @fromBackingInt(@intCast(2)), .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(2))), .kind = .{ .dynamic = .flex }, .descriptor = .of(@fromBackingInt(@intCast(fixtureTableIndex(0)))), .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(3))), .kind = .{ .dynamic = .flex }, .descriptor = .of(@fromBackingInt(@intCast(1))), .contains_dynamic = true },
+        .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(4))), .kind = .{ .dynamic = .flex }, .descriptor = .of(@fromBackingInt(@intCast(2))), .contains_dynamic = true },
         .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(5))), .kind = .erased_callable },
     });
     try builder.plan.hidden_descriptor_params.appendSlice(gpa, &.{
@@ -24170,12 +24209,12 @@ test "boxy planner propagates dynamic descriptor requirements through records" {
     const record = plan.representations.items[@backingInt(plan.root_reps.items[0])];
     try std.testing.expectEqual(RepresentationKind.record, record.kind);
     try std.testing.expect(record.contains_dynamic);
-    try std.testing.expect(record.descriptor != null);
+    try std.testing.expect(record.descriptor.get() != null);
     try std.testing.expectEqual(@as(usize, 2), plan.childSlice(record.children).len);
     const host_record = plan.representations.items[@backingInt(plan.hostRepFor(plan.root_reps.items[0]))];
-    try std.testing.expect(host_record.descriptor == null);
+    try std.testing.expect(host_record.descriptor.get() == null);
     try std.testing.expectEqual(@as(usize, 2), plan.descriptors.items.len);
-    try std.testing.expectEqual(DescriptorReason.aggregate_contains_dynamic, plan.descriptors.items[@backingInt(record.descriptor.?)].reason);
+    try std.testing.expectEqual(DescriptorReason.aggregate_contains_dynamic, plan.descriptors.items[@backingInt(record.descriptor.get().?)].reason);
 }
 
 test "boxy planner preserves optional record field representation and descriptor" {
@@ -24216,13 +24255,13 @@ test "boxy planner preserves optional record field representation and descriptor
     try std.testing.expectEqual(@as(usize, 1), record_children.len);
     try std.testing.expectEqual(checked.CheckedFieldKind.Tag.optional, record_children[0].record_field_kind.tag);
     try std.testing.expect(record.contains_dynamic);
-    try std.testing.expect(record.descriptor != null);
+    try std.testing.expect(record.descriptor.get() != null);
 
     const slot = plan.representations.items[@backingInt(record_children[0].rep)];
     try std.testing.expectEqual(RepresentationKind.tag_union, slot.kind);
     try std.testing.expect(slot.contains_dynamic);
-    try std.testing.expect(slot.descriptor != null);
-    try std.testing.expectEqual(@as(?u32, 1), slot.presence_slot_present_discriminant);
+    try std.testing.expect(slot.descriptor.get() != null);
+    try std.testing.expectEqual(@as(?u32, 1), slot.presence_slot_present_discriminant.get());
     const variants = plan.tagVariantSlice(slot.tag_variants);
     try std.testing.expectEqual(@as(usize, 2), variants.len);
     try std.testing.expectEqual(missing, variants[0].name);
@@ -24274,8 +24313,8 @@ test "boxy planner preserves undetermined record field kind identity in a presen
 
     const slot = plan.representations.items[@backingInt(record_children[0].rep)];
     try std.testing.expectEqual(RepresentationKind.tag_union, slot.kind);
-    try std.testing.expectEqual(@as(?u32, 1), slot.presence_slot_present_discriminant);
-    try std.testing.expect(slot.descriptor != null);
+    try std.testing.expectEqual(@as(?u32, 1), slot.presence_slot_present_discriminant.get());
+    try std.testing.expect(slot.descriptor.get() != null);
 }
 
 test "boxy planner represents open record rows dynamically" {
@@ -24294,7 +24333,7 @@ test "boxy planner represents open record rows dynamically" {
     const rep = plan.representations.items[@backingInt(plan.root_reps.items[0])];
     try std.testing.expectEqual(RepresentationKind{ .dynamic = .flex }, rep.kind);
     try std.testing.expect(rep.contains_dynamic);
-    try std.testing.expect(rep.descriptor != null);
+    try std.testing.expect(rep.descriptor.get() != null);
 }
 
 test "boxy empty tag rows share their tail representation and descriptor" {
@@ -24312,7 +24351,7 @@ test "boxy empty tag rows share their tail representation and descriptor" {
     try std.testing.expectEqual(plan.root_reps.items[0], plan.root_reps.items[2]);
     const rep = plan.representations.items[@backingInt(plan.root_reps.items[0])];
     try std.testing.expectEqual(RepresentationKind{ .dynamic = .rigid }, rep.kind);
-    try std.testing.expect(rep.descriptor != null);
+    try std.testing.expect(rep.descriptor.get() != null);
 }
 
 test "boxy Bool retains its closed row for generic descriptor arguments" {
@@ -24346,7 +24385,7 @@ test "boxy Bool retains its closed row for generic descriptor arguments" {
     const call_tail = query.requiredSingleChild(plan.root_reps.items[0], .tag_ext);
     try std.testing.expectEqual(worker_tail.role, call_tail.role);
     try std.testing.expectEqual(RepresentationKind.empty_tag_union, plan.representations.items[@backingInt(call_tail.rep)].kind);
-    try std.testing.expect(worker_rep.descriptor != null);
+    try std.testing.expect(worker_rep.descriptor.get() != null);
 }
 
 test "boxy planner represents open tag-union rows dynamically" {
@@ -24365,7 +24404,7 @@ test "boxy planner represents open tag-union rows dynamically" {
     const rep = plan.representations.items[@backingInt(plan.root_reps.items[0])];
     try std.testing.expectEqual(RepresentationKind{ .dynamic = .flex }, rep.kind);
     try std.testing.expect(rep.contains_dynamic);
-    try std.testing.expect(rep.descriptor != null);
+    try std.testing.expect(rep.descriptor.get() != null);
 }
 
 test "boxy row instantiation retains unmatched zero-payload variants in dynamic rows" {
@@ -24465,8 +24504,8 @@ test "boxy call row tails use original arguments for complete and empty rows" {
                 .{ .name = @fromBackingInt(@intCast(2)), .name_module = viewModule(builder.root_view), .payloads = .{} },
             });
             try builder.plan.representations.appendSlice(gpa, &.{
-                .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(fixtureTableIndex(0)))), .kind = .{ .dynamic = .flex }, .children = .{ .start = 0, .len = 1 }, .tag_variants = .{ .start = 0, .len = 1 }, .descriptor = worker_desc, .contains_dynamic = true },
-                .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(1))), .kind = .{ .dynamic = .flex }, .descriptor = tail_desc, .contains_dynamic = true },
+                .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(fixtureTableIndex(0)))), .kind = .{ .dynamic = .flex }, .children = .{ .start = 0, .len = 1 }, .tag_variants = .{ .start = 0, .len = 1 }, .descriptor = .of(worker_desc), .contains_dynamic = true },
+                .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(1))), .kind = .{ .dynamic = .flex }, .descriptor = .of(tail_desc), .contains_dynamic = true },
                 .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(2))), .kind = .tag_union, .children = .{ .start = 1, .len = 1 }, .tag_variants = .{ .start = 1, .len = if (extra_tag) 2 else 1 } },
                 .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(3))), .kind = .empty_tag_union },
                 .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(4))), .kind = .tag_union, .children = .{ .start = 1, .len = 1 }, .tag_variants = .{ .start = 2, .len = 1 } },
@@ -24528,7 +24567,7 @@ test "boxy planner keeps quantified defaultable tag tails open" {
         const rep = plan.representations.items[@backingInt(plan.root_reps.items[0])];
         try std.testing.expectEqual(if (quantified) RepresentationKind{ .dynamic = .flex } else RepresentationKind.tag_union, rep.kind);
         try std.testing.expectEqual(quantified, rep.contains_dynamic);
-        try std.testing.expectEqual(quantified, rep.descriptor != null);
+        try std.testing.expectEqual(quantified, rep.descriptor.get() != null);
         try std.testing.expectEqual(@as(usize, 1), plan.tagVariantSlice(rep.tag_variants).len);
         const children = plan.childSlice(rep.children);
         try std.testing.expectEqual(@as(usize, 1), children.len);
@@ -24564,7 +24603,7 @@ test "boxy planner preserves known variants on open tag-union rows" {
     const rep = plan.representations.items[@backingInt(plan.root_reps.items[0])];
     try std.testing.expectEqual(RepresentationKind{ .dynamic = .flex }, rep.kind);
     try std.testing.expect(rep.contains_dynamic);
-    try std.testing.expect(rep.descriptor != null);
+    try std.testing.expect(rep.descriptor.get() != null);
 
     const variants = plan.tagVariantSlice(rep.tag_variants);
     try std.testing.expectEqual(@as(usize, 1), variants.len);
@@ -24608,7 +24647,7 @@ test "boxy call substitution recognizes open tag rows without named variants" {
             const params = [_]HiddenDescriptorParam{.{
                 .source_type = rep.source_type,
                 .rep = open_row,
-                .desc = rep.descriptor.?,
+                .desc = rep.descriptor.get().?,
             }};
             var pending = std.ArrayList(DirectCallHiddenDescriptorArg).empty;
             defer pending.deinit(gpa);
@@ -24660,7 +24699,7 @@ test "boxy planner keeps explicit Box of dynamic payload distinct from dynamic p
     const box_rep = plan.representations.items[@backingInt(plan.root_reps.items[0])];
     try std.testing.expectEqual(RepresentationKind.box, box_rep.kind);
     try std.testing.expect(box_rep.contains_dynamic);
-    try std.testing.expect(box_rep.descriptor != null);
+    try std.testing.expect(box_rep.descriptor.get() != null);
     const children = plan.childSlice(box_rep.children);
     try std.testing.expectEqual(@as(usize, 1), children.len);
     try std.testing.expectEqual(ChildRole.box_payload, children[0].role);

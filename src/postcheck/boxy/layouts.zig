@@ -423,7 +423,7 @@ const Builder = struct {
             .in_progress => boxyLayoutInvariant("in-progress representation reached boxy layout planning"),
             .dynamic => .{ .layout = .{ .dynamic_box = .{
                 .storage_layout = try self.dynamicStorageLayout(),
-                .desc = rep.descriptor orelse boxyLayoutInvariant("dynamic layout had no descriptor requirement"),
+                .desc = rep.descriptor.get() orelse boxyLayoutInvariant("dynamic layout had no descriptor requirement"),
             } } },
             .primitive => |primitive| .{ .layout = .{ .concrete = Common.primitiveLayout(primitive) } },
             .bool_tag_union => .{ .layout = .{ .concrete = .bool } },
@@ -528,7 +528,7 @@ const Builder = struct {
         var at_root = true;
         while (true) : (at_root = false) {
             const rep = self.program.representations.items[@backingInt(rep_id)];
-            if (rep.descriptor == null) {
+            if (rep.descriptor.get() == null) {
                 if (at_root) return null;
                 return (try self.runtimeLayoutForRep(rep_id)).layoutIdx();
             }
@@ -739,7 +739,7 @@ const GraphBuilder = struct {
                         .opaque_nominal, .builtin_other => {},
                     }
                 }
-                if (rep.kind == .dynamic and rep.descriptor != null) {
+                if (rep.kind == .dynamic and rep.descriptor.get() != null) {
                     if (rep.tag_variants.len != 0) {
                         const node = try self.reserveLocalNode(rep_id);
                         try self.pushGraphFrame(frames, .{ .tag = .{ .node = node, .rep_id = rep_id, .mode = .descriptor_payload } });
