@@ -15,6 +15,50 @@ const no_local = std.math.maxInt(u32);
 /// Exact topology construction count for reuse tests.
 pub threadlocal var topology_builds: usize = 0;
 
+/// Memoized `usesAfter` answers: each statement's answered locals are a
+/// chain from that statement's head through `entries`.
+pub const UseAnswers = struct {
+    pub const Entry = struct {
+        stmt: LIR.CFStmtId,
+        local: LIR.LocalId,
+        answer: bool,
+        next: u32,
+    };
+
+    allocator: Allocator,
+    heads: collections.DenseMap(LIR.CFStmtId, u32),
+    entries: std.ArrayList(Entry) = .empty,
+
+    pub fn init(allocator: Allocator) UseAnswers {
+        return .{ .allocator = allocator, .heads = collections.DenseMap(LIR.CFStmtId, u32).init(allocator) };
+    }
+
+    pub fn deinit(self: *UseAnswers) void {
+        self.heads.deinit();
+        self.entries.deinit(self.allocator);
+    }
+
+    pub fn get(self: *const UseAnswers, stmt: LIR.CFStmtId, local: LIR.LocalId) ?bool {
+        var cursor = self.heads.get(stmt) orelse return null;
+        while (cursor != no_local) {
+            const entry = self.entries.items[cursor];
+            if (entry.local == local) return entry.answer;
+            cursor = entry.next;
+        }
+        return null;
+    }
+
+    /// Records the answer for a query `get` has not answered.
+    pub fn put(self: *UseAnswers, stmt: LIR.CFStmtId, local: LIR.LocalId, answer: bool) Allocator.Error!void {
+        const position = std.math.cast(u32, self.entries.items.len) orelse return error.OutOfMemory;
+        if (position == no_local) return error.OutOfMemory;
+        const head = try self.heads.getOrPut(stmt);
+        if (!head.found_existing) head.value_ptr.* = no_local;
+        try self.entries.append(self.allocator, .{ .stmt = stmt, .local = local, .answer = answer, .next = head.value_ptr.* });
+        head.value_ptr.* = position;
+    }
+};
+
 /// Orders the uses of a local along control flow. A consuming use takes the
 /// value's single ownership unit with it, so the value is unique at that use
 /// exactly when no other use of the same local can execute afterwards
@@ -53,10 +97,8 @@ pub const UseOrder = struct {
     mark_defs: std.ArrayList(u64) = .empty,
     /// Only the fixed-point workspace enables this cache. Each key names
     /// an immutable ordered-use question, independent of signatures/takes.
-    use_answers: ?*std.AutoHashMap(UseQuery, bool) = null,
+    use_answers: ?*UseAnswers = null,
     backward_visits: usize = 0,
-
-    pub const UseQuery = struct { stmt: LIR.CFStmtId, local: LIR.LocalId };
 
     /// Explicit compact domains for one procedure. Whole-program ARC already
     /// owns dense store-wide domains and leaves this absent.
@@ -741,15 +783,15 @@ pub const UseOrder = struct {
     /// before `local` is redefined. Marks from the local's reads once and
     /// answers every later query about the same local from those marks.
     pub fn usesAfter(self: *UseOrder, from: u32, local: LIR.LocalId) Allocator.Error!bool {
-        const key: UseQuery = .{ .stmt = @fromBackingInt(@intCast(from)), .local = local };
-        if (self.use_answers) |answers| if (answers.get(key)) |answer| return answer;
+        const from_stmt: LIR.CFStmtId = @fromBackingInt(@intCast(from));
+        if (self.use_answers) |answers| if (answers.get(from_stmt, local)) |answer| return answer;
         if (self.marked_local != @backingInt(local) or !self.marked_uses) {
             try self.markFrom(local, self.topology.reads_of.row(local));
             self.marked_local = @backingInt(local);
             self.marked_uses = true;
         }
         const answer = self.after(from, local);
-        if (self.use_answers) |answers| try answers.put(key, answer);
+        if (self.use_answers) |answers| try answers.put(from_stmt, local, answer);
         return answer;
     }
 
