@@ -3227,16 +3227,38 @@ const empty_builtin_nominal_declarations: BuiltinNominalDeclarationIndex = @spla
 /// `var_names` interner, so type accessors can resolve ids without holding the owning
 /// store (used by both a live store and a deserialized, buffer-backed one).
 pub const CheckedTypeStoreView = struct {
-    /// Reusable scratch for repeated `rootAliasTransparentEql` queries.
+    /// Reusable scratch for checked type equality queries. Every query
+    /// clears it on entry, so one scratch serves any number of queries of
+    /// any mode; clearing is proportional to what the previous query used.
     pub const EqualityScratch = struct {
-        assumed: std.AutoHashMap(CheckedTypeExactPair, void),
+        allocator: Allocator,
+        assumed: CheckedTypePairSet,
+        /// The variable bijection of an alpha-exact query, in both directions.
+        left_variables: collections.DenseMap(CheckedTypeId, CheckedTypeId),
+        right_variables: collections.DenseMap(CheckedTypeId, CheckedTypeId),
+        pending: std.ArrayListUnmanaged(CheckedTypeExactPair) = .empty,
 
         pub fn init(allocator: Allocator) EqualityScratch {
-            return .{ .assumed = std.AutoHashMap(CheckedTypeExactPair, void).init(allocator) };
+            return .{
+                .allocator = allocator,
+                .assumed = CheckedTypePairSet.init(allocator),
+                .left_variables = collections.DenseMap(CheckedTypeId, CheckedTypeId).init(allocator),
+                .right_variables = collections.DenseMap(CheckedTypeId, CheckedTypeId).init(allocator),
+            };
         }
 
         pub fn deinit(self: *EqualityScratch) void {
             self.assumed.deinit();
+            self.left_variables.deinit();
+            self.right_variables.deinit();
+            self.pending.deinit(self.allocator);
+        }
+
+        fn clear(self: *EqualityScratch) void {
+            self.assumed.clearRetainingCapacity();
+            self.left_variables.clearRetainingCapacity();
+            self.right_variables.clearRetainingCapacity();
+            self.pending.clearRetainingCapacity();
         }
     };
 
@@ -3339,27 +3361,25 @@ pub const CheckedTypeStoreView = struct {
     /// repeated closed obligations.
     pub fn rootExactEql(
         self: CheckedTypeStoreView,
-        allocator: Allocator,
+        scratch: *EqualityScratch,
         left: CheckedTypeId,
         right: CheckedTypeId,
     ) Allocator.Error!bool {
-        var assumed = std.AutoHashMap(CheckedTypeExactPair, void).init(allocator);
-        defer assumed.deinit();
-        return try checkedTypeRootExactEql(.named, self, left, right, &assumed);
+        scratch.clear();
+        return try checkedTypeRootSliceEql(.exact, .named, self, &.{left}, &.{right}, scratch);
     }
 
     /// Same-store equality of the types two roots denote: transparent aliases
     /// are expanded at every depth, while nominal types, variables, and all
-    /// other structure compare exactly as in `rootExactEql`. The scratch is
-    /// cleared on entry so one scratch serves any number of queries.
+    /// other structure compare exactly as in `rootExactEql`.
     pub fn rootAliasTransparentEql(
         self: CheckedTypeStoreView,
         scratch: *EqualityScratch,
         left: CheckedTypeId,
         right: CheckedTypeId,
     ) Allocator.Error!bool {
-        scratch.assumed.clearRetainingCapacity();
-        return try checkedTypeRootExactEql(.transparent, self, left, right, &scratch.assumed);
+        scratch.clear();
+        return try checkedTypeRootSliceEql(.exact, .transparent, self, &.{left}, &.{right}, scratch);
     }
 
     /// Exact same-store equality modulo a bijective renaming of flex/rigid
@@ -3369,11 +3389,11 @@ pub const CheckedTypeStoreView = struct {
     /// structure must remain identical.
     pub fn rootAlphaExactEql(
         self: CheckedTypeStoreView,
-        allocator: Allocator,
+        scratch: *EqualityScratch,
         left: CheckedTypeId,
         right: CheckedTypeId,
     ) Allocator.Error!bool {
-        return try self.rootsAlphaExactEql(allocator, &.{left}, &.{right});
+        return try self.rootsAlphaExactEql(scratch, &.{left}, &.{right});
     }
 
     /// Alpha-exact equality for a relation with multiple roots. All roots
@@ -3381,7 +3401,7 @@ pub const CheckedTypeStoreView = struct {
     /// part of the comparison.
     pub fn rootsAlphaExactEql(
         self: CheckedTypeStoreView,
-        allocator: Allocator,
+        scratch: *EqualityScratch,
         left: []const CheckedTypeId,
         right: []const CheckedTypeId,
     ) Allocator.Error!bool {
@@ -3389,9 +3409,8 @@ pub const CheckedTypeStoreView = struct {
         for (left, right) |left_root, right_root| {
             if (!std.meta.eql(self.rootKey(left_root), self.rootKey(right_root))) return false;
         }
-        var context = CheckedTypeAlphaExactContext.init(allocator);
-        defer context.deinit();
-        return try checkedTypeRootSliceAlphaExactEql(.named, self, left, right, &context);
+        scratch.clear();
+        return try checkedTypeRootSliceEql(.alpha, .named, self, left, right, scratch);
     }
 
     /// Bucket key for `rootAliasTransparentEql`: a hash of the alias-resolved
@@ -3439,14 +3458,13 @@ pub const CheckedTypeStoreView = struct {
     /// key prefilter applies.
     pub fn rootsAliasTransparentAlphaEql(
         self: CheckedTypeStoreView,
-        allocator: Allocator,
+        scratch: *EqualityScratch,
         left: []const CheckedTypeId,
         right: []const CheckedTypeId,
     ) Allocator.Error!bool {
         if (left.len != right.len) return false;
-        var context = CheckedTypeAlphaExactContext.init(allocator);
-        defer context.deinit();
-        return try checkedTypeRootSliceAlphaExactEql(.transparent, self, left, right, &context);
+        scratch.clear();
+        return try checkedTypeRootSliceEql(.alpha, .transparent, self, left, right, scratch);
     }
 
     pub fn nominalDeclaration(
@@ -3513,6 +3531,51 @@ const CheckedTypeExactPair = struct {
     right: CheckedTypeId,
 };
 
+/// The type pairs one equality query assumes equal. Pairs are indexed by
+/// their left type; the right types paired with one left type form a chain.
+const CheckedTypePairSet = struct {
+    first_by_left: collections.DenseMap(CheckedTypeId, u32),
+    rows: std.ArrayListUnmanaged(Row) = .empty,
+
+    const no_row = std.math.maxInt(u32);
+    const Row = struct {
+        right: CheckedTypeId,
+        next: u32,
+    };
+
+    fn init(allocator: Allocator) CheckedTypePairSet {
+        return .{ .first_by_left = collections.DenseMap(CheckedTypeId, u32).init(allocator) };
+    }
+
+    fn deinit(self: *CheckedTypePairSet) void {
+        self.rows.deinit(self.first_by_left.allocator);
+        self.first_by_left.deinit();
+    }
+
+    fn clearRetainingCapacity(self: *CheckedTypePairSet) void {
+        self.first_by_left.clearRetainingCapacity();
+        self.rows.clearRetainingCapacity();
+    }
+
+    /// Add `pair`, reporting whether it was already present.
+    fn insert(self: *CheckedTypePairSet, pair: CheckedTypeExactPair) Allocator.Error!bool {
+        const row_index = std.math.cast(u32, self.rows.items.len) orelse return error.OutOfMemory;
+        if (row_index == no_row) return error.OutOfMemory;
+        try self.rows.ensureUnusedCapacity(self.first_by_left.allocator, 1);
+        const head = try self.first_by_left.getOrPut(pair.left);
+        const first = if (head.found_existing) head.value_ptr.* else no_row;
+        var cursor = first;
+        while (cursor != no_row) {
+            const row = self.rows.items[cursor];
+            if (row.right == pair.right) return true;
+            cursor = row.next;
+        }
+        self.rows.appendAssumeCapacity(.{ .right = pair.right, .next = first });
+        head.value_ptr.* = row_index;
+        return false;
+    }
+};
+
 /// How checked type equality treats transparent alias wrappers. `named`
 /// compares an alias by its declaration identity; `transparent` compares only
 /// the types aliases denote, at every depth. Nominal types keep their
@@ -3543,37 +3606,27 @@ fn checkedTypeEqualityRoot(
     };
 }
 
-/// Exact equality of every root pair. Pairs are compared in source order
-/// from an explicit work list; a pair already in `assumed` is equal by
-/// assumption, which is what lets a cyclic type answer at all.
-fn checkedTypeRootSliceExactEql(
+/// Equality of every root pair. Pairs are compared in source order from an
+/// explicit work list; a pair already assumed is equal by assumption, which is
+/// what lets a cyclic type answer at all. `.alpha` shares one variable
+/// bijection across all of the pairs. The caller clears `scratch`.
+fn checkedTypeRootSliceEql(
+    comptime mode: CheckedTypeEqlMode,
     comptime aliases: CheckedAliasEquality,
     view: CheckedTypeStoreView,
     left: []const CheckedTypeId,
     right: []const CheckedTypeId,
-    assumed: *std.AutoHashMap(CheckedTypeExactPair, void),
+    scratch: *CheckedTypeStoreView.EqualityScratch,
 ) Allocator.Error!bool {
-    const allocator = assumed.allocator;
-    var pending: std.ArrayListUnmanaged(CheckedTypeExactPair) = .empty;
-    defer pending.deinit(allocator);
-    if (!try appendCheckedTypePairs(allocator, &pending, left, right)) return false;
+    const pending = &scratch.pending;
+    if (!try appendCheckedTypePairs(scratch.allocator, pending, left, right)) return false;
     std.mem.reverse(CheckedTypeExactPair, pending.items);
     while (pending.pop()) |pair| {
         const start = pending.items.len;
-        if (!try checkedTypePairEqlStep(.exact, aliases, view, pair, assumed, {}, &pending)) return false;
+        if (!try checkedTypePairEqlStep(mode, aliases, view, pair, scratch)) return false;
         std.mem.reverse(CheckedTypeExactPair, pending.items[start..]);
     }
     return true;
-}
-
-fn checkedTypeRootExactEql(
-    comptime aliases: CheckedAliasEquality,
-    view: CheckedTypeStoreView,
-    raw_left: CheckedTypeId,
-    raw_right: CheckedTypeId,
-    assumed: *std.AutoHashMap(CheckedTypeExactPair, void),
-) Allocator.Error!bool {
-    return try checkedTypeRootSliceExactEql(aliases, view, &.{raw_left}, &.{raw_right}, assumed);
 }
 
 /// Queue `left[i]` against `right[i]` in order; false on a length mismatch.
@@ -3601,67 +3654,20 @@ fn checkedDeclaredFieldsExactEql(
     return true;
 }
 
-const CheckedTypeAlphaExactContext = struct {
-    assumed: std.AutoHashMap(CheckedTypeExactPair, void),
-    left_variables: collections.DenseMap(CheckedTypeId, CheckedTypeId),
-    right_variables: collections.DenseMap(CheckedTypeId, CheckedTypeId),
-
-    fn init(allocator: Allocator) CheckedTypeAlphaExactContext {
-        return .{
-            .assumed = std.AutoHashMap(CheckedTypeExactPair, void).init(allocator),
-            .left_variables = collections.DenseMap(CheckedTypeId, CheckedTypeId).init(allocator),
-            .right_variables = collections.DenseMap(CheckedTypeId, CheckedTypeId).init(allocator),
-        };
-    }
-
-    fn deinit(self: *CheckedTypeAlphaExactContext) void {
-        self.assumed.deinit();
-        self.left_variables.deinit();
-        self.right_variables.deinit();
-    }
-};
-
-/// Alpha-exact equality of every root pair, sharing one variable bijection
-/// across all of them. Pairs are compared in source order from an explicit
-/// work list.
-fn checkedTypeRootSliceAlphaExactEql(
-    comptime aliases: CheckedAliasEquality,
-    view: CheckedTypeStoreView,
-    left: []const CheckedTypeId,
-    right: []const CheckedTypeId,
-    context: *CheckedTypeAlphaExactContext,
-) Allocator.Error!bool {
-    const allocator = context.assumed.allocator;
-    var pending: std.ArrayListUnmanaged(CheckedTypeExactPair) = .empty;
-    defer pending.deinit(allocator);
-    if (!try appendCheckedTypePairs(allocator, &pending, left, right)) return false;
-    std.mem.reverse(CheckedTypeExactPair, pending.items);
-    while (pending.pop()) |pair| {
-        const start = pending.items.len;
-        if (!try checkedTypePairEqlStep(.alpha, aliases, view, pair, &context.assumed, context, &pending)) return false;
-        std.mem.reverse(CheckedTypeExactPair, pending.items[start..]);
-    }
-    return true;
-}
-
 const CheckedTypeEqlMode = enum { exact, alpha };
 
 /// Compare one pair's own structure, queueing its child pairs in order.
-/// `.alpha` relates flex/rigid identities through `context`'s bijection;
+/// `.alpha` relates flex/rigid identities through `scratch`'s bijection;
 /// `.exact` treats distinct variable ids as distinct.
 fn checkedTypePairEqlStep(
     comptime mode: CheckedTypeEqlMode,
     comptime aliases: CheckedAliasEquality,
     view: CheckedTypeStoreView,
     pair: CheckedTypeExactPair,
-    assumed: *std.AutoHashMap(CheckedTypeExactPair, void),
-    context: switch (mode) {
-        .exact => void,
-        .alpha => *CheckedTypeAlphaExactContext,
-    },
-    pending: *std.ArrayListUnmanaged(CheckedTypeExactPair),
+    scratch: *CheckedTypeStoreView.EqualityScratch,
 ) Allocator.Error!bool {
-    const allocator = assumed.allocator;
+    const allocator = scratch.allocator;
+    const pending = &scratch.pending;
     const left = checkedTypeEqualityRoot(aliases, view, pair.left);
     const right = checkedTypeEqualityRoot(aliases, view, pair.right);
     if (mode == .exact and left == right) return true;
@@ -3674,8 +3680,8 @@ fn checkedTypePairEqlStep(
         // a sharing mismatch after the same left variable was already mapped to a
         // different right variable.
         switch (left_payload) {
-            .flex => |left_variable| return try checkedTypeVariableAlphaStep(left, left_variable, right, right_payload.flex, context, pending),
-            .rigid => |left_variable| return try checkedTypeVariableAlphaStep(left, left_variable, right, right_payload.rigid, context, pending),
+            .flex => |left_variable| return try checkedTypeVariableAlphaStep(left, left_variable, right, right_payload.flex, scratch),
+            .rigid => |left_variable| return try checkedTypeVariableAlphaStep(left, left_variable, right, right_payload.rigid, scratch),
             .pending,
             .err,
             .empty_record,
@@ -3690,7 +3696,7 @@ fn checkedTypePairEqlStep(
         }
         if (left == right) return true;
     }
-    if ((try assumed.getOrPut(.{ .left = left, .right = right })).found_existing) return true;
+    if (try scratch.assumed.insert(.{ .left = left, .right = right })) return true;
     if (mode == .exact and std.meta.activeTag(left_payload) != std.meta.activeTag(right_payload)) return false;
 
     switch (left_payload) {
@@ -3788,13 +3794,12 @@ fn checkedTypeVariableAlphaStep(
     left: CheckedTypeVariable,
     right_id: CheckedTypeId,
     right: CheckedTypeVariable,
-    context: *CheckedTypeAlphaExactContext,
-    pending: *std.ArrayListUnmanaged(CheckedTypeExactPair),
+    scratch: *CheckedTypeStoreView.EqualityScratch,
 ) Allocator.Error!bool {
-    if (context.left_variables.get(left_id)) |mapped| return mapped == right_id;
-    if (context.right_variables.get(right_id)) |mapped| return mapped == left_id;
-    try context.left_variables.put(left_id, right_id);
-    try context.right_variables.put(right_id, left_id);
+    if (scratch.left_variables.get(left_id)) |mapped| return mapped == right_id;
+    if (scratch.right_variables.get(right_id)) |mapped| return mapped == left_id;
+    try scratch.left_variables.put(left_id, right_id);
+    try scratch.right_variables.put(right_id, left_id);
 
     if (left.numeric_default_phase != right.numeric_default_phase or
         left.row_default != right.row_default or
@@ -3809,7 +3814,7 @@ fn checkedTypeVariableAlphaStep(
         {
             return false;
         }
-        try pending.append(context.assumed.allocator, .{ .left = left_constraint.fn_ty, .right = right_constraint.fn_ty });
+        try scratch.pending.append(scratch.allocator, .{ .left = left_constraint.fn_ty, .right = right_constraint.fn_ty });
     }
     return true;
 }
@@ -19419,10 +19424,10 @@ const EvidencePass = struct {
     fn debugVerifyGeneratedCodecContracts(self: *EvidencePass) Allocator.Error!void {
         if (builtin.mode != .debug) return;
         const type_view = self.checked_types.store.view();
+        var scratch = CheckedTypeStoreView.EqualityScratch.init(self.allocator);
+        defer scratch.deinit();
         for (self.plan_table.generated_codec_derivations) |derivation| {
             const calls = derivation.callsSlice(self.plan_table);
-            var subject_scratch = CheckedTypeStoreView.EqualityScratch.init(self.allocator);
-            defer subject_scratch.deinit();
             for (calls, 0..) |call, index| {
                 switch (call.resolution) {
                     .pending => checkedArtifactInvariant(
@@ -19457,7 +19462,7 @@ const EvidencePass = struct {
                             ),
                         }
                         if (node.dispatcher_ty == null or
-                            !try type_view.rootExactEql(self.allocator, node.dispatcher_ty.?, call.dispatcher_ty))
+                            !try type_view.rootExactEql(&scratch, node.dispatcher_ty.?, call.dispatcher_ty))
                         {
                             checkedArtifactInvariant(
                                 "checked generated codec callable evidence had a different dispatcher type",
@@ -19471,7 +19476,7 @@ const EvidencePass = struct {
                                 .{},
                             ),
                         };
-                        if (!try type_view.rootExactEql(self.allocator, instantiated_callable, call.callable_ty)) {
+                        if (!try type_view.rootExactEql(&scratch, instantiated_callable, call.callable_ty)) {
                             checkedArtifactInvariant(
                                 "checked generated codec callable evidence had a different callable type",
                                 .{},
@@ -19498,7 +19503,7 @@ const EvidencePass = struct {
                         // are therefore renamed copies, while every sharing
                         // relation and constraint must remain exact.
                         if (!try type_view.rootsAlphaExactEql(
-                            self.allocator,
+                            &scratch,
                             &.{ nested.constructor_ty, nested.shape_ty },
                             &.{ call.callable_ty, call.dispatcher_ty },
                         )) {
@@ -19528,7 +19533,7 @@ const EvidencePass = struct {
                         );
                     }
                     if (call.subject_ty) |subject_ty| {
-                        if (!try type_view.rootAliasTransparentEql(&subject_scratch, previous.subject_ty.?, subject_ty)) {
+                        if (!try type_view.rootAliasTransparentEql(&scratch, previous.subject_ty.?, subject_ty)) {
                             checkedArtifactInvariant(
                                 "checked generated codec method role named different subject types",
                                 .{},
@@ -19577,17 +19582,24 @@ const EvidencePass = struct {
         }
         const identity_vars = try self.identity_writer.identityVarsFromScheme(root, relation_roots.items);
         errdefer self.allocator.free(identity_vars);
-        const by_dispatcher = try arena.create(DispatcherParams);
-        by_dispatcher.* = .{};
+        var dispatcher_row_count: usize = 0;
+        for (params.items) |param| {
+            if (param.source != .scheme_requirement) dispatcher_row_count += 1;
+        }
+        const dispatcher_rows = try arena.alloc(DispatcherParams.Row, dispatcher_row_count);
+        var dispatcher_row_len: usize = 0;
         for (params.items, 0..) |param, index| {
             if (param.source == .scheme_requirement) continue;
-            const entry = try by_dispatcher.getOrPut(arena, self.types.resolveVar(param.dispatcher_var).var_);
-            if (!entry.found_existing) entry.value_ptr.* = .empty;
-            try entry.value_ptr.append(arena, @intCast(index));
+            dispatcher_rows[dispatcher_row_len] = .{
+                .root = self.types.resolveVar(param.dispatcher_var).var_,
+                .param = std.math.cast(u32, index) orelse return error.OutOfMemory,
+            };
+            dispatcher_row_len += 1;
         }
+        std.sort.pdq(DispatcherParams.Row, dispatcher_rows, {}, DispatcherParams.Row.lessThan);
         const schema = SchemeSchema{
             .params = try arena.dupe(EvidenceParam, params.items),
-            .by_dispatcher = by_dispatcher,
+            .by_dispatcher = .{ .rows = dispatcher_rows },
             .path_nodes = try arena.dupe(static_dispatch.EvidencePathNode, self.enum_scratch.paramPathNodes()),
             .identity_vars = identity_vars,
         };
@@ -37772,8 +37784,10 @@ test "checked type exact equality compares recursive payloads instead of root ke
     } });
 
     const view = store.view();
-    try std.testing.expect(try view.rootExactEql(allocator, first, second));
-    try std.testing.expect(!try view.rootExactEql(allocator, first, different));
+    var scratch = CheckedTypeStoreView.EqualityScratch.init(allocator);
+    defer scratch.deinit();
+    try std.testing.expect(try view.rootExactEql(&scratch, first, second));
+    try std.testing.expect(!try view.rootExactEql(&scratch, first, different));
 }
 
 test "checked type alpha-exact equality renames variables and preserves sharing" {
@@ -37806,13 +37820,15 @@ test "checked type alpha-exact equality renames variables and preserves sharing"
     const different_default = try store.appendSyntheticFunctionRoot(allocator, .pure, &.{defaulted_variable}, defaulted_variable);
 
     const view = store.view();
-    try std.testing.expect(!try view.rootExactEql(allocator, left, renamed));
-    try std.testing.expect(try view.rootAlphaExactEql(allocator, left, renamed));
-    try std.testing.expect(!try view.rootAlphaExactEql(allocator, left, split));
-    try std.testing.expect(!try view.rootAlphaExactEql(allocator, left, crossed));
-    try std.testing.expect(!try view.rootAlphaExactEql(allocator, left, different_default));
+    var scratch = CheckedTypeStoreView.EqualityScratch.init(allocator);
+    defer scratch.deinit();
+    try std.testing.expect(!try view.rootExactEql(&scratch, left, renamed));
+    try std.testing.expect(try view.rootAlphaExactEql(&scratch, left, renamed));
+    try std.testing.expect(!try view.rootAlphaExactEql(&scratch, left, split));
+    try std.testing.expect(!try view.rootAlphaExactEql(&scratch, left, crossed));
+    try std.testing.expect(!try view.rootAlphaExactEql(&scratch, left, different_default));
     try std.testing.expect(!try view.rootsAlphaExactEql(
-        allocator,
+        &scratch,
         &.{ left_variable, left_variable },
         &.{ right_variable, split_ret },
     ));
