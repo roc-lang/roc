@@ -4326,17 +4326,7 @@ fn evaluationDemand(
                     },
                     .boxy_thunk, .rc_helper => {},
                 }
-                for (visit.set.artifacts, 0..) |candidate, candidate_index| {
-                    const matches = switch (ref.target) {
-                        .proc => |identity| candidate.kind == .proc and std.meta.eql(identity, candidate.kind.proc),
-                        .boxy_thunk => |identity| candidate.kind == .boxy_thunk and std.meta.eql(identity, candidate.kind.boxy_thunk),
-                        .rc_helper => |name| candidate.kind == .rc_helper and std.mem.eql(u8, name, candidate.kind.rc_helper),
-                    };
-                    if (matches) {
-                        try stack.append(allocator, .{ .set = visit.set, .index = @intCast(candidate_index) });
-                        break;
-                    }
-                }
+                if (visit.set.definitionOf(ref.target)) |definition| try stack.append(allocator, .{ .set = visit.set, .index = definition });
             }
         }
         if (!grew) return demand;

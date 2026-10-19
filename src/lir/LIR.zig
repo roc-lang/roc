@@ -1171,6 +1171,18 @@ pub const CallExtra = struct {
     returns_pending: ?PendingReturn = null,
 };
 
+/// The fields of `CFStmt.crash` that most crashes leave unset, stored out of
+/// line.
+pub const CrashExtra = struct {
+    /// Set when this crash is a literal conversion rejecting its literal:
+    /// compile-time evaluation reports the literal's own diagnostic with
+    /// `msg`, the conversion's error message.
+    literal_rejection: ?LiteralRejectionSite = null,
+    /// Set when this crash is the failure path of a read of a compile-time
+    /// value whose producer failed.
+    failed_value: ?ComptimeValueRef = null,
+};
+
 /// The ownership facts ARC stamps on a `CFStmt.assign_ref`, stored out of
 /// line.
 pub const RefExtra = struct {
@@ -1833,17 +1845,13 @@ pub const CFStmt = union(enum) {
     },
     crash: struct {
         msg: CrashMessage,
-        /// Set when this crash is a literal conversion rejecting its literal:
-        /// compile-time evaluation reports the literal's own diagnostic with
-        /// `msg`, the conversion's error message.
-        literal_rejection: ?LiteralRejectionSite = null,
         /// Set when this crash is code checking rejected and already
         /// reported: compile-time evaluation that reaches it discards the
         /// result instead of reporting the problem a second time.
         checked_error: bool = false,
-        /// Set when this crash is the failure path of a read of a
-        /// compile-time value whose producer failed.
-        failed_value: ?ComptimeValueRef = null,
+        /// What the crash reports beyond `msg`; `none` when it reports
+        /// nothing more.
+        extra: StmtRowId(CrashExtra) = .none,
     },
 };
 

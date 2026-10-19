@@ -20820,18 +20820,19 @@ const ProcBodyBuilder = struct {
             const payloads = self.parent.plan.childSlice(variant.payloads);
             if (payloads.len != 1) boxyLowerInvariant("literal conversion error tag did not carry one message");
             const message = try self.addFrameLocalForRep(payloads[0].rep);
+            const site_rejection: LIR.LiteralRejectionSite = .{
+                .owner = owner,
+                .checked_expr = @backingInt(site.source.expr),
+                .kind = switch (self.module.checked_bodies.expr(site.source.expr).data) {
+                    .numeral => .numeral,
+                    .str_from_quote => .quote,
+                    .interpolation => .interpolation,
+                    .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => boxyLowerInvariant("literal rejection site did not name a checked literal conversion"),
+                },
+            };
             const rejected = try self.parent.result.store.addCFStmt(.{ .crash = .{
                 .msg = .{ .local = message },
-                .literal_rejection = .{
-                    .owner = owner,
-                    .checked_expr = @backingInt(site.source.expr),
-                    .kind = switch (self.module.checked_bodies.expr(site.source.expr).data) {
-                        .numeral => .numeral,
-                        .str_from_quote => .quote,
-                        .interpolation => .interpolation,
-                        .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => boxyLowerInvariant("literal rejection site did not name a checked literal conversion"),
-                    },
-                },
+                .extra = try self.parent.result.store.addStmtRow(LIR.CrashExtra, .{ .literal_rejection = site_rejection }),
             } }, self.origin);
             const read_message = try self.assignConcreteTagPayloadRead(message, payloads[0].rep, null, error_value, error_rep, variant.name, @intCast(index), 0, 1, rejected);
             try branches.append(self.parent.allocator, .{ .value = @intCast(index), .body = read_message });
