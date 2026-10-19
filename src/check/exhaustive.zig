@@ -2720,6 +2720,33 @@ fn collectCtorsSketched(
     return .non_exhaustive_wildcards;
 }
 
+/// `prefix` followed by `rest`. A row with nothing in front of `rest` is
+/// `rest` itself, shared rather than copied.
+fn concatRow(
+    allocator: std.mem.Allocator,
+    prefix: []const UnresolvedPattern,
+    rest: []const UnresolvedPattern,
+) error{OutOfMemory}![]const UnresolvedPattern {
+    if (prefix.len == 0) return rest;
+    const row = try allocator.alloc(UnresolvedPattern, prefix.len + rest.len);
+    @memcpy(row[0..prefix.len], prefix);
+    @memcpy(row[prefix.len..], rest);
+    return row;
+}
+
+/// `count` wildcards followed by `rest`, sharing `rest` when `count` is 0.
+fn wildcardRow(
+    allocator: std.mem.Allocator,
+    count: usize,
+    rest: []const UnresolvedPattern,
+) error{OutOfMemory}![]const UnresolvedPattern {
+    if (count == 0) return rest;
+    const row = try allocator.alloc(UnresolvedPattern, count + rest.len);
+    @memset(row[0..count], .anything);
+    @memcpy(row[count..], rest);
+    return row;
+}
+
 /// The rows of a matrix being specialized, at most one per source row, in
 /// one slice sized for every source row.
 const SpecializedRows = struct {
@@ -2773,10 +2800,7 @@ fn specializeByConstructorSketched(
             .ctor => |c| {
                 const pat_tag_id = tag_ids_by_name.get(c.tag_name.idx) orelse continue;
                 if (@backingInt(pat_tag_id) == @backingInt(tag_id)) {
-                    const new_row = try allocator.alloc(UnresolvedPattern, c.args.len + rest.len);
-                    @memcpy(new_row[0..c.args.len], c.args);
-                    @memcpy(new_row[c.args.len..], rest);
-                    new_rows.append(new_row);
+                    new_rows.append(try concatRow(allocator, c.args, rest));
                 }
             },
             .known_ctor => |kc| {
@@ -2812,21 +2836,11 @@ fn specializeByConstructorSketched(
                         new_rows.append(new_row);
                     } else {
                         // Non-record: use positional matching
-                        const new_row = try allocator.alloc(UnresolvedPattern, kc.args.len + rest.len);
-                        @memcpy(new_row[0..kc.args.len], kc.args);
-                        @memcpy(new_row[kc.args.len..], rest);
-                        new_rows.append(new_row);
+                        new_rows.append(try concatRow(allocator, kc.args, rest));
                     }
                 }
             },
-            .anything => {
-                const new_row = try allocator.alloc(UnresolvedPattern, arity + rest.len);
-                for (0..arity) |i| {
-                    new_row[i] = .anything;
-                }
-                @memcpy(new_row[arity..], rest);
-                new_rows.append(new_row);
-            },
+            .anything => new_rows.append(try wildcardRow(allocator, arity, rest)),
             .literal, .str_pattern, .list => {},
         }
     }
@@ -2890,14 +2904,7 @@ fn specializeByListAritySketched(
                     new_rows.append(new_row);
                 }
             },
-            .anything => {
-                const new_row = try allocator.alloc(UnresolvedPattern, target_len + rest.len);
-                for (0..target_len) |i| {
-                    new_row[i] = .anything;
-                }
-                @memcpy(new_row[target_len..], rest);
-                new_rows.append(new_row);
-            },
+            .anything => new_rows.append(try wildcardRow(allocator, target_len, rest)),
             .literal, .str_pattern, .ctor, .known_ctor => {},
         }
     }
@@ -3496,11 +3503,7 @@ fn usefulNext(
                 .tag, .opaque_type, .tuple => try frame.column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity),
             };
 
-            const extended = try allocator.alloc(UnresolvedPattern, alt.arity + rest.len);
-            for (0..alt.arity) |i| {
-                extended[i] = .anything;
-            }
-            @memcpy(extended[alt.arity..], rest);
+            const extended = try wildcardRow(allocator, alt.arity, rest);
 
             return .{ .matrix = specialized, .row = extended, .column_types = specialized_types, .close_open_extension = false };
         },
@@ -3518,11 +3521,7 @@ fn usefulNext(
             const specialized = try specializeByListAritySketched(allocator, frame.matrix, list_arity);
             const specialized_types = try frame.column_types.specializeForList(allocator, lists.elem_type, min_len);
 
-            const extended = try allocator.alloc(UnresolvedPattern, min_len + rest.len);
-            for (0..min_len) |i| {
-                extended[i] = .anything;
-            }
-            @memcpy(extended[min_len..], rest);
+            const extended = try wildcardRow(allocator, min_len, rest);
 
             return .{ .matrix = specialized, .row = extended, .column_types = specialized_types, .close_open_extension = false };
         },
@@ -3608,9 +3607,7 @@ fn usefulEnter(
             );
             const specialized_types = try column_types.specializeByConstructor(allocator, tag_id, c.args.len);
 
-            const extended_row = try allocator.alloc(UnresolvedPattern, c.args.len + rest.len);
-            @memcpy(extended_row[0..c.args.len], c.args);
-            @memcpy(extended_row[c.args.len..], rest);
+            const extended_row = try concatRow(allocator, c.args, rest);
 
             return .{ .call = .{ .matrix = specialized, .row = extended_row, .column_types = specialized_types, .close_open_extension = false } };
         },
@@ -3711,12 +3708,7 @@ fn usefulEnter(
                     @memcpy(row[arity..], rest);
                     break :blk row;
                 },
-                .tag, .opaque_type, .tuple, .guard => blk: {
-                    const row = try allocator.alloc(UnresolvedPattern, kc.args.len + rest.len);
-                    @memcpy(row[0..kc.args.len], kc.args);
-                    @memcpy(row[kc.args.len..], rest);
-                    break :blk row;
-                },
+                .tag, .opaque_type, .tuple, .guard => try concatRow(allocator, kc.args, rest),
             };
 
             return .{ .call = .{ .matrix = specialized, .row = extended_row, .column_types = specialized_types, .close_open_extension = false } };
