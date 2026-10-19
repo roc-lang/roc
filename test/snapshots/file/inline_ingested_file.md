@@ -14,7 +14,7 @@ foo = Json.parse(data)
 DUPLICATE DEFINITION - inline_ingested_file.md:2:1:2:12
 FILE NOT FOUND - inline_ingested_file.md:1:1:1:34
 MOD NOT FOUND - inline_ingested_file.md:2:1:2:12
-TYPE NOT DETERMINED - inline_ingested_file.md:4:7:4:17
+MISSING METHOD - inline_ingested_file.md:4:7:4:17
 # PROBLEMS
 ~~~clojure
 (reports
@@ -63,27 +63,31 @@ TYPE NOT DETERMINED - inline_ingested_file.md:4:7:4:17
 			(source-region (file "inline_ingested_file.md") (start 2 1) (end 2 12) (annotation error) (line-text "import Json"))))
 	(report
 		(severity runtime_error)
-		(title "Type Not Determined")
+		(title "Missing Method")
 		(region (start 4 7) (end 4 17))
 		(headline
-			(reflow "Nothing in this program determines the type this")
+			(reflow "This")
 			(reflow " ")
 			(annotated code "parser_for")
 			(reflow " ")
-			(reflow "method is called on."))
+			(reflow "call is on")
+			(reflow " ")
+			(reflow "a value of type")
+			(reflow " ")
+			(annotated code "a")
+			(reflow ",")
+			(reflow " ")
+			(reflow "which never resolved to a concrete type,")
+			(reflow " ")
+			(reflow "so it has no")
+			(reflow " ")
+			(annotated code "parser_for")
+			(reflow " ")
+			(reflow "method."))
 		(document
 			(source-region (file "inline_ingested_file.md") (start 4 7) (end 4 17) (annotation error) (line-text "foo = Json.parse(data)"))
 			(line-break)
-			(reflow "Without knowing which type it is, there's no way to tell which")
-			(reflow " ")
-			(annotated code "parser_for")
-			(reflow " ")
-			(reflow "method to use.")
-			(line-break)
-			(line-break)
-			(annotated emphasis "Hint:")
-			(reflow " ")
-			(reflow "Add a type annotation saying which type it should be."))))
+			(reflow "Using the value somewhere that requires a specific type, or annotating it, will give it one."))))
 ~~~
 # TOKENS
 ~~~zig

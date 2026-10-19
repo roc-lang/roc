@@ -119,14 +119,14 @@ test "check type - string plus number should fail" {
     const source =
         \\x = "hello" + 123
     ;
-    try checkTypesModule(source, .fail_first, "Type Not Determined");
+    try checkTypesModule(source, .fail_first, "Missing Method");
 }
 
 test "check type - string plus string should fail (no plus method)" {
     const source =
         \\x = "hello" + "world"
     ;
-    try checkTypesModule(source, .fail, "Type Not Determined");
+    try checkTypesModule(source, .fail, "Missing Method");
 }
 
 // binop operand type unification //
@@ -4511,7 +4511,7 @@ test "check type - unary minus mismatch" {
         \\
         \\y = -x
     ;
-    try checkTypesModule(source, .fail, "Type Not Determined");
+    try checkTypesModule(source, .fail, "Missing Method");
 }
 
 // binops
@@ -12140,7 +12140,7 @@ test "check type - shared pending scheme requirement reports once across uses" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
     try testing.expectEqual(@as(usize, 1), try test_env.typeProblemCount());
-    try test_env.assertFirstTypeError("Type Not Determined");
+    try test_env.assertFirstTypeError("Missing Method");
 }
 
 test "check type - independent value dispatch sites each receive an ambiguity judgment" {

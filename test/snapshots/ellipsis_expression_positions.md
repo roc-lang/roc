@@ -89,8 +89,8 @@ TRAILING `?` - ellipsis_expression_positions.md:44:19:44:20
 UNCONDITIONAL CONDITION - ellipsis_expression_positions.md:25:23:25:26
 UNCONDITIONAL CONDITION - ellipsis_expression_positions.md:26:29:26:32
 UNCONDITIONAL CONDITION - ellipsis_expression_positions.md:34:10:34:13
-TYPE NOT DETERMINED - ellipsis_expression_positions.md:39:18:39:21
-TYPE NOT DETERMINED - ellipsis_expression_positions.md:59:14:59:17
+MISSING METHOD - ellipsis_expression_positions.md:39:18:39:21
+MISSING METHOD - ellipsis_expression_positions.md:59:14:59:17
 # PROBLEMS
 ~~~clojure
 (reports
@@ -219,46 +219,52 @@ TYPE NOT DETERMINED - ellipsis_expression_positions.md:59:14:59:17
 			(source-region (file "ellipsis_expression_positions.md") (start 34 10) (end 34 13) (annotation warning) (line-text "    x if ... => x"))))
 	(report
 		(severity runtime_error)
-		(title "Type Not Determined")
+		(title "Missing Method")
 		(region (start 39 18) (end 39 21))
 		(headline
-			(reflow "Nothing in this program determines the type of the values this")
+			(reflow "This")
 			(reflow " ")
 			(annotated code "==")
 			(reflow " ")
-			(reflow "compares."))
+			(reflow "compares")
+			(reflow " ")
+			(reflow "values whose type never resolved to a concrete type,")
+			(reflow " ")
+			(reflow "so they have no")
+			(reflow " ")
+			(annotated code "is_eq")
+			(reflow " ")
+			(reflow "method for")
+			(reflow " ")
+			(annotated code "==")
+			(reflow " ")
+			(reflow "to call."))
 		(document
 			(source-region (file "ellipsis_expression_positions.md") (start 39 18) (end 39 21) (annotation error) (line-text "both_sides = |_| ... == ..."))
 			(line-break)
-			(reflow "Without knowing which type it is, there's no way to tell how to compare them.")
-			(line-break)
-			(line-break)
-			(annotated emphasis "Hint:")
-			(reflow " ")
-			(reflow "Add a type annotation saying which type it should be.")))
+			(reflow "Using the values somewhere that requires a specific type, or annotating them, will give them one.")))
 	(report
 		(severity runtime_error)
-		(title "Type Not Determined")
+		(title "Missing Method")
 		(region (start 59 14) (end 59 17))
 		(headline
-			(reflow "Nothing in this program determines the type this")
+			(reflow "This")
 			(reflow " ")
 			(annotated code "iter")
 			(reflow " ")
-			(reflow "method is called on."))
+			(reflow "call is on")
+			(reflow " ")
+			(reflow "a value whose type never resolved to a concrete type,")
+			(reflow " ")
+			(reflow "so it has no")
+			(reflow " ")
+			(annotated code "iter")
+			(reflow " ")
+			(reflow "method."))
 		(document
 			(source-region (file "ellipsis_expression_positions.md") (start 59 14) (end 59 17) (annotation error) (line-text "    for x in ... {"))
 			(line-break)
-			(reflow "Without knowing which type it is, there's no way to tell which")
-			(reflow " ")
-			(annotated code "iter")
-			(reflow " ")
-			(reflow "method to use.")
-			(line-break)
-			(line-break)
-			(annotated emphasis "Hint:")
-			(reflow " ")
-			(reflow "Add a type annotation saying which type it should be."))))
+			(reflow "Using the value somewhere that requires a specific type, or annotating it, will give it one."))))
 ~~~
 # TOKENS
 ~~~zig
