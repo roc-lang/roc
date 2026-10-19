@@ -9073,14 +9073,6 @@ fn packFileBytes(
     set: *const backend.dev.ProcArtifact.Set,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
 ) Allocator.Error![]u8 {
-    var artifact_by_identity = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator);
-    defer artifact_by_identity.deinit();
-    for (set.artifacts, 0..) |artifact, index| {
-        switch (artifact.kind) {
-            .proc => |identity| try artifact_by_identity.put(identity, @intCast(index)),
-            .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => {},
-        }
-    }
     var specs = std.ArrayList(backend.dev.PackFile.SpecEntry).empty;
     defer specs.deinit(allocator);
     var conditions_arena = base.SingleThreadArena.init(allocator);
@@ -9095,6 +9087,8 @@ fn packFileBytes(
     for (procs, converting) |proc, converts| {
         if (converts) try literal_converters.put(proc.identity, {});
     }
+    var converting_artifacts = try literalConvertingArtifacts(allocator, set, &literal_converters);
+    defer converting_artifacts.deinit(allocator);
     var closure = try SpliceClosure.init(allocator, set);
     defer closure.deinit();
     const comptime_reads = if (lowered.spec_comptime_reads) |*reads| reads else {
@@ -9136,7 +9130,7 @@ fn packFileBytes(
     }
     for (candidates.items) |spec_proc| {
         const proc = procs[@backingInt(spec_proc.proc)];
-        const artifact = artifact_by_identity.get(proc.identity) orelse continue;
+        const artifact = closure.offeredProcArtifact(proc.identity) orelse continue;
         // An entry whose code evaluates a compile-time root in place would
         // compute that root whenever it runs in a program that evaluates the
         // root itself, so it is not offered. Any other entry carries the
@@ -9178,7 +9172,7 @@ fn packFileBytes(
         // an entry that reaches either cannot be linked elsewhere, so it is
         // not offered.
         const placed = try closure.of(artifact);
-        if (closureNamesProgramLocalSymbols(set, placed) or closureConvertsLiteral(set, &literal_converters, placed)) {
+        if (closureNamesProgramLocalSymbols(set, placed) or closureConvertsLiteral(&converting_artifacts, placed)) {
             withheld += 1;
             continue;
         }
@@ -9222,18 +9216,22 @@ fn procFingerprint(allocator: Allocator, lowered: *const lir.CheckedPipeline.Low
 const SpliceClosure = struct {
     allocator: Allocator,
     set: *const backend.dev.ProcArtifact.Set,
-    procs: std.AutoHashMap(lir.ProcIdentity, u32),
+    procs: std.AutoHashMap(lir.ProcIdentity, ProcArtifacts),
     thunks: std.AutoHashMap(lir.ProcIdentity, u32),
     helpers: std.StringHashMap(u32),
     /// Artifacts the current query reached; exactly the indices in `order`.
     seen: std.DynamicBitSetUnmanaged,
     order: std.ArrayList(u32) = .empty,
 
+    /// The artifacts of one procedure identity: a splice reaches the first,
+    /// and a pack offers the last.
+    const ProcArtifacts = struct { first: u32, last: u32 };
+
     fn init(allocator: Allocator, set: *const backend.dev.ProcArtifact.Set) Allocator.Error!SpliceClosure {
         var self = SpliceClosure{
             .allocator = allocator,
             .set = set,
-            .procs = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator),
+            .procs = std.AutoHashMap(lir.ProcIdentity, ProcArtifacts).init(allocator),
             .thunks = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator),
             .helpers = std.StringHashMap(u32).init(allocator),
             .seen = .{},
@@ -9242,13 +9240,23 @@ const SpliceClosure = struct {
         self.seen = try std.DynamicBitSetUnmanaged.initEmpty(allocator, set.artifacts.len);
         for (set.artifacts, 0..) |artifact, index| {
             switch (artifact.kind) {
-                .proc => |identity| _ = try self.procs.getOrPutValue(identity, @intCast(index)),
+                .proc => |identity| {
+                    const entry = try self.procs.getOrPut(identity);
+                    if (!entry.found_existing) entry.value_ptr.first = @intCast(index);
+                    entry.value_ptr.last = @intCast(index);
+                },
                 .boxy_thunk => |identity| _ = try self.thunks.getOrPutValue(identity, @intCast(index)),
                 .rc_helper => |name| _ = try self.helpers.getOrPutValue(name, @intCast(index)),
                 .entrypoint, .message_pool_run, .branch_island => {},
             }
         }
         return self;
+    }
+
+    /// The artifact a pack offers for the procedure `identity`.
+    fn offeredProcArtifact(self: *const SpliceClosure, identity: lir.ProcIdentity) ?u32 {
+        const artifacts = self.procs.get(identity) orelse return null;
+        return artifacts.last;
     }
 
     fn deinit(self: *SpliceClosure) void {
@@ -9271,7 +9279,7 @@ const SpliceClosure = struct {
             for (artifact.refs) |ref| try self.visit(ref.target);
             for (artifact.symbolic_refs) |ref| {
                 const target = switch (ref.target) {
-                    .proc => |identity| self.procs.get(identity),
+                    .proc => |identity| if (self.procs.get(identity)) |artifacts| artifacts.first else null,
                     .boxy_thunk => |identity| self.thunks.get(identity),
                     .rc_helper => |name| self.helpers.get(name),
                 };
@@ -9288,17 +9296,28 @@ const SpliceClosure = struct {
     }
 };
 
-/// Whether any procedure a splice places converts a specialized custom
+/// The artifacts of `set` whose procedure converts a specialized custom
 /// literal when it runs (`PackProgram.procConvertsLiteralAtRuntime`).
-fn closureConvertsLiteral(
+fn literalConvertingArtifacts(
+    allocator: Allocator,
     set: *const backend.dev.ProcArtifact.Set,
     literal_converters: *const std.AutoHashMap(lir.ProcIdentity, void),
-    placed: []const u32,
-) bool {
-    for (placed) |index| switch (set.artifacts[index].kind) {
-        .proc => |identity| if (literal_converters.contains(identity)) return true,
+) Allocator.Error!std.DynamicBitSetUnmanaged {
+    var converting = try std.DynamicBitSetUnmanaged.initEmpty(allocator, set.artifacts.len);
+    if (literal_converters.count() == 0) return converting;
+    for (set.artifacts, 0..) |artifact, index| switch (artifact.kind) {
+        .proc => |identity| if (literal_converters.contains(identity)) converting.set(index),
         .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => {},
     };
+    return converting;
+}
+
+/// Whether any procedure a splice places converts a specialized custom
+/// literal when it runs.
+fn closureConvertsLiteral(converting_artifacts: *const std.DynamicBitSetUnmanaged, placed: []const u32) bool {
+    for (placed) |index| {
+        if (converting_artifacts.isSet(index)) return true;
+    }
     return false;
 }
 
@@ -9389,9 +9408,11 @@ test "pack withholds an entry whose stable references reach a literal-converting
     var converters = std.AutoHashMap(lir.ProcIdentity, void).init(std.testing.allocator);
     defer converters.deinit();
     try converters.put(converter, {});
+    var converting_artifacts = try literalConvertingArtifacts(std.testing.allocator, &set, &converters);
+    defer converting_artifacts.deinit(std.testing.allocator);
     var closure = try SpliceClosure.init(std.testing.allocator, &set);
     defer closure.deinit();
-    try std.testing.expect(closureConvertsLiteral(&set, &converters, try closure.of(0)));
+    try std.testing.expect(closureConvertsLiteral(&converting_artifacts, try closure.of(0)));
 }
 
 test "pack offers an entry that carries its program data and withholds one that calls the Boxy runtime" {
@@ -12005,6 +12026,8 @@ const CliTestPlan = struct {
     /// Only modules with executable test requests need runtime planning.
     modules: []CliTestPlanModule,
     entries: []CliTestPlanEntry,
+    /// Every entry's `symbol_name`, each followed by its terminator.
+    symbol_names: []u8,
 
     fn deinit(self: *CliTestPlan, allocator: Allocator) void {
         for (self.modules) |*module| {
@@ -12014,7 +12037,8 @@ const CliTestPlan = struct {
             }
         }
         allocator.free(self.modules);
-        deinitCliTestPlanEntries(allocator, self.entries);
+        allocator.free(self.entries);
+        allocator.free(self.symbol_names);
     }
 };
 
@@ -12102,11 +12126,21 @@ fn deinitCliTestTranscriptEvents(allocator: Allocator, events: []const CliTestTr
     if (events.len > 0) allocator.free(@constCast(events));
 }
 
-fn deinitCliTestPlanEntries(allocator: Allocator, entries: []const CliTestPlanEntry) void {
-    for (entries) |entry| {
-        allocator.free(entry.symbol_name);
+/// Name every entry's test symbol after its result index, into one buffer
+/// that the plan owns.
+fn nameCliTestPlanSymbols(allocator: Allocator, entries: []CliTestPlanEntry) Allocator.Error![]u8 {
+    const symbol_format = "roc_test_expect_{d}";
+    var len: usize = 0;
+    for (entries) |entry| len += std.fmt.count(symbol_format, .{entry.result_index}) + 1;
+    const buffer = try allocator.alloc(u8, len);
+    var offset: usize = 0;
+    for (entries) |*entry| {
+        const name = std.fmt.bufPrintSentinel(buffer[offset..], symbol_format, .{entry.result_index}, 0) catch unreachable;
+        entry.symbol_name = name;
+        offset += name.len + 1;
     }
-    allocator.free(@constCast(entries));
+    std.debug.assert(offset == buffer.len);
+    return buffer;
 }
 
 const cli_test_cache_magic = "ROC_TEST_RESULTS_V9";
@@ -12479,9 +12513,6 @@ fn buildCliTestPlan(
             }
         }
         planned_modules.deinit(ctx.gpa);
-        for (entries.items) |entry| {
-            ctx.gpa.free(entry.symbol_name);
-        }
         entries.deinit(ctx.gpa);
     }
 
@@ -12534,18 +12565,15 @@ fn buildCliTestPlan(
         const first_entry_index: u32 = @intCast(entries.items.len);
         for (test_roots, 0..) |root, root_index| {
             const result_index: u32 = @intCast(entries.items.len);
-            const symbol_name = try std.fmt.allocPrintSentinel(ctx.gpa, "roc_test_expect_{d}", .{result_index}, 0);
-            entries.append(ctx.gpa, .{
+            // Named below, once every entry is known.
+            try entries.append(ctx.gpa, .{
                 .module_index = @intCast(module_index),
                 .root_index = @intCast(root_index),
                 .root_order = root.order,
                 .result_index = result_index,
                 .region = testRootRegion(module.semantic.env, root.source),
-                .symbol_name = symbol_name,
-            }) catch |err| {
-                ctx.gpa.free(symbol_name);
-                return err;
-            };
+                .symbol_name = "",
+            });
         }
 
         try planned_modules.append(ctx.gpa, .{
@@ -12568,12 +12596,14 @@ fn buildCliTestPlan(
         ctx.gpa.free(owned_modules);
     }
     const owned_entries = try entries.toOwnedSlice(ctx.gpa);
-    errdefer deinitCliTestPlanEntries(ctx.gpa, owned_entries);
+    errdefer ctx.gpa.free(owned_entries);
+    const symbol_names = try nameCliTestPlanSymbols(ctx.gpa, owned_entries);
 
     return .{
         .modules_with_tests = modules_with_tests,
         .modules = owned_modules,
         .entries = owned_entries,
+        .symbol_names = symbol_names,
     };
 }
 
