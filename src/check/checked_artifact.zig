@@ -11368,7 +11368,7 @@ pub const CheckedBodyStoreView = struct {
     record_destruct_pool: []const CheckedRecordDestruct = &.{},
     str_pattern_step_pool: []const CheckedStrPatternStep = &.{},
     string_bytes: []const u8 = &.{},
-    string_ranges: []const canonical.NameInterner.Range = &.{},
+    string_ranges: []const CheckedStringRange = &.{},
     default_exprs: []const CheckedBodyStore.CheckedDefaultExpr = &.{},
     record_omitted_defaults: []const CheckedRecordOmittedDefault = &.{},
 
@@ -12478,7 +12478,7 @@ pub const CheckedBodyStore = struct {
     /// Flat bytes pool backing string literals; `string_ranges` holds bounds.
     string_bytes: std.ArrayList(u8) = .empty,
     /// `CheckedStringLiteralId`-indexed ranges into `string_bytes`.
-    string_ranges: std.ArrayList(canonical.NameInterner.Range) = .empty,
+    string_ranges: std.ArrayList(CheckedStringRange) = .empty,
     /// Serialized local default expressions, sorted by source node for
     /// cross-module construction lookup.
     default_exprs: std.ArrayList(CheckedDefaultExpr) = .empty,
@@ -13457,7 +13457,7 @@ pub const CheckedBodyStore = struct {
         record_destruct_pool: SerializedSlice(CheckedRecordDestruct) = .{},
         str_pattern_step_pool: SerializedSlice(CheckedStrPatternStep) = .{},
         string_bytes: SerializedSlice(u8) = .{},
-        string_ranges: SerializedSlice(canonical.NameInterner.Range) = .{},
+        string_ranges: SerializedSlice(CheckedStringRange) = .{},
         default_exprs: SerializedSlice(CheckedDefaultExpr) = .{},
         record_omitted_defaults: SerializedSlice(CheckedRecordOmittedDefault) = .{},
 
@@ -30196,6 +30196,12 @@ pub const CheckedConstBodyTable = struct {
 /// Public `MethodRegistryEntryRef` declaration.
 pub const MethodRegistryEntryRef = enum(u32) { _ };
 
+/// The bytes of one checked string literal in its body store's string pool.
+pub const CheckedStringRange = extern struct {
+    start: u32,
+    len: u32,
+};
+
 /// Public `ArtifactCheckedBodyRef` declaration.
 pub const ArtifactCheckedBodyRef = struct {
     artifact: CheckedModuleDigest,
@@ -39530,8 +39536,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x00, 0x2B, 0x86, 0x57, 0xA8, 0x25, 0xCD, 0x28, 0x03, 0x0B, 0x64, 0x39, 0xF3, 0x6F, 0x4A, 0x5E,
-        0xC0, 0x9D, 0x8E, 0x9C, 0xC1, 0x36, 0x27, 0xFD, 0xFE, 0x4B, 0xDF, 0x46, 0x1D, 0xFF, 0xF6, 0x83,
+        0xBE, 0x96, 0xF9, 0x34, 0x4E, 0xC9, 0x43, 0xD9, 0x80, 0x8E, 0x4B, 0x96, 0x17, 0x16, 0xA0, 0x7C,
+        0xD6, 0x05, 0x70, 0x10, 0x82, 0xC8, 0xCD, 0x58, 0xF0, 0x15, 0x84, 0xCE, 0xC2, 0xEF, 0x7F, 0x0C,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

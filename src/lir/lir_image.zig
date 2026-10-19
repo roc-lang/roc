@@ -324,19 +324,19 @@ pub const StringLiteralStoreImage = extern struct {
 /// Portable Boxy names. The insertion index never enters an image.
 pub const BoxyNamesImage = extern struct {
     bytes: ArrayRef,
-    ranges: ArrayRef,
+    ends: ArrayRef,
 
     fn fromStore(encoder: anytype, names: *const core.BoxyNames) @TypeOf(encoder).Error!BoxyNamesImage {
         return .{
             .bytes = try encoder.ref(names.interner.bytes.items.items),
-            .ranges = try encoder.ref(names.interner.ranges.items.items),
+            .ends = try encoder.ref(names.interner.ends.items.items),
         };
     }
 
     fn view(self: BoxyNamesImage, base_ptr: [*]align(1) u8, image_size: usize) ImageError!core.BoxyNames {
         return .{ .interner = .{
             .bytes = try safeListFromRef(u8, base_ptr, image_size, self.bytes),
-            .ranges = try safeListFromRef(base.SerialStringInterner.Range, base_ptr, image_size, self.ranges),
+            .ends = try safeListFromRef(u32, base_ptr, image_size, self.ends),
             .supports_inserts = false,
         } };
     }
@@ -1788,7 +1788,7 @@ test "LIR image copies and round-trips every populated store field" {
     try std.testing.expectEqualStrings("étiquette", view.store.getBoxyName(unicode_name));
     try std.testing.expectEqualStrings("", view.store.getBoxyName(empty_name));
     try h.expectBytesEq(store.boxy_names.interner.bytes.items.items, view.store.boxy_names.interner.bytes.items.items);
-    try h.expectBytesEq(std.mem.sliceAsBytes(store.boxy_names.interner.ranges.items.items), std.mem.sliceAsBytes(view.store.boxy_names.interner.ranges.items.items));
+    try h.expectBytesEq(std.mem.sliceAsBytes(store.boxy_names.interner.ends.items.items), std.mem.sliceAsBytes(view.store.boxy_names.interner.ends.items.items));
     try std.testing.expectEqual(@as(usize, 0), view.store.boxy_names.interner.index.len());
     try std.testing.expect(!view.store.boxy_names.interner.supports_inserts);
 
