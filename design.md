@@ -2432,15 +2432,17 @@ reference counts.
 #### Recorded Program Output
 
 A dev build also records its program's runtime output: the Roc object it
-linked and the link facts it read from the lowering (hosted symbols, link
+linked and the link inputs it read from the lowering (hosted symbols, link
 roots and app exports), filed under a key covering every checked module the
 program lowers against, with their code-generation keys, and the build's
 output policy, inside the store's namespace for the target, compiler and
 optimization level. Once a later build's program is checked and before it is
-evaluated, the build asks for that key. On a hit the program is evaluated as
-`roc check` evaluates it, which reports the same diagnostics, no runtime
-program is lowered, and the recorded object is linked with the platform's
-current inputs. A build that reports an error records nothing, and neither
+evaluated, the build asks for that key. On a hit the program is evaluated
+exactly as a build without the record evaluates it: its specialization decides
+the demanded compile-time roots ("Demand-Driven Compile-Time Evaluation"), so
+it reports the same diagnostics and evaluates no root a build without the
+record would leave alone. No runtime program is lowered, and the recorded
+object is linked with the platform's current inputs. A build that reports an error records nothing, and neither
 does a program that links Boxy runtime inputs or optimized pack objects,
 which the record does not carry.
 
@@ -12869,8 +12871,8 @@ Other solved-graph mutations:
   ("Evidence params"). Each same-name callable pair on a receiver still flex
   at the boundary's rank is related through an ordinary committed probe; a
   probe that cannot establish the pair rolls back, reports the method
-  conflict, and poisons the receiver. A relation that defers requirements is
-  redone after recording the two method types, so a requirement that later
+  conflict, and poisons the receiver. A relation that defers checks is
+  redone after recording the two method types, so a deferred check that later
   fails reports the method conflict and poisons the definition.
 - `deduplicateGeneralizedDispatchRequirements` (`setVarContent` of a retained
   constraint list, `unifyEquivalentGeneralizedCallables` committed probe)—
