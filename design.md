@@ -632,7 +632,13 @@ each constant as weak readonly data under its `roc__h` content name, so two
 objects carrying one constant share a single copy in the link. It exports,
 for each entry it offers, a weak C-ABI entry `roc__c{hash}`, the procedure's
 arguments and result classified by `layout.abi` exactly as for a hosted
-call. Two such objects may export one entry; the link keeps one. Not every
+call. Two such objects may export one entry; the link keeps one. Each weak
+definition sits in an `any` COMDAT of its own name on every object format
+that has COMDATs, so the link keeps one copy and discards the others whole;
+COFF can express a coalescing definition only this way, since a weak
+definition without one lowers to a strong `.weak.*` default that every
+object defining it also defines. Mach-O has no COMDATs, and its linker
+coalesces weak definitions without one. Not every
 object format can place a weak symbol inside a datum, so a constant's symbol
 in an object pack marks its first byte: a constant whose symbol sits some
 bytes into its data is named as the datum anchored at its first byte, with
@@ -13559,6 +13565,30 @@ frame stack, and an argument's evidence computation that reaches such an
 operand stops, lets the loop draft it, and resumes. A nested function never
 starts a lowering run of its own inside its parent's.
 
+### Lowering Scopes Share One Helper Layer
+
+Monotype lowering keeps its state in two scopes: the coordinator `Builder`,
+whose ids belong to the program or to the active specialization workspace, and
+each body's `BodyContext`, whose ids belong to its instantiation graph's
+stores. Boxy lowering has the same split between `ProcedureBuilder` and each
+`ProcBodyBuilder`. A question asked of either scope's data has one definition,
+which takes the stores it reads as parameters: type-shape queries take a type
+store (and the name store a tag label belongs to), name imports take the
+destination name store, and method lookup takes the name store its owner's ids
+belong to and memoizes only owners in the program's domain. Each scope passes
+its own stores, so the scope a helper is called from never changes which store
+it reads. Tag lookup within one name store is label identity, which there is
+id equality; a label from another domain is imported before it is looked up.
+
+Coordinator work whose inputs are program ids, such as result-row widening
+adapters, reads the program store explicitly and only under a program
+destination. Where the two scopes genuinely differ, such as the store a
+restored constant is emitted into or how a node's reuse is cached, a generic
+walker takes the scope as a comptime-duck-typed parameter (`runConstRestore`)
+or a policy struct (`RuntimeImpossibilityProofEvaluation`). A source-text test
+fails when either lowerer defines one name twice with near-identical bodies
+outside an explicit list of such per-scope interface methods.
+
 ### Monotype Types
 
 Monotype types contain no lambda sets.
@@ -23348,7 +23378,8 @@ functions; object symbol discovery must never enlarge that set.
 
 Compiled Roc code references each hosted symbol (and the fixed runtime set:
 roc_alloc, roc_dealloc, roc_realloc, roc_dbg, roc_expect_failed, roc_crashed)
-as a weak extern and calls it directly with the natural C ABI for its types.
+as a weak extern (a plain extern on COFF, below) and calls it directly with
+the natural C ABI for its types.
 Entrypoints are exported under their `provides` strings with natural C ABI
 signatures. No context pointer is threaded through compiled code: hosts that
 need per-call context (for example an arena) own its delivery out of band
