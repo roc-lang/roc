@@ -9,42 +9,79 @@ const Var = types.Var;
 
 /// Reuse completed root answers only while the analyzed graph is immutable.
 pub const Memo = struct {
-    answers: std.HashMapUnmanaged(Key, bool, Context, std.hash_map.default_max_load_percentage) = .empty,
+    answers: std.HashMapUnmanaged(StoredKey, bool, StoredContext, std.hash_map.default_max_load_percentage) = .empty,
+    /// Every stored key's assumptions, back to back.
+    known_empty_pool: std.ArrayListUnmanaged(Var) = .empty,
 
     pub const Key = struct {
         root: Var,
-        /// Sorted, unique resolved roots. Owned by the memo for stored keys.
+        /// Sorted, unique resolved roots.
         known_empty: []const Var,
     };
 
-    const Context = struct {
-        pub fn hash(_: Context, key: Key) u64 {
-            var hasher = std.hash.Wyhash.init(0);
-            std.hash.autoHash(&hasher, key.root);
-            for (key.known_empty) |root| std.hash.autoHash(&hasher, root);
-            return hasher.final();
+    /// A stored key, whose assumptions are a span of `known_empty_pool`.
+    const StoredKey = struct {
+        root: Var,
+        start: u32,
+        len: u32,
+    };
+
+    fn hashKey(root: Var, known_empty: []const Var) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        std.hash.autoHash(&hasher, root);
+        for (known_empty) |known| std.hash.autoHash(&hasher, known);
+        return hasher.final();
+    }
+
+    fn storedKnownEmpty(pool: []const Var, key: StoredKey) []const Var {
+        return pool[key.start..][0..key.len];
+    }
+
+    const StoredContext = struct {
+        pool: []const Var,
+
+        pub fn hash(self: StoredContext, key: StoredKey) u64 {
+            return hashKey(key.root, storedKnownEmpty(self.pool, key));
         }
 
-        pub fn eql(_: Context, a: Key, b: Key) bool {
-            return a.root == b.root and varsEqual(a.known_empty, b.known_empty);
+        pub fn eql(_: StoredContext, a: StoredKey, b: StoredKey) bool {
+            // Stored keys are distinct, so they are equal exactly when they
+            // name the same span.
+            return a.root == b.root and a.start == b.start and a.len == b.len;
+        }
+    };
+
+    /// Looks stored keys up by a query key.
+    const QueryContext = struct {
+        pool: []const Var,
+
+        pub fn hash(_: QueryContext, key: Key) u64 {
+            return hashKey(key.root, key.known_empty);
+        }
+
+        pub fn eql(self: QueryContext, query: Key, stored: StoredKey) bool {
+            return query.root == stored.root and varsEqual(query.known_empty, storedKnownEmpty(self.pool, stored));
         }
     };
 
     pub fn deinit(self: *Memo, gpa: std.mem.Allocator) void {
-        var keys = self.answers.keyIterator();
-        while (keys.next()) |key| gpa.free(key.known_empty);
         self.answers.deinit(gpa);
+        self.known_empty_pool.deinit(gpa);
     }
 
     pub fn get(self: *const Memo, key: Key) ?bool {
-        return self.answers.get(key);
+        return self.answers.getAdapted(key, QueryContext{ .pool = self.known_empty_pool.items });
     }
 
     /// Call only with a complete root-query answer, never a cycle assumption.
     pub fn put(self: *Memo, gpa: std.mem.Allocator, key: Key, answer: bool) std.mem.Allocator.Error!void {
-        const owned = try gpa.dupe(Var, key.known_empty);
-        errdefer gpa.free(owned);
-        try self.answers.putNoClobber(gpa, .{ .root = key.root, .known_empty = owned }, answer);
+        std.debug.assert(self.get(key) == null);
+        const start = std.math.cast(u32, self.known_empty_pool.items.len) orelse return error.OutOfMemory;
+        const len = std.math.cast(u32, key.known_empty.len) orelse return error.OutOfMemory;
+        try self.known_empty_pool.appendSlice(gpa, key.known_empty);
+        errdefer self.known_empty_pool.shrinkRetainingCapacity(start);
+        const stored: StoredKey = .{ .root = key.root, .start = start, .len = len };
+        try self.answers.putNoClobberContext(gpa, stored, answer, StoredContext{ .pool = self.known_empty_pool.items });
     }
 
     /// Canonicalize query assumptions without changing the solver graph.
