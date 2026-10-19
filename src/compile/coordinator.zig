@@ -1284,6 +1284,145 @@ pub const ExternalImportTarget = struct {
     public_target: *const PublicModuleTarget,
 };
 
+/// One module a compile-time evaluation finalizes.
+const PreparedModuleEntry = struct {
+    pkg: *PackageState,
+    mod: *ModuleState,
+};
+
+/// The dependency edges between the modules one evaluation finalizes: each
+/// module's direct imports, then the app values its platform requirements
+/// bind, in declaration order. Edges to modules outside the evaluation are
+/// absent.
+const PreparedModuleGraph = struct {
+    entries: []const PreparedModuleEntry,
+    by_key: *const std.AutoHashMap([32]u8, usize),
+
+    fn nodeCount(self: PreparedModuleGraph) usize {
+        return self.entries.len;
+    }
+
+    fn edgeCount(self: PreparedModuleGraph, node: usize) usize {
+        const artifact = self.entries[node].mod.checkedArtifact().?;
+        return artifact.direct_import_artifact_keys.len + artifact.platform_required_bindings.bindings.len;
+    }
+
+    fn edge(self: PreparedModuleGraph, node: usize, edge_index: usize) ?usize {
+        const artifact = self.entries[node].mod.checkedArtifact().?;
+        const imports = artifact.direct_import_artifact_keys;
+        const key = if (edge_index < imports.len)
+            imports[edge_index].bytes
+        else
+            artifact.platform_required_bindings.bindings[edge_index - imports.len].app_value.artifact.bytes;
+        return self.by_key.get(key);
+    }
+};
+
+/// Fill `order` with every node of the acyclic `graph`, each after all of the
+/// nodes its edges reach: a depth-first post-order that starts from the nodes
+/// in index order and follows each node's edges in edge order. The pending
+/// path lives on an explicit frame stack (design.md "Stack Safety").
+fn dependencyPostOrder(gpa: Allocator, graph: anytype, order: []usize) Allocator.Error!void {
+    const node_count = graph.nodeCount();
+    std.debug.assert(order.len == node_count);
+    const Visit = enum { unseen, visiting, complete };
+    const visits = try gpa.alloc(Visit, node_count);
+    defer gpa.free(visits);
+    @memset(visits, .unseen);
+    const Frame = struct { node: usize, next_edge: usize };
+    var frames = std.ArrayList(Frame).empty;
+    defer frames.deinit(gpa);
+    var emitted: usize = 0;
+    for (0..node_count) |start| {
+        if (visits[start] == .complete) continue;
+        visits[start] = .visiting;
+        try frames.append(gpa, .{ .node = start, .next_edge = 0 });
+        while (frames.items.len != 0) {
+            const frame = &frames.items[frames.items.len - 1];
+            if (frame.next_edge < graph.edgeCount(frame.node)) {
+                const dependency = graph.edge(frame.node, frame.next_edge);
+                frame.next_edge += 1;
+                const target = dependency orelse continue;
+                switch (visits[target]) {
+                    .complete => {},
+                    .visiting => Coordinator.coordinatorInvariant("prepared checked module dependency cycle", .{}),
+                    .unseen => {
+                        visits[target] = .visiting;
+                        try frames.append(gpa, .{ .node = target, .next_edge = 0 });
+                    },
+                }
+                continue;
+            }
+            order[emitted] = frame.node;
+            emitted += 1;
+            visits[frame.node] = .complete;
+            frames.items.len -= 1;
+        }
+    }
+    std.debug.assert(emitted == node_count);
+}
+
+const DependencyPostOrderTestGraph = struct {
+    edges: []const []const ?usize,
+
+    fn nodeCount(self: DependencyPostOrderTestGraph) usize {
+        return self.edges.len;
+    }
+
+    fn edgeCount(self: DependencyPostOrderTestGraph, node: usize) usize {
+        return self.edges[node].len;
+    }
+
+    fn edge(self: DependencyPostOrderTestGraph, node: usize, edge_index: usize) ?usize {
+        return self.edges[node][edge_index];
+    }
+};
+
+test "dependency post-order follows edges in order and emits each node after its dependencies" {
+    const gpa = std.testing.allocator;
+    // 0 -> [3, absent, 1], 1 -> [2, 3], 2 -> [], 3 -> [2], 4 -> [0], 5 -> []
+    const edges = [_][]const ?usize{
+        &.{ 3, null, 1 },
+        &.{ 2, 3 },
+        &.{},
+        &.{2},
+        &.{0},
+        &.{},
+    };
+    var order: [edges.len]usize = undefined;
+    try dependencyPostOrder(gpa, DependencyPostOrderTestGraph{ .edges = &edges }, &order);
+    try std.testing.expectEqualSlices(usize, &.{ 2, 3, 1, 0, 4, 5 }, &order);
+}
+
+fn dependencyPostOrderOnSmallStack(edges: []const []const ?usize, order: []usize, result: *Allocator.Error!void) void {
+    result.* = dependencyPostOrder(std.testing.allocator, DependencyPostOrderTestGraph{ .edges = edges }, order);
+}
+
+test "dependency post-order of a deep dependency chain runs on a small stack" {
+    const gpa = std.testing.allocator;
+    const depth = 200_000;
+    const edge_storage = try gpa.alloc(?usize, depth);
+    defer gpa.free(edge_storage);
+    const edges = try gpa.alloc([]const ?usize, depth);
+    defer gpa.free(edges);
+    // Node i depends on node i + 1, so the walk from node 0 is `depth` deep.
+    for (edges, 0..) |*node_edges, node| {
+        if (node + 1 == depth) {
+            node_edges.* = &.{};
+        } else {
+            edge_storage[node] = node + 1;
+            node_edges.* = edge_storage[node .. node + 1];
+        }
+    }
+    const order = try gpa.alloc(usize, depth);
+    defer gpa.free(order);
+    var result: Allocator.Error!void = {};
+    const thread = try std.Thread.spawn(.{ .stack_size = 64 * 1024 }, dependencyPostOrderOnSmallStack, .{ edges, order, &result });
+    thread.join();
+    try result;
+    for (order, 0..) |node, position| try std.testing.expectEqual(depth - 1 - position, node);
+}
+
 /// Coordinator manages all compilation state and coordinates workers
 pub const Coordinator = struct {
     gpa: Allocator,
@@ -2768,10 +2907,7 @@ pub const Coordinator = struct {
         extra_cached: ?*const CheckedArtifact.CheckedModuleArtifact,
         program_root: ?*const CheckedArtifact.CheckedModuleArtifact,
     ) CoordinatorError!void {
-        const Entry = struct {
-            pkg: *PackageState,
-            mod: *ModuleState,
-        };
+        const Entry = PreparedModuleEntry;
         var dependencies = std.AutoHashMap([32]u8, void).init(self.gpa);
         defer dependencies.deinit();
         if (dependency_root) |root_key| {
@@ -2827,40 +2963,19 @@ pub const Coordinator = struct {
         var indices = std.AutoHashMap([32]u8, usize).init(self.gpa);
         defer indices.deinit();
         for (entries.items, 0..) |entry, index| try indices.put(entry.mod.checkedArtifact().?.key.bytes, index);
-        const Visit = enum { unseen, visiting, complete };
-        const visits = try self.gpa.alloc(Visit, entries.items.len);
-        defer self.gpa.free(visits);
-        @memset(visits, .unseen);
+        const order = try self.gpa.alloc(usize, entries.items.len);
+        defer self.gpa.free(order);
+        try dependencyPostOrder(self.gpa, PreparedModuleGraph{ .entries = entries.items, .by_key = &indices }, order);
         var ordered_modules = std.ArrayList(eval.CompileTimeFinalization.ProgramModule).empty;
         defer ordered_modules.deinit(self.gpa);
-        const Walker = struct {
-            fn visit(coord: *Coordinator, ordered: []const Entry, by_key: *const std.AutoHashMap([32]u8, usize), states: []Visit, output: *std.ArrayList(eval.CompileTimeFinalization.ProgramModule), index: usize) CoordinatorError!void {
-                switch (states[index]) {
-                    .complete => return,
-                    .visiting => coordinatorInvariant("prepared checked module dependency cycle", .{}),
-                    .unseen => {},
-                }
-                states[index] = .visiting;
-                const entry = ordered[index];
-                const artifact = entry.mod.checkedArtifact().?;
-                for (artifact.direct_import_artifact_keys) |key| {
-                    if (by_key.get(key.bytes)) |dependency_index| {
-                        try visit(coord, ordered, by_key, states, output, dependency_index);
-                    }
-                }
-                for (artifact.platform_required_bindings.bindings) |binding| {
-                    if (by_key.get(binding.app_value.artifact.bytes)) |dependency_index| {
-                        try visit(coord, ordered, by_key, states, output, dependency_index);
-                    }
-                }
-                try output.append(coord.gpa, .{
-                    .module = artifact,
-                    .problem_store = &entry.mod.pending_evaluation.?.problems,
-                });
-                states[index] = .complete;
-            }
-        };
-        for (entries.items, 0..) |_, index| try Walker.visit(self, entries.items, &indices, visits, &ordered_modules, index);
+        try ordered_modules.ensureTotalCapacity(self.gpa, order.len);
+        for (order) |index| {
+            const entry = entries.items[index];
+            ordered_modules.appendAssumeCapacity(.{
+                .module = entry.mod.checkedArtifact().?,
+                .problem_store = &entry.mod.pending_evaluation.?.problems,
+            });
+        }
         var cached_debug_modules = std.ArrayList(*const CheckedArtifact.CheckedModuleArtifact).empty;
         defer cached_debug_modules.deinit(self.gpa);
         var cached_artifacts = self.checked_artifact_index.iterator();
