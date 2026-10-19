@@ -18678,9 +18678,9 @@ Fields that do not fit live in out-of-line rows. A statement names a row by a
 - a low-level operation's reference-count effect, which is larger than every
   inline payload
 - the rarely set fields of a common kind: a call's cold-path, frame-replacing,
-  and tail-drive flags, descriptors, and pending return; the ownership facts
+  and tail-drive flags, descriptors, and pending return; the ownership data
   ARC stamps on a reference read; the uniqueness proofs and single-operation
-  facts of a low-level operation; a static data read's list-of-copies facts;
+  data of a low-level operation; a static data read's list-of-copies data;
   a join's retained units and maybe-uninitialized environment; and the
   descriptors of tags, struct contents, Boxy tag matches, and Boxy
   reference-count helpers.
@@ -18692,8 +18692,8 @@ Optional inline references use types that reserve their own absent values
 rather than Zig optionals, which would double their size: a call's
 self-tail link is a `TailCallLink`, whose `none` and `last` tags occupy the
 top two `CFStmtId` values (so the statement count stays below them), and an
-incref, decref, or free names its helper by an `RcHelperRef`, which keeps a
-concrete layout helper inline. A reference read's `RefOp` is a 128-bit packed
+incref, decref, or free names its reference-count helper by a value that
+keeps a concrete layout helper inline. A reference read's `RefOp` is a 128-bit packed
 struct: a 3-bit kind, the source local, a field or payload index, and the
 variant index and discriminant as `layout.VariantIndex`, with the fields a
 kind does not use left zero. Literal values a statement does not hold, such
