@@ -3464,6 +3464,20 @@ const Unifier = struct {
             }
         }
 
+        // A receiver gaining requirements one use at a time keeps every one
+        // it had, so its list grows in place.
+        // A receiver gaining requirements one use at a time keeps every one
+        // it had: its list is reused as it is, or grows in place, rather
+        // than being copied whole for each use.
+        const kept_a = self.scratch.only_in_a_static_dispatch_constraints.sliceRange(partitioned.only_in_a);
+        const kept_b = self.scratch.only_in_b_static_dispatch_constraints.sliceRange(partitioned.only_in_b);
+        const a_whole = self.keptWhole(kept_a, a_constraints, partitioned.a_order, &self.scratch.a_static_dispatch_constraint_indices);
+        const b_whole = self.keptWhole(kept_b, b_constraints, partitioned.b_order, &self.scratch.b_static_dispatch_constraint_indices);
+        if (a_whole and kept_b.len == 0) return a_constraints;
+        if (b_whole and kept_a.len == 0) return b_constraints;
+        if (a_whole and a_len >= b_len) return try self.types_store.appendStaticDispatchConstraintsAfter(a_constraints, kept_b);
+        if (b_whole) return try self.types_store.appendStaticDispatchConstraintsAfter(b_constraints, kept_a);
+
         const top: u32 = @intCast(self.types_store.static_dispatch_constraints.len());
 
         // Shared pairs validate callable compatibility. The partitioner places
@@ -3482,6 +3496,25 @@ const Unifier = struct {
         }
 
         return self.types_store.static_dispatch_constraints.rangeToEnd(top);
+    }
+
+    /// Whether a partition kept every constraint of `range`, unchanged and in
+    /// `range`'s own order: `kept` lists them in partition order, which
+    /// `order` gives by position.
+    fn keptWhole(
+        self: *const Self,
+        kept: []const StaticDispatchConstraint,
+        range: StaticDispatchConstraint.SafeList.Range,
+        order: u32Range,
+        indices: anytype,
+    ) bool {
+        if (kept.len != range.len()) return false;
+        const original = self.types_store.static_dispatch_constraints.sliceRange(range);
+        const positions = indices.items.items[order.start..][0..order.len];
+        for (kept, positions, 0..) |constraint, position, index| {
+            if (position != index or !std.meta.eql(constraint, original[position])) return false;
+        }
+        return true;
     }
 
     /// Unify two static dispatch constraints. A type has one method of each
@@ -3530,10 +3563,16 @@ const Unifier = struct {
         try hook.link(hook.ctx, resolved.var_);
     }
 
+    /// A run of a scratch index list.
+    const u32Range = struct { start: u32, len: u32 };
+
     const PartitionedStaticDispatchConstraints = struct {
         only_in_a: StaticDispatchConstraint.SafeList.Range,
         only_in_b: StaticDispatchConstraint.SafeList.Range,
         in_both: TwoStaticDispatchConstraints.SafeList.Range,
+        /// `a`'s and `b`'s constraints by position, in partition order.
+        a_order: u32Range,
+        b_order: u32Range,
     };
 
     fn retainFixedLiteralStaticDispatchConstraint(
@@ -3633,6 +3672,7 @@ const Unifier = struct {
         if (!std.sort.isSorted(u32, a_indices, a_order, ConstraintOrder.lessThan)) {
             std.mem.sort(u32, a_indices, a_order, ConstraintOrder.lessThan);
         }
+
         const b_order = ConstraintOrder{ .unifier = self, .constraints = b_constraints };
         if (!std.sort.isSorted(u32, b_indices, b_order, ConstraintOrder.lessThan)) {
             std.mem.sort(u32, b_indices, b_order, ConstraintOrder.lessThan);
@@ -3797,6 +3837,7 @@ const Unifier = struct {
                         a_constraints[a_indices[a_index]],
                     );
                 }
+
                 var b_index = b_group_start;
                 while (b_index < b_group_end) : (b_index += 1) {
                     _ = try scratch.only_in_b_static_dispatch_constraints.append(
@@ -3828,6 +3869,8 @@ const Unifier = struct {
             .only_in_a = scratch.only_in_a_static_dispatch_constraints.rangeToEnd(a_constraints_start),
             .only_in_b = scratch.only_in_b_static_dispatch_constraints.rangeToEnd(b_constraints_start),
             .in_both = scratch.in_both_static_dispatch_constraints.rangeToEnd(both_constraints_start),
+            .a_order = .{ .start = a_indices_start, .len = @intCast(a_constraints.len) },
+            .b_order = .{ .start = b_indices_start, .len = @intCast(b_constraints.len) },
         };
     }
 
