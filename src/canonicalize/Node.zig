@@ -260,6 +260,7 @@ pub const Tag = enum {
     diag_private_type_in_exposed_field,
     diag_type_from_missing_module,
     diag_module_not_imported,
+    diag_public_type_not_defined,
     diag_nested_type_not_found,
     diag_internal_builtin_type,
     diag_nested_value_not_found,
@@ -1358,7 +1359,7 @@ pub const Payload = extern union {
         name: u32,
         alias: u32,
         flags: u32,
-        _reserved: [4]u8 = .{ 0, 0, 0, 0 },
+        target: u32 = 0,
     };
 
     pub const IfBranch = extern struct {

@@ -317,9 +317,10 @@ pub fn tokenizedRegionToRegion(self: *AST, tokenized_region: TokenizedRegion) ba
         safe_end_idx;
 
     const start_region = self.tokens.resolve(safe_start_idx);
-    // Protect against underflow when final_end_idx is 0
-    const end_idx = if (final_end_idx > 0) final_end_idx - 1 else 0;
-    const end_region = self.tokens.resolve(end_idx);
+    // A span of no tokens, such as a missing expression at the end of the
+    // file, is the empty region where its first token would start.
+    if (final_end_idx <= safe_start_idx) return .{ .start = start_region.start, .end = start_region.start };
+    const end_region = self.tokens.resolve(final_end_idx - 1);
     return .{
         .start = start_region.start,
         .end = end_region.end,
@@ -832,6 +833,35 @@ pub fn rootAppKind(self: *const AST) RootAppKind {
         .default_app => .default_platform,
         .module, .package, .platform, .hosted, .malformed => .non_app,
     };
+}
+
+/// The source offset just past `header`'s last token, or zero for a file
+/// without a header.
+pub fn headerEndOffset(self: *const AST, header: Header) u32 {
+    const region = header.to_tokenized_region();
+    if (region.end <= region.start) return 0;
+
+    const token_count: u32 = @intCast(self.tokens.tokens.len);
+    if (token_count == 0) return 0;
+
+    const last_token = @min(region.end - 1, token_count - 1);
+    return self.tokens.resolve(last_token).end.offset;
+}
+
+/// Whether the tokenizer reported a problem inside `header`.
+///
+/// The tokenizer reports problems in source order, except that a byte order
+/// mark and source-policy rejections (see `source_rejected`) come first, and it
+/// drops the latest ones past its limit. Short of a source-policy rejection,
+/// the limit marker therefore never stands for a header problem that is not
+/// also reported individually.
+pub fn headerHasTokenizeErrors(self: *const AST, header: Header) bool {
+    const header_end_offset = self.headerEndOffset(header);
+    for (self.tokenize_diagnostics.items) |diagnostic| {
+        if (diagnostic.tag == .TooManyTokenizationErrors) continue;
+        if (diagnostic.region.start.offset < header_end_offset) return true;
+    }
+    return false;
 }
 
 /// Resolve a token index to a string slice from the source code.

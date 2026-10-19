@@ -906,17 +906,37 @@ pub fn prepareVariants(
     defer combined.deinit();
     const a = combined.arena.allocator();
     var joined = std.ArrayList(ProcArtifact.Artifact).empty;
+    // Each source's lines name its own files; the combined set names the
+    // files of every source once, in first-source order.
+    var source_files = std.ArrayList([32]u8).empty;
     for (sources) |source| {
         const base: u32 = @intCast(joined.items.len);
+        const file_map = try a.alloc(u32, source.source_files.len);
+        var identity_map = true;
+        for (source.source_files, file_map, 0..) |identity, *mapped, file| {
+            mapped.* = for (source_files.items, 0..) |existing, index| {
+                if (std.mem.eql(u8, &existing, &identity)) break @intCast(index);
+            } else index: {
+                try source_files.append(a, identity);
+                break :index @intCast(source_files.items.len - 1);
+            };
+            if (mapped.* != file) identity_map = false;
+        }
         for (source.artifacts) |original| {
             var artifact = original;
             const refs = try a.dupe(ProcArtifact.Reference, original.refs);
             for (refs) |*ref| ref.target += base;
             artifact.refs = refs;
+            if (!identity_map) {
+                const lines = try a.dupe(ProcArtifact.LineEntry, original.lines);
+                for (lines) |*line| line.loc = ProcArtifact.rebindLoc(line.loc, file_map);
+                artifact.lines = lines;
+            }
             try joined.append(a, artifact);
         }
     }
     combined.artifacts = joined.items;
+    combined.source_files = source_files.items;
     const artifacts = @constCast(combined.artifacts);
     const valid = try a.alloc(bool, artifacts.len);
     @memset(valid, true);
@@ -1400,7 +1420,7 @@ pub fn selectMarked(allocator: Allocator, source: *const ProcArtifact.Set, marke
         }
         artifact.data = data;
     }
-    const view = ProcArtifact.Set{ .arena = temporary, .artifacts = artifacts.items };
+    const view = ProcArtifact.Set{ .arena = temporary, .artifacts = artifacts.items, .source_files = source.source_files };
     var set = try ProcArtifact.combine(allocator, &.{&view});
     errdefer set.deinit();
     const owned_remap = try set.arena.allocator().dupe(?u32, remap);

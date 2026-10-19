@@ -47,6 +47,8 @@ pub const ModuleTypeCheckTiming = struct {
 
     name_buf: [max_name_len]u8 = undefined,
     name_len: u16 = 0,
+    /// Bytes of `name_buf` holding the package label.
+    package_len: u16 = 0,
     ns: u64,
 
     /// `package.Module`, cut to `max_name_len` bytes.
@@ -56,11 +58,23 @@ pub const ModuleTypeCheckTiming = struct {
             error.NoSpaceLeft => result.name_buf[0..],
         };
         result.name_len = @intCast(written.len);
+        result.package_len = @intCast(@min(package.len, written.len));
         return result;
     }
 
     pub fn name(self: *const ModuleTypeCheckTiming) []const u8 {
         return self.name_buf[0..self.name_len];
+    }
+
+    /// The package label: a shorthand, or the identity of a package that has
+    /// none, which for a local package is its path.
+    pub fn packageLabel(self: *const ModuleTypeCheckTiming) []const u8 {
+        return self.name_buf[0..self.package_len];
+    }
+
+    /// The module name, after the package label and its `.` separator.
+    pub fn moduleName(self: *const ModuleTypeCheckTiming) []const u8 {
+        return self.name_buf[@min(self.package_len + 1, self.name_len)..self.name_len];
     }
 };
 
@@ -476,6 +490,7 @@ pub fn typeCheckModule(
     validation: Can.Validation,
     ctfe_options: eval.CompileTimeFinalization.Options,
     deferred_imports: can.ImportResolution.Imports,
+    missing_public_types: []const []const u8,
 ) TypeCheckModuleError!TypeCheckOutput {
     const builtin_indices = compiled_builtins.builtinIndices(can.CIR);
 
@@ -506,6 +521,7 @@ pub fn typeCheckModule(
     try can.resolveDeferredImports(env, .{
         .imports = deferred_imports,
         .reachable_envs = owner_envs,
+        .missing_public_types = missing_public_types,
     });
 
     var checker = try Check.initWithOwnerModules(

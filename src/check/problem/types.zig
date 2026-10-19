@@ -634,6 +634,25 @@ pub const TypeMismatch = struct {
     /// Set when `leaf` failed because the use gave one instantiated
     /// interpolation's values different types.
     interpolation_tie: ?InterpolationTie = null,
+    /// How the report suggests turning the actual value into the expected
+    /// builtin `Str`.
+    str_conversion: StrConversion = .none,
+};
+
+/// The way a report suggests turning a value into a `Str` when it is used
+/// where the builtin `Str` is needed, decided by the checker from the value's
+/// type and that type's methods.
+pub const StrConversion = enum {
+    /// The value's type is not one a hint applies to.
+    none,
+    /// The value's type has a `to_str` method.
+    to_str,
+    /// The value's type is a nominal type declared in the module being
+    /// checked, and it has no `to_str` method.
+    define_to_str,
+    /// The value's type has no `to_str` method, and `Str.inspect` gives a
+    /// representation of it for debugging.
+    inspect,
 };
 
 /// A use of a generalized definition gave the values one of its
@@ -725,18 +744,36 @@ pub const ComptimeCondition = struct {
     region: base.Region,
 };
 
+/// The part of a match branch that a redundant or unmatchable pattern problem
+/// is about: either every `|` alternative of the branch, or one alternative.
+pub const MatchBranchPart = enum(u32) {
+    whole_branch = std.math.maxInt(u32),
+    _,
+
+    /// The alternative at this zero-based index within its branch.
+    pub fn alternative(index: u32) MatchBranchPart {
+        std.debug.assert(index != std.math.maxInt(u32));
+        return @fromBackingInt(index);
+    }
+
+    /// The zero-based alternative index, or null for the whole branch.
+    pub fn alternativeIndex(self: MatchBranchPart) ?u32 {
+        return if (self == .whole_branch) null else @backingInt(self);
+    }
+};
+
 /// Problem data for a redundant pattern in a match
 pub const RedundantPattern = struct {
     match_expr: CIR.Expr.Idx,
-    num_branches: u32,
-    problem_branch_index: u32,
+    branch_index: u32,
+    part: MatchBranchPart,
 };
 
 /// Problem data for an unmatchable pattern (pattern on uninhabited type)
 pub const UnmatchablePattern = struct {
     match_expr: CIR.Expr.Idx,
-    num_branches: u32,
-    problem_branch_index: u32,
+    branch_index: u32,
+    part: MatchBranchPart,
 };
 
 /// A name bound by one `|` alternative of a match branch but not by another,
@@ -880,6 +917,9 @@ pub const DispatcherDoesNotImplMethod = struct {
     /// Set when the dispatcher is a record's or tag union's `..` extension,
     /// whose obligation came from deriving the method for that whole type.
     row_extension_of: ?RowExtension = null,
+    /// How the report suggests turning the literal into the builtin `Str`
+    /// when the dispatcher is `Str`.
+    str_conversion: StrConversion = .none,
 
     /// Type of the dispatcher
     pub const DispatcherType = enum { nominal, rigid };

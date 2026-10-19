@@ -83,6 +83,7 @@ const WorkerTask = messages.WorkerTask;
 const WorkerResult = messages.WorkerResult;
 const ModuleId = messages.ModuleId;
 const ParseTask = messages.ParseTask;
+const DiscoveredParse = messages.DiscoveredParse;
 const CanonicalizeTask = messages.CanonicalizeTask;
 const CanonicalizeImport = messages.CanonicalizeImport;
 const TypeCheckTask = messages.TypeCheckTask;
@@ -642,6 +643,9 @@ pub const ModuleState = struct {
     validation: can.Can.Validation = .checking,
     /// Declared source pin from the parse/canonicalization producer.
     has_source_version_pin: bool = false,
+    /// Whether this module's source has syntax errors, so later stages work
+    /// from a parse that recovered past them.
+    has_syntax_errors: bool = false,
     /// Owned semantic module payload. Earlier phases populate only `module_env`;
     /// type checking later fills in the checked artifact.
     semantic: ?OwnedSemanticModuleData = null,
@@ -868,6 +872,9 @@ pub const PublicModuleTarget = struct {
         unresolved_nested_type,
         /// Stable exact declaration selected from the completed source CIR.
         type_decl: CIR.Statement.Idx,
+        /// The completed source module defines no exposed type by this name.
+        /// The header that selected it and every import of it report that.
+        missing_nested_type,
     };
 
     pub fn logicalModule(self: PublicModuleTarget) []const u8 {
@@ -1359,10 +1366,18 @@ pub const Coordinator = struct {
     /// backed by a shared global pool, designed for SMP workloads). In
     /// single-threaded mode, returns gpa for better performance.
     pub fn getWorkerAllocator(self: *const Coordinator) Allocator {
-        return if (threads_available and self.mode == .multi_threaded)
+        return workerAllocatorFor(self.gpa, self.mode);
+    }
+
+    /// The allocator a coordinator created with `gpa` and `mode` gives its
+    /// workers for module environments and results. Anything handed to a
+    /// worker task as if the task had allocated it, such as a
+    /// `DiscoveredParse`, is allocated with this.
+    pub fn workerAllocatorFor(gpa: Allocator, mode: Mode) Allocator {
+        return if (threads_available and mode == .multi_threaded)
             thread_safe_allocator
         else
-            self.gpa;
+            gpa;
     }
 
     /// Initialize a `Coordinator`.
@@ -1392,7 +1407,7 @@ pub const Coordinator = struct {
         // smp_allocator is thread-safe and avoids the per-allocation mmap/munmap
         // serialization on the kernel VM lock that page_allocator incurs.
         const channel_allocator = if (threads_available) thread_safe_allocator else gpa;
-        const worker_allocator = if (threads_available and mode == .multi_threaded) thread_safe_allocator else gpa;
+        const worker_allocator = workerAllocatorFor(gpa, mode);
         const initial_task_capacity = 256;
         return .{
             .gpa = gpa,
@@ -1462,13 +1477,15 @@ pub const Coordinator = struct {
             const payload_alloc = self.getWorkerAllocator();
             while (self.task_channel.tryRecv()) |task| {
                 switch (task) {
-                    .parse, .post_check => {},
+                    .parse => |t| if (t.discovered) |discovered| discovered.deinit(),
+                    .post_check => {},
                     .canonicalize => |t| {
                         t.cached_ast.deinit();
                     },
                     .type_check => |t| {
                         payload_alloc.free(t.imported_envs);
                         payload_alloc.free(t.deferred_imports);
+                        payload_alloc.free(t.missing_public_types);
                         payload_alloc.free(t.imported_artifacts);
                         payload_alloc.free(t.available_artifacts);
                         payload_alloc.free(t.explicit_roots);
@@ -2524,8 +2541,30 @@ pub const Coordinator = struct {
 
     /// Enqueue a parse task for a module
     pub fn enqueueParseTask(self: *Coordinator, pkg_name: []const u8, module_id: ModuleId) Allocator.Error!void {
-        const pkg = self.packages.get(pkg_name) orelse return;
-        const mod = pkg.getModule(module_id) orelse return;
+        try self.enqueueParseTaskWith(pkg_name, module_id, null);
+    }
+
+    /// Enqueue the parse task of a module whose source dependency discovery
+    /// already parsed; the task takes ownership of `discovered`.
+    pub fn enqueueDiscoveredParseTask(self: *Coordinator, pkg_name: []const u8, module_id: ModuleId, discovered: DiscoveredParse) Allocator.Error!void {
+        try self.enqueueParseTaskWith(pkg_name, module_id, discovered);
+    }
+
+    fn enqueueParseTaskWith(self: *Coordinator, pkg_name: []const u8, module_id: ModuleId, discovered: ?DiscoveredParse) Allocator.Error!void {
+        errdefer if (discovered) |parsed| parsed.deinit();
+        const pkg = self.packages.get(pkg_name) orelse {
+            if (discovered) |parsed| parsed.deinit();
+            return;
+        };
+        const mod = pkg.getModule(module_id) orelse {
+            if (discovered) |parsed| parsed.deinit();
+            return;
+        };
+        if (discovered) |parsed| {
+            if (!std.mem.eql(u8, parsed.path, mod.path)) {
+                base.invariant("discovered parse of {s} handed to module at {s}", .{ parsed.path, mod.path });
+            }
+        }
 
         mod.phase = .Parsing;
 
@@ -2544,6 +2583,7 @@ pub const Coordinator = struct {
                 .depth = mod.depth,
                 .validation = mod.validation,
                 .is_entry_module = self.isEntryModule(pkg, module_id),
+                .discovered = discovered,
             },
         });
     }
@@ -3796,12 +3836,10 @@ pub const Coordinator = struct {
             if (!std.mem.eql(u8, target.logicalModule(), mod.name)) break;
             switch (target.selection) {
                 .unresolved_nested_type => {
-                    const nested_type = target.unresolvedNestedType() orelse unreachable;
-                    const statement = compile_package.resolveSelectedType(env, target.source_target) orelse
-                        coordinatorInvariant(
-                            "public nested type '{s}.{s}' had no exposed declaration",
-                            .{ mod.name, nested_type },
-                        );
+                    const statement = compile_package.resolveSelectedType(env, target.source_target) orelse {
+                        target.selection = .missing_nested_type;
+                        continue;
+                    };
                     target.source_target = try self.gpa.realloc(target.source_target, target.logical_module_len);
                     target.selection = .{ .type_decl = statement };
                 },
@@ -3810,7 +3848,7 @@ pub const Coordinator = struct {
                         target.selection = .{ .type_decl = statement };
                     }
                 },
-                .type_decl => {},
+                .type_decl, .missing_nested_type => {},
             }
         }
     }
@@ -3977,6 +4015,7 @@ pub const Coordinator = struct {
         mod.source_file_state = result.source_file_state;
         mod.replaceModuleEnv(result.module_env);
         mod.cached_ast = result.cached_ast;
+        mod.has_syntax_errors = result.cached_ast.hasErrors();
 
         // Append reports - we take ownership, so clear result.reports after copying
         for (result.reports.items) |rep| {
@@ -4596,6 +4635,11 @@ pub const Coordinator = struct {
 
         const deferred_imports = try self.buildCanonicalizeImports(pkg, mod, task_payload_alloc);
         errdefer task_payload_alloc.free(deferred_imports);
+        const missing_public_types = if (pkg.root_module_id == module_id)
+            try buildMissingPublicTypes(pkg, task_payload_alloc)
+        else
+            &.{};
+        errdefer task_payload_alloc.free(missing_public_types);
 
         mod.phase = .TypeCheck;
         try self.enqueueTask(.{
@@ -4607,6 +4651,7 @@ pub const Coordinator = struct {
                 .module_env = mod.moduleEnv().?,
                 .imported_envs = imported_envs,
                 .deferred_imports = deferred_imports,
+                .missing_public_types = missing_public_types,
                 .imported_artifacts = imported_artifacts,
                 .available_artifacts = available_artifacts,
                 .platform_requirements = platform_surface,
@@ -4614,6 +4659,26 @@ pub const Coordinator = struct {
                 .validation = mod.validation,
             },
         });
+    }
+
+    /// The public names a package root's header exposes whose selected nested
+    /// type its module does not define. Every module a header exposure selects
+    /// from is one of the root's imports, so each selection is settled here.
+    fn buildMissingPublicTypes(
+        pkg: *const PackageState,
+        allocator: Allocator,
+    ) Allocator.Error![]const []const u8 {
+        var missing = std.ArrayList([]const u8).empty;
+        errdefer missing.deinit(allocator);
+
+        var target_it = pkg.public_module_targets.iterator();
+        while (target_it.next()) |entry| {
+            switch (entry.value_ptr.selection) {
+                .missing_nested_type => try missing.append(allocator, entry.key_ptr.*),
+                .whole_module, .type_decl, .unresolved_nested_type => {},
+            }
+        }
+        return missing.toOwnedSlice(allocator);
     }
 
     fn buildExplicitRootRequests(
@@ -4744,9 +4809,9 @@ pub const Coordinator = struct {
             },
             .type_check => "Type Checking Failed",
         };
-        const headline = try std.fmt.allocPrint(self.gpa, "{s}: {s}.", .{ mod.path, @errorName(operation_error) });
-        defer self.gpa.free(headline);
-        const report = try Report.init(self.gpa, title, headline, .fatal);
+        const after = try std.fmt.allocPrint(self.gpa, ": {s}.", .{@errorName(operation_error)});
+        defer self.gpa.free(after);
+        const report = try Report.initWithPath(self.gpa, title, "", mod.path, after, .fatal);
         try appendReportOwned(self.gpa, &mod.reports, report);
         return operation_error;
     }
@@ -4817,18 +4882,26 @@ pub const Coordinator = struct {
                         coordinatorInvariant("successful external import '{s}' had no module environment", .{ext_name});
                     const public_target = self.getExternalPublicTarget(pkg.name, ext_name) orelse
                         coordinatorInvariant("successful external import '{s}' had no public target", .{ext_name});
+                    const selected_type_decl: ?CIR.Statement.Idx = switch (public_target.selection) {
+                        .type_decl => |statement| statement,
+                        .whole_module => null,
+                        .missing_nested_type => {
+                            try imports.append(allocator, .{
+                                .import_name = ext_name,
+                                .resolution = .missing_public_type,
+                            });
+                            continue;
+                        },
+                        .unresolved_nested_type => coordinatorInvariant(
+                            "successful external import '{s}' had an unresolved public nested type",
+                            .{ext_name},
+                        ),
+                    };
                     try imports.append(allocator, .{
                         .import_name = ext_name,
                         .resolution = .{ .available = .{
                             .module_env = ext_env,
-                            .selected_type_decl = switch (public_target.selection) {
-                                .type_decl => |statement| statement,
-                                .whole_module => null,
-                                .unresolved_nested_type => coordinatorInvariant(
-                                    "successful external import '{s}' had an unresolved public nested type",
-                                    .{ext_name},
-                                ),
-                            },
+                            .selected_type_decl = selected_type_decl,
                         } },
                     });
                 },
@@ -4858,6 +4931,19 @@ pub const Coordinator = struct {
         allocator: Allocator,
     ) Allocator.Error![]const *ModuleEnv {
         return self.buildTypecheckImportedEnvsForEnv(pkg, mod, mod.moduleEnv().?, allocator);
+    }
+
+    /// The environment `mod`'s import named `import_name` was type-checked
+    /// against: the compiler's Builtin module, the local module its import
+    /// edge names, or the module it names in a dependency package. Null when
+    /// that import did not resolve to a checked module.
+    pub fn importedModuleEnv(self: *Coordinator, pkg: *PackageState, mod: *const ModuleState, import_name: []const u8) ?*ModuleEnv {
+        if (can.CIR.Import.isCompilerBuiltinImportName(import_name)) return self.builtin_modules.builtin_module.env;
+        if (localImportModuleId(mod, import_name)) |imp_id| {
+            const imp = pkg.getModule(imp_id) orelse return null;
+            return imp.moduleEnv();
+        }
+        return self.getExternalEnv(pkg.name, import_name);
     }
 
     fn localImportModuleId(mod: *const ModuleState, import_name: []const u8) ?ModuleId {
@@ -5635,7 +5721,10 @@ pub const Coordinator = struct {
     fn executeParseFallible(self: *Coordinator, task: ParseTask, task_allocs: WorkerTaskAllocators) (Allocator.Error || error{ AccessDenied, FileNotFound, IoError, StreamTooLong })!WorkerResult {
         var parse_timer = startStageTimer(self.roc_ctx.std_io);
 
-        const source_read = try self.readModuleSourceForParse(task.path, task_allocs.module);
+        const source_read: SourceRead = if (task.discovered) |discovered| .{
+            .source = @constCast(discovered.module_env.common.source),
+            .file_state = discovered.source_file_state,
+        } else try self.readModuleSourceForParse(task.path, task_allocs.module);
         const src = source_read.source;
 
         // The stable key names this module's source, basename, entry-module
@@ -5651,50 +5740,34 @@ pub const Coordinator = struct {
             task.is_entry_module,
         );
         const cached_load = self.tryLoadCanonicalizedModule(task, task_allocs, canonicalized_key, source_read) catch |err| {
-            task_allocs.module.free(src);
+            if (task.discovered) |discovered| discovered.deinit() else task_allocs.module.free(src);
             return err;
         };
         // A hit moves `src` into the loaded environment; a miss leaves it to
         // the parse below.
-        if (cached_load) |cached| return cached;
+        if (cached_load) |cached| {
+            if (task.discovered) |discovered| _ = discovered.releaseKeepingSource();
+            return cached;
+        }
 
         // Checked-module disk cache lookup happens after canonicalization, when
         // the coordinator has the exact module identity and import keys.
 
-        // Create ModuleEnv using the long-lived module allocator.
-        const module_alloc = task_allocs.module;
-        const env = module_alloc.create(ModuleEnv) catch |err| {
-            module_alloc.free(src);
-            return err;
-        };
-
-        var env_initialized = false;
-        errdefer {
-            if (env_initialized) {
-                destroyModuleEnvAndSource(env);
-            } else {
-                module_alloc.destroy(env);
-                module_alloc.free(src);
-            }
-        }
-
-        env.* = try ModuleEnv.init(module_alloc, src);
-        env_initialized = true;
         const display_module_name = base.module_path.getModuleBasename(task.module_name);
-        try env.initCIRFields(display_module_name);
-        env.module_role = task.module_role;
+        const parsed = if (task.discovered) |discovered|
+            adoptDiscoveredParse(task, discovered, display_module_name)
+        else
+            try parseModuleSource(task, task_allocs, src, display_module_name);
+        const env = parsed.env;
+        const parse_ast = parsed.ast;
+        errdefer destroyModuleEnvAndSource(env);
+        errdefer parse_ast.deinit();
 
-        try env.common.calcLineStarts(module_alloc);
-
-        // The AST and result payloads outlive this task, so they use the result
+        // The result payloads outlive this task, so they use the result
         // allocator. Only import-discovery intermediates use task scratch below.
         const worker_alloc = task_allocs.result;
         var reports = try std.ArrayList(Report).initCapacity(worker_alloc, 8);
         errdefer check.module_reports.deinit(worker_alloc, &reports);
-
-        const parse_ast = try parse.file(worker_alloc, &env.common);
-        errdefer parse_ast.deinit();
-        parse_ast.store.emptyScratch();
 
         try check.module_reports.appendSyntax(worker_alloc, &reports, parse_ast, &env.common, task.path);
 
@@ -5755,6 +5828,63 @@ pub const Coordinator = struct {
                 .canonicalized_cache_key = canonicalized_key,
             },
         };
+    }
+
+    const ParsedModule = struct {
+        env: *ModuleEnv,
+        ast: *AST,
+    };
+
+    /// Parse `src`, which this takes ownership of, into a new environment.
+    fn parseModuleSource(
+        task: ParseTask,
+        task_allocs: WorkerTaskAllocators,
+        src: []u8,
+        display_module_name: []const u8,
+    ) Allocator.Error!ParsedModule {
+        // Create ModuleEnv using the long-lived module allocator.
+        const module_alloc = task_allocs.module;
+        const env = module_alloc.create(ModuleEnv) catch |err| {
+            module_alloc.free(src);
+            return err;
+        };
+
+        var env_initialized = false;
+        errdefer {
+            if (env_initialized) {
+                destroyModuleEnvAndSource(env);
+            } else {
+                module_alloc.destroy(env);
+                module_alloc.free(src);
+            }
+        }
+
+        env.* = try ModuleEnv.init(module_alloc, src);
+        env_initialized = true;
+        try env.initCIRFields(display_module_name);
+        env.module_role = task.module_role;
+
+        try env.common.calcLineStarts(module_alloc);
+
+        // The AST outlives this task, so it uses the result allocator.
+        const parse_ast = try parse.file(task_allocs.result, &env.common);
+        parse_ast.store.emptyScratch();
+        return .{ .env = env, .ast = parse_ast };
+    }
+
+    /// Take over the environment and AST that dependency discovery produced
+    /// for this module the same way `parseModuleSource` produces them.
+    fn adoptDiscoveredParse(task: ParseTask, discovered: DiscoveredParse, display_module_name: []const u8) ParsedModule {
+        const env = discovered.module_env;
+        if (!std.mem.eql(u8, env.module_name, display_module_name)) {
+            base.invariant("discovered parse of {s} named {s}, not {s}", .{ discovered.path, env.module_name, display_module_name });
+        }
+        // The display name borrowed the discovered path, which is freed here.
+        env.module_name = display_module_name;
+        env.module_role = task.module_role;
+        env.gpa.free(discovered.path);
+        discovered.ast.store.emptyScratch();
+        return .{ .env = env, .ast = discovered.ast };
     }
 
     /// Execute a canonicalize task (pure function)
@@ -5914,6 +6044,7 @@ pub const Coordinator = struct {
         const env = task.module_env;
         defer task_allocs.result.free(task.imported_envs);
         defer task_allocs.result.free(task.deferred_imports);
+        defer task_allocs.result.free(task.missing_public_types);
         defer task_allocs.result.free(task.imported_artifacts);
         defer task_allocs.result.free(task.available_artifacts);
         defer if (task.platform_requirements) |surface| {
@@ -5948,6 +6079,7 @@ pub const Coordinator = struct {
             task.validation,
             ctfe_options,
             .{ .explicit = task.deferred_imports },
+            task.missing_public_types,
         );
         defer typecheck_output.deinit();
         // On error the coordinator still owns the input environment. Transfer

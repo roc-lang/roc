@@ -713,7 +713,7 @@ test "ordinary native consumers select the same complete provider without role v
     const Lookup = lir.CheckedPipeline.SpecCacheLookup;
     const Result = @typeInfo(@typeInfo(@FieldType(Lookup, "find")).pointer.child).@"fn".return_type.?;
     const Callbacks = struct {
-        fn find(_: *anyopaque, _: [32]u8, _: ?[32]u8) Result {
+        fn find(_: *anyopaque, _: [32]u8, _: ?[32]u8, _: bool) Result {
             return null;
         }
     };
@@ -1131,10 +1131,10 @@ test "runtime handoff validates the original declaration and continues the selec
     const Lookup = lir.CheckedPipeline.SpecCacheLookup;
     const LookupResult = @typeInfo(@typeInfo(@FieldType(Lookup, "find")).pointer.child).@"fn".return_type.?;
     const ColdCache = struct {
-        fn find(_: *anyopaque, _: [32]u8, _: ?[32]u8) LookupResult {
+        fn find(_: *anyopaque, _: [32]u8, _: ?[32]u8, _: bool) LookupResult {
             return null;
         }
-        fn otherFind(context: *anyopaque, _: [32]u8, _: ?[32]u8) LookupResult {
+        fn otherFind(context: *anyopaque, _: [32]u8, _: ?[32]u8, _: bool) LookupResult {
             const calls: *u8 = @ptrCast(context);
             calls.* += 1;
             return null;
@@ -1199,10 +1199,10 @@ test "shared producer requires the exact non-null provider capability" {
     const Lookup = lir.CheckedPipeline.SpecCacheLookup;
     const LookupResult = @typeInfo(@typeInfo(@FieldType(Lookup, "find")).pointer.child).@"fn".return_type.?;
     const Callbacks = struct {
-        fn first(_: *anyopaque, _: [32]u8, _: ?[32]u8) LookupResult {
+        fn first(_: *anyopaque, _: [32]u8, _: ?[32]u8, _: bool) LookupResult {
             return null;
         }
-        fn second(context: *anyopaque, _: [32]u8, _: ?[32]u8) LookupResult {
+        fn second(context: *anyopaque, _: [32]u8, _: ?[32]u8, _: bool) LookupResult {
             // Distinct behavior keeps optimized builds from merging callbacks.
             const count: *u8 = @ptrCast(context);
             count.* += 1;
@@ -1965,7 +1965,7 @@ fn finalizeLoweredProgram(
             const id = first_state.completion.request_root_ids[root.request];
             const demand_ordinal = first_state.ordinals[@backingInt(id)].?;
             if (first_state.completion.isDone(id)) finalizationInvariant("scheduled checked root executed twice");
-            const root_started = if (std.c.getenv("ROC_PACK_STATS") != null) statsNowNs() else 0;
+            const root_started = if (stats_available and std.c.getenv("ROC_PACK_STATS") != null) statsNowNs() else 0;
             defer if (root_started != 0) std.debug.print("evaluated root: module={s} root={d} {d} ms\n", .{ self.modules[root.module].module.moduleEnvConst().module_name, @backingInt(id), @divTrunc(statsNowNs() - root_started, std.time.ns_per_ms) });
             var module_index: ?u32 = @intCast(root.module);
             while (module_index) |index| : (module_index = self.owners.next_alias[index]) {
@@ -4903,7 +4903,7 @@ const DevProgram = struct {
 
     fn init(allocator: Allocator, modules: lir.CheckedPipeline.CheckedModuleSet, lowered: *lir.CheckedPipeline.LoweredProgram, options: Options) FinalizeError!DevProgram {
         const static_data_started_ns = if (options.timing) |timing| timing.start() else 0;
-        const stats = std.c.getenv("ROC_PACK_STATS") != null;
+        const stats = stats_available and std.c.getenv("ROC_PACK_STATS") != null;
         var stage_started = if (stats) statsNowNs() else 0;
         var static_strings = try backend.StaticStringData.build(allocator, &lowered.lir_result.store, backend.dev.LirCodeGenMod.host_lir_codegen_target);
         errdefer static_strings.deinit();
@@ -7335,6 +7335,10 @@ test "LLVM test roots run a float remainder in process" {
 }
 
 /// Monotonic nanoseconds for the `ROC_PACK_STATS` stage reports.
+/// Whether this build can read `ROC_PACK_STATS` and the monotonic clock its
+/// stage timings use.
+const stats_available = @import("builtin").link_libc;
+
 fn statsNowNs() i128 {
     var ts: std.c.timespec = undefined;
     _ = std.c.clock_gettime(.MONOTONIC, &ts);

@@ -1004,6 +1004,10 @@ pub const Result = struct {
     store: LirStore,
     layouts: layout.Store,
     root_procs: std.ArrayList(LIR.LirProcSpecId) = .empty,
+    /// Procedures this program keeps though nothing it compiles reaches
+    /// them: the lambda-set members an object-cache entry it takes calls by
+    /// identity, which the program supplies its own code for.
+    retained_procs: std.ArrayList(LIR.LirProcSpecId) = .empty,
     /// The procedure lowered for each template specialization, by the
     /// specialization's content key (`Monotype.Ast.specIdentityKey`). Only
     /// the specialization's own procedure is listed, never SpecConstr clones
@@ -1123,6 +1127,7 @@ pub const Result = struct {
         self.root_metadata.deinit(allocator);
         self.root_procs.deinit(allocator);
         for (self.spec_procs.items) |spec| if (spec.demand) |demand| demand.deinit(allocator);
+        self.retained_procs.deinit(allocator);
         self.spec_procs.deinit(allocator);
         for (self.identity_offers.items) |offer| if (offer.demand) |demand| demand.deinit(allocator);
         self.identity_offers.deinit(allocator);

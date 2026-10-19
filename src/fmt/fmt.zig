@@ -53,6 +53,8 @@ pub const Options = struct {
     compiler_version: ?[]const u8 = null,
     /// Borrowed, invocation-owned builtin facts. Never shared between threads.
     builtin_facts: ?*BuiltinFacts = null,
+    /// Absolute working directory that messages show paths relative to.
+    working_dir: ?[]const u8 = null,
 };
 
 /// Report of the result of formatting Roc files including the count of successes, failures, and any files that need to be reformatted
@@ -98,7 +100,7 @@ fn formatFilePathReportingFailure(
     options: Options,
     io: std.Io,
     stderr: *std.Io.Writer,
-) std.Io.Writer.Error!enum { formatted, failed, not_roc_file } {
+) (Allocator.Error || std.Io.Writer.Error)!enum { formatted, failed, not_roc_file } {
     if (formatFilePath(gpa, base_dir, path, unformatted_files, options, io, stderr)) |_| {
         return .formatted;
     } else |err| switch (err) {
@@ -138,7 +140,9 @@ fn formatFilePathReportingFailure(
         error.WouldBlock,
         error.WriteFailed,
         => {
-            try stderr.print("Failed to format {f}: {any}\n", .{ base.bidi.Display{ .bytes = display_path }, err });
+            const shown_path = try @import("reporting").displayPath(gpa, display_path, options.working_dir);
+            defer gpa.free(shown_path);
+            try stderr.print("Failed to format {f}: {any}\n", .{ base.bidi.Display{ .bytes = shown_path }, err });
             return .failed;
         },
     }
@@ -173,7 +177,7 @@ pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: st
                 if (!std.mem.eql(u8, std.fs.path.extension(entry.basename), ".roc")) continue;
                 const file_path = try std.fs.path.join(gpa, &.{ path, entry.path });
                 defer gpa.free(file_path);
-                switch (try formatFilePathReportingFailure(gpa, base_dir, file_path, entry.path, if (unformatted_files) |*to_reformat| to_reformat else null, shared_options, io, stderr)) {
+                switch (try formatFilePathReportingFailure(gpa, base_dir, file_path, file_path, if (unformatted_files) |*to_reformat| to_reformat else null, shared_options, io, stderr)) {
                     .formatted => success_count += 1,
                     .failed => failed_count += 1,
                     .not_roc_file => {},
@@ -1485,10 +1489,8 @@ const Formatter = struct {
             Formatter.discardRegion(try formatter(fmt, entry.idx));
             fmt.curr_indent = item_indent;
             if (multiline) {
-                if (fmt.has_multiline_string) {
-                    try fmt.newlineIndent();
-                }
-                if (trailing_comma or i + 1 < entries.items.len) try fmt.push(',');
+                const last = i + 1 == entries.items.len;
+                if (trailing_comma or !last) try fmt.pushMultilineItemComma(fmt.has_multiline_string, last);
                 if (std.mem.findScalar(u8, fmt.ast.env.source[entry.before_separator.start..entry.before_separator.end], '#') != null) {
                     // The separator moves before these comments, so blank lines
                     // after them would not survive the next formatting.
@@ -1540,12 +1542,20 @@ const Formatter = struct {
         }
     }
 
+    /// Ends an item of a multiline collection. A `\\` line runs to the end of
+    /// the line, so a comma after one goes on the next line; the last item
+    /// needs no comma there, so it gets none.
+    fn pushMultilineItemComma(fmt: *Formatter, ends_with_multiline_string_line: bool, last: bool) error{WriteFailed}!void {
+        if (ends_with_multiline_string_line) {
+            if (last) return;
+            try fmt.newlineIndent();
+        }
+        try fmt.push(',');
+    }
+
     fn endCollectionItem(fmt: *Formatter, state: CollectionFormatting, last: bool) FormatAstError!void {
         if (state.multiline) {
-            if (fmt.has_multiline_string) {
-                try fmt.newlineIndent();
-            }
-            try fmt.push(',');
+            try fmt.pushMultilineItemComma(fmt.has_multiline_string, last);
         } else if (!last) {
             try fmt.pushAll(", ");
         }
@@ -1686,23 +1696,25 @@ const Formatter = struct {
             return .{ .done = .{ .region = field.region, .ends_with_multiline_string_line = result.ends_with_multiline_string_line } };
         }
         try fmt.pushTokenText(field.name);
-        if (fmt.roc_version_upgrade) |upgrade| {
-            if (f.idx == upgrade.field) {
-                // Write the running compiler's version rather than the stale
-                // one in the source. Planning the upgrade already parsed that
-                // version as a nightly tag, so it is alphanumerics and `-`
-                // only and needs no escaping inside the quotes.
-                try fmt.pushAll(": \"");
-                try fmt.pushAll(upgrade.version);
-                try fmt.push('"');
-                return .{ .done = .{ .region = field.region } };
-            }
-        }
         switch (field.value) {
             .supplied => |v| {
                 try fmt.commentBoundary(field.name + 1, false);
                 try fmt.push(':');
                 try fmt.commentBoundary(fmt.nodeRegion(@backingInt(v)).start, true);
+                if (fmt.roc_version_upgrade) |upgrade| {
+                    if (f.idx == upgrade.field) {
+                        // Write the running compiler's version in place of the
+                        // stale string literal. Planning the upgrade already
+                        // parsed that version as a nightly tag, so it is
+                        // alphanumerics and `-` only and needs no escaping
+                        // inside the quotes; and the literal it replaces is a
+                        // single string part, so no comment sits inside it.
+                        try fmt.push('"');
+                        try fmt.pushAll(upgrade.version);
+                        try fmt.push('"');
+                        return .{ .done = .{ .region = field.region } };
+                    }
+                }
                 f.phase = 1;
                 return call(exprFrame(v, .{}));
             },
@@ -2001,6 +2013,51 @@ const Formatter = struct {
         nominal_record: struct { parenthesize_mapper: bool },
     };
 
+    /// How an `if` writes its condition. A `then` block's `{` already marks
+    /// where the condition ends, so its condition goes without grouping
+    /// parentheses; every other `then` branch gets a parenthesized condition.
+    /// A malformed condition prints no source to delimit, so it stays as written.
+    const IfCondition = union(enum) {
+        as_written,
+        parenthesized,
+        unwrapped: AST.Expr.Idx,
+    };
+
+    fn ifCondition(fmt: *Formatter, condition: AST.Expr.Idx, then: AST.Expr.Idx) IfCondition {
+        if (fmt.ast.store.getExpr(condition) == .malformed) return .as_written;
+        if (fmt.ast.store.getExpr(then) != .block) {
+            return if (fmt.groupedInner(condition) == null) .parenthesized else .as_written;
+        }
+        var inner = fmt.groupedInner(condition) orelse return .as_written;
+        while (fmt.groupedInner(inner)) |next| inner = next;
+        if (fmt.ast.store.getExpr(inner) == .malformed) return .as_written;
+        return .{ .unwrapped = inner };
+    }
+
+    /// The expression inside grouping parentheses that hold no comments.
+    fn groupedInner(fmt: *Formatter, expr_idx: AST.Expr.Idx) ?AST.Expr.Idx {
+        const expr = fmt.ast.store.getExpr(expr_idx);
+        if (expr != .tuple) return null;
+        const items = fmt.ast.store.exprSlice(expr.tuple.items);
+        if (items.len != 1 or fmt.ast.store.getCollectionLayout(expr_idx) != .compact) return null;
+        if (fmt.regionHasInteriorComment(expr.tuple.region)) return null;
+        return items[0];
+    }
+
+    fn ifConditionLayout(
+        fmt: *Formatter,
+        sink: LayoutSink,
+        comptime child: fn (*Formatter, LayoutSink, AST.Expr.Idx) Allocator.Error!bool,
+        condition: AST.Expr.Idx,
+        then: AST.Expr.Idx,
+    ) Allocator.Error!bool {
+        return switch (fmt.ifCondition(condition, then)) {
+            .as_written => child(fmt, sink, condition),
+            .parenthesized => fmt.groupedExprChild(sink, condition),
+            .unwrapped => |inner| child(fmt, sink, inner),
+        };
+    }
+
     fn removedReturnHasLeadingComment(fmt: *Formatter, expr_idx: AST.Expr.Idx) bool {
         const expr = fmt.ast.store.getExpr(expr_idx);
         return expr == .@"return" and fmt.ast.redundant_returns.isSet(@backingInt(expr_idx)) and
@@ -2195,7 +2252,6 @@ const Formatter = struct {
                 try fmt.flushCommentsBeforeDiscard(if (qualifiers.len > 0) qualifiers[0] else suffix_path.final_token);
                 try fmt.newlineIndent();
                 try fmt.formatLiteralTypeSuffix(s.type_suffix);
-                fmt.has_multiline_string = true;
                 return fmt.finishExpr(f);
             },
             .single_quote => |s| {
@@ -2590,10 +2646,7 @@ const Formatter = struct {
                         const i = state.next;
                         const formatted_field = result;
                         if (state.multiline) {
-                            if (formatted_field.ends_with_multiline_string_line or fmt.has_multiline_string) {
-                                try fmt.newlineIndent();
-                            }
-                            try fmt.push(',');
+                            try fmt.pushMultilineItemComma(formatted_field.ends_with_multiline_string_line or fmt.has_multiline_string, i == fields.len - 1);
                             try fmt.flushItemComments(formatted_field.region.end);
                             if (i == fields.len - 1) {
                                 fmt.curr_indent -= 1;
@@ -2755,40 +2808,42 @@ const Formatter = struct {
             },
             inline .if_then_else, .if_without_else => |i, tag| {
                 const else_expr: ?AST.Expr.Idx = if (tag == .if_then_else) i.@"else" else null;
-                // Check if then/else are blocks - blocks use original behavior,
-                // non-blocks use base_indent to keep else at the same level as if
-                const then_is_block = fmt.ast.store.getExpr(i.then) == .block;
-                const else_is_block = if (else_expr) |else_idx| fmt.ast.store.getExpr(else_idx) == .block else false;
-                const has_blocks = then_is_block or else_is_block;
                 const then_region = fmt.nodeRegion(@backingInt(i.then));
                 switch (f.phase) {
                     0 => {
                         try fmt.pushAll(kw(.KwIf));
                         f.locals = .{ .conditional = .{ .base_indent = fmt.curr_indent } };
-                        const cond_region = fmt.nodeRegion(@backingInt(i.condition));
+                        const condition = fmt.ifCondition(i.condition, i.then);
+                        const cond_region = fmt.nodeRegion(@backingInt(switch (condition) {
+                            .as_written, .parenthesized => i.condition,
+                            .unwrapped => |inner| inner,
+                        }));
                         try fmt.indentedBeforeOrSpace(cond_region.start);
                         f.phase = 1;
-                        return call(exprFrame(i.condition, .{}));
+                        return call(switch (condition) {
+                            .as_written => exprFrame(i.condition, .{}),
+                            .parenthesized => parenthesizedFrame(null, i.condition, try fmt.groupedExprWillBeMultiline(i.condition)),
+                            .unwrapped => |inner| exprFrame(inner, .{}),
+                        });
                     },
                     1 => {
-                        const base_indent = f.locals.conditional.base_indent;
-                        if (!has_blocks) fmt.curr_indent = base_indent;
+                        // The then branch continues the condition's line, so a block
+                        // opened there indents relative to that line.
                         try fmt.indentedBeforeOrSpace(then_region.start);
                         f.phase = 2;
                         return call(exprFrame(i.then, .{}));
                     },
                     2 => {
                         const else_idx = else_expr orelse return fmt.finishExpr(f);
-                        const base_indent = f.locals.conditional.base_indent;
-                        if (!has_blocks) fmt.curr_indent = base_indent;
+                        // `else` on its own line aligns with `if`, and its branch
+                        // indents relative to `else`.
+                        fmt.curr_indent = f.locals.conditional.base_indent;
                         if (try fmt.flushCommentsBefore(then_region.end)) {
-                            if (has_blocks) fmt.curr_indent += 1;
                             try fmt.pushIndent();
                         } else {
                             try fmt.push(' ');
                         }
                         try fmt.pushAll(kw(.KwElse));
-                        if (!has_blocks) fmt.curr_indent = base_indent;
                         const else_region = fmt.nodeRegion(@backingInt(else_idx));
                         try fmt.indentedBeforeOrSpace(else_region.start);
                         f.phase = 3;
@@ -3115,19 +3170,13 @@ const Formatter = struct {
                         const ends_with_multiline_string_line = formatted_field.ends_with_multiline_string_line or fmt.has_multiline_string;
 
                         if (i < fields.len - 1) {
-                            if (ends_with_multiline_string_line) {
-                                try fmt.newlineIndent();
-                            }
-                            try fmt.push(',');
+                            try fmt.pushMultilineItemComma(ends_with_multiline_string_line, false);
                             if (state.multiline) {
                                 try fmt.flushItemComments(formatted_field.region.end);
                                 try fmt.newlineIndent();
                             }
                         } else if (state.multiline) {
-                            if (ends_with_multiline_string_line) {
-                                try fmt.newlineIndent();
-                            }
-                            try fmt.push(',');
+                            try fmt.pushMultilineItemComma(ends_with_multiline_string_line, true);
                             try fmt.flushItemComments(formatted_field.region.end);
                             fmt.curr_indent -= 1;
                             try fmt.newlineIndent();
@@ -5265,10 +5314,10 @@ const Formatter = struct {
             .lambda => |l| fmt.ast.store.getCollectionLayout(expr_idx) == .expanded or
                 try child(fmt, sink, l.body) or
                 try fmt.itemsLayout(sink, AST.Pattern.Idx, fmt.ast.store.patternSlice(l.args)),
-            .if_then_else => |i| try child(fmt, sink, i.condition) or
+            .if_then_else => |i| try fmt.ifConditionLayout(sink, child, i.condition, i.then) or
                 try child(fmt, sink, i.then) or
                 try child(fmt, sink, i.@"else"),
-            .if_without_else => |i| try child(fmt, sink, i.condition) or try child(fmt, sink, i.then),
+            .if_without_else => |i| try fmt.ifConditionLayout(sink, child, i.condition, i.then) or try child(fmt, sink, i.then),
             .arrow_call => |a| if (grouped) fmt.exprChild(sink, expr_idx) else try child(fmt, sink, a.left) or try child(fmt, sink, a.right),
             .dbg => |d| child(fmt, sink, d.expr),
             .crash => |c| child(fmt, sink, c.expr),
@@ -5442,7 +5491,7 @@ pub fn moduleFmtsStableWithDiags(gpa: std.mem.Allocator, input: []const u8, debu
     const formatted = parseAndFmtCountingDiags(gpa, input, expected_diags) catch |err| return err;
     defer gpa.free(formatted);
 
-    const formatted_twice = parseAndFmt(gpa, formatted, debug) catch {
+    const formatted_twice = parseAndFmt(gpa, formatted, debug, .{}) catch {
         return error.SecondParseFailed;
     };
     errdefer gpa.free(formatted_twice);
@@ -5457,14 +5506,19 @@ pub fn moduleFmtsStableWithDiags(gpa: std.mem.Allocator, input: []const u8, debu
 /// Assert that formatting `input` as a module is stable (formatting the
 /// formatted output changes nothing) and return the formatted source.
 pub fn moduleFmtsStable(gpa: std.mem.Allocator, input: []const u8, debug: bool) FormatTestError![]const u8 {
+    return moduleFmtsStableWithOptions(gpa, input, debug, .{});
+}
+
+/// `moduleFmtsStable`, formatting both passes with `options`.
+pub fn moduleFmtsStableWithOptions(gpa: std.mem.Allocator, input: []const u8, debug: bool, options: Options) FormatTestError![]const u8 {
     if (debug) {
         std.debug.print("Original:\n==========\n{s}\n==========\n\n", .{input});
     }
 
-    const formatted = try parseAndFmt(gpa, input, debug);
+    const formatted = try parseAndFmt(gpa, input, debug, options);
     defer gpa.free(formatted);
 
-    const formatted_twice = parseAndFmt(gpa, formatted, debug) catch {
+    const formatted_twice = parseAndFmt(gpa, formatted, debug, options) catch {
         return error.SecondParseFailed;
     };
     errdefer gpa.free(formatted_twice);
@@ -5548,7 +5602,7 @@ fn parseAndFmtCountingDiags(gpa: std.mem.Allocator, input: []const u8, expected_
     return result.toOwnedSlice();
 }
 
-fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) FormatParseError![]const u8 {
+fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool, options: Options) FormatParseError![]const u8 {
     var module_env = try ModuleEnv.init(gpa, input);
     defer module_env.deinit();
 
@@ -5574,7 +5628,7 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) FormatPar
 
     var result: std.Io.Writer.Allocating = .init(gpa);
     defer result.deinit();
-    try formatAst(parse_ast.*, &result.writer);
+    try formatAstWithOptions(parse_ast.*, &result.writer, options);
 
     if (debug) {
         std.debug.print("Formatted:\n==========\n{s}\n==========\n\n", .{result.written()});
@@ -6483,7 +6537,7 @@ test "issue 11160: pipe method receivers preserve expression grouping" {
         .{ .input = "t=x|>(a+b).y()", .expected = "t = x |> (a + b).y()\n" },
         .{ .input = "t=x|>(-a).y()", .expected = "t = x |> (-a).y()\n" },
         .{ .input = "t=x|>(|v|v).y()", .expected = "t = x |> (|v| v).y()\n" },
-        .{ .input = "t=x|>(if a b else c).y()", .expected = "t = x |> (if a b else c).y()\n" },
+        .{ .input = "t=x|>(if a b else c).y()", .expected = "t = x |> (if (a) b else c).y()\n" },
         .{ .input = "t=x|>(dbg a).y()", .expected = "t = x |> (dbg a).y()\n" },
         .{ .input = "t=x|>(crash \"failed\").y()", .expected = "t = x |> (crash \"failed\").y()\n" },
         .{ .input = "t=x|>((a+b).y())", .expected = "t = x |> ((a + b).y())\n" },
@@ -7592,35 +7646,11 @@ test "blank line inserted before doc comments following code" {
 
 /// Format `input` as a compiler reporting itself as `compiler_version` would,
 /// so that tests of the `roc` version pin do not depend on how this binary was
-/// built. Asserts that formatting the result again is a no-op, since a pin
-/// that has just been brought up to date must have nothing left to upgrade.
+/// built. Asserts that every comment survives and that formatting the result
+/// again is a no-op, since a pin that has just been brought up to date must
+/// have nothing left to upgrade.
 fn fmtAsCompiler(gpa: std.mem.Allocator, input: []const u8, compiler_version: []const u8) FormatTestError![]const u8 {
-    const options: Options = .{ .compiler_version = compiler_version };
-
-    var module_env = try ModuleEnv.init(gpa, input);
-    defer module_env.deinit();
-    const parse_ast = try parse.file(gpa, &module_env.common);
-    defer parse_ast.deinit();
-    std.testing.expectEqualSlices(AST.Diagnostic, &[_]AST.Diagnostic{}, parse_ast.parse_diagnostics.items) catch {
-        return error.ParseFailed;
-    };
-
-    var result: std.Io.Writer.Allocating = .init(gpa);
-    defer result.deinit();
-    try formatAstWithOptions(parse_ast.*, &result.writer, options);
-
-    var stable_env = try ModuleEnv.init(gpa, result.written());
-    defer stable_env.deinit();
-    const stable_ast = try parse.file(gpa, &stable_env.common);
-    defer stable_ast.deinit();
-    var stable: std.Io.Writer.Allocating = .init(gpa);
-    defer stable.deinit();
-    try formatAstWithOptions(stable_ast.*, &stable.writer, options);
-    std.testing.expectEqualStrings(result.written(), stable.written()) catch {
-        return error.FormattingNotStable;
-    };
-
-    return try result.toOwnedSlice();
+    return moduleFmtsStableWithOptions(gpa, input, false, .{ .compiler_version = compiler_version });
 }
 
 test "fmt upgrades an app's roc version pin to a newer nightly" {
@@ -7675,6 +7705,24 @@ test "fmt upgrades a roc version pin written across several lines" {
             "}\n\nmain! = |_| {}\n",
         result,
     );
+}
+
+test "issue 12283: upgrading a roc version pin keeps the comments around its colon" {
+    // Repro for https://github.com/roc-lang/roc/issues/12283
+    const result = try fmtAsCompiler(
+        std.testing.allocator,
+        "app [main!] {\n" ++
+            "    pf: platform \"../basic-cli/main.roc\",\n" ++
+            "    roc # before the colon\n" ++
+            "        : # the compiler this app pins\n" ++
+            "        \"nightly-2026-July-31-aaaaaaa\",\n" ++
+            "}\n\nmain! = |_| {}",
+        "nightly-2026-August-1-bbbbbbb",
+    );
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expect(std.mem.find(u8, result, "\"nightly-2026-August-1-bbbbbbb\"") != null);
+    try std.testing.expect(std.mem.find(u8, result, "nightly-2026-July-31-aaaaaaa") == null);
 }
 
 test "fmt leaves a roc version pin alone when it must not be upgraded" {
@@ -8037,6 +8085,12 @@ test "comment prefix matches inter-token scans for every region" {
     }
 }
 
+/// The native stack the nesting tests format on. It holds the module
+/// environment's setup with room to spare, and is far below what formatting
+/// even the shallowest of their cases would take if each nesting level cost a
+/// native call.
+const small_native_stack_bytes = 512 * 1024;
+
 test "nested lists and tuples format on a small native stack" {
     const StackTestError = FormatTestError || std.mem.Allocator.Error || error{TestExpectedEqual};
     const Worker = struct {
@@ -8079,7 +8133,7 @@ test "nested lists and tuples format on a small native stack" {
         }
     };
     var result: StackTestError!void = {};
-    const thread = try std.Thread.spawn(.{ .stack_size = 256 * 1024 }, Worker.run, .{&result});
+    const thread = try std.Thread.spawn(.{ .stack_size = small_native_stack_bytes }, Worker.run, .{&result});
     thread.join();
     try result;
 }
@@ -8258,7 +8312,7 @@ test "issue 11926: multiline string separator whitespace is emitted once" {
     const source = "r = {\n\tx: \\\\value\n\t,\n}\n";
     const result = try moduleFmtsStable(std.testing.allocator, source, false);
     defer std.testing.allocator.free(result);
-    try std.testing.expectEqualStrings(source, result);
+    try std.testing.expectEqualStrings("r = {\n\tx: \\\\value\n}\n", result);
 }
 
 test "nested expressions, patterns, types, and statements format on a small native stack" {
@@ -8282,7 +8336,7 @@ test "nested expressions, patterns, types, and statements format on a small nati
         .{ .head = "x = ", .open = "1 + (", .core = "1", .close = ")" },
         .{ .head = "x = 1", .open = "", .core = "", .close = " + 1" },
         .{ .head = "x = ", .open = "|a| ", .core = "a", .close = "" },
-        .{ .head = "x = ", .open = "if a b else ", .core = "c", .close = "" },
+        .{ .head = "x = ", .open = "if (a) b else ", .core = "c", .close = "" },
         .{ .head = "x = a", .open = "", .core = "", .close = " |> f" },
         .{ .head = "x = a |> f", .open = "", .core = "", .close = "()" },
         .{ .head = "x = ", .open = "f(", .core = "a", .close = "?)" },
@@ -8336,7 +8390,7 @@ test "nested expressions, patterns, types, and statements format on a small nati
         }
     };
     var result: StackTestError!void = {};
-    const thread = try std.Thread.spawn(.{ .stack_size = 256 * 1024 }, Worker.run, .{&result});
+    const thread = try std.Thread.spawn(.{ .stack_size = small_native_stack_bytes }, Worker.run, .{&result});
     thread.join();
     try result;
 }
@@ -9597,4 +9651,188 @@ test "multiline field access pipe target keeps its parentheses" {
     const result = try moduleFmtsStable(std.testing.allocator, "x = y |> (rec\n.func1)", false);
     defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings("x = y\n\t|> (rec\n\t.func1)\n", result);
+}
+
+test "issue 12302: no lone comma after a multiline string as the last call argument" {
+    // Repro for https://github.com/roc-lang/roc/issues/12302
+    const input =
+        "main! = |_| {\n" ++
+        "\techo!(\n" ++
+        "\t\t\\\\Hello, World!\n" ++
+        "\t\t\\\\\n" ++
+        "\t)\n" ++
+        "\tOk({})\n" ++
+        "}\n";
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(input, result);
+}
+
+test "issue 12302: last collection item ending on a multiline string line gets no comma" {
+    const Case = struct {
+        input: []const u8,
+        expected: []const u8,
+    };
+    const cases = [_]Case{
+        .{
+            .input = "x = [\n\t1,\n\t\\\\a\n]\n",
+            .expected = "x = [\n\t1,\n\t\\\\a\n]\n",
+        },
+        .{
+            .input = "x = f(\n\t\\\\a\n\t,\n\t1,\n)\n",
+            .expected = "x = f(\n\t\\\\a\n\t,\n\t1,\n)\n",
+        },
+        .{
+            .input = "x = f(\n\tg(\n\t\t\\\\a\n\t),\n)\n",
+            .expected = "x = f(\n\tg(\n\t\t\\\\a\n\t),\n)\n",
+        },
+        .{
+            .input = "x = A(\n\t\\\\a\n\t,\n)\n",
+            .expected = "x = A(\n\t\\\\a\n)\n",
+        },
+        .{
+            .input = "x = (1,\n\t\\\\a\n)\n",
+            .expected = "x = (\n\t1,\n\t\\\\a\n)\n",
+        },
+        .{
+            .input = "x = (\n\t\\\\a\n\t,\n)\n",
+            .expected = "x = (\n\t\\\\a\n)\n",
+        },
+        .{
+            .input = "x = { a: 1, b:\n\t\\\\a\n}\n",
+            .expected = "x = {\n\ta: 1,\n\tb: \\\\a\n}\n",
+        },
+        .{
+            .input = "x = { ..r, a:\n\t\\\\a\n}\n",
+            .expected = "x = {\n\t..r,\n\ta: \\\\a\n}\n",
+        },
+        .{
+            .input = "x = f(\n\t\\\\a\n\t# c\n)\n",
+            .expected = "x = f(\n\t\\\\a\n\t# c\n)\n",
+        },
+    };
+
+    for (cases) |case| {
+        const result = try moduleFmtsStable(std.testing.allocator, case.input, false);
+        defer std.testing.allocator.free(result);
+        try std.testing.expectEqualStrings(case.expected, result);
+    }
+}
+
+test "issue 12302: code after a typed multiline string's suffix continues on the suffix line" {
+    const Case = struct {
+        input: []const u8,
+        expected: []const u8,
+    };
+    const cases = [_]Case{
+        .{
+            .input = "x = f(\n\t\\\\a\n\t.U8, 1,\n)\n",
+            .expected = "x = f(\n\t\\\\a\n\t.U8,\n\t1,\n)\n",
+        },
+        .{
+            .input = "x = f(\n\t\\\\a\n\t.U8,\n)\n",
+            .expected = "x = f(\n\t\\\\a\n\t.U8,\n)\n",
+        },
+    };
+
+    for (cases) |case| {
+        const result = try moduleFmtsStable(std.testing.allocator, case.input, false);
+        defer std.testing.allocator.free(result);
+        try std.testing.expectEqualStrings(case.expected, result);
+    }
+}
+
+test "if condition is parenthesized unless the then branch is a block" {
+    const input =
+        \\abs = |n| if n < 0 -n else n
+        \\max = |a, b| if a > b a else b
+        \\rec = |c| if c { x: 1 } else { x: 2 }
+        \\kept = |n| if (n < 0) -n else n
+        \\run! = |c| if c log!("yes")
+        \\multi = |n|
+        \\    if n < 0
+        \\        -n
+        \\    else
+        \\        n
+        \\blk = |n| if (n < 0) {
+        \\    -n
+        \\} else n
+        \\nested = |n| if ((n < 0)) {
+        \\    -n
+        \\} else n
+        \\chain = |n| if n < 0 -1 else if (n == 0) {
+        \\    0
+        \\} else 1
+        \\commented = |n| if (n < 0 # why
+        \\) {
+        \\    -n
+        \\} else n
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(
+        "abs = |n| if (n < 0) -n else n\n\n" ++
+            "max = |a, b| if (a > b) a else b\n\n" ++
+            "rec = |c| if (c) { x: 1 } else { x: 2 }\n\n" ++
+            "kept = |n| if (n < 0) -n else n\n\n" ++
+            "run! = |c| if (c) log!(\"yes\")\n\n" ++
+            "multi = |n|\n\tif (n < 0)\n\t\t-n\n\telse\n\t\tn\n\n" ++
+            "blk = |n| if n < 0 {\n\t-n\n} else n\n\n" ++
+            "nested = |n| if n < 0 {\n\t-n\n} else n\n\n" ++
+            "chain = |n| if (n < 0) -1 else if n == 0 {\n\t0\n} else 1\n\n" ++
+            "commented = |n| if (\n\tn < 0 # why\n) {\n\t-n\n} else n\n",
+        result,
+    );
+}
+
+test "else block aligns with if when only the else branch has braces" {
+    const input =
+        "value =\n" ++
+        "\tif (True) 1\n" ++
+        "\telse { # comment\n" ++
+        "\t\t2\n" ++
+        "\t}\n";
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(input, result);
+}
+
+test "else on its own line aligns with if when the then branch is a block" {
+    const input =
+        "value =\n" ++
+        "\tif True {\n" ++
+        "\t\t1\n" ++
+        "\t}\n" ++
+        "\telse {\n" ++
+        "\t\t2\n" ++
+        "\t}\n";
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(input, result);
+}
+
+test "else chain with a final block stays aligned with if" {
+    const input =
+        "value =\n" ++
+        "\tif (True) 1\n" ++
+        "\telse if (False) 3\n" ++
+        "\telse {\n" ++
+        "\t\t2\n" ++
+        "\t}\n";
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(input, result);
+}
+
+test "block then branch after a comment-broken condition indents under the condition" {
+    const input =
+        "value =\n" ++
+        "\tif # c\n" ++
+        "\t\tTrue {\n" ++
+        "\t\t\t1\n" ++
+        "\t\t}\n" ++
+        "\telse 2\n";
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(input, result);
 }

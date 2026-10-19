@@ -606,6 +606,8 @@ const Lifter = struct {
         stmt: Mono.StmtId,
         finish_fn_def: Mono.ExprId,
         finish_call_proc: Mono.ExprId,
+        /// A call of a function definition written as its callee.
+        finish_fn_def_call: Mono.ExprId,
         finish_lambda: LambdaFinish,
     };
 
@@ -625,7 +627,7 @@ const Lifter = struct {
         defer {
             for (work.items) |item| switch (item) {
                 .finish_lambda => |finish| self.allocator.free(finish.captures),
-                .expr, .stmt, .finish_fn_def, .finish_call_proc => {},
+                .expr, .stmt, .finish_fn_def, .finish_call_proc, .finish_fn_def_call => {},
             };
             work.deinit(self.allocator);
         }
@@ -643,6 +645,7 @@ const Lifter = struct {
                 } });
             },
             .finish_call_proc => |expr_id| try self.finishRewrittenProcCall(expr_id),
+            .finish_fn_def_call => |expr_id| try self.finishFnDefCall(expr_id),
             .finish_lambda => |finish| {
                 defer self.allocator.free(finish.captures);
                 try self.finishLiftedLambda(finish);
@@ -796,6 +799,18 @@ const Lifter = struct {
                 try children.add(.{ .finish_fn_def = expr_id });
             },
             .call_value => |call| {
+                // A call whose function is defined where it is called calls
+                // that function directly, as a call through a name bound to
+                // it does. The definition's capture values are evaluated
+                // first, as they would be to build the function value.
+                const callee = output.getExpr(call.callee).data;
+                if (callee == .fn_def) {
+                    const captures = output.fnDefCaptureSpan(callee.fn_def.captures);
+                    for (0..captures.len) |capture_index| try children.child(GuardedList.at(captures, capture_index).value);
+                    try children.span(call.args);
+                    try children.add(.{ .finish_fn_def_call = expr_id });
+                    return;
+                }
                 try children.child(call.callee);
                 try children.span(call.args);
             },
@@ -870,6 +885,17 @@ const Lifter = struct {
                 try children.span(jump.args);
             },
         }
+    }
+
+    fn finishFnDefCall(self: *Lifter, expr_id: Mono.ExprId) Allocator.Error!void {
+        const call = self.output.getExpr(expr_id).data.call_value;
+        const fn_def = self.output.getExpr(call.callee).data.fn_def;
+        const lifted = self.liftedFn(fn_def.fn_id);
+        self.output.setExprData(expr_id, .{ .call_proc = .{
+            .callee = .{ .lifted = lifted },
+            .args = call.args,
+            .captures = try self.fnRefCaptureExprSpanForFnDef(lifted, fn_def.captures, expr_id),
+        } });
     }
 
     fn finishRewrittenProcCall(self: *Lifter, expr_id: Mono.ExprId) Allocator.Error!void {

@@ -14,6 +14,23 @@ const Allocator = std.mem.Allocator;
 /// directories (see `CacheConfig.getScratchDir`).
 pub const scratch_dir_name = "tmp";
 
+/// Prefix of the per-version subdirectories that hold object-cache packs. One
+/// namespace exists per pack version hash, named by appending the hash's
+/// first eight bytes in hex, so packs of different versions never share a
+/// directory.
+pub const object_pack_namespace_prefix = "objects-";
+
+/// The length of every object-cache namespace name.
+pub const object_pack_namespace_len = object_pack_namespace_prefix.len + 16;
+
+/// The object-cache namespace of packs stamped with `version_hash`.
+pub fn objectPackNamespace(version_hash: [32]u8) [object_pack_namespace_len]u8 {
+    var name: [object_pack_namespace_len]u8 = undefined;
+    @memcpy(name[0..object_pack_namespace_prefix.len], object_pack_namespace_prefix);
+    name[object_pack_namespace_prefix.len..].* = std.fmt.bytesToHex(version_hash[0..8].*, .lower);
+    return name;
+}
+
 const CacheOs = enum { windows, macos, other };
 
 fn cacheOs(os: std.Target.Os.Tag) CacheOs {
@@ -319,7 +336,14 @@ pub const Constants = struct {
     ///      field of their own.
     /// 150: `str_from_utf8`'s builtin call takes only the `Try` discriminant
     ///      and error-record field offsets.
-    pub const CACHE_VERSION = 150;
+    /// 151: an import's exposed items record the declaration import
+    ///      resolution selected for them.
+    /// 152: a nested procedure site records whether its module's source
+    ///      calls it at exactly one site.
+    /// 153: a package or platform header's qualified exposures record a
+    ///      deferred reference, and canonical diagnostics gain
+    ///      `public_type_not_defined`.
+    pub const CACHE_VERSION = 153;
 };
 
 /// Configuration for the Roc cache system.

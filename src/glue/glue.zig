@@ -98,13 +98,13 @@ pub const GlueError = error{
 pub fn rocGlue(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, args: GlueArgs, roc_ctx: compile.CoreCtx, std_io: std.Io) GlueError!void {
     rocGlueInner(gpa, stderr, stdout, args, roc_ctx, std_io) catch |err| {
         (switch (err) {
-            error.GlueSpecNotFound => stderr.print("Error: Glue spec file not found: '{s}'\n", .{args.glue_spec}),
+            error.GlueSpecNotFound => printPath(gpa, stderr, "Error: Glue spec file not found: '{s}'\n", args.glue_spec, args.report_config),
             error.NotPlatformFile => blk: {
-                stderr.print("Error: '{s}' is not a platform file.\n", .{args.platform_path}) catch {};
+                printPath(gpa, stderr, "Error: '{s}' is not a platform file.\n", args.platform_path, args.report_config) catch {};
                 break :blk stderr.print("The glue command only works with platform files.\n", .{});
             },
-            error.FileNotFound => stderr.print("Error: File not found: '{s}'\n", .{args.platform_path}),
-            error.ParseFailed => stderr.print("Error: Failed to parse '{s}'\n", .{args.platform_path}),
+            error.FileNotFound => printPath(gpa, stderr, "Error: File not found: '{s}'\n", args.platform_path, args.report_config),
+            error.ParseFailed => printPath(gpa, stderr, "Error: Failed to parse '{s}'\n", args.platform_path, args.report_config),
             error.PlatformPathResolution => stderr.print("Error: Could not resolve platform path\n", .{}),
             error.TempDirCreation => stderr.print("Error: Could not create temp directory\n", .{}),
             error.BuildEnvInit => stderr.print("Error: Failed to initialize build environment\n", .{}),
@@ -326,7 +326,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     }
 
     std.Io.Dir.cwd().createDirPath(std_io, args.output_dir) catch {
-        stderr.print("Error: Could not create output directory: {s}\n", .{args.output_dir}) catch {};
+        printPath(gpa, stderr, "Error: Could not create output directory: {s}\n", args.output_dir, args.report_config) catch {};
         return error.CompilationFailed;
     };
 
@@ -342,11 +342,11 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
             .sub_path = file_path,
             .data = file.content,
         }) catch {
-            stderr.print("Error: Could not write file '{s}'\n", .{file_path}) catch {};
+            printPath(gpa, stderr, "Error: Could not write file '{s}'\n", file_path, args.report_config) catch {};
             return error.CompilationFailed;
         };
 
-        stdout.print("  Wrote: {s}\n", .{file_path}) catch {};
+        printPath(gpa, stdout, "  Wrote: {s}\n", file_path, args.report_config) catch {};
     }
 }
 
@@ -517,6 +517,19 @@ fn compileGlueSpec(
     };
 }
 
+/// Print a message naming `path`, spelled relative to the working directory.
+fn printPath(
+    gpa: Allocator,
+    writer: *std.Io.Writer,
+    comptime fmt: []const u8,
+    path: []const u8,
+    config: reporting.ReportingConfig,
+) (Allocator.Error || std.Io.Writer.Error)!void {
+    const display_path = try reporting.displayPath(gpa, path, config.source_path_base);
+    defer gpa.free(display_path);
+    try writer.print(fmt, .{display_path});
+}
+
 /// Compile a glue spec and write its stamped plugin object to `output_path`.
 /// `roc install` uses this so installed glue specs ship a prebuilt optimized
 /// plugin that `roc glue <shorthand>` loads without compiling on the fly.
@@ -532,7 +545,7 @@ pub fn buildGlueSpecPluginFile(
 ) GlueError!void {
     buildGlueSpecPluginFileInner(gpa, stderr, glue_spec, output_path, opt, report_config, std_io) catch |err| {
         (switch (err) {
-            error.GlueSpecNotFound => stderr.print("Error: Glue spec file not found: '{s}'\n", .{glue_spec}),
+            error.GlueSpecNotFound => printPath(gpa, stderr, "Error: Glue spec file not found: '{s}'\n", glue_spec, report_config),
             error.BuildEnvInit => stderr.print("Error: Failed to initialize build environment\n", .{}),
             error.CompilationFailed => stderr.print("Error: Compilation failed\n", .{}),
             error.OutOfMemory => stderr.print("Error: Out of memory\n", .{}),

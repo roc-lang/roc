@@ -26,6 +26,7 @@ pub const TypeMismatch = types.TypeMismatch;
 pub const TypeMismatchEvidence = types.TypeMismatchEvidence;
 pub const TypePair = types.TypePair;
 pub const InterpolationTie = types.InterpolationTie;
+pub const StrConversion = types.StrConversion;
 pub const IncompatiblePlatformRequirement = types.IncompatiblePlatformRequirement;
 pub const CrossModuleImport = types.CrossModuleImport;
 
@@ -63,6 +64,7 @@ pub const NonExhaustiveMatch = types.NonExhaustiveMatch;
 pub const NonExhaustiveDestructure = types.NonExhaustiveDestructure;
 pub const RedundantPattern = types.RedundantPattern;
 pub const UnmatchablePattern = types.UnmatchablePattern;
+pub const MatchBranchPart = types.MatchBranchPart;
 pub const MatchAltBinderMissing = types.MatchAltBinderMissing;
 pub const DiscardedVarUpdate = types.DiscardedVarUpdate;
 pub const ComptimeUnusedBranch = types.ComptimeUnusedBranch;

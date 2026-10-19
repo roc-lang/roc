@@ -528,6 +528,25 @@ fn createFileNotFoundReport(allocator: Allocator, info: anytype) Allocator.Error
     return report;
 }
 
+/// A report whose headline names the file at `path` and whose body names the
+/// error that caused it.
+fn createPathErrorNameReport(
+    allocator: Allocator,
+    title: []const u8,
+    before: []const u8,
+    path: []const u8,
+    after: []const u8,
+    severity: reporting.Severity,
+    err_name: []const u8,
+) Allocator.Error!Report {
+    var report = try Report.initWithPath(allocator, title, before, path, after, severity);
+
+    try report.document.addText("Error: ");
+    try report.document.addText(err_name);
+
+    return report;
+}
+
 /// A report whose headline is formatted from `headline_fmt` and whose body
 /// names the error that caused it.
 fn createErrorNameReport(
@@ -549,15 +568,15 @@ fn createErrorNameReport(
 }
 
 fn createFileReadFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    return createErrorNameReport(allocator, "File Read Failed", "I could not read the file {s}.", .{info.path}, .runtime_error, @errorName(info.err));
+    return createPathErrorNameReport(allocator, "File Read Failed", "I could not read the file ", info.path, ".", .runtime_error, @errorName(info.err));
 }
 
 fn createFileWriteFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    return createErrorNameReport(allocator, "File Write Failed", "I could not write to the file {s}.", .{info.path}, .runtime_error, @errorName(info.err));
+    return createPathErrorNameReport(allocator, "File Write Failed", "I could not write to the file ", info.path, ".", .runtime_error, @errorName(info.err));
 }
 
 fn createDirectoryCreateFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    return createErrorNameReport(allocator, "Directory Create Failed", "I could not create the directory {s}.", .{info.path}, .runtime_error, @errorName(info.err));
+    return createPathErrorNameReport(allocator, "Directory Create Failed", "I could not create the directory ", info.path, ".", .runtime_error, @errorName(info.err));
 }
 
 fn createDirectoryNotFoundReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
@@ -583,9 +602,7 @@ fn createCacheDirUnavailableReport(allocator: Allocator, info: anytype) Allocato
 }
 
 fn createNoPlatformFoundReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "The app file {s} does not specify a platform.", .{info.app_path});
-    defer allocator.free(headline);
-    var report = try Report.init(allocator, "No Platform Found", headline, .fatal);
+    var report = try Report.initWithPath(allocator, "No Platform Found", "The app file ", info.app_path, " does not specify a platform.", .fatal);
 
     try report.document.addText("Add a platform to your app header, for example:");
     try report.document.addLineBreak();
@@ -597,13 +614,7 @@ fn createNoPlatformFoundReport(allocator: Allocator, info: anytype) Allocator.Er
 }
 
 fn createPlatformRequiresAppReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(
-        allocator,
-        "The platform file {s} declares app requirements, so it cannot be built by itself.",
-        .{info.platform_path},
-    );
-    defer allocator.free(headline);
-    var report = try Report.init(allocator, "Platform Requires an App", headline, .fatal);
+    var report = try Report.initWithPath(allocator, "Platform Requires an App", "The platform file ", info.platform_path, " declares app requirements, so it cannot be built by itself.", .fatal);
 
     try report.document.addText("Build an app that uses this platform, or use `roc glue` to generate its host interface.");
 
@@ -627,9 +638,7 @@ fn createPlatformSourceNotFoundReport(allocator: Allocator, info: anytype) Alloc
 }
 
 fn createMissingPlatformModuleReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "The platform at {s}.", .{info.platform_path});
-    defer allocator.free(headline);
-    var report = try Report.init(allocator, "Missing Platform Module", headline, .runtime_error);
+    var report = try Report.initWithPath(allocator, "Missing Platform Module", "The platform at ", info.platform_path, ".", .runtime_error);
 
     try report.document.addText("is missing the required module: ");
     try report.document.addAnnotated(info.module_name, .emphasized);
@@ -661,9 +670,7 @@ fn createCircularPlatformDependencyReport(allocator: Allocator, info: anytype) A
 }
 
 fn createInvalidAppHeaderReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "The file {s} does not have a valid app header with a platform declaration.", .{info.app_path});
-    defer allocator.free(headline);
-    var report = try Report.init(allocator, "Invalid App Header", headline, .runtime_error);
+    var report = try Report.initWithPath(allocator, "Invalid App Header", "The file ", info.app_path, " does not have a valid app header with a platform declaration.", .runtime_error);
 
     try report.document.addText("Expected an app header like:");
     try report.document.addLineBreaks(2);
@@ -679,9 +686,7 @@ fn createInvalidAppHeaderReport(allocator: Allocator, info: anytype) Allocator.E
 }
 
 fn createBuildNotSupportedForHeaderlessReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "The file {s} is a headerless app, which uses a simple builtin platform.", .{info.app_path});
-    defer allocator.free(headline);
-    var report = try Report.init(allocator, "Build Not Supported", headline, .fatal);
+    var report = try Report.initWithPath(allocator, "Build Not Supported", "The file ", info.app_path, " is a headerless app, which uses a simple builtin platform.", .fatal);
 
     try report.document.addText("designed for tutorials and cannot be compiled to a standalone executable.");
     try report.document.addLineBreaks(2);
@@ -729,9 +734,7 @@ fn createUnsupportedOptLevelReport(allocator: Allocator, info: anytype) Allocato
 }
 
 fn createCompilationFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "Compilation of {s} failed.", .{info.path});
-    defer allocator.free(headline);
-    var report = try Report.init(allocator, "Compilation Failed", headline, .fatal);
+    var report = try Report.initWithPath(allocator, "Compilation Failed", "Compilation of ", info.path, " failed.", .fatal);
 
     var buf: [32]u8 = undefined;
     const count_str = std.fmt.bufPrint(&buf, "{}", .{info.error_count}) catch "?";
@@ -805,7 +808,7 @@ fn createLinkerFailedReport(allocator: Allocator, info: anytype) Allocator.Error
 }
 
 fn createObjectCompilationFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    return createErrorNameReport(allocator, "Object Compilation Failed", "Failed to compile object file for {s}.", .{info.path}, .runtime_error, @errorName(info.err));
+    return createPathErrorNameReport(allocator, "Object Compilation Failed", "Failed to compile object file for ", info.path, ".", .runtime_error, @errorName(info.err));
 }
 
 fn createShimGenerationFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
@@ -1166,9 +1169,7 @@ fn createSharedMemoryFailedReport(allocator: Allocator, info: anytype) Allocator
 }
 
 fn createExpectedAppHeaderReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "Expected an app header in {s}.", .{info.path});
-    defer allocator.free(headline);
-    var report = try Report.init(allocator, "Expected App Header", headline, .runtime_error);
+    var report = try Report.initWithPath(allocator, "Expected App Header", "Expected an app header in ", info.path, ".", .runtime_error);
 
     try report.document.addText("but found: ");
     try report.document.addAnnotated(info.found, .emphasized);
@@ -1189,9 +1190,7 @@ fn createExpectedAppHeaderReport(allocator: Allocator, info: anytype) Allocator.
 }
 
 fn createExpectedPlatformStringReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "Expected a platform string in the app header of {s}.", .{info.path});
-    defer allocator.free(headline);
-    var report = try Report.init(allocator, "Expected Platform String", headline, .runtime_error);
+    var report = try Report.initWithPath(allocator, "Expected Platform String", "Expected a platform string in the app header of ", info.path, ".", .runtime_error);
 
     try report.document.addText("Example:");
     try report.document.addLineBreak();
@@ -1203,13 +1202,11 @@ fn createExpectedPlatformStringReport(allocator: Allocator, info: anytype) Alloc
 }
 
 fn createModuleInitFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    return createErrorNameReport(allocator, "Module Initialization Failed", "Failed to initialize module {s}.", .{info.path}, .runtime_error, @errorName(info.err));
+    return createPathErrorNameReport(allocator, "Module Initialization Failed", "Failed to initialize module ", info.path, ".", .runtime_error, @errorName(info.err));
 }
 
 fn createNoExportsFoundReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "No exports were found in {s}.", .{info.path});
-    defer allocator.free(headline);
-    var report = try Report.init(allocator, "No Exports Found", headline, .runtime_error);
+    var report = try Report.initWithPath(allocator, "No Exports Found", "No exports were found in ", info.path, ".", .runtime_error);
 
     try report.document.addText("Ensure the module exports at least one definition.");
 

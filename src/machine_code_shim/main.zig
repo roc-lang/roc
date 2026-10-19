@@ -573,11 +573,21 @@ fn resolveShimFunction(name: []const u8) ?usize {
     }
     if (resolveRuntimeSymbol(name)) |address| return address;
     if (resolveHostedSymbol(name)) |address| return address;
+    if (resolvePackageSymbol(name)) |address| return address;
     return resolveBoxyShimFunction(name);
 }
 
 /// `roc_source_event` for a process in which no observer can be registered.
 fn unobservedSourceEvent(_: *const builtins.source_events.Header) callconv(.c) void {}
+
+/// An object-cache entry linked into this executable, by its C-ABI entry
+/// name, which the generated platform shim recorded next to its address.
+fn resolvePackageSymbol(name: []const u8) ?usize {
+    for (shim_host_abi.packageNames(), shim_host_abi.packageFns()) |package_name, package_fn| {
+        if (std.mem.eql(u8, std.mem.span(package_name), name)) return @intFromPtr(package_fn);
+    }
+    return null;
+}
 
 /// The host's runtime symbols, which this shim links against directly.
 fn resolveRuntimeSymbol(name: []const u8) ?usize {

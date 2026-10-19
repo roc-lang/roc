@@ -55,7 +55,7 @@ pub const Symbol = packed struct(u64) {
 /// the same in every program that contains the procedure and is what its
 /// symbol name is derived from, so separately compiled objects can refer to
 /// one another.
-pub const ProcIdentity = struct {
+pub const ProcIdentity = extern struct {
     bytes: [32]u8,
 
     /// Hex of the leading 128 bits, for symbol names.
@@ -65,6 +65,22 @@ pub const ProcIdentity = struct {
 
     /// Bytes that every procedure symbol name begins with.
     pub const symbol_name_prefix = "roc__p";
+
+    /// Bytes that every C-ABI entry symbol name begins with: the entry a
+    /// linked object-cache object exports for a procedure, which callers
+    /// compiled by any backend reach through the platform C ABI.
+    pub const c_abi_entry_name_prefix = "roc__c";
+
+    comptime {
+        std.debug.assert(c_abi_entry_name_prefix.len == symbol_name_prefix.len);
+    }
+
+    /// Write this procedure's C-ABI entry symbol into caller-owned storage.
+    pub fn writeCAbiEntryName(self: ProcIdentity, buffer: *[symbol_name_len]u8) []u8 {
+        @memcpy(buffer[0..c_abi_entry_name_prefix.len], c_abi_entry_name_prefix);
+        buffer[c_abi_entry_name_prefix.len..].* = self.symbolHex();
+        return buffer;
+    }
 
     /// Length of a procedure symbol name. The identity encoding fixes it: the
     /// prefix plus the hex of the leading 128 bits.
@@ -193,7 +209,14 @@ pub const InlineScopeId = enum(u32) {
 
 /// A virtual source frame retained independently of physical procedures.
 pub const InlineScope = extern struct {
-    source_symbol: Symbol,
+    /// Identity of the inlined procedure, which names its debug subprogram
+    /// the same way in every program.
+    source_identity: ProcIdentity,
+    /// Whether the inlined procedure's identity names its template by site
+    /// (`LirProcSpec.code_key`), so the code this scope copied is not named
+    /// by the identity of the procedure it was copied into.
+    copies_site_code: bool,
+    _reserved: [3]u8 = @splat(0),
     source_name: StringLiteral.Idx,
     source_loc: base.SourceLoc,
     call_site: base.SourceLoc,
@@ -1119,6 +1142,10 @@ pub const CFStmt = union(enum) {
         /// argument unique—and clears this, so no consumer after ARC sees
         /// it set.
         fresh_alternative: ?LirProcSpecId = null,
+        /// For a read of a compile-time list of copies held as static data
+        /// in `value`: its item count, which the read's value has in either
+        /// form ARC chooses. Range proving binds it as the list's length.
+        list_len: ?u64 = null,
         next: CFStmtId,
     },
     assign_call: struct {
@@ -1707,6 +1734,30 @@ pub const LirProcSpec = struct {
     /// body here, its `identity` names the cache entry, and its `rc_*`
     /// fields carry the ownership signature the entry was compiled with.
     external: bool = false,
+    /// For an `external` proc, the object-cache key its entry was served
+    /// under, which locates the entry's artifact. Its identity cannot: a
+    /// procedure named by site has one identity for every version of its
+    /// code.
+    cache_key: ?[32]u8 = null,
+    /// For a procedure whose identity names its template by site rather than
+    /// content (`Mono.FnTemplate.site_identity`): its identity together with
+    /// its module's content key, which names its code. Cached code of the
+    /// procedure is taken and placed only under an equal code key; a null key
+    /// means the identity names the code. Code compiled against an earlier
+    /// body of the procedure calls it by identity, so ARC pins its signature
+    /// to the one its types determine. Set only in a program using the
+    /// object cache.
+    code_key: ?[32]u8 = null,
+    /// The Monotype function this procedure lowers, which keys the producer's
+    /// summary of the compile-time roots its code reads
+    /// (`SpecComptimeReads.fnReads`); null for a procedure no Monotype
+    /// function names.
+    source_monotype_fn: ?u32 = null,
+    /// Set on an `external` proc whose cache entry is a linked object rather
+    /// than spliced code: callers reach it through its C-ABI entry
+    /// (`ProcIdentity.writeCAbiEntryName`), classified from its argument and
+    /// return layouts by `layout.abi`.
+    c_abi_entry: bool = false,
     /// Exact self-tail sites produced by LIR construction, consumed by TRMC/TCE.
     tail_calls: ?TailCalls = null,
     /// Set by the tail-drive pass on an erased-callable procedure with an

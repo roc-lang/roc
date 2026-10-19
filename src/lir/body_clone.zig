@@ -1967,6 +1967,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .target = try self.mapLocal(s.target),
                     .value = s.value,
                     .fresh_alternative = s.fresh_alternative,
+                    .list_len = s.list_len,
                     .next = s.next,
                 } },
                 .assign_call => |s| .{ .assign_call = .{
@@ -2601,7 +2602,8 @@ pub fn BodyCloner(comptime Rewriter: type) type {
             while (chain.pop()) |scope| {
                 const source = self.store.inlineScope(scope);
                 const mapped = try self.store.addInlineScope(.{
-                    .source_symbol = source.source_symbol,
+                    .source_identity = source.source_identity,
+                    .copies_site_code = source.copies_site_code,
                     .source_name = source.source_name,
                     .source_loc = source.source_loc,
                     .call_site = source.call_site,
@@ -2862,6 +2864,27 @@ test "rewritableProcBody refuses procs whose body is not the compiler's to clone
     try std.testing.expect(rewritableProcBody(&store, erased) == null);
 }
 
+test "call variant identity digests layouts by content, not by index" {
+    const allocator = std.testing.allocator;
+    const native = base.target.TargetUsize.native;
+    var first_layouts = try layout_mod.Store.init(allocator, native);
+    defer first_layouts.deinit();
+    var second_layouts = try layout_mod.Store.init(allocator, native);
+    defer second_layouts.deinit();
+    _ = try first_layouts.insertPtr(.u8);
+    const first_ptr = try first_layouts.insertPtr(.u64);
+    const second_ptr = try second_layouts.insertPtr(.u64);
+    try std.testing.expect(first_ptr != second_ptr);
+
+    const source = LIR.ProcIdentity.forTest(1);
+    const first = callVariantIdentity(source, 1, 0, try first_layouts.contentDigest(first_ptr));
+    const second = callVariantIdentity(source, 1, 0, try second_layouts.contentDigest(second_ptr));
+    try std.testing.expectEqual(first.bytes, second.bytes);
+
+    const other = callVariantIdentity(source, 1, 0, try second_layouts.contentDigest(.u64));
+    try std.testing.expect(!std.mem.eql(u8, &first.bytes, &other.bytes));
+}
+
 test "call-result fusion machinery has one definition" {
     // `return_slot` and `str_append` are the same pass with different consumer
     // matches. The walk, the liveness guard, and the variant clone live here so
@@ -2892,7 +2915,8 @@ test "body_clone scratch is bounded by reachable locals and scopes" {
     var store = LirStore.init(testing.allocator);
     defer store.deinit();
     const scope: LIR.InlineScope = .{
-        .source_symbol = store.freshSyntheticSymbol(),
+        .source_identity = LIR.ProcIdentity.forTest(1),
+        .copies_site_code = false,
         .source_name = .none,
         .source_loc = .none,
         .call_site = .none,

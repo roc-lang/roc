@@ -313,11 +313,15 @@ const Engine = struct {
                 try self.putBytes(@tagName(primitive));
             },
             .zst => try self.putBytes("zst"),
+            // An erased callable is one pointer-sized value called through
+            // the convention of its source function type, whichever closures
+            // the program puts in it, so its members are not part of the
+            // code of a procedure that holds one. A procedure that packs a
+            // function into it names that function in its own body.
             .erased => |erased| {
                 try self.putBytes("erased");
                 if (identityTraceEnabled()) std.debug.print("identity-erased source_fn_ty={s}\n", .{std.fmt.bytesToHex(erased.source_fn_ty.bytes[0..8], .lower)});
                 try self.putBytes(&erased.source_fn_ty.bytes);
-                try self.putMembers(erased.members);
             },
             .func => |func| {
                 try self.putBytes("func");
@@ -372,7 +376,11 @@ const Engine = struct {
                     (if (module_identity.len == 32) renderer.declarations.nominal(module_identity[0..32].*, decl) else null)
                 else
                     null;
-                if (declaration) |identity| {
+                if (named.def.site) {
+                    // A root app module type is named by its declaration; its
+                    // backing, rendered below, names its structure.
+                    try self.putBytes("site");
+                } else if (declaration) |identity| {
                     // Named by declaration, like a specialization key names
                     // it, so an edit elsewhere in its module leaves it alone.
                     try self.putBytes("declaration");
@@ -780,8 +788,46 @@ test "procedure identity excludes outer callable sets but retains nested callabl
     try std.testing.expect(!std.mem.eql(u8, &identity, &try renderer.specIdentity(second_fn, alone, &.{}, "finite", "none")));
     try std.testing.expect(!std.mem.eql(u8, &identity, &try renderer.specIdentity(first_fn, alone, &.{}, "erased", "none")));
     try std.testing.expect(!std.mem.eql(u8, &identity, &try renderer.specIdentity(first_fn, alone, &.{}, "finite", "reuse")));
+
+    // An erased callable's members are whatever closures the program puts
+    // in it; a procedure that takes one is the same code whichever they are.
+    const erased_digest: names.TypeDigest = .{ .bytes = @splat(9) };
+    const erased_first = try types.add(.{ .erased = .{ .source_fn_ty = erased_digest, .members = try types.addMembers(&.{
+        .{ .lambda = first, .captures = .empty() },
+    }), .abi_fn = alone } });
+    const erased_both = try types.add(.{ .erased = .{ .source_fn_ty = erased_digest, .members = try types.addMembers(&.{
+        .{ .lambda = first, .captures = .empty() },
+        .{ .lambda = second, .captures = .empty() },
+    }), .abi_fn = alone } });
+    const boxed_first = try types.add(.{ .box = try types.add(.{ .func = .{ .args = args, .ret = scalar, .callable = erased_first } }) });
+    const boxed_both = try types.add(.{ .box = try types.add(.{ .func = .{ .args = args, .ret = scalar, .callable = erased_both } }) });
+    const takes_boxed_first = try types.add(.{ .func = .{ .args = try types.addSpan(&.{boxed_first}), .ret = scalar, .callable = singleton } });
+    const takes_boxed_both = try types.add(.{ .func = .{ .args = try types.addSpan(&.{boxed_both}), .ret = scalar, .callable = singleton } });
+    const other_erased = try types.add(.{ .erased = .{ .source_fn_ty = .{ .bytes = @splat(8) }, .abi_fn = alone } });
+    const boxed_other = try types.add(.{ .box = try types.add(.{ .func = .{ .args = args, .ret = scalar, .callable = other_erased } }) });
+    const takes_boxed_other = try types.add(.{ .func = .{ .args = try types.addSpan(&.{boxed_other}), .ret = scalar, .callable = singleton } });
+    const erased_renderer = Renderer{
+        .allocator = allocator,
+        .types = types.view(),
+        .names = &name_store,
+        .fn_tys = &.{ alone, beside_lambda },
+        .source_digests = &.{ @splat(1), @splat(2) },
+        .fn_by_symbol = &fn_by_symbol,
+        .memo = &memo,
+        .declarations = &Common.DeclarationNames.empty,
+    };
+    try std.testing.expectEqual(
+        try erased_renderer.specIdentity(first_fn, takes_boxed_first, &.{}, "finite", "none"),
+        try erased_renderer.specIdentity(first_fn, takes_boxed_both, &.{}, "finite", "none"),
+    );
+    // The erased function type is still part of the identity.
+    try std.testing.expect(!std.mem.eql(
+        u8,
+        &try erased_renderer.specIdentity(first_fn, takes_boxed_first, &.{}, "finite", "none"),
+        &try erased_renderer.specIdentity(first_fn, takes_boxed_other, &.{}, "finite", "none"),
+    ));
 }
 
-fn identityTraceEnabled() bool {
+inline fn identityTraceEnabled() bool {
     return @import("builtin").os.tag != .freestanding and std.c.getenv("ROC_IDENTITY_TRACE") != null;
 }

@@ -1786,3 +1786,67 @@ test "a comparison a mask decides folds in a body with no branch and no checked 
     // The mask bounds the left operand by 7, so `< 8` is a constant.
     try std.testing.expectEqual(@as(usize, 0), bare_compare_shape.is_lt);
 }
+
+// The matchfinders' extension: the length starts at a caller-given count,
+// the first four words run against a bound of their own below the limit,
+// and a byte loop finishes. The entry guard bounds the string cursor plus
+// the limit once, so every word read on either side is a sum sharing an
+// operand with that guarded sum, and all of them prove.
+test "the match extension proves every word read on both sides against its entry guard" {
+    marked_op = "num_from_le_bytes_unchecked";
+    try harness.expectLirInspectionWithOptions(
+        \\lz_extend : List(U8), U64, U64, U64, U64 -> U64
+        \\lz_extend = |input, str_at, match_at, start_len, max_len| {
+        \\    if str_at + max_len > List.len(input) or match_at >= str_at {
+        \\        crash "match window outside the input"
+        \\    } else {
+        \\    }
+        \\    var $len = start_len
+        \\    four_words_end = $len + 32
+        \\    if four_words_end <= max_len {
+        \\        while $len + 8 <= four_words_end {
+        \\            s = U64.from_le_bytes(input, str_at.plus_wrap($len)) ?? 0
+        \\            d = (U64.from_le_bytes(input, match_at.plus_wrap($len)) ?? 0).bitwise_xor(s)
+        \\            if d != 0 {
+        \\                return $len.plus_wrap(d.count_trailing_zero_bits().to_u64().shr_zf_wrap(3))
+        \\            } else {
+        \\            }
+        \\            $len = $len.plus_wrap(8)
+        \\        }
+        \\    } else {
+        \\    }
+        \\    while $len + 8 <= max_len {
+        \\        s = U64.from_le_bytes(input, str_at.plus_wrap($len)) ?? 0
+        \\        d = (U64.from_le_bytes(input, match_at.plus_wrap($len)) ?? 0).bitwise_xor(s)
+        \\        if d != 0 {
+        \\            return $len.plus_wrap(d.count_trailing_zero_bits().to_u64().shr_zf_wrap(3))
+        \\        } else {
+        \\        }
+        \\        $len = $len.plus_wrap(8)
+        \\    }
+        \\    while $len < max_len
+        \\        and (List.get(input, str_at.plus_wrap($len)) ?? 0) == (List.get(input, match_at.plus_wrap($len)) ?? 0) {
+        \\        $len = $len.plus_wrap(1)
+        \\    }
+        \\    $len
+        \\}
+        \\
+        \\main! : List(Str) => Try({}, [Exit(I8), ..])
+        \\main! = |args| {
+        \\    bytes = Str.to_utf8(Str.join_with(args, ","))
+        \\    echo!(Str.inspect(lz_extend(bytes, args.len(), 1, 4, 40)))
+        \\    Ok({})
+        \\}
+    ,
+        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        countMarkedShape,
+    );
+    try std.testing.expect(marked_shape.found);
+    try std.testing.expectEqual(@as(usize, 4), marked_shape.unchecked_reads);
+    try std.testing.expectEqual(@as(usize, 2), marked_shape.get_unsafe);
+    // Every read's length test and bound test folded; the comparisons left
+    // are the guard's own and the loops' conditions.
+    try std.testing.expectEqual(@as(usize, 1), marked_shape.is_lt);
+    try std.testing.expectEqual(@as(usize, 1), marked_shape.is_gt);
+    try std.testing.expectEqual(@as(usize, 1), marked_shape.is_gte);
+}

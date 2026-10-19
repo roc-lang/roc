@@ -14828,6 +14828,13 @@ fn fnBodySizeWithin(allocator: Allocator, program: *const Ast.Program, body: Ast
 /// Count the expressions in `expr_id`, stopping once more than `limit` have
 /// been seen. The count is order-independent, so the walk keeps its own
 /// work stack.
+///
+/// A constant read counts as one expression whichever form it has: a
+/// compile-time root read whose proof call is never executed, or a static
+/// data candidate whose construction is not caller work. Clones share either
+/// read whole, and a program that restores a constant from the cache reads
+/// it in the other form, so counting beneath the read would let the cache
+/// decide what a body costs.
 fn exprBodySizeWithin(allocator: Allocator, program: *const Ast.Program, expr_id: Ast.ExprId, limit: usize) Allocator.Error!BodySize {
     var remaining = limit;
     var stack: std.ArrayList(Ast.ExprChild) = .empty;
@@ -14843,7 +14850,8 @@ fn exprBodySizeWithin(allocator: Allocator, program: *const Ast.Program, expr_id
                 .def_ref,
                 .fn_def,
                 => Common.invariant("pre-lift function expression reached SpecConstr body-size counting"),
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => try Ast.appendChildren(allocator, program, id, &stack),
+                .static_data_candidate, .comptime_value => {},
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => try Ast.appendChildren(allocator, program, id, &stack),
             }
         },
     };
@@ -16256,6 +16264,38 @@ test "compile-time root reads remain opaque through specialization and cloning" 
     try std.testing.expectEqual(root_id, program.getExpr(read).data.comptime_value.root);
     try std.testing.expectEqualDeep(root, program.getComptimeValueRoot(root_id));
     try std.testing.expectEqual(@as(usize, 1), program.comptime_value_roots.len());
+}
+
+test "a constant read counts as one expression in either form" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+    const item_ty = try program.types.add(.{ .primitive = .u8 });
+    const list_ty = try program.types.add(.{ .list = item_ty });
+    const item = try program.addExpr(.{ .ty = item_ty, .data = .{ .int_lit = .{ .bytes = @bitCast(@as(u128, 7)), .kind = .u128 } } });
+    const list = try program.addExpr(.{ .ty = list_ty, .data = .{ .list = try program.addExprSpan(&.{ item, item, item }) } });
+    const root_id = try program.addComptimeValueRoot(.{
+        .module = .{},
+        .root = .{ .checked = @fromBackingInt(@intCast(1)) },
+        .const_locator = .{
+            .artifact = .{},
+            .owner = .{ .hoisted_expr = .{ .module_idx = 0, .expr = @fromBackingInt(@intCast(1)) } },
+            .template = @fromBackingInt(@intCast(1)),
+            .source_scheme = .{},
+        },
+    });
+    const read = try program.addExpr(.{ .ty = list_ty, .data = .{ .comptime_value = .{
+        .root = root_id,
+        .initializer = list,
+    } } });
+    const candidate = try program.addExpr(.{ .ty = list_ty, .data = .{ .static_data_candidate = .{
+        .storage = .aggregate,
+        .static_data = try addStaticDataIdentityForTest(&program),
+        .runtime_expr = list,
+    } } });
+    try std.testing.expectEqual(BodySize{ .exact = 4 }, try exprBodySizeWithin(allocator, &program, list, spec_constr_body_expr_threshold));
+    try std.testing.expectEqual(BodySize{ .exact = 1 }, try exprBodySizeWithin(allocator, &program, read, spec_constr_body_expr_threshold));
+    try std.testing.expectEqual(BodySize{ .exact = 1 }, try exprBodySizeWithin(allocator, &program, candidate, spec_constr_body_expr_threshold));
 }
 
 test "static candidate clones share closed initializers without emitting caller work" {

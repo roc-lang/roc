@@ -63,14 +63,22 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
         std.debug.print("Commented:\n==========\n{s}\n==========\n\n", .{commented});
     }
 
-    checkFormatting(gpa, generated, debug, .generated);
-    checkFormatting(gpa, commented, debug, .commented);
+    checkFormatting(gpa, generated, debug, .generated, .{});
+    checkFormatting(gpa, commented, debug, .commented, .{});
+    if (generator.roc_pinned) {
+        checkFormatting(gpa, generated, debug, .generated, upgrading);
+        checkFormatting(gpa, commented, debug, .commented, upgrading);
+    }
 }
+
+/// Formatting as a nightly newer than `SyntaxGenerator.roc_pin` rewrites a
+/// header's `roc` entry, which must keep every comment around it.
+const upgrading: fmt.Options = .{ .compiler_version = "nightly-2026-August-1-bbbbbbb" };
 
 const SourceKind = enum { generated, commented };
 
-fn checkFormatting(gpa: std.mem.Allocator, source: []const u8, debug: bool, kind: SourceKind) void {
-    const formatted = fmt.moduleFmtsStable(gpa, source, debug) catch |err| {
+fn checkFormatting(gpa: std.mem.Allocator, source: []const u8, debug: bool, kind: SourceKind, options: fmt.Options) void {
+    const formatted = fmt.moduleFmtsStableWithOptions(gpa, source, debug, options) catch |err| {
         switch (err) {
             // A line break where the module had none can change how it
             // parses, so inserting comments may produce invalid source.

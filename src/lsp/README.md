@@ -160,17 +160,21 @@ const request_handlers = std.StaticStringMap(HandlerPtr).initComptime(.{
 When adding a new capability, if the server is ready to support it, you need to add the capabilities to
 the `capabilities.zig` file for the `initialize` response to tell the client the capabilities is available :
 ```zig
-pub fn buildCapabilities() ServerCapabilities {
-    return .{
+pub fn buildCapabilities(trusted_workspace: bool) ServerCapabilities {
+    const parse_only: ServerCapabilities = .{
         .textDocumentSync = .{
             .openClose = true,
             .change = @backingInt(ServerCapabilities.TextDocumentSyncKind.incremental),
         },
     };
+    // ...
 }
 ```
 Here we tell the client that `textDocumentSync` is available in accordance to the LSP specifications data
-structure. The `Server` struct holds the state, meaning in has the knowledge of the project files, the
+structure. Capabilities that need a full build belong in the trusted branch only, matching
+`requires_trust` on their handler.
+
+The `Server` struct holds the state, meaning in has the knowledge of the project files, the
 documentation, the type inference, the syntax, etc. Every handler has access to it. These points of knowledge
 are ideally separated in different fields of the server. For example, the opened buffer and other desired files
 are stored in a `DocumentStore` which is a struct containing a `StringHashMap`, accessible through the `Server`.
@@ -226,7 +230,8 @@ trust from their own user-controlled trust mechanism, never repository settings.
 Restart the server when trust changes. Trust applies to the entire server session,
 including every opened document and transitive dependency; use separate sessions
 for untrusted folders. Clients without a trust integration remain in syntax-only
-mode. Semantic requests return a trust-required error in that mode.
+mode. In that mode the `initialize` response only advertises formatting, folding
+ranges, and selection ranges, and other requests return a trust-required error.
 
 ## Editor examples
 

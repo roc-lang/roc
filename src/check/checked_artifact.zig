@@ -5835,6 +5835,15 @@ fn appendCheckedNominalDeclarationFromStatement(
         store,
         nominal_payload,
     );
+    if (builtin.mode == .debug) {
+        // The declaration's formals are exactly the roots its backing was
+        // built over, so instantiating them substitutes into that backing.
+        const declared_args = store.payload(declaration_root).nominal.args;
+        std.debug.assert(declared_args.len == declaration_formals.len);
+        for (declared_args, declaration_formals) |declared_arg, formal| {
+            std.debug.assert(declared_arg == formal.root);
+        }
+    }
     try appendCheckedNominalDeclarationFromPayload(allocator, store, declaration_root, backing, declared_record_fields);
 }
 
@@ -6685,7 +6694,14 @@ fn appendNominalDeclarationRootPayload(
     const nominal = owned_payload.nominal;
 
     const key_info = try checkedTypePayloadKeyBuild(allocator, names, store, owned_payload);
-    if (store.rootForKey(key_info.key)) |existing| {
+    // A key names a type only up to a consistent renaming of its variables,
+    // so a generic declaration's key also names applications of the nominal
+    // to other variables of the same names (`A(s)` written inside another
+    // declaration's body, over that declaration's `s`). Only a key without
+    // variables identifies one type, so only such a key selects an existing
+    // root.
+    const existing_root = if (key_info.contains_identity_variables) null else store.rootForKey(key_info.key);
+    if (existing_root) |existing| {
         const index: usize = @backingInt(existing);
         if (index >= store.payloads.items.len) {
             checkedArtifactInvariant("nominal declaration root key referenced a missing payload", .{});
@@ -6694,9 +6710,9 @@ fn appendNominalDeclarationRootPayload(
             checkedArtifactInvariant("nominal declaration key collided with a non-nominal payload", .{});
         }
         const existing_nominal = store.payloads.items[index].nominal;
-        // The canonical key already includes the semantic formal-arg shapes.
-        // The checked root ids can differ when the same nominal declaration is
-        // reached through a declaration root and a use-site root.
+        // The checked root ids can differ when the same closed nominal
+        // declaration is reached through a declaration root and a use-site
+        // root.
         if (existing_nominal.name != nominal.name or
             existing_nominal.origin_module != nominal.origin_module or
             !CheckedModuleArtifactKey.eql(existing_nominal.owner_module, nominal.owner_module) or
@@ -22151,6 +22167,12 @@ pub const NestedProcSite = struct {
     kind: NestedProcKind,
     checked_expr: ?CheckedExprId,
     checked_pattern: ?CheckedPatternId,
+    /// The module's source uses the function this site constructs exactly
+    /// once, as the function of a call: either the site's expression is that
+    /// call's function, or it is the whole value of a non-recursive binding
+    /// whose one reference is. Every call to the function, in any program,
+    /// is then that call (`NestedProcSiteTable.markSingleSourceCalls`).
+    single_source_call: bool = false,
 };
 
 /// Public `NestedProcSiteTable` declaration.
@@ -22229,6 +22251,7 @@ pub const NestedProcSiteTable = struct {
 
         const sites = try builder.sites.toOwnedSlice(allocator);
         errdefer allocator.free(sites);
+        try markSingleSourceCalls(allocator, checked_bodies, sites);
         const path_components = try builder.path_pool.toOwnedSlice(allocator);
         errdefer allocator.free(path_components);
 
@@ -22244,6 +22267,78 @@ pub const NestedProcSiteTable = struct {
     }
 
     pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
+
+    /// Set `single_source_call` on each template-owned site whose function
+    /// the module's source calls at one site and never otherwise uses. A
+    /// default-root site is lowered at every construction site that omits
+    /// its field, and an expression with more than one site is lowered once
+    /// per site, so neither qualifies.
+    fn markSingleSourceCalls(
+        allocator: Allocator,
+        checked_bodies: *const CheckedBodyStore,
+        sites: []NestedProcSite,
+    ) Allocator.Error!void {
+        const expr_count = checked_bodies.exprCount();
+        const pattern_count = checked_bodies.patternCount();
+
+        // Whether each expression is the function of a call.
+        const callees = try allocator.alloc(bool, expr_count);
+        defer allocator.free(callees);
+        @memset(callees, false);
+        // Each pattern's references, and how many of them are a call's
+        // function.
+        const references = try allocator.alloc(u32, pattern_count);
+        defer allocator.free(references);
+        @memset(references, 0);
+        const calls = try allocator.alloc(u32, pattern_count);
+        defer allocator.free(calls);
+        @memset(calls, 0);
+        for (0..expr_count) |raw| {
+            const expr = checked_bodies.expr(@fromBackingInt(@intCast(@as(u32, @intCast(raw)))));
+            if (expr.data == .call) callees[@backingInt(expr.data.call.func)] = true;
+        }
+        for (0..expr_count) |raw| {
+            const expr = checked_bodies.expr(@fromBackingInt(@intCast(@as(u32, @intCast(raw)))));
+            if (expr.data != .lookup_local) continue;
+            const pattern = @backingInt(expr.data.lookup_local.pattern);
+            references[pattern] += 1;
+            if (callees[raw]) calls[pattern] += 1;
+        }
+
+        // The pattern each expression is the whole value of, for a
+        // non-recursive binding of one name.
+        const bound_by = try allocator.alloc(?CheckedPatternId, expr_count);
+        defer allocator.free(bound_by);
+        @memset(bound_by, null);
+        for (0..checked_bodies.statementCount()) |raw| {
+            const statement = checked_bodies.statement(@fromBackingInt(@intCast(@as(u32, @intCast(raw)))));
+            if (statement.data != .decl) continue;
+            const decl = statement.data.decl;
+            if (decl.recursive) continue;
+            if (checked_bodies.pattern(decl.pattern).data != .assign) continue;
+            bound_by[@backingInt(decl.expr)] = decl.pattern;
+        }
+
+        // How many sites each expression has.
+        const site_counts = try allocator.alloc(u32, expr_count);
+        defer allocator.free(site_counts);
+        @memset(site_counts, 0);
+        for (sites) |site| {
+            const expr_id = site.checked_expr orelse continue;
+            site_counts[@backingInt(expr_id)] += 1;
+        }
+
+        for (sites) |*site| {
+            if (site.owner != .template) continue;
+            const expr_id = site.checked_expr orelse continue;
+            const raw = @backingInt(expr_id);
+            if (site_counts[raw] != 1) continue;
+            site.single_source_call = callees[raw] or if (bound_by[raw]) |pattern|
+                references[@backingInt(pattern)] == 1 and calls[@backingInt(pattern)] == 1
+            else
+                false;
+        }
+    }
 
     /// The binders of enclosing frames whose values the procedure at `site`
     /// needs at runtime (see `NestedProcSite.runtime_captures`).
@@ -36272,6 +36367,7 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
             .diag_private_type_in_exposed_field,
             .diag_type_from_missing_module,
             .diag_module_not_imported,
+            .diag_public_type_not_defined,
             .diag_nested_type_not_found,
             .diag_internal_builtin_type,
             .diag_nested_value_not_found,
@@ -40147,8 +40243,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xBE, 0x4C, 0xC8, 0xA3, 0x84, 0xFA, 0xD8, 0xE4, 0x0F, 0x4F, 0x89, 0xB2, 0x8A, 0x36, 0x7A, 0xE8,
-        0xF5, 0x4E, 0xDC, 0x36, 0xEA, 0xA8, 0x79, 0x36, 0xAE, 0xC3, 0x55, 0x20, 0x3E, 0xA2, 0xEB, 0x0C,
+        0x0A, 0x93, 0x67, 0x84, 0x88, 0x97, 0x60, 0xA7, 0xB6, 0x80, 0x02, 0x4B, 0x13, 0x4A, 0x53, 0x52,
+        0x84, 0x0C, 0xA5, 0x43, 0x1D, 0x68, 0x63, 0xCA, 0x50, 0xF3, 0x9E, 0xAF, 0x21, 0xFF, 0x5F, 0x6A,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

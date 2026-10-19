@@ -498,6 +498,9 @@ pub const SpecCacheHit = struct {
     /// Complete serving-closure demand, borrowed from the immutable provider.
     /// Consumers declare these checked roots before retiring a source body.
     checked_root_uses: []const CheckedRootUse = &.{},
+    /// The entry is a linked object reached through its C-ABI entry rather
+    /// than spliced code (`LIR.LirProcSpec.c_abi_entry`).
+    c_abi_entry: bool = false,
     /// Producer-owned demand summary: the compile-time roots the procedure's
     /// code reads, through every procedure it reaches. A program that takes
     /// the hit demands them as if it had lowered the body (design.md
@@ -516,12 +519,23 @@ pub const SpecCacheHit = struct {
     rc_ret_conditions: []const u32,
 };
 
+/// The object-cache key of a procedure served by its identity alone: a
+/// specialization whose request mentions functions, so no reservation-time
+/// key names it, is looked up once Lambda Mono has decided its identity
+/// (design.md "Object Cache Store").
+pub fn procIdentityCacheKey(identity: [32]u8) [32]u8 {
+    var hasher = base.Sha256.init(.{});
+    hasher.update("roc.object-cache.proc-identity.v1");
+    hasher.update(&identity);
+    return hasher.finalResult();
+}
+
 /// The object cache's answer for a specialization key, asked when Monotype
 /// reserves the specialization and before its body exists. The consumer that
 /// owns the cache supplies the context and the lookup.
 pub const SpecCacheLookup = struct {
     context: *anyopaque,
-    find: *const fn (context: *anyopaque, key: [32]u8, current_relation: ?[32]u8) ?SpecCacheHit,
+    find: *const fn (context: *anyopaque, key: [32]u8, current_relation: ?[32]u8, accept_linked: bool) ?SpecCacheHit,
     /// Whether the provider holds a settled discovery outcome for the
     /// specialization (`lir.Program.DiscoverySummary`).
     find_discovery: ?*const fn (context: *anyopaque, key: [32]u8, current_relation: ?[32]u8) bool = null,
@@ -552,15 +566,17 @@ pub const SpecCacheLookup = struct {
         return hit;
     }
 
-    pub fn lookup(self: SpecCacheLookup, key: [32]u8, current_relation: ?[32]u8) ?SpecCacheHit {
-        const hit = self.find(self.context, key, current_relation) orelse return null;
+    /// `accept_linked`: whether the asking consumer's code is linked, so a
+    /// linked-object entry (`SpecCacheHit.c_abi_entry`) can serve it.
+    pub fn lookup(self: SpecCacheLookup, key: [32]u8, current_relation: ?[32]u8, accept_linked: bool) ?SpecCacheHit {
+        const hit = self.find(self.context, key, current_relation, accept_linked) orelse return null;
         const demand = hit.demand orelse return null;
         if (!demand.permitsRetirement()) return null;
         // Machine relocations to current literal headers do not imply that
         // the executable producer itself is present. Its exact object is an
         // additional semantic dependency supplied by the same provider.
         for (demand.literal_reads) |read| {
-            const producer = self.find(self.context, read.recipe.producer_key, current_relation) orelse return null;
+            const producer = self.find(self.context, read.recipe.producer_key, current_relation, accept_linked) orelse return null;
             if (!std.mem.eql(u8, &producer.identity, &read.recipe.object_identity)) return null;
             const producer_demand = producer.demand orelse return null;
             if (!producer_demand.permitsRetirement()) return null;

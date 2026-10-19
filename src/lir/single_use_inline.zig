@@ -227,7 +227,8 @@ fn inlineAt(store: *LirStore, layouts: *layout_mod.Store, site: CallSite) Resour
     if (source_args.len != call_args.len) invariant("{s}", .{"single-use inline call arity differed from callee"});
 
     const inline_scope = try store.addInlineScope(.{
-        .source_symbol = callee.name,
+        .source_identity = callee.identity,
+        .copies_site_code = callee.code_key != null,
         .source_name = store.procDebugNameString(call.proc),
         .source_loc = store.procLoc(call.proc),
         .call_site = store.stmtLoc(site.stmt),

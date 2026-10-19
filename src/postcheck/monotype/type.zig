@@ -101,6 +101,13 @@ pub const TypeDef = struct {
     /// Generated iterator types retain these as the exact representation roles
     /// consumed by post-check stages.
     iterator_topology: ?IteratorTopology = null,
+    /// Declared in the root app module. Identity digests name such a type by
+    /// its declaration and the structure of its backing rather than by its
+    /// module's content, as `Ast.FnTemplate.site_identity` does for
+    /// functions, so an edit elsewhere in the module leaves the identities
+    /// of specializations at it unchanged, and a change to its structure
+    /// changes them.
+    site: bool = false,
 };
 
 /// Explicit representation tier assigned when an iterator nominal is created.
@@ -3278,23 +3285,27 @@ pub const Store = struct {
             },
             .named => |named| {
                 try sink.writeBytes("named");
-                const declaration: ?[32]u8 = if (mode == .declaration) if (named.def.source_decl) |source_decl|
-                    declarations.?.nominal(name_store.moduleIdentityBytes(named.def.module), source_decl)
-                else
-                    null else null;
-                if (declaration) |identity| {
-                    try sink.writeBytes("declaration");
-                    try sink.writeBytes(&identity);
+                if (named.def.site) {
+                    try sink.writeBytes("site");
                 } else {
-                    if (mode == .declaration and @import("builtin").os.tag != .freestanding and std.c.getenv("ROC_IDENTITY_TRACE") != null) {
-                        std.debug.print("named-undeclared module={s} source_decl={?d} name={s} generated={} iter={s}\n", .{ std.fmt.bytesToHex(name_store.moduleIdentityBytes(named.def.module)[0..8], .lower), named.def.source_decl, name_store.typeNameText(named.def.type_name), named.def.generated != null, @tagName(named.def.iterator_kind) });
+                    const declaration: ?[32]u8 = if (mode == .declaration) if (named.def.source_decl) |source_decl|
+                        declarations.?.nominal(name_store.moduleIdentityBytes(named.def.module), source_decl)
+                    else
+                        null else null;
+                    if (declaration) |identity| {
+                        try sink.writeBytes("declaration");
+                        try sink.writeBytes(&identity);
+                    } else {
+                        if (mode == .declaration and @import("builtin").os.tag != .freestanding and std.c.getenv("ROC_IDENTITY_TRACE") != null) {
+                            std.debug.print("named-undeclared module={s} source_decl={?d} name={s} generated={} iter={s}\n", .{ std.fmt.bytesToHex(name_store.moduleIdentityBytes(named.def.module)[0..8], .lower), named.def.source_decl, name_store.typeNameText(named.def.type_name), named.def.generated != null, @tagName(named.def.iterator_kind) });
+                        }
+                        try sink.writeBytes(&named.named_type.module.bytes);
+                        if (mode == .full or mode == .identity_only) try sink.writeU32(@backingInt(named.named_type.ty));
+                        try sink.writeBytes(name_store.moduleIdentityBytes(named.def.module));
+                        try sinkOptionalU32(sink, named.def.source_decl);
                     }
-                    try sink.writeBytes(&named.named_type.module.bytes);
-                    if (mode == .full or mode == .identity_only) try sink.writeU32(@backingInt(named.named_type.ty));
-                    try sink.writeBytes(name_store.moduleIdentityBytes(named.def.module));
-                    try sinkOptionalU32(sink, named.def.source_decl);
                 }
-                if ((mode != .equality and mode != .declaration) or named.def.source_decl == null) {
+                if ((mode != .equality and mode != .declaration) or named.def.source_decl == null or named.def.site) {
                     try sink.writeBytes(name_store.typeNameText(named.def.type_name));
                 }
                 try sinkOptionalDigest(sink, named.def.generated);
@@ -3318,6 +3329,8 @@ pub const Store = struct {
                     .identity_only => if (specializationUsesBacking(named.backing)) {
                         try sink.writeBytes("specialization-generated-backing");
                         try encodeNamedBacking(sink, named.backing, .full);
+                    } else if (named.def.site) {
+                        try encodeNamedBacking(sink, named.backing, .identity_only);
                     } else {
                         try sink.writeBytes("specialization-named-identity");
                     },
@@ -3327,6 +3340,9 @@ pub const Store = struct {
                         try sink.writeBytes(@tagName(backing.use));
                         try sink.writeBytes(@tagName(backing.authority));
                         try sink.child(backing.ty, mode);
+                    } else if (named.def.site) {
+                        // Named by declaration, so its structure names it too.
+                        try encodeNamedBacking(sink, named.backing, .equality);
                     } else {
                         try sink.writeBytes("equality-named-identity");
                     },

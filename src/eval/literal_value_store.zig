@@ -81,7 +81,7 @@ pub const LiteralValueStore = struct {
     }
 
     pub fn deinit(self: *LiteralValueStore) void {
-        if (std.c.getenv("ROC_PACK_STATS") != null) {
+        if (@import("builtin").link_libc and std.c.getenv("ROC_PACK_STATS") != null) {
             std.debug.print("literal value store: hits {d} misses {d} writes {d}\n", .{ self.hits, self.misses, self.writes });
         }
         var it = self.entries.valueIterator();

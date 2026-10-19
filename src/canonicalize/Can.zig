@@ -866,10 +866,18 @@ fn qualifiedNameIdent(
     qualifiers: AST.Token.Span,
     final_token: Token.Idx,
 ) std.mem.Allocator.Error!Ident.Idx {
+    return self.qualifiedNameIdentFromTokens(self.parse_ir.store.tokenSlice(qualifiers), final_token);
+}
+
+fn qualifiedNameIdentFromTokens(
+    self: *Self,
+    qualifier_tokens: []const Token.Idx,
+    final_token: Token.Idx,
+) std.mem.Allocator.Error!Ident.Idx {
     const top = self.qualified_ident_bytes.top();
     defer self.qualified_ident_bytes.clearFrom(top);
 
-    for (self.parse_ir.store.tokenSlice(qualifiers)) |raw_token| {
+    for (qualifier_tokens) |raw_token| {
         const segment = self.parse_ir.tokens.resolveIdentifier(@intCast(raw_token)) orelse unreachable;
         try self.qualified_ident_bytes.items.appendSlice(self.parse_ir.env.getIdent(segment));
         try self.qualified_ident_bytes.append('.');
@@ -1158,6 +1166,8 @@ const DeferredRef = struct {
     diagnostic_region: ?Region = null,
     /// For a file import, the `file_dependencies` entry it records under.
     file_dependency_idx: u32 = 0,
+    /// For an exposed-item check, the exposed item it checks.
+    exposed_item: ?CIR.ExposedItem.Idx = null,
     /// Whether a file import binds the file's raw bytes rather than its text.
     file_import_is_bytes: bool = false,
 };
@@ -1203,6 +1213,7 @@ fn pushDeferredRef(self: *Self, ref: DeferredRef) std.mem.Allocator.Error!Module
         .diagnostic_region_start = if (ref.diagnostic_region) |r| r.start.offset else 0,
         .diagnostic_region_end = if (ref.diagnostic_region) |r| r.end.offset else 0,
         .tag_receiver_end = ref.tag_receiver_end,
+        .exposed_item = if (ref.exposed_item) |item| @backingInt(item) else 0,
     });
     return @fromBackingInt(@intCast(idx));
 }
@@ -6378,6 +6389,7 @@ fn addToExposedScope(
                     try self.addQualifiedExposedType(
                         type_name.qualifiers,
                         type_name.ident,
+                        type_name.as,
                         type_name.region,
                     );
                     continue;
@@ -6411,6 +6423,7 @@ fn addToExposedScope(
                     try self.addQualifiedExposedType(
                         type_with_constructors.qualifiers,
                         type_with_constructors.ident,
+                        null,
                         type_with_constructors.region,
                     );
                     continue;
@@ -6446,6 +6459,7 @@ fn addQualifiedExposedType(
     self: *Self,
     qualifiers: AST.Token.Span,
     final_token: Token.Idx,
+    alias_token: ?Token.Idx,
     tokenized_region: AST.TokenizedRegion,
 ) std.mem.Allocator.Error!void {
     const type_ident = try self.qualifiedNameIdent(qualifiers, final_token);
@@ -6463,6 +6477,27 @@ fn addQualifiedExposedType(
     // A qualified exposed name re-exports a declaration of the module its
     // qualifier names, so this module owes no definition for it.
     try self.exposed_qualified_type_idents.put(self.env.gpa, type_ident, region);
+
+    if (self.env.module_kind != .platform and self.env.module_kind != .package) return;
+
+    // Whether the qualifier's module defines that declaration is settled when
+    // the module completes, so the entry waits for the drain.
+    const qualifier_tokens = self.parse_ir.store.tokenSlice(qualifiers);
+    const module_ident = self.parse_ir.tokens.resolveIdentifier(qualifier_tokens[0]) orelse unreachable;
+    const nested_ident = try self.qualifiedNameIdentFromTokens(qualifier_tokens[1..], final_token);
+    const public_ident = self.parse_ir.tokens.resolveIdentifier(alias_token orelse final_token) orelse unreachable;
+    _ = try self.pushDeferredRef(.{
+        .import_idx = null,
+        .kind = .header_exposure,
+        .path = nested_ident,
+        .module_name = module_ident,
+        .item_name = public_ident,
+        .parent_name = module_ident,
+        .qualified_name = type_ident,
+        .missing_module_failure = .type_not_exposed,
+        .not_found_failure = .type_not_exposed,
+        .diagnostic_region = region,
+    });
 }
 
 /// Add platform provides items to the exposed scope.
@@ -7562,6 +7597,7 @@ fn deferImportStatement(
             .selects_type = selects_type,
             .exposes_constructors = exposed_item.is_wildcard,
             .diagnostic_region = self.env.store.getRegionAt(@fromBackingInt(@intCast(@backingInt(exposed_item_idx)))),
+            .exposed_item = exposed_item_idx,
         });
         self.setDeferredRefNode(item_ref, @backingInt(import_stmt_idx));
     }
@@ -15341,6 +15377,7 @@ fn notCanonicalized(kind: ModuleEnv.DeferredRefKind, region: Region) Diagnostic 
         .exposed_item,
         .hosted_entry,
         .file_import,
+        .header_exposure,
         => Diagnostic{ .expr_not_canonicalized = .{ .region = region } },
     };
 }

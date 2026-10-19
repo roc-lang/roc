@@ -4,6 +4,7 @@
 //! Non-construction values retain their static storage, and failed roots retain
 //! their ordinary failure guards.
 const std = @import("std");
+const base = @import("base");
 const collections = @import("collections");
 const builtins = @import("builtins");
 const check = @import("check");
@@ -60,6 +61,57 @@ pub fn requiresOwnedCapacity(construction: Construction) bool {
 pub const UniformList = struct {
     element: Construction,
     count: u64,
+
+    /// Writes the list's content: the count and the element's construction,
+    /// part by part. Together with the list's layout this is everything
+    /// `emitRepeat` builds from, so equal digests name equal code in every
+    /// program.
+    pub fn writeDigest(self: UniformList, allocator: Allocator, hasher: *base.TypeDigestHasher) Allocator.Error!void {
+        writeDigestWord(hasher, self.count);
+        // Parts wait on an explicit stack, so nesting never becomes native
+        // call depth.
+        var pending: std.ArrayList(Construction) = .empty;
+        defer pending.deinit(allocator);
+        try pending.append(allocator, self.element);
+        while (pending.pop()) |part| {
+            hasher.update(&.{@backingInt(std.meta.activeTag(part))});
+            switch (part) {
+                .literal => |literal| {
+                    hasher.update(&.{@backingInt(std.meta.activeTag(literal))});
+                    switch (literal) {
+                        .i64_literal => |int| {
+                            writeDigestWord(hasher, @bitCast(int.value));
+                            writeDigestWord(hasher, @backingInt(int.layout_idx));
+                        },
+                        .i128_literal => |int| {
+                            writeDigestWord(hasher, @truncate(@as(u128, @bitCast(int.value))));
+                            writeDigestWord(hasher, @truncate(@as(u128, @bitCast(int.value)) >> 64));
+                            writeDigestWord(hasher, @backingInt(int.layout_idx));
+                        },
+                        .f32_literal => |value| writeDigestWord(hasher, @as(u32, @bitCast(value))),
+                        .f64_literal => |value| writeDigestWord(hasher, @bitCast(value)),
+                        .dec_literal => |value| {
+                            writeDigestWord(hasher, @truncate(@as(u128, @bitCast(value))));
+                            writeDigestWord(hasher, @truncate(@as(u128, @bitCast(value)) >> 64));
+                        },
+                        .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => base.invariant("a construction's literal was not a scalar", .{}),
+                    }
+                },
+                .zst, .empty_str => {},
+                .empty_list => |capacity| writeDigestWord(hasher, capacity),
+                .record => |fields| {
+                    writeDigestWord(hasher, fields.len);
+                    try pending.appendSlice(allocator, fields);
+                },
+                .tag => |tag| {
+                    writeDigestWord(hasher, tag.variant_index);
+                    writeDigestWord(hasher, tag.discriminant);
+                    hasher.update(&.{@intFromBool(tag.payload != null)});
+                    if (tag.payload) |payload| try pending.append(allocator, payload.*);
+                },
+            }
+        }
+    }
 };
 
 /// A decoded construction owned only while its consumer emits the requested
@@ -100,6 +152,12 @@ pub fn constructionForExportedValue(allocator: Allocator, program: *const Progra
     var decoder = Decoder{ .program = program, .frozen = frozen, .arena = result.arena.allocator() };
     result.construction = try decoder.decode(&exported, exported.bytes[exported.symbol_offset..], exported.symbol_offset, root.role.value.plan, entry.layout_idx);
     return result;
+}
+
+fn writeDigestWord(hasher: *base.TypeDigestHasher, value: u64) void {
+    var bytes: [8]u8 = undefined;
+    std.mem.writeInt(u64, &bytes, value, .little);
+    hasher.update(&bytes);
 }
 
 /// Constructions of the completed successful roots of one host program that
@@ -944,4 +1002,28 @@ test "an empty string root and a record of an empty list and a scalar decode to 
     try std.testing.expectEqual(@as(u64, 4), record.record[0].empty_list);
     try std.testing.expectEqual(@as(i128, 9), record.record[1].literal.i128_literal.value);
     try std.testing.expect(values.constructionFor(.{}, .{ .checked = @fromBackingInt(@intCast(3)) }, .str) == null);
+}
+
+test "uniform list digests name the count and every part of the item" {
+    const digestOf = struct {
+        fn of(uniform: UniformList) Allocator.Error![base.TypeDigestHasher.digest_length]u8 {
+            var hasher = base.TypeDigestHasher.init();
+            try uniform.writeDigest(std.testing.allocator, &hasher);
+            return hasher.finalResult();
+        }
+    }.of;
+    const zero: Construction = .{ .literal = .{ .i128_literal = .{ .value = 0, .layout_idx = .u8 } } };
+    const dash: Construction = .{ .literal = .{ .i128_literal = .{ .value = 45, .layout_idx = .u8 } } };
+    const zeros = try digestOf(.{ .element = zero, .count = 4 });
+    try std.testing.expectEqualSlices(u8, &zeros, &try digestOf(.{ .element = zero, .count = 4 }));
+    try std.testing.expect(!std.mem.eql(u8, &zeros, &try digestOf(.{ .element = zero, .count = 1 })));
+    try std.testing.expect(!std.mem.eql(u8, &zeros, &try digestOf(.{ .element = dash, .count = 4 })));
+
+    const first = [_]Construction{ zero, .{ .empty_list = 2 } };
+    const second = [_]Construction{ zero, .{ .empty_list = 3 } };
+    const tagged: Construction = .{ .tag = .{ .variant_index = 1, .discriminant = 1, .payload = &first[1] } };
+    const untagged: Construction = .{ .tag = .{ .variant_index = 1, .discriminant = 1, .payload = null } };
+    const records = try digestOf(.{ .element = .{ .record = &first }, .count = 2 });
+    try std.testing.expect(!std.mem.eql(u8, &records, &try digestOf(.{ .element = .{ .record = &second }, .count = 2 })));
+    try std.testing.expect(!std.mem.eql(u8, &try digestOf(.{ .element = tagged, .count = 2 }), &try digestOf(.{ .element = untagged, .count = 2 })));
 }

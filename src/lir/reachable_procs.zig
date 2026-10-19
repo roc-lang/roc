@@ -213,6 +213,9 @@ const Pass = struct {
         for (self.result.root_procs.items) |proc| {
             try self.markProc(proc);
         }
+        for (self.result.retained_procs.items) |proc| {
+            try self.markProc(proc);
+        }
         for (self.result.const_roots.items) |root| {
             try self.markProc(root.proc);
             try self.markConstPlan(root.plan);
@@ -485,6 +488,9 @@ const Pass = struct {
 
     fn remapRootProcs(self: *Pass) Allocator.Error!void {
         for (self.result.root_procs.items) |*proc| {
+            proc.* = self.remapProc(proc.*);
+        }
+        for (self.result.retained_procs.items) |*proc| {
             proc.* = self.remapProc(proc.*);
         }
         // A specialization whose procedure was unreachable leaves the table.

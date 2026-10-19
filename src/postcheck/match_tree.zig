@@ -1136,8 +1136,9 @@ pub fn Compiler(comptime Ctx: type) type {
         /// Work the emitter hands back to the host lowerer. Each request is
         /// answered by passing the lowered statement to `Emitter.advance`.
         pub const EmitRequest = union(enum) {
-            /// Lower a branch body into the host's result local, then `next`.
-            body: struct { body: ExprId, next: CtxStmt },
+            /// Lower a branch body into the host's result local, then jump
+            /// to `done` when the body falls through.
+            body: struct { body: ExprId, done: Ctx.JoinPointId },
             /// Lower a branch's binding statements, then `next`.
             bindings: struct { bindings: BindingSpan, next: CtxStmt },
             /// Lower a guard expression into `cond`, then `next`.
@@ -1621,7 +1622,7 @@ pub fn Compiler(comptime Ctx: type) type {
                     .leaf => |leaf| switch (frame.cursor) {
                         0 => {
                             frame.cursor = 1;
-                            return .{ .request = .{ .body = .{ .body = leaf.body, .next = try self.ctx.joinJump(self.done) } } };
+                            return .{ .request = .{ .body = .{ .body = leaf.body, .done = self.done } } };
                         },
                         1 => {
                             frame.cursor = 2;
@@ -1632,7 +1633,7 @@ pub fn Compiler(comptime Ctx: type) type {
                     .guard => |g| switch (frame.cursor) {
                         0 => {
                             frame.cursor = 1;
-                            return .{ .request = .{ .body = .{ .body = g.body, .next = try self.ctx.joinJump(self.done) } } };
+                            return .{ .request = .{ .body = .{ .body = g.body, .done = self.done } } };
                         },
                         1 => {
                             task.body = input.?;
