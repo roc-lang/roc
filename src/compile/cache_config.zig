@@ -336,10 +336,12 @@ pub const Constants = struct {
     /// 153: a package or platform header's qualified exposures record a
     ///      deferred reference, and canonical diagnostics gain
     ///      `public_type_not_defined`.
-    /// 154: a module records which top-level definitions' calls can invoke a
+    /// 154: canonical diagnostics drop `execution_requires_app_or_default_app`,
+    ///      and file-level diagnostics store no region.
+    /// 156: a module records which top-level definitions' calls can invoke a
     ///      function value they do not name, and its strict-demand relation
     ///      follows function values and every selected dispatch.
-    pub const CACHE_VERSION = 155;
+    pub const CACHE_VERSION = 156;
 };
 
 /// Configuration for the Roc cache system.

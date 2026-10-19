@@ -662,11 +662,13 @@ const EmbeddedTargetObjects = struct {
 
     /// The embedded objects for `requested`.
     ///
-    /// A `v1` target uses its default twin's objects. The cross-compile target
-    /// queries in `build.zig` name no CPU model, so Zig resolves them to the
-    /// architecture baseline and these objects already contain no instruction
-    /// above it. `assertCrossTargetsAreBaseline` in `build.zig` keeps that true.
+    /// A `v1` target other than wasm32v1 uses its default twin's objects. The
+    /// cross-compile target queries in `build.zig` name no CPU model, so Zig
+    /// resolves them to the architecture baseline, which for x86-64 and
+    /// AArch64 is the v1 floor. Zig's wasm baseline includes extensions past
+    /// WebAssembly 1.0, so wasm32v1 has objects of its own, built for it.
     fn forTarget(requested: RocTarget) EmbeddedTargetObjects {
+        if (requested == .wasm32v1) return comptime cross(.wasm32v1, .none);
         return switch (requested.defaultCpuTarget()) {
             inline .x64musl,
             .arm64musl,
@@ -715,11 +717,17 @@ const EmbeddedTargetObjects = struct {
     }
 };
 
-/// Compiler implementation support for wasm32. This object is composed into
-/// the Roc-owned object and localized before any platform input participates
-/// in symbol resolution; it is never linked as a public archive member.
+/// Compiler implementation support for a wasm target. This object is
+/// composed into the Roc-owned object and localized before any platform input
+/// participates in symbol resolution; it is never linked as a public archive
+/// member.
 const WasmCompilerRtObject = struct {
-    const bytes = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/wasm32/roc_compiler_rt.o");
+    fn forTarget(target: RocTarget) []const u8 {
+        if (builtin.is_test) return &[_]u8{};
+        std.debug.assert(target == .wasm32 or target == .wasm32v1);
+        if (target == .wasm32v1) return @import("embedded_assets").file("targets/wasm32v1/roc_compiler_rt.o");
+        return @import("embedded_assets").file("targets/wasm32/roc_compiler_rt.o");
+    }
 };
 
 // Workaround for Zig standard library compilation issue on macOS ARM64.
@@ -1352,18 +1360,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
         .licenses => {
             try ctx.io.stdout().writeAll(legalDetailsFileContent);
         },
-        .problem => |problem| {
-            try switch (problem) {
-                .missing_flag_value => |details| ctx.io.stderr().print("Error: no value was supplied for {s}\n", .{details.flag}),
-                .unexpected_argument => |details| ctx.io.stderr().print("Error: roc {s} received an unexpected argument: `{s}`\n", .{ details.cmd, details.arg }),
-                .invalid_flag_value => |details| ctx.io.stderr().print("Error: `{s}` is not a valid value for {s}. The valid options are {s}\n", .{ details.value, details.flag, details.valid_options }),
-                .shorthand_requires_run => |details| ctx.io.stderr().print(
-                    "Error: `{s}` looks like an installed shorthand, and running one requires the `run` subcommand: `roc run {s}`\nIf you meant a local file named `{s}`, write it as `./{s}` instead.\n",
-                    .{ details.name, details.name, details.name, details.name },
-                ),
-            };
-            return error.InvalidArguments;
-        },
+        .problem => |problem| ctx.fail(.{ .invalid_arguments = problem }),
     }) catch |err| {
         // Commands report by recording a problem and returning `CliError`, and
         // a few print straight to stderr instead. Either way the user has been
@@ -2758,7 +2755,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
 
     // Check whether this is a default app—a headerless file with main!, or an
     // app header naming no platform—before linking the platform host shim.
-    if (try stageDefaultApp(ctx, args.path, .execution)) |staged| {
+    if (try stageDefaultApp(ctx, args.path, .running)) |staged| {
         var owned_staged = staged;
         // Default apps never hot reload; they just run once. The shared-memory
         // shim is the run mechanism where the default platform runtime exists (Linux native,
@@ -3524,9 +3521,12 @@ fn stageDefaultApp(
         .invalid => {
             defer result.deinit(ctx.gpa);
             const config = ctx.reportConfig(.stderr);
+            var counts = CheckDiagnosticCounts{};
             for (result.invalid.items) |*report| {
+                if (report.severity.isError()) counts.errors += 1 else counts.warnings += 1;
                 reporting.renderReportToTerminal(report, ctx.io.stderr(), reporting.ColorUtils.getPaletteForConfig(config), config) catch {};
             }
+            renderSummaryHeaderLine(ctx.arena, ctx.io.stderr(), counts.errors, counts.warnings, file_path, config) catch {};
             ctx.io.flush();
             return error.CliError;
         },
@@ -6774,7 +6774,7 @@ const RunObjectCache = struct {
             error.NoHomeDirectory => return null,
         };
         errdefer store.deinit();
-        var linked_store: ?pack_store.Store = if (llvm_available) pack_store.Store.init(ctx.gpa, config, native, linked_pack_policy) catch |err| switch (err) {
+        var linked_store: ?pack_store.Store = if (llvm_available) pack_store.Store.init(ctx.gpa, config, native, @tagName(linkedPackOpt(native))) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.NoHomeDirectory => return null,
         } else null;
@@ -8112,7 +8112,7 @@ fn rocBuildOnce(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
     }
 
     // Default apps build through a synthetic default platform.
-    const prepared = stageDefaultApp(ctx, args.path, .execution) catch |err| {
+    const prepared = stageDefaultApp(ctx, args.path, .building) catch |err| {
         // Preparation can fail before a BuildEnv exists. The watch parent
         // must still observe edits that repair the root source.
         if (args.watch_inputs_file) |file_path| {
@@ -8560,9 +8560,20 @@ fn writePacksToStore(
     }
 }
 
-/// The store directory name, in place of an optimization level, of the
-/// LLVM-optimized object packs a dev build links for URL-package modules.
-const linked_pack_policy = "speed";
+/// The optimization level of the LLVM-optimized object packs a dev build
+/// for `target` links for URL-package modules, which is also their store
+/// directory's name: wasm32 code is optimized for size, every native target
+/// for speed.
+fn linkedPackOpt(target: RocTarget) cli_args.OptLevel {
+    return if (target.toCpuArch() == .wasm32) .size else .speed;
+}
+
+test "object packs are optimized for size on wasm32 and for speed natively" {
+    for (std.enums.values(RocTarget)) |target| {
+        const expected: cli_args.OptLevel = if (target.toCpuArch() == .wasm32) .size else .speed;
+        try std.testing.expectEqual(expected, linkedPackOpt(target));
+    }
+}
 
 /// Write an optimized object pack for every URL-package module in view whose
 /// pack is not in the store yet. A dev build links these in place of
@@ -8612,7 +8623,7 @@ fn compileModuleObjectPack(
     target: RocTarget,
 ) CliMainError!?[]u8 {
     if (comptime !llvm_available) return null;
-    const pack = try lowerModulePack(ctx, build_env, root_artifact, app_imports, app_relations, artifact, roots, .speed, specialization_strategy, target);
+    const pack = try lowerModulePack(ctx, build_env, root_artifact, app_imports, app_relations, artifact, roots, linkedPackOpt(target), specialization_strategy, target);
     var lowered = pack.lowered;
     defer lowered.deinit();
     defer compile.static_data_exports.deinitStaticData(ctx.gpa, pack.static_data_exports);
@@ -8806,7 +8817,7 @@ fn buildTier2Objects(ctx: *CliCtx, args: cli_args.BuildArgs, requests_path: []co
     const bytes = (try objectPackBytes(ctx, &lowered, static_data_exports, candidates.items, target)) orelse return;
     defer ctx.gpa.free(bytes);
     const placement = build_env.packPlacementForArtifactKey(root_artifact.key) orelse return;
-    var store = pack_store.Store.init(ctx.gpa, .{ .enabled = true, .verbose = false, .roc_ctx = ctx.coreCtx() }, target, linked_pack_policy) catch return;
+    var store = pack_store.Store.init(ctx.gpa, .{ .enabled = true, .verbose = false, .roc_ctx = ctx.coreCtx() }, target, @tagName(linkedPackOpt(target))) catch return;
     defer store.deinit();
     store.write(placement.origin, placement.identity, key, bytes) catch |err| {
         std.log.warn("object cache could not store the tier 2 objects: {}", .{err});
@@ -8814,7 +8825,7 @@ fn buildTier2Objects(ctx: *CliCtx, args: cli_args.BuildArgs, requests_path: []co
     reporter.finish();
 }
 
-fn noObjectCacheEntries(_: *anyopaque, _: [32]u8, _: bool) ?postcheck.Common.SpecCacheHit {
+fn noObjectCacheEntries(_: *anyopaque, _: [32]u8, _: postcheck.Common.SpecCacheTakes) ?postcheck.Common.SpecCacheHit {
     return null;
 }
 
@@ -8958,7 +8969,7 @@ fn objectPackBytes(
     const success = try builder.compileBitcodeToObject(ctx.gpa, ctx.io.std_io, .{
         .input_path = bitcode_path,
         .output_path = object_path,
-        .optimization = llvmOptimizationLevel(.speed),
+        .optimization = llvmOptimizationLevel(linkedPackOpt(target)),
         .target = target,
         .report_config = ctx.reportConfig(.stderr),
         .cpu = llvmCpuNameForTarget(std_target),
@@ -9836,6 +9847,7 @@ fn mergeBoxySidecarWasm(
 
 fn writeSealedWasmObject(
     ctx: *CliCtx,
+    target: RocTarget,
     artifact_dir: []const u8,
     output_filename: []const u8,
     module: *backend.wasm.WasmModule,
@@ -9849,13 +9861,13 @@ fn writeSealedWasmObject(
     backend.writeFileWindowsAvSafe(ctx.io.std_io, unsealed_path, unsealed_bytes) catch return error.WasmOutputWriteFailed;
 
     const compiler_rt_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, "roc_compiler_rt_support.o" });
-    backend.writeFileWindowsAvSafe(ctx.io.std_io, compiler_rt_path, WasmCompilerRtObject.bytes) catch return error.WasmOutputWriteFailed;
+    backend.writeFileWindowsAvSafe(ctx.io.std_io, compiler_rt_path, WasmCompilerRtObject.forTarget(target)) catch return error.WasmOutputWriteFailed;
 
     var compiler_inputs = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 3);
     try compiler_inputs.append(unsealed_path);
     try compiler_inputs.append(compiler_rt_path);
     if (lirResultNeedsBoxyRuntime(lir_result)) {
-        const runtime_bytes = EmbeddedTargetObjects.forTarget(.wasm32).boxy_runtime orelse return error.UnsupportedTarget;
+        const runtime_bytes = EmbeddedTargetObjects.forTarget(target).boxy_runtime orelse return error.UnsupportedTarget;
         const runtime_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, "roc_boxy_runtime_support.o" });
         backend.writeFileWindowsAvSafe(ctx.io.std_io, runtime_path, runtime_bytes) catch return error.WasmOutputWriteFailed;
         try compiler_inputs.append(runtime_path);
@@ -10164,7 +10176,8 @@ fn writeDevWasmObject(
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     entrypoints: []const backend.Entrypoint,
     static_data_exports: []const backend.StaticDataExport,
-    cpu_level: roc_target.CpuLevel,
+    linked_packs: []const *const backend.dev.PackFile.ObjectPack,
+    target: RocTarget,
 ) CliMainError![]const u8 {
     if (entrypoints.len == 0) {
         if (builtin.mode == .debug) {
@@ -10190,7 +10203,7 @@ fn writeDevWasmObject(
         lowered.lir_result.boxy_erased_arg_desc_params.items,
         lowered.lir_result.boxy_worker_procs.items,
         &wasm_module,
-        cpu_level,
+        target.cpuLevel(),
     );
     wasm_module_owned_here = false;
     defer codegen.deinit();
@@ -10204,7 +10217,7 @@ fn writeDevWasmObject(
     try codegen.registerHostedSymbolTargets(lowered.lir_result.store.getProcSpecs());
     if (lirResultNeedsBoxyRuntime(&lowered.lir_result)) try codegen.registerBoxySymbolTargets();
 
-    const builtins_bytes = EmbeddedTargetObjects.forTarget(.wasm32).builtins_extern;
+    const builtins_bytes = EmbeddedTargetObjects.forTarget(target).builtins_extern;
     if (builtins_bytes.len > 0) {
         var builtins_module = backend.wasm.WasmModule.preload(ctx.gpa, builtins_bytes, .relocatable_for_merge) catch |err| {
             std.log.err("Failed to preload wasm builtins: {}", .{err});
@@ -10215,6 +10228,25 @@ fn writeDevWasmObject(
         var merge_result = try codegen.module.mergeModuleForObject(&builtins_module);
         merge_result.deinit();
     }
+    // The object packs whose C-ABI entries serve this program's linked
+    // procedures. Their imports are the runtime and hosted functions their
+    // code calls, which the platform provides like this program's own.
+    var pack_imports = std.ArrayList([]const u8).empty;
+    for (linked_packs, 0..) |pack, ordinal| {
+        var object = backend.wasm.WasmModule.preload(ctx.gpa, pack.object, .relocatable_for_merge) catch |err| {
+            std.log.err("Failed to preload an optimized object pack: {}", .{err});
+            return err;
+        };
+        defer object.deinit();
+        for (object.imports.items) |import| try pack_imports.append(ctx.arena, import.field_name);
+        const entry_names = try ctx.arena.alloc([]const u8, pack.identities.len);
+        for (entry_names, pack.identities) |*entry_name, identity| {
+            const buffer = try ctx.arena.alloc(u8, lir.ProcIdentity.symbol_name_len);
+            entry_name.* = identity.writeCAbiEntryName(buffer[0..lir.ProcIdentity.symbol_name_len]);
+        }
+        try codegen.module.mergeLinkedObject(&object, @intCast(ordinal), entry_names);
+    }
+    try codegen.registerLinkedEntryTargets(lowered.lir_result.store.getProcSpecs());
     const builtin_symbols = backend.wasm.BuiltinSignatures.populateForRelocs(&codegen.module) catch |err| {
         std.log.err("Failed to locate wasm builtin symbols after object merge: {}", .{err});
         return err;
@@ -10243,14 +10275,16 @@ fn writeDevWasmObject(
     }
     try mergeStaticDataWasmModule(ctx, &codegen.module, static_data_exports, .relocatable_object);
     try mergeBoxySidecarWasm(ctx, &codegen.module, &lowered.lir_result, .relocatable_object);
+    try pack_imports.appendSlice(ctx.arena, try wasmRocHostRequirements(ctx.arena, &lowered.lir_result.store));
     return writeSealedWasmObject(
         ctx,
+        target,
         artifact_dir,
         "roc_app_wasm32.o",
         &codegen.module,
         &lowered.lir_result,
         try sharedLibraryAppExports(ctx, entrypoints, static_data_exports),
-        try wasmRocHostRequirements(ctx.arena, &lowered.lir_result.store),
+        pack_imports.items,
     );
 }
 
@@ -10308,6 +10342,7 @@ fn rocBuildWasm(
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     entrypoints: []const backend.Entrypoint,
     static_data_exports: []const backend.StaticDataExport,
+    linked_packs: []const *const backend.dev.PackFile.ObjectPack,
 ) CliMainError!void {
     if (entrypoints.len == 0) {
         if (builtin.mode == .debug) {
@@ -10328,7 +10363,7 @@ fn rocBuildWasm(
     if (link_type == .archive) {
         // Archives package whatever inputs the platform declared (possibly
         // just the app); no platform wasm file is required.
-        const obj_path = try writeDevWasmObject(ctx, scratch_dir, lowered, entrypoints, static_data_exports, target.cpuLevel());
+        const obj_path = try writeDevWasmObject(ctx, scratch_dir, lowered, entrypoints, static_data_exports, linked_packs, target);
         try writeArchiveOutput(ctx, .wasm32, final_output_path, link_inputs, &.{obj_path});
         return;
     }
@@ -10347,7 +10382,8 @@ fn rocBuildWasm(
         lowered,
         entrypoints,
         static_data_exports,
-        target.cpuLevel(),
+        linked_packs,
+        target,
     );
 
     try linkWasmOutput(ctx, args, target, link_inputs, final_output_path, obj_path, scratch_dir);
@@ -10750,6 +10786,7 @@ fn mergeStaticDataWasmModule(
 
 fn writeCombinedLlvmWasmObject(
     ctx: *CliCtx,
+    target: RocTarget,
     artifact_dir: []const u8,
     app_object_path: []const u8,
     lir_result: *const lir.Program.Result,
@@ -10775,6 +10812,7 @@ fn writeCombinedLlvmWasmObject(
     const obj_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_wasm32_{s}.o", .{@tagName(opt)});
     return writeSealedWasmObject(
         ctx,
+        target,
         artifact_dir,
         obj_filename,
         &wasm_module,
@@ -10828,7 +10866,7 @@ fn rocBuildWasmLlvm(
     if (link_type == .archive) {
         // Archives package whatever inputs the platform declared (possibly
         // just the app); no platform wasm file is required.
-        const combined_obj = try writeCombinedLlvmWasmObject(ctx, app_object.artifact_dir, app_object.object_path, &lowered.lir_result, entrypoints, static_data_exports, args.opt, &owned_inputs);
+        const combined_obj = try writeCombinedLlvmWasmObject(ctx, target, app_object.artifact_dir, app_object.object_path, &lowered.lir_result, entrypoints, static_data_exports, args.opt, &owned_inputs);
         try writeArchiveOutput(ctx, target, final_output_path, link_inputs, &.{combined_obj});
         return;
     }
@@ -10838,7 +10876,7 @@ fn rocBuildWasmLlvm(
         return error.UnsupportedTarget;
     }
 
-    const combined_obj = try writeCombinedLlvmWasmObject(ctx, app_object.artifact_dir, app_object.object_path, &lowered.lir_result, entrypoints, static_data_exports, args.opt, &owned_inputs);
+    const combined_obj = try writeCombinedLlvmWasmObject(ctx, target, app_object.artifact_dir, app_object.object_path, &lowered.lir_result, entrypoints, static_data_exports, args.opt, &owned_inputs);
     try linkWasmOutput(ctx, args, target, link_inputs, final_output_path, combined_obj, app_object.artifact_dir);
 }
 
@@ -11381,13 +11419,16 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     // links in place of compiling the packages' code itself.
     var linked_store: ?pack_store.Store = null;
     defer if (linked_store) |*store| store.deinit();
-    if (object_cache_enabled and target_arch != .wasm32 and llvm_available) {
+    if (object_cache_enabled and llvm_available) {
         const store_config = CacheConfig{ .enabled = true, .verbose = args.verbose, .roc_ctx = ctx.coreCtx() };
-        linked_store = pack_store.Store.init(ctx.gpa, store_config, target, linked_pack_policy) catch |err| {
+        linked_store = pack_store.Store.init(ctx.gpa, store_config, target, @tagName(linkedPackOpt(target))) catch |err| {
             std.log.warn("object cache unavailable: {}", .{err});
             return error.NativeCompilationFailed;
         };
     }
+    // The wasm32 dev backend cannot splice dev packs' artifacts, so a wasm32
+    // build reads and writes no dev packs; only object packs serve it.
+    const splices_dev_packs = target_arch != .wasm32;
     if (object_cache_enabled) {
         if (sharedCompileTimeObjectCache(&build_env, target, args.opt)) |shared| {
             object_store = &shared.store;
@@ -11395,14 +11436,16 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
             shared.linked_store = if (linked_store) |*store| store else null;
         } else {
             const store_config = CacheConfig{ .enabled = true, .verbose = args.verbose, .roc_ctx = ctx.coreCtx() };
-            own_store = pack_store.Store.init(ctx.gpa, store_config, target, @tagName(args.opt)) catch |err| {
-                std.log.warn("object cache unavailable: {}", .{err});
-                return error.NativeCompilationFailed;
-            };
-            object_store = &own_store.?;
+            if (splices_dev_packs) {
+                own_store = pack_store.Store.init(ctx.gpa, store_config, target, @tagName(args.opt)) catch |err| {
+                    std.log.warn("object cache unavailable: {}", .{err});
+                    return error.NativeCompilationFailed;
+                };
+                object_store = &own_store.?;
+            }
             own_packs = pack_store.LoadedPacks.init(ctx.gpa);
             own_packs.?.pending = .{
-                .store = object_store.?,
+                .store = object_store,
                 .linked_store = if (linked_store) |*store| store else null,
                 .io = ctx.io.std_io,
                 .build_env = &build_env,
@@ -11511,6 +11554,9 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
             &lowered,
             entrypoints,
             static_data_exports,
+            // The optimized object packs that served this program's
+            // specializations, composed into its object.
+            if (loaded_packs) |packs| try packs.linkedObjectPacks(ctx.arena) else &.{},
         );
         reporter.end();
 
@@ -13330,10 +13376,12 @@ fn devCapturePrefix(roots: CheckedLirRoots, opt: cli_args.OptLevel, target: RocT
     return if (arch == .x86_64 or arch == .aarch64) @import("builtins").erased_callable.hot_reload_capture_prefix_size else 0;
 }
 
-/// Native builds promise object provision only when their emitter has a
-/// splice source. Foreign objects cannot replace CTFE's host-domain bodies.
-fn nativeObjectCodeProvision(target: RocTarget, opt: cli_args.OptLevel, has_splice_source: bool, links_objects: bool) lir.CheckedPipeline.CodeProvision {
-    if (!has_splice_source or opt != .dev) return .source_bodies;
+/// Native builds promise object provision only when they have an object
+/// cache. Foreign objects cannot replace CTFE's host-domain bodies. The
+/// wasm32 emitter splices no dev artifacts, so only linked objects serve it.
+fn nativeObjectCodeProvision(target: RocTarget, opt: cli_args.OptLevel, has_object_cache: bool, links_objects: bool) lir.CheckedPipeline.CodeProvision {
+    if (!has_object_cache or opt != .dev) return .source_bodies;
+    if (target.toCpuArch() == .wasm32) return if (links_objects) .target_linked_objects else .source_bodies;
     const host = target == RocTarget.detectNative();
     if (links_objects) return if (host) .host_linked_dev_objects else .target_linked_dev_objects;
     return if (host) .host_dev_objects else .target_dev_objects;
@@ -13350,6 +13398,12 @@ test "native code provision names the emitter target and splice capability" {
     }
     for (std.enums.values(RocTarget)) |target| {
         if (target == native) continue;
+        if (target.toCpuArch() == .wasm32) {
+            try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.source_bodies, nativeObjectCodeProvision(target, .dev, true, false));
+            try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.target_linked_objects, nativeObjectCodeProvision(target, .dev, true, true));
+            try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.source_bodies, nativeObjectCodeProvision(target, .size, true, true));
+            continue;
+        }
         try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.target_dev_objects, nativeObjectCodeProvision(target, .dev, true, false));
         try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.target_linked_dev_objects, nativeObjectCodeProvision(target, .dev, true, true));
     }

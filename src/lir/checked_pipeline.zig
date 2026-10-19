@@ -1014,17 +1014,23 @@ pub const CodeProvision = enum {
     host_linked_dev_objects,
     /// As `target_dev_objects`, emitted as an object file that is linked.
     target_linked_dev_objects,
+    /// Dev emission into a linked object by an emitter that cannot splice
+    /// dev artifacts (the wasm32 dev backend): only linked object-cache
+    /// entries serve it.
+    target_linked_objects,
 
     pub fn permitsNativeObjects(self: CodeProvision) bool {
         return self != .source_bodies;
     }
 
-    /// Whether the consumer's code is linked, so an object-cache entry that
-    /// is a linked object can serve it.
-    pub fn permitsLinkedObjects(self: CodeProvision) bool {
+    /// Which object-cache entries can serve the consumer: a linked object's
+    /// entry only when its code is linked, and dev artifacts only when its
+    /// emitter splices them.
+    pub fn specCacheTakes(self: CodeProvision) postcheck.Common.SpecCacheTakes {
         return switch (self) {
-            .host_linked_dev_objects, .target_linked_dev_objects => true,
-            .source_bodies, .host_dev_objects, .target_dev_objects => false,
+            .source_bodies, .host_dev_objects, .target_dev_objects => .dev_code,
+            .host_linked_dev_objects, .target_linked_dev_objects => .dev_code_and_linked_objects,
+            .target_linked_objects => .linked_objects,
         };
     }
 
@@ -1043,7 +1049,7 @@ pub const CodeProvision = enum {
     fn hostDomain(self: CodeProvision) bool {
         return switch (self) {
             .host_dev_objects, .host_linked_dev_objects => true,
-            .source_bodies, .target_dev_objects, .target_linked_dev_objects => false,
+            .source_bodies, .target_dev_objects, .target_linked_dev_objects, .target_linked_objects => false,
         };
     }
 };
@@ -1481,7 +1487,7 @@ pub fn prepareCheckedModulesMonotype(
             .{
                 .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled(),
                 .spec_cache = if (target.code_provision.permitsNativeObjects()) target.spec_cache else null,
-                .spec_cache_accepts_linked = target.code_provision.permitsLinkedObjects(),
+                .spec_cache_takes = target.code_provision.specCacheTakes(),
                 .post_check_executor = target.post_check_executor,
                 .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
                 .comptime_value_reads = target.comptime_value_reads,
@@ -1790,7 +1796,7 @@ fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResou
     var lowered = try postcheck.SolvedLirLower.runBorrowed(allocator, target.target_usize, &prepared.program, .{
         .root_manifest = consumer.roots,
         .spec_cache = if (target.code_provision.permitsNativeObjects()) target.spec_cache else null,
-        .spec_cache_accepts_linked = target.code_provision.permitsLinkedObjects(),
+        .spec_cache_takes = target.code_provision.specCacheTakes(),
         .inline_plan = prepared.inline_plan.view(),
         .keep_specialization_procs = target.keep_specialization_procs,
         .post_check_executor = target.post_check_executor,

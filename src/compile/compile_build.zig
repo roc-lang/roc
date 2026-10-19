@@ -2366,6 +2366,10 @@ pub const BuildEnv = struct {
     fn remapSyntheticRootReport(self: *BuildEnv, report: *Report) Allocator.Error!void {
         if (self.synthetic_root_original_path == null or self.synthetic_root_original_source == null) return;
 
+        if (report.file) |file| {
+            if (self.syntheticRootDisplayPath(file)) |original_path| try report.setFile(original_path);
+        }
+
         var original_line_starts = try base.RegionInfo.findLineStarts(self.gpa, self.synthetic_root_original_source.?);
         defer original_line_starts.deinit(self.gpa);
         for (report.document.elements.items) |*element| {
