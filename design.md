@@ -1860,7 +1860,7 @@ write a non-zero address into such bytes at link time, so anything relocated
 stays byte-backed, as does every root, whose slot addresses it.
 
 The guard pass also marks each guard's crash statement as the failure path of a
-read of its slot's value (`crash.failed_value`), naming the producer. Failed
+read of its slot's value (`CrashExtra.failed_value`), naming the producer. Failed
 root completion records, per producer, the original evaluated failure's source
 location and region. Recorded origins remain stable. A suspended invocation may
 demand another root, whose completion records additional origins before that
@@ -18776,7 +18776,8 @@ Fields that do not fit live in out-of-line rows. A statement names a row by a
   and tail-drive flags, descriptors, and pending return; the ownership data
   ARC stamps on a reference read; the uniqueness proofs and single-operation
   data of a low-level operation; a static data read's list-of-copies data;
-  a join's retained units and maybe-uninitialized environment; and the
+  a join's retained units and maybe-uninitialized environment; a crash's
+  literal rejection site and failed compile-time value; and the
   descriptors of tags, struct contents, Boxy tag matches, and Boxy
   reference-count helpers.
   Such a row is optional: `none` names no row, meaning there is no

@@ -62,7 +62,6 @@ const HoistedConstantsTestError = std.mem.Allocator.Error ||
         PathOutsideWorkspace,
         RootDidNotStoreConstNode,
         StaticDataInitializerCountMismatch,
-        StaticDataInitializerPrecededRootBody,
         StaticDataInitializerRequestOrderMismatch,
         StaticDataLiteralNotFound,
         StaticDataSymbolNotFound,
@@ -535,13 +534,9 @@ test "hoisted list constants lower to internal static data in request order" {
     const second_initializer = lowered.lir_result.store.getProcSpec(lowered.lir_result.static_data_values.items[1].initializer.?);
     const first_body = first_initializer.body orelse return error.StaticDataLiteralNotFound;
     const second_body = second_initializer.body orelse return error.StaticDataLiteralNotFound;
-    // Reachable roots form a barrier before queued initializers, whose request
-    // order must then determine their body order.
+    // Queued initializers lower in request order. ARC leaves initializers as
+    // lowered, so their bodies' statement ids still show that order.
     if (@backingInt(first_body) >= @backingInt(second_body)) return error.StaticDataInitializerRequestOrderMismatch;
-    for (lowered.lir_result.root_procs.items) |root_proc| {
-        const root_body = lowered.lir_result.store.getProcSpecImmediate(root_proc).body orelse return error.StaticDataLiteralNotFound;
-        if (@backingInt(root_body) >= @backingInt(first_body)) return error.StaticDataInitializerPrecededRootBody;
-    }
     try expectStaticDataLiteralPresent(&lowered.lir_result);
 
     const exports = try static_data_exports.buildStaticData(

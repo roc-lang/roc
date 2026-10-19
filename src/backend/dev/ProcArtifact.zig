@@ -178,6 +178,20 @@ pub const Set = struct {
     pub fn deinit(self: *Set) void {
         self.arena.deinit();
     }
+
+    /// The index of the artifact defining `target`, a symbolic reference's
+    /// target, or null when this set does not define it.
+    pub fn definitionOf(self: *const Set, target: @FieldType(SymbolicReference, "target")) ?u32 {
+        for (self.artifacts, 0..) |candidate, candidate_index| {
+            const matches = switch (target) {
+                .proc => |identity| candidate.kind == .proc and std.meta.eql(identity, candidate.kind.proc),
+                .boxy_thunk => |identity| candidate.kind == .boxy_thunk and std.meta.eql(identity, candidate.kind.boxy_thunk),
+                .rc_helper => |name| candidate.kind == .rc_helper and std.mem.eql(u8, name, candidate.kind.rc_helper),
+            };
+            if (matches) return @intCast(candidate_index);
+        }
+        return null;
+    }
 };
 
 /// A fragment owns its requirement list in the same arena as its artifacts.
@@ -1447,17 +1461,7 @@ pub fn splice(
                 .proc => |identity| if (procs_by_identity.contains(identity)) continue,
                 .boxy_thunk, .rc_helper => {},
             }
-            for (set.artifacts, 0..) |candidate, candidate_index| {
-                const matches = switch (ref.target) {
-                    .proc => |identity| candidate.kind == .proc and std.meta.eql(identity, candidate.kind.proc),
-                    .boxy_thunk => |identity| candidate.kind == .boxy_thunk and std.meta.eql(identity, candidate.kind.boxy_thunk),
-                    .rc_helper => |name| candidate.kind == .rc_helper and std.mem.eql(u8, name, candidate.kind.rc_helper),
-                };
-                if (matches) {
-                    try stack.append(allocator, @intCast(candidate_index));
-                    break;
-                }
-            }
+            if (set.definitionOf(ref.target)) |definition| try stack.append(allocator, definition);
         }
     }
 

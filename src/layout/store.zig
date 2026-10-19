@@ -1671,9 +1671,10 @@ pub const Store = struct {
                             .canonical, .member, .component_node => continue,
                         };
                         const member_ref = groups.member_of.get(digest) orelse continue;
-                        if (std.mem.findScalar(u32, candidate_groups.items, member_ref.group) == null) {
-                            try candidate_groups.append(allocator, member_ref.group);
-                        }
+                        const known = for (candidate_groups.items) |group| {
+                            if (group == member_ref.group) break true;
+                        } else false;
+                        if (!known) try candidate_groups.append(allocator, member_ref.group);
                     }
                 }
                 if (candidate_groups.items.len == 0) return false;
@@ -1724,7 +1725,7 @@ pub const Store = struct {
                     const shape = groups.rank(group, pair.rank);
                     try self_engine.encodeComponentShape(members[pair.position], component_id);
                     const content = groups.content.items[shape.content_start..][0..shape.content_len];
-                    if (!std.mem.eql(u8, content, self_engine.shape_content.items)) return false;
+                    if (!keyBytesEqual(content, self_engine.shape_content.items)) return false;
                     const shape_children = groups.children.items[shape.child_start..][0..shape.child_len];
                     if (shape_children.len != self_engine.shape_children.items.len) return false;
                     for (self_engine.shape_children.items, shape_children) |actual, expected| {
@@ -1735,8 +1736,8 @@ pub const Store = struct {
                                 .component_node => unreachable,
                             },
                             .settled => |digest| switch (expected) {
-                                .settled => |expected_digest| if (!std.mem.eql(u8, &expected_digest, &digest)) return false,
-                                .member => |expected_rank| if (!std.mem.eql(u8, &groups.rank(group, expected_rank).digest, &digest)) return false,
+                                .settled => |expected_digest| if (!std.meta.eql(expected_digest, digest)) return false,
+                                .member => |expected_rank| if (!std.meta.eql(groups.rank(group, expected_rank).digest, digest)) return false,
                                 .canonical => return false,
                                 .component_node => unreachable,
                             },
