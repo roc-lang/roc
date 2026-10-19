@@ -497,11 +497,13 @@ const State = struct {
         };
     }
 
-    fn nextOrdinal(self: *State, ordinals: *std.AutoHashMapUnmanaged([32]u8, u32), class: []const u8, owner: [32]u8) Allocator.Error!u32 {
-        var hasher = Sha256.init(.{});
-        hashTag(&hasher, class);
-        hasher.update(&owner);
-        const entry = try ordinals.getOrPut(self.allocator, hasher.finalResult());
+    /// The next ordinal among the roots of one class: roots whose sites
+    /// would otherwise coincide. A class names everything its roots' value
+    /// identities cover beyond the module context, so roots that share a class
+    /// have equal value identities and their order among themselves never
+    /// decides which value a site names.
+    fn nextOrdinal(self: *State, ordinals: *std.AutoHashMapUnmanaged([32]u8, u32), class: [32]u8) Allocator.Error!u32 {
+        const entry = try ordinals.getOrPut(self.allocator, class);
         if (!entry.found_existing) entry.value_ptr.* = 0;
         const ordinal = entry.value_ptr.*;
         entry.value_ptr.* += 1;
@@ -516,6 +518,7 @@ const State = struct {
         ordinals: *std.AutoHashMapUnmanaged([32]u8, u32),
     ) Allocator.Error!CompileTimeRootIdentity {
         const env = self.inputs.env;
+        const type_digest = try self.type_walk.digest(root.checked_type);
         var value = Sha256.init(.{});
         hashTag(&value, domain);
         value.update(&context);
@@ -537,29 +540,39 @@ const State = struct {
             },
             .hoisted => |hoisted| {
                 const owner = self.owners.get(hoisted.expr);
-                const owner_key = self.ownerKey(owner);
-                const ordinal = try self.nextOrdinal(ordinals, "hoisted", owner_key);
+                var class = Sha256.init(.{});
+                hashTag(&class, "hoisted");
+                class.update(&self.ownerKey(owner));
+                hashBytes(&class, @tagName(root.kind));
                 if (owner) |resolved| switch (resolved) {
-                    .def => |def_idx| value.update(&self.definitionIdentity(def_idx)),
+                    .def => |def_idx| class.update(&self.definitionIdentity(def_idx)),
                     .expect => |statement| {
-                        hashBytes(&value, self.regionText(env.store.getStatementRegion(statement)));
-                        hashDigests(&value, try self.referencedIdentities(expectBody(env, statement)));
+                        hashBytes(&class, self.regionText(env.store.getStatementRegion(statement)));
+                        hashDigests(&class, try self.referencedIdentities(expectBody(env, statement)));
                     },
-                } else hashTag(&value, "unowned");
-                hashU32(&value, ordinal);
-                hashBytes(&value, if (root.hoisted_body) |body| @tagName(body) else "no-body");
-                hashBytes(&value, self.regionText(env.store.getExprRegion(hoisted.expr)));
-                hashDigests(&value, try self.referencedIdentities(hoisted.expr));
-                site.update(&owner_key);
-                hashU32(&site, ordinal);
+                } else hashTag(&class, "unowned");
+                hashBytes(&class, if (root.hoisted_body) |body| @tagName(body) else "no-body");
+                hashBytes(&class, self.regionText(env.store.getExprRegion(hoisted.expr)));
+                hashDigests(&class, try self.referencedIdentities(hoisted.expr));
+                class.update(&type_digest);
+                const class_digest = class.finalResult();
+                value.update(&class_digest);
+                site.update(&class_digest);
+                hashU32(&site, try self.nextOrdinal(ordinals, class_digest));
             },
             .expr => |expr| switch (root.kind) {
                 .numeral_conversion, .quote_conversion => {
-                    const owner_key = self.ownerKey(self.owners.get(expr));
-                    const ordinal = try self.nextOrdinal(ordinals, "literal", owner_key);
-                    hashBytes(&value, self.regionText(env.store.getExprRegion(expr)));
-                    site.update(&owner_key);
-                    hashU32(&site, ordinal);
+                    const text = self.regionText(env.store.getExprRegion(expr));
+                    hashBytes(&value, text);
+                    var class = Sha256.init(.{});
+                    hashTag(&class, "literal");
+                    class.update(&self.ownerKey(self.owners.get(expr)));
+                    hashBytes(&class, @tagName(root.kind));
+                    hashBytes(&class, text);
+                    class.update(&type_digest);
+                    const class_digest = class.finalResult();
+                    site.update(&class_digest);
+                    hashU32(&site, try self.nextOrdinal(ordinals, class_digest));
                 },
                 .repl_expr => {
                     hashBytes(&value, self.regionText(env.store.getExprRegion(expr)));
@@ -573,7 +586,7 @@ const State = struct {
             },
         }
         hashTag(&value, "type");
-        value.update(&try self.type_walk.digest(root.checked_type));
+        value.update(&type_digest);
         return .{ .value = value.finalResult(), .site = site.finalResult() };
     }
 };
