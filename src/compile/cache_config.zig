@@ -342,7 +342,10 @@ pub const Constants = struct {
     /// 155: Identifier stores assign serial indices, keep each name's end
     ///      offset and probe fingerprints in columns of their own, and drop
     ///      the per-identifier attribute column.
-    pub const CACHE_VERSION = 155;
+    /// 156: Type stores keep each derived map payload selection in a table
+    ///      keyed by its callable's class instead of on every static
+    ///      dispatch constraint.
+    pub const CACHE_VERSION = 156;
 };
 
 /// Configuration for the Roc cache system.

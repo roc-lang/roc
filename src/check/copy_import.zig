@@ -630,11 +630,13 @@ fn stepIdentity(ctx: *CopyContext, frame: *IdentityFrame) std.mem.Allocator.Erro
                 if (ctx.source_store.constraintNumeralInfo(frame.source_constraints[frame.idx])) |info| {
                     frame.pending.numeral = try ctx.dest_store.appendNumeralInfo(info);
                 }
-                if (frame.source_constraints[frame.idx].derived_map_plan) |plan| {
-                    frame.pending.derived_map_plan = .{
+                // A copy of a derived `map`/`map!` relation's callable joins
+                // the relation.
+                if (ctx.source_store.derivedMapPlan(frame.source_constraints[frame.idx].fn_var)) |plan| {
+                    try ctx.dest_store.setDerivedMapPlan(frame.pending.fn_var, .{
                         .tag_name = try ctx.copyIdent(plan.tag_name),
                         .payload_index = plan.payload_index,
-                    };
+                    });
                 }
                 // The introducing expression is module-scoped: its index refers to the
                 // SOURCE module's CIR and is meaningless here. Clear it on the boundary

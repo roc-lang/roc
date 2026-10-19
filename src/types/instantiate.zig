@@ -1519,6 +1519,7 @@ pub const Instantiator = struct {
                 .await_fn => {
                     frame.fresh_fn_var = machine.value_stack.pop().?;
                     const constraint = self.store.static_dispatch_constraints.items.items[frame.cons_start + frame.cons_idx];
+                    try self.carryDerivedMapPlan(constraint.fn_var, frame.fresh_fn_var);
                     if (!constraint.interpolation.isPresent()) {
                         self.freshConstraint(frame).fn_var = frame.fresh_fn_var;
                         frame.cons_idx += 1;
@@ -1906,8 +1907,16 @@ pub const Instantiator = struct {
             return result;
         }
         result.fn_var = try self.instantiateVarHelp(constraint.fn_var, force_root_copy);
+        try self.carryDerivedMapPlan(constraint.fn_var, result.fn_var);
         result.interpolation = try self.instantiateInterpolationMetadata(constraint.interpolation);
         return result;
+    }
+
+    /// A copy of a derived `map`/`map!` relation's callable joins the
+    /// relation: its class selects the same payload.
+    fn carryDerivedMapPlan(self: *Self, source_fn_var: Var, fresh_fn_var: Var) std.mem.Allocator.Error!void {
+        const plan = self.store.derivedMapPlan(source_fn_var) orelse return;
+        try self.store.setDerivedMapPlan(fresh_fn_var, plan);
     }
 
     fn instantiateInterpolationMetadata(

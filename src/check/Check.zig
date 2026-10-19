@@ -34753,7 +34753,7 @@ fn copyImportedBindingSchemeCodecRequirements(
         // Generated codec requirements cannot carry any metadata shape; each
         // belongs to another method family and would require its own
         // source-node/value-pool rebasing rules at this boundary.
-        std.debug.assert(source_constraint.derived_map_plan == null);
+        std.debug.assert(source_env.types.derivedMapPlan(source_constraint.fn_var) == null);
         std.debug.assert(!source_constraint.interpolation.isPresent());
         std.debug.assert(source_constraint.numeral == .none);
 
@@ -52351,15 +52351,6 @@ fn mappedStructuralTagUnion(
     return try self.freshFromContent(try self.types.mkTagUnion(self.scratch_tags.sliceFromStart(tags_top), ext), env, region);
 }
 
-fn recordDerivedMapPlan(self: *Self, constraint_fn_var: Var, plan: types_mod.DerivedMapPlan) void {
-    const fn_root = self.types.resolveVar(constraint_fn_var).var_;
-    for (self.types.static_dispatch_constraints.items.items) |*constraint| {
-        if (self.types.resolveVar(constraint.fn_var).var_ == fn_root) {
-            constraint.derived_map_plan = plan;
-        }
-    }
-}
-
 const DerivedMapConstraintResult = enum {
     satisfied,
     suppressed_by_error,
@@ -52437,7 +52428,7 @@ fn satisfyDerivedMapConstraint(
         return .unsupported;
     }
 
-    self.recordDerivedMapPlan(constraint.fn_var, analysis.plan);
+    try self.types.setDerivedMapPlan(constraint.fn_var, analysis.plan);
     try self.recordSuccessfulStaticDispatch(constraint);
     return .satisfied;
 }

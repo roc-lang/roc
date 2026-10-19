@@ -20370,14 +20370,7 @@ const EvidencePass = struct {
             .encoder => .encoder,
             .map, .map_effectful => blk: {
                 const fn_var = constraint_fn_var orelse checkedArtifactInvariant("derived map evidence had no constraint function", .{});
-                const fn_root = self.types.resolveVar(fn_var).var_;
-                var source_plan: ?types.DerivedMapPlan = null;
-                for (self.types.static_dispatch_constraints.items.items) |constraint| {
-                    if (self.types.resolveVar(constraint.fn_var).var_ != fn_root) continue;
-                    source_plan = constraint.derived_map_plan orelse continue;
-                    break;
-                }
-                const plan = source_plan orelse checkedArtifactInvariant("derived map evidence had no checked payload selection", .{});
+                const plan = self.types.derivedMapPlan(fn_var) orelse checkedArtifactInvariant("derived map evidence had no checked payload selection", .{});
                 const canonical_plan = static_dispatch.DerivedMapPlan{
                     .tag = try self.names.internTagIdent(self.module.identStoreConst(), plan.tag_name),
                     .payload_index = plan.payload_index,

@@ -57,6 +57,7 @@ const StaticDispatchConstraint = types.StaticDispatchConstraint;
 const InterpolationPartMetadata = types.InterpolationPartMetadata;
 const NumeralInfo = types.NumeralInfo;
 const SourceDecl = types.SourceDecl;
+const DerivedMapPlan = types.DerivedMapPlan;
 
 /// Metadata belonging to a live union-find storage root.
 ///
@@ -106,6 +107,14 @@ const NominalDeclIndexEntry = struct {
         if (lhs_origin != rhs_origin) return std.math.order(lhs_origin, rhs_origin);
         return std.math.order(statement, entry.statement);
     }
+};
+
+/// One class's entry in `Store.derived_map_plans`.
+const DerivedMapPlanEntry = struct {
+    class: DescStore.Idx,
+    plan: DerivedMapPlan,
+
+    const SafeList = collections.SafeList(@This());
 };
 
 /// Watched class descriptors. A write to one advances `generation` and drops
@@ -229,6 +238,13 @@ pub const Store = struct {
     /// keep the default.
     invalid_nominal_decl_written: bool = true,
 
+    /// The payload each accepted derived `map`/`map!` relation selects, by the
+    /// class of the relation's callable, sorted by class descriptor so lookups
+    /// binary-search. The selection is a fact about that equivalence class: a
+    /// merge keeps it, a member detached from the class keeps it, and a copy
+    /// of a relation's callable carries it.
+    derived_map_plans: DerivedMapPlanEntry.SafeList = .{},
+
     /// Reusable worklist buffers for `instantiate.Instantiator`'s explicit
     /// graph-copy machine. Runtime-only scratch: never serialized, cloned, or
     /// relocated; capacity persists across instantiations against this store.
@@ -282,6 +298,10 @@ pub const Store = struct {
     desc_trail: std.ArrayListUnmanaged(DescUndo) = .empty,
     root_meta_trail: std.ArrayListUnmanaged(RootMetaUndo) = .empty,
     union_rank_trail: std.ArrayListUnmanaged(UnionRankUndo) = .empty,
+    /// `derived_map_plans` as it stood when the open probe first changed it,
+    /// valid while `derived_map_plans_journaled`; rollback restores it.
+    derived_map_plans_undo: std.ArrayListUnmanaged(DerivedMapPlanEntry) = .empty,
+    derived_map_plans_journaled: bool = false,
 
     /// Descriptors no slot names any more: a class merge keeps one side's
     /// descriptor and orphans the other's. The next class created takes the
@@ -379,6 +399,7 @@ pub const Store = struct {
         // nominal declaration table
         self.nominal_decls.deinit(self.gpa);
         self.nominal_decl_index.deinit(self.gpa);
+        self.derived_map_plans.deinit(self.gpa);
 
         // instantiation worklist scratch
         self.instantiate_scratch.deinit(self.gpa);
@@ -390,6 +411,7 @@ pub const Store = struct {
         self.desc_trail.deinit(self.gpa);
         self.root_meta_trail.deinit(self.gpa);
         self.union_rank_trail.deinit(self.gpa);
+        self.derived_map_plans_undo.deinit(self.gpa);
         self.free_descs.deinit(self.gpa);
         self.pending_free_descs.deinit(self.gpa);
     }
@@ -412,6 +434,7 @@ pub const Store = struct {
             .nominal_decls = try self.nominal_decls.clone(gpa),
             .nominal_decl_index = try self.nominal_decl_index.clone(gpa),
             .invalid_nominal_decl_written = self.invalid_nominal_decl_written,
+            .derived_map_plans = try self.derived_map_plans.clone(gpa),
         };
     }
 
@@ -478,11 +501,13 @@ pub const Store = struct {
         descs: std.MultiArrayList(Desc),
         root_metas: std.MultiArrayList(RootMeta),
         union_ranks: []u8,
+        derived_map_plans: []DerivedMapPlanEntry,
         fn deinit(self: *VerifyClone, gpa: Allocator) void {
             gpa.free(self.slots);
             self.descs.deinit(gpa);
             self.root_metas.deinit(gpa);
             gpa.free(self.union_ranks);
+            gpa.free(self.derived_map_plans);
         }
     };
 
@@ -503,11 +528,14 @@ pub const Store = struct {
         errdefer root_metas.deinit(self.gpa);
 
         const union_ranks = try self.gpa.dupe(u8, self.union_ranks.items.items);
+        errdefer self.gpa.free(union_ranks);
+        const derived_map_plans = try self.gpa.dupe(DerivedMapPlanEntry, self.derived_map_plans.items.items);
         return .{
             .slots = slots,
             .descs = descs,
             .root_metas = root_metas,
             .union_ranks = union_ranks,
+            .derived_map_plans = derived_map_plans,
         };
     }
 
@@ -554,6 +582,7 @@ pub const Store = struct {
         std.debug.assert(!self.savepoint_active);
         std.debug.assert(self.pending_free_descs.items.len == 0);
         std.debug.assert(self.probe_taken_descs == 0);
+        std.debug.assert(!self.derived_map_plans_journaled);
         self.savepoint_active = true;
         self.savepoint_baseline_slots = @intCast(self.slots.len());
         self.savepoint_baseline_descs = @intCast(self.descs.backing.items.len);
@@ -573,6 +602,7 @@ pub const Store = struct {
         self.slot_trail.shrinkRetainingCapacity(savepoint.slot_trail_len);
         self.root_meta_trail.shrinkRetainingCapacity(savepoint.root_meta_trail_len);
         self.union_rank_trail.shrinkRetainingCapacity(savepoint.union_rank_trail_len);
+        self.derived_map_plans_journaled = false;
         self.savepoint_active = false;
         // The descriptors the probe reissued stay reissued, and its merges
         // are kept, so the descriptors they orphaned are dead for good.
@@ -656,6 +686,14 @@ pub const Store = struct {
         self.numeral_infos.items.shrinkRetainingCapacity(savepoint.numeral_infos_len);
         self.static_dispatch_constraints.items.shrinkRetainingCapacity(savepoint.static_dispatch_constraints_len);
         self.static_dispatch_relation_merges.shrinkRetainingCapacity(savepoint.static_dispatch_relation_merges_len);
+        if (self.derived_map_plans_journaled) {
+            // The plan rows never shrink capacity, so the rows the probe
+            // first changed still fit.
+            const restored = self.derived_map_plans_undo.items;
+            self.derived_map_plans.items.items.len = restored.len;
+            @memcpy(self.derived_map_plans.items.items, restored);
+            self.derived_map_plans_journaled = false;
+        }
 
         // The probe's merges are undone, so nothing they orphaned is dead,
         // and every descriptor the probe took from the free list is dead
@@ -694,6 +732,11 @@ pub const Store = struct {
         }
 
         std.debug.assert(std.mem.eql(u8, self.union_ranks.items.items, vclone.union_ranks));
+
+        std.debug.assert(self.derived_map_plans.items.items.len == vclone.derived_map_plans.len);
+        for (self.derived_map_plans.items.items, vclone.derived_map_plans) |entry, cloned| {
+            std.debug.assert(std.meta.eql(entry, cloned));
+        }
     }
 
     /// In-place slot write. While a probe is active, journals the slot's previous
@@ -829,13 +872,105 @@ pub const Store = struct {
 
     /// Put a dead descriptor on the free list, forgetting everything the
     /// store itself remembers about it by index: a settled mark, a watch,
-    /// and a frozen anchor. The caller has reserved the list's room.
+    /// a frozen anchor, and a derived map plan. The caller has reserved the
+    /// list's room.
     fn recycleDesc(self: *Self, desc_idx: DescStore.Idx) void {
+        std.debug.assert(!self.savepoint_active);
         const index: u32 = @backingInt(desc_idx);
         if (index < self.settled_descs.bits.bit_length) self.settled_descs.bits.unset(index);
         if (index < self.class_watch.watched.bit_length) self.class_watch.watched.unset(index);
         if (self.descs.get(desc_idx).flags.frozen) _ = self.frozen_anchors.remove(desc_idx);
+        const plan_slot = self.derivedMapPlanSlot(desc_idx);
+        if (plan_slot.found) _ = self.derived_map_plans.items.orderedRemove(plan_slot.index);
         self.free_descs.appendAssumeCapacity(desc_idx);
+    }
+
+    // derived map plans //
+
+    const DerivedMapPlanSlot = struct { index: usize, found: bool };
+
+    /// Where `class`'s row in `derived_map_plans` is, or would be inserted.
+    fn derivedMapPlanSlot(self: *const Self, class: DescStore.Idx) DerivedMapPlanSlot {
+        const entries = self.derived_map_plans.items.items;
+        const key: u32 = @backingInt(class);
+        var lo: usize = 0;
+        var hi: usize = entries.len;
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            const mid_key: u32 = @backingInt(entries[mid].class);
+            if (key < mid_key) {
+                hi = mid;
+            } else if (key > mid_key) {
+                lo = mid + 1;
+            } else {
+                return .{ .index = mid, .found = true };
+            }
+        }
+        return .{ .index = lo, .found = false };
+    }
+
+    fn classDerivedMapPlan(self: *const Self, class: DescStore.Idx) ?DerivedMapPlan {
+        const slot = self.derivedMapPlanSlot(class);
+        if (!slot.found) return null;
+        return self.derived_map_plans.items.items[slot.index].plan;
+    }
+
+    /// Before the open probe first changes the plan rows, keep a copy for
+    /// rollback.
+    fn journalDerivedMapPlans(self: *Self) Allocator.Error!void {
+        if (!self.savepoint_active or self.derived_map_plans_journaled) return;
+        self.derived_map_plans_undo.clearRetainingCapacity();
+        try self.derived_map_plans_undo.appendSlice(self.gpa, self.derived_map_plans.items.items);
+        self.derived_map_plans_journaled = true;
+    }
+
+    fn putClassDerivedMapPlan(self: *Self, class: DescStore.Idx, plan: DerivedMapPlan) Allocator.Error!void {
+        const slot = self.derivedMapPlanSlot(class);
+        if (slot.found and std.meta.eql(self.derived_map_plans.items.items[slot.index].plan, plan)) return;
+        try self.journalDerivedMapPlans();
+        if (slot.found) {
+            self.derived_map_plans.items.items[slot.index].plan = plan;
+        } else {
+            try self.derived_map_plans.items.insert(self.gpa, slot.index, .{ .class = class, .plan = plan });
+        }
+    }
+
+    fn removeClassDerivedMapPlan(self: *Self, class: DescStore.Idx) Allocator.Error!void {
+        const slot = self.derivedMapPlanSlot(class);
+        if (!slot.found) return;
+        try self.journalDerivedMapPlans();
+        _ = self.derived_map_plans.items.orderedRemove(slot.index);
+    }
+
+    /// Give the class `to` the plan of the class `from`, when it has one: a
+    /// member detached from a class stays a member of the relation it
+    /// joined.
+    fn inheritClassDerivedMapPlan(self: *Self, from: DescStore.Idx, to: DescStore.Idx) Allocator.Error!void {
+        const plan = self.classDerivedMapPlan(from) orelse return;
+        try self.putClassDerivedMapPlan(to, plan);
+    }
+
+    /// Two classes merge into `destination`, one of them: the merged class
+    /// keeps `b`'s plan, or else `a`'s.
+    fn mergeClassDerivedMapPlans(self: *Self, a: DescStore.Idx, b: DescStore.Idx, destination: DescStore.Idx) Allocator.Error!void {
+        std.debug.assert(destination == a or destination == b);
+        if (a == b) return;
+        const merged = self.classDerivedMapPlan(b) orelse self.classDerivedMapPlan(a) orelse return;
+        try self.removeClassDerivedMapPlan(if (destination == a) b else a);
+        try self.putClassDerivedMapPlan(destination, merged);
+    }
+
+    /// The payload the accepted derived `map`/`map!` relation whose callable
+    /// class holds `fn_var` selects, if checking accepted one.
+    pub fn derivedMapPlan(self: *const Self, fn_var: Var) ?DerivedMapPlan {
+        if (self.derived_map_plans.items.items.len == 0) return null;
+        return self.classDerivedMapPlan(self.resolveVar(fn_var).desc_idx);
+    }
+
+    /// Record the payload a derived `map`/`map!` relation selects for the
+    /// class of its callable `fn_var`.
+    pub fn setDerivedMapPlan(self: *Self, fn_var: Var, plan: DerivedMapPlan) Allocator.Error!void {
+        try self.putClassDerivedMapPlan(self.resolveVar(fn_var).desc_idx, plan);
     }
 
     fn getRootMeta(self: *const Self, desc_idx: DescStore.Idx) RootMeta {
@@ -972,6 +1107,7 @@ pub const Store = struct {
         var desc = class.desc;
         desc.flags.frozen = false;
         const desc_idx = try self.appendClass(desc, target_var);
+        try self.inheritClassDerivedMapPlan(class.desc_idx, desc_idx);
         try self.setSlot(Self.varToSlotIdx(target_var), .{ .root = desc_idx });
         return true;
     }
@@ -1963,6 +2099,9 @@ pub const Store = struct {
         else
             self.getUnionRank(parent.storage_var);
 
+        if (self.derived_map_plans.items.items.len != 0) {
+            try self.mergeClassDerivedMapPlans(a.desc_idx, b.desc_idx, destination_desc_idx);
+        }
         try self.setRootMeta(destination_desc_idx, .{
             .checked_var = checked_var,
         });
@@ -2098,6 +2237,9 @@ pub const Store = struct {
         if (!b_open) return self.poisonOccurrence(a_var);
         var a = self.resolveStorageRoot(a_var);
         var b = self.resolveStorageRoot(b_var);
+        // The error class joins whatever derived map relation either
+        // operand's class belonged to, as a merge of the two would.
+        const err_plan = self.classDerivedMapPlan(b.desc_idx) orelse self.classDerivedMapPlan(a.desc_idx);
         // Poisoning replaces the content, not the rejection or defaulting
         // history: a class whose dispatch check was already rejected stays
         // rejected, and a class a default chose stays default-decided.
@@ -2141,6 +2283,7 @@ pub const Store = struct {
         }
 
         try self.linkStorageRoots(a, b, b.desc_idx, b.meta.checked_var);
+        if (err_plan) |plan| try self.putClassDerivedMapPlan(b.desc_idx, plan);
         // Only a class that joined the error class whole loses its
         // descriptor; a detached occurrence already shares `b`'s.
         if (a.desc_idx != b.desc_idx) try self.freeDesc(a.desc_idx, a.storage_var);
@@ -2159,6 +2302,7 @@ pub const Store = struct {
         if (var_ == class.meta.checked_var) return self.setDesc(class.desc_idx, err_desc);
         try self.detachOccurrence(class, var_);
         const err_desc_idx = try self.appendClass(err_desc, var_);
+        try self.inheritClassDerivedMapPlan(class.desc_idx, err_desc_idx);
         try self.setSlot(Self.varToSlotIdx(var_), .{ .root = err_desc_idx });
     }
 
@@ -2267,6 +2411,7 @@ pub const Store = struct {
         static_dispatch_constraints: StaticDispatchConstraint.SafeList.Serialized,
         nominal_decls: NominalDecl.SafeList.Serialized,
         nominal_decl_index: NominalDeclIndexEntry.SafeList.Serialized,
+        derived_map_plans: DerivedMapPlanEntry.SafeList.Serialized,
 
         /// Serialize a Store into this Serialized struct, appending data to the writer
         pub fn serialize(
@@ -2288,6 +2433,7 @@ pub const Store = struct {
             try self.static_dispatch_constraints.serialize(&store.static_dispatch_constraints, allocator, writer);
             try self.nominal_decls.serialize(&store.nominal_decls, allocator, writer);
             try self.nominal_decl_index.serialize(&store.nominal_decl_index, allocator, writer);
+            try self.derived_map_plans.serialize(&store.derived_map_plans, allocator, writer);
 
             // Set gpa to all zeros; the space needs to be here,
             // but the value will be set separately during deserialization.
@@ -2314,6 +2460,7 @@ pub const Store = struct {
                 .static_dispatch_constraints = self.static_dispatch_constraints.deserializeInto(base_addr),
                 .nominal_decls = self.nominal_decls.deserializeInto(base_addr),
                 .nominal_decl_index = self.nominal_decl_index.deserializeInto(base_addr),
+                .derived_map_plans = self.derived_map_plans.deserializeInto(base_addr),
             };
         }
 
@@ -2335,6 +2482,7 @@ pub const Store = struct {
                 .static_dispatch_constraints = try self.static_dispatch_constraints.deserializeWithCopy(base_addr, gpa),
                 .nominal_decls = try self.nominal_decls.deserializeWithCopy(base_addr, gpa),
                 .nominal_decl_index = try self.nominal_decl_index.deserializeWithCopy(base_addr, gpa),
+                .derived_map_plans = try self.derived_map_plans.deserializeWithCopy(base_addr, gpa),
             };
             store.invalid_nominal_decl_written = false;
             for (store.nominal_decls.items.items) |decl| store.noteNominalDeclWrite(decl);
@@ -3474,6 +3622,114 @@ test "nominal declaration table: CompactWriter roundtrip" {
     const deser_formals = deserialized.sliceVars(deser_decl.formals);
     try std.testing.expectEqual(@as(usize, 1), deser_formals.len);
     try std.testing.expectEqual(formal, deser_formals[0]);
+}
+
+fn testDerivedMapPlan(tag: u32, payload_index: u32) DerivedMapPlan {
+    return .{ .tag_name = @bitCast(tag), .payload_index = payload_index };
+}
+
+test "a derived map plan follows its callable's class through merges and detaches" {
+    const gpa = std.testing.allocator;
+    var store = try Store.init(gpa);
+    defer store.deinit();
+    const flex_desc: Desc = .{ .content = .{ .flex = Flex.init() }, .rank = Rank.outermost };
+    const plan = testDerivedMapPlan(5, 1);
+
+    const callable = try store.fresh();
+    const unrelated = try store.fresh();
+    try store.setDerivedMapPlan(callable, plan);
+    try std.testing.expectEqual(plan, store.derivedMapPlan(callable).?);
+    try std.testing.expectEqual(@as(?DerivedMapPlan, null), store.derivedMapPlan(unrelated));
+
+    // The merged class keeps the plan whichever side's descriptor survives.
+    const joined_first = try store.fresh();
+    try store.union_(joined_first, callable, flex_desc);
+    const joined_second = try store.fresh();
+    try store.union_(callable, joined_second, flex_desc);
+    for ([_]Var{ callable, joined_first, joined_second }) |member| {
+        try std.testing.expectEqual(plan, store.derivedMapPlan(member).?);
+    }
+    try std.testing.expectEqual(@as(usize, 1), store.derived_map_plans.items.items.len);
+
+    // A merge of two planned classes keeps the second operand's plan.
+    const other_plan = testDerivedMapPlan(9, 0);
+    const other_callable = try store.fresh();
+    try store.setDerivedMapPlan(other_callable, other_plan);
+    try store.union_(other_callable, unrelated, flex_desc);
+    try store.union_(callable, other_callable, flex_desc);
+    try std.testing.expectEqual(other_plan, store.derivedMapPlan(joined_first).?);
+    try std.testing.expectEqual(@as(usize, 1), store.derived_map_plans.items.items.len);
+
+    // An occurrence poisoned alone stays in the relation it joined.
+    try std.testing.expect(store.resolveVar(joined_first).var_ != joined_first);
+    try store.poisonOccurrence(joined_first);
+    try std.testing.expectEqual(Content.err, store.resolveVar(joined_first).desc.content);
+    try std.testing.expectEqual(other_plan, store.derivedMapPlan(joined_first).?);
+    try std.testing.expectEqual(other_plan, store.derivedMapPlan(callable).?);
+    try std.testing.expectEqual(@as(usize, 2), store.derived_map_plans.items.items.len);
+}
+
+test "a rolled-back probe restores the derived map plans and a freed class forgets its plan" {
+    const gpa = std.testing.allocator;
+    var store = try Store.init(gpa);
+    defer store.deinit();
+    const flex_desc: Desc = .{ .content = .{ .flex = Flex.init() }, .rank = Rank.outermost };
+    const plan = testDerivedMapPlan(3, 2);
+
+    const callable = try store.fresh();
+    const other = try store.fresh();
+    try store.setDerivedMapPlan(callable, plan);
+    {
+        var savepoint = try store.createSavepointVerifying();
+        try store.union_(callable, other, flex_desc);
+        const fresh_callable = try store.fresh();
+        try store.setDerivedMapPlan(fresh_callable, testDerivedMapPlan(4, 0));
+        try std.testing.expectEqual(plan, store.derivedMapPlan(other).?);
+        store.rollbackToSavepoint(&savepoint);
+    }
+    try std.testing.expectEqual(plan, store.derivedMapPlan(callable).?);
+    try std.testing.expectEqual(@as(?DerivedMapPlan, null), store.derivedMapPlan(other));
+    try std.testing.expectEqual(@as(usize, 1), store.derived_map_plans.items.items.len);
+
+    // Resetting the class's storage root frees its descriptor, and the class
+    // that takes the descriptor next has no plan.
+    try store.resetVarToUnbound(callable, Rank.outermost);
+    try std.testing.expectEqual(@as(?DerivedMapPlan, null), store.derivedMapPlan(callable));
+    try std.testing.expectEqual(@as(usize, 0), store.derived_map_plans.items.items.len);
+    const reuser = try store.fresh();
+    try std.testing.expectEqual(@as(?DerivedMapPlan, null), store.derivedMapPlan(reuser));
+}
+
+test "derived map plans: CompactWriter roundtrip" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    const CompactWriter = collections.CompactWriter;
+
+    var original = try Store.init(gpa);
+    defer original.deinit();
+    const plain = try original.fresh();
+    const callable = try original.fresh();
+    const plan = testDerivedMapPlan(12, 3);
+    try original.setDerivedMapPlan(callable, plan);
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const file = try tmp_dir.dir.createFile(io, "test_derived_map_plans.dat", .{ .read = true });
+    defer file.close(io);
+
+    var writer = CompactWriter.init();
+    defer writer.deinit(gpa);
+    try (try writer.appendAlloc(gpa, Store.Serialized)).serialize(&original, gpa, &writer);
+    try writer.writeGather(file, io);
+
+    const buffer = try gpa.alignedAlloc(u8, std.mem.Alignment.@"16", @intCast(writer.total_bytes));
+    defer gpa.free(buffer);
+    _ = try file.readPositionalAll(io, buffer, 0);
+
+    const serialized: *const Store.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    const deserialized = serialized.deserializeInto(@intFromPtr(buffer.ptr), gpa);
+    try std.testing.expectEqual(plan, deserialized.derivedMapPlan(callable).?);
+    try std.testing.expectEqual(@as(?DerivedMapPlan, null), deserialized.derivedMapPlan(plain));
 }
 
 test "Store comprehensive CompactWriter roundtrip" {

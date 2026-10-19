@@ -44,12 +44,12 @@ test {
     // the constraint holds one row index rather than a full `NumeralInfo`, and
     // `origin` holds only kind flags. Provenance adds one raw expr index (4B);
     // expect effects live in checker-owned slots because they belong to call
-    // occurrences, not copied type constraints. The optional derived-map
-    // payload selection adds its tag, payload index, and optional discriminant
-    // without affecting type identity. Interpolation metadata records whose
-    // source its regions point into, so reports never render another module's
-    // positions against this module's source.
-    try std.testing.expectEqual(56, @sizeOf(StaticDispatchConstraint));
+    // occurrences, not copied type constraints. A derived map's payload
+    // selection belongs to its callable's class in the type store, not to
+    // each constraint. Interpolation metadata records whose source its
+    // regions point into, so reports never render another module's positions
+    // against this module's source.
+    try std.testing.expectEqual(44, @sizeOf(StaticDispatchConstraint));
     // Directed effect dependencies must survive type generalization,
     // instantiation, and cross-module copying, so they live with the function
     // payload rather than in checker-only side state.
@@ -1138,10 +1138,6 @@ pub const StaticDispatchConstraint = struct {
     /// so two structurally identical constraints with different provenance stay
     /// equal.
     provenance: Provenance = .{},
-    /// The direct tag payload selected by checked derived `map`/`map!`.
-    /// This is checker-owned derivation metadata and, like `provenance`, does
-    /// not participate in type identity or constraint equality.
-    derived_map_plan: ?DerivedMapPlan = null,
     /// Extra checking metadata for `from_interpolation`. This travels with the
     /// constraint because the checker must re-check interpolated part types
     /// after instantiation and cross-module copying. It is metadata, not type
@@ -1289,7 +1285,9 @@ pub const StaticDispatchConstraint = struct {
 };
 
 /// Source-type identity for the payload slot selected by derived mapping.
-/// The checked artifact translates `tag_name` into its canonical tag name.
+/// The type store keeps one for each class of relation callables
+/// (`Store.derived_map_plans`). The checked artifact translates `tag_name`
+/// into its canonical tag name.
 pub const DerivedMapPlan = struct {
     tag_name: Ident.Idx,
     payload_index: u32,
