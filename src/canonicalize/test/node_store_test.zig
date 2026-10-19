@@ -962,7 +962,6 @@ test "NodeStore round trip - Diagnostics" {
     try diagnostics.append(gpa, CIR.Diagnostic{
         .type_module_missing_matching_type = .{
             .module_name = rand_ident_idx(),
-            .region = rand_region(),
         },
     });
 
@@ -976,7 +975,6 @@ test "NodeStore round trip - Diagnostics" {
     try diagnostics.append(gpa, CIR.Diagnostic{
         .default_app_missing_main = .{
             .module_name = rand_ident_idx(),
-            .region = rand_region(),
         },
     });
 
@@ -990,12 +988,6 @@ test "NodeStore round trip - Diagnostics" {
     try diagnostics.append(gpa, CIR.Diagnostic{
         .cannot_import_default_app = .{
             .module_name = rand_ident_idx(),
-            .region = rand_region(),
-        },
-    });
-
-    try diagnostics.append(gpa, CIR.Diagnostic{
-        .execution_requires_app_or_default_app = .{
             .region = rand_region(),
         },
     });

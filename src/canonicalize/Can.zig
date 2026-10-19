@@ -5512,7 +5512,11 @@ pub fn validateForChecking(self: *Self) std.mem.Allocator.Error!void {
                 // Type modules require nominal types (:= or ::), not aliases (:)
                 .nominal, .@"opaque" => result.ident,
                 .alias, .where_alias => blk: {
-                    try self.pushModuleFileDiagnostic(.type_module_has_alias_not_nominal);
+                    // The alias named after the module is the problem.
+                    try self.env.pushDiagnostic(.{ .type_module_has_alias_not_nominal = .{
+                        .module_name = try self.env.insertIdent(base.Ident.for_text(self.env.module_name)),
+                        .region = result.region,
+                    } });
                     break :blk null;
                 },
             } else blk: {
@@ -21522,6 +21526,7 @@ fn checkMainFunction(self: *Self, report_errors: bool) std.mem.Allocator.Error!M
 const MatchingTypeResult = struct {
     ident: Ident.Idx,
     kind: AST.TypeDeclKind,
+    region: Region,
 };
 
 /// Check if there's a type declaration matching the module name
@@ -21543,6 +21548,7 @@ fn findMatchingTypeIdent(self: *Self) ?MatchingTypeResult {
             return .{
                 .ident = type_ident,
                 .kind = kind,
+                .region = self.parserDeclRegion(decl),
             };
         }
     }
@@ -21596,14 +21602,12 @@ fn reportTypeModuleOrDefaultAppError(self: *Self) std.mem.Allocator.Error!void {
     }
 }
 
-/// Report a problem with the module as a whole, at the file's region.
+/// Report a problem with the module as a whole, which names the file rather
+/// than a region of it.
 fn pushModuleFileDiagnostic(self: *Self, comptime tag: std.meta.Tag(Diagnostic)) std.mem.Allocator.Error!void {
-    const file = self.parse_ir.store.getFile();
     const module_name_ident = try self.env.insertIdent(base.Ident.for_text(self.env.module_name));
-    const file_region = self.parse_ir.tokenizedRegionToRegion(file.region);
     try self.env.pushDiagnostic(@unionInit(Diagnostic, @tagName(tag), .{
         .module_name = module_name_ident,
-        .region = file_region,
     }));
 }
 

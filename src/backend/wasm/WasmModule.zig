@@ -499,6 +499,8 @@ data_segments: std.ArrayList(DataSegment),
 /// Segment names this module allocated, such as the `.bss.` names that mark a
 /// static export's segment as zero-fill; borrowed names stay with their owner.
 owned_segment_names: std.ArrayList([]u8),
+/// Symbol names this module allocated (`mergeLinkedObject`).
+owned_symbol_names: std.ArrayList([]u8),
 omit_zero_fill_data_segments: bool,
 /// Next available offset for data placement in linear memory (grows up from 0).
 data_offset: u32,
@@ -562,6 +564,7 @@ pub fn init(allocator: Allocator) Self {
         .table_imports = .empty,
         .data_segments = .empty,
         .owned_segment_names = .empty,
+        .owned_symbol_names = .empty,
         .omit_zero_fill_data_segments = false,
         .data_offset = 1024, // reserve first 1KB for future use
         .has_memory = false,
@@ -609,6 +612,8 @@ pub fn deinit(self: *Self) void {
     self.data_segments.deinit(self.allocator);
     for (self.owned_segment_names.items) |name| self.allocator.free(name);
     self.owned_segment_names.deinit(self.allocator);
+    for (self.owned_symbol_names.items) |name| self.allocator.free(name);
+    self.owned_symbol_names.deinit(self.allocator);
     self.table_func_indices.deinit(self.allocator);
     self.extra_globals.deinit(self.allocator);
     self.code_bytes.deinit(self.allocator);
@@ -1618,8 +1623,17 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) MergeE
             source.linking.segment_info.items[i].flags
         else
             src_ds.flags;
+        // The source may own its segment names (`owned_segment_names`) and
+        // free them before this module is encoded, so the merged segment
+        // owns a copy.
+        const merged_name: ?[]const u8 = if (segment_name) |name| blk: {
+            const owned = try self.allocator.dupe(u8, name);
+            errdefer self.allocator.free(owned);
+            try self.owned_segment_names.append(self.allocator, owned);
+            break :blk owned;
+        } else null;
         data_segment_remap[i] = @intCast(self.data_segments.items.len);
-        _ = try self.addDataSegmentWithInfo(src_ds.data, alignment, segment_name, segment_flags);
+        _ = try self.addDataSegmentWithInfo(src_ds.data, alignment, merged_name, segment_flags);
     }
 
     // --- 5b. Merge element section (remap function indices) ---
@@ -1939,6 +1953,42 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) MergeE
         .symbol_remap = symbol_remap,
         .allocator = gpa,
     };
+}
+
+/// Merge a linked object-cache object (an object pack's object) into this
+/// relocatable object. Such an object defines everything its code needs and
+/// exports one weak C-ABI entry per procedure it offers, named in
+/// `entry_names`. Every other definition of it, and every entry this module
+/// already defines, becomes local under a name in a namespace of its own,
+/// `roc__pack{ordinal}.`, so that no name lookup in this module finds it in
+/// place of a definition of this module or of another merged object, and the
+/// module keeps exactly one definition of each entry. The source's symbol
+/// names are rewritten in place.
+pub fn mergeLinkedObject(self: *Self, source: *Self, ordinal: u32, entry_names: []const []const u8) MergeError!void {
+    for (source.linking.symbol_table.items) |*sym| {
+        if (sym.isUndefined()) continue;
+        switch (sym.kind) {
+            .function, .data => {},
+            .global, .table, .section, .event => continue,
+        }
+        const name = sym.resolveName(source.imports.items, source.global_imports.items, source.table_imports.items) orelse continue;
+        if (sym.kind == .function and !sym.isLocal() and stringInSlice(name, entry_names)) {
+            if (self.findSymbolByNameAndKind(name, .function)) |existing| {
+                if (self.linking.symbol_table.items[existing].isUndefined()) continue;
+            } else continue;
+        }
+        const local_name = try std.fmt.allocPrint(self.allocator, "roc__pack{d}.{s}", .{ ordinal, name });
+        errdefer self.allocator.free(local_name);
+        try self.owned_symbol_names.append(self.allocator, local_name);
+        sym.name = local_name;
+        sym.flags &= ~(WasmLinking.SymFlag.BINDING_WEAK |
+            WasmLinking.SymFlag.EXPORTED |
+            WasmLinking.SymFlag.NO_STRIP);
+        sym.flags |= WasmLinking.SymFlag.BINDING_LOCAL |
+            WasmLinking.SymFlag.VISIBILITY_HIDDEN;
+    }
+    var result = try self.mergeModuleForObject(source);
+    result.deinit();
 }
 
 /// Find the table index (position in table_func_indices) for a given function index.
@@ -5617,6 +5667,63 @@ test "mergeModule—undefined symbol in builtins resolved to host's roc_alloc im
     try std.testing.expectEqual(@as(usize, 2), host.imports.items.len);
 }
 
+test "mergeLinkedObject keeps one definition per entry and hides every other definition" {
+    const allocator = std.testing.allocator;
+
+    var app = Self.init(allocator);
+    defer app.deinit();
+    _ = try app.addFuncType(&.{}, &.{});
+    try app.func_type_indices.append(allocator, 0);
+    try app.code_bytes.appendSlice(allocator, &.{ 0x02, 0x00, Op.end });
+    try app.function_offsets.append(allocator, 0);
+    try app.linking.symbol_table.append(allocator, .{
+        .kind = .function,
+        .flags = WasmLinking.SymFlag.BINDING_LOCAL | WasmLinking.SymFlag.VISIBILITY_HIDDEN,
+        .name = "roc__p0",
+        .index = 0,
+    });
+
+    const Object = struct {
+        fn init(gpa: Allocator) Allocator.Error!Self {
+            var object = Self.init(gpa);
+            errdefer object.deinit();
+            _ = try object.addFuncType(&.{}, &.{});
+            for (0..2) |i| {
+                try object.func_type_indices.append(gpa, 0);
+                try object.function_offsets.append(gpa, @intCast(i * 3));
+                try object.code_bytes.appendSlice(gpa, &.{ 0x02, 0x00, Op.end });
+            }
+            try object.linking.symbol_table.appendSlice(gpa, &.{
+                // The object's own copy of a procedure the app also compiles.
+                .{ .kind = .function, .flags = WasmLinking.SymFlag.BINDING_LOCAL | WasmLinking.SymFlag.VISIBILITY_HIDDEN, .name = "roc__p0", .index = 0 },
+                .{ .kind = .function, .flags = WasmLinking.SymFlag.BINDING_WEAK, .name = "roc__c1", .index = 1 },
+            });
+            return object;
+        }
+    };
+    const entries = [_][]const u8{"roc__c1"};
+    for (0..2) |ordinal| {
+        var object = try Object.init(allocator);
+        defer object.deinit();
+        try app.mergeLinkedObject(&object, @intCast(ordinal), &entries);
+    }
+
+    // Names resolve to the app's own procedure and to one entry.
+    const own = try app.findDefinedFunctionSymbolExact("roc__p0");
+    try std.testing.expectEqual(@as(u32, 0), own.raw());
+    const entry = app.linking.symbol_table.items[(try app.findDefinedFunctionSymbolExact("roc__c1")).raw()];
+    try std.testing.expect(!entry.isLocal());
+    try std.testing.expectEqual(@as(u32, 2), entry.index);
+    // The second object's entry and every object's internal procedure are
+    // local, in their object's own namespace.
+    const hidden = [_][]const u8{ "roc__pack0.roc__p0", "roc__pack1.roc__p0", "roc__pack1.roc__c1" };
+    for (hidden) |name| {
+        const sym = app.linking.symbol_table.items[(try app.findDefinedFunctionSymbolExact(name)).raw()];
+        try std.testing.expect(sym.isLocal());
+        try std.testing.expect((sym.flags & WasmLinking.SymFlag.BINDING_WEAK) == 0);
+    }
+}
+
 test "mergeModule—later weak definition resolves earlier undefined function import" {
     const allocator = std.testing.allocator;
 
@@ -6713,6 +6820,27 @@ test "all-zero static exports without relocations become zero-fill segments" {
     // The zero-fill segment still owns its address range: the following
     // segments are placed after it.
     try std.testing.expect(module.data_segments.items[1].offset >= module.data_segments.items[0].offset + 64);
+}
+
+test "a merged zero-fill segment keeps its name after its source module is gone" {
+    const allocator = std.testing.allocator;
+    var module = Self.init(allocator);
+    defer module.deinit();
+    const exports = [_]StaticDataExport{.{ .symbol_name = "table", .bytes = &(@as([16]u8, @splat(0))), .alignment = 8, .is_exported = false }};
+    {
+        var static_module = try Self.staticDataModule(allocator, &exports);
+        defer static_module.deinit();
+        var merged = try module.mergeModuleForObject(&static_module);
+        merged.deinit();
+    }
+    // The source module freed the names it owned, so the merged segment's
+    // name is one this module owns.
+    const name = module.data_segments.items[module.data_segments.items.len - 1].name.?;
+    try std.testing.expectEqualStrings(".bss.table", name);
+    const owned = for (module.owned_segment_names.items) |candidate| {
+        if (candidate.ptr == name.ptr) break true;
+    } else false;
+    try std.testing.expect(owned);
 }
 
 test "addStaticDataExports defines forward data symbols used by code relocations" {

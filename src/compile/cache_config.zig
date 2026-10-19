@@ -336,9 +336,11 @@ pub const Constants = struct {
     /// 153: a package or platform header's qualified exposures record a
     ///      deferred reference, and canonical diagnostics gain
     ///      `public_type_not_defined`.
-    /// 154: Module environments record row-coerced results in place of
+    /// 154: canonical diagnostics drop `execution_requires_app_or_default_app`,
+    ///      and file-level diagnostics store no region.
+    /// 155: Module environments record row-coerced results in place of
     ///      row-coerced callees and closed-result definitions.
-    pub const CACHE_VERSION = 154;
+    pub const CACHE_VERSION = 155;
 };
 
 /// Configuration for the Roc cache system.

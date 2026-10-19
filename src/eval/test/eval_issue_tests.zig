@@ -431,6 +431,7 @@ pub const tests = [_]TestCase{
         \\Runner :: {}.{
         \\    run = |_, body| body({}).repeat(3)
         \\}
+        \\demo : Runner -> (Str, List(List(U64)))
         \\demo = |runner| (runner.run(|{}| "a"), runner.run(|{}| [1.U64]))
         \\main = demo(Runner.{})
         ,
@@ -447,6 +448,7 @@ pub const tests = [_]TestCase{
         \\        (repeated, body({}))
         \\    }
         \\}
+        \\demo : Db({ fetch : {} -> Str }) -> ((Str, Str), (Str, U64))
         \\demo = |db| (db.run(|{}| "a"), db.run(|{}| 42.U64))
         \\forward = |db| demo(db)
         \\main = forward(Db.{ deps: { fetch: |{}| "x" } })
