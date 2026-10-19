@@ -235,7 +235,7 @@ pub const ModuleType = enum {
     roc_target,
     backend,
     lir_core,
-    value_semantics,
+    value_rules,
     postcheck,
     lir,
     symbol,
@@ -327,7 +327,7 @@ pub const ModuleType = enum {
             },
             .eval => .{
                 .root = "src/eval/mod.zig",
-                .deps = &.{ .tracy, .ctx, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .static_data, .build_options, .reporting, .backend, .lir, .symbol, .roc_target, .sljmp, .ipc, .value_semantics },
+                .deps = &.{ .tracy, .ctx, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .static_data, .build_options, .reporting, .backend, .lir, .symbol, .roc_target, .sljmp, .ipc, .value_rules },
                 .extra_imports = &.{"vendor_relocatable_loader"},
                 .tests = .{ .unit = .{ .aggregators = &.{"eval tests"} } },
             },
@@ -362,13 +362,13 @@ pub const ModuleType = enum {
             },
             // Shared by the post-check lowerers and the standalone Boxy
             // runtime object, so it imports nothing from the compiler.
-            .value_semantics => .{
-                .root = "src/postcheck/semantics/mod.zig",
-                .tests = .{ .unit = .{ .aggregators = &.{"value semantics declarations are referenced"} } },
+            .value_rules => .{
+                .root = "src/postcheck/value_rules/mod.zig",
+                .tests = .{ .unit = .{ .aggregators = &.{"value rules declarations are referenced"} } },
             },
             .postcheck => .{
                 .root = "src/postcheck/mod.zig",
-                .deps = &.{ .base, .builtins, .can, .check, .collections, .layout, .lir_core, .types, .value_semantics, .build_options },
+                .deps = &.{ .base, .builtins, .can, .check, .collections, .layout, .lir_core, .types, .value_rules, .build_options },
                 .tests = .{ .unit = .{ .aggregators = &.{"postcheck declarations are referenced"} } },
             },
             .lir => .{
@@ -562,7 +562,7 @@ pub const RocModules = struct {
     lsp_integration: *Module,
     backend: *Module,
     lir_core: *Module,
-    value_semantics: *Module,
+    value_rules: *Module,
     postcheck: *Module,
     lir: *Module,
     symbol: *Module,

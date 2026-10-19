@@ -32,7 +32,7 @@ const Ident = base.Ident;
 const checked = check.CheckedModule;
 const checked_names = check.CanonicalNames;
 const static_dispatch = check.StaticDispatchRegistry;
-const value_semantics = @import("value_semantics");
+const value_rules = @import("value_rules");
 const RecordFieldLabelId = @TypeOf(@as(checked.CheckedRecordField, undefined).name);
 const TagLabelId = @TypeOf(@as(checked.CheckedTag, undefined).name);
 const MethodNameId = @TypeOf(@as(checked.CheckedStaticDispatchConstraint, undefined).fn_name);
@@ -22128,7 +22128,7 @@ pub fn inspectOverrideFor(
     owner_view: ModuleView,
     owner: static_dispatch.MethodOwner,
 ) ?MethodTargetLookup {
-    return value_semantics.lookupInspectOverride(InspectOverrideViews{
+    return value_rules.lookupInspectOverride(InspectOverrideViews{
         .modules = modules,
         .owner_view = owner_view,
         .owner = owner,

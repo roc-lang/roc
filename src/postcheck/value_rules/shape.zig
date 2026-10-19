@@ -1,7 +1,7 @@
-//! The shapes value semantics distinguishes.
+//! The shapes value rules distinguish.
 //!
 //! Inspection, structural equality, and structural hashing are value
-//! semantics: they depend on a type's shape, not on which lowering strategy
+//! rules: they depend on a type's shape, not on which lowering strategy
 //! produced it. Each consumer (Monotype lowering, Boxy lowering, the Boxy
 //! runtime) reads its own type representation into one of these shapes, and
 //! the shared walkers decide what each shape means.

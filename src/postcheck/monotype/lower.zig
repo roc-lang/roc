@@ -43,7 +43,7 @@ const Ident = base.Ident;
 const GuardedList = collections.GuardedList;
 const TypeFieldSpanBorrow = Type.StoreSpanBorrow(Type.Field, "fields");
 const PatternRefutability = can.PatternRefutability;
-const value_semantics = @import("value_semantics");
+const value_rules = @import("value_rules");
 
 /// Whether a dispatch instantiation replays a template's checked relations
 /// or serves an expression. Result-type queries serve expressions: they
@@ -11930,7 +11930,7 @@ const Builder = struct {
         owner_names: *const names.NameStore,
         owner: static_dispatch.MethodOwner,
     ) ?MethodLookup {
-        return value_semantics.lookupInspectOverride(InspectOverrideViews{
+        return value_rules.lookupInspectOverride(InspectOverrideViews{
             .builder = self,
             .scope = scope,
             .owner_names = owner_names,
@@ -23852,8 +23852,8 @@ const BodyContext = struct {
         started: bool = false,
     };
 
-    const InspectRules = value_semantics.InspectSpec(InspectShapes);
-    const inspect_text = value_semantics.inspect.text;
+    const InspectRules = value_rules.InspectSpec(InspectShapes);
+    const inspect_text = value_rules.inspect.text;
 
     /// A record field's label or a variant's name, resolved to text only
     /// when its part is emitted: the name store can grow while the parts
@@ -23898,7 +23898,7 @@ const BodyContext = struct {
             return @intCast(shapes.body.typeStore().fieldSpan(record).len);
         }
 
-        pub fn recordField(shapes: InspectShapes, record: Type.Span, slot: u32) ?value_semantics.inspect.RecordField(InspectShapes) {
+        pub fn recordField(shapes: InspectShapes, record: Type.Span, slot: u32) ?value_rules.inspect.RecordField(InspectShapes) {
             return .{ .label = .{ .field = GuardedList.at(shapes.body.typeStore().fieldSpan(record), slot).name }, .child = slot };
         }
 

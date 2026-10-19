@@ -13104,7 +13104,7 @@ descriptors, dictionaries, or host ABI adapters.
 
 ### Strategy Equivalence Tests
 
-Value semantics must not depend on the strategy either. The cross-strategy
+Value rules must not depend on the strategy either. The cross-strategy
 differential harness (`zig build run-test-strategy-differential`,
 `src/eval/test/strategy_differential_runner.zig`) compiles every runnable eval
 case, every runtime host-effects case, and its own corpus
@@ -13138,12 +13138,12 @@ or runtime performance are allowed.
 
 ## Shared Post-Check Model
 
-### Value Semantics
+### Value Rules
 
 `Str.inspect` rendering, structural equality, structural hashing, and the
-selection of a `to_inspect` override are value semantics: they depend on a
+selection of a `to_inspect` override are value rules: they depend on a
 type's shape, not on which strategy lowered it. They are defined once, in the
-`value_semantics` module (`src/postcheck/semantics/`), which depends on
+`value_rules` module (`src/postcheck/value_rules/`), which depends on
 nothing else in the compiler so the standalone Boxy runtime object can import
 it too. Each consumer reads its own representation into the shared
 `ShapeKind` view through a comptime context:

@@ -16,8 +16,8 @@ const types = @import("types");
 
 const Common = @import("../common.zig");
 const match_tree = @import("../match_tree.zig");
-const value_semantics = @import("value_semantics");
-const inspect_text = value_semantics.inspect.text;
+const value_rules = @import("value_rules");
+const inspect_text = value_rules.inspect.text;
 const Layouts = @import("layouts.zig");
 const Plan = @import("plan.zig");
 const LiteralRequirements = @import("literal_requirements.zig");
@@ -34546,7 +34546,7 @@ const ProcBodyBuilder = struct {
         return .{ .done = stmt };
     }
 
-    const InspectRules = value_semantics.InspectSpec(InspectShapes);
+    const InspectRules = value_rules.InspectSpec(InspectShapes);
 
     /// Boxy representations as the shared inspect rules read them. A
     /// component is named by its index among its representation's children,
@@ -34580,7 +34580,7 @@ const ProcBodyBuilder = struct {
             return @intCast(shapes.children(record).len);
         }
 
-        pub fn recordField(shapes: InspectShapes, record: Plan.TypeRepId, slot: u32) ?value_semantics.inspect.RecordField(InspectShapes) {
+        pub fn recordField(shapes: InspectShapes, record: Plan.TypeRepId, slot: u32) ?value_rules.inspect.RecordField(InspectShapes) {
             const child = shapes.children(record)[slot];
             switch (child.role) {
                 .record_field => |label| return .{ .label = shapes.builder.module.canonical_names.?.recordFieldLabelText(label), .child = slot },
@@ -35370,7 +35370,7 @@ const ProcBodyBuilder = struct {
     // payloads are compared. This context decides how each representation
     // is compared and emits the reads and joins.
 
-    const EqWalk = value_semantics.structural.EqLower(EqLowering);
+    const EqWalk = value_rules.structural.EqLower(EqLowering);
     const EqRequest = EqWalk.Request;
 
     /// A comparison delegated to another representation of the operands.
@@ -35661,7 +35661,7 @@ const ProcBodyBuilder = struct {
         return components;
     }
 
-    const StructuralComponent = value_semantics.structural.Component(Plan.TypeRepId);
+    const StructuralComponent = value_rules.structural.Component(Plan.TypeRepId);
 
     fn repTagVariants(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) []const Plan.TagVariant {
         return self.parent.plan.tagVariantSlice(self.parent.plan.representations.items[@backingInt(rep_id)].tag_variants);
@@ -36231,7 +36231,7 @@ const ProcBodyBuilder = struct {
     // tag value writes its variant index first. This context decides how
     // each representation is hashed and emits the reads and joins.
 
-    const HashWalk = value_semantics.structural.HashLower(HashLowering);
+    const HashWalk = value_rules.structural.HashLower(HashLowering);
     const HashRequest = HashWalk.Request;
 
     /// A hash delegated to another representation of the value.

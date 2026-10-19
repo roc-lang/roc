@@ -14,7 +14,7 @@ const check = @import("check");
 const collections = @import("collections");
 const layout = @import("layout");
 const Common = @import("common.zig");
-const value_semantics = @import("value_semantics");
+const value_rules = @import("value_rules");
 const AnyAll = collections.AnyAll;
 const ComptimeScalarValues = @import("comptime_scalar_values.zig");
 const match_tree = @import("match_tree.zig");
@@ -10082,7 +10082,7 @@ const Lowerer = struct {
         return try HashWalk.lower(.{ .l = self, .where = where }, .{ .target = target, .value = value, .hasher = hasher, .ty = value_ty, .next = next });
     }
 
-    const HashWalk = value_semantics.structural.HashLower(HashLowering);
+    const HashWalk = value_rules.structural.HashLower(HashLowering);
 
     /// A type with no values, for walker steps Monotype leaves no direct LIR
     /// lowering to reach.
@@ -11630,8 +11630,8 @@ const Lowerer = struct {
         return try EqWalk.lower(.{ .l = self, .where = where }, .{ .target = target, .lhs = lhs, .rhs = rhs, .ty = ty, .negated = negated, .next = next });
     }
 
-    const EqWalk = value_semantics.structural.EqLower(EqLowering);
-    const StructuralComponent = value_semantics.structural.Component(Type.TypeId);
+    const EqWalk = value_rules.structural.EqLower(EqLowering);
+    const StructuralComponent = value_rules.structural.Component(Type.TypeId);
 
     /// Solved types as the shared structural-equality walker lowers them.
     const EqLowering = struct {

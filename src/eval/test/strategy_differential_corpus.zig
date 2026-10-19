@@ -1,7 +1,7 @@
 //! The cross-strategy differential harness's own corpus.
 //!
 //! Most eval cases compute their values during checking finalization, which
-//! always uses `.lss`, so neither strategy's runtime value semantics runs for
+//! always uses `.lss`, so neither strategy's runtime value rules run for
 //! them. These cases are expressions, whose root runs at runtime, and they
 //! build every value from a seed read after a `dbg` statement, which no
 //! compile-time evaluation can perform. The harness requires each of them to
@@ -15,10 +15,10 @@
 //! this file's comptime check until the corpus covers it.
 
 const std = @import("std");
-const value_semantics = @import("value_semantics");
+const value_rules = @import("value_rules");
 const helpers = @import("eval").test_helpers;
 
-const ShapeKind = value_semantics.ShapeKind;
+const ShapeKind = value_rules.ShapeKind;
 
 /// One corpus program, run under both strategies on both backends.
 pub const Case = struct {

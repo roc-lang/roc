@@ -1,4 +1,4 @@
-//! Unit tests for the shared value-semantics walkers over mock contexts.
+//! Unit tests for the shared value-rule walkers over mock contexts.
 
 const std = @import("std");
 const inspect = @import("inspect.zig");

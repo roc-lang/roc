@@ -14,7 +14,7 @@ const lir = @import("lir");
 const builtins = @import("builtins");
 const build_options = @import("build_options");
 const lir_value = @import("value.zig");
-const value_semantics = @import("value_semantics");
+const value_rules = @import("value_rules");
 
 const LIR = lir.LIR;
 const LirStore = lir.LirStore;
@@ -4890,7 +4890,7 @@ pub const BoxyRuntime = struct {
         desc: *const LirProgram.BoxyTypeDesc,
     ) Error!bool {
         const shapes = EqShapes(@TypeOf(hooks)){ .runtime = self, .hooks = hooks };
-        return try value_semantics.structural.EqEval(EqShapes(@TypeOf(hooks))).eq(
+        return try value_rules.structural.EqEval(EqShapes(@TypeOf(hooks))).eq(
             shapes,
             .{ .value = lhs, .layout = value_layout, .desc = desc },
             .{ .value = rhs, .layout = value_layout, .desc = desc },
@@ -5072,7 +5072,7 @@ pub const BoxyRuntime = struct {
             hooks: Hooks,
 
             const Shapes = @This();
-            const Rules = value_semantics.structural.EqEval(Shapes);
+            const Rules = value_rules.structural.EqEval(Shapes);
 
             pub const WalkError = Error;
             pub const Operand = StoredValue;
@@ -5219,7 +5219,7 @@ pub const BoxyRuntime = struct {
                     Value.zst, .layout = lhs.layout, .desc = lhs.desc } };
             }
 
-            pub fn variants(shapes: Shapes, bases: TagBases) Error!value_semantics.structural.VariantPair(StoredValue) {
+            pub fn variants(shapes: Shapes, bases: TagBases) Error!value_rules.structural.VariantPair(StoredValue) {
                 const self = shapes.runtime;
                 if (bases.lhs_discriminant != bases.rhs_discriminant) return .different;
                 const discriminant = bases.lhs_discriminant;
@@ -5310,7 +5310,7 @@ pub const BoxyRuntime = struct {
         hasher: u64,
     ) Error!u64 {
         const shapes = HashShapes(@TypeOf(hooks)){ .runtime = self, .hooks = hooks };
-        return try value_semantics.structural.HashEval(HashShapes(@TypeOf(hooks))).hash(
+        return try value_rules.structural.HashEval(HashShapes(@TypeOf(hooks))).hash(
             shapes,
             .{ .stored = .{ .value = value, .layout = value_layout, .desc = desc } },
             hasher,
@@ -5343,7 +5343,7 @@ pub const BoxyRuntime = struct {
             hooks: Hooks,
 
             const Shapes = @This();
-            const Rules = value_semantics.structural.HashEval(Shapes);
+            const Rules = value_rules.structural.HashEval(Shapes);
 
             pub const WalkError = Error;
             pub const Operand = HashOperand;
@@ -5497,7 +5497,7 @@ pub const BoxyRuntime = struct {
                 return .{ .stored = field };
             }
 
-            pub fn variant(shapes: Shapes, tag: HashTag) Error!value_semantics.structural.HashVariant(HashOperand) {
+            pub fn variant(shapes: Shapes, tag: HashTag) Error!value_rules.structural.HashVariant(HashOperand) {
                 const self = shapes.runtime;
                 var discriminant: u32 = 0;
                 if (self.layout_store.getLayout(tag.layout).tag != .zst) {
@@ -5634,8 +5634,8 @@ pub const BoxyRuntime = struct {
     // shared value-semantics shape, and the shared rules decide every literal
     // and the order of every part.
 
-    const InspectRules = value_semantics.InspectSpec(InspectShapes);
-    const inspect_text = value_semantics.inspect.text;
+    const InspectRules = value_rules.InspectSpec(InspectShapes);
+    const inspect_text = value_rules.inspect.text;
 
     /// A value as inspection reads it.
     const InspectValue = union(enum) {
@@ -5684,7 +5684,7 @@ pub const BoxyRuntime = struct {
             return record.desc.nested_descs.len;
         }
 
-        pub fn recordField(shapes: InspectShapes, record: InspectStruct, slot: u32) ?value_semantics.inspect.RecordField(InspectShapes) {
+        pub fn recordField(shapes: InspectShapes, record: InspectStruct, slot: u32) ?value_rules.inspect.RecordField(InspectShapes) {
             const name = shapes.runtime.requireBoxyFieldNames(record.desc.field_names)[slot];
             // Padding holds no value.
             if (name == .padding_field) return null;

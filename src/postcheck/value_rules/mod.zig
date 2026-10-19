@@ -1,4 +1,4 @@
-//! Value semantics shared by both runtime lowering strategies.
+//! Value rules shared by both runtime lowering strategies.
 //!
 //! `Str.inspect` rendering, structural equality, structural hashing, and the
 //! selection of a `to_inspect` override depend on a value's shape, not on how
@@ -18,7 +18,7 @@ pub const InspectShape = inspect.InspectShape;
 pub const InspectSpec = inspect.InspectSpec;
 pub const lookupInspectOverride = inspect_override.lookupInspectOverride;
 
-test "value semantics declarations are referenced" {
+test "value rules declarations are referenced" {
     @import("std").testing.refAllDecls(@This());
     _ = @import("test.zig");
 }

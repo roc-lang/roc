@@ -1044,7 +1044,7 @@ fn createAndRunBuiltinCompiler(
             .{ .name = "roc_target", .module = roc_modules.roc_target },
             .{ .name = "static_data", .module = roc_modules.static_data },
             .{ .name = "sljmp", .module = roc_modules.sljmp },
-            .{ .name = "value_semantics", .module = roc_modules.value_semantics },
+            .{ .name = "value_rules", .module = roc_modules.value_rules },
         },
     });
     // The interpreter's hosted-call trampoline is hand-written assembly; attach
@@ -5269,7 +5269,7 @@ fn buildBoxyRuntimeObject(
     boxy_eval_module.addImport("collections", roc_modules.collections);
     boxy_eval_module.addImport("builtins", roc_modules.builtins);
     boxy_eval_module.addImport("build_options", roc_modules.build_options);
-    boxy_eval_module.addImport("value_semantics", roc_modules.value_semantics);
+    boxy_eval_module.addImport("value_rules", roc_modules.value_rules);
 
     obj.root_module.addImport("base", roc_modules.base);
     obj.root_module.addImport("builtins", roc_modules.builtins);
