@@ -162,6 +162,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/issue_12228_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11886_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12318_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12309_test.zig"));
     std.testing.refAllDecls(@import("test/nominal_decl_growth_test.zig"));
     std.testing.refAllDecls(@import("test/frame_owned_judgment_test.zig"));
 
