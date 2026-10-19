@@ -2874,6 +2874,18 @@ fixed activation lifetime without repeatedly moving the accumulated entry
 instruction list. Slot values are available to body construction immediately;
 final instruction numbering follows the completed block order.
 
+An entry-block slot is allocated for the whole activation, so LLVM can overlap
+two slots only through `llvm.lifetime.start` and `llvm.lifetime.end`. The LLVM
+backend brackets the slot of every local whose address it passes to an
+out-of-line Roc procedure call (a result returned through memory, or an
+argument passed by pointer) with markers at that local's exact lifetime
+boundaries, which the shared LIR stack planner solves over the procedure's
+explicit control-flow graph. Other slots carry no markers: SROA removes slots
+whose addresses never escape, and markers on them would only add optimizer
+work. Procedure arguments, which the prologue writes, and locals in deferred
+string-match captures, which the backend materializes outside the statements
+that access them, keep their activation lifetime.
+
 LLVM call sites do not acquire `alwaysinline` from loop nesting. Nesting depth
 does not establish execution frequency or bound the combined body of a caller
 with many sites. Larger helpers remain ordinary calls so LLVM can simplify each
@@ -20890,7 +20902,11 @@ Admission of those mandatory owned variants uses the same definition-sensitive
 ownership-place query as complete payload transfers: scalar shell reads and
 uses after an explicit rebind do not retain the argument's old stored units.
 A terminal crash or failed expectation observes only its explicit message
-operand; it does not implicitly use every live ownership place.
+operand; it does not implicitly use every live ownership place. A string or
+Boxy tag match likewise uses only its source (and the tag match's descriptor):
+a borrowed capture view reaches the source's place through its borrow link,
+and an owned capture retains through the source at the match. Only releases
+use every place.
 
 The ownership-place query asks whether a path from a statement reaches a use
 of a root's place before a statement that rebinds the root. Its cost is linear
@@ -22140,10 +22156,11 @@ change an earlier snapshot. Floating-point values that require per-binding NaN
 normalization and vector values retain independent locations. The proof never
 uses emission order, last-use guesses, or an adjacent-instruction peephole.
 
-Native stack planning consumes the shared LIR read/definition inventories plus
-explicit native descriptor accesses and fused-result writes. Runtime successor
-edges distinguish join declarations from jumps, and pattern captures write only
-on their successful edges. Immutable aliases share a storage identity; their
+Native stack planning uses the shared LIR stack planner, which builds a
+procedure's control-flow graph from the shared LIR read/definition
+inventories, plus explicit native descriptor accesses and fused-result writes.
+Runtime successor edges distinguish join declarations from jumps, and pattern
+captures write only on their successful edges. Immutable aliases share a storage identity; their
 combined reads keep that identity live. Each instruction-selection region holds
 all its inputs and outputs simultaneously, so multiword copies cannot overwrite
 unread operands. This analysis follows explicit ARC statements as ordinary reads

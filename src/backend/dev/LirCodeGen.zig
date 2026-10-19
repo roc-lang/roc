@@ -54,7 +54,7 @@ const CpuLevel = roc_target_mod.CpuLevel;
 const Relocation = @import("Relocation.zig").IndexedRelocation;
 const collections = @import("collections");
 const SymbolTable = @import("SymbolTable.zig");
-const StackPlan = @import("StackPlan.zig");
+const StackPlan = lir.StackPlan;
 const coff = @import("object/coff.zig");
 
 const StaticStringData = @import("StaticStringData.zig");
@@ -8520,102 +8520,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return indexes;
         }
 
-        fn stackPlanNode(self: *Self, plan: *StackPlan, indexes: *StackPlan.Indexes, work: *std.ArrayList(CFStmtId), stmt: CFStmtId) Allocator.Error!u32 {
-            if (indexes.nodeOf(stmt)) |index| return index;
-            try work.ensureUnusedCapacity(self.allocator, 1);
-            const index = try plan.node();
-            try indexes.setNode(stmt, index);
-            work.appendAssumeCapacity(stmt);
-            return index;
-        }
+        /// The native backend's explicit accesses beyond the shared LIR
+        /// operand inventory, for `StackPlan.addProcGraph`.
+        const StackPlanExtra = struct {
+            owner: *Self,
 
-        fn stackPlanCaptures(self: *Self, plan: *StackPlan, at: u32, source: LocalId, steps: LIR.StrMatchStepSpan) Allocator.Error!u32 {
-            const capture_node = try plan.node();
-            try plan.edge(at, capture_node);
-            try plan.access(capture_node, source, true, false);
-            const captures = self.store.getStrMatchSteps(steps);
-            for (0..captures.len) |i| switch (GuardedList.at(captures, i).capture) {
-                .discard => {},
-                .view => |local| {
-                    try plan.access(capture_node, local, false, true);
-                    plan.values.items[try plan.local(local)].mutable = true;
-                },
-            };
-            return capture_node;
-        }
-
-        fn ensureStableLocationsForStmtLocals(self: *Self, root: CFStmtId) Allocator.Error!void {
-            const indexes = try self.stackPlanIndexes();
-            var plan = StackPlan.initWithLocalIndices(indexes.allocator, indexes.local_indices);
-            indexes.local_indices = .empty;
-            defer indexes.local_indices = plan.deinitKeepingLocalIndices();
-            // Every planned statement is in `work`, so it empties the indexes.
-            var work: std.ArrayList(CFStmtId) = .empty;
-            defer {
-                indexes.clear(work.items);
-                work.deinit(self.allocator);
+            pub fn tracks(_: StackPlanExtra, _: LocalId) bool {
+                return true;
             }
-            var successors: std.ArrayList(CFStmtId) = .empty;
-            defer successors.deinit(self.allocator);
-            const joins = &indexes.joins;
-            std.debug.assert(joins.count() == 0);
-            _ = try self.stackPlanNode(&plan, indexes, &work, root);
-            var cursor: usize = 0;
-            while (cursor < work.items.len) : (cursor += 1) {
-                const id = work.items[cursor];
-                const at = indexes.nodeOf(id).?;
-                const stmt = self.store.getCFStmt(id);
-                var ctx = StackAccessContext{ .owner = self, .plan = &plan, .at = at };
-                lir.BodyClone.forEachStmtRead(self.store, stmt, &ctx, StackAccessContext.read);
-                // Join parameters are declarations, not writes at the join's entry.
-                // Pattern captures are written on the successful edge only.
-                switch (stmt) {
-                    .join => |j| {
-                        try joins.put(j.id, j.body);
-                    },
-                    .str_match, .str_match_set => {},
-                    .init_uninitialized,
-                    .assign_ref,
-                    .assign_literal,
-                    .assign_call,
-                    .assign_call_erased,
-                    .assign_packed_erased_fn,
-                    .assign_boxy_desc_ref,
-                    .assign_boxy_dict_ref,
-                    .assign_boxy_box,
-                    .assign_boxy_record_update,
-                    .assign_boxy_unbox,
-                    .assign_boxy_adapt,
-                    .assign_boxy_inspect,
-                    .assign_boxy_eq,
-                    .assign_boxy_hash,
-                    .assign_boxy_tag,
-                    .assign_boxy_tag_payload,
-                    .boxy_tag_match,
-                    .assign_call_dict,
-                    .assign_low_level,
-                    .assign_list,
-                    .assign_struct,
-                    .assign_tag,
-                    .store_struct,
-                    .store_tag,
-                    .set_local,
-                    .debug,
-                    .expect,
-                    .expect_err,
-                    .runtime_error,
-                    .comptime_exhaustiveness_failed,
-                    .incref,
-                    .decref,
-                    .decref_if_initialized,
-                    .free,
-                    .switch_stmt,
-                    .switch_initialized_payload,
-                    .jump,
-                    .ret,
-                    .crash,
-                    => lir.BodyClone.forEachStmtDef(self.store, stmt, &ctx, StackAccessContext.write),
-                }
+
+            pub fn statement(extra: StackPlanExtra, plan: *StackPlan, at: u32, stmt: LIR.CFStmt) Allocator.Error!void {
+                const self = extra.owner;
+                var ctx = StackAccessContext{ .owner = self, .plan = plan, .at = at };
                 // Native descriptor accesses supplement the shared LIR operand
                 // inventory; they never infer ownership or add ARC operations.
                 switch (stmt) {
@@ -8681,80 +8597,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     => {},
                 }
                 if (ctx.failure) |err| return err;
-                successors.clearRetainingCapacity();
-                switch (stmt) {
-                    .join => |j| {
-                        _ = try self.stackPlanNode(&plan, indexes, &work, j.body);
-                        try successors.append(self.allocator, j.remainder);
-                    },
-                    .switch_stmt => |s| {
-                        const branches = self.store.getCFSwitchBranches(s.branches);
-                        for (0..branches.len) |i| try successors.append(self.allocator, GuardedList.at(branches, i).body);
-                        try successors.append(self.allocator, s.default_branch);
-                    },
-                    .str_match => |s_stmt| {
-                        const s = self.store.stmtRow(s_stmt.data);
-                        const capture = try self.stackPlanCaptures(&plan, at, s_stmt.source, s.steps);
-                        const next = try self.stackPlanNode(&plan, indexes, &work, s_stmt.on_match);
-                        try plan.edge(capture, next);
-                        try successors.append(self.allocator, s_stmt.on_miss);
-                    },
-                    .str_match_set => |s| {
-                        const arms = self.store.getStrMatchArms(s.arms);
-                        for (0..arms.len) |i| {
-                            const arm = GuardedList.at(arms, i);
-                            const capture = try self.stackPlanCaptures(&plan, at, s.source, arm.steps);
-                            const next = try self.stackPlanNode(&plan, indexes, &work, arm.on_match);
-                            try plan.edge(capture, next);
-                        }
-                        try successors.append(self.allocator, s.on_miss);
-                    },
-                    .jump => {}, // Resolved after every join has been declared.
-                    .init_uninitialized,
-                    .assign_ref,
-                    .assign_literal,
-                    .assign_call,
-                    .assign_call_erased,
-                    .assign_packed_erased_fn,
-                    .assign_boxy_desc_ref,
-                    .assign_boxy_dict_ref,
-                    .assign_boxy_box,
-                    .assign_boxy_record_update,
-                    .assign_boxy_unbox,
-                    .assign_boxy_adapt,
-                    .assign_boxy_inspect,
-                    .assign_boxy_eq,
-                    .assign_boxy_hash,
-                    .assign_boxy_tag,
-                    .assign_boxy_tag_payload,
-                    .boxy_tag_match,
-                    .assign_call_dict,
-                    .assign_low_level,
-                    .assign_list,
-                    .assign_struct,
-                    .assign_tag,
-                    .store_struct,
-                    .store_tag,
-                    .set_local,
-                    .debug,
-                    .expect,
-                    .expect_err,
-                    .runtime_error,
-                    .comptime_exhaustiveness_failed,
-                    .incref,
-                    .decref,
-                    .decref_if_initialized,
-                    .free,
-                    .switch_initialized_payload,
-                    .ret,
-                    .crash,
-                    => try lir.BodyClone.appendSuccessors(self.store, &successors, id, self.allocator),
-                }
-                for (successors.items) |next| {
-                    const to = try self.stackPlanNode(&plan, indexes, &work, next);
-                    try plan.edge(at, to);
-                }
             }
+        };
+
+        fn ensureStableLocationsForStmtLocals(self: *Self, root: CFStmtId) Allocator.Error!void {
+            const indexes = try self.stackPlanIndexes();
+            var plan = StackPlan.initWithLocalIndices(indexes.allocator, indexes.local_indices);
+            indexes.local_indices = .empty;
+            defer indexes.local_indices = plan.deinitKeepingLocalIndices();
+            // Every planned statement is in `work`, so it empties the indexes.
+            var work: std.ArrayList(CFStmtId) = .empty;
+            defer {
+                indexes.clear(work.items);
+                work.deinit(plan.allocator);
+            }
+            try plan.addProcGraph(self.store, indexes, root, &work, StackPlanExtra{ .owner = self });
             for (work.items) |id| {
                 const stmt = self.store.getCFStmt(id);
                 const at = indexes.nodeOf(id).?;
@@ -8765,9 +8622,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     for (0..params.len) |i| {
                         if (plan.localIndex(GuardedList.at(params, i))) |index| plan.values.items[index].mutable = true;
                     }
-                }
-                if (stmt == .jump) {
-                    try plan.edge(at, indexes.nodeOf(joins.get(stmt.jump.target).?).?);
                 }
                 if (stmt == .assign_low_level) {
                     if (OverflowFusion.findResultConsumer(self.store, id)) |fusion| {

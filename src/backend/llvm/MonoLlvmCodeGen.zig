@@ -36,6 +36,7 @@ const roc_target = @import("roc_target");
 
 const CoreCtx = @import("ctx").CoreCtx;
 const LlvmBuilder = @import("vendor_llvm_ir").Builder;
+const SlotLifetimes = @import("SlotLifetimes.zig");
 
 const Allocator = std.mem.Allocator;
 const CFStmtId = lir.CFStmtId;
@@ -394,6 +395,8 @@ pub const MonoLlvmCodeGen = struct {
     join_points: collections.DenseMap(u32, JoinInfo),
     compiled_joins: collections.DenseMap(u32, void),
     stmt_incoming_counts: collections.DenseMap(u32, u32),
+    /// The current procedure's slot lifetime markers.
+    slot_lifetimes: SlotLifetimes,
     stmt_entry_blocks: collections.DenseMap(u32, LlvmBuilder.Function.Block.Index),
     /// Reusable store-indexed columns. Only a procedure's explicit inventory
     /// is invalidated at its end; growing the store initializes only new rows.
@@ -610,6 +613,7 @@ pub const MonoLlvmCodeGen = struct {
             .join_points = collections.DenseMap(u32, JoinInfo).init(allocator),
             .compiled_joins = collections.DenseMap(u32, void).init(allocator),
             .stmt_incoming_counts = collections.DenseMap(u32, u32).init(allocator),
+            .slot_lifetimes = SlotLifetimes.init(allocator),
             .stmt_entry_blocks = collections.DenseMap(u32, LlvmBuilder.Function.Block.Index).init(allocator),
             .debug_inline_subprograms = std.AutoHashMap(u32, LlvmBuilder.Metadata).init(allocator),
             .debug_inline_callsites = std.AutoHashMap(u32, LlvmBuilder.Metadata).init(allocator),
@@ -681,6 +685,7 @@ pub const MonoLlvmCodeGen = struct {
         self.join_points.deinit();
         self.compiled_joins.deinit();
         self.stmt_incoming_counts.deinit();
+        self.slot_lifetimes.deinit();
         self.stmt_entry_blocks.deinit();
     }
 
@@ -966,9 +971,45 @@ pub const MonoLlvmCodeGen = struct {
         self.builder = &builder;
         defer self.builder = null;
 
+        try self.buildEntrypointModule(&builder, module_name, entrypoints);
+        return .{
+            .bitcode = try self.serializeBuilderToBitcode(&builder),
+            .allocator = self.allocator,
+        };
+    }
+
+    /// Write the textual LLVM IR of the module `generateEntrypointModule`
+    /// serializes, for tests that inspect emitted code.
+    pub fn printEntrypointModule(
+        self: *MonoLlvmCodeGen,
+        module_name: []const u8,
+        entrypoints: []const Entrypoint,
+        writer: *std.Io.Writer,
+    ) Error!void {
+        self.reset();
+
+        var builder = try self.createBuilder(module_name);
+        defer builder.deinit();
+
+        self.builder = &builder;
+        defer self.builder = null;
+
+        try self.buildEntrypointModule(&builder, module_name, entrypoints);
+        builder.print(writer) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.WriteFailed => return error.CompilationFailed,
+        };
+    }
+
+    fn buildEntrypointModule(
+        self: *MonoLlvmCodeGen,
+        builder: *LlvmBuilder,
+        module_name: []const u8,
+        entrypoints: []const Entrypoint,
+    ) Error!void {
         if (!builder.strip) {
-            try self.setupDebugInfo(&builder, module_name);
-            if (self.target.ofmt == .elf) try self.embedGdbScript(&builder);
+            try self.setupDebugInfo(builder, module_name);
+            if (self.target.ofmt == .elf) try self.embedGdbScript(builder);
         }
 
         if (self.object_cache_pack) try self.declarePackStaticData();
@@ -1002,11 +1043,6 @@ pub const MonoLlvmCodeGen = struct {
             builder.resolveDebugForwardReference(self.debug_enums_fwd_ref.unwrap().?, empty_tuple);
             builder.resolveDebugForwardReference(self.debug_globals_fwd_ref.unwrap().?, empty_tuple);
         }
-
-        return .{
-            .bitcode = try self.serializeBuilderToBitcode(&builder),
-            .allocator = self.allocator,
-        };
     }
 
     /// Creates the compile unit, registers it in `llvm.dbg.cu`, and sets the
@@ -1830,8 +1866,7 @@ pub const MonoLlvmCodeGen = struct {
         if (self.enable_default_platform_diagnostics) {
             try attrs_wip.addFnAttr(.@"noinline", builder);
         } else {
-            const inline_everywhere = self.inline_everywhere.items.len > @backingInt(proc_id) and self.inline_everywhere.items[@backingInt(proc_id)];
-            if (inline_everywhere) {
+            if (self.inlineEverywhere(proc_id)) {
                 try attrs_wip.addFnAttr(.alwaysinline, builder);
             } else {
                 try attrs_wip.addFnAttr(.inlinehint, builder);
@@ -2417,8 +2452,7 @@ pub const MonoLlvmCodeGen = struct {
         if (self.enable_default_platform_diagnostics) {
             try attrs_wip.addFnAttr(.@"noinline", builder);
         } else {
-            const inline_everywhere = self.inline_everywhere.items.len > @backingInt(proc_id) and self.inline_everywhere.items[@backingInt(proc_id)];
-            if (inline_everywhere) {
+            if (self.inlineEverywhere(proc_id)) {
                 try attrs_wip.addFnAttr(.alwaysinline, builder);
             } else {
                 try attrs_wip.addFnAttr(.inlinehint, builder);
@@ -2780,6 +2814,8 @@ pub const MonoLlvmCodeGen = struct {
                 return error.CompilationFailed;
             };
             try self.collectStmtIncomingCounts(body);
+            defer self.slot_lifetimes.clear();
+            try self.slot_lifetimes.plan(self.store, body, self.store.getLocalSpan(proc.args), AddressedCallLocals{ .codegen = self });
             try self.compileStmt(body);
             if (!self.currentBlockHasTerminator()) {
                 if (self.fast_ret_registers != null) {
@@ -3929,6 +3965,7 @@ pub const MonoLlvmCodeGen = struct {
         defer self.current_source_stmt = outer_source_stmt;
         self.current_source_stmt = stmt_id;
         try self.setStmtDebugLocation(stmt_id);
+        try self.emitSlotLifetimeMarkers(stmt_id);
         switch (stmt) {
             .assign_ref => |assign| {
                 try self.emitAssignRef(assign.target, assign.op);
@@ -4547,6 +4584,54 @@ pub const MonoLlvmCodeGen = struct {
             _ = try self.callFunctionIndex(func, &.{ ret_ptr, args_ptr, desc_ptr }, is_cold);
         } else {
             _ = try self.callFunctionIndex(func, &.{ ret_ptr, args_ptr }, is_cold);
+        }
+    }
+
+    fn inlineEverywhere(self: *const MonoLlvmCodeGen, proc_id: LirProcSpecId) bool {
+        return self.inline_everywhere.items.len > @backingInt(proc_id) and self.inline_everywhere.items[@backingInt(proc_id)];
+    }
+
+    /// The locals whose slot addresses `emitDirectCall` passes to an
+    /// out-of-line callee, for `SlotLifetimes`: the target of a result
+    /// returned through memory, and each argument passed by pointer. An
+    /// `alwaysinline` callee is never out of line.
+    const AddressedCallLocals = struct {
+        codegen: *MonoLlvmCodeGen,
+
+        pub const AppendError = Error;
+
+        pub fn appendAddressed(self: AddressedCallLocals, call: @FieldType(lir.LIR.CFStmt, "assign_call"), out: *std.ArrayList(LocalId)) AppendError!void {
+            const codegen = self.codegen;
+            if (codegen.store.stmtRowOrDefault(call.extra).replaces_frame) return;
+            const proc = codegen.store.getProcSpec(call.proc);
+            if (proc.hosted != null) return;
+            if (!codegen.enable_default_platform_diagnostics and codegen.inlineEverywhere(call.proc)) return;
+            if (codegen.fast_registry.get(@backingInt(call.proc)) == null) {
+                try out.append(codegen.allocator, call.target);
+                return;
+            }
+            var arena_state = Base.SingleThreadArena.init(codegen.allocator);
+            defer arena_state.deinit();
+            const sig = try codegen.fastSignature(arena_state.allocator(), proc);
+            if (sig.lowered.ret == .indirect) try out.append(codegen.allocator, call.target);
+            const args = codegen.store.getLocalSpan(call.args);
+            for (sig.lowered.args, 0..) |placement, i| {
+                if (placement == .indirect and !sig.tail_args.stored[i]) try out.append(codegen.allocator, GuardedList.at(args, i));
+            }
+        }
+    };
+
+    fn emitSlotLifetimeMarkers(self: *MonoLlvmCodeGen, stmt_id: CFStmtId) Error!void {
+        const markers = self.slot_lifetimes.at(stmt_id);
+        if (markers.len == 0) return;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const ptr_ty = try self.ptrType();
+        for (markers) |marker| {
+            const intrinsic: LlvmBuilder.Intrinsic = switch (marker.kind) {
+                .start => .@"lifetime.start",
+                .end => .@"lifetime.end",
+            };
+            _ = wip.callIntrinsic(.normal, .none, intrinsic, &.{ptr_ty}, &.{self.slot(marker.local).ptr}, "") catch return error.OutOfMemory;
         }
     }
 
