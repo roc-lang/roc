@@ -25,6 +25,7 @@ const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 const BuildEnv = compile.BuildEnv;
 const DebugFlags = @import("../debug.zig").DebugFlags;
+const BuildEnvHandle = @import("../build_env_handle.zig").BuildEnvHandle;
 
 const CompletionItem = completion_handler.CompletionItem;
 const CompletionItemKind = completion_handler.CompletionItemKind;
@@ -96,36 +97,39 @@ fn completionKindForExpr(expr: CIR.Expr) u32 {
 /// Handles deduplication and provides methods for adding different types of completions.
 pub const CompletionBuilder = struct {
     allocator: Allocator,
+    /// Allocates the accepted items and every string they hold. Owned by the
+    /// request, which frees them together once the response is sent.
+    strings: Allocator,
     std_io: std.Io,
     items: *std.ArrayList(CompletionItem),
-    seen_labels: std.StringHashMap(void),
+    /// Accepted labels, borrowing the copies in `strings`.
+    seen_labels: std.StringHashMapUnmanaged(void) = .empty,
     builtin_module_env: ?*ModuleEnv,
+    /// The handle owning the document module the completions are built for,
+    /// which holds that module's scope map.
+    module_handle: *BuildEnvHandle,
     debug: DebugFlags = .{},
     log_file: ?std.Io.File = null,
-    /// Lazily-built scope map, shared across methods that need scope info.
-    cached_scope: ?scope_map.ScopeMap = null,
-    /// The module env the cached scope was built from.
-    cached_scope_env: ?*const ModuleEnv = null,
 
-    /// Initialize a new CompletionBuilder.
-    pub fn init(allocator: Allocator, std_io: std.Io, items: *std.ArrayList(CompletionItem), builtin_module_env: ?*ModuleEnv) CompletionBuilder {
+    /// Initialize a new CompletionBuilder with debug logging. `items` and all
+    /// strings in it are allocated from `strings`.
+    pub fn initWithDebug(
+        allocator: Allocator,
+        strings: Allocator,
+        std_io: std.Io,
+        items: *std.ArrayList(CompletionItem),
+        builtin_module_env: ?*ModuleEnv,
+        module_handle: *BuildEnvHandle,
+        debug: DebugFlags,
+        log_file: ?std.Io.File,
+    ) CompletionBuilder {
         return .{
             .allocator = allocator,
+            .strings = strings,
             .std_io = std_io,
             .items = items,
-            .seen_labels = std.StringHashMap(void).init(allocator),
             .builtin_module_env = builtin_module_env,
-        };
-    }
-
-    /// Initialize a new CompletionBuilder with debug logging.
-    pub fn initWithDebug(allocator: Allocator, std_io: std.Io, items: *std.ArrayList(CompletionItem), builtin_module_env: ?*ModuleEnv, debug: DebugFlags, log_file: ?std.Io.File) CompletionBuilder {
-        return .{
-            .allocator = allocator,
-            .std_io = std_io,
-            .items = items,
-            .seen_labels = std.StringHashMap(void).init(allocator),
-            .builtin_module_env = builtin_module_env,
+            .module_handle = module_handle,
             .debug = debug,
             .log_file = log_file,
         };
@@ -133,25 +137,12 @@ pub const CompletionBuilder = struct {
 
     /// Clean up resources used by the builder.
     pub fn deinit(self: *CompletionBuilder) void {
-        self.seen_labels.deinit();
-        if (self.cached_scope) |*s| s.deinit();
+        self.seen_labels.deinit(self.allocator);
     }
 
-    /// Get or build the scope map for the given module env.
-    /// Reuses a previously built scope if it was built from the same env.
-    fn getOrBuildScope(self: *CompletionBuilder, module_env: *ModuleEnv) Allocator.Error!*scope_map.ScopeMap {
-        if (self.cached_scope != null and self.cached_scope_env == module_env) {
-            return &self.cached_scope.?;
-        }
-        // Dispose of stale scope if the module changed.
-        if (self.cached_scope) |*old| old.deinit();
-
-        var scope = scope_map.ScopeMap.init(self.allocator);
-        errdefer scope.deinit();
-        try scope.build(module_env);
-        self.cached_scope = scope;
-        self.cached_scope_env = module_env;
-        return &self.cached_scope.?;
+    /// The scope bindings of the document module `module_env`.
+    pub fn scopeBindings(self: *CompletionBuilder, module_env: *ModuleEnv) Allocator.Error![]const scope_map.Binding {
+        return self.module_handle.scopeBindings(module_env);
     }
 
     fn logDebug(self: *CompletionBuilder, comptime fmt: []const u8, args: anytype) void {
@@ -165,58 +156,21 @@ pub const CompletionBuilder = struct {
     }
 
     /// Add a completion item, returning true if it was added (not a duplicate).
+    ///
+    /// The item's optional strings must be allocated from `strings`; the label
+    /// may be borrowed, since an accepted label is copied there.
     pub fn addItem(self: *CompletionBuilder, item: CompletionItem) Allocator.Error!bool {
-        // Check for duplicates
-        if (self.seen_labels.contains(item.label)) {
-            // Avoid leaking owned optional fields on duplicate rejection.
-            // Label ownership is centralized below (we duplicate labels only for
-            // accepted items), so duplicate callers can pass borrowed labels.
-            self.freeOwnedOptionalFields(item);
-            return false;
-        }
+        const gop = try self.seen_labels.getOrPut(self.allocator, item.label);
+        if (gop.found_existing) return false;
+        errdefer self.seen_labels.removeByPtr(gop.key_ptr);
 
-        // Keep label lifetime simple and consistent: every retained completion
-        // owns its label memory regardless of where it came from.
-        const owned_label = try self.allocator.dupe(u8, item.label);
-        errdefer self.allocator.free(owned_label);
-
-        // Store the dedupe key using stable owned memory. This avoids dangling
-        // map keys when callers pass transient labels (e.g. stack buffers).
-        try self.seen_labels.put(owned_label, {});
-        errdefer _ = self.seen_labels.remove(owned_label);
+        const owned_label = try self.strings.dupe(u8, item.label);
+        gop.key_ptr.* = owned_label;
 
         var stored_item = item;
         stored_item.label = owned_label;
-
-        // If appending fails, clean up all fields this builder owns.
-        errdefer self.freeOwnedFields(stored_item);
-        try self.items.append(self.allocator, stored_item);
+        try self.items.append(self.strings, stored_item);
         return true;
-    }
-
-    /// Free optional owned fields on a completion item that wasn't retained.
-    ///
-    /// We only free fields that are known to be owned by the builder. If new
-    /// owned fields are added to CompletionItem in the future, update this list.
-    fn freeOwnedOptionalFields(self: *CompletionBuilder, item: CompletionItem) void {
-        if (item.detail) |detail| {
-            self.allocator.free(detail);
-        }
-        if (item.documentation) |doc| {
-            self.allocator.free(doc);
-        }
-        if (item.insertText) |insert_text| {
-            self.allocator.free(insert_text);
-        }
-        if (item.sortText) |sort_text| {
-            self.allocator.free(sort_text);
-        }
-    }
-
-    /// Free all fields owned by a retained completion item.
-    fn freeOwnedFields(self: *CompletionBuilder, item: CompletionItem) void {
-        self.allocator.free(item.label);
-        self.freeOwnedOptionalFields(item);
     }
 
     // Module Name Completions
@@ -367,12 +321,12 @@ pub const CompletionBuilder = struct {
                         };
                         const type_str = tw.get();
                         if (type_str.len > 0) {
-                            detail = try self.allocator.dupe(u8, type_str);
+                            detail = try self.strings.dupe(u8, type_str);
                         }
                         tw.reset();
 
                         documentation = try doc_comments.extractDocForDef(
-                            self.allocator,
+                            self.strings,
                             module_env.common.source,
                             &module_env.store,
                             def,
@@ -478,7 +432,7 @@ pub const CompletionBuilder = struct {
             if (name.len == 0) continue;
 
             const documentation = try doc_comments.extractDocForStatement(
-                self.allocator,
+                self.strings,
                 module_env.common.source,
                 &module_env.store,
                 stmt,
@@ -502,10 +456,10 @@ pub const CompletionBuilder = struct {
         var type_writer: ?types.TypeWriter = try module_env.initTypeWriter();
         defer if (type_writer) |*tw| tw.deinit();
 
-        const scope = try self.getOrBuildScope(module_env);
+        const bindings = try self.scopeBindings(module_env);
 
         // Add local variables in scope at cursor position
-        for (scope.bindings.items) |binding| {
+        for (bindings) |binding| {
             if (!scope_map.ScopeMap.isVisibleAt(binding, cursor_offset)) continue;
 
             const name = module_env.getIdentText(binding.ident);
@@ -528,13 +482,13 @@ pub const CompletionBuilder = struct {
                 };
                 const type_str = tw.get();
                 if (type_str.len > 0) {
-                    detail = try self.allocator.dupe(u8, type_str);
+                    detail = try self.strings.dupe(u8, type_str);
                 }
                 tw.reset();
             }
 
             const documentation = try doc_comments.extractDocCommentBefore(
-                self.allocator,
+                self.strings,
                 module_env.common.source,
                 module_env.store.getPatternRegion(binding.pattern_idx).start.offset,
             );
@@ -574,13 +528,13 @@ pub const CompletionBuilder = struct {
                 };
                 const type_str = tw.get();
                 if (type_str.len > 0) {
-                    detail = try self.allocator.dupe(u8, type_str);
+                    detail = try self.strings.dupe(u8, type_str);
                 }
                 tw.reset();
             }
 
             const documentation = try doc_comments.extractDocForDef(
-                self.allocator,
+                self.strings,
                 module_env.common.source,
                 &module_env.store,
                 def,
@@ -627,13 +581,13 @@ pub const CompletionBuilder = struct {
                     };
                     const type_str = tw.get();
                     if (type_str.len > 0) {
-                        detail = try self.allocator.dupe(u8, type_str);
+                        detail = try self.strings.dupe(u8, type_str);
                     }
                     tw.reset();
                 }
 
                 const documentation = try doc_comments.extractDocForStatement(
-                    self.allocator,
+                    self.strings,
                     module_env.common.source,
                     &module_env.store,
                     stmt,
@@ -783,7 +737,7 @@ pub const CompletionBuilder = struct {
                             };
                             const type_str = tw.get();
                             if (type_str.len > 0) {
-                                detail = try self.allocator.dupe(u8, type_str);
+                                detail = try self.strings.dupe(u8, type_str);
                             }
                             tw.reset();
                         }
@@ -937,16 +891,13 @@ pub const CompletionBuilder = struct {
                 };
                 const type_str = tw.get();
                 if (type_str.len > 0) {
-                    detail = try self.allocator.dupe(u8, type_str);
+                    detail = try self.strings.dupe(u8, type_str);
                 }
                 tw.reset();
             }
 
             const insert_text = if (fieldPresenceIsOptional(type_store, field_presence))
-                std.fmt.allocPrint(self.allocator, "?{s}", .{field_name}) catch |err| {
-                    if (detail) |owned_detail| self.allocator.free(owned_detail);
-                    return err;
-                }
+                try std.fmt.allocPrint(self.strings, "?{s}", .{field_name})
             else
                 null;
 
@@ -998,12 +949,12 @@ pub const CompletionBuilder = struct {
     ) Allocator.Error!void {
         self.logDebug("addMethodCompletions: looking for '{s}' at offset {d}", .{ variable_name, variable_start });
 
-        const scope = try self.getOrBuildScope(module_env);
-        self.logDebug("addMethodCompletions: scope has {d} bindings", .{scope.bindings.items.len});
+        const bindings = try self.scopeBindings(module_env);
+        self.logDebug("addMethodCompletions: scope has {d} bindings", .{bindings.len});
 
         // Find the binding with matching name that's visible at the variable position
         var found_binding: ?scope_map.Binding = null;
-        for (scope.bindings.items) |binding| {
+        for (bindings) |binding| {
             const name = module_env.getIdentText(binding.ident);
             const is_visible = scope_map.ScopeMap.isVisibleAt(binding, variable_start);
             if (!is_visible) continue;
@@ -1165,7 +1116,7 @@ pub const CompletionBuilder = struct {
                 };
                 const type_str = tw.get();
                 if (type_str.len > 0) {
-                    detail = try self.allocator.dupe(u8, type_str);
+                    detail = try self.strings.dupe(u8, type_str);
                 }
                 tw.reset();
             }
@@ -1242,7 +1193,7 @@ pub const CompletionBuilder = struct {
                         };
                         const type_str = tw.get();
                         if (type_str.len > 0) {
-                            detail = try self.allocator.dupe(u8, type_str);
+                            detail = try self.strings.dupe(u8, type_str);
                         }
                         tw.reset();
                     }
@@ -1250,7 +1201,7 @@ pub const CompletionBuilder = struct {
 
                 // If we couldn't get the type signature, at least show which type it's from
                 if (detail == null and type_name.len > 0 and qualified_name.len > 0) {
-                    detail = try std.fmt.allocPrint(self.allocator, "method on {s}", .{type_name});
+                    detail = try std.fmt.allocPrint(self.strings, "method on {s}", .{type_name});
                 }
 
                 // Extract documentation for the method definition.
@@ -1282,7 +1233,7 @@ pub const CompletionBuilder = struct {
 
             if (ident_idx.eql(qualified_ident)) {
                 return try doc_comments.extractDocForDef(
-                    self.allocator,
+                    self.strings,
                     module_env.common.source,
                     &module_env.store,
                     def,
@@ -1301,7 +1252,7 @@ pub const CompletionBuilder = struct {
 
             if (ident_idx.eql(qualified_ident)) {
                 return try doc_comments.extractDocForStatement(
-                    self.allocator,
+                    self.strings,
                     module_env.common.source,
                     &module_env.store,
                     stmt,
@@ -1420,21 +1371,21 @@ pub const CompletionBuilder = struct {
 
     fn formatTagSignatureInner(self: *CompletionBuilder, module_env: *ModuleEnv, tag_name: []const u8, args_slice: []const CIR.TypeAnno.Idx) Allocator.Error![]const u8 {
         var buf: std.ArrayList(u8) = .empty;
-        errdefer buf.deinit(self.allocator);
-        try buf.appendSlice(self.allocator, tag_name);
-        try buf.append(self.allocator, '(');
+        errdefer buf.deinit(self.strings);
+        try buf.appendSlice(self.strings, tag_name);
+        try buf.append(self.strings, '(');
         for (args_slice, 0..) |arg_idx, i| {
-            if (i > 0) try buf.appendSlice(self.allocator, ", ");
+            if (i > 0) try buf.appendSlice(self.strings, ", ");
             const arg_anno = module_env.store.getTypeAnno(arg_idx);
             try self.writeTypeAnno(&buf, module_env, arg_anno);
         }
-        try buf.append(self.allocator, ')');
-        return try buf.toOwnedSlice(self.allocator);
+        try buf.append(self.strings, ')');
+        return try buf.toOwnedSlice(self.strings);
     }
 
     /// Write a human-readable representation of a TypeAnno to a buffer.
     fn writeTypeAnno(self: *CompletionBuilder, buf: *std.ArrayList(u8), module_env: *ModuleEnv, anno: CIR.TypeAnno) Allocator.Error!void {
-        const alloc = self.allocator;
+        const alloc = self.strings;
         switch (anno) {
             .lookup => |t| {
                 const name = module_env.getIdentText(t.name);

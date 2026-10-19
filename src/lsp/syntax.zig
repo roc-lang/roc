@@ -215,6 +215,7 @@ pub const SyntaxChecker = struct {
         checker: *SyntaxChecker,
         identity: ?DocumentIdentity,
         session: ?BuildSession,
+        handle: *BuildEnvHandle,
         env: *BuildEnv,
         absolute_path: []const u8,
         build_succeeded: bool,
@@ -400,6 +401,7 @@ pub const SyntaxChecker = struct {
                     .checker = self,
                     .identity = identity,
                     .session = null,
+                    .handle = handle,
                     .env = env,
                     .absolute_path = abs_path,
                     .build_succeeded = documentParsedCleanly(env, document.absolute_path),
@@ -420,6 +422,7 @@ pub const SyntaxChecker = struct {
                 .checker = self,
                 .identity = identity,
                 .session = null,
+                .handle = env_handle,
                 .env = env,
                 .absolute_path = abs_path,
                 .build_succeeded = false,
@@ -447,6 +450,7 @@ pub const SyntaxChecker = struct {
             .checker = self,
             .identity = identity,
             .session = session,
+            .handle = env_handle,
             .env = env,
             .absolute_path = abs_path,
             .build_succeeded = session.build_succeeded and documentParsedCleanly(env, session.absolute_path),
@@ -634,6 +638,13 @@ pub const SyntaxChecker = struct {
         return false;
     }
 
+    fn publishListHasDiagnostics(publish_list: *const std.ArrayList(Diagnostics.PublishDiagnostics), uri: []const u8) bool {
+        for (publish_list.items) |set| {
+            if (set.diagnostics.len > 0 and std.mem.eql(u8, set.uri, uri)) return true;
+        }
+        return false;
+    }
+
     /// Ensure the checked URI is published, clear stale URIs from prior publishes,
     /// and refresh the set of URIs that currently have non-empty diagnostics.
     fn finishDiagnosticPublishes(
@@ -648,35 +659,37 @@ pub const SyntaxChecker = struct {
             });
         }
 
-        var stale_uris: std.ArrayList([]const u8) = .empty;
-        defer {
-            for (stale_uris.items) |stale_uri| self.allocator.free(stale_uri);
-            stale_uris.deinit(self.allocator);
-        }
-
+        // Every URI that had diagnostics last time and is not published now
+        // gets an empty set, which clears it in the editor.
         var it = self.published_diagnostic_uris.keyIterator();
         while (it.next()) |prev| {
             if (!publishListContainsUri(publish_list, prev.*)) {
-                try stale_uris.append(self.allocator, try self.allocator.dupe(u8, prev.*));
+                const stale_uri = try self.allocator.dupe(u8, prev.*);
+                errdefer self.allocator.free(stale_uri);
+                try publish_list.append(self.allocator, .{
+                    .uri = stale_uri,
+                    .diagnostics = &.{},
+                });
             }
-        }
-        for (stale_uris.items) |stale_uri| {
-            try publish_list.append(self.allocator, .{
-                .uri = try self.allocator.dupe(u8, stale_uri),
-                .diagnostics = &.{},
-            });
         }
 
-        self.clearPublishedDiagnosticUris();
+        // Keep the URIs that still have diagnostics, so a document whose
+        // errors persist across edits keeps its owned key.
+        var keys = self.published_diagnostic_uris.keyIterator();
+        while (keys.next()) |key| {
+            if (publishListHasDiagnostics(publish_list, key.*)) continue;
+            const owned = key.*;
+            self.published_diagnostic_uris.removeByPtr(key);
+            self.allocator.free(owned);
+        }
         for (publish_list.items) |set| {
             if (set.diagnostics.len == 0) continue;
-            const owned = try self.allocator.dupe(u8, set.uri);
-            const gop = try self.published_diagnostic_uris.getOrPut(self.allocator, owned);
-            if (gop.found_existing) {
-                self.allocator.free(owned);
-            } else {
-                gop.key_ptr.* = owned;
-            }
+            const gop = try self.published_diagnostic_uris.getOrPut(self.allocator, set.uri);
+            if (gop.found_existing) continue;
+            gop.key_ptr.* = self.allocator.dupe(u8, set.uri) catch |err| {
+                self.published_diagnostic_uris.removeByPtr(gop.key_ptr);
+                return err;
+            };
         }
     }
 
@@ -829,16 +842,20 @@ pub const SyntaxChecker = struct {
     /// Get the BuildEnv that should be used for module lookups (semantic tokens, etc.).
     /// Prefers the current build_env if it has modules, otherwise falls back to previous_build_env.
     pub fn getModuleLookupEnv(self: *SyntaxChecker) ?*BuildEnv {
+        const handle = self.getModuleLookupHandle() orelse return null;
+        return handle.envPtr();
+    }
+
+    /// The handle owning `getModuleLookupEnv`'s env.
+    fn getModuleLookupHandle(self: *SyntaxChecker) ?*BuildEnvHandle {
         // Prefer current build_env if it exists and has modules
         if (self.build_env) |handle| {
-            const env = handle.envPtr();
-            if (env.hasCompiledModules()) {
-                return env;
+            if (handle.envPtr().hasCompiledModules()) {
+                return handle;
             }
         }
         // Fall back to previous_build_env
-        if (self.previous_build_env) |handle| return handle.envPtr();
-        return null;
+        return self.previous_build_env;
     }
 
     /// Get the cached snapshot BuildEnv for completions.
@@ -2869,17 +2886,15 @@ pub const SyntaxChecker = struct {
     /// `new_name`, so an overlap is refused. Bindings in unrelated scopes do
     /// not overlap and stay renameable.
     fn checkNewNameAgainstScope(
-        self: *SyntaxChecker,
+        handle: *BuildEnvHandle,
         module_env: *ModuleEnv,
         target_pattern: CIR.Pattern.Idx,
         new_name: []const u8,
     ) Allocator.Error!ScopeCheck {
-        var scopes = scope_map.ScopeMap.init(self.allocator);
-        defer scopes.deinit();
-        try scopes.build(module_env);
+        const bindings = try handle.scopeBindings(module_env);
 
         var target_binding: ?scope_map.Binding = null;
-        for (scopes.bindings.items) |binding| {
+        for (bindings) |binding| {
             if (@backingInt(binding.pattern_idx) == @backingInt(target_pattern)) {
                 target_binding = binding;
                 break;
@@ -2894,7 +2909,7 @@ pub const SyntaxChecker = struct {
         // been established.
         const target = target_binding orelse return .scope_unavailable;
 
-        for (scopes.bindings.items) |binding| {
+        for (bindings) |binding| {
             if (@backingInt(binding.pattern_idx) == @backingInt(target_pattern)) continue;
             if (!std.mem.eql(u8, module_env.common.idents.getText(binding.ident), new_name)) continue;
             if (binding.visible_from <= target.visible_to and target.visible_from <= binding.visible_to) {
@@ -3042,7 +3057,7 @@ pub const SyntaxChecker = struct {
             return RenameOutcome{ .rejected = .{ .bad_new_name = rejection } };
         }
 
-        switch (try self.checkNewNameAgainstScope(module_env, target.pattern, new_name)) {
+        switch (try checkNewNameAgainstScope(build.handle, module_env, target.pattern, new_name)) {
             .clear => {},
             .taken => return RenameOutcome{ .rejected = .name_already_in_scope },
             .scope_unavailable => return RenameOutcome{ .rejected = .scope_unavailable },
@@ -3181,12 +3196,10 @@ pub const SyntaxChecker = struct {
     }
 
     /// Resolve a local binding's type var for chained access completion.
-    fn resolveLocalBindingTypeVar(self: *SyntaxChecker, module_env: *ModuleEnv, name: []const u8, name_start: u32, oom: *?Allocator.Error) ?types.Var {
-        var scope = scope_map.ScopeMap.init(self.allocator);
-        defer scope.deinit();
-        noteOom(oom, scope.build(module_env)) orelse return null;
+    fn resolveLocalBindingTypeVar(builder: *completion_builder.CompletionBuilder, module_env: *ModuleEnv, name: []const u8, name_start: u32, oom: *?Allocator.Error) ?types.Var {
+        const bindings = noteOom(oom, builder.scopeBindings(module_env)) orelse return null;
 
-        for (scope.bindings.items) |binding| {
+        for (bindings) |binding| {
             const binding_name = module_env.getIdentText(binding.ident);
             if (!scope_map.ScopeMap.isVisibleAt(binding, name_start)) continue;
             if (std.mem.eql(u8, binding_name, name)) {
@@ -3277,7 +3290,7 @@ pub const SyntaxChecker = struct {
             return .{ .module_env = resolved_env, .type_var = type_var };
         }
 
-        var type_var = self.resolveLocalBindingTypeVar(module_env, first.segment, chain_start, oom) orelse return null;
+        var type_var = resolveLocalBindingTypeVar(builder, module_env, first.segment, chain_start, oom) orelse return null;
         while (nextChainSegment(access_chain, idx)) |segment| {
             idx = segment.next;
             const next_var = builder.getFieldTypeVarFromTypeVar(module_env, type_var, segment.segment) orelse return null;
@@ -3391,18 +3404,11 @@ pub const SyntaxChecker = struct {
         // Compute cursor offset for scope-based completions
         const cursor_offset = completion_context.computeOffset(source, line, character);
 
-        // Collect completions based on context
+        // Collect completions based on context. The items and their strings
+        // live in one arena that the result owns.
+        var arena = base.SingleThreadArena.init(self.allocator);
+        errdefer arena.deinit();
         var items: std.ArrayList(completion_handler.CompletionItem) = .empty;
-        errdefer {
-            for (items.items) |item| {
-                self.allocator.free(item.label);
-                if (item.detail) |d| self.allocator.free(d);
-                if (item.documentation) |doc| self.allocator.free(doc);
-                if (item.sortText) |sort_text| self.allocator.free(sort_text);
-                if (item.insertText) |insert_text| self.allocator.free(insert_text);
-            }
-            items.deinit(self.allocator);
-        }
 
         // Try to get the module environment for richer completions
         // ALWAYS try snapshot first for completion - typing usually produces incomplete code
@@ -3410,6 +3416,8 @@ pub const SyntaxChecker = struct {
         // Track which BuildEnv backs the chosen module_env_opt so module member
         // lookups stay consistent with snapshot/previous envs.
         var module_lookup_env: *BuildEnv = env;
+        // The handle owning `module_env_opt`, which holds its scope map.
+        var module_handle: *BuildEnvHandle = build.handle;
         const module_env_opt: ?*ModuleEnv = blk: {
             if (!build_has_reports) {
                 if (build.getModuleEnv()) |module_env| {
@@ -3422,6 +3430,7 @@ pub const SyntaxChecker = struct {
                 if (snapshot_module_env) |module_env| {
                     used_snapshot = true;
                     module_lookup_env = snapshot_handle.envPtr();
+                    module_handle = snapshot_handle;
                     break :blk module_env;
                 }
             }
@@ -3432,15 +3441,19 @@ pub const SyntaxChecker = struct {
                 if (prev_module_env) |module_env| {
                     used_snapshot = true;
                     module_lookup_env = previous_handle.envPtr();
+                    module_handle = previous_handle;
                     break :blk module_env;
                 }
             }
 
             // Fall back to current build only if no snapshot available and build succeeded
             if (build.build_succeeded and !build_has_reports) {
-                if (self.getModuleEnvByPath(build.absolute_path)) |module_env| {
-                    module_lookup_env = env;
-                    break :blk module_env;
+                if (self.getModuleLookupHandle()) |lookup_handle| {
+                    if (self.getModuleEnvByPathInEnv(lookup_handle.envPtr(), build.absolute_path)) |module_env| {
+                        module_lookup_env = env;
+                        module_handle = lookup_handle;
+                        break :blk module_env;
+                    }
                 }
 
                 module_lookup_env = env;
@@ -3454,7 +3467,7 @@ pub const SyntaxChecker = struct {
 
         // Initialize CompletionBuilder for deduplication and organized completion item building
         // Provide the builtin module env so completion can resolve builtin method data.
-        var builder = completion_builder.CompletionBuilder.initWithDebug(self.allocator, self.std_io, &items, env.builtin_modules.builtin_module.env, self.debug, self.log_file);
+        var builder = completion_builder.CompletionBuilder.initWithDebug(self.allocator, arena.allocator(), self.std_io, &items, env.builtin_modules.builtin_module.env, module_handle, self.debug, self.log_file);
         defer builder.deinit();
 
         switch (context) {
@@ -3603,20 +3616,13 @@ pub const SyntaxChecker = struct {
         // remains robust even when environments expose very large symbol sets.
         const max_completion_items: usize = 512;
         if (items.items.len > max_completion_items) {
-            // Free the allocated strings in items being dropped
-            for (items.items[max_completion_items..]) |item| {
-                self.allocator.free(item.label);
-                if (item.detail) |d| self.allocator.free(d);
-                if (item.documentation) |doc| self.allocator.free(doc);
-                if (item.sortText) |sort_text| self.allocator.free(sort_text);
-                if (item.insertText) |insert_text| self.allocator.free(insert_text);
-            }
             items.items.len = max_completion_items;
         }
 
         return .{
-            .items = try items.toOwnedSlice(self.allocator),
+            .items = items.items,
             .is_incomplete = false,
+            .arena = arena,
         };
     }
 };

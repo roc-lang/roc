@@ -25,6 +25,8 @@ const TestHarness = struct {
     platform_path: []u8,
     file_path: ?[:0]u8 = null,
     uri: ?[]u8 = null,
+    /// Results handed out by `getCompletions` and not yet freed.
+    completions: std.ArrayList(completion_handler.CompletionResult) = .empty,
 
     fn init() integration_spec.SpecError!TestHarness {
         const allocator = test_env.allocator;
@@ -43,6 +45,8 @@ const TestHarness = struct {
     }
 
     fn deinit(self: *TestHarness) void {
+        for (self.completions.items) |result| result.deinit();
+        self.completions.deinit(self.allocator);
         self.checker.deinit();
         if (self.uri) |u| self.allocator.free(u);
         if (self.file_path) |f| self.allocator.free(f);
@@ -75,9 +79,11 @@ const TestHarness = struct {
     /// Get completion items at a line/character position.
     /// Fails the test if no completions are returned.
     fn getCompletions(self: *TestHarness, source: []const u8, line: u32, character: u32) integration_spec.SpecError![]const CompletionItem {
-        const result = try self.checker.getCompletionsAtPosition(self.uri.?, source, line, character);
-        if (result) |r| return r.items;
-        return error.TestUnexpectedResult;
+        const result = try self.checker.getCompletionsAtPosition(self.uri.?, source, line, character) orelse
+            return error.TestUnexpectedResult;
+        errdefer result.deinit();
+        try self.completions.append(self.allocator, result);
+        return result.items;
     }
 
     /// Get hover information at a line/character position.
@@ -89,14 +95,13 @@ const TestHarness = struct {
 
     /// Free completion items returned by `getCompletions`.
     fn freeCompletions(self: *TestHarness, items: []const CompletionItem) void {
-        for (items) |item| {
-            self.allocator.free(item.label);
-            if (item.detail) |d| self.allocator.free(d);
-            if (item.documentation) |doc| self.allocator.free(doc);
-            if (item.sortText) |s| self.allocator.free(s);
-            if (item.insertText) |t| self.allocator.free(t);
+        for (self.completions.items, 0..) |result, index| {
+            if (result.items.ptr != items.ptr) continue;
+            result.deinit();
+            _ = self.completions.swapRemove(index);
+            return;
         }
-        self.allocator.free(items);
+        unreachable;
     }
 
     /// Assert that every label in `expected` appears in `items`.
