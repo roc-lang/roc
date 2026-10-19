@@ -10346,7 +10346,7 @@ const Builder = struct {
         defer methods.deinit(self.allocator);
         for (constraints, 0..) |constraint, index| {
             if (self.constraintIsOwnerlessStructuralEquality(source_type, constraint)) continue;
-            if (!static_dispatch.requiresRuntimeDictionary(constraint.origin)) continue;
+            if (!static_dispatch.requiresRuntimeDictionary(constraint.origin.literalKind())) continue;
             // Independent callable relations share the checker's target slot.
             // Their signatures are all analyzed below, including duplicates.
             if (constraints.len > 1 and (try methods.getOrPut(self.allocator, constraint.fn_name)).found_existing) continue;

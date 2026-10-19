@@ -2458,14 +2458,14 @@ pub const CheckedTypeScheme = struct {
 pub const CheckedStaticDispatchConstraint = struct {
     fn_name: canonical.MethodNameId,
     fn_ty: CheckedTypeId,
-    origin: types.StaticDispatchConstraint.Origin,
+    origin: types.StaticDispatchConstraint.ResolvedOrigin,
 
     pub fn binopNegated(self: @This()) bool {
         return self.origin.binopNegated();
     }
 
     pub fn numeralInfo(self: @This()) ?types.NumeralInfo {
-        return self.origin.numeralInfo();
+        return self.origin.numeral();
     }
 };
 
@@ -8788,7 +8788,7 @@ const CheckedTypePublisher = struct {
             task.out[frame.index] = .{
                 .fn_name = try self.names.internMethodIdent(module.identStoreConst(), constraint.fn_name),
                 .fn_ty = undefined,
-                .origin = constraint.origin,
+                .origin = module.typeStoreConst().resolveOrigin(constraint.origin),
             };
             return rootStep(constraint.fn_var, null);
         }
@@ -19717,7 +19717,7 @@ const EvidencePass = struct {
                 .callable_ty = self.checked_types.rootForSourceVar(self.module, param.constraint.fn_var) orelse
                     checkedArtifactInvariant("checked evidence parameter callable type was not published", .{}),
                 .slot = if (source == .scheme_requirement) null else self.schemeVarSlot(param.dispatcher_var),
-                .runtime_dictionary = source == .constraint_callable or static_dispatch.requiresRuntimeDictionary(param.constraint.origin),
+                .runtime_dictionary = source == .constraint_callable or static_dispatch.requiresRuntimeDictionary(param.constraint.origin.literalKind()),
                 .structural = self.structuralKindForMethodIdent(param.constraint.fn_name),
                 .source = source,
                 .path = published_path,
@@ -20354,7 +20354,7 @@ const EvidencePass = struct {
                 var source_plan: ?types.DerivedMapPlan = null;
                 for (self.types.static_dispatch_constraints.items.items) |constraint| {
                     if (self.types.resolveVar(constraint.fn_var).var_ != fn_root) continue;
-                    source_plan = constraint.derived_map_plan orelse continue;
+                    source_plan = self.types.getDerivedMapPlan(constraint.derived_map_plan) orelse continue;
                     break;
                 }
                 const plan = source_plan orelse checkedArtifactInvariant("derived map evidence had no checked payload selection", .{});
@@ -21155,7 +21155,7 @@ const EvidencePass = struct {
         const dispatcher_ty = context.dispatcher_ty;
         return .{
             .dispatcher_ty = dispatcher_ty,
-            .runtime_dictionary = static_dispatch.requiresRuntimeDictionary(param.constraint.origin),
+            .runtime_dictionary = static_dispatch.requiresRuntimeDictionary(param.constraint.origin.literalKind()),
             .resolution = switch (resolution) {
                 .direct_pending => |node| .{ .direct = node },
                 .direct_closed, .direct_parametric => checkedArtifactInvariant("call resolution was finalized before evidence publication completed", .{}),
@@ -21377,7 +21377,7 @@ const EvidencePass = struct {
                 checkedArtifactInvariant("checked procedure-value dispatcher type was not published", .{});
             entries.appendAssumeCapacity(.{
                 .dispatcher_ty = dispatcher_ty,
-                .runtime_dictionary = static_dispatch.requiresRuntimeDictionary(param.constraint.origin),
+                .runtime_dictionary = static_dispatch.requiresRuntimeDictionary(param.constraint.origin.literalKind()),
                 .resolution = .from_callable,
             });
         }
@@ -21486,7 +21486,7 @@ const EvidencePass = struct {
                     checkedArtifactInvariant("checked nested-procedure evidence dispatcher type was not published", .{});
                 entries.appendAssumeCapacity(.{
                     .dispatcher_ty = dispatcher_ty,
-                    .runtime_dictionary = static_dispatch.requiresRuntimeDictionary(param.constraint.origin),
+                    .runtime_dictionary = static_dispatch.requiresRuntimeDictionary(param.constraint.origin.literalKind()),
                     .resolution = if (param.source == .scheme_requirement) .from_scheme else .from_callable,
                 });
                 continue;

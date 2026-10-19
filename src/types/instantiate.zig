@@ -801,7 +801,7 @@ pub const Instantiator = struct {
             const constraint = self.store.static_dispatch_constraints.items.items[@backingInt(constraints.start) + i];
             try self.visitReachChild(parent, constraint.fn_var);
             if (constraint.interpolation.isPresent()) {
-                const metadata = constraint.interpolation;
+                const metadata = self.store.getInterpolationMetadata(constraint.interpolation);
                 var part_idx: u32 = 0;
                 while (part_idx < metadata.interpolated_parts.len()) : (part_idx += 1) {
                     try self.visitReachChild(parent, self.store.getInterpolationPartAt(metadata.interpolated_parts, part_idx).var_);
@@ -977,7 +977,7 @@ pub const Instantiator = struct {
             // output polarity whatever position its dispatcher occupies.
             try pending.append(allocator, .{ .var_ = constraint.fn_var, .polarity = .pos, .reach = .nested });
             if (constraint.interpolation.isPresent()) {
-                const metadata = constraint.interpolation;
+                const metadata = self.store.getInterpolationMetadata(constraint.interpolation);
                 var part_idx: u32 = 0;
                 while (part_idx < metadata.interpolated_parts.len()) : (part_idx += 1) {
                     try pending.append(allocator, .{ .var_ = self.store.getInterpolationPartAt(metadata.interpolated_parts, part_idx).var_, .polarity = polarity, .reach = .nested });
@@ -1513,7 +1513,7 @@ pub const Instantiator = struct {
                 },
                 .dispatch_part_or_item => {
                     const constraint = self.store.static_dispatch_constraints.items.items[frame.cons_start + frame.cons_idx];
-                    const metadata = constraint.interpolation;
+                    const metadata = self.store.getInterpolationMetadata(constraint.interpolation);
                     self.current_reach = .nested;
                     if (frame.part_idx == metadata.interpolated_parts.len()) {
                         frame.stage = .await_item;
@@ -1527,7 +1527,7 @@ pub const Instantiator = struct {
                 .await_part => {
                     const fresh_part_var = machine.value_stack.pop().?;
                     const constraint = self.store.static_dispatch_constraints.items.items[frame.cons_start + frame.cons_idx];
-                    const part = self.store.getInterpolationPartAt(constraint.interpolation.interpolated_parts, frame.part_idx);
+                    const part = self.store.getInterpolationPartAt(self.store.getInterpolationMetadata(constraint.interpolation).interpolated_parts, frame.part_idx);
                     try machine.pending_parts.append(self.store.gpa, .{
                         .var_ = fresh_part_var,
                         .region = part.region,
@@ -1542,14 +1542,15 @@ pub const Instantiator = struct {
                     );
                     machine.pending_parts.items.len = frame.parts_base;
                     const constraint = self.store.static_dispatch_constraints.items.items[frame.cons_start + frame.cons_idx];
+                    const metadata = self.store.getInterpolationMetadata(constraint.interpolation);
                     var fresh_constraint = constraint;
                     fresh_constraint.fn_var = frame.fresh_fn_var;
-                    fresh_constraint.interpolation = .{
-                        .expr_region = constraint.interpolation.expr_region,
+                    fresh_constraint.interpolation = try self.store.appendInterpolationMetadata(.{
+                        .expr_region = metadata.expr_region,
                         .item_var = fresh_item_var,
                         .interpolated_parts = fresh_parts_range,
-                        .regions = constraint.interpolation.regions,
-                    };
+                        .regions = metadata.regions,
+                    });
                     try machine.pending_constraints.append(self.store.gpa, fresh_constraint);
                     frame.cons_idx += 1;
                     frame.stage = .dispatch_fn;
@@ -1900,9 +1901,10 @@ pub const Instantiator = struct {
 
     fn instantiateInterpolationMetadata(
         self: *Self,
-        metadata: StaticDispatchConstraint.InterpolationMetadata,
-    ) std.mem.Allocator.Error!StaticDispatchConstraint.InterpolationMetadata {
-        if (!metadata.isPresent()) return metadata;
+        source: StaticDispatchConstraint.InterpolationMetadata.OptIdx,
+    ) std.mem.Allocator.Error!StaticDispatchConstraint.InterpolationMetadata.OptIdx {
+        if (!source.isPresent()) return source;
+        const metadata = self.store.getInterpolationMetadata(source);
 
         const machine = self.scratch();
         const parts_len = metadata.interpolated_parts.len();
@@ -1922,12 +1924,12 @@ pub const Instantiator = struct {
         const fresh_item_var = try self.instantiateVarHelp(metadata.item_var, false);
         const fresh_parts_range = try self.store.appendInterpolationParts(machine.pending_parts.items[parts_base..]);
         machine.pending_parts.items.len = parts_base;
-        return .{
+        return try self.store.appendInterpolationMetadata(.{
             .expr_region = metadata.expr_region,
             .item_var = fresh_item_var,
             .interpolated_parts = fresh_parts_range,
             .regions = metadata.regions,
-        };
+        });
     }
 };
 

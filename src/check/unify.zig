@@ -3582,7 +3582,7 @@ const Unifier = struct {
     ) Error!void {
         for (self.scratch.only_in_a_static_dispatch_constraints.items.items[retained_group_start..]) |*existing| {
             if (!sameFixedLiteralClass(existing.origin, constraint.origin)) continue;
-            existing.* = mergeStaticDispatchConstraintMetadata(constraint, existing.*);
+            existing.* = try mergeStaticDispatchConstraintMetadata(self.types_store, constraint, existing.*);
             try self.types_store.static_dispatch_relation_merges.append(self.types_store.gpa, .{
                 .dropped_fn_var = constraint.fn_var,
                 .retained_fn_var = existing.fn_var,
@@ -3933,16 +3933,23 @@ fn sameFixedLiteralClass(
 }
 
 fn mergeStaticDispatchConstraintMetadata(
+    types_store: *types_mod.Store,
     other: StaticDispatchConstraint,
     retained: StaticDispatchConstraint,
-) StaticDispatchConstraint {
+) std.mem.Allocator.Error!StaticDispatchConstraint {
     var merged = retained;
     if (other.origin == .from_literal and retained.origin == .from_literal) {
-        if (mergeFromNumeralLiteralInfo(
-            other.origin.numeralInfo(),
-            retained.origin.numeralInfo(),
-        )) |numeral_info| {
-            merged.origin = .{ .from_literal = .{ .numeral = numeral_info } };
+        if (other.origin.numeral()) |other_numeral| {
+            // Pooled facts are never mutated: copies of either constraint
+            // share them, so the merge pools its own.
+            const numeral = if (retained.origin.numeral()) |retained_numeral|
+                try types_store.appendNumeralInfo(types_mod.NumeralInfo.merged(
+                    types_store.getNumeralInfo(other_numeral),
+                    types_store.getNumeralInfo(retained_numeral),
+                ))
+            else
+                other_numeral;
+            merged.origin = .{ .from_literal = .{ .numeral = numeral } };
         }
     }
 
@@ -3956,15 +3963,6 @@ fn mergeStaticDispatchConstraintMetadata(
         merged.interpolation = other.interpolation;
     }
     return merged;
-}
-
-fn mergeFromNumeralLiteralInfo(
-    a: ?types_mod.NumeralInfo,
-    b: ?types_mod.NumeralInfo,
-) ?types_mod.NumeralInfo {
-    const a_info = a orelse return b;
-    const b_info = b orelse return a;
-    return types_mod.NumeralInfo.merged(a_info, b_info);
 }
 
 /// A list of constraint that should apply to concrete type
