@@ -261,7 +261,8 @@ fn objectPackNamespaceName(buf: []u8, format_version: u32) []const u8 {
 /// Clean up object-cache packs.
 ///
 /// Layout: `<cache_base>/<version>/objects-v<format>/<target-opt>/<local|pkg>/
-/// <module identity>/<artifact key>.rpk`. A namespace of any format other
+/// <module identity>/<artifact key>.rpk`, with recorded program outputs in
+/// `<target-opt>/programs/<program key>.rpo`. A namespace of any format other
 /// than `format_version` is deleted outright: its packs can never be read
 /// again. In the current namespace, packs under `pkg/` come from URL
 /// packages, are written once per package version, and keep the 30-day
@@ -322,20 +323,30 @@ fn cleanupPackNamespace(std_io: Io, namespace_dir: Dir, now_ns: i128, maybe_stat
                 if (identity_entry.kind != .directory) continue;
                 var identity_dir = origin_dir.openDir(std_io, identity_entry.name, .{ .iterate = true }) catch continue;
                 defer identity_dir.close(std_io);
-                var pack_it = identity_dir.iterate();
-                while (true) {
-                    const pack_entry = (pack_it.next(std_io) catch break) orelse break;
-                    if (pack_entry.kind != .file) continue;
-                    const last_use = lastUseNs(identity_dir, std_io, pack_entry.name) orelse continue;
-                    if (now_ns - last_use <= origin.max_age_ns) continue;
-                    identity_dir.deleteFile(std_io, pack_entry.name) catch {
-                        if (maybe_stats) |stats| stats.errors += 1;
-                        continue;
-                    };
-                    if (maybe_stats) |stats| stats.cache_files_deleted += 1;
-                }
+                ageFilesIn(std_io, identity_dir, origin.max_age_ns, now_ns, maybe_stats);
             }
         }
+        // A recorded program output names one exact program, which an edit
+        // replaces, so it keeps the window of a local pack.
+        var programs_dir = mode_dir.openDir(std_io, "programs", .{ .iterate = true }) catch continue;
+        defer programs_dir.close(std_io);
+        ageFilesIn(std_io, programs_dir, Config.LOCAL_PACK_MAX_AGE_NS, now_ns, maybe_stats);
+    }
+}
+
+/// Delete the files of `dir` last used more than `max_age_ns` before `now_ns`.
+fn ageFilesIn(std_io: Io, dir: Dir, max_age_ns: i96, now_ns: i128, maybe_stats: ?*CleanupStats) void {
+    var file_it = dir.iterate();
+    while (true) {
+        const file_entry = (file_it.next(std_io) catch break) orelse break;
+        if (file_entry.kind != .file) continue;
+        const last_use = lastUseNs(dir, std_io, file_entry.name) orelse continue;
+        if (now_ns - last_use <= max_age_ns) continue;
+        dir.deleteFile(std_io, file_entry.name) catch {
+            if (maybe_stats) |stats| stats.errors += 1;
+            continue;
+        };
+        if (maybe_stats) |stats| stats.cache_files_deleted += 1;
     }
 }
 
@@ -838,9 +849,12 @@ test "object pack sweep deletes stale format namespaces and ages current packs b
     defer allocator.free(stale_dir);
     const stale_namespace = try std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "objects-v6" });
     defer allocator.free(stale_namespace);
+    const programs_dir = try std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "objects-v7", "x64glibc-dev", "programs" });
+    defer allocator.free(programs_dir);
     try writeTestFile(local_dir, "fresh.rpk", "local", now_ns);
     try writeTestFile(pkg_dir, "fresh.rpk", "pkg", now_ns);
     try writeTestFile(stale_dir, "fresh.rpk", "stale", now_ns);
+    try writeTestFile(programs_dir, "fresh.rpo", "program", now_ns);
 
     const limits: Limits = .{ .object_pack_format_version = 7, .max_size_bytes = std.math.maxInt(u64) };
     var stats = CleanupStats{};
@@ -853,14 +867,18 @@ test "object pack sweep deletes stale format namespaces and ages current packs b
     defer local_dir_handle.close(std.testing.io);
     var pkg_dir_handle = try Dir.cwd().openDir(std.testing.io, pkg_dir, .{});
     defer pkg_dir_handle.close(std.testing.io);
+    var programs_dir_handle = try Dir.cwd().openDir(std.testing.io, programs_dir, .{});
+    defer programs_dir_handle.close(std.testing.io);
     try local_dir_handle.access(std.testing.io, "fresh.rpk", .{});
     try pkg_dir_handle.access(std.testing.io, "fresh.rpk", .{});
+    try programs_dir_handle.access(std.testing.io, "fresh.rpo", .{});
 
     const two_days_later = now_ns + 2 * Config.LOCAL_PACK_MAX_AGE_NS;
     var aged_stats = CleanupStats{};
     sweep(std.testing.io, cache_base, limits, two_days_later, &aged_stats);
-    try std.testing.expectEqual(@as(u32, 1), aged_stats.cache_files_deleted);
+    try std.testing.expectEqual(@as(u32, 2), aged_stats.cache_files_deleted);
     try std.testing.expectError(error.FileNotFound, local_dir_handle.access(std.testing.io, "fresh.rpk", .{}));
+    try std.testing.expectError(error.FileNotFound, programs_dir_handle.access(std.testing.io, "fresh.rpo", .{}));
     try pkg_dir_handle.access(std.testing.io, "fresh.rpk", .{});
 
     const past_window = now_ns + Config.PERSISTENT_MAX_AGE_NS + std.time.ns_per_s;

@@ -621,7 +621,10 @@ const Reader = struct {
 };
 
 test "pack ownership survives input destruction and allocation failure" {
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, testOwnedPack, .{});
+    // In-place growth under the testing allocator depends on the heap's
+    // layout, so the failure check runs over an allocator that refuses it.
+    var deterministic = collections.DeterministicAllocator.init(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), testOwnedPack, .{});
 }
 
 fn testOwnedPack(allocator: Allocator) (ReadError || error{TestExpectedEqual})!void {
@@ -836,7 +839,10 @@ test "pack round-trips spec summaries and declines a previous format" {
             try std.testing.expectError(error.UnsupportedPackVersion, read(allocator, old));
         }
     };
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, Attempt.run, .{});
+    // In-place growth under the testing allocator depends on the heap's
+    // layout, so the failure check runs over an allocator that refuses it.
+    var deterministic = collections.DeterministicAllocator.init(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), Attempt.run, .{});
 }
 
 test "pack writes program-local constants and every reference to them under content names" {

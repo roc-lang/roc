@@ -326,7 +326,8 @@ pub fn combine(allocator: Allocator, sets: []const *const Set) Allocator.Error!S
         try copyArtifacts(a, &artifacts, set, file_map);
     }
     const owned = try artifacts.toOwnedSlice(a);
-    return .{ .arena = arena, .artifacts = owned, .source_files = try source_files.toOwnedSlice(a) };
+    const owned_source_files = try source_files.toOwnedSlice(a);
+    return .{ .arena = arena, .artifacts = owned, .source_files = owned_source_files };
 }
 
 /// Deep-copy sets compiled from programs of one Solved program, which name a
@@ -432,7 +433,10 @@ pub fn combineDistinct(allocator: Allocator, sets: []const *const Set) Allocator
             try nameDataByContent(a, &artifacts.items[first], &names);
         }
     }
-    return .{ .arena = arena, .artifacts = try artifacts.toOwnedSlice(a), .source_files = try a.dupe([32]u8, source_files) };
+    // Both slices come from the arena before it is copied into the set.
+    const owned_artifacts = try artifacts.toOwnedSlice(a);
+    const owned_source_files = try a.dupe([32]u8, source_files);
+    return .{ .arena = arena, .artifacts = owned_artifacts, .source_files = owned_source_files };
 }
 
 /// Replace every program-local constant name `artifact` carries or refers
@@ -464,7 +468,8 @@ fn copySet(allocator: Allocator, set: *const Set) Allocator.Error!Set {
     const a = arena.allocator();
     var artifacts = std.ArrayList(Artifact).empty;
     try copyArtifacts(a, &artifacts, set, null);
-    return .{ .arena = arena, .artifacts = try artifacts.toOwnedSlice(a) };
+    const owned = try artifacts.toOwnedSlice(a);
+    return .{ .arena = arena, .artifacts = owned };
 }
 
 /// Append deep copies of `set`'s artifacts, rebasing set-local references
