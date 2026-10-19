@@ -61,9 +61,13 @@ const CheckedTypeRootPublisher = struct {
 pub const ModuleEnvStorage = union(enum) {
     checked_source: *ModuleEnv,
     static_builtin: *ModuleEnv,
-    cached_buffer: struct {
+    /// An environment relocated in place inside a loaded cache entry, which
+    /// also backs the module's artifact. The storage owns the entry and the
+    /// source; `release_entry` releases the entry with the env's allocator.
+    cached_entry: struct {
         env: *ModuleEnv,
-        buffer: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
+        entry: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
+        release_entry: *const fn ([]align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8, Allocator) void,
         source: []const u8,
     },
 
@@ -71,7 +75,7 @@ pub const ModuleEnvStorage = union(enum) {
         return switch (self.*) {
             .checked_source => |module_env| module_env,
             .static_builtin => |module_env| module_env,
-            .cached_buffer => |cached| cached.env,
+            .cached_entry => |cached| cached.env,
         };
     }
 
@@ -92,12 +96,12 @@ pub const ModuleEnvStorage = union(enum) {
                 module_env.common.idents.deinitTextRanks();
                 module_env.gpa.destroy(module_env);
             },
-            .cached_buffer => |cached| {
+            .cached_entry => |cached| {
                 const env_alloc = cached.env.gpa;
                 cached.env.deinitCachedModule();
                 if (cached.source.len > 0) env_alloc.free(@constCast(cached.source));
                 env_alloc.destroy(cached.env);
-                env_alloc.free(cached.buffer);
+                cached.release_entry(cached.entry, env_alloc);
             },
         }
         self.* = undefined;
@@ -141,8 +145,21 @@ pub const CheckedModuleArtifactKey = extern struct {
         checking_context_identity: CheckingContextIdentity,
         direct_import_artifact_keys: []const CheckedModuleArtifactKey,
     ) CheckedModuleArtifactKey {
+        return computeFromIdentityHash(
+            source_hash,
+            hashModuleIdentity(module_identity),
+            checking_context_identity,
+            direct_import_artifact_keys,
+        );
+    }
+
+    pub fn computeFromIdentityHash(
+        source_hash: [32]u8,
+        module_identity_hash: [32]u8,
+        checking_context_identity: CheckingContextIdentity,
+        direct_import_artifact_keys: []const CheckedModuleArtifactKey,
+    ) CheckedModuleArtifactKey {
         const compiler_artifact_hash = build_options.compiler_artifact_hash;
-        const module_identity_hash = hashModuleIdentity(module_identity);
         const checking_context_identity_hash = hashCheckingContextIdentity(checking_context_identity);
         const direct_import_artifact_keys_hash = hashDirectImportArtifactKeys(direct_import_artifact_keys);
 
@@ -403,14 +420,13 @@ pub const CheckingContextIdentity = struct {
 
     pub fn fromModule(
         allocator: Allocator,
-        module: TypedCIR.Module,
+        module_env: *const ModuleEnv,
         publish_imports: []const PublishImportArtifact,
         platform_requirement_context: ?PlatformRequirementContextKey,
         platform_app_relation: ?PlatformAppRelationKey,
         explicit_roots: []const ExplicitRootRequestInput,
         validation: can.Can.Validation,
     ) Allocator.Error!CheckingContextIdentity {
-        const module_env = module.moduleEnvConst();
         const imported_names = module_env.imports.imports.items.items;
         const imports = try allocator.alloc(ImportIdentity, imported_names.len);
         errdefer allocator.free(imports);
@@ -419,7 +435,7 @@ pub const CheckingContextIdentity = struct {
 
         for (imported_names, 0..) |str_idx, i| {
             const import_idx: CIR.Import.Idx = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
-            const resolved_module_idx = module.resolvedImportModule(import_idx);
+            const resolved_module_idx = module_env.imports.getResolvedModule(import_idx);
             imports[i] = .{
                 .import_name_hash = hashBytes(module_env.getString(str_idx)),
                 .artifact_key = if (resolved_module_idx) |resolved|
@@ -9230,7 +9246,7 @@ fn expectSingleNominalBackingPayload(allocator: Allocator, module_name: []const 
     };
     _ = try names.internModuleIdentity(&module_identity.stable_hash);
 
-    var checking_context_identity = try CheckingContextIdentity.fromModule(allocator, module, &.{}, null, null, &.{}, .checking);
+    var checking_context_identity = try CheckingContextIdentity.fromModule(allocator, module_env, &.{}, null, null, &.{}, .checking);
     defer checking_context_identity.deinit(allocator);
     const artifact_key = CheckedModuleArtifactKey.computeFromSourceHash(
         hashModuleSourceInputs(module_env),
@@ -33622,7 +33638,7 @@ pub const CheckedModuleArtifact = struct {
             // per-sub-store frees would free into the buffer (and the unconditional
             // `direct_import_artifact_keys` free below points into it too). Free
             // only the buffer and the injected env storage, mirroring how a
-            // `cached_buffer`/`static_builtin`-backed module is torn down.
+            // `cached_entry`/`static_builtin`-backed module is torn down.
             if (deinit_module_env) {
                 self.module_env.deinit();
             } else {
@@ -36035,17 +36051,16 @@ const CheckedTypeStoreImportProjector = struct {
 
 fn directImportArtifactKeysFromModule(
     allocator: Allocator,
-    module: TypedCIR.Module,
+    module_env: *const ModuleEnv,
     imports: []const PublishImportArtifact,
 ) Allocator.Error![]CheckedModuleArtifactKey {
-    const module_env = module.moduleEnvConst();
     const imported_names = module_env.imports.imports.items.items;
     var keys = std.ArrayList(CheckedModuleArtifactKey).empty;
     errdefer keys.deinit(allocator);
 
     for (imported_names, 0..) |_, i| {
         const import_idx: CIR.Import.Idx = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
-        const resolved_module_idx = module.resolvedImportModule(import_idx) orelse continue;
+        const resolved_module_idx = module_env.imports.getResolvedModule(import_idx) orelse continue;
         const key = publishImportKeyForModule(imports, resolved_module_idx) orelse {
             if (builtin.mode == .debug) {
                 base.invariant(
@@ -36603,33 +36618,18 @@ pub const CheckedModuleKeyInputs = struct {
     validation: can.Can.Validation = .checking,
 };
 
-/// Compute the checked module cache identity for a checked typed module and the
-/// checked data it depends on.
-pub fn checkedModuleKeyFromTypedModule(
+/// Compute the checked module cache identity for a module environment whose
+/// imports are resolved, and the checked data it depends on. The identity
+/// reads only the environment's source inputs, content identity, and resolved
+/// imports, so it needs no typed module graph.
+pub fn checkedModuleKeyFromModuleEnv(
     allocator: Allocator,
-    modules: *const TypedCIR.Modules,
-    module_idx: u32,
+    module_env: *const ModuleEnv,
     inputs: CheckedModuleKeyInputs,
 ) Allocator.Error!CheckedModuleArtifactKey {
-    const module = modules.module(module_idx);
-    const module_env = module.moduleEnvConst();
-    const idents = module.identStoreConst();
-
-    var canonical_names = canonical.CanonicalNameStore.init(allocator);
-    defer canonical_names.deinit();
-    const module_name = try canonical_names.internModuleName(module_env.module_name);
-    const display_module_name = try canonical_names.internModuleIdent(idents, module_env.display_module_name_idx);
-    const module_identity = ModuleIdentity{
-        .stable_hash = computeStableModuleIdentityHash(module_env),
-        .module_idx = module_idx,
-        .module_name = module_name,
-        .display_module_name = display_module_name,
-        .kind = module_env.module_kind,
-    };
-
     var checking_context_identity = try CheckingContextIdentity.fromModule(
         allocator,
-        module,
+        module_env,
         inputs.imports,
         inputs.platform_requirement_context,
         inputs.platform_app_relation,
@@ -36638,12 +36638,12 @@ pub fn checkedModuleKeyFromTypedModule(
     );
     defer checking_context_identity.deinit(allocator);
 
-    const direct_import_artifact_keys = try directImportArtifactKeysFromModule(allocator, module, inputs.imports);
+    const direct_import_artifact_keys = try directImportArtifactKeysFromModule(allocator, module_env, inputs.imports);
     defer allocator.free(direct_import_artifact_keys);
 
-    return CheckedModuleArtifactKey.computeFromSourceHash(
+    return CheckedModuleArtifactKey.computeFromIdentityHash(
         hashModuleSourceInputs(module_env),
-        module_identity,
+        computeStableModuleIdentityHash(module_env),
         checking_context_identity,
         direct_import_artifact_keys,
     );
@@ -36684,7 +36684,7 @@ pub fn publishFromTypedModule(
 
     var checking_context_identity = try CheckingContextIdentity.fromModule(
         allocator,
-        module,
+        module_env,
         inputs.imports,
         inputs.platform_requirement_context,
         if (inputs.platform_app_relation) |relation| relation.key else null,
@@ -36693,7 +36693,7 @@ pub fn publishFromTypedModule(
     );
     errdefer checking_context_identity.deinit(allocator);
 
-    const direct_import_artifact_keys = try directImportArtifactKeysFromModule(allocator, module, inputs.imports);
+    const direct_import_artifact_keys = try directImportArtifactKeysFromModule(allocator, module_env, inputs.imports);
     errdefer allocator.free(direct_import_artifact_keys);
     const artifact_key = CheckedModuleArtifactKey.computeFromSourceHash(
         hashModuleSourceInputs(module_env),

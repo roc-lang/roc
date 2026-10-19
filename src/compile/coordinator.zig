@@ -220,8 +220,11 @@ fn readStageTimer(io: std.Io, timer: *?StageTimer) u64 {
 const checked_module_cache_magic = "roc-mod-cache-v11";
 
 // Header: magic, entry-version hash (32), artifact key (32), env-blob length
-// (u64), artifact-blob length (u64), and pin-validation stamp (32). The two
-// length-prefixed bodies follow the header. Checked-module and platform-pairing
+// (u64), artifact-blob length (u64), pin-validation stamp (32), and zero bytes
+// up to the next multiple of the 16-byte serialization alignment. The env body
+// follows the header, then zero bytes up to the next aligned offset, then the
+// artifact body, so both bodies are 16-byte aligned wherever the entry is and
+// a cache hit relocates them in place. Checked-module and platform-pairing
 // entries share this envelope; the entry-version hash is
 // `cache_versioning.entryVersionHash` for the entry's kind, so a stale envelope
 // or body is rejected by one admission check.
@@ -232,7 +235,15 @@ const checked_module_cache_magic = "roc-mod-cache-v11";
 // stale or wrong entries, and relocation bounds-checks every marker against the blob.
 // A corrupt-but-right-length body is the only residue, which for a recomputable local
 // cache does not justify hashing the whole blob on every read and write.
-const checked_module_cache_header_len: usize = checked_module_cache_magic.len + 32 + 32 + 8 + 8 + 32;
+const checked_module_cache_header_fields_len: usize = checked_module_cache_magic.len + 32 + 32 + 8 + 8 + 32;
+const checked_module_cache_header_len: usize = std.mem.alignForward(usize, checked_module_cache_header_fields_len, CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits());
+
+/// Zero bytes between an env body of `env_len` bytes and the artifact body.
+fn checkedModuleCacheEnvPadding(env_len: usize) usize {
+    return std.mem.alignForward(usize, env_len, CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) - env_len;
+}
+
+const checked_module_cache_zero_padding: [CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()]u8 = @splat(0);
 
 /// The cache entry kinds written in the checked-module envelope.
 const CheckedEnvelopeEntry = enum {
@@ -277,6 +288,8 @@ fn writeCheckedModuleCacheHeader(
     std.mem.writeInt(u64, dest[offset..][0..8], artifact_len, .little);
     offset += 8;
     @memcpy(dest[offset..][0..32], &pin_validation_hash);
+    offset += 32;
+    @memset(dest[offset..checked_module_cache_header_len], 0);
 }
 
 fn decodeCheckedCacheEnvelope(
@@ -303,15 +316,16 @@ fn decodeCheckedCacheEnvelope(
     const artifact_len = std.math.cast(usize, std.mem.readInt(u64, bytes[offset..][0..8], .little)) orelse return null;
     offset += 8;
     const pin_validation_hash = bytes[offset..][0..32].*;
-    offset += 32;
+    offset = checked_module_cache_header_len;
 
     const remaining = bytes.len - offset;
     if (env_len > remaining) return null;
-    if (artifact_len > remaining - env_len) return null;
-    if (env_len + artifact_len != remaining) return null;
+    const env_padding = checkedModuleCacheEnvPadding(env_len);
+    if (env_padding > remaining - env_len) return null;
+    if (artifact_len != remaining - env_len - env_padding) return null;
 
     const env_body = bytes[offset..][0..env_len];
-    offset += env_len;
+    offset += env_len + env_padding;
     const artifact_body = bytes[offset..][0..artifact_len];
 
     return .{
@@ -338,7 +352,7 @@ test "checked module cache header decodes bodies and rejects corrupt envelope" {
     const key = checkedModuleCacheTestKey(0xAB);
     const env_len = @sizeOf(ModuleEnv.Serialized);
     const artifact_len = @sizeOf(check.CheckedArtifact.CheckedModuleArtifact.Serialized);
-    const total_len = checked_module_cache_header_len + env_len + artifact_len;
+    const total_len = checked_module_cache_header_len + env_len + comptime checkedModuleCacheEnvPadding(env_len) + artifact_len;
     const env_len_offset = checked_module_cache_magic.len + 32 + 32;
     const artifact_len_offset = env_len_offset + 8;
 
@@ -349,6 +363,9 @@ test "checked module cache header decodes bodies and rejects corrupt envelope" {
     const bodies = decodeCheckedModuleCacheEntry(key, &entry) orelse return error.TestExpectedEqual;
     try std.testing.expectEqual(@as(usize, env_len), bodies.env_body.len);
     try std.testing.expectEqual(@as(usize, artifact_len), bodies.artifact_body.len);
+    const alignment = CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits();
+    try std.testing.expect(std.mem.isAligned(@intFromPtr(bodies.env_body.ptr) - @intFromPtr(&entry), alignment));
+    try std.testing.expect(std.mem.isAligned(@intFromPtr(bodies.artifact_body.ptr) - @intFromPtr(&entry), alignment));
 
     var bad_magic = entry;
     bad_magic[0] ^= 0xFF;
@@ -1195,6 +1212,43 @@ pub const PackageState = struct {
     }
 };
 
+/// Entry directories of the coordinator's caches, resolved from the cache
+/// configuration once per coordinator. A null directory is one the
+/// configuration names no location for: every store into it records a store
+/// failure and every probe of it a miss.
+const CacheEntryDirs = struct {
+    checked: ?[]u8 = null,
+    canonicalized: ?[]u8 = null,
+    platform_pairing: ?[]u8 = null,
+
+    fn resolve(allocator: Allocator, cache_manager: ?*CacheManager) Allocator.Error!CacheEntryDirs {
+        const manager = cache_manager orelse return .{};
+        if (!manager.config.enabled) return .{};
+        var dirs: CacheEntryDirs = .{};
+        errdefer dirs.deinit(allocator);
+        dirs.checked = manager.config.getCheckedArtifactCacheDir(allocator) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.NoHomeDirectory => null,
+        };
+        dirs.canonicalized = manager.config.getCanonicalizedModuleCacheDir(allocator) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.NoHomeDirectory => null,
+        };
+        dirs.platform_pairing = manager.config.getPlatformPairingCacheDir(allocator) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.NoHomeDirectory => null,
+        };
+        return dirs;
+    }
+
+    fn deinit(self: *CacheEntryDirs, allocator: Allocator) void {
+        if (self.checked) |dir| allocator.free(dir);
+        if (self.canonicalized) |dir| allocator.free(dir);
+        if (self.platform_pairing) |dir| allocator.free(dir);
+        self.* = .{};
+    }
+};
+
 /// A reference to a module in a specific package
 pub const ModuleRef = struct {
     pkg_name: []const u8,
@@ -1297,6 +1351,9 @@ pub const Coordinator = struct {
 
     /// Optional cache manager for transparent checked-module disk caching.
     cache_manager: ?*CacheManager,
+
+    /// Entry directories of the caches `cache_manager` holds, resolved once.
+    cache_entry_dirs: CacheEntryDirs,
 
     /// Cross-package dependents: when module (pkg, id) completes, notify these modules
     /// Key is "pkg_name:module_id", value is list of dependent ModuleRefs
@@ -1401,6 +1458,8 @@ pub const Coordinator = struct {
         const channel_allocator = if (threads_available) thread_safe_allocator else gpa;
         const worker_allocator = workerAllocatorFor(gpa, mode);
         const initial_task_capacity = 256;
+        var cache_entry_dirs = try CacheEntryDirs.resolve(gpa, cache_manager);
+        errdefer cache_entry_dirs.deinit(gpa);
         return .{
             .gpa = gpa,
             .mode = mode,
@@ -1428,6 +1487,7 @@ pub const Coordinator = struct {
             .roc_ctx = roc_ctx,
             .compiler_version = compiler_version,
             .cache_manager = cache_manager,
+            .cache_entry_dirs = cache_entry_dirs,
             .cross_package_dependents = std.StringHashMap(std.ArrayList(ModuleRef)).init(gpa),
             .checked_artifact_index = std.AutoHashMap([32]u8, ModuleRef).init(gpa),
             .retired_checked_artifacts = std.ArrayList(RetiredCheckedArtifact).empty,
@@ -1535,6 +1595,7 @@ pub const Coordinator = struct {
         self.cross_package_dependents.deinit();
 
         self.checked_artifact_index.deinit();
+        self.cache_entry_dirs.deinit(self.gpa);
 
         for (self.retired_checked_artifacts.items) |*retired| {
             retired.deinit();
@@ -2413,6 +2474,18 @@ pub const Coordinator = struct {
         });
     }
 
+    /// `registerCheckedArtifact` for a module that has an artifact, after the
+    /// index reserved room for it.
+    fn registerReservedCheckedArtifact(self: *Coordinator, pkg: *PackageState, mod: *ModuleState) void {
+        const artifact = mod.checkedArtifact().?;
+        const module_id = moduleIdForPtr(pkg, mod) orelse
+            coordinatorInvariant("could not locate checked artifact module {s} in package {s}", .{ mod.name, pkg.name });
+        self.checked_artifact_index.putAssumeCapacity(artifact.key.bytes, .{
+            .pkg_name = pkg.name,
+            .module_id = module_id,
+        });
+    }
+
     fn moduleIdForPtr(pkg: *PackageState, mod: *ModuleState) ?ModuleId {
         for (pkg.modules.items, 0..) |*candidate, raw| {
             if (@intFromPtr(candidate) == @intFromPtr(mod)) return @intCast(raw);
@@ -3286,20 +3359,15 @@ pub const Coordinator = struct {
 
     fn checkedModuleCacheKey(
         self: *Coordinator,
-        env: *ModuleEnv,
-        imported_envs: []const *ModuleEnv,
+        env: *const ModuleEnv,
         imported_artifacts: []const check.CheckedArtifact.PublishImportArtifact,
         platform_requirement_context: ?check.CheckedArtifact.PlatformRequirementContextKey,
         explicit_roots: []const check.CheckedArtifact.ExplicitRootRequestInput,
         validation: can.Can.Validation,
     ) Allocator.Error!check.CheckedArtifact.CheckedModuleArtifactKey {
-        var typed = try CheckedModules.initForRootModule(self.gpa, env, imported_envs);
-        defer typed.modules.deinit();
-
-        return check.CheckedArtifact.checkedModuleKeyFromTypedModule(
+        return check.CheckedArtifact.checkedModuleKeyFromModuleEnv(
             self.gpa,
-            &typed.modules,
-            typed.module_idx,
+            env,
             .{
                 .imports = imported_artifacts,
                 .platform_requirement_context = platform_requirement_context,
@@ -3352,7 +3420,7 @@ pub const Coordinator = struct {
         if (!manager.config.enabled) return;
 
         const scratch = task_allocs.scratch;
-        const entries_dir = manager.config.getCanonicalizedModuleCacheDir(scratch) catch {
+        const entries_dir = self.cache_entry_dirs.canonicalized orelse {
             manager.recordStoreFailureFor(.canonicalized);
             return;
         };
@@ -3370,21 +3438,38 @@ pub const Coordinator = struct {
         const env_len = env_writer.total_bytes;
         const record_len = canonicalized_cache_entry.encodedLen(parse_record);
 
-        const entry = scratch.alloc(u8, canonicalized_module_cache_header_len + env_len + record_len) catch {
+        // The env body streams from the writer's borrowed columns; only the
+        // header and the parse-stage record are materialized.
+        var header: [canonicalized_module_cache_header_len]u8 = undefined;
+        writeCanonicalizedModuleCacheHeader(&header, cache_key, env_len, record_len);
+        const record = scratch.alloc(u8, record_len) catch {
             manager.recordStoreFailureFor(.canonicalized);
             return;
         };
+        canonicalized_cache_entry.encode(parse_record, record);
 
-        writeCanonicalizedModuleCacheHeader(
-            entry[0..canonicalized_module_cache_header_len],
+        const Entry = struct {
+            header: []const u8,
+            env: *const CompactWriter,
+            record: []const u8,
+
+            fn write(raw: *const anyopaque, destination: *std.Io.Writer) std.Io.Writer.Error!void {
+                const entry: *const @This() = @ptrCast(@alignCast(raw));
+                try destination.writeAll(entry.header);
+                try entry.env.writeTo(destination);
+                try destination.writeAll(entry.record);
+            }
+        };
+        const entry = Entry{ .header = &header, .env = &env_writer, .record = record };
+        manager.storeStreamIn(
+            scratch,
+            .canonicalized,
             cache_key,
-            env_len,
-            record_len,
+            .{ .context = &entry, .write = Entry.write },
+            header.len + env_len + record_len,
+            entries_dir,
+            env.module_name,
         );
-        _ = env_writer.writeToBuffer(entry[canonicalized_module_cache_header_len..][0..env_len]) catch unreachable;
-        canonicalized_cache_entry.encode(parse_record, entry[canonicalized_module_cache_header_len + env_len ..][0..record_len]);
-
-        manager.storeRawBytesIn(scratch, .canonicalized, cache_key, entry, entries_dir, env.module_name);
     }
 
     fn resolvedDirectImportsHaveCheckedOutput(
@@ -3414,11 +3499,10 @@ pub const Coordinator = struct {
         const app_root = self.findRootModule(.app) orelse self.findRootModule(.default_app).?;
         const app = app_root.mod.checkedArtifact().?;
         const key = cache_key_mod.platformPairingCacheKey(artifact.key, app.key);
-        const directory = manager.config.getPlatformPairingCacheDir(manager.allocator) catch {
+        const directory = self.cache_entry_dirs.platform_pairing orelse {
             manager.recordStoreFailure();
             return;
         };
-        defer manager.allocator.free(directory);
         var arena = base.SingleThreadArena.init(manager.allocator);
         defer arena.deinit();
         const allocator = arena.allocator();
@@ -3443,8 +3527,7 @@ pub const Coordinator = struct {
     fn tryLoadCachedPlatformPairing(self: *Coordinator, platform: *const CheckedArtifact.CheckedModuleArtifact, app: *const CheckedArtifact.CheckedModuleArtifact) ?CheckedArtifact.CheckedModuleArtifact {
         const manager = self.cache_manager orelse return null;
         if (!manager.config.enabled) return null;
-        const directory = manager.config.getPlatformPairingCacheDir(manager.allocator) catch return null;
-        defer manager.allocator.free(directory);
+        const directory = self.cache_entry_dirs.platform_pairing orelse return null;
         const key = cache_key_mod.platformPairingCacheKey(platform.key, app.key);
         const data = manager.loadRawBytesMapped(key.bytes, directory) orelse return null;
         defer data.deinit(manager.allocator);
@@ -3478,11 +3561,10 @@ pub const Coordinator = struct {
         const manager = self.cache_manager orelse return;
         if (!manager.config.enabled) return;
 
-        const entries_dir = manager.config.getCheckedArtifactCacheDir(manager.allocator) catch {
+        const entries_dir = self.cache_entry_dirs.checked orelse {
             manager.recordStoreFailure();
             return;
         };
-        defer manager.allocator.free(entries_dir);
 
         // The writers borrow live columns and retain only relocation headers.
         // Stream canonical bytes to the staging file before atomic publication;
@@ -3518,20 +3600,23 @@ pub const Coordinator = struct {
         const Entry = struct {
             header: []const u8,
             env: *const CompactWriter,
+            env_padding: []const u8,
             artifact: *const CompactWriter,
 
             fn write(raw: *const anyopaque, destination: *std.Io.Writer) std.Io.Writer.Error!void {
                 const entry: *const @This() = @ptrCast(@alignCast(raw));
                 try destination.writeAll(entry.header);
                 try entry.env.writeTo(destination);
+                try destination.writeAll(entry.env_padding);
                 try entry.artifact.writeTo(destination);
             }
         };
-        const entry = Entry{ .header = &header, .env = &env_writer, .artifact = &artifact_writer };
+        const env_padding = checked_module_cache_zero_padding[0..checkedModuleCacheEnvPadding(env_len)];
+        const entry = Entry{ .header = &header, .env = &env_writer, .env_padding = env_padding, .artifact = &artifact_writer };
         manager.storeStream(
             artifact.key.bytes,
             .{ .context = &entry, .write = Entry.write },
-            header.len + env_len + artifact_len,
+            header.len + env_len + env_padding.len + artifact_len,
             entries_dir,
             artifact.moduleEnvConst().module_name,
         );
@@ -3541,7 +3626,6 @@ pub const Coordinator = struct {
         self: *Coordinator,
         pkg: *PackageState,
         mod: *ModuleState,
-        imported_envs: []const *ModuleEnv,
         imported_artifacts: []const check.CheckedArtifact.PublishImportArtifact,
         platform_requirement_context: ?check.CheckedArtifact.PlatformRequirementContextKey,
         explicit_roots: []const check.CheckedArtifact.ExplicitRootRequestInput,
@@ -3554,7 +3638,7 @@ pub const Coordinator = struct {
         // source-input identity is complete and the key below is exact.
         std.debug.assert(current_env.fileDependenciesSettled());
         if (!resolvedDirectImportsHaveCheckedOutput(current_env, imported_artifacts)) return false;
-        const cache_key = self.checkedModuleCacheKey(current_env, imported_envs, imported_artifacts, platform_requirement_context, explicit_roots, mod.validation) catch {
+        const cache_key = self.checkedModuleCacheKey(current_env, imported_artifacts, platform_requirement_context, explicit_roots, mod.validation) catch {
             manager.stats.recordMiss();
             return false;
         };
@@ -3568,8 +3652,9 @@ pub const Coordinator = struct {
         return candidate.mod == mod;
     }
 
-    /// Relocate a reusable checked artifact and its source environment into
-    /// owned storage. Cache misses or invalidations leave the module unchanged.
+    /// Relocate a reusable checked artifact and its source environment in place
+    /// inside the loaded cache entry. Cache misses or invalidations leave the
+    /// module unchanged.
     fn installCachedCheckedArtifact(
         self: *Coordinator,
         pkg: *PackageState,
@@ -3580,20 +3665,25 @@ pub const Coordinator = struct {
         const manager = self.cache_manager orelse return false;
         if (!manager.config.enabled) return false;
 
-        const entries_dir = manager.config.getCheckedArtifactCacheDir(manager.allocator) catch {
+        const entries_dir = self.cache_entry_dirs.checked orelse {
             manager.stats.recordMiss();
             return false;
         };
-        defer manager.allocator.free(entries_dir);
+
+        // The installed env and artifact are allocated like the env they
+        // replace, so the replaced env's source can move into the installed
+        // storage, which frees it with the installed env's allocator.
+        const module_alloc = current_env.gpa;
 
         // Load the entry as a copy-on-write mmap where the OS supports it, heap-read
-        // otherwise. The mapping's lifetime is confined to this function: the entry
-        // is decoded and its env/artifact bodies are copied into separately-owned
-        // 16-byte-aligned buffers below, then `cache_data.deinit` unmaps (or frees)
-        // it before returning. The deserialized env and artifact alias those copies,
-        // never this mapping, so nothing outlives the `defer`.
-        const cache_data = manager.loadRawBytesMapped(cache_key.bytes, entries_dir) orelse return false;
-        defer cache_data.deinit(manager.allocator);
+        // otherwise. Both bodies start at 16-byte-aligned entry offsets, so they
+        // are relocated in place: the installed env's `.cached_entry` storage
+        // owns the whole entry and releases it when the module is torn down, and
+        // the artifact aliases its body without owning it. Writes made while
+        // relocating stay private to this process.
+        const cache_data = manager.loadRawBytesMappedIn(module_alloc, .checked, cache_key.bytes, entries_dir) orelse return false;
+        var entry_owned = true;
+        defer if (entry_owned) cache_data.deinit(module_alloc);
         const entry = cache_data.data();
 
         const bodies = decodeCheckedModuleCacheEntry(cache_key, entry) orelse {
@@ -3605,38 +3695,29 @@ pub const Coordinator = struct {
             manager.stats.recordMiss();
             return false;
         }
+        const env_buffer = writableCacheBody(bodies.env_body);
+        const artifact_buffer = writableCacheBody(bodies.artifact_body);
 
-        // The env and artifact bodies are copied (not aliased) out of `entry`: each
-        // needs its own 16-byte-aligned, independently-owned buffer whose lifetime
-        // outlives this function. The env buffer flows into the artifact's
-        // `.cached_buffer` (freed via `allocator.free`) and the artifact buffer into
-        // its `serialized_backing`; the artifact body's file offset (header + env
-        // length) is not 16-aligned, so a single mapping could not back both in
-        // place. Threading the mapping's munmap-based ownership through those two
-        // distinct owners is why this path copies rather than aliasing the mmap.
-        const module_alloc = self.getModuleAllocator();
-        const buffer = module_alloc.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bodies.env_body.len) catch {
-            manager.stats.recordInvalidation();
-            return false;
-        };
-        @memcpy(buffer, bodies.env_body);
-        var buffer_owned = true;
-        defer if (buffer_owned) module_alloc.free(buffer);
-
-        const source = module_alloc.dupe(u8, current_env.common.source) catch {
-            manager.stats.recordInvalidation();
-            return false;
-        };
-        var source_owned = true;
+        // A module that already has an artifact keeps its env alive in the
+        // retired artifact, so only a module without one gives up its source.
+        const old_had_artifact = mod.checkedArtifact() != null;
+        const source = if (old_had_artifact)
+            module_alloc.dupe(u8, current_env.common.source) catch {
+                manager.stats.recordInvalidation();
+                return false;
+            }
+        else
+            current_env.common.source;
+        var source_owned = old_had_artifact;
         defer if (source_owned) module_alloc.free(source);
 
-        const serialized_ptr: *ModuleEnv.Serialized = @ptrCast(@alignCast(buffer.ptr));
-        serialized_ptr.validate(buffer.len) catch {
+        const serialized_ptr: *ModuleEnv.Serialized = @ptrCast(@alignCast(env_buffer.ptr));
+        serialized_ptr.validate(env_buffer.len) catch {
             manager.stats.recordInvalidation();
             return false;
         };
         const cached_env = serialized_ptr.deserializeWithMutableTypes(
-            @intFromPtr(buffer.ptr),
+            @intFromPtr(env_buffer.ptr),
             module_alloc,
             source,
             current_env.module_name,
@@ -3660,98 +3741,104 @@ pub const Coordinator = struct {
         // package-qualified name comes from the module being installed.
         cached_env.qualified_module_name = mod.qualified_name;
 
-        // Relocate the artifact into its own 16-byte-aligned buffer, injecting the
-        // freshly-relocated cached env (transform E). The resulting artifact is
-        // frozen/buffer-backed: its sub-stores alias `artifact_buffer`, and its
-        // `.cached_buffer` storage owns the env + env buffer + source. Cross-artifact
-        // references are content-addressed `CheckedModuleArtifactKey`s already baked
-        // into the blob; a cache hit implies matching imports (the key incorporates
-        // `direct_import_artifact_keys`), so they resolve against the current build's
-        // `available_artifacts` DAG exactly as a freshly published artifact would.
-        const artifact_buffer = module_alloc.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bodies.artifact_body.len) catch {
-            manager.stats.recordInvalidation();
-            return false;
-        };
-        @memcpy(artifact_buffer, bodies.artifact_body);
-        var artifact_buffer_owned = true;
-        defer if (artifact_buffer_owned) module_alloc.free(artifact_buffer);
-
         const artifact_serialized: *const check.CheckedArtifact.CheckedModuleArtifact.Serialized = @ptrCast(@alignCast(artifact_buffer.ptr));
-        // L-10: bounds-check every relocatable marker against the buffer before any
+        // L-10: bounds-check every relocatable marker against the body before any
         // sub-store aliases it. A corrupt/truncated cache body is treated as a cache
-        // miss (the buffer is freed by the `artifact_buffer_owned` defer above).
+        // miss.
         artifact_serialized.validate(artifact_buffer.len) catch {
             manager.stats.recordInvalidation();
             return false;
         };
-        // `deserialize` stores `artifact_buffer` in `serialized_backing`, so the
-        // artifact owns it: a single `artifact.deinit` frees the buffer + env storage.
-        var artifact = artifact_serialized.deserialize(
+        if (!std.mem.eql(u8, &artifact_serialized.key.bytes, &cache_key.bytes)) {
+            manager.stats.recordInvalidation();
+            return false;
+        }
+
+        // Reserve everything publication needs, so nothing after the artifact
+        // takes ownership of the entry and source can fail.
+        const artifact_ptr = module_alloc.create(CheckedModuleArtifact) catch {
+            manager.stats.recordInvalidation();
+            return false;
+        };
+        var artifact_ptr_owned = true;
+        defer if (artifact_ptr_owned) module_alloc.destroy(artifact_ptr);
+        if (old_had_artifact) {
+            self.retired_checked_artifacts.ensureUnusedCapacity(self.gpa, 1) catch {
+                manager.stats.recordInvalidation();
+                return false;
+            };
+        }
+        self.checked_artifact_index.ensureUnusedCapacity(1) catch {
+            manager.stats.recordInvalidation();
+            return false;
+        };
+        const semantic = &(mod.semantic orelse
+            coordinatorInvariant("checked cache install for module '{s}' without semantic state", .{mod.name}));
+
+        // Transform E: the artifact's sub-stores alias `artifact_buffer` and the
+        // freshly relocated env is injected as its storage. Cross-artifact
+        // references are content-addressed `CheckedModuleArtifactKey`s already baked
+        // into the blob; a cache hit implies matching imports (the key incorporates
+        // `direct_import_artifact_keys`), so they resolve against the current build's
+        // `available_artifacts` DAG exactly as a freshly published artifact would.
+        artifact_ptr.* = artifact_serialized.deserializeStatic(
             artifact_buffer,
             module_alloc,
-            .{ .cached_buffer = .{
+            .{ .cached_entry = .{
                 .env = cached_env,
-                .buffer = buffer,
+                .entry = switch (cache_data) {
+                    .mapped => |mapped| mapped.region,
+                    .allocated => |allocated| @constCast(allocated),
+                },
+                .release_entry = switch (cache_data) {
+                    .mapped => &releaseMappedCacheEntry,
+                    .allocated => &releaseAllocatedCacheEntry,
+                },
                 .source = source,
             } },
         );
-        cached_env_owned = false;
-        buffer_owned = false;
+        entry_owned = false;
         source_owned = false;
-        artifact_buffer_owned = false;
-        var artifact_owned = true;
-        defer if (artifact_owned) artifact.deinit(artifact.canonical_names.allocator);
-
-        if (!std.mem.eql(u8, &artifact.key.bytes, &cache_key.bytes)) {
-            manager.stats.recordInvalidation();
-            return false;
-        }
-        const artifact_ptr = allocateCheckedArtifact(artifact) catch {
-            manager.stats.recordInvalidation();
-            return false;
-        };
-        artifact_owned = false;
+        cached_env_owned = false;
+        artifact_ptr_owned = false;
 
         const old_env = current_env;
         const old_env_alloc = old_env.gpa;
-        const old_source = old_env.common.source;
-        const old_had_artifact = mod.checkedArtifact() != null;
         self.unregisterCheckedArtifact(mod);
-        if (mod.semantic) |*semantic| {
-            if (semantic.checked_artifact) |existing| {
-                self.retired_checked_artifacts.append(self.gpa, .{
-                    .artifact = existing,
-                    .retain_module_env = @intFromPtr(existing.moduleEnv()) == @intFromPtr(artifact_ptr.moduleEnv()),
-                }) catch {
-                    destroyCheckedArtifact(artifact_ptr, false);
-                    manager.stats.recordInvalidation();
-                    return false;
-                };
-            }
-            semantic.module_env = cached_env;
-            semantic.checked_artifact = artifact_ptr;
-        } else {
-            destroyCheckedArtifact(artifact_ptr, false);
-            return false;
+        if (semantic.checked_artifact) |existing| {
+            self.retired_checked_artifacts.appendAssumeCapacity(.{
+                .artifact = existing,
+                .retain_module_env = @intFromPtr(existing.moduleEnv()) == @intFromPtr(artifact_ptr.moduleEnv()),
+            });
         }
-
-        self.registerCheckedArtifact(pkg, mod) catch {
-            if (mod.semantic) |*semantic| {
-                semantic.module_env = old_env;
-                semantic.checked_artifact = null;
-            }
-            destroyCheckedArtifact(artifact_ptr, false);
-            manager.stats.recordInvalidation();
-            return false;
-        };
+        semantic.module_env = cached_env;
+        semantic.checked_artifact = artifact_ptr;
+        self.registerReservedCheckedArtifact(pkg, mod);
 
         if (!old_had_artifact) {
+            // The installed storage owns the replaced env's source.
             old_env.deinit();
             old_env_alloc.destroy(old_env);
-            if (old_source.len > 0) old_env_alloc.free(@constCast(old_source));
         }
 
         return true;
+    }
+
+    /// A body of a loaded cache entry as the writable, aligned buffer its
+    /// relocation writes into. The entry is a private mapping or a heap buffer
+    /// this process owns, and every body starts at an aligned entry offset.
+    fn writableCacheBody(body: []const u8) []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8 {
+        return @alignCast(@constCast(body));
+    }
+
+    /// Release a mapped entry, whose storage holds the mapping's whole region.
+    fn releaseMappedCacheEntry(entry: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8, _: Allocator) void {
+        const mapped: CoreCtx.MappedFile = .{ .region = @alignCast(entry), .file_len = entry.len };
+        mapped.unmap();
+    }
+
+    fn releaseAllocatedCacheEntry(entry: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8, allocator: Allocator) void {
+        allocator.free(entry);
     }
 
     /// Complete one module successfully and notify every dependency consumer.
@@ -4551,6 +4638,20 @@ pub const Coordinator = struct {
         try mod.moduleEnv().?.ensureContentIdentity(imported_envs);
         const imported_artifacts = try self.buildTypecheckImportedArtifacts(pkg, mod, task_payload_alloc);
         errdefer task_payload_alloc.free(imported_artifacts);
+        const explicit_roots = try buildExplicitRootRequests(mod, task_payload_alloc);
+        errdefer task_payload_alloc.free(explicit_roots);
+
+        // The checked-cache key needs only the direct imports, so the probe
+        // runs before the availability walk, which only checking consumes.
+        if (mod.reports.items.len == 0 and
+            self.tryLoadCachedCheckedModule(pkg, mod, imported_artifacts, platform_requirement_context, explicit_roots))
+        {
+            task_payload_alloc.free(imported_envs);
+            task_payload_alloc.free(imported_artifacts);
+            task_payload_alloc.free(explicit_roots);
+            try self.finishCachedModule(pkg, mod);
+            return;
+        }
 
         var platform_requirement_imported_envs: []const *ModuleEnv = &.{};
         var platform_requirement_imported_artifacts: []const check.CheckedArtifact.PublishImportArtifact = &.{};
@@ -4589,19 +4690,6 @@ pub const Coordinator = struct {
         }
         const available_artifacts = try self.collectTypecheckAvailableArtifactViewsSeeded(task_payload_alloc, imported_artifacts, platform_seed_list.items);
         errdefer task_payload_alloc.free(available_artifacts);
-        const explicit_roots = try buildExplicitRootRequests(mod, task_payload_alloc);
-        errdefer task_payload_alloc.free(explicit_roots);
-
-        if (mod.reports.items.len == 0 and
-            self.tryLoadCachedCheckedModule(pkg, mod, imported_envs, imported_artifacts, platform_requirement_context, explicit_roots))
-        {
-            task_payload_alloc.free(imported_envs);
-            task_payload_alloc.free(imported_artifacts);
-            task_payload_alloc.free(available_artifacts);
-            task_payload_alloc.free(explicit_roots);
-            try self.finishCachedModule(pkg, mod);
-            return;
-        }
 
         const platform_requirement_owner_envs: []const *const ModuleEnv = if (platform_surface != null)
             try buildPlatformRequirementOwnerEnvs(
@@ -5525,7 +5613,7 @@ pub const Coordinator = struct {
         if (!manager.config.enabled) return null;
 
         const scratch = task_allocs.scratch;
-        const entries_dir = manager.config.getCanonicalizedModuleCacheDir(scratch) catch {
+        const entries_dir = self.cache_entry_dirs.canonicalized orelse {
             manager.recordMissFor(.canonicalized);
             return null;
         };

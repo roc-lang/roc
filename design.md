@@ -4376,7 +4376,9 @@ unrepresentable one.
 
 Checked-module cache writes stream the header and the two relocatable
 bodies to a private staging file, then atomically rename it. They never gather
-another full-entry heap buffer. A failed write or rename removes the staging file
+another full-entry heap buffer. Each body starts at a 16-byte-aligned entry
+offset, so a cache hit relocates both bodies in place inside the entry's
+private mapping, which the installed module's environment storage owns. A failed write or rename removes the staging file
 and records a cache-write failure; partial data never becomes a cache entry.
 
 Serialization never writes spare capacity. A `SafeMultiList` persists its live
