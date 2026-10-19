@@ -9,6 +9,7 @@ const std = @import("std");
 const base = @import("base");
 const builtins = @import("builtins");
 const lir = @import("lir");
+const collections = @import("collections");
 const FinalizeError = @import("check").CheckedArtifact.CompileTimeFinalizer.Error;
 
 /// Exact producer-completion callback for a compile-time static slot read.
@@ -81,6 +82,10 @@ pub const HostEvent = union(enum) {
     }
 };
 
+/// Published producer origins, keyed by the emitted LIR statement that reads
+/// a failed slot.
+pub const FailureOrigins = collections.DenseMap(lir.LIR.CFStmtId, lir.LIR.ComptimeFailureOrigin);
+
 /// A compile-time branch marker reached by one root.
 pub const ComptimeBranchHit = struct {
     site: lir.LIR.ComptimeSiteId,
@@ -107,8 +112,8 @@ failed_region: ?base.Region = null,
 /// Resolved source location of the failing LIR statement (file entry names
 /// the declaring module), captured alongside `failed_region`.
 failed_loc: ?base.SourceLoc = null,
-/// Published producer origins, indexed by the emitted LIR statement.
-failure_origins: []const ?lir.LIR.ComptimeFailureOrigin = &.{},
+/// Published producer origins of the emitted LIR statements that have one.
+failure_origins: ?*const FailureOrigins = null,
 /// The LIR statement whose failure-region hook ran last: the failing
 /// statement once the run fails.
 failed_stmt: ?lir.LIR.CFStmtId = null,
@@ -253,8 +258,8 @@ pub fn rocComptimeExhaustivenessFailed(site_raw: u32) callconv(.c) void {
 pub fn rocComptimeFailureRegion(start_offset: u32, end_offset: u32, file: u32, line: u32, column: u32, stmt: u32) callconv(.c) void {
     const self = enteredHost();
     self.failed_stmt = @fromBackingInt(@intCast(stmt));
-    if (stmt < self.failure_origins.len) {
-        if (self.failure_origins[stmt]) |origin| {
+    if (self.failure_origins) |origins| {
+        if (origins.get(@fromBackingInt(@intCast(stmt)))) |origin| {
             self.failed_region = origin.region;
             self.failed_loc = origin.loc;
             return;

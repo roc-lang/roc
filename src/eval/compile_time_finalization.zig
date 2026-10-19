@@ -1655,7 +1655,17 @@ const TimingPhase = enum {
 
 const ComptimeCoverage = struct {
     allocator: Allocator,
+    /// In first-hit order, which is the order unused branches are reported.
     entries: std.ArrayList(Entry),
+    /// Index into `entries` of each site's structural key. Several lowered
+    /// sites (one per specialization of a procedure) share one source site.
+    entry_index: std.AutoHashMapUnmanaged(SiteKey, u32),
+
+    const SiteKey = struct {
+        kind: lir.LIR.ComptimeSiteKind,
+        start: u32,
+        end: u32,
+    };
 
     const Entry = struct {
         kind: lir.LIR.ComptimeSiteKind,
@@ -1668,6 +1678,7 @@ const ComptimeCoverage = struct {
         return .{
             .allocator = allocator,
             .entries = .empty,
+            .entry_index = .empty,
         };
     }
 
@@ -1677,6 +1688,7 @@ const ComptimeCoverage = struct {
             self.allocator.free(entry.hits);
         }
         self.entries.deinit(self.allocator);
+        self.entry_index.deinit(self.allocator);
     }
 
     fn record(self: *ComptimeCoverage, site: lir.LIR.ComptimeSite, branch_index: u32) Allocator.Error!void {
@@ -1691,14 +1703,18 @@ const ComptimeCoverage = struct {
     }
 
     fn entryFor(self: *ComptimeCoverage, site: lir.LIR.ComptimeSite) Allocator.Error!*Entry {
-        for (self.entries.items) |*entry| {
-            if (entry.kind == site.kind and regionsEqual(entry.region, site.region)) {
-                if (entry.branch_regions.len != site.branch_regions.len) {
-                    finalizationInvariant("compile-time site branch count changed for one source region");
-                }
-                return entry;
+        const key = SiteKey{ .kind = site.kind, .start = site.region.start.offset, .end = site.region.end.offset };
+        const index_entry = try self.entry_index.getOrPut(self.allocator, key);
+        if (index_entry.found_existing) {
+            const entry = &self.entries.items[index_entry.value_ptr.*];
+            if (entry.branch_regions.len != site.branch_regions.len) {
+                finalizationInvariant("compile-time site branch count changed for one source region");
             }
+            return entry;
         }
+        errdefer _ = self.entry_index.remove(key);
+        if (self.entries.items.len >= std.math.maxInt(u32)) return error.OutOfMemory;
+        index_entry.value_ptr.* = @intCast(self.entries.items.len);
 
         const branch_regions = try self.allocator.dupe(base.Region, site.branch_regions);
         errdefer self.allocator.free(branch_regions);
@@ -2282,7 +2298,7 @@ fn evalInterpreterProgramRoots(
         if (!succeeded and options.publish_shared_slots) {
             const message = failed_message orelse finalizationInvariant("failed interpreter root omitted its explicit failure message");
             const origin: lir.LIR.ComptimeFailureOrigin = .{ .loc = interpreter.getFailedSourceLoc(), .region = interpreter.getFailedCheckedRegion() };
-            program.slotEnvironment().publishFailureOrigin(lowered, root.owner, .{ .checked = root_id }, origin);
+            try program.slotEnvironment().publishFailureOrigin(lowered, root.owner, .{ .checked = root_id }, origin);
             try program.slotEnvironment().publishFailure(lowered, root.owner, .{ .checked = root_id }, .{ .message = message, .kind = RootFailure.ofPayload(module, payload) }, .{ .resolve = InterpreterProgram.resolveFunction });
             program.refreshCallableMetadata();
         }
@@ -2619,8 +2635,8 @@ fn evalInterpreterLiteralRoot(
     plan: LirProgram.LiteralRootPlan,
     shared_program: *InterpreterProgram,
 ) FinalizeError!void {
-    const program = try shared_program.fork(lowered);
-    defer program.deinit();
+    const program = try shared_program.acquireFork(lowered);
+    defer shared_program.releaseFork(program);
     program.timing_io = if (options.timing) |timing| timing.std_io else null;
     const interpreter = &program.interpreter;
     const producer: lir.LIR.ComptimeProducer = .{ .literal = plan.id };
@@ -2655,7 +2671,7 @@ fn evalInterpreterLiteralRoot(
     const failed = failure orelse return;
     try recordLiteralRootFailure(allocator, owners, lowered, plan, failed);
     if (options.publish_shared_slots) {
-        program.slotEnvironment().publishFailureOrigin(lowered, plan.site.owner, producer, .{ .loc = failed.loc, .region = failed.region });
+        try program.slotEnvironment().publishFailureOrigin(lowered, plan.site.owner, producer, .{ .loc = failed.loc, .region = failed.region });
         try program.slotEnvironment().publishFailure(lowered, plan.site.owner, producer, .{ .message = failed.message, .kind = .crash }, .{ .resolve = InterpreterProgram.resolveFunction });
         program.refreshCallableMetadata();
     }
@@ -2679,7 +2695,7 @@ fn evalDevLiteralRoot(
     @memset(ret_buf, 0);
     var host = CompileTimeHost.init(host_allocator);
     defer host.deinit();
-    host.failure_origins = native.slots.failure_origins;
+    host.failure_origins = &native.slots.failure_origins;
     host.slot_demand = native.slot_demand;
     host.timing_io = if (options.timing) |timing| timing.std_io else null;
 
@@ -2724,7 +2740,7 @@ fn evalDevLiteralRoot(
     };
     try recordLiteralRootFailure(allocator, owners, lowered, plan, failed);
     if (options.publish_shared_slots) {
-        native.slots.publishFailureOrigin(lowered, plan.site.owner, producer, .{ .loc = failed.loc, .region = failed.region });
+        try native.slots.publishFailureOrigin(lowered, plan.site.owner, producer, .{ .loc = failed.loc, .region = failed.region });
         try native.publishFailure(lowered, plan.site.owner, producer, .{ .message = failed.message, .kind = .crash });
     }
 }
@@ -3111,6 +3127,13 @@ const InterpreterProgram = struct {
     shared_callable_owner: ?*InterpreterProgram = null,
     callable_images: usize = 0,
     base_callables_ready: bool = false,
+    /// Forks of this root program that finished an evaluation, kept with
+    /// their interpreter's warmed stacks and caches for the next one. A fork
+    /// in use is never here, so a root demanded while another is suspended
+    /// takes a different fork.
+    idle_forks: std.ArrayListUnmanaged(*InterpreterProgram) = .empty,
+    /// Forks handed out by `acquireFork` and not yet released.
+    active_forks: usize = 0,
 
     fn init(allocator: Allocator, modules: lir.CheckedPipeline.CheckedModuleSet, lowered: *lir.CheckedPipeline.LoweredProgram, options: Options) FinalizeError!*InterpreterProgram {
         const self = try allocator.create(InterpreterProgram);
@@ -3125,6 +3148,8 @@ const InterpreterProgram = struct {
         self.shared_callable_owner = null;
         self.callable_images = 0;
         self.base_callables_ready = false;
+        self.idle_forks = .empty;
+        self.active_forks = 0;
         const started = if (options.timing) |timing| timing.start() else 0;
         self.slots = try StaticSlotEnvironment.init(allocator, modules, lowered, roc_target.RocTarget.detectNative(), interpreter_static_data.image_options);
         errdefer self.slots.deinit();
@@ -3137,7 +3162,7 @@ const InterpreterProgram = struct {
         self.host.bindInterpreter(&self.interpreter);
         self.callable_owner = .forInterpreter(&self.interpreter);
         self.interpreter.dict_seed_mode = .comptime_zero;
-        self.interpreter.failure_origins = self.slots.failure_origins;
+        self.interpreter.failure_origins = &self.slots.failure_origins;
         self.slots.image.resolveFunctionRelocations(.{ .resolve = resolveFunction }) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => finalizationInvariant("interpreter image omitted a callable procedure"),
@@ -3172,10 +3197,44 @@ const InterpreterProgram = struct {
         errdefer child.interpreter.deinit();
         child.host.bindInterpreter(&child.interpreter);
         child.interpreter.dict_seed_mode = .comptime_zero;
-        child.interpreter.failure_origins = child.slotEnvironment().failure_origins;
+        child.interpreter.failure_origins = &child.slotEnvironment().failure_origins;
         child.interpreter.static_data_demand = .{ .context = child, .ensure = ensureStaticData };
         child.refreshCallableMetadata();
         return child;
+    }
+
+    /// A fork for one evaluation, reusing an idle one when there is one.
+    /// `releaseFork` returns it.
+    fn acquireFork(self: *InterpreterProgram, lowered: *lir.CheckedPipeline.LoweredProgram) FinalizeError!*InterpreterProgram {
+        const owner = self.shared_callable_owner orelse self;
+        // Reserve the slot `releaseFork` pushes into, so releasing never fails.
+        try owner.idle_forks.ensureTotalCapacity(owner.allocator, owner.idle_forks.items.len + owner.active_forks + 1);
+        const child = if (owner.idle_forks.pop()) |idle| reused: {
+            if (builtin.mode == .debug) {
+                std.debug.assert(idle.interpreter.store == &lowered.lir_result.store);
+                std.debug.assert(idle.shared_slots == self.slotEnvironment());
+            }
+            idle.slot_demand = self.slot_demand;
+            idle.refreshCallableMetadata();
+            break :reused idle;
+        } else try self.fork(lowered);
+        owner.active_forks += 1;
+        return child;
+    }
+
+    /// Return a fork from `acquireFork`, discarding everything its evaluation
+    /// left behind.
+    fn releaseFork(self: *InterpreterProgram, child: *InterpreterProgram) void {
+        const owner = self.shared_callable_owner orelse self;
+        if (builtin.mode == .debug) std.debug.assert(owner.active_forks > 0);
+        owner.active_forks -= 1;
+        child.host.reset();
+        child.interpreter.resetBetweenEvaluations();
+        child.timing_io = null;
+        child.suspended_ns = 0;
+        child.slot_demand = null;
+        child.demand_error = null;
+        owner.idle_forks.appendAssumeCapacity(child);
     }
 
     fn ensureStaticData(raw: *anyopaque, slot: lir.LIR.StaticDataId) Interpreter.Error!void {
@@ -3232,6 +3291,8 @@ const InterpreterProgram = struct {
 
     fn deinit(self: *InterpreterProgram) void {
         const allocator = self.allocator;
+        for (self.idle_forks.items) |child| child.deinit();
+        self.idle_forks.deinit(allocator);
         self.interpreter.deinit();
         self.host.deinit();
         if (self.shared_slots == null) {
@@ -3370,7 +3431,7 @@ const StaticSlotEnvironment = struct {
     image_options: backend.StaticDataImage.Options = .{},
     publication: PublicationSlots,
     export_positions: []?usize,
-    failure_origins: []?lir.LIR.ComptimeFailureOrigin,
+    failure_origins: CompileTimeHost.FailureOrigins,
 
     fn init(allocator: Allocator, modules: lir.CheckedPipeline.CheckedModuleSet, lowered: *lir.CheckedPipeline.LoweredProgram, target: roc_target.RocTarget, image_options: backend.StaticDataImage.Options) FinalizeError!StaticSlotEnvironment {
         const materialized_static_data = static_data_exports.buildStaticData(
@@ -3416,8 +3477,7 @@ const StaticSlotEnvironment = struct {
         errdefer publication.deinit(allocator);
         const export_positions = try exportPositions(allocator, materialized_static_data, native_static_data.len);
         errdefer allocator.free(export_positions);
-        const failure_origins = try allocator.alloc(?lir.LIR.ComptimeFailureOrigin, lowered.lir_result.store.getCFStmts().len);
-        @memset(failure_origins, null);
+        const failure_origins = CompileTimeHost.FailureOrigins.init(allocator);
         return .{ .allocator = allocator, .materialized = materialized_static_data, .image = static_data_image, .addresses = native_static_data, .image_options = image_options, .publication = publication, .export_positions = export_positions, .failure_origins = failure_origins };
     }
 
@@ -3492,15 +3552,15 @@ const StaticSlotEnvironment = struct {
         try self.completed_roots.append(self.allocator, .{ .exports = exports, .image = image });
     }
 
-    fn publishFailureOrigin(self: *StaticSlotEnvironment, lowered: *const lir.CheckedPipeline.LoweredProgram, module: lir.LIR.LoweringModuleId, producer: lir.LIR.ComptimeProducer, origin: lir.LIR.ComptimeFailureOrigin) void {
+    fn publishFailureOrigin(self: *StaticSlotEnvironment, lowered: *const lir.CheckedPipeline.LoweredProgram, module: lir.LIR.LoweringModuleId, producer: lir.LIR.ComptimeProducer, origin: lir.LIR.ComptimeFailureOrigin) Allocator.Error!void {
         var next = self.publication.first(module, producer);
         while (next) |slot| {
             next = self.publication.next[@backingInt(slot)];
             var guard_index = lowered.lir_result.static_data_values.items[@backingInt(slot)].first_comptime_guard;
             while (guard_index) |index| {
                 const guard = lowered.lir_result.comptime_value_guards.items[index];
-                self.failure_origins[@backingInt(guard.crash)] = origin;
-                self.failure_origins[@backingInt(guard.checked_crash)] = origin;
+                try self.failure_origins.put(guard.crash, origin);
+                try self.failure_origins.put(guard.checked_crash, origin);
                 guard_index = guard.next_for_slot;
             }
         }
@@ -3614,7 +3674,7 @@ const StaticSlotEnvironment = struct {
     fn deinit(self: *StaticSlotEnvironment) void {
         for (self.completed_roots.items) |*root| root.deinit(self.allocator);
         self.completed_roots.deinit(self.allocator);
-        self.allocator.free(self.failure_origins);
+        self.failure_origins.deinit();
         self.publication.deinit(self.allocator);
         self.allocator.free(self.export_positions);
         self.allocator.free(self.addresses);
@@ -3909,7 +3969,7 @@ fn evalDevProgramRoots(
                 .host = CompileTimeHost.init(host_allocator),
                 .label = label,
             };
-            jobs[i].host.failure_origins = native.slots.failure_origins;
+            jobs[i].host.failure_origins = &native.slots.failure_origins;
             jobs[i].host.slot_demand = native.slot_demand;
             jobs[i].host.timing_io = if (options.timing) |timing| timing.std_io else null;
             jobs_len += 1;
@@ -4078,7 +4138,7 @@ fn evalDevProgramRoots(
         };
         const failure_origin: lir.LIR.ComptimeFailureOrigin = .{ .loc = job.host.failed_loc, .region = job.host.failed_region };
         if (options.publish_shared_slots and failure_message == null) try native.publishRoot(lowered, job.root.owner, .{ .checked = job.root_id }, job.root.shape(), .{ .ptr = job.ret_buf.ptr });
-        if (options.publish_shared_slots and failure_message != null) native.slots.publishFailureOrigin(lowered, job.root.owner, .{ .checked = job.root_id }, failure_origin);
+        if (options.publish_shared_slots and failure_message != null) try native.slots.publishFailureOrigin(lowered, job.root.owner, .{ .checked = job.root_id }, failure_origin);
         if (options.publish_shared_slots) try native.publishFailure(lowered, job.root.owner, .{ .checked = job.root_id }, if (failure_message) |message| .{ .message = message, .kind = RootFailure.ofPayload(module, payload) } else null);
 
         try recordComptimeSiteHits(problem_store, coverage, owners, job.root.owner, job.compile_time_root, &lowered.lir_result, job.host.comptime_branch_hits.items, job.root.proc);
@@ -5500,13 +5560,14 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
     owner.slot_demand = null;
     owner.timing_io = null;
     owner.suspended_ns = 0;
-    const failure_origins = try allocator.alloc(?lir.LIR.ComptimeFailureOrigin, result.store.getCFStmts().len);
-    @memset(failure_origins, null);
+    const failure_origins = CompileTimeHost.FailureOrigins.init(allocator);
     owner.slots = .{ .allocator = allocator, .materialized = materialized, .image = image, .addresses = addresses, .publication = try PublicationSlots.init(allocator, result), .export_positions = try StaticSlotEnvironment.exportPositions(allocator, materialized, addresses.len), .failure_origins = failure_origins };
     owner.host = CompilerHost.init(allocator);
     owner.shared_callable_owner = null;
     owner.callable_images = 0;
     owner.base_callables_ready = false;
+    owner.idle_forks = .empty;
+    owner.active_forks = 0;
     owner.static_strings = try Interpreter.buildStaticStrings(allocator, &result.store);
     owner.interpreter = try Interpreter.initWithBoxyTables(allocator, &result.store, &result.layouts, Interpreter.BoxyTables.fromResult(result), owner.static_strings.view(), owner.host.ops());
     owner.host.bindInterpreter(&owner.interpreter);
@@ -5533,7 +5594,7 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
                 const child = try self.owner.fork(self.lowered);
                 defer child.deinit();
                 if (self.failure) |message| {
-                    child.slotEnvironment().publishFailureOrigin(self.lowered, self.module_id, .{ .checked = self.root_id }, .{
+                    try child.slotEnvironment().publishFailureOrigin(self.lowered, self.module_id, .{ .checked = self.root_id }, .{
                         .loc = .{ .file = 0, .line = 7, .column = 3 },
                         .region = base.Region.from_raw_offsets(40, 51),
                     });

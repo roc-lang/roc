@@ -1744,12 +1744,13 @@ pub const LirProcSpec = struct {
     /// intentionally separate from externally resolvable `ret_desc`.
     runtime_ret_desc: ?LocalId = null,
     /// Keyed byte offsets of hidden descriptor fields in this erased worker's
-    /// capture value.
+    /// capture value, in increasing (argument, descriptor) key order.
     erased_arg_desc_offsets: BoxySpan = .{},
     /// Ordered runtime layouts expected in this erased worker's explicit
     /// argument buffer.
     erased_arg_layouts: BoxySpan = .{},
-    /// Hidden descriptor parameters supplied for this erased invocation.
+    /// Hidden descriptor parameters supplied for this erased invocation, in
+    /// increasing (argument, descriptor) key order.
     erased_arg_desc_params: BoxySpan = .{},
     /// Hidden capture-pointer parameter for an erased callable procedure.
     erased_capture_arg: ?LocalId = null,

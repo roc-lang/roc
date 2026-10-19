@@ -426,7 +426,7 @@ pub const Interpreter = struct {
     /// region, and inline scope are read from the store when needed.
     active_stmt_id: ?CFStmtId = null,
     /// Source location captured when the current evaluation first failed.
-    failure_origins: []const ?LIR.ComptimeFailureOrigin = &.{},
+    failure_origins: ?*const collections.DenseMap(CFStmtId, LIR.ComptimeFailureOrigin) = null,
     failed_stmt_loc: base.SourceLoc = base.SourceLoc.none,
     /// Checked source region captured when the current evaluation first failed.
     failed_stmt_region: base.Region = base.Region.zero(),
@@ -1291,6 +1291,15 @@ pub const Interpreter = struct {
         if (builtin.mode == .debug) self.inflight_zeroed_box_payloads.clearRetainingCapacity();
     }
 
+    /// Prepare for an evaluation unrelated to every earlier one: no value,
+    /// frame, or activation an earlier evaluation left is live afterwards.
+    /// Descriptor identities and per-procedure caches are kept.
+    pub fn resetBetweenEvaluations(self: *LirInterpreter) void {
+        self.resetRetainedExecution();
+        self.call_depth = 0;
+        self.erased_caller_drives = false;
+    }
+
     fn bindCallerRocOps(self: *LirInterpreter, caller_roc_ops: *RocOps) void {
         // A host-created callable can synchronously invoke this interpreter's
         // callable again with the interpreter's forwarding RocOps. Preserve
@@ -1540,22 +1549,28 @@ pub const Interpreter = struct {
         }
 
         const arg_bytes = @as([*]u8, @ptrCast(arg_ptr.?));
-        var sorted_indices = try self.evalAllocator().alloc(usize, arg_count);
-        for (0..arg_count) |i| sorted_indices[i] = i;
+        var stack_first_buffer: [512]u8 align(@alignOf(usize)) = undefined;
+        var stack_first = std.heap.BufferFirstAllocator.init(&stack_first_buffer, self.allocator);
+        const offsets_allocator = stack_first.allocator();
+        // Arguments are packed in decreasing alignment order, ties in
+        // argument order.
+        const sorted_indices = try offsets_allocator.alloc(usize, arg_count);
+        defer offsets_allocator.free(sorted_indices);
+        for (sorted_indices, 0..) |*index, i| index.* = i;
+        const AlignmentOrder = struct {
+            interpreter: *const LirInterpreter,
+            layouts: []const layout_mod.Idx,
 
-        for (0..arg_count) |i| {
-            for (i + 1..arg_count) |j| {
-                const i_align = self.helper.sizeAlignOf(arg_layouts[sorted_indices[i]]).alignment.toByteUnits();
-                const j_align = self.helper.sizeAlignOf(arg_layouts[sorted_indices[j]]).alignment.toByteUnits();
-                if (j_align > i_align or (j_align == i_align and sorted_indices[j] < sorted_indices[i])) {
-                    const tmp = sorted_indices[i];
-                    sorted_indices[i] = sorted_indices[j];
-                    sorted_indices[j] = tmp;
-                }
+            fn lessThan(order: @This(), a: usize, b: usize) bool {
+                const a_align = order.interpreter.helper.sizeAlignOf(order.layouts[a]).alignment.toByteUnits();
+                const b_align = order.interpreter.helper.sizeAlignOf(order.layouts[b]).alignment.toByteUnits();
+                return a_align > b_align;
             }
-        }
+        };
+        std.sort.insertion(usize, sorted_indices, AlignmentOrder{ .interpreter = self, .layouts = arg_layouts }, AlignmentOrder.lessThan);
 
-        var arg_offsets = try self.evalAllocator().alloc(usize, arg_count);
+        const arg_offsets = try offsets_allocator.alloc(usize, arg_count);
+        defer offsets_allocator.free(arg_offsets);
         var byte_offset: usize = 0;
         for (sorted_indices) |orig_idx| {
             const sa = self.helper.sizeAlignOf(arg_layouts[orig_idx]);
@@ -2419,13 +2434,7 @@ pub const Interpreter = struct {
             }
         }
         for (descriptor_bindings) |binding| {
-            try self.setLocalChecked(
-                &frame,
-                null,
-                binding.local,
-                try self.allocPointerIntValue(@intFromPtr(binding.desc)),
-                false,
-            );
+            try self.setLocalPointerIntChecked(&frame, null, binding.local, @intFromPtr(binding.desc));
         }
         const body = self.requireProcBody(proc_id, proc_spec);
         if (trace.enabled) self.debugDumpProc(proc_id);
@@ -2655,7 +2664,7 @@ pub const Interpreter = struct {
                         frame.setLocalDesc(assign.target, desc);
                         if (self.store.getLocal(assign.target).boxy_desc) |target_desc| {
                             if (target_desc.localOrNull()) |desc_local| {
-                                try self.setLocalChecked(frame, current, desc_local, try self.allocPointerIntValue(@intFromPtr(desc)), false);
+                                try self.setLocalPointerIntChecked(frame, current, desc_local, @intFromPtr(desc));
                             }
                         }
                         current = assign.next;
@@ -2671,7 +2680,7 @@ pub const Interpreter = struct {
                         frame.setLocalDesc(assign.target, desc);
                         if (self.store.getLocal(assign.target).boxy_desc) |target_desc| {
                             if (target_desc.localOrNull()) |desc_local| {
-                                try self.setLocalChecked(frame, current, desc_local, try self.allocPointerIntValue(@intFromPtr(desc)), false);
+                                try self.setLocalPointerIntChecked(frame, current, desc_local, @intFromPtr(desc));
                             }
                         }
                         current = assign.next;
@@ -2719,7 +2728,7 @@ pub const Interpreter = struct {
                             // value; this procedure returns to whoever makes
                             // it without reading the value.
                             frame.setLocal(assign.target, result.value);
-                            if (assign.out_desc) |out_desc| frame.setLocal(out_desc, try self.allocPointerIntValue(0));
+                            if (assign.out_desc) |out_desc| self.setLocalPointerInt(frame, out_desc, 0);
                             current = assign.next;
                             continue;
                         }
@@ -2766,7 +2775,7 @@ pub const Interpreter = struct {
                                 .{},
                             );
                         };
-                        try self.setLocalChecked(frame, current, out_desc, try self.allocPointerIntValue(@intFromPtr(desc)), false);
+                        try self.setLocalPointerIntChecked(frame, current, out_desc, @intFromPtr(desc));
                     }
                     current = assign.next;
                 },
@@ -2847,7 +2856,7 @@ pub const Interpreter = struct {
                                 return .returned_pending;
                             }
                             frame.setLocal(assign.target, try self.poisonUninitializedValue(target_layout));
-                            if (assign.out_desc) |out_desc| frame.setLocal(out_desc, try self.allocPointerIntValue(0));
+                            if (assign.out_desc) |out_desc| self.setLocalPointerInt(frame, out_desc, 0);
                             current = assign.next;
                             continue;
                         }
@@ -2893,7 +2902,7 @@ pub const Interpreter = struct {
                                 .{},
                             );
                         };
-                        try self.setLocalChecked(frame, current, out_desc, try self.allocPointerIntValue(@intFromPtr(desc)), false);
+                        try self.setLocalPointerIntChecked(frame, current, out_desc, @intFromPtr(desc));
                     }
                     current = assign.next;
                 },
@@ -2990,7 +2999,7 @@ pub const Interpreter = struct {
                                     .{},
                                 );
                             };
-                            try self.setLocalChecked(frame, current, desc_local, try self.allocPointerIntValue(@intFromPtr(desc)), false);
+                            try self.setLocalPointerIntChecked(frame, current, desc_local, @intFromPtr(desc));
                         }
                     }
                     current = assign.next;
@@ -3074,7 +3083,7 @@ pub const Interpreter = struct {
                                 "LIR/interpreter invariant violated: boxy unbox produced no descriptor for descriptor-bearing target",
                                 .{},
                             );
-                            try self.setLocalChecked(frame, current, desc_local, try self.allocPointerIntValue(@intFromPtr(desc)), false);
+                            try self.setLocalPointerIntChecked(frame, current, desc_local, @intFromPtr(desc));
                         }
                     }
                     current = assign.next;
@@ -3190,7 +3199,7 @@ pub const Interpreter = struct {
                                 "LIR/interpreter invariant violated: boxy adapter produced no descriptor for descriptor-bearing target",
                                 .{},
                             );
-                            try self.setLocalChecked(frame, current, desc_local, try self.allocPointerIntValue(@intFromPtr(desc)), false);
+                            try self.setLocalPointerIntChecked(frame, current, desc_local, @intFromPtr(desc));
                         }
                     }
                     current = assign.next;
@@ -3548,8 +3557,8 @@ pub const Interpreter = struct {
                 .ret => |ret_stmt| return .{ .returned = ret_stmt.value },
                 .crash => |crash_stmt| {
                     self.failed_crash_stmt = current;
-                    if (@backingInt(current) < self.failure_origins.len) {
-                        if (self.failure_origins[@backingInt(current)]) |origin| {
+                    if (self.failure_origins) |origins| {
+                        if (origins.get(current)) |origin| {
                             self.failed_stmt_loc = origin.loc orelse base.SourceLoc.none;
                             self.failed_stmt_region = origin.region orelse base.Region.zero();
                         }
@@ -4250,10 +4259,14 @@ pub const Interpreter = struct {
         }
 
         const capture_value_ptr = callable.capture_ptr;
-        proc_args[explicit_arg_count] = try self.allocPointerIntValue(@intFromPtr(capture_value_ptr));
+        // The hidden arguments are copied into the callee's frame when it
+        // begins, while these cells are live.
+        var capture_cell: PointerIntCell = .{};
+        var reuse_cell: PointerIntCell = .{};
+        proc_args[explicit_arg_count] = self.pointerIntCellValue(&capture_cell, @intFromPtr(capture_value_ptr));
         proc_arg_layouts[explicit_arg_count] = .opaque_ptr;
         const reuse_index = explicit_arg_count + 1;
-        proc_args[reuse_index] = try self.allocPointerIntValue(if (reuse_ptr) |ptr| @intFromPtr(ptr) else 0);
+        proc_args[reuse_index] = self.pointerIntCellValue(&reuse_cell, if (reuse_ptr) |ptr| @intFromPtr(ptr) else 0);
         proc_arg_layouts[reuse_index] = self.store.getLocal(GuardedList.at(proc_arg_locals, reuse_index)).layout_idx;
 
         const descriptor_bindings = try self.erasedDescriptorBindingsFromCapture(proc_spec, capture_value_ptr);
@@ -4287,23 +4300,23 @@ pub const Interpreter = struct {
         const offsets = self.boxy_runtime.boxy_tables.erased_arg_desc_offsets[proc_spec.erased_arg_desc_offsets.start..][0..proc_spec.erased_arg_desc_offsets.len];
         const bindings = try self.evalAllocator().alloc(EvalDescriptorBinding, params.len);
 
+        // Parameters and capture offsets are both in increasing key order, so
+        // one forward walk over the offsets pairs every `call_key` parameter
+        // with its offset.
+        var next_offset: usize = 0;
         for (params, 0..) |param, param_index| {
             const desc = if (param.read == .call_key) direct: {
-                var capture_offset: ?u32 = null;
-                for (offsets) |entry| {
-                    if (!std.meta.eql(entry.key, param.key)) continue;
-                    if (capture_offset != null) {
-                        return self.invariantFailedError(
-                            "LIR/interpreter invariant violated: erased descriptor key had multiple capture offsets",
-                            .{},
-                        );
-                    }
-                    capture_offset = entry.offset;
+                while (next_offset < offsets.len and erasedArgDescKeyLessThan(offsets[next_offset].key, param.key)) {
+                    next_offset += 1;
                 }
-                const offset = capture_offset orelse return self.invariantFailedError(
-                    "LIR/interpreter invariant violated: exact erased descriptor parameter had no capture offset",
-                    .{},
-                );
+                if (next_offset >= offsets.len or !std.meta.eql(offsets[next_offset].key, param.key)) {
+                    return self.invariantFailedError(
+                        "LIR/interpreter invariant violated: exact erased descriptor parameter had no capture offset",
+                        .{},
+                    );
+                }
+                const offset = offsets[next_offset].offset;
+                next_offset += 1;
                 const raw_ptr = self.readPointerInt(.{ .ptr = capture_ptr + offset });
                 if (raw_ptr == 0) {
                     return self.invariantFailedError(
@@ -4335,6 +4348,10 @@ pub const Interpreter = struct {
             bindings[param_index] = .{ .local = param.local, .desc = desc };
         }
         return bindings;
+    }
+
+    fn erasedArgDescKeyLessThan(a: LIR.ErasedArgDescKey, b: LIR.ErasedArgDescKey) bool {
+        return a.arg_index < b.arg_index or (a.arg_index == b.arg_index and a.descriptor_index < b.descriptor_index);
     }
 
     /// Make an erased call and then every call it leaves pending, as the
@@ -4524,7 +4541,11 @@ pub const Interpreter = struct {
                     .{},
                 );
             }
-            proc_args[explicit_arg_count] = try self.allocPointerIntValue(@intFromPtr(callable.capture_ptr));
+            // The hidden arguments are copied into the callee's frame when it
+            // begins, while these cells are live.
+            var capture_cell: PointerIntCell = .{};
+            var reuse_cell: PointerIntCell = .{};
+            proc_args[explicit_arg_count] = self.pointerIntCellValue(&capture_cell, @intFromPtr(callable.capture_ptr));
             proc_arg_layouts[explicit_arg_count] = .opaque_ptr;
 
             const reuse_index = explicit_arg_count + 1;
@@ -4538,7 +4559,7 @@ pub const Interpreter = struct {
                     .{},
                 );
             }
-            proc_args[reuse_index] = try self.allocPointerIntValue(if (reuse_closure) @intFromPtr(closure_ptr) else 0);
+            proc_args[reuse_index] = self.pointerIntCellValue(&reuse_cell, if (reuse_closure) @intFromPtr(closure_ptr) else 0);
             proc_arg_layouts[reuse_index] = self.store.getLocal(reuse_param).layout_idx;
 
             self.erased_caller_drives = true;
@@ -8583,9 +8604,38 @@ pub const Interpreter = struct {
     }
 
     fn allocPointerIntValue(self: *LirInterpreter, raw_ptr: usize) Error!Value {
-        const value = try self.alloc(.opaque_ptr);
+        const value = try self.allocUninit(.opaque_ptr);
         self.boxy_runtime.writePointerInt(value, raw_ptr);
         return value;
+    }
+
+    /// Storage for one pointer-sized integer outside interpreter scratch, for
+    /// a value that is copied into frame storage while the cell is live.
+    const PointerIntCell = struct {
+        bytes: [@sizeOf(usize)]u8 align(@alignOf(usize)) = undefined,
+    };
+
+    fn pointerIntCellValue(self: *const LirInterpreter, cell: *PointerIntCell, raw_ptr: usize) Value {
+        const value = Value{ .ptr = &cell.bytes };
+        self.boxy_runtime.writePointerInt(value, raw_ptr);
+        return value;
+    }
+
+    /// Store the pointer-sized integer `raw_ptr` directly in `local_id`.
+    fn setLocalPointerInt(self: *const LirInterpreter, frame: *Frame, local_id: LocalId, raw_ptr: usize) void {
+        var cell: PointerIntCell = .{};
+        frame.setLocal(local_id, self.pointerIntCellValue(&cell, raw_ptr));
+    }
+
+    fn setLocalPointerIntChecked(
+        self: *LirInterpreter,
+        frame: *Frame,
+        stmt_id: ?CFStmtId,
+        local_id: LocalId,
+        raw_ptr: usize,
+    ) Error!void {
+        var cell: PointerIntCell = .{};
+        try self.setLocalChecked(frame, stmt_id, local_id, self.pointerIntCellValue(&cell, raw_ptr), false);
     }
 
     fn readBoxedDataPointer(self: *const LirInterpreter, boxed: Value) ?[*]u8 {
