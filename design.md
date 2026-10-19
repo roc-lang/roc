@@ -20578,7 +20578,11 @@ Admission of those mandatory owned variants uses the same definition-sensitive
 ownership-place query as complete payload transfers: scalar shell reads and
 uses after an explicit rebind do not retain the argument's old stored units.
 A terminal crash or failed expectation observes only its explicit message
-operand; it does not implicitly use every live ownership place.
+operand; it does not implicitly use every live ownership place. A string or
+Boxy tag match likewise uses only its source (and the tag match's descriptor):
+a borrowed capture view reaches the source's place through its borrow link,
+and an owned capture retains through the source at the match. Only releases
+use every place.
 
 The ownership-place query asks whether a path from a statement reaches a use
 of a root's place before a statement that rebinds the root. Its cost is linear
