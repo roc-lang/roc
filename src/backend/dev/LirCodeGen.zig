@@ -8566,15 +8566,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 switch (stmt) {
                     .assign_literal => |s| switch (s.value) {
                         inline .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal => |lit| {
-                            ctx.descriptor(lit.desc);
+                            ctx.descriptor(self.store.stmtRow(lit).desc);
                             ctx.outputDescriptor(s.target);
                         },
                         .i64_literal, .i128_literal, .f32_literal, .f64_literal, .dec_literal, .str_literal, .bytes_literal, .static_data, .proc_ref => {},
                     },
                     inline .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt => |s| ctx.outputDescriptor(s.target),
                     .assign_call_dict => |s| ctx.outputDescriptor(s.target),
-                    inline .incref, .decref, .decref_if_initialized, .free => |s| if (s.rc == .boxy) {
-                        ctx.descriptor(s.rc.boxy);
+                    inline .incref, .decref, .free => |s| if (s.rc == .boxy) {
+                        ctx.descriptor(self.store.stmtRow(s.rc.boxy));
+                    },
+                    .decref_if_initialized => |s| {
+                        const rc = self.store.stmtRow(s.data).rc;
+                        if (rc == .boxy) ctx.descriptor(rc.boxy);
                     },
                     .ret => |s| if (self.runtime_ret_desc_ptr_slot != null) {
                         if (self.runtime_ret_desc_local) |local| ctx.read(local) else ctx.descriptor(self.store.getLocal(s.value).boxy_desc);
@@ -8663,15 +8667,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // subsequently permit the same physical slot.
             for (work.items) |id| {
                 const stmt = self.store.getCFStmt(id);
-                if (stmt != .assign_ref or stmt.assign_ref.op != .local) continue;
+                if (stmt != .assign_ref or stmt.assign_ref.op.kind != .local) continue;
                 const assign = stmt.assign_ref;
                 const target_index = plan.localIndex(assign.target).?;
-                const source = plan.localIndex(assign.op.local).?;
+                const source = plan.localIndex(assign.op.source).?;
                 const t = plan.values.items[target_index];
                 const s = plan.values.items[source];
                 if (t.definitions != 1 or s.definitions > 1 or t.mutable or s.mutable) continue;
                 const rep = self.runtimeRepresentationLayoutIdx(self.localLayout(assign.target));
-                if (rep != self.runtimeRepresentationLayoutIdx(self.localLayout(assign.op.local))) continue;
+                if (rep != self.runtimeRepresentationLayoutIdx(self.localLayout(assign.op.source))) continue;
                 if (rep == .f32 or rep == .f64 or self.simdKindForLayout(rep) != null) continue;
                 plan.values.items[target_index].representative = source;
             }
@@ -8703,47 +8707,47 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn generateRefOp(self: *Self, op: lir.RefOp, target_layout: layout.Idx) Allocator.Error!ValueLocation {
-            return switch (op) {
-                .local => |local| blk: {
-                    const raw_loc = try self.emitValueLocal(local);
+            return switch (op.kind) {
+                .local => blk: {
+                    const raw_loc = try self.emitValueLocal(op.source);
                     break :blk try self.coerceRefLocalValueToLayout(
                         raw_loc,
-                        self.localLayout(local),
+                        self.localLayout(op.source),
                         target_layout,
                         "assign_ref.local",
                     );
                 },
-                .discriminant => |disc| try self.generateDiscriminantAccess(.{
-                    .source = disc.source,
+                .discriminant => try self.generateDiscriminantAccess(.{
+                    .source = op.source,
                     .target_layout = target_layout,
                 }),
-                .field => |field| try self.generateStructAccess(.{
-                    .source = field.source,
-                    .field_idx = field.field_idx,
+                .field => try self.generateStructAccess(.{
+                    .source = op.source,
+                    .field_idx = op.index,
                     .target_layout = target_layout,
                 }),
-                .tag_payload => |payload| try self.generateTagPayloadAccess(.{
-                    .source = payload.source,
-                    .payload_idx = payload.payload_idx,
-                    .variant_index = payload.variant_index,
-                    .tag_discriminant = payload.tag_discriminant,
+                .tag_payload => try self.generateTagPayloadAccess(.{
+                    .source = op.source,
+                    .payload_idx = op.index,
+                    .variant_index = op.variant_index,
+                    .tag_discriminant = op.tag_discriminant,
                     .target_layout = target_layout,
                 }),
-                .tag_payload_struct => |payload| try self.generateTagPayloadStructAccess(.{
-                    .source = payload.source,
-                    .variant_index = payload.variant_index,
-                    .tag_discriminant = payload.tag_discriminant,
+                .tag_payload_struct => try self.generateTagPayloadStructAccess(.{
+                    .source = op.source,
+                    .variant_index = op.variant_index,
+                    .tag_discriminant = op.tag_discriminant,
                     .target_layout = target_layout,
                 }),
-                .list_reinterpret => |list_reinterpret| self.requireExplicitListValueLocationToLayout(
-                    try self.emitValueLocal(list_reinterpret.backing_ref),
-                    self.localLayout(list_reinterpret.backing_ref),
+                .list_reinterpret => self.requireExplicitListValueLocationToLayout(
+                    try self.emitValueLocal(op.source),
+                    self.localLayout(op.source),
                     target_layout,
                     "assign_ref.list_reinterpret",
                 ),
-                .nominal => |nominal| try self.requireExplicitNominalValueLocationToLayout(
-                    try self.emitValueLocal(nominal.backing_ref),
-                    self.localLayout(nominal.backing_ref),
+                .nominal => try self.requireExplicitNominalValueLocationToLayout(
+                    try self.emitValueLocal(op.source),
+                    self.localLayout(op.source),
                     target_layout,
                     "assign_ref.nominal",
                 ),
@@ -15640,8 +15644,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return slot;
         }
 
-        fn generateBoxyDescRef(self: *Self, assign: anytype) Allocator.Error!ValueLocation {
-            const target_layout = self.localLayout(assign.target);
+        fn generateBoxyDescRef(self: *Self, target_local: LocalId, assign: anytype) Allocator.Error!ValueLocation {
+            const target_layout = self.localLayout(target_local);
             const captures = self.store.getLocalSpan(assign.captures);
             if (assign.tag_residual_for) |target_desc| {
                 if (assign.nested_index != null or assign.box_payload_layout != null or assign.tag_payload != null or assign.tag_ext or captures.len != 0) {
@@ -16133,8 +16137,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn generateCallDict(self: *Self, assign: anytype) Allocator.Error!ValueLocation {
-            const target_layout = self.localLayout(assign.target);
+        fn generateCallDict(self: *Self, target_local: LocalId, assign: anytype) Allocator.Error!ValueLocation {
+            const target_layout = self.localLayout(target_local);
             const arg_locals = self.store.getLocalSpan(assign.args);
             const arg_desc_locals = self.store.getLocalSpan(assign.arg_descs);
             const hidden_locals = self.store.getLocalSpan(assign.hidden_args);
@@ -16212,7 +16216,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (result_desc_slot) |s| try builder.addMemArg(frame_ptr, s) else try builder.addImmArg(0);
             try builder.addImmArg(@backingInt(target_layout));
             try self.callBoxyBuiltin(&builder, .call_dict);
-            try self.bindBoxyOutDescriptor(assign.target, out_desc_slot);
+            try self.bindBoxyOutDescriptor(target_local, out_desc_slot);
             return self.stackLocationForLayout(target_layout, out_slot);
         }
 
@@ -16249,7 +16253,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// miss target. Returns the jump patch taken when the tag does not
         /// match (the wrapper returned zero).
         fn generateBoxyTagMatch(self: *Self, tag_match: anytype) Allocator.Error!usize {
-            _ = try self.callBoxyPlan(&boxy_call_plan.tagMatch(tag_match), undefined);
+            _ = try self.callBoxyPlan(&boxy_call_plan.tagMatch(tag_match, self.store.stmtRow(tag_match.source_desc)), undefined);
             // The wrapper returns a C `bool` in the low byte of the return
             // register; the upper bits are undefined, so mask before testing.
             const result_reg = try self.allocTempGeneral();
@@ -17723,7 +17727,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Generate code for free operation.
         fn generateFree(self: *Self, rc_op: anytype) Allocator.Error!ValueLocation {
             const value_loc = try self.generateRcOperandValue(rc_op.value);
-            try self.emitExplicitRcStmtHelperCallForValue(rc_op.rc, .free, rc_op.atomicity, value_loc, self.localLayout(rc_op.value), 1);
+            try self.emitExplicitRcStmtHelperCallForValue(self.store.rcHelper(rc_op.rc), .free, rc_op.atomicity, value_loc, self.localLayout(rc_op.value), 1);
             return value_loc;
         }
 
@@ -20083,15 +20087,25 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .assign_literal => |assign| {
                             const value_loc: ValueLocation = switch (assign.value) {
                                 .i64_literal => |lit| .{ .immediate_i64 = lit.value },
-                                .i128_literal => |lit| try self.generateI128Literal(lit.value),
+                                .i128_literal => |lit_id| blk_lit: {
+                                    const lit = self.store.stmtRow(lit_id);
+                                    break :blk_lit try self.generateI128Literal(lit.value);
+                                },
                                 .f64_literal => |lit| .{ .immediate_f64 = lit },
                                 .f32_literal => |lit| .{ .immediate_f32 = lit },
                                 .dec_literal => |lit| try self.generateI128Literal(lit),
                                 .str_literal => |str_idx| try self.generateStrLiteral(str_idx),
-                                .boxy_dynamic_num_literal => |lit| try self.generateBoxyDynamicLiteral(assign.target, lit.desc, lit.value, lit.default_layout, .dynamic_num_literal_ref),
-                                .boxy_dynamic_frac_literal => |lit| try self.generateBoxyDynamicLiteral(assign.target, lit.desc, lit.dec_bits, lit.default_layout, .dynamic_frac_literal_ref),
+                                .boxy_dynamic_num_literal => |id| blk: {
+                                    const lit = self.store.stmtRow(id);
+                                    break :blk try self.generateBoxyDynamicLiteral(assign.target, lit.desc, lit.value, lit.default_layout, .dynamic_num_literal_ref);
+                                },
+                                .boxy_dynamic_frac_literal => |id| blk: {
+                                    const lit = self.store.stmtRow(id);
+                                    break :blk try self.generateBoxyDynamicLiteral(assign.target, lit.desc, lit.dec_bits, lit.default_layout, .dynamic_frac_literal_ref);
+                                },
                                 .bytes_literal => |bytes_idx| try self.generateBytesLiteral(bytes_idx),
-                                .static_data => |id| blk: {
+                                .static_data => |read| blk: {
+                                    const id = read.id;
                                     self.fragment_context.static_data = true;
                                     if (self.comptime_hooks) |hooks| {
                                         try self.spillAllVectorLocals();
@@ -20121,26 +20135,28 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             try work.append(wa, .{ .node = uninit.next });
                         },
 
-                        .assign_call => |assign| if (assign.replaces_frame) {
+                        .assign_call => |assign| if (self.store.stmtRowOrDefault(assign.extra).replaces_frame) {
                             try self.generateTailCall(.{
                                 .proc = assign.proc,
                                 .args = assign.args,
                                 .ret_layout = self.localLayout(assign.target),
                             });
                         } else {
+                            const extra = self.store.stmtRowOrDefault(assign.extra);
                             const value_loc = try self.generateCall(.{
                                 .proc = assign.proc,
                                 .args = assign.args,
                                 .ret_layout = self.localLayout(assign.target),
-                                .out_desc = assign.out_desc,
+                                .out_desc = extra.out_desc,
                             });
-                            const driven_loc = try self.emitDrivePending(assign.drive, value_loc, self.localLayout(assign.target), assign.result_desc, assign.out_desc);
-                            try self.bindCallResult(assign.target, driven_loc, assign.drive);
-                            if (assign.returns_pending) |pending| try self.emitReturnIfCallPending(pending);
+                            const driven_loc = try self.emitDrivePending(extra.drive, value_loc, self.localLayout(assign.target), extra.result_desc, extra.out_desc);
+                            try self.bindCallResult(assign.target, driven_loc, extra.drive);
+                            if (extra.returns_pending) |pending| try self.emitReturnIfCallPending(pending);
                             try work.append(wa, .{ .node = assign.next });
                         },
 
-                        .assign_call_erased => |assign| {
+                        .assign_call_erased => |assign_stmt| {
+                            const assign = self.store.stmtRow(assign_stmt.data);
                             const value_loc = try self.generateErasedCall(
                                 assign.closure,
                                 assign.args,
@@ -20148,20 +20164,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 assign.arg_descs,
                                 assign.arg_desc_keys,
                                 assign.arg_plan,
-                                self.localLayout(assign.target),
+                                self.localLayout(assign_stmt.target),
                                 assign.result_desc,
                                 assign.out_desc,
                                 assign.reuse_closure,
                                 assign.deferred,
                             );
-                            const driven_loc = try self.emitDrivePending(assign.drive, value_loc, self.localLayout(assign.target), assign.result_desc, assign.out_desc);
-                            try self.bindCallResult(assign.target, driven_loc, assign.drive);
+                            const driven_loc = try self.emitDrivePending(assign.drive, value_loc, self.localLayout(assign_stmt.target), assign.result_desc, assign.out_desc);
+                            try self.bindCallResult(assign_stmt.target, driven_loc, assign.drive);
                             if (assign.returns_pending) |pending| try self.emitReturnIfCallPending(pending);
-                            try work.append(wa, .{ .node = assign.next });
+                            try work.append(wa, .{ .node = assign_stmt.next });
                         },
 
                         .assign_boxy_desc_ref => |assign| {
-                            const value_loc = try self.generateBoxyDescRef(assign);
+                            const value_loc = try self.generateBoxyDescRef(assign.target, self.store.stmtRow(assign.data));
                             try self.bindAssignedLocal(assign.target, value_loc);
                             try work.append(wa, .{ .node = assign.next });
                         },
@@ -20173,16 +20189,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         },
 
                         inline .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload => |assign, tag| {
-                            const value_loc = try self.generateBoxyValueOp(boxy_call_plan.forStatement(tag, assign));
+                            const value_loc = try self.generateBoxyValueOp(boxy_call_plan.forStatement(tag, assign.target, self.store.stmtRow(assign.data)));
                             try self.bindAssignedLocal(assign.target, value_loc);
                             try work.append(wa, .{ .node = assign.next });
                         },
 
                         .assign_boxy_eq => |assign| {
-                            if (builtin.mode == .debug and self.localLayout(assign.rhs) != self.localLayout(assign.lhs)) {
+                            const data = self.store.stmtRow(assign.data);
+                            if (builtin.mode == .debug and self.localLayout(data.rhs) != self.localLayout(data.lhs)) {
                                 base.invariant("LIR/codegen invariant violated: boxy equality operands had different layouts", .{});
                             }
-                            const value_loc = try self.generateBoxyValueOp(boxy_call_plan.forStatement(.assign_boxy_eq, assign));
+                            const value_loc = try self.generateBoxyValueOp(boxy_call_plan.forStatement(.assign_boxy_eq, assign.target, data));
                             try self.bindAssignedLocal(assign.target, value_loc);
                             try work.append(wa, .{ .node = assign.next });
                         },
@@ -20203,24 +20220,25 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         },
 
                         .assign_call_dict => |assign| {
-                            const value_loc = try self.generateCallDict(assign);
+                            const value_loc = try self.generateCallDict(assign.target, self.store.stmtRow(assign.data));
                             try self.bindAssignedLocal(assign.target, value_loc);
                             try work.append(wa, .{ .node = assign.next });
                         },
 
-                        .assign_packed_erased_fn => |assign| {
+                        .assign_packed_erased_fn => |assign_stmt| {
+                            const assign = self.store.stmtRow(assign_stmt.data);
                             const value_loc = try self.generatePackedErasedFn(
                                 assign.proc,
                                 assign.capture,
-                                self.localLayout(assign.target),
+                                self.localLayout(assign_stmt.target),
                                 assign.capture_layout,
                                 assign.on_drop,
                                 assign.result_desc,
                                 assign.reuse,
                                 assign.reuse_unique,
                             );
-                            try self.bindAssignedLocal(assign.target, value_loc);
-                            try work.append(wa, .{ .node = assign.next });
+                            try self.bindAssignedLocal(assign_stmt.target, value_loc);
+                            try work.append(wa, .{ .node = assign_stmt.next });
                         },
 
                         .assign_low_level => |assign| {
@@ -20234,8 +20252,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                     .args = assign.args,
                                     .target = assign.target,
                                     .ret_layout = self.localLayout(assign.target),
-                                    .unique_args = assign.unique_args,
-                                    .interchangeable = assign.interchangeable,
+                                    .unique_args = self.store.stmtRowOrDefault(assign.extra).unique_args,
+                                    .interchangeable = self.store.stmtRowOrDefault(assign.extra).interchangeable,
                                 }) catch |err| {
                                     self.pending_overflow_result_target = null;
                                     return err;
@@ -20533,19 +20551,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             try work.append(wa, .{ .node = sw.initialized_branch });
                         },
 
-                        .str_match => |str_match| {
+                        .str_match => |str_match_stmt| {
+                            const str_match = self.store.stmtRow(str_match_stmt.data);
                             const before_env = try self.captureStmtEnv();
-                            const miss_patches = try self.generateStrMatch(str_match);
+                            const miss_patches = try self.generateStrMatch(str_match_stmt.source, str_match);
                             const state = try self.allocator.create(StrMatchState);
                             state.* = .{
                                 .owner = stmt_id,
                                 .before_env = before_env,
                                 .miss_patches = miss_patches,
-                                .on_miss = str_match.on_miss,
+                                .on_miss = str_match_stmt.on_miss,
                                 .end_patch = 0,
                             };
                             try work.append(wa, .{ .str_match_after_match = state });
-                            try work.append(wa, .{ .node = str_match.on_match });
+                            try work.append(wa, .{ .node = str_match_stmt.on_match });
                         },
 
                         .str_match_set => |str_match_set| {
@@ -20568,7 +20587,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .incref => |inc| {
                             _ = try self.generateIncref(.{
                                 .value = inc.value,
-                                .rc = inc.rc,
+                                .rc = self.store.rcHelper(inc.rc),
                                 .count = inc.count,
                                 .atomicity = inc.atomicity,
                             });
@@ -20578,14 +20597,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .decref => |dec| {
                             _ = try self.generateDecref(.{
                                 .value = dec.value,
-                                .rc = dec.rc,
+                                .rc = self.store.rcHelper(dec.rc),
                                 .atomicity = dec.atomicity,
                             });
                             try work.append(wa, .{ .node = dec.next });
                         },
 
-                        .decref_if_initialized => |dec| {
-                            const cond_loc = try self.emitValueLocal(dec.cond);
+                        .decref_if_initialized => |dec_stmt| {
+                            const dec = self.store.stmtRow(dec_stmt.data);
+                            const cond_loc = try self.emitValueLocal(dec_stmt.cond);
                             const cond_reg = try self.ensureInGeneralReg(cond_loc);
                             const cond_mask: i64 = @bitCast(dec.cond_mask);
                             const compare_reg = try self.allocTempGeneral();
@@ -20599,7 +20619,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             self.freeGenerals(.{ compare_reg, cond_reg });
 
                             _ = try self.generateDecref(.{
-                                .value = dec.value,
+                                .value = dec_stmt.value,
                                 .rc = dec.rc,
                                 .atomicity = dec.atomicity,
                             });
@@ -20607,7 +20627,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             const successor_offset = self.codegen.currentOffset();
                             try self.codegen.patchJump(skip_patch, successor_offset);
                             try self.codegen.patchJump(done_patch, successor_offset);
-                            try work.append(wa, .{ .node = dec.next });
+                            try work.append(wa, .{ .node = dec_stmt.next });
                         },
 
                         .free => |free_stmt| {
@@ -20813,8 +20833,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             };
         }
 
-        fn generateStrMatch(self: *Self, str_match: anytype) Allocator.Error!std.ArrayList(usize) {
-            const source = try self.emitStrMatchSourceRegs(str_match.source);
+        fn generateStrMatch(self: *Self, source_local: LocalId, str_match: anytype) Allocator.Error!std.ArrayList(usize) {
+            const source = try self.emitStrMatchSourceRegs(source_local);
             defer self.codegen.freeGeneral(source.allocation);
             defer self.codegen.freeGeneral(source.is_small);
             defer self.codegen.freeGeneral(source.len);
@@ -23452,7 +23472,7 @@ fn addUnaryLowLevelProc(store: *LirStore, op: lir.LowLevel, operand_value: i64, 
     const assign_op = try store.addCFStmt(.{ .assign_low_level = .{
         .target = result,
         .op = op,
-        .rc_effect = op.rcEffect(),
+        .rc_effect = try store.addRcEffect(op.rcEffect()),
         .args = args,
         .next = ret,
     } }, .test_fixture);
@@ -23480,7 +23500,7 @@ fn addBinaryLowLevelProc(
     const assign_op = try store.addCFStmt(.{ .assign_low_level = .{
         .target = result,
         .op = op,
-        .rc_effect = op.rcEffect(),
+        .rc_effect = try store.addRcEffect(op.rcEffect()),
         .args = args,
         .next = ret,
     } }, .test_fixture);
@@ -23506,7 +23526,7 @@ fn addBinaryF32LowLevelProc(store: *LirStore, op: lir.LowLevel, lhs_value: f32, 
     const assign_op = try store.addCFStmt(.{ .assign_low_level = .{
         .target = result,
         .op = op,
-        .rc_effect = op.rcEffect(),
+        .rc_effect = try store.addRcEffect(op.rcEffect()),
         .args = args,
         .next = ret,
     } }, .test_fixture);
@@ -23535,7 +23555,7 @@ fn addDeadTempChainProc(store: *LirStore, allocator: Allocator, temp_count: u32,
         stmt = try store.addCFStmt(.{ .assign_low_level = .{
             .target = totals[i],
             .op = .num_int_add_wrap,
-            .rc_effect = lir.LowLevel.num_int_add_wrap.rcEffect(),
+            .rc_effect = try store.addRcEffect(lir.LowLevel.num_int_add_wrap.rcEffect()),
             .args = try store.addLocalSpan(&.{ totals[i - 1], step }),
             .next = stmt,
         } }, .test_fixture);
@@ -23773,7 +23793,7 @@ fn addSineChainProc(store: *LirStore, allocator: Allocator, count: u32) Allocato
         body = try store.addCFStmt(.{ .assign_low_level = .{
             .target = locals[i],
             .op = .num_sin,
-            .rc_effect = lir.LowLevel.num_sin.rcEffect(),
+            .rc_effect = try store.addRcEffect(lir.LowLevel.num_sin.rcEffect()),
             .args = try store.addLocalSpan(&.{locals[i - 1]}),
             .next = body,
         } }, .test_fixture);
@@ -24396,7 +24416,7 @@ test "proc params and mutable list cells use distinct stack slots" {
     const append_stmt = try store.addCFStmt(.{ .assign_low_level = .{
         .target = appended,
         .op = .list_append_unsafe,
-        .rc_effect = lir.LowLevel.list_append_unsafe.rcEffect(),
+        .rc_effect = try store.addRcEffect(lir.LowLevel.list_append_unsafe.rcEffect()),
         .args = append_args,
         .next = ret,
     } }, .test_fixture);
@@ -24461,7 +24481,7 @@ test "immutable aliases share storage but aliases of mutable locals do not" {
     } }, .test_fixture);
     const mutable_alias_stmt = try store.addCFStmt(.{ .assign_ref = .{
         .target = mutable_alias,
-        .op = .{ .local = mutable_source },
+        .op = .local(mutable_source),
         .next = mutate,
     } }, .test_fixture);
     const mutable_source_stmt = try store.addCFStmt(.{ .assign_literal = .{
@@ -24471,12 +24491,12 @@ test "immutable aliases share storage but aliases of mutable locals do not" {
     } }, .test_fixture);
     const alias2_stmt = try store.addCFStmt(.{ .assign_ref = .{
         .target = alias2,
-        .op = .{ .local = alias1 },
+        .op = .local(alias1),
         .next = mutable_source_stmt,
     } }, .test_fixture);
     const alias1_stmt = try store.addCFStmt(.{ .assign_ref = .{
         .target = alias1,
-        .op = .{ .local = source },
+        .op = .local(source),
         .next = alias2_stmt,
     } }, .test_fixture);
     const source_stmt = try store.addCFStmt(.{ .assign_literal = .{
@@ -24705,7 +24725,7 @@ test "two-arg proc list join loop returns full length" {
     const add_next_index = try store.addCFStmt(.{ .assign_low_level = .{
         .target = next_index,
         .op = .num_int_add_crash_on_overflow,
-        .rc_effect = lir.LowLevel.num_int_add_crash_on_overflow.rcEffect(),
+        .rc_effect = try store.addRcEffect(lir.LowLevel.num_int_add_crash_on_overflow.rcEffect()),
         .args = next_index_args,
         .next = set_index,
     } }, .test_fixture);
@@ -24713,7 +24733,7 @@ test "two-arg proc list join loop returns full length" {
     const add_next_acc = try store.addCFStmt(.{ .assign_low_level = .{
         .target = next_acc,
         .op = .num_int_add_crash_on_overflow,
-        .rc_effect = lir.LowLevel.num_int_add_crash_on_overflow.rcEffect(),
+        .rc_effect = try store.addRcEffect(lir.LowLevel.num_int_add_crash_on_overflow.rcEffect()),
         .args = next_acc_args,
         .next = add_next_index,
     } }, .test_fixture);
@@ -24735,7 +24755,7 @@ test "two-arg proc list join loop returns full length" {
     const loop_body = try store.addCFStmt(.{ .assign_low_level = .{
         .target = cond,
         .op = .num_is_lt,
-        .rc_effect = lir.LowLevel.num_is_lt.rcEffect(),
+        .rc_effect = try store.addRcEffect(lir.LowLevel.num_is_lt.rcEffect()),
         .args = cond_args,
         .next = loop_switch,
     } }, .test_fixture);
@@ -24767,7 +24787,7 @@ test "two-arg proc list join loop returns full length" {
     const len_stmt = try store.addCFStmt(.{ .assign_low_level = .{
         .target = len,
         .op = .list_len,
-        .rc_effect = lir.LowLevel.list_len.rcEffect(),
+        .rc_effect = try store.addRcEffect(lir.LowLevel.list_len.rcEffect()),
         .args = len_args,
         .next = zero_index_stmt,
     } }, .test_fixture);
@@ -24791,7 +24811,7 @@ test "two-arg proc list join loop returns full length" {
     const ret_result = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
     const drop_list = try store.addCFStmt(.{ .decref = .{
         .value = root_list,
-        .rc = LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = list_layout }),
+        .rc = try store.addRcHelperRef(LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = list_layout })),
         .next = ret_result,
     } }, .test_fixture);
     const call_args = try store.addLocalSpan(&.{ root_list, ignored });
@@ -24853,7 +24873,7 @@ test "ptr_alloca slot is zeroed and ptr_store/ptr_load round trip" {
     const add = try store.addCFStmt(.{ .assign_low_level = .{
         .target = sum,
         .op = .num_int_add_crash_on_overflow,
-        .rc_effect = lir.LowLevel.num_int_add_crash_on_overflow.rcEffect(),
+        .rc_effect = try store.addRcEffect(lir.LowLevel.num_int_add_crash_on_overflow.rcEffect()),
         .args = add_args,
         .next = ret,
     } }, .test_fixture);
@@ -24861,7 +24881,7 @@ test "ptr_alloca slot is zeroed and ptr_store/ptr_load round trip" {
     const load_post = try store.addCFStmt(.{ .assign_low_level = .{
         .target = post,
         .op = .ptr_load,
-        .rc_effect = lir.LowLevel.ptr_load.rcEffect(),
+        .rc_effect = try store.addRcEffect(lir.LowLevel.ptr_load.rcEffect()),
         .args = load_post_args,
         .next = add,
     } }, .test_fixture);
@@ -24869,7 +24889,7 @@ test "ptr_alloca slot is zeroed and ptr_store/ptr_load round trip" {
     const store_v = try store.addCFStmt(.{ .assign_low_level = .{
         .target = st,
         .op = .ptr_store,
-        .rc_effect = lir.LowLevel.ptr_store.rcEffect(),
+        .rc_effect = try store.addRcEffect(lir.LowLevel.ptr_store.rcEffect()),
         .args = store_args,
         .next = load_post,
     } }, .test_fixture);
@@ -24883,14 +24903,14 @@ test "ptr_alloca slot is zeroed and ptr_store/ptr_load round trip" {
     const load_pre = try store.addCFStmt(.{ .assign_low_level = .{
         .target = pre,
         .op = .ptr_load,
-        .rc_effect = lir.LowLevel.ptr_load.rcEffect(),
+        .rc_effect = try store.addRcEffect(lir.LowLevel.ptr_load.rcEffect()),
         .args = load_pre_args,
         .next = v_lit,
     } }, .test_fixture);
     const alloca = try store.addCFStmt(.{ .assign_low_level = .{
         .target = slot,
         .op = .ptr_alloca,
-        .rc_effect = lir.LowLevel.ptr_alloca.rcEffect(),
+        .rc_effect = try store.addRcEffect(lir.LowLevel.ptr_alloca.rcEffect()),
         .args = try store.addLocalSpan(&.{}),
         .next = load_pre,
     } }, .test_fixture);
@@ -24926,14 +24946,14 @@ test "box_alloc_zeroed cell is zeroed, writable through ptr_cast, and freed by d
     // decref also verifies the cell came from allocateWithRefcount with rc=1.
     const drop_cell = try store.addCFStmt(.{ .decref = .{
         .value = cell,
-        .rc = LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = box_u64 }),
+        .rc = try store.addRcHelperRef(LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = box_u64 })),
         .next = ret,
     } }, .test_fixture);
     const add_args = try store.addLocalSpan(&.{ pre, post });
     const add = try store.addCFStmt(.{ .assign_low_level = .{
         .target = sum,
         .op = .num_int_add_crash_on_overflow,
-        .rc_effect = lir.LowLevel.num_int_add_crash_on_overflow.rcEffect(),
+        .rc_effect = try store.addRcEffect(lir.LowLevel.num_int_add_crash_on_overflow.rcEffect()),
         .args = add_args,
         .next = drop_cell,
     } }, .test_fixture);
@@ -24941,7 +24961,7 @@ test "box_alloc_zeroed cell is zeroed, writable through ptr_cast, and freed by d
     const load_post = try store.addCFStmt(.{ .assign_low_level = .{
         .target = post,
         .op = .ptr_load,
-        .rc_effect = lir.LowLevel.ptr_load.rcEffect(),
+        .rc_effect = try store.addRcEffect(lir.LowLevel.ptr_load.rcEffect()),
         .args = load_post_args,
         .next = add,
     } }, .test_fixture);
@@ -24949,7 +24969,7 @@ test "box_alloc_zeroed cell is zeroed, writable through ptr_cast, and freed by d
     const store_v = try store.addCFStmt(.{ .assign_low_level = .{
         .target = st,
         .op = .ptr_store,
-        .rc_effect = lir.LowLevel.ptr_store.rcEffect(),
+        .rc_effect = try store.addRcEffect(lir.LowLevel.ptr_store.rcEffect()),
         .args = store_args,
         .next = load_post,
     } }, .test_fixture);
@@ -24963,7 +24983,7 @@ test "box_alloc_zeroed cell is zeroed, writable through ptr_cast, and freed by d
     const load_pre = try store.addCFStmt(.{ .assign_low_level = .{
         .target = pre,
         .op = .ptr_load,
-        .rc_effect = lir.LowLevel.ptr_load.rcEffect(),
+        .rc_effect = try store.addRcEffect(lir.LowLevel.ptr_load.rcEffect()),
         .args = load_pre_args,
         .next = v_lit,
     } }, .test_fixture);
@@ -24971,14 +24991,14 @@ test "box_alloc_zeroed cell is zeroed, writable through ptr_cast, and freed by d
     const cast = try store.addCFStmt(.{ .assign_low_level = .{
         .target = p,
         .op = .ptr_cast,
-        .rc_effect = lir.LowLevel.ptr_cast.rcEffect(),
+        .rc_effect = try store.addRcEffect(lir.LowLevel.ptr_cast.rcEffect()),
         .args = cast_args,
         .next = load_pre,
     } }, .test_fixture);
     const alloc = try store.addCFStmt(.{ .assign_low_level = .{
         .target = cell,
         .op = .box_alloc_zeroed,
-        .rc_effect = lir.LowLevel.box_alloc_zeroed.rcEffect(),
+        .rc_effect = try store.addRcEffect(lir.LowLevel.box_alloc_zeroed.rcEffect()),
         .args = try store.addLocalSpan(&.{}),
         .next = cast,
     } }, .test_fixture);
@@ -25054,12 +25074,7 @@ test "tag payload bind invariant rejects mismatched pattern layout" {
     const ret = try store.addCFStmt(.{ .ret = .{ .value = mismatched_target } }, .test_fixture);
     _ = try store.addCFStmt(.{ .assign_ref = .{
         .target = mismatched_target,
-        .op = .{ .tag_payload = .{
-            .source = source,
-            .payload_idx = 0,
-            .variant_index = 0,
-            .tag_discriminant = 0,
-        } },
+        .op = .tagPayload(source, 0, 0, 0),
         .next = ret,
     } }, .test_fixture);
 }
@@ -25118,7 +25133,7 @@ test "dev backend fuses overflow predicate with matching wrapping result" {
     const wrapping_result = try store.addCFStmt(.{ .assign_low_level = .{
         .target = result,
         .op = .num_int_add_wrap,
-        .rc_effect = lir.LowLevel.num_int_add_wrap.rcEffect(),
+        .rc_effect = try store.addRcEffect(lir.LowLevel.num_int_add_wrap.rcEffect()),
         .args = arithmetic_args,
         .next = ret_result,
     } }, .test_fixture);
@@ -25132,7 +25147,7 @@ test "dev backend fuses overflow predicate with matching wrapping result" {
     const predicate = try store.addCFStmt(.{ .assign_low_level = .{
         .target = overflowed,
         .op = .num_int_add_overflows,
-        .rc_effect = lir.LowLevel.num_int_add_overflows.rcEffect(),
+        .rc_effect = try store.addRcEffect(lir.LowLevel.num_int_add_overflows.rcEffect()),
         .args = arithmetic_args,
         .next = choose,
     } }, .test_fixture);
@@ -25846,7 +25861,7 @@ test "independent fragment defers shared RC helper demand" {
     const ret = try store.addCFStmt(.{ .ret = .{ .value = string } }, .test_fixture);
     const drop = try store.addCFStmt(.{ .decref = .{
         .value = string,
-        .rc = LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = .str }),
+        .rc = try store.addRcHelperRef(LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = .str })),
         .next = ret,
     } }, .test_fixture);
     const proc = try addProc(&store, &.{string}, drop, .str);
@@ -26047,7 +26062,7 @@ test "independent fragment symbolic hooks record actual context use" {
     defer layouts.deinit();
     const pure = try addLiteralProc(&store, .{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } }, .i64);
     const data_id: LIR.StaticDataId = @fromBackingInt(@intCast(8));
-    const data_proc = try addLiteralProc(&store, .{ .static_data = data_id }, .i64);
+    const data_proc = try addLiteralProc(&store, .{ .static_data = .{ .id = data_id } }, .i64);
     var source = try HostLirCodeGen.init(allocator, &store, &layouts.layout_store, .{}, &.{}, .default);
     defer source.deinit();
     try source.setStaticDataSymbols(&.{.{

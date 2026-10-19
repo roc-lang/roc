@@ -287,9 +287,10 @@ pub const Options = struct {
     proc_debug_names: bool = false,
     /// The object cache to ask for closed specializations at reservation.
     spec_cache: ?Common.SpecCacheLookup = null,
-    /// Whether this program's code is linked, so the cache may serve it a
-    /// linked-object entry (`Common.SpecCacheHit.c_abi_entry`).
-    spec_cache_accepts_linked: bool = false,
+    /// Which cache entries can serve this program: whether its code is
+    /// linked, so a linked-object entry (`Common.SpecCacheHit.c_abi_entry`)
+    /// can, and whether its emitter splices dev code.
+    spec_cache_takes: Common.SpecCacheTakes = .dev_code,
     /// Optional deterministic counters for specialization-shape tests.
     specialization_counters: ?*SpecializationCounters = null,
     /// Optional deterministic workload diagnostics. The checked pipeline
@@ -5047,7 +5048,7 @@ const Builder = struct {
     field_kind_scope_pool: std.ArrayList(*collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind)) = .empty,
     /// The object cache consulted for closed specializations, if any.
     spec_cache: ?Common.SpecCacheLookup,
-    spec_cache_accepts_linked: bool,
+    spec_cache_takes: Common.SpecCacheTakes,
     counters: ?*SpecializationCounters,
     diagnostics: ?*Diagnostics,
     /// Result-owned sink while one ordinary specialization shard is lowering or
@@ -5342,7 +5343,7 @@ const Builder = struct {
             .current_region = program.current_region,
             .proc_debug_names = options.proc_debug_names,
             .spec_cache = options.spec_cache,
-            .spec_cache_accepts_linked = options.spec_cache_accepts_linked,
+            .spec_cache_takes = options.spec_cache_takes,
             .counters = counters,
             .diagnostics = options.diagnostics,
             .active_spec_job_diagnostics = null,
@@ -8020,7 +8021,7 @@ const Builder = struct {
                 std.debug.print("CENSUS_KEY\t{s}\t{x}\tev={x}\tcodec={x}\treq={x}\tcallable={s}\n", .{ name, key.bytes[0..8], spec_identity.evidence_digest.bytes[0..6], spec_identity.codec_contract_digest.bytes[0..6], spec_identity.request_fn_ty_digest.bytes[0..6], @tagName(spec_identity.callable) });
             }
             if (self.spec_cache) |cache| {
-                if (cache.lookup(key.bytes, self.spec_cache_accepts_linked)) |hit| {
+                if (cache.lookup(key.bytes, self.spec_cache_takes)) |hit| {
                     fn_template.cached = hit;
                     self.count("spec_cache_hits");
                     if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup monotype key={x} hit\n", .{key.bytes[0..8]});
@@ -38448,23 +38449,21 @@ const BodyContext = struct {
         return info.item_fields;
     }
 
-    const GeneratedParseTagUnionSpecBackingInfo = struct {
-        record_fields: TypeFieldSpanBorrow,
-    };
-
-    fn generatedParseTagUnionSpecBackingInfo(
-        self: *BodyContext,
-        spec_ty: Type.TypeId,
-    ) ?GeneratedParseTagUnionSpecBackingInfo {
+    /// The generated backing of a tag-union spec, or null when `spec_ty` is
+    /// not a tag-union spec.
+    fn generatedParseTagUnionSpecBackingType(self: *BodyContext, spec_ty: Type.TypeId) ?Type.TypeId {
         if (!self.typeHasBuiltinOwner(spec_ty, .parse_tag_union_spec)) return null;
-        const backing_ty = self.namedBackingType(spec_ty) orelse return null;
-        const record_fields = switch (self.shapeContent(backing_ty)) {
+        return self.namedBackingType(spec_ty) orelse Common.invariant("generated tag-union spec had no backing type");
+    }
+
+    /// The label fields of a generated tag-union spec backing, which is empty
+    /// when no payload record has a field.
+    fn generatedParseTagUnionSpecLabels(self: *BodyContext, spec_backing_ty: Type.TypeId) TypeFieldSpanBorrow {
+        return switch (self.shapeContent(spec_backing_ty)) {
             .record => |span| self.typeStore().fieldSpan(span),
             .zst => self.typeStore().fieldSpan(.empty()),
-            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased => return null,
+            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased => Common.invariant("generated tag-union spec backing was not a record"),
         };
-        if (record_fields.len == 0) return null;
-        return .{ .record_fields = record_fields };
     }
 
     fn isGeneratedIteratorEvidenceNode(self: *BodyContext, node: NodeId) Allocator.Error!bool {
@@ -40137,16 +40136,7 @@ const BodyContext = struct {
         }
     }
 
-    fn generatedParseTagUnionSpecBackingRecordFieldName(
-        self: *BodyContext,
-        index: usize,
-    ) Allocator.Error!names.RecordFieldNameId {
-        const label = try std.fmt.allocPrint(self.allocator, "record_{d:0>20}", .{index});
-        defer self.allocator.free(label);
-        return try self.nameStoreMut().internRecordFieldLabel(label);
-    }
-
-    fn generatedParseTagUnionSpecBackingFieldName(
+    fn generatedFieldNamesItemFieldName(
         self: *BodyContext,
         index: usize,
     ) Allocator.Error!names.RecordFieldNameId {
@@ -40155,51 +40145,62 @@ const BodyContext = struct {
         return try self.nameStoreMut().internRecordFieldLabel(label);
     }
 
+    /// The renamed field name each record field label reads, from every
+    /// precomputed record the tag union's payload parsers reach.
+    fn parserPrecomputedLabelLocals(
+        self: *BodyContext,
+        plan: *const ParserPrecomputedPlan,
+        union_ty: Type.TypeId,
+    ) Allocator.Error!collections.DenseMap(names.RecordFieldNameId, DraftLocalId) {
+        const record_shapes = try self.parserPrecomputedRecordShapesForTagUnion(plan, union_ty);
+        defer self.allocator.free(record_shapes);
+
+        var label_locals = collections.DenseMap(names.RecordFieldNameId, DraftLocalId).init(self.allocator);
+        errdefer label_locals.deinit();
+        for (record_shapes) |record_shape| {
+            const precomputed = self.parserPlanGet(plan, record_shape) orelse
+                Common.invariant("generated tag-union spec requested missing parser precomputed record");
+            const fields = try self.dupeRecordFieldsForShape(record_shape);
+            defer self.allocator.free(fields);
+            if (fields.len != precomputed.renamed_field_locals.len) {
+                Common.invariant("generated tag-union spec record arity differed from precomputed record");
+            }
+            for (fields, precomputed.renamed_field_locals) |field, renamed_local| {
+                const entry = try label_locals.getOrPut(field.name);
+                if (!entry.found_existing) entry.value_ptr.* = renamed_local;
+            }
+        }
+        return label_locals;
+    }
+
     fn lowerParseTagUnionSpecValue(
         self: *BodyContext,
         spec_ty: Type.TypeId,
         spec_backing_ty: Type.TypeId,
-        record_shapes: []const Type.TypeId,
+        union_ty: Type.TypeId,
         plan: *const ParserPrecomputedPlan,
     ) Allocator.Error!DraftExprId {
         const str_ty = try self.primitiveType(.str);
-        const backing_fields = try GuardedList.dupe(self.allocator, Type.Field, self.typeStore().fieldSpan(self.recordFieldsSpan(spec_backing_ty)));
+        var label_locals = try self.parserPrecomputedLabelLocals(plan, union_ty);
+        defer label_locals.deinit();
+
+        const backing_fields = try GuardedList.dupe(self.allocator, Type.Field, self.generatedParseTagUnionSpecLabels(spec_backing_ty));
         defer self.allocator.free(backing_fields);
-        if (backing_fields.len != record_shapes.len) Common.invariant("generated tag-union spec backing arity differed from record shape count");
-
-        const outer_values = try self.allocator.alloc(DraftFieldExpr, record_shapes.len);
-        defer self.allocator.free(outer_values);
-
-        for (record_shapes, backing_fields, 0..) |record_shape, backing_field, record_index| {
-            const precomputed = self.parserPlanGet(plan, record_shape) orelse
-                Common.invariant("generated tag-union spec requested missing parser precomputed record");
-            const inner_fields = try GuardedList.dupe(self.allocator, Type.Field, self.typeStore().fieldSpan(self.recordFieldsSpan(backing_field.ty)));
-            defer self.allocator.free(inner_fields);
-            if (inner_fields.len != precomputed.renamed_field_locals.len) {
-                Common.invariant("generated tag-union spec record arity differed from precomputed record");
-            }
-
-            const inner_values = try self.allocator.alloc(DraftFieldExpr, inner_fields.len);
-            defer self.allocator.free(inner_values);
-            for (inner_fields, precomputed.renamed_field_locals, 0..) |inner_field, renamed_local, field_index| {
-                inner_values[field_index] = .{
-                    .name = inner_field.name,
-                    .value = try self.localExpr(renamed_local, str_ty),
-                };
-            }
-
-            outer_values[record_index] = .{
+        const values = try self.allocator.alloc(DraftFieldExpr, backing_fields.len);
+        defer self.allocator.free(values);
+        for (backing_fields, values) |backing_field, *value| {
+            self.assertSameType(backing_field.ty, str_ty, "generated tag-union spec field name value was not Str");
+            const renamed_local = label_locals.get(backing_field.name) orelse
+                Common.invariant("generated tag-union spec label had no precomputed renamed field name");
+            value.* = .{
                 .name = backing_field.name,
-                .value = try self.addExpr(.{
-                    .ty = backing_field.ty,
-                    .data = .{ .record = try self.addFieldExprSpan(inner_values) },
-                }),
+                .value = try self.localExpr(renamed_local, str_ty),
             };
         }
 
         const backing_expr = try self.addExpr(.{
             .ty = spec_backing_ty,
-            .data = .{ .record = try self.addFieldExprSpan(outer_values) },
+            .data = .{ .record = try self.addFieldExprSpan(values) },
         });
         return try self.addExpr(.{
             .ty = spec_ty,
@@ -40207,34 +40208,43 @@ const BodyContext = struct {
         });
     }
 
+    /// Record every record shape the tag union's payload parsers reach into
+    /// `plan`, each field reading its label's renamed name from the spec. A
+    /// spec with no labels has no backing local to read.
     fn buildParserPrecomputedPlanFromTagUnionSpec(
         self: *BodyContext,
         plan: *ParserPrecomputedPlan,
-        spec_backing_local: DraftLocalId,
+        spec_backing_local: ?DraftLocalId,
         spec_backing_ty: Type.TypeId,
         union_ty: Type.TypeId,
     ) Allocator.Error!void {
-        const record_shapes = try self.parserPrecomputedRecordShapesForTagUnion(null, union_ty);
-        defer self.allocator.free(record_shapes);
-
-        const backing_fields = try GuardedList.dupe(self.allocator, Type.Field, self.typeStore().fieldSpan(self.recordFieldsSpan(spec_backing_ty)));
+        const str_ty = try self.primitiveType(.str);
+        const backing_fields = try GuardedList.dupe(self.allocator, Type.Field, self.generatedParseTagUnionSpecLabels(spec_backing_ty));
         defer self.allocator.free(backing_fields);
-        if (backing_fields.len != record_shapes.len) {
-            Common.invariant("generated tag-union spec backing arity differed from payload record shape count");
+
+        var label_captures = collections.DenseMap(names.RecordFieldNameId, ParserPrecomputedCapture).init(self.allocator);
+        defer label_captures.deinit();
+        for (backing_fields) |backing_field| {
+            self.assertSameType(backing_field.ty, str_ty, "generated tag-union spec field name value was not Str");
+            const capture = ParserPrecomputedCapture{
+                .local = try self.addLocal(self.builder.symbols.fresh(), str_ty),
+                .value = try self.addFieldAccessExpr(
+                    try self.localExpr(spec_backing_local orelse Common.invariant("generated tag-union spec labels had no backing local"), spec_backing_ty),
+                    backing_field.name,
+                    str_ty,
+                ),
+            };
+            try label_captures.put(backing_field.name, capture);
+            try plan.captures.append(self.allocator, capture);
         }
 
-        const str_ty = try self.primitiveType(.str);
-        for (record_shapes, backing_fields) |record_shape, backing_field| {
+        const record_shapes = try self.parserPrecomputedRecordShapesForTagUnion(null, union_ty);
+        defer self.allocator.free(record_shapes);
+        for (record_shapes) |record_shape| {
             if (self.parserPlanContains(plan, record_shape)) continue;
 
             const record_fields = try self.dupeRecordFieldsForShape(record_shape);
             defer self.allocator.free(record_fields);
-            const backing_record_fields = try GuardedList.dupe(self.allocator, Type.Field, self.typeStore().fieldSpan(self.recordFieldsSpan(backing_field.ty)));
-            defer self.allocator.free(backing_record_fields);
-            if (backing_record_fields.len != record_fields.len) {
-                Common.invariant("generated tag-union spec record arity differed from payload record arity");
-            }
-
             const locals = try self.allocator.alloc(DraftLocalId, record_fields.len);
             const values = try self.allocator.alloc(DraftExprId, record_fields.len);
             var inserted = false;
@@ -40242,17 +40252,11 @@ const BodyContext = struct {
                 self.allocator.free(locals);
                 self.allocator.free(values);
             };
-
-            const record_expr = try self.addFieldAccessExpr(
-                try self.localExpr(spec_backing_local, spec_backing_ty),
-                backing_field.name,
-                backing_field.ty,
-            );
-
-            for (backing_record_fields, 0..) |field, index| {
-                self.assertSameType(field.ty, str_ty, "generated tag-union spec field name value was not Str");
-                locals[index] = try self.addLocal(self.builder.symbols.fresh(), str_ty);
-                values[index] = try self.addFieldAccessExpr(record_expr, field.name, str_ty);
+            for (record_fields, locals, values) |field, *local, *value| {
+                const capture = label_captures.get(field.name) orelse
+                    Common.invariant("generated tag-union spec had no label for a payload record field");
+                local.* = capture.local;
+                value.* = capture.value;
             }
 
             try self.parserPlanPut(plan, record_shape, .{
@@ -40262,8 +40266,6 @@ const BodyContext = struct {
                 .renamed_field_texts = null,
             });
             inserted = true;
-
-            try self.appendParserPrecomputedCaptures(plan, record_fields, locals, values);
         }
     }
 
@@ -40331,12 +40333,6 @@ const BodyContext = struct {
         self.assertSameType(GuardedList.at(parse_arg_tys, 0), encoding_ty, "parser target tag-union encoding type differed from input encoding type");
         self.assertSameType(GuardedList.at(parse_arg_tys, 2), state_ty, "parser target tag-union state type differed from input state type");
 
-        const record_shapes = if (precomputed_plan) |plan|
-            try self.parserPrecomputedRecordShapesForTagUnion(plan, shape_ty)
-        else
-            &.{};
-        defer if (precomputed_plan != null) self.allocator.free(record_shapes);
-
         const callable_mono_ty = parse_mono_ty;
         const callable_fn = self.functionShape(callable_mono_ty, "parser target tag-union method was not a function");
         const callable_arg_tys = self.typeStore().span(callable_fn.args);
@@ -40350,7 +40346,7 @@ const BodyContext = struct {
             const plan = precomputed_plan orelse Common.invariant("generated tag-union spec requested without a precomputed plan");
             const spec_backing_ty = self.namedBackingType(spec_ty) orelse
                 Common.invariant("generated tag-union spec had no backing type");
-            break :blk try self.lowerParseTagUnionSpecValue(spec_ty, spec_backing_ty, record_shapes, plan);
+            break :blk try self.lowerParseTagUnionSpecValue(spec_ty, spec_backing_ty, shape_ty, plan);
         };
         const result = try self.addExpr(.{
             .ty = callable_fn.ret,
@@ -43409,19 +43405,22 @@ const BodyContext = struct {
 
         var precomputed_plan = ParserPrecomputedPlan.init(self.allocator);
         defer precomputed_plan.deinit();
-        const maybe_spec_backing_ty = if (self.generatedParseTagUnionSpecBackingInfo(spec_ty) != null)
-            self.namedBackingType(spec_ty) orelse Common.invariant("generated tag-union spec had no backing type")
+        const maybe_spec_backing_ty = self.generatedParseTagUnionSpecBackingType(spec_ty);
+        const spec_has_labels = if (maybe_spec_backing_ty) |spec_backing_ty|
+            self.generatedParseTagUnionSpecLabels(spec_backing_ty).len != 0
         else
-            null;
-        const spec_local = if (maybe_spec_backing_ty != null)
+            false;
+        const spec_local = if (spec_has_labels)
             try self.addLocal(self.builder.symbols.fresh(), spec_ty)
         else
             null;
-        const spec_backing_local = if (maybe_spec_backing_ty) |spec_backing_ty| blk: {
-            const local = try self.addLocal(self.builder.symbols.fresh(), spec_backing_ty);
-            try self.buildParserPrecomputedPlanFromTagUnionSpec(&precomputed_plan, local, spec_backing_ty, value_ty);
-            break :blk local;
-        } else null;
+        const spec_backing_local = if (spec_has_labels)
+            try self.addLocal(self.builder.symbols.fresh(), maybe_spec_backing_ty orelse Common.invariant("generated tag-union spec labels had no backing type"))
+        else
+            null;
+        if (maybe_spec_backing_ty) |spec_backing_ty| {
+            try self.buildParserPrecomputedPlanFromTagUnionSpec(&precomputed_plan, spec_backing_local, spec_backing_ty, value_ty);
+        }
 
         var body = try self.unknownDecodedTagErr(ret_ty, missing_local, missing_ty);
         var index = tags.len;
@@ -43458,14 +43457,14 @@ const BodyContext = struct {
         body = try self.wrapLet(encoding_local, encoding_ty, encoding_value, body, ret_ty);
         body = try self.wrapLet(key_local, key_ty, key_value, body, ret_ty);
         body = try self.wrapLet(options_local, options_ty, options_value, body, ret_ty);
-        if (maybe_spec_backing_ty) |spec_backing_ty| {
+        if (spec_backing_local) |backing_local| {
+            const spec_backing_ty = maybe_spec_backing_ty orelse Common.invariant("generated tag-union spec backing local had no backing type");
             var capture_index = precomputed_plan.captures.items.len;
             while (capture_index > 0) {
                 capture_index -= 1;
                 const capture = precomputed_plan.captures.items[capture_index];
                 body = try self.wrapLet(capture.local, try self.primitiveType(.str), capture.value, body, ret_ty);
             }
-            const backing_local = spec_backing_local orelse Common.invariant("generated tag-union spec backing local was missing");
             const spec_pat = try self.addPat(.{
                 .ty = spec_ty,
                 .data = .{ .nominal = try self.bindPat(backing_local, spec_backing_ty) },
@@ -58689,6 +58688,10 @@ const BodyContext = struct {
         }
     }
 
+    /// The generated tag-union spec backing: one `Str` field per distinct
+    /// field label of the record shapes the union's payload parsers reach,
+    /// holding that label's renamed name. Renamed names depend only on the
+    /// label, so each record field reads its name by label.
     fn generatedParseTagUnionSpecBackingNode(
         self: *BodyContext,
         union_node: NodeId,
@@ -58700,30 +58703,21 @@ const BodyContext = struct {
         try self.appendGraphParserRecordShapes(union_node, &record_shapes, &seen);
 
         const str_node = try self.graph.newNode(.{ .primitive = .str });
-        const outer_fields = try self.graph.arena().alloc(InstField, record_shapes.items.len);
-        for (record_shapes.items, outer_fields, 0..) |record_shape, *outer_field, record_index| {
-            const record_fields = (try self.graph.recordNodes(record_shape)).fields;
-            const inner_fields = try self.graph.arena().alloc(InstField, record_fields.len);
-            for (inner_fields, 0..) |*inner_field, field_index| {
-                inner_field.* = .{
-                    .name = try self.generatedParseTagUnionSpecBackingFieldName(field_index),
+        var label_fields = std.ArrayList(InstField).empty;
+        defer label_fields.deinit(self.allocator);
+        var seen_labels = collections.DenseMap(names.RecordFieldNameId, void).init(self.allocator);
+        defer seen_labels.deinit();
+        for (record_shapes.items) |record_shape| {
+            for ((try self.graph.recordNodes(record_shape)).fields) |field| {
+                if ((try seen_labels.getOrPut(field.name)).found_existing) continue;
+                try label_fields.append(self.allocator, .{
+                    .name = field.name,
                     .ty = str_node,
                     .default = null,
-                };
+                });
             }
-            outer_field.* = .{
-                .name = try self.generatedParseTagUnionSpecBackingRecordFieldName(record_index),
-                .ty = try self.graph.newNode(.{ .record = .{
-                    .fields = inner_fields,
-                    .ext = try self.graph.newNode(.empty_record),
-                } }),
-                .default = null,
-            };
         }
-        return try self.graph.newNode(.{ .record = .{
-            .fields = outer_fields,
-            .ext = try self.graph.newNode(.empty_record),
-        } });
+        return try self.graphClosedRecord(label_fields.items);
     }
 
     fn cloneGraphNamedWithBackingAuthority(
@@ -58894,7 +58888,7 @@ const BodyContext = struct {
         const item_fields = try self.graph.arena().alloc(InstField, record_fields.len);
         for (item_fields, 0..) |*field, index| {
             field.* = .{
-                .name = try self.generatedParseTagUnionSpecBackingFieldName(index),
+                .name = try self.generatedFieldNamesItemFieldName(index),
                 .ty = field_handle,
                 .default = null,
             };

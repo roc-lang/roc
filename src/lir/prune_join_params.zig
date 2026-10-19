@@ -12,8 +12,15 @@
 //! parameter qualifies when no reachable statement reads it and every write
 //! to it is an explicit `set_local`: the parameter is removed from its join,
 //! and each of its writes is deleted by routing the write's incoming edges to
-//! the write's successor. Deleting a write can leave the written value unread,
-//! so the pass repeats until no parameter qualifies.
+//! the write's successor.
+//!
+//! Deleting a write can leave the written value unread. When that value is
+//! defined once, by a statement that only computes it from its operands, the
+//! definition is deleted too, and so on back through its operands: a write's
+//! value is often a fresh read of the variable's current value, and that read,
+//! left after a consuming call, would keep the call's argument shared just as
+//! the write did. A written value that is itself a join parameter is left to
+//! the next round, so the pass repeats until no parameter qualifies.
 //!
 //! A parameter is never removed when anything reads it outside an operand
 //! position: a join's retained or maybe-uninitialized lists, or another local's
@@ -52,6 +59,14 @@ const Pass = struct {
     /// Locals read somewhere other than an operand position, or defined by
     /// something other than a join binding or a `set_local`.
     pinned: LocalSet,
+    /// Locals read somewhere other than an operand position.
+    observed: LocalSet,
+    /// Each defined local's defining statement when it has exactly one
+    /// definition and that statement is pure, else null. Collected only in
+    /// rounds that delete writes.
+    defs: collections.DenseMap(LocalId, ?CFStmtId),
+    /// Locals that lost a read to a deleted statement, one entry per read.
+    orphans: std.ArrayList(LocalId) = .empty,
     /// Parameters this round removes.
     pruned: LocalSet,
     /// Writes this round deletes, mapped to their successor.
@@ -65,6 +80,8 @@ const Pass = struct {
             .reads = collections.DenseMap(LocalId, u32).init(allocator),
             .params = LocalSet.init(allocator),
             .pinned = LocalSet.init(allocator),
+            .observed = LocalSet.init(allocator),
+            .defs = collections.DenseMap(LocalId, ?CFStmtId).init(allocator),
             .pruned = LocalSet.init(allocator),
             .deleted = collections.DenseMap(CFStmtId, CFStmtId).init(allocator),
         };
@@ -75,6 +92,9 @@ const Pass = struct {
         self.reads.deinit();
         self.params.deinit();
         self.pinned.deinit();
+        self.observed.deinit();
+        self.defs.deinit();
+        self.orphans.deinit(self.allocator);
         self.pruned.deinit();
         self.deleted.deinit();
     }
@@ -85,6 +105,9 @@ const Pass = struct {
         self.reads.clearRetainingCapacity();
         self.params.clearRetainingCapacity();
         self.pinned.clearRetainingCapacity();
+        self.observed.clearRetainingCapacity();
+        self.defs.clearRetainingCapacity();
+        self.orphans.clearRetainingCapacity();
         self.pruned.clearRetainingCapacity();
         self.deleted.clearRetainingCapacity();
 
@@ -109,9 +132,10 @@ const Pass = struct {
                         try self.params.put(param, {});
                         try self.pinDescriptor(param);
                     }
-                    try self.pinSpan(join.retained);
-                    try self.pinSpan(join.maybe_uninitialized_params);
-                    try self.pinSpan(join.maybe_uninitialized_conditions);
+                    const extra = store.stmtRowOrDefault(join.extra);
+                    try self.pinSpan(extra.retained);
+                    try self.pinSpan(extra.maybe_uninitialized_params);
+                    try self.pinSpan(extra.maybe_uninitialized_conditions);
                 },
                 .set_local => |set| try self.pinDescriptor(set.target),
                 .init_uninitialized,
@@ -174,8 +198,10 @@ const Pass = struct {
             if (stmt == .join) try self.pruneJoinParams(stmt_id, stmt.join.params);
             if (stmt == .set_local and self.pruned.contains(stmt.set_local.target)) {
                 try self.deleted.put(stmt_id, stmt.set_local.next);
+                try self.orphans.append(self.allocator, stmt.set_local.value);
             }
         }
+        try self.deleteOrphanedDefs();
 
         for (self.stmts.items) |stmt_id| {
             if (self.deleted.contains(stmt_id)) continue;
@@ -183,6 +209,29 @@ const Pass = struct {
         }
         store.getProcSpecPtr(self.proc_id).body = resolve(self, body);
         return true;
+    }
+
+    /// Delete each pure definition whose last read was a deleted statement,
+    /// following the deleted definitions' own operands.
+    fn deleteOrphanedDefs(self: *Pass) Allocator.Error!void {
+        const store = self.store;
+        for (self.stmts.items) |stmt_id| {
+            var defs: DefCollector = .{ .pass = self, .stmt = stmt_id };
+            try BodyClone.tryForEachStmtDef(store, store.getCFStmt(stmt_id), &defs, DefCollector.note);
+        }
+        while (self.orphans.pop()) |local| {
+            const reads = self.reads.getPtr(local).?;
+            reads.* -= 1;
+            if (reads.* != 0 or self.observed.contains(local) or self.params.contains(local)) continue;
+            const def_id = (self.defs.get(local) orelse continue) orelse continue;
+            const def = store.getCFStmt(def_id);
+            try self.deleted.put(def_id, pureNext(def).?);
+            try BodyClone.tryForEachStmtRead(store, def, self, Pass.noteOrphan);
+        }
+    }
+
+    fn noteOrphan(self: *Pass, local: LocalId) Allocator.Error!void {
+        try self.orphans.append(self.allocator, local);
     }
 
     fn pruneJoinParams(self: *Pass, join_stmt: CFStmtId, span: LIR.LocalSpan) Allocator.Error!void {
@@ -209,7 +258,11 @@ const Pass = struct {
 
     fn pinSpan(self: *Pass, span: LIR.LocalSpan) Allocator.Error!void {
         const locals = self.store.getLocalSpan(span);
-        for (0..locals.len) |index| try self.pinned.put(GuardedList.at(locals, index), {});
+        for (0..locals.len) |index| {
+            const local = GuardedList.at(locals, index);
+            try self.pinned.put(local, {});
+            try self.observed.put(local, {});
+        }
     }
 
     fn pinDefinition(self: *Pass, local: LocalId) Allocator.Error!void {
@@ -221,9 +274,79 @@ const Pass = struct {
     /// used, so a parameter serving as a descriptor is never unread.
     fn pinDescriptor(self: *Pass, local: LocalId) Allocator.Error!void {
         const desc = self.store.getLocal(local).boxy_desc orelse return;
-        if (desc.localOrNull()) |desc_local| try self.pinned.put(desc_local, {});
+        if (desc.localOrNull()) |desc_local| {
+            try self.pinned.put(desc_local, {});
+            try self.observed.put(desc_local, {});
+        }
     }
 };
+
+const DefCollector = struct {
+    pass: *Pass,
+    stmt: CFStmtId,
+
+    fn note(self: *DefCollector, local: LocalId) Allocator.Error!void {
+        const entry = try self.pass.defs.getOrPut(local);
+        if (entry.found_existing) {
+            entry.value_ptr.* = null;
+        } else {
+            entry.value_ptr.* = if (pureNext(self.pass.store.getCFStmt(self.stmt)) != null) self.stmt else null;
+        }
+    }
+};
+
+/// The successor of a statement that only computes its target from its
+/// operands, with no effect, failure, or divergence; null for any other
+/// statement.
+fn pureNext(stmt: LIR.CFStmt) ?CFStmtId {
+    return switch (stmt) {
+        .assign_ref => |assign| assign.next,
+        .assign_literal => |assign| assign.next,
+        .assign_list => |assign| assign.next,
+        .assign_struct => |assign| if (assign.contents_desc == null) assign.next else null,
+        .assign_tag => |assign| if (assign.target_desc == null) assign.next else null,
+        .init_uninitialized,
+        .set_local,
+        .join,
+        .assign_call,
+        .assign_call_erased,
+        .assign_packed_erased_fn,
+        .assign_boxy_desc_ref,
+        .assign_boxy_dict_ref,
+        .assign_boxy_box,
+        .assign_boxy_record_update,
+        .assign_boxy_unbox,
+        .assign_boxy_adapt,
+        .assign_boxy_inspect,
+        .assign_boxy_eq,
+        .assign_boxy_hash,
+        .assign_boxy_tag,
+        .assign_boxy_tag_payload,
+        .boxy_tag_match,
+        .assign_call_dict,
+        .assign_low_level,
+        .store_struct,
+        .store_tag,
+        .debug,
+        .expect,
+        .expect_err,
+        .runtime_error,
+        .comptime_exhaustiveness_failed,
+        .comptime_branch_taken,
+        .incref,
+        .decref,
+        .decref_if_initialized,
+        .free,
+        .switch_stmt,
+        .switch_initialized_payload,
+        .str_match,
+        .str_match_set,
+        .jump,
+        .ret,
+        .crash,
+        => null,
+    };
+}
 
 fn noteRead(reads: *collections.DenseMap(LocalId, u32), local: LocalId) Allocator.Error!void {
     const entry = try reads.getOrPut(local);

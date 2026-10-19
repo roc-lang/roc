@@ -146,13 +146,12 @@ fn collectCandidates(self: *Self, store: *const LirStore, root: CFStmtId, params
                 try calls.appendAddressed(call, &addressed);
                 for (addressed.items) |local| try self.candidates.put(self.allocator, @backingInt(local), {});
             },
-            .assign_ref => |assign| switch (assign.op) {
-                .local => |source| try self.copies.append(self.allocator, .{ @backingInt(source), @backingInt(assign.target) }),
-                inline .list_reinterpret, .nominal => |ref| try self.copies.append(self.allocator, .{ @backingInt(ref.backing_ref), @backingInt(assign.target) }),
+            .assign_ref => |assign| switch (assign.op.kind) {
+                .local, .list_reinterpret, .nominal => try self.copies.append(self.allocator, .{ @backingInt(assign.op.source), @backingInt(assign.target) }),
                 .discriminant, .field, .tag_payload, .tag_payload_struct => {},
             },
             .set_local => |assign| try self.copies.append(self.allocator, .{ @backingInt(assign.value), @backingInt(assign.target) }),
-            .str_match => |s| try self.noteDeferredCaptures(store, s.source, s.steps),
+            .str_match => |s| try self.noteDeferredCaptures(store, s.source, store.stmtRow(s.data).steps),
             .str_match_set => |s| {
                 const arms = store.getStrMatchArms(s.arms);
                 for (0..arms.len) |i| try self.noteDeferredCaptures(store, s.source, GuardedList.at(arms, i).steps);

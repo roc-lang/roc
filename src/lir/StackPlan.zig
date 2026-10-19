@@ -339,7 +339,7 @@ pub fn addProcGraph(
                 try successors.append(self.allocator, s.default_branch);
             },
             .str_match => |s| {
-                const capture = try self.captureNode(store, at, s.source, s.steps, extra);
+                const capture = try self.captureNode(store, at, s.source, store.stmtRow(s.data).steps, extra);
                 const next = try self.stmtNode(indexes, planned, s.on_match);
                 try self.edge(capture, next);
                 try successors.append(self.allocator, s.on_miss);

@@ -226,8 +226,9 @@ const Pass = struct {
                 if (callee_index >= self.proc_returns.len) tagReachabilityInvariant("callee proc id exceeded proc table");
                 return try self.localInfoMut(s.target).mergeFrom(self.allocator, &self.proc_returns[callee_index]);
             },
-            .assign_call_erased => |s| {
-                var changed = self.localInfoMut(s.target).markAll(self.allocator);
+            .assign_call_erased => |inline_s| {
+                const s = self.store.stmtRow(inline_s.data);
+                var changed = self.localInfoMut(inline_s.target).markAll(self.allocator);
                 if (s.out_desc) |out_desc| {
                     if (self.localInfoMut(out_desc).markAll(self.allocator)) changed = true;
                 }
@@ -286,18 +287,18 @@ const Pass = struct {
     }
 
     fn mergeRef(self: *Pass, target: LIR.LocalId, op: LIR.RefOp) Allocator.Error!bool {
-        return switch (op) {
-            .local => |source| self.localInfoMut(target).mergeFrom(self.allocator, self.localInfo(source)),
-            .nominal => |ref| self.localInfoMut(target).mergeFrom(self.allocator, self.localInfo(ref.backing_ref)),
-            .list_reinterpret => |ref| self.localInfoMut(target).mergeFrom(self.allocator, self.localInfo(ref.backing_ref)),
-            .discriminant => |ref| self.localInfoMut(target).tags.mergeFrom(self.allocator, &self.localInfo(ref.source).tags),
-            .field => |ref| self.mergeFieldRead(target, ref.source, ref.field_idx),
-            .tag_payload => |ref| self.mergePayloadRead(target, ref.source, .{
-                .variant = ref.tag_discriminant,
-                .payload = ref.payload_idx,
+        return switch (op.kind) {
+            .local => self.localInfoMut(target).mergeFrom(self.allocator, self.localInfo(op.source)),
+            .nominal => self.localInfoMut(target).mergeFrom(self.allocator, self.localInfo(op.source)),
+            .list_reinterpret => self.localInfoMut(target).mergeFrom(self.allocator, self.localInfo(op.source)),
+            .discriminant => self.localInfoMut(target).tags.mergeFrom(self.allocator, &self.localInfo(op.source).tags),
+            .field => self.mergeFieldRead(target, op.source, op.index),
+            .tag_payload => self.mergePayloadRead(target, op.source, .{
+                .variant = op.tag_discriminant,
+                .payload = op.index,
             }),
-            .tag_payload_struct => |ref| self.mergePayloadRead(target, ref.source, .{
-                .variant = ref.tag_discriminant,
+            .tag_payload_struct => self.mergePayloadRead(target, op.source, .{
+                .variant = op.tag_discriminant,
                 .payload = payload_struct_slot,
             }),
         };
@@ -401,7 +402,7 @@ const Pass = struct {
             const stmt = self.store.getCFStmt(stmt_id);
             if (stmt != .assign_ref) continue;
             const assign = stmt.assign_ref;
-            if (assign.op != .discriminant) continue;
+            if (assign.op.kind != .discriminant) continue;
             const next_stmt = self.store.getCFStmt(assign.next);
             if (next_stmt != .switch_stmt) continue;
             const switch_stmt = next_stmt.switch_stmt;
@@ -544,16 +545,12 @@ test "tag reachability bypasses call result and direct payload switches" {
     } }, .test_fixture);
     const inner_disc_read = try store.addCFStmt(.{ .assign_ref = .{
         .target = inner_disc,
-        .op = .{ .discriminant = .{ .source = payload } },
+        .op = .discriminant(payload),
         .next = inner_switch,
     } }, .test_fixture);
     const read_payload = try store.addCFStmt(.{ .assign_ref = .{
         .target = payload,
-        .op = .{ .tag_payload_struct = .{
-            .source = call_result,
-            .variant_index = 0,
-            .tag_discriminant = 0,
-        } },
+        .op = .tagPayloadStruct(call_result, 0, 0),
         .next = inner_disc_read,
     } }, .test_fixture);
     const outer_switch = try store.addCFStmt(.{ .switch_stmt = .{
@@ -563,7 +560,7 @@ test "tag reachability bypasses call result and direct payload switches" {
     } }, .test_fixture);
     const outer_disc_read = try store.addCFStmt(.{ .assign_ref = .{
         .target = outer_disc,
-        .op = .{ .discriminant = .{ .source = call_result } },
+        .op = .discriminant(call_result),
         .next = outer_switch,
     } }, .test_fixture);
     const caller_body = try store.addCFStmt(.{ .assign_call = .{
@@ -653,17 +650,12 @@ test "tag reachability tracks per-payload tags through payload structs" {
     } }, .test_fixture);
     const disc_read = try store.addCFStmt(.{ .assign_ref = .{
         .target = disc,
-        .op = .{ .discriminant = .{ .source = payload } },
+        .op = .discriminant(payload),
         .next = switch_stmt,
     } }, .test_fixture);
     const read_payload = try store.addCFStmt(.{ .assign_ref = .{
         .target = payload,
-        .op = .{ .tag_payload = .{
-            .source = call_result,
-            .payload_idx = 1,
-            .variant_index = 0,
-            .tag_discriminant = 0,
-        } },
+        .op = .tagPayload(call_result, 1, 0, 0),
         .next = disc_read,
     } }, .test_fixture);
     const caller_body = try store.addCFStmt(.{ .assign_call = .{
@@ -727,12 +719,12 @@ test "tag reachability preserves nested tag variants extracted across a loop joi
     } }, .test_fixture);
     const disc_read = try store.addCFStmt(.{ .assign_ref = .{
         .target = disc,
-        .op = .{ .discriminant = .{ .source = loop_inner } },
+        .op = .discriminant(loop_inner),
         .next = switch_stmt,
     } }, .test_fixture);
     const read_loop_inner = try store.addCFStmt(.{ .assign_ref = .{
         .target = loop_inner,
-        .op = .{ .field = .{ .source = loop_slot, .field_idx = 0 } },
+        .op = .field(loop_slot, 0),
         .next = disc_read,
     } }, .test_fixture);
     const merge_successor = try store.addCFStmt(.{ .set_local = .{
@@ -743,16 +735,12 @@ test "tag reachability preserves nested tag variants extracted across a loop joi
     } }, .test_fixture);
     const read_successor = try store.addCFStmt(.{ .assign_ref = .{
         .target = extracted_wrapper,
-        .op = .{ .field = .{ .source = extracted_pair, .field_idx = 1 } },
+        .op = .field(extracted_pair, 1),
         .next = merge_successor,
     } }, .test_fixture);
     const read_step_payload = try store.addCFStmt(.{ .assign_ref = .{
         .target = extracted_pair,
-        .op = .{ .tag_payload_struct = .{
-            .source = step,
-            .variant_index = 0,
-            .tag_discriminant = 0,
-        } },
+        .op = .tagPayloadStruct(step, 0, 0),
         .next = read_successor,
     } }, .test_fixture);
     const assign_step = try store.addCFStmt(.{ .assign_tag = .{
@@ -833,7 +821,7 @@ test "tag reachability removes impossible explicit branches from multi-value set
     } }, .test_fixture);
     const disc_read = try store.addCFStmt(.{ .assign_ref = .{
         .target = disc,
-        .op = .{ .discriminant = .{ .source = local } },
+        .op = .discriminant(local),
         .next = switch_stmt,
     } }, .test_fixture);
     const assign_one = try store.addCFStmt(.{ .assign_tag = .{
@@ -886,12 +874,12 @@ test "tag reachability keeps unrelated live discriminant reads" {
     } }, .test_fixture);
     const disc_read = try store.addCFStmt(.{ .assign_ref = .{
         .target = disc,
-        .op = .{ .discriminant = .{ .source = source } },
+        .op = .discriminant(source),
         .next = other_switch,
     } }, .test_fixture);
     const other_disc_read = try store.addCFStmt(.{ .assign_ref = .{
         .target = other_disc,
-        .op = .{ .discriminant = .{ .source = other } },
+        .op = .discriminant(other),
         .next = disc_read,
     } }, .test_fixture);
     const assign_other = try store.addCFStmt(.{ .assign_tag = .{
@@ -947,7 +935,7 @@ test "tag reachability retains branches for arg-derived tags" {
     } }, .test_fixture);
     const body = try store.addCFStmt(.{ .assign_ref = .{
         .target = disc,
-        .op = .{ .discriminant = .{ .source = arg } },
+        .op = .discriminant(arg),
         .next = switch_stmt,
     } }, .test_fixture);
     const proc = try store.addProcSpec(.{
@@ -998,7 +986,7 @@ test "tag reachability retains branches for hosted call results" {
     } }, .test_fixture);
     const disc_read = try store.addCFStmt(.{ .assign_ref = .{
         .target = disc,
-        .op = .{ .discriminant = .{ .source = result } },
+        .op = .discriminant(result),
         .next = switch_stmt,
     } }, .test_fixture);
     const body = try store.addCFStmt(.{ .assign_call = .{
@@ -1044,14 +1032,16 @@ test "tag reachability retains branches for erased call results" {
     } }, .test_fixture);
     const disc_read = try store.addCFStmt(.{ .assign_ref = .{
         .target = disc,
-        .op = .{ .discriminant = .{ .source = result } },
+        .op = .discriminant(result),
         .next = switch_stmt,
     } }, .test_fixture);
     const body = try store.addCFStmt(.{ .assign_call_erased = .{
         .target = result,
-        .closure = closure,
-        .args = LIR.LocalSpan.empty(),
-        .arg_plan = arg_plan,
+        .data = try store.addStmtRow(LIR.ErasedCallData, .{
+            .closure = closure,
+            .args = LIR.LocalSpan.empty(),
+            .arg_plan = arg_plan,
+        }),
         .next = disc_read,
     } }, .test_fixture);
     const proc = try store.addProcSpec(.{
