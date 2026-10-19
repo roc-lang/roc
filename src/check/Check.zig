@@ -21678,6 +21678,23 @@ fn annotationPositionOwner(context: *const anyopaque, owner: *const ModuleEnv, i
     return self.moduleEnvForIdentity(owner, identity).env;
 }
 
+/// Where a type application's arguments stand, by their formals. A
+/// declaration's positions are borrowed from `nominal_positions`.
+const ApplicationPositions = union(enum) {
+    /// A rejected declaration or arity.
+    invalid,
+    builtin,
+    declaration: []const annotation_positions.Positions,
+
+    fn at(self: ApplicationPositions, index: usize) ?annotation_positions.Positions {
+        return switch (self) {
+            .invalid => null,
+            .builtin => annotation_positions.builtin_argument,
+            .declaration => |positions| positions[index],
+        };
+    }
+};
+
 fn declarationPositions(self: *Self, owner: *const ModuleEnv, statement: CIR.Statement.Idx) std.mem.Allocator.Error!?[]annotation_positions.Positions {
     const key = NominalPositionKey{ .owner = owner, .statement = statement };
     const entry = try self.nominal_positions.getOrPut(self.gpa, key);
@@ -22242,9 +22259,8 @@ const AnnoGenState = union(enum) {
     apply: struct {
         /// Each argument's adapter reach. Owned.
         reaches: []GenTypeAnnoCtx.AnnotationGenCtx.AdapterReach = &.{},
-        /// Each argument's formal's declaration positions, or null for a
-        /// rejected declaration or arity. Owned.
-        positions: ?[]annotation_positions.Positions = null,
+        /// Each argument's formal's declaration positions.
+        positions: ApplicationPositions = .invalid,
         /// Waiting for the referenced local declaration, generated before
         /// argument reaches are read from it.
         awaiting_reach_decl: bool = false,
@@ -22493,7 +22509,6 @@ fn releaseAnnoGenScratch(self: *Self, frame: *AnnoGenFrame) void {
         .tuple => |state| self.scratch_vars.clearFrom(state.scratch_top),
         .apply => |state| {
             self.gpa.free(state.reaches);
-            if (state.positions) |positions| self.gpa.free(positions);
         },
         .none, .rigid, .lookup_awaiting_decl, .func => {},
     }
@@ -23381,11 +23396,18 @@ fn stepApplyAnnoGen(self: *Self, frame: *AnnoGenFrame, a: CIR.TypeAnno.Apply, in
         // passes the adapter's reach to its ERROR row; every other
         // application argument puts its arguments out of reach.
         frame.state.apply.reaches = try self.applicationArgumentReaches(a, env, ctx);
-        frame.state.apply.positions = try annotation_positions.analyze(self.gpa, .{
+        frame.state.apply.positions = switch (try annotation_positions.classify(self.gpa, .{
             .builtin_owner = self.builtin_ctx.builtin_module,
             .context = self,
             .resolve = annotationPositionOwner,
-        }, self.cir, a);
+        }, self.cir, a)) {
+            .builtin => .builtin,
+            .invalid => .invalid,
+            .declaration => |declaration| if (try self.declarationPositions(declaration.owner, declaration.statement)) |positions|
+                .{ .declaration = positions }
+            else
+                .invalid,
+        };
         frame.state.apply.prepared = true;
     }
     const state = &frame.state.apply;
@@ -23399,12 +23421,12 @@ fn stepApplyAnnoGen(self: *Self, frame: *AnnoGenFrame, a: CIR.TypeAnno.Apply, in
             // A null result belongs only to rejected declaration/arity
             // diagnostics, never to a valid type application. An invariant
             // formal's argument stands on both sides at every depth.
-            const as_written = if (state.positions) |positions| positions[arg_index].isInvariant() else true;
+            const as_written = if (state.positions.at(arg_index)) |positions| positions.isInvariant() else true;
             const arg_ctx = if (as_written)
                 reached_arg_ctx.withOpening(.as_written)
             else
                 reached_arg_ctx;
-            const arg_polarity = if (state.positions) |positions| positions[arg_index].polarity(polarity) else .neg;
+            const arg_polarity = if (state.positions.at(arg_index)) |positions| positions.polarity(polarity) else .neg;
             return annoGenChild(anno_args[arg_index], arg_ctx, arg_polarity);
         }
 
