@@ -598,6 +598,10 @@ pub const CanonicalNameStore = struct {
         return lookupId(MethodNameId, &self.method_names, text);
     }
 
+    pub fn lookupRecordFieldLabel(self: *const CanonicalNameStore, text: []const u8) ?RecordFieldLabelId {
+        return lookupId(RecordFieldLabelId, &self.record_field_labels, text);
+    }
+
     pub fn lookupTagLabel(self: *const CanonicalNameStore, text: []const u8) ?TagLabelId {
         return lookupId(TagLabelId, &self.tag_labels, text);
     }

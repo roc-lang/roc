@@ -281,45 +281,68 @@ fn nestedCallableExprRuntimeCaptures(module: Plan.ModuleView, expr_id: checked.C
     return Plan.nestedCallableRuntimeCaptures(module, expr_id);
 }
 
-/// Positions of a record expression's labels. Labels from the expression's
-/// own module match by id; labels from another module match by text.
-const RecordLabelPositions = struct {
-    same_module: bool,
-    by_id: collections.DenseMapUnmanaged(names.RecordFieldLabelId, usize) = .empty,
-    by_text: std.StringHashMapUnmanaged(usize) = .empty,
+/// A dense column slot holding an `Id` or nothing at the id's own width. The
+/// id domain's largest value marks an empty slot: no store counts that many
+/// rows, since every id is narrowed from a checked row count.
+fn IdSlot(comptime Id: type) type {
+    return enum(u32) {
+        empty = std.math.maxInt(u32),
+        _,
 
-    fn init(same_module: bool) RecordLabelPositions {
-        return .{ .same_module = same_module };
-    }
+        const Self = @This();
 
-    fn deinit(self: *RecordLabelPositions, allocator: Allocator) void {
-        self.by_id.deinit(allocator);
-        self.by_text.deinit(allocator);
-    }
-
-    /// Record `label`'s position; true when the label was already present.
-    fn put(
-        self: *RecordLabelPositions,
-        allocator: Allocator,
-        label_names: *const names.CanonicalNameStore,
-        label: names.RecordFieldLabelId,
-        position: usize,
-    ) Allocator.Error!bool {
-        if (self.same_module) {
-            const entry = try self.by_id.getOrPut(allocator, label);
-            if (entry.found_existing) return true;
-            entry.value_ptr.* = position;
-        } else {
-            const entry = try self.by_text.getOrPut(allocator, label_names.recordFieldLabelText(label));
-            if (entry.found_existing) return true;
-            entry.value_ptr.* = position;
+        fn of(id: Id) Self {
+            const raw: u32 = @backingInt(id);
+            std.debug.assert(raw != std.math.maxInt(u32));
+            return @fromBackingInt(raw);
         }
+
+        fn get(self: Self) ?Id {
+            if (self == .empty) return null;
+            return @fromBackingInt(@backingInt(self));
+        }
+    };
+}
+
+/// Whether a representation holds a callable in its structure, once known.
+const CallableHolding = enum(u8) { unknown, holds, holds_none };
+
+/// Positions of a record expression's labels, keyed by the expression
+/// module's label ids. A label from the expression's own module matches by
+/// id; a label from another module matches the expression label with the
+/// same text, which the expression module's name store resolves to its id.
+const RecordLabelPositions = struct {
+    expr_names: *const names.CanonicalNameStore,
+    same_module: bool,
+    by_id: collections.DenseMap(names.RecordFieldLabelId, usize),
+
+    fn init(
+        pool: *collections.DenseMapPool(names.RecordFieldLabelId, usize),
+        expr_names: *const names.CanonicalNameStore,
+        same_module: bool,
+    ) RecordLabelPositions {
+        return .{ .expr_names = expr_names, .same_module = same_module, .by_id = pool.acquire() };
+    }
+
+    fn deinit(self: *RecordLabelPositions, pool: *collections.DenseMapPool(names.RecordFieldLabelId, usize)) void {
+        pool.release(&self.by_id);
+    }
+
+    /// Record the position of `label`, an expression module label; true when
+    /// the label was already present.
+    fn put(self: *RecordLabelPositions, label: names.RecordFieldLabelId, position: usize) Allocator.Error!bool {
+        const entry = try self.by_id.getOrPut(label);
+        if (entry.found_existing) return true;
+        entry.value_ptr.* = position;
         return false;
     }
 
     fn get(self: *const RecordLabelPositions, label_names: *const names.CanonicalNameStore, label: names.RecordFieldLabelId) ?usize {
-        if (self.same_module) return self.by_id.get(label);
-        return self.by_text.get(label_names.recordFieldLabelText(label));
+        const expr_label = if (self.same_module)
+            label
+        else
+            self.expr_names.lookupRecordFieldLabel(label_names.recordFieldLabelText(label)) orelse return null;
+        return self.by_id.get(expr_label);
     }
 };
 
@@ -836,19 +859,24 @@ const ProcedureBuilder = struct {
     layout_plan: *const Layouts.LayoutPlan,
     result: *LirProgram.Result,
     options: Options,
-    worker_procs: []?LIR.LirProcSpecId,
-    erased_worker_procs: []?LIR.LirProcSpecId,
-    hosted_external_procs: []?LIR.LirProcSpecId,
-    type_desc_ids: []?LIR.BoxyTypeDescId,
+    worker_procs: []IdSlot(LIR.LirProcSpecId),
+    erased_worker_procs: []IdSlot(LIR.LirProcSpecId),
+    hosted_external_procs: []IdSlot(LIR.LirProcSpecId),
+    type_desc_ids: []IdSlot(LIR.BoxyTypeDescId),
     /// Per representation, whether an erased callable sits in its structure;
     /// see `ProcBodyBuilder.repHoldsCallableInStructure`.
-    rep_holds_callable: []?bool,
+    rep_holds_callable: []CallableHolding,
     generated_evidence_desc_ids: [4]?LIR.BoxyTypeDescId,
     internal_leaf_desc_ids: std.AutoHashMapUnmanaged(layout.Idx, LIR.BoxyTypeDescId),
     /// Exact-storage template descriptors that read no procedure's bound
     /// descriptor locals, so every procedure describes the representation
     /// with the same descriptor.
     exact_template_desc_ids: collections.DenseMapUnmanaged(Plan.TypeRepId, LIR.BoxyTypeDescId) = .empty,
+    /// Reused visited sets over representations, so a structural query
+    /// touches only the representations it reaches.
+    rep_set_pool: collections.DenseMapPool(Plan.TypeRepId, void),
+    /// Reused record label position maps; see `RecordLabelPositions`.
+    label_position_pool: collections.DenseMapPool(names.RecordFieldLabelId, usize),
     static_dict_cache: std.ArrayList(StaticDictCacheEntry),
     /// The procedures every descriptor dictionary's `is_eq` and `to_hash`
     /// slots call; see `descriptorDict`.
@@ -1014,10 +1042,14 @@ const ProcedureBuilder = struct {
             .source_file_ids = .empty,
             .packed_plans = collections.DenseMap(layout.Idx, lir_core.PackedData.Plan).init(allocator),
             .packed_literals = std.AutoHashMap(PackedLiteralKey, LIR.ListLiteral).init(allocator),
+            .rep_set_pool = collections.DenseMapPool(Plan.TypeRepId, void).init(allocator),
+            .label_position_pool = collections.DenseMapPool(names.RecordFieldLabelId, usize).init(allocator),
         };
     }
 
     fn deinit(self: *ProcedureBuilder) void {
+        self.label_position_pool.deinit();
+        self.rep_set_pool.deinit();
         self.literal_dicts.deinit(self.allocator);
         if (self.literal_const_plans) |*plans| plans.deinit();
         for (self.frozen_callable_recipes.items) |recipe| self.allocator.free(recipe.fields);
@@ -1077,8 +1109,8 @@ const ProcedureBuilder = struct {
 
     fn ensureTypeDescIds(self: *ProcedureBuilder) Allocator.Error!void {
         if (self.type_desc_ids.len != 0) return;
-        self.type_desc_ids = try self.allocator.alloc(?LIR.BoxyTypeDescId, self.plan.representations.items.len);
-        @memset(self.type_desc_ids, null);
+        self.type_desc_ids = try self.allocator.alloc(IdSlot(LIR.BoxyTypeDescId), self.plan.representations.items.len);
+        @memset(self.type_desc_ids, .empty);
     }
 
     fn staticDescRefForRep(self: *ProcedureBuilder, rep_id: Plan.TypeRepId) Allocator.Error!LIR.BoxyDescRef {
@@ -1689,7 +1721,7 @@ const ProcedureBuilder = struct {
                 if (rep_index >= self.type_desc_ids.len) {
                     boxyLowerInvariant("boxy descriptor referenced a representation outside the descriptor cache");
                 }
-                if (self.type_desc_ids[rep_index]) |existing| return .{ .desc = existing };
+                if (self.type_desc_ids[rep_index].get()) |existing| return .{ .desc = existing };
                 return try self.pushStaticFrame(stack, .desc, .{ .rep = rep_id });
             },
             .source_desc => |source_desc| return try self.pushStaticFrame(stack, .source_desc, .{ .request = source_desc }),
@@ -1817,7 +1849,7 @@ const ProcedureBuilder = struct {
                 }
 
                 frame.desc_id = @fromBackingInt(@intCast(@as(u32, @intCast(self.result.boxy_type_descs.items.len))));
-                self.type_desc_ids[rep_index] = frame.desc_id;
+                self.type_desc_ids[rep_index] = .of(frame.desc_id);
                 try self.result.boxy_type_descs.append(self.allocator, reserved_boxy_type_desc);
 
                 const rep_layout = self.layout_plan.rep_layouts[rep_index];
@@ -1835,7 +1867,7 @@ const ProcedureBuilder = struct {
                     .desc => |desc| desc,
                     .ref, .dict, .slot_id, .span, .method_slot, .adapter => boxyLowerInvariant("forwarded static descriptor delivered a non-descriptor value"),
                 };
-                self.type_desc_ids[rep_index] = desc_id;
+                self.type_desc_ids[rep_index] = .of(desc_id);
                 return .{ .done = .{ .desc = desc_id } };
             },
             .nested => {
@@ -5293,8 +5325,8 @@ const ProcedureBuilder = struct {
             for (shape.dictionaries, frame_dict_locals) |dictionaries, local| {
                 for (0..dictionaries.len) |offset| {
                     const index = dictionaries.start + offset;
-                    proc.dictionary_slots[index] = local;
-                    proc.dictionary_locals[index] = local;
+                    proc.dictionary_slots[index] = .of(local);
+                    proc.dictionary_locals[index] = .of(local);
                     proc.dictionary_bound[index] = true;
                 }
             }
@@ -6550,12 +6582,12 @@ const ProcedureBuilder = struct {
     }
 
     fn emitRoots(self: *ProcedureBuilder, roots: Common.RootRequests) Allocator.Error!void {
-        self.worker_procs = try self.allocator.alloc(?LIR.LirProcSpecId, self.plan.workers.items.len);
-        @memset(self.worker_procs, null);
-        self.erased_worker_procs = try self.allocator.alloc(?LIR.LirProcSpecId, self.plan.workers.items.len);
-        @memset(self.erased_worker_procs, null);
-        self.hosted_external_procs = try self.allocator.alloc(?LIR.LirProcSpecId, self.plan.workers.items.len);
-        @memset(self.hosted_external_procs, null);
+        self.worker_procs = try self.allocator.alloc(IdSlot(LIR.LirProcSpecId), self.plan.workers.items.len);
+        @memset(self.worker_procs, .empty);
+        self.erased_worker_procs = try self.allocator.alloc(IdSlot(LIR.LirProcSpecId), self.plan.workers.items.len);
+        @memset(self.erased_worker_procs, .empty);
+        self.hosted_external_procs = try self.allocator.alloc(IdSlot(LIR.LirProcSpecId), self.plan.workers.items.len);
+        @memset(self.hosted_external_procs, .empty);
         self.worker_jobs = try self.allocator.alloc(?u32, self.plan.workers.items.len);
         @memset(self.worker_jobs, null);
         self.worker_return_locals = try self.allocator.alloc(?LIR.LocalId, self.plan.workers.items.len);
@@ -7065,7 +7097,7 @@ const ProcedureBuilder = struct {
         const index = @backingInt(worker_id);
         const procs = if (erased) self.erased_worker_procs else self.worker_procs;
         if (index >= procs.len) boxyLowerInvariant("boxy procedure referenced a missing worker proc");
-        if (procs[index]) |existing| return existing;
+        if (procs[index].get()) |existing| return existing;
 
         const resolved = resolveWorker(self.modules, self.plan, index);
         const worker_layout = self.layout_plan.workerLayoutFor(worker_id);
@@ -7080,7 +7112,7 @@ const ProcedureBuilder = struct {
             .abi = if (erased) .erased_callable else .roc,
             .boxy_runtime_entry = erased,
         }, (try self.workerOrigin(resolved)).loc);
-        procs[index] = proc_id;
+        procs[index] = .of(proc_id);
         try self.setProcDebugName(proc_id, resolved);
         const job = try self.allocator.create(WorkerJob);
         errdefer self.allocator.destroy(job);
@@ -7396,8 +7428,8 @@ const ProcedureBuilder = struct {
             const dictionaries = Plan.Span{ .start = @backingInt(match.requirement), .len = 1 };
             try proc.ensureDictionaryLocals();
             const local = try proc.addFrameLocal(.opaque_ptr);
-            proc.dictionary_locals[dictionaries.start] = local;
-            proc.dictionary_slots[dictionaries.start] = local;
+            proc.dictionary_locals[dictionaries.start] = .of(local);
+            proc.dictionary_slots[dictionaries.start] = .of(local);
             proc.dictionary_bound[dictionaries.start] = true;
             dictionary_initializer = .{ .local = local, .materialize = try self.staticDictRefForRepWithEvidence(initializer.rep, dictionaries, initializer.method_evidence, 0) };
         };
@@ -7488,7 +7520,7 @@ const ProcedureBuilder = struct {
     ) Allocator.Error!LIR.LirProcSpecId {
         const index = @backingInt(worker_id);
         if (index >= self.hosted_external_procs.len) boxyLowerInvariant("boxy hosted worker referenced a missing external proc slot");
-        if (self.hosted_external_procs[index]) |existing| return existing;
+        if (self.hosted_external_procs[index].get()) |existing| return existing;
 
         if (resolved.body != .hosted) {
             boxyLowerInvariant("non-hosted worker tried to emit a hosted external proc");
@@ -7537,7 +7569,7 @@ const ProcedureBuilder = struct {
             .hosted = try self.lirHostedProcForTemplate(template_ref),
             .stack_probe = self.stackProbeForProc(args_span, LIR.LocalSpan.empty(), ret_layout),
         }, .none);
-        self.hosted_external_procs[index] = proc_id;
+        self.hosted_external_procs[index] = .of(proc_id);
         try self.setProcDebugName(proc_id, resolved);
         return proc_id;
     }
@@ -14891,12 +14923,12 @@ const ProcBodyBuilder = struct {
     /// binders, direct-indexed by binder id so a body touches only the
     /// binders it binds rather than a column over every binder in the module.
     binder_bindings: collections.DenseMap(checked.PatternBinderId, BinderBinding),
-    descriptor_locals: []?LIR.LocalId,
-    descriptor_local_reps: []?Plan.TypeRepId,
+    descriptor_locals: []IdSlot(LIR.LocalId),
+    descriptor_local_reps: []IdSlot(Plan.TypeRepId),
     descriptor_bound: []bool,
     descriptor_evidence_bound: []bool,
-    descriptor_slots: []?LIR.LocalId,
-    descriptor_slot_reps: []?Plan.TypeRepId,
+    descriptor_slots: []IdSlot(LIR.LocalId),
+    descriptor_slot_reps: []IdSlot(Plan.TypeRepId),
     descriptor_rep_bindings: std.ArrayList(DescriptorRepBinding),
     adapter_descriptor_entries: std.ArrayList(AdapterDescriptorEntry),
     runtime_initialized_descriptor_locals: std.ArrayList(LIR.LocalId),
@@ -14925,9 +14957,9 @@ const ProcBodyBuilder = struct {
     /// at this call.
     call_boundary_substitution: []const Plan.DirectCallHiddenDescriptorArg = &.{},
     read_only_descriptor_inputs: std.ArrayList(LIR.LocalId),
-    dictionary_locals: []?LIR.LocalId,
+    dictionary_locals: []IdSlot(LIR.LocalId),
     dictionary_bound: []bool,
-    dictionary_slots: []?LIR.LocalId,
+    dictionary_slots: []IdSlot(LIR.LocalId),
     erased_capture_arg: ?LIR.LocalId,
     erased_capture_contents_desc: ?LIR.LocalId,
     erased_capture_locals: std.ArrayList(LIR.LocalId),
@@ -15249,12 +15281,12 @@ const ProcBodyBuilder = struct {
     };
 
     const DescriptorBindingsSnapshot = struct {
-        locals: []?LIR.LocalId,
-        local_reps: []?Plan.TypeRepId,
+        locals: []IdSlot(LIR.LocalId),
+        local_reps: []IdSlot(Plan.TypeRepId),
         bound: []bool,
         evidence_bound: []bool,
-        slots: []?LIR.LocalId,
-        slot_reps: []?Plan.TypeRepId,
+        slots: []IdSlot(LIR.LocalId),
+        slot_reps: []IdSlot(Plan.TypeRepId),
         rep_bindings: []DescriptorRepBinding,
         runtime_initialized_len: usize,
 
@@ -15866,8 +15898,8 @@ const ProcBodyBuilder = struct {
             var dict_offset: u32 = 0;
             while (dict_offset < param.dictionaries.len) : (dict_offset += 1) {
                 const dict_index: usize = @intCast(param.dictionaries.start + dict_offset);
-                self.dictionary_slots[dict_index] = local;
-                self.dictionary_locals[dict_index] = local;
+                self.dictionary_slots[dict_index] = .of(local);
+                self.dictionary_locals[dict_index] = .of(local);
                 self.dictionary_bound[dict_index] = true;
             }
         }
@@ -15930,8 +15962,8 @@ const ProcBodyBuilder = struct {
                     var dict_offset: u32 = 0;
                     while (dict_offset < capture.dictionaries.len) : (dict_offset += 1) {
                         const dict_index: usize = @intCast(capture.dictionaries.start + dict_offset);
-                        self.dictionary_slots[dict_index] = local;
-                        self.dictionary_locals[dict_index] = local;
+                        self.dictionary_slots[dict_index] = .of(local);
+                        self.dictionary_locals[dict_index] = .of(local);
                         self.dictionary_bound[dict_index] = true;
                     }
                 },
@@ -18407,17 +18439,18 @@ const ProcBodyBuilder = struct {
         // Supplied and unset labels, so each representation field finds its
         // source in constant time. They match as `Plan.recordFieldNameMatches`
         // does: by id within the expression's module, by text across modules.
-        var expr_field_positions = RecordLabelPositions.init(checked_moduleKeyEqual(self.module.key, rep_field_view.key));
-        defer expr_field_positions.deinit(self.parent.allocator);
+        const label_pool = &self.parent.label_position_pool;
+        var expr_field_positions = RecordLabelPositions.init(label_pool, self.module.canonical_names.?, checked_moduleKeyEqual(self.module.key, rep_field_view.key));
+        defer expr_field_positions.deinit(label_pool);
         for (expr_fields, 0..) |field, index| {
-            if (try expr_field_positions.put(self.parent.allocator, self.module.canonical_names.?, field.label, index)) {
+            if (try expr_field_positions.put(field.label, index)) {
                 boxyLowerInvariant("record expression contained the same field label more than once");
             }
         }
-        var unset_positions = RecordLabelPositions.init(expr_field_positions.same_module);
-        defer unset_positions.deinit(self.parent.allocator);
+        var unset_positions = RecordLabelPositions.init(label_pool, self.module.canonical_names.?, expr_field_positions.same_module);
+        defer unset_positions.deinit(label_pool);
         for (unset_fields, 0..) |unset_label, index| {
-            if (try unset_positions.put(self.parent.allocator, self.module.canonical_names.?, unset_label, index)) {
+            if (try unset_positions.put(unset_label, index)) {
                 boxyLowerInvariant("record expression contained the same unset field label more than once");
             }
         }
@@ -25676,18 +25709,22 @@ const ProcBodyBuilder = struct {
     /// convention and only the formals' descriptors differ.
     fn repHoldsCallableInStructure(self: *ProcBodyBuilder, rep_id: Plan.TypeRepId) Allocator.Error!bool {
         if (self.parent.rep_holds_callable.len == 0) {
-            self.parent.rep_holds_callable = try self.parent.allocator.alloc(?bool, self.parent.plan.representations.items.len);
-            @memset(self.parent.rep_holds_callable, null);
+            self.parent.rep_holds_callable = try self.parent.allocator.alloc(CallableHolding, self.parent.plan.representations.items.len);
+            @memset(self.parent.rep_holds_callable, .unknown);
         }
         const rep_index = @backingInt(rep_id);
         if (rep_index >= self.parent.rep_holds_callable.len) {
             boxyLowerInvariant("boxy callable-structure query referenced a representation outside its cache");
         }
-        if (self.parent.rep_holds_callable[rep_index]) |known| return known;
-        var visited = collections.DenseMap(Plan.TypeRepId, void).init(self.parent.allocator);
-        defer visited.deinit();
+        switch (self.parent.rep_holds_callable[rep_index]) {
+            .unknown => {},
+            .holds => return true,
+            .holds_none => return false,
+        }
+        var visited = self.parent.rep_set_pool.acquire();
+        defer self.parent.rep_set_pool.release(&visited);
         const holds = try self.repHoldsCallableInStructureVisited(rep_id, &visited);
-        self.parent.rep_holds_callable[rep_index] = holds;
+        self.parent.rep_holds_callable[rep_index] = if (holds) .holds else .holds_none;
         return holds;
     }
 
@@ -31962,12 +31999,12 @@ const ProcBodyBuilder = struct {
         if (desc_index < snapshot.bound.len and
             snapshot.bound[desc_index] and
             desc_index < snapshot.local_reps.len and
-            snapshot.local_reps[desc_index] == identity_rep)
+            snapshot.local_reps[desc_index].get() == identity_rep)
         {
             if (desc_index >= snapshot.locals.len) {
                 boxyLowerInvariant("boxy descriptor snapshot bound state had no local slot");
             }
-            return snapshot.locals[desc_index] orelse
+            return snapshot.locals[desc_index].get() orelse
                 boxyLowerInvariant("boxy descriptor snapshot marked a missing local as bound");
         }
         for (snapshot.rep_bindings) |binding| {
@@ -32901,9 +32938,8 @@ const ProcBodyBuilder = struct {
         rep_id: Plan.TypeRepId,
     ) Allocator.Error!bool {
         const allocator = self.parent.allocator;
-        const visited = try allocator.alloc(bool, self.parent.plan.representations.items.len);
-        defer allocator.free(visited);
-        @memset(visited, false);
+        var visited = self.parent.rep_set_pool.acquire();
+        defer self.parent.rep_set_pool.release(&visited);
         var pending: std.ArrayList(TemplateCaptureProbe) = .empty;
         defer pending.deinit(allocator);
         try pending.append(allocator, .{ .body = rep_id });
@@ -32919,7 +32955,7 @@ const ProcBodyBuilder = struct {
                 }
                 try pending.append(allocator, .{ .body = identity_rep });
             },
-            .body => |body_rep| try self.probeTemplateBodyCaptures(body_rep, visited, &pending),
+            .body => |body_rep| try self.probeTemplateBodyCaptures(body_rep, &visited, &pending),
         };
         return false;
     }
@@ -32936,14 +32972,13 @@ const ProcBodyBuilder = struct {
     fn probeTemplateBodyCaptures(
         self: *ProcBodyBuilder,
         rep_id: Plan.TypeRepId,
-        visited: []bool,
+        visited: *collections.DenseMap(Plan.TypeRepId, void),
         pending: *std.ArrayList(TemplateCaptureProbe),
     ) Allocator.Error!void {
         const allocator = self.parent.allocator;
         const identity_rep = self.parent.descriptorIdentityRep(rep_id);
         const rep_index = @backingInt(identity_rep);
-        if (visited[rep_index]) return;
-        visited[rep_index] = true;
+        if ((try visited.getOrPut(identity_rep)).found_existing) return;
 
         const rep = self.parent.plan.representations.items[rep_index];
         var substitutions = self.parent.plan.nominalBackingSubstitutions(rep.nominal_backing_arg_substitutions);
@@ -38317,16 +38352,16 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("boxy descriptor binding exceeded descriptor table");
         }
         const identity_rep = self.descriptorStorageRep(rep_id);
-        if (self.descriptor_locals[desc_index] == null or
-            self.descriptor_local_reps[desc_index] == null or
-            self.descriptor_local_reps[desc_index].? == identity_rep)
+        if (self.descriptor_locals[desc_index].get() == null or
+            self.descriptor_local_reps[desc_index].get() == null or
+            self.descriptor_local_reps[desc_index].get().? == identity_rep)
         {
-            const preserves = self.descriptor_locals[desc_index] == local and
-                self.descriptor_local_reps[desc_index] == identity_rep;
+            const preserves = self.descriptor_locals[desc_index].get() == local and
+                self.descriptor_local_reps[desc_index].get() == identity_rep;
             const preserves_bound = preserves and self.descriptor_bound[desc_index];
             const preserves_evidence = preserves and self.descriptor_evidence_bound[desc_index];
-            self.descriptor_locals[desc_index] = local;
-            self.descriptor_local_reps[desc_index] = identity_rep;
+            self.descriptor_locals[desc_index] = .of(local);
+            self.descriptor_local_reps[desc_index] = .of(identity_rep);
             self.descriptor_bound[desc_index] = preserves_bound;
             self.descriptor_evidence_bound[desc_index] = preserves_evidence;
             return;
@@ -38359,7 +38394,7 @@ const ProcBodyBuilder = struct {
     ) void {
         const identity_rep = self.descriptorStorageRep(rep_id);
         const desc_index = @backingInt(desc);
-        if (desc_index < self.descriptor_local_reps.len and self.descriptor_local_reps[desc_index] == identity_rep) {
+        if (desc_index < self.descriptor_local_reps.len and self.descriptor_local_reps[desc_index].get() == identity_rep) {
             self.descriptor_bound[desc_index] = true;
             self.descriptor_evidence_bound[desc_index] = true;
             return;
@@ -38385,8 +38420,8 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("boxy descriptor binding exceeded descriptor table");
         }
         if (bind_slot) {
-            self.descriptor_slots[desc_index] = local;
-            self.descriptor_slot_reps[desc_index] = self.descriptorStorageRep(rep_id);
+            self.descriptor_slots[desc_index] = .of(local);
+            self.descriptor_slot_reps[desc_index] = .of(self.descriptorStorageRep(rep_id));
         }
         try self.setDescriptorRequirementLocalForRep(desc, rep_id, local);
         self.markDescriptorRequirementBoundForRep(desc, rep_id);
@@ -41082,11 +41117,12 @@ const ProcBodyBuilder = struct {
         if (std.mem.findScalar(LIR.LocalId, self.runtime_initialized_descriptor_locals.items, local) == null) {
             try self.runtime_initialized_descriptor_locals.append(self.parent.allocator, local);
         }
+        const slot = IdSlot(LIR.LocalId).of(local);
         for (self.descriptor_locals, 0..) |maybe_local, index| {
-            if (maybe_local == local) self.descriptor_bound[index] = true;
+            if (maybe_local == slot) self.descriptor_bound[index] = true;
         }
         for (self.descriptor_slots, 0..) |maybe_local, index| {
-            if (maybe_local == local) self.descriptor_bound[index] = true;
+            if (maybe_local == slot) self.descriptor_bound[index] = true;
         }
         for (self.descriptor_rep_bindings.items) |*binding| {
             if (binding.local == local) binding.bound = true;
@@ -41408,35 +41444,35 @@ const ProcBodyBuilder = struct {
 
     fn ensureDescriptorLocals(self: *ProcBodyBuilder) Allocator.Error!void {
         if (self.descriptor_locals.len != 0) return;
-        self.descriptor_locals = try self.parent.allocator.alloc(?LIR.LocalId, self.parent.plan.descriptors.items.len);
+        self.descriptor_locals = try self.parent.allocator.alloc(IdSlot(LIR.LocalId), self.parent.plan.descriptors.items.len);
         errdefer self.parent.allocator.free(self.descriptor_locals);
-        self.descriptor_local_reps = try self.parent.allocator.alloc(?Plan.TypeRepId, self.parent.plan.descriptors.items.len);
+        self.descriptor_local_reps = try self.parent.allocator.alloc(IdSlot(Plan.TypeRepId), self.parent.plan.descriptors.items.len);
         errdefer self.parent.allocator.free(self.descriptor_local_reps);
         self.descriptor_bound = try self.parent.allocator.alloc(bool, self.parent.plan.descriptors.items.len);
         errdefer self.parent.allocator.free(self.descriptor_bound);
         self.descriptor_evidence_bound = try self.parent.allocator.alloc(bool, self.parent.plan.descriptors.items.len);
         errdefer self.parent.allocator.free(self.descriptor_evidence_bound);
-        self.descriptor_slots = try self.parent.allocator.alloc(?LIR.LocalId, self.parent.plan.descriptors.items.len);
+        self.descriptor_slots = try self.parent.allocator.alloc(IdSlot(LIR.LocalId), self.parent.plan.descriptors.items.len);
         errdefer self.parent.allocator.free(self.descriptor_slots);
-        self.descriptor_slot_reps = try self.parent.allocator.alloc(?Plan.TypeRepId, self.parent.plan.descriptors.items.len);
-        @memset(self.descriptor_locals, null);
-        @memset(self.descriptor_local_reps, null);
+        self.descriptor_slot_reps = try self.parent.allocator.alloc(IdSlot(Plan.TypeRepId), self.parent.plan.descriptors.items.len);
+        @memset(self.descriptor_locals, .empty);
+        @memset(self.descriptor_local_reps, .empty);
         @memset(self.descriptor_bound, false);
         @memset(self.descriptor_evidence_bound, false);
-        @memset(self.descriptor_slots, null);
-        @memset(self.descriptor_slot_reps, null);
+        @memset(self.descriptor_slots, .empty);
+        @memset(self.descriptor_slot_reps, .empty);
     }
 
     fn ensureDictionaryLocals(self: *ProcBodyBuilder) Allocator.Error!void {
         if (self.dictionary_locals.len != 0) return;
-        self.dictionary_locals = try self.parent.allocator.alloc(?LIR.LocalId, self.parent.plan.dictionaries.items.len);
+        self.dictionary_locals = try self.parent.allocator.alloc(IdSlot(LIR.LocalId), self.parent.plan.dictionaries.items.len);
         errdefer self.parent.allocator.free(self.dictionary_locals);
         self.dictionary_bound = try self.parent.allocator.alloc(bool, self.parent.plan.dictionaries.items.len);
         errdefer self.parent.allocator.free(self.dictionary_bound);
-        self.dictionary_slots = try self.parent.allocator.alloc(?LIR.LocalId, self.parent.plan.dictionaries.items.len);
-        @memset(self.dictionary_locals, null);
+        self.dictionary_slots = try self.parent.allocator.alloc(IdSlot(LIR.LocalId), self.parent.plan.dictionaries.items.len);
+        @memset(self.dictionary_locals, .empty);
         @memset(self.dictionary_bound, false);
-        @memset(self.dictionary_slots, null);
+        @memset(self.dictionary_slots, .empty);
     }
 
     fn descriptorRepBindingIndex(
@@ -41458,11 +41494,11 @@ const ProcBodyBuilder = struct {
         const identity_rep = self.descriptorStorageRep(rep_id);
         const desc_index = @backingInt(desc);
         if (desc_index < self.descriptor_locals.len) {
-            if (self.descriptor_locals[desc_index]) |local| {
+            if (self.descriptor_locals[desc_index].get()) |local| {
                 if (desc_index >= self.descriptor_local_reps.len) {
                     boxyLowerInvariant("boxy descriptor local representation table was missing an entry");
                 }
-                const local_rep = self.descriptor_local_reps[desc_index] orelse
+                const local_rep = self.descriptor_local_reps[desc_index].get() orelse
                     boxyLowerInvariant("boxy descriptor local had no representation binding");
                 if (local_rep == identity_rep) return local;
             }
@@ -41497,7 +41533,7 @@ const ProcBodyBuilder = struct {
         const desc_index = @backingInt(desc);
         if (desc_index < @field(self, marks).len and @field(self, marks)[desc_index]) {
             if (desc_index >= self.descriptor_local_reps.len) return false;
-            if (self.descriptor_local_reps[desc_index] == identity_rep) return true;
+            if (self.descriptor_local_reps[desc_index].get() == identity_rep) return true;
         }
         for (self.descriptor_rep_bindings.items) |binding| {
             if (binding.desc == desc and binding.rep == identity_rep) return @field(binding, flag);
@@ -41526,7 +41562,7 @@ const ProcBodyBuilder = struct {
     ) ?LIR.LocalId {
         const dict_index = @backingInt(dict);
         if (dict_index >= self.dictionary_locals.len) return null;
-        return self.dictionary_locals[dict_index];
+        return self.dictionary_locals[dict_index].get();
     }
 
     fn dictionaryBindingIsBound(self: *const ProcBodyBuilder, dict: Plan.DictionaryRequirementId) bool {
@@ -41567,12 +41603,12 @@ const ProcBodyBuilder = struct {
         static: StaticDescriptorMaterializationScope,
     ) Allocator.Error!DetachedDescriptorScope {
         const outer_bindings = try self.snapshotDescriptorBindings();
-        @memset(self.descriptor_locals, null);
-        @memset(self.descriptor_local_reps, null);
+        @memset(self.descriptor_locals, .empty);
+        @memset(self.descriptor_local_reps, .empty);
         @memset(self.descriptor_bound, false);
         @memset(self.descriptor_evidence_bound, false);
-        @memset(self.descriptor_slots, null);
-        @memset(self.descriptor_slot_reps, null);
+        @memset(self.descriptor_slots, .empty);
+        @memset(self.descriptor_slot_reps, .empty);
         self.descriptor_rep_bindings.items.len = 0;
         const outer_static = self.static_descriptor_materialization_scope;
         self.static_descriptor_materialization_scope = static;
@@ -41618,17 +41654,17 @@ const ProcBodyBuilder = struct {
 
     fn snapshotDescriptorBindings(self: *ProcBodyBuilder) Allocator.Error!DescriptorBindingsSnapshot {
         try self.ensureDescriptorLocals();
-        const locals = try self.parent.allocator.dupe(?LIR.LocalId, self.descriptor_locals);
+        const locals = try self.parent.allocator.dupe(IdSlot(LIR.LocalId), self.descriptor_locals);
         errdefer self.parent.allocator.free(locals);
-        const local_reps = try self.parent.allocator.dupe(?Plan.TypeRepId, self.descriptor_local_reps);
+        const local_reps = try self.parent.allocator.dupe(IdSlot(Plan.TypeRepId), self.descriptor_local_reps);
         errdefer self.parent.allocator.free(local_reps);
         const bound = try self.parent.allocator.dupe(bool, self.descriptor_bound);
         errdefer self.parent.allocator.free(bound);
         const evidence_bound = try self.parent.allocator.dupe(bool, self.descriptor_evidence_bound);
         errdefer self.parent.allocator.free(evidence_bound);
-        const slots = try self.parent.allocator.dupe(?LIR.LocalId, self.descriptor_slots);
+        const slots = try self.parent.allocator.dupe(IdSlot(LIR.LocalId), self.descriptor_slots);
         errdefer self.parent.allocator.free(slots);
-        const slot_reps = try self.parent.allocator.dupe(?Plan.TypeRepId, self.descriptor_slot_reps);
+        const slot_reps = try self.parent.allocator.dupe(IdSlot(Plan.TypeRepId), self.descriptor_slot_reps);
         errdefer self.parent.allocator.free(slot_reps);
         const rep_bindings = try self.parent.allocator.dupe(DescriptorRepBinding, self.descriptor_rep_bindings.items);
         return .{
@@ -41713,8 +41749,8 @@ const ProcBodyBuilder = struct {
                 const desc_index = @backingInt(desc);
                 const identity_rep = self.descriptorStorageRep(rep_id);
                 const local = try self.addFrameLocal(.opaque_ptr);
-                self.descriptor_slots[desc_index] = local;
-                self.descriptor_slot_reps[desc_index] = identity_rep;
+                self.descriptor_slots[desc_index] = .of(local);
+                self.descriptor_slot_reps[desc_index] = .of(identity_rep);
                 try self.setDescriptorRequirementLocalForRep(desc, identity_rep, local);
                 self.markDescriptorRequirementBoundForRep(desc, identity_rep);
                 return local;
@@ -41737,14 +41773,14 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("boxy descriptor requirement index exceeded descriptor local table");
         }
         const identity_rep = self.descriptorStorageRep(rep_id);
-        if (self.descriptor_slots[desc_index]) |existing| {
-            const slot_rep = self.descriptor_slot_reps[desc_index] orelse
+        if (self.descriptor_slots[desc_index].get()) |existing| {
+            const slot_rep = self.descriptor_slot_reps[desc_index].get() orelse
                 boxyLowerInvariant("boxy descriptor slot had no representation binding");
             if (slot_rep == identity_rep) return .{ .local = existing, .fresh = false };
         }
         const local = try self.addFrameLocal(.opaque_ptr);
-        self.descriptor_slots[desc_index] = local;
-        self.descriptor_slot_reps[desc_index] = identity_rep;
+        self.descriptor_slots[desc_index] = .of(local);
+        self.descriptor_slot_reps[desc_index] = .of(identity_rep);
         return .{ .local = local, .fresh = true };
     }
 
@@ -41766,12 +41802,12 @@ const ProcBodyBuilder = struct {
         if (dict_index >= self.dictionary_slots.len) {
             boxyLowerInvariant("boxy dictionary requirement index exceeded dictionary local table");
         }
-        if (self.dictionary_slots[dict_index]) |existing| return .{ .local = existing, .fresh = false };
+        if (self.dictionary_slots[dict_index].get()) |existing| return .{ .local = existing, .fresh = false };
         const local = try self.addFrameLocal(.opaque_ptr);
         var offset: u32 = 0;
         while (offset < span.len) : (offset += 1) {
             const index: usize = @intCast(span.start + offset);
-            self.dictionary_slots[index] = local;
+            self.dictionary_slots[index] = .of(local);
         }
         return .{ .local = local, .fresh = true };
     }
@@ -41851,8 +41887,8 @@ const ProcBodyBuilder = struct {
         var index = self.descriptor_slots.len;
         while (index > 0) {
             index -= 1;
-            const local = self.descriptor_slots[index] orelse continue;
-            const slot_rep = self.descriptor_slot_reps[index] orelse
+            const local = self.descriptor_slots[index].get() orelse continue;
+            const slot_rep = self.descriptor_slot_reps[index].get() orelse
                 boxyLowerInvariant("boxy descriptor slot materialization had no representation binding");
             if (std.mem.findScalar(LIR.LocalId, self.runtime_initialized_descriptor_locals.items, local) != null) continue;
             if (self.descriptorBindingIsBoundForRep(slot_rep)) continue;
@@ -41899,11 +41935,11 @@ const ProcBodyBuilder = struct {
         var index = self.descriptor_slots.len;
         while (index > 0) {
             index -= 1;
-            const local = self.descriptor_slots[index] orelse continue;
-            const slot_rep = self.descriptor_slot_reps[index] orelse
+            const local = self.descriptor_slots[index].get() orelse continue;
+            const slot_rep = self.descriptor_slot_reps[index].get() orelse
                 boxyLowerInvariant("boxy descriptor slot materialization had no representation binding");
             if (outer) |snapshot| {
-                if (snapshot.slots[index] == local and snapshot.slot_reps[index] == slot_rep) continue;
+                if (snapshot.slots[index].get() == local and snapshot.slot_reps[index].get() == slot_rep) continue;
             }
             // A write mark comes from a statement that may execute after code
             // that already reads this slot, so only evidence binds, which are
@@ -41955,8 +41991,9 @@ const ProcBodyBuilder = struct {
     }
 
     fn localIsDescriptorSlot(self: *const ProcBodyBuilder, local: LIR.LocalId) bool {
+        const slot = IdSlot(LIR.LocalId).of(local);
         for (self.descriptor_slots) |maybe_local| {
-            if (maybe_local == local) return true;
+            if (maybe_local == slot) return true;
         }
         return false;
     }
@@ -41969,9 +42006,10 @@ const ProcBodyBuilder = struct {
         const desc = source.desc orelse return planned_rep;
         const local = desc.localOrNull() orelse return planned_rep;
         var source_rep: ?Plan.TypeRepId = null;
+        const slot = IdSlot(LIR.LocalId).of(local);
         for (self.descriptor_slots, self.descriptor_slot_reps) |maybe_slot, maybe_rep| {
-            if (maybe_slot != local) continue;
-            const rep = maybe_rep orelse
+            if (maybe_slot != slot) continue;
+            const rep = maybe_rep.get() orelse
                 boxyLowerInvariant("boxy descriptor slot had no representation binding");
             if (source_rep) |existing| {
                 if (existing != rep) {
@@ -43263,6 +43301,9 @@ fn constRecordFields(allocator: Allocator, module: Plan.ModuleView, checked_ty: 
     var seen = collections.DenseMap(checked.CheckedTypeId, void).init(allocator);
     defer seen.deinit();
 
+    // Each checked record row is in label order, so fields from a single row
+    // need no sorting; rows joined through extensions are merged by sorting.
+    var rows: usize = 0;
     var current: ?checked.CheckedTypeId = checked_ty;
     while (current) |ty| {
         const entry = try seen.getOrPut(ty);
@@ -43274,6 +43315,7 @@ fn constRecordFields(allocator: Allocator, module: Plan.ModuleView, checked_ty: 
         switch (resolvedTypePayload(module, ty)) {
             .record => |record| {
                 try fields.appendSlice(allocator, record.fields);
+                if (record.fields.len != 0) rows += 1;
                 current = record.ext;
             },
             .empty_record => current = null,
@@ -43295,7 +43337,12 @@ fn constRecordFields(allocator: Allocator, module: Plan.ModuleView, checked_ty: 
             return context.names.recordFieldLabelTextLessThan(lhs.name, rhs.name);
         }
     };
-    std.mem.sort(checked.CheckedRecordField, fields.items, SortContext{ .names = module.canonical_names.? }, SortContext.lessThan);
+    const context = SortContext{ .names = module.canonical_names.? };
+    if (rows > 1) {
+        std.mem.sort(checked.CheckedRecordField, fields.items, context, SortContext.lessThan);
+    } else if (zig_builtin.mode == .debug) {
+        std.debug.assert(std.sort.isSorted(checked.CheckedRecordField, fields.items, context, SortContext.lessThan));
+    }
     return try fields.toOwnedSlice(allocator);
 }
 
