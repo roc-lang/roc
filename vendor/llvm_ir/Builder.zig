@@ -3240,6 +3240,8 @@ pub const Intrinsic = enum {
     memmove,
     memset,
     @"memset.inline",
+    @"lifetime.start",
+    @"lifetime.end",
     sqrt,
     powi,
     sin,
@@ -3608,6 +3610,20 @@ pub const Intrinsic = enum {
                 .{ .kind = .{ .type = .i1 }, .attrs = &.{.immarg} },
             },
             .attrs = &.{ .nocallback, .nofree, .nounwind, .willreturn, .{ .memory = .{ .argmem = .write } } },
+        },
+        .@"lifetime.start" = .{
+            .ret_len = 0,
+            .params = &.{
+                .{ .kind = .overloaded, .attrs = &.{.nocapture} },
+            },
+            .attrs = &.{ .nocallback, .nofree, .nosync, .nounwind, .willreturn, .{ .memory = .{ .argmem = .readwrite } } },
+        },
+        .@"lifetime.end" = .{
+            .ret_len = 0,
+            .params = &.{
+                .{ .kind = .overloaded, .attrs = &.{.nocapture} },
+            },
+            .attrs = &.{ .nocallback, .nofree, .nosync, .nounwind, .willreturn, .{ .memory = .{ .argmem = .readwrite } } },
         },
         .sqrt = .{
             .ret_len = 1,
