@@ -206,6 +206,12 @@ of these widths is checked, and a count past the field's range returns
 `error.OutOfMemory`, the same failure as an allocation returning null. No
 stage narrows such a count unchecked.
 
+A tag union layout has at most `layout.max_tag_union_variants` (2^30)
+variants; the layout store returns `error.OutOfMemory` for a larger one when
+it creates the layout. Every variant index and discriminant therefore fits
+`layout.VariantIndex`, and producers carry them in that type from where they
+number a variant, so later stages never narrow them.
+
 A walk along a chain in a store (alias and wrapper chains, row extensions,
 descriptor extensions) is bounded by that store's entry count: a longer walk
 must revisit an entry, so it has found a cycle, which is an invariant
@@ -611,11 +617,19 @@ A URL-package module also gets an optimized object pack, filed in the same
 layout under `<target>-speed/pkg/`: its closed exports lowered under the
 optimized LIR policy and compiled by LLVM into one object, with the same spec
 table naming each entry's procedure. The object defines everything its code
-needs (procedures, constants, refcount helpers, builtins) as internal symbols
-and exports, for each entry it offers, a weak C-ABI entry
-`roc__c{hash}`, the procedure's arguments and result classified by
-`layout.abi` exactly as for a hosted call. Two such objects may export one
-entry; the link keeps one. An entry whose code makes an erased call or builds
+needs: procedures, refcount helpers, and builtins as internal symbols, and
+each constant as weak readonly data under its `roc__h` content name, so two
+objects carrying one constant share a single copy in the link. It exports,
+for each entry it offers, a weak C-ABI entry `roc__c{hash}`, the procedure's
+arguments and result classified by `layout.abi` exactly as for a hosted
+call. Two such objects may export one entry; the link keeps one. Not every
+object format can place a weak symbol inside a datum, so a constant's symbol
+in an object pack marks its first byte: a constant whose symbol sits some
+bytes into its data is named as the datum anchored at its first byte, with
+that offset folded into every reference to it
+(`ContentNames.initObjectData`). A code pointer in a constant (an erased
+callable's procedure or capture drop helper) names the function the object
+defines. An entry whose code makes an erased call or builds
 an erased callable is not offered, since the erased-call runtime is passed the
 program's own layout indices, and a module whose object needs the runtime at
 all gets no object pack.
@@ -7118,6 +7132,14 @@ payload result positions. They are not arity-specific user APIs, and userspace
 code does not construct or pattern match on them. The compiler specializes every
 use with the concrete tag-union type, so opaque spec operations lower to direct
 tag code.
+
+A tag-union spec's generated backing holds one `Str` per distinct field label
+of the record shapes its payload parsers reach: that label's renamed field
+name. A renamed name depends only on its label, so every payload record reads
+each of its fields' names from the spec by label. The spec therefore carries
+no record identity or record order, and the payload records reaching one
+record type through different paths (directly and through an imported nominal's
+backing, say) share its entries.
 
 Userspace format code operates through safe Roc values, opaque specs, opaque
 field values, iterators, and slice-returning string/list APIs. The compiler does
@@ -18693,6 +18715,66 @@ builtin a private slot, and returns the three words by value, so the caller's
 result slot never escapes into a non-inlined call; every other builtin's
 shim has the builtin's own signature. Every call site of a builtin states the
 same signature, which is the wrapper's C ABI.
+
+### Statement Storage
+
+Every LIR statement occupies one fixed-size slot in the store's statement
+column: 32 bytes, holding the statement's kind and at most 28 bytes of inline
+fields aligned to 4 bytes. The LIR store is alive through the program's later
+memory peaks (code generation for compile-time evaluation, pack compiles, and
+dev builds), so a statement kind's inline fields are chosen by how often they
+are read and set, not by what the largest kind needs. An inline field is
+narrower than 32 bits only where its producer bounds it (see "Representation
+Capacity"); a field that does not fit moves out of line instead.
+
+Fields that do not fit live in out-of-line rows. A statement names a row by a
+`LIR.StmtRowId(Row)`, and each row type has its own column in the store
+(`LirStore.stmt_row_types`). Rows hold:
+
+- the payload of a rare, large statement kind (Boxy value statements, erased
+  calls, packed erased functions, dictionary calls, and conditional releases),
+  a string match's pattern, and a 128-bit integer literal. The statement keeps its target, its
+  successors, and the few fields generic statement walkers read inline;
+  every other field is in the row
+- a low-level operation's reference-count effect, which is larger than every
+  inline payload
+- the rarely set fields of a common kind: a call's cold-path, frame-replacing,
+  and tail-drive flags, descriptors, and pending return; the ownership data
+  ARC stamps on a reference read; the uniqueness proofs and single-operation
+  data of a low-level operation; a static data read's list-of-copies data;
+  a join's retained units and maybe-uninitialized environment; and the
+  descriptors of tags, struct contents, Boxy tag matches, and Boxy
+  reference-count helpers.
+  Such a row is optional: `none` names no row, meaning there is no
+  descriptor or every field of the row has its default (`optionalStmtRow`,
+  `stmtRowOrDefault`)
+
+Optional inline references use types that reserve their own absent values
+rather than Zig optionals, which would double their size: a call's
+self-tail link is a `TailCallLink`, whose `none` and `last` tags occupy the
+top two `CFStmtId` values (so the statement count stays below them), and an
+incref, decref, or free names its reference-count helper by a value that
+keeps a concrete layout helper inline. A reference read's `RefOp` is a 128-bit packed
+struct: a 3-bit kind, the source local, a field or payload index, and the
+variant index and discriminant as `layout.VariantIndex`, with the fields a
+kind does not use left zero. Literal values a statement does not hold, such
+as a completed compile-time scalar, use a store-independent literal type and
+become a `LiteralValue` only when emitted into a store.
+
+Rows are immutable. A rewrite that changes a field adds a new row and points
+the statement at it, and statements copied from one another share their rows.
+A row holds no statement id, no span a procedure rewrite prepares for
+mutation, and no other row id, which the store checks at compile time; a
+procedure rewrite therefore never takes a private copy of a row, and a body
+shard relocates the rows it adds exactly as it relocates its spans. The LIR
+image serializes each row column alongside the statements.
+
+Statement compaction (`ReachableProcs`, which runs before ARC and again after
+ARC and the tail-drive pass) drops every statement no reachable procedure
+reaches, then every row no remaining statement names, and releases the
+capacity both occupied. A procedure body that ARC or a procedure-local
+rewrite replaced therefore does not stay resident after the pass that
+replaced it.
 
 ### Statement Provenance
 

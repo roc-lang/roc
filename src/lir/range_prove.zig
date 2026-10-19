@@ -150,7 +150,7 @@ test "range prove ordered procedure runs match whole-store constant arithmetic a
         const add = try store.addCFStmt(.{ .assign_low_level = .{
             .target = result,
             .op = .num_int_add_crash_on_overflow,
-            .rc_effect = .none(),
+            .rc_effect = try store.addRcEffect(.none()),
             .args = try store.addLocalSpan(&.{ lhs, rhs }),
             .next = done,
         } }, .test_fixture);
@@ -380,7 +380,7 @@ test "range prove folds a threaded Bool join site that wrote the parameter as a 
     } }, .test_fixture);
     const set_written = try store.addCFStmt(.{ .assign_literal = .{
         .target = written,
-        .value = .{ .i128_literal = .{ .value = 1, .layout_idx = .bool } },
+        .value = .{ .i128_literal = try store.addStmtRow(LIR.I128Literal, .{ .value = 1, .layout_idx = .bool }) },
         .next = set_flag,
     } }, .test_fixture);
     const set_zero = try store.addCFStmt(.{ .assign_literal = .{
@@ -458,7 +458,7 @@ test "range prove reads a static list of copies' stated item count as its length
         const compare = try store.addCFStmt(.{ .assign_low_level = .{
             .target = in_range,
             .op = .num_is_lt,
-            .rc_effect = .none(),
+            .rc_effect = try store.addRcEffect(.none()),
             .args = try store.addLocalSpan(&.{ last, len }),
             .next = test_switch,
         } }, .test_fixture);
@@ -480,7 +480,7 @@ test "range prove reads a static list of copies' stated item count as its length
         const measure = try store.addCFStmt(.{ .assign_low_level = .{
             .target = len,
             .op = .list_len,
-            .rc_effect = LIR.LowLevel.list_len.rcEffect(),
+            .rc_effect = try store.addRcEffect(LIR.LowLevel.list_len.rcEffect()),
             .args = try store.addLocalSpan(&.{list}),
             .next = set_last,
         } }, .test_fixture);
@@ -489,8 +489,12 @@ test "range prove reads a static list of copies' stated item count as its length
                 .target = list,
                 // The prover reads only the literal's stated length, never its
                 // static data.
-                .value = .{ .static_data = undefined },
-                .list_len = list_len,
+                .value = .{ .static_data = .{
+                    .id = undefined,
+                    .copies = try store.addOptionalStmtRow(LIR.LiteralExtra, .{
+                        .list_len = list_len,
+                    }),
+                } },
                 .next = measure,
             },
         }, .test_fixture);
@@ -2318,7 +2322,7 @@ const Pass = struct {
             try seen.put(current, {});
             const stmt = self.store.getCFStmt(current);
             switch (stmt) {
-                .assign_ref => |s| if (s.op == .local) try self.alias_of.put(s.target, s.op.local),
+                .assign_ref => |s| if (s.op.kind == .local) try self.alias_of.put(s.target, s.op.source),
                 inline .store_struct, .store_tag => |s| try self.bumpAssign(s.dest),
                 .join => |s| {
                     try self.join_stmts.put(s.id, current);
@@ -4385,7 +4389,7 @@ const Pass = struct {
             };
             const params = self.store.getLocalSpan(join.params);
             if (GuardedList.borrowLen(params) != 1) continue;
-            if (!join.maybe_uninitialized_params.isEmpty()) continue;
+            if (!self.store.stmtRowOrDefault(join.extra).maybe_uninitialized_params.isEmpty()) continue;
             const param = GuardedList.at(params, 0);
             if (self.localLayout(param) != .bool) continue;
 
@@ -4473,16 +4477,20 @@ const Pass = struct {
             const false_join = try self.store.addCFStmt(.{ .join = .{
                 .id = false_id,
                 .params = empty_params,
-                .retained = join.retained,
                 .body = false_arm,
                 .remainder = join.remainder,
+                .extra = try self.store.addOptionalStmtRow(LIR.JoinExtra, .{
+                    .retained = self.store.stmtRowOrDefault(join.extra).retained,
+                }),
             } }, split_join_origin);
             try self.store.replaceCFStmt(join_stmt, .{ .join = .{
                 .id = true_id,
                 .params = empty_params,
-                .retained = join.retained,
                 .body = true_arm,
                 .remainder = false_join,
+                .extra = try self.store.addOptionalStmtRow(LIR.JoinExtra, .{
+                    .retained = self.store.stmtRowOrDefault(join.extra).retained,
+                }),
             } }, join_origin);
 
             for (structural_jumps.items) |record| {
@@ -4728,10 +4736,10 @@ const Pass = struct {
                 switch (self.store.getCFStmtImmediate(current).*) {
                     .assign_ref => |s| {
                         try self.visited.put(current, {});
-                        switch (s.op) {
-                            .local => |src| {
-                                if (try self.valueOf(src)) |node| {
-                                    const source_binding = self.lookup(src);
+                        switch (s.op.kind) {
+                            .local => {
+                                if (try self.valueOf(s.op.source)) |node| {
+                                    const source_binding = self.lookup(s.op.source);
                                     try self.bind(s.target, .{
                                         .node = node,
                                         .pred = if (source_binding) |b| b.pred else null,
@@ -4742,8 +4750,8 @@ const Pass = struct {
                                     try self.bindFresh(s.target);
                                 }
                             },
-                            .field => |f| {
-                                try self.bindFieldRead(s.target, f.source, f.field_idx);
+                            .field => {
+                                try self.bindFieldRead(s.target, s.op.source, s.op.index);
                             },
                             .discriminant, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => try self.bindFresh(s.target),
                         }
@@ -4751,7 +4759,7 @@ const Pass = struct {
                     },
                     .assign_literal => |s| {
                         try self.visited.put(current, {});
-                        try self.modelLiteral(s.target, s.value, s.list_len);
+                        try self.modelLiteral(s.target, s.value, self.store.literalExtra(s.value).list_len);
                         current = s.next;
                     },
                     .assign_tag => |s| {
@@ -5060,7 +5068,11 @@ const Pass = struct {
             return;
         }
         const literal: ?i128 = switch (value) {
-            inline .i64_literal, .i128_literal => |lit| if (lit.value >= 0) lit.value else null,
+            .i64_literal => |lit| if (lit.value >= 0) lit.value else null,
+            .i128_literal => |lit_id| blk_lit: {
+                const lit = self.store.stmtRow(lit_id);
+                break :blk_lit if (lit.value >= 0) lit.value else null;
+            },
             .f64_literal, .f32_literal, .dec_literal, .str_literal, .static_data, .bytes_literal, .proc_ref, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal => null,
         };
         if (literal) |v| {
@@ -5097,7 +5109,8 @@ const Pass = struct {
         switch (s.op) {
             .simd_concat_shift_bytes => {
                 std.debug.assert(arg_count == 3);
-                if (s.simd_concat_count == null) {
+                const s_extra = self.store.stmtRowOrDefault(s.extra);
+                if (s_extra.simd_concat_count == null) {
                     if (try self.valueOf(GuardedList.at(args, 2))) |node| {
                         if (self.constValueOf(node)) |count| {
                             // Unreachable invalid-count arms can still be in
@@ -5105,7 +5118,10 @@ const Pass = struct {
                             // A node's window never rests on an assumption,
                             // so the count needs no verification round.
                             if (count >= 0 and count <= 16) {
-                                self.store.getCFStmtPtr(stmt).assign_low_level.simd_concat_count = @intCast(count);
+                                var extra = s_extra;
+                                extra.simd_concat_count = @intCast(count);
+                                const row = try self.store.addStmtRow(LIR.LowLevelExtra, extra);
+                                self.store.getCFStmtPtr(stmt).assign_low_level.extra = row;
                             }
                         }
                     }
@@ -6033,9 +6049,10 @@ const Pass = struct {
                 self.deferred_rewrites = true;
             } else if (CheckedArithmetic.provenForm(s.op)) |proven| {
                 try self.recordProof(stmt);
+                const rc_effect = try self.store.addRcEffect(proven.rcEffect());
                 const ptr = &self.store.getCFStmtPtr(stmt).assign_low_level;
                 ptr.op = proven;
-                ptr.rc_effect = proven.rcEffect();
+                ptr.rc_effect = rc_effect;
                 self.rewrites += 1;
             }
         }
@@ -6126,17 +6143,17 @@ const Pass = struct {
         if (inner_entry.operation != entry.operation or inner_entry.mode != .crash_on_overflow) return false;
 
         const wrapping_op = CheckedArithmetic.member(entry.operation, .wrap);
+        const wrapping_effect = try self.store.addRcEffect(wrapping_op.rcEffect());
         self.store.getCFStmtPtr(chain.stmt).assign_low_level.op = wrapping_op;
-        self.store.getCFStmtPtr(chain.stmt).assign_low_level.rc_effect = wrapping_op.rcEffect();
+        self.store.getCFStmtPtr(chain.stmt).assign_low_level.rc_effect = wrapping_effect;
 
         if (outer_constant > max - chain.constant) {
             try self.rewriteAsArithmeticCrash(stmt, entry.operation);
             return true;
         }
         const combined_constant = chain.constant + outer_constant;
-        self.store.getCFStmtPtr(outer_literal_stmt).assign_literal.value = .{
-            .i128_literal = .{ .value = combined_constant, .layout_idx = operand_layout },
-        };
+        const combined_literal = try self.store.addStmtRow(LIR.I128Literal, .{ .value = combined_constant, .layout_idx = operand_layout });
+        self.store.getCFStmtPtr(outer_literal_stmt).assign_literal.value = .{ .i128_literal = combined_literal };
         const combined_args = try self.store.addLocalSpan(&.{ chain.base, outer_constant_local });
         self.store.getCFStmtPtr(stmt).assign_low_level.args = combined_args;
         self.rewrites += 1;

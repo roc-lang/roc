@@ -3567,9 +3567,17 @@ const ProcedureBuilder = struct {
         const result = try proc.addFrameLocal(ret_layout);
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = result } }, proc.derivedOrigin());
         const stmt: LIR.CFStmt = if (hasher_layout != null)
-            .{ .assign_boxy_hash = .{ .target = result, .value = first, .hasher = second, .desc = .{ .local = desc }, .next = ret_stmt } }
+            .{ .assign_boxy_hash = .{
+                .target = result,
+                .data = try self.result.store.addStmtRow(LIR.BoxyHashData, .{ .value = first, .hasher = second, .desc = .{ .local = desc } }),
+                .next = ret_stmt,
+            } }
         else
-            .{ .assign_boxy_eq = .{ .target = result, .lhs = first, .rhs = second, .desc = .{ .local = desc }, .next = ret_stmt } };
+            .{ .assign_boxy_eq = .{
+                .target = result,
+                .data = try self.result.store.addStmtRow(LIR.BoxyEqData, .{ .lhs = first, .rhs = second, .desc = .{ .local = desc } }),
+                .next = ret_stmt,
+            } };
         const body = try self.result.store.addCFStmt(stmt, proc.derivedOrigin());
         const args_span = try self.result.store.addLocalSpan(proc.arg_locals.items);
         const frame_span = try self.result.store.addLocalSpan(proc.frame_locals.items);
@@ -4074,7 +4082,9 @@ const ProcedureBuilder = struct {
             .target = raw_result,
             .proc = job.worker_proc,
             .args = try self.result.store.addLocalSpan(worker_call_args),
-            .out_desc = raw_result_desc,
+            .extra = try self.result.store.addOptionalStmtRow(LIR.CallExtra, .{
+                .out_desc = raw_result_desc,
+            }),
             .next = continuation,
         } }, proc.origin);
         var arg_index = worker_args.len;
@@ -5464,19 +5474,21 @@ const ProcedureBuilder = struct {
         const call_stmt = try self.result.store.addCFStmt(.{
             .assign_call_erased = .{
                 .target = call_target,
-                .closure = job.source_closure,
-                .args = try self.result.store.addLocalSpan(call_args),
-                .arg_layouts = try adapter_proc.appendErasedArgumentLayouts(call_args),
-                .arg_plan = try adapter_proc.erasedCallArgsPlan(call_args),
-                .arg_descs = arg_descs.locals,
-                .arg_desc_keys = arg_descs.keys,
-                // `result_desc` governs materialization into the source
-                // signature's result layout. `out_desc` separately
-                // preserves the exact descriptor returned by the callable.
-                .result_desc = expected_result_desc.desc,
-                .out_desc = out_desc,
-                .reuse_closure = false,
-                .reuse_source = null,
+                .data = try self.result.store.addStmtRow(LIR.ErasedCallData, .{
+                    .closure = job.source_closure,
+                    .args = try self.result.store.addLocalSpan(call_args),
+                    .arg_layouts = try adapter_proc.appendErasedArgumentLayouts(call_args),
+                    .arg_plan = try adapter_proc.erasedCallArgsPlan(call_args),
+                    .arg_descs = arg_descs.locals,
+                    .arg_desc_keys = arg_descs.keys,
+                    // `result_desc` governs materialization into the source
+                    // signature's result layout. `out_desc` separately
+                    // preserves the exact descriptor returned by the callable.
+                    .result_desc = expected_result_desc.desc,
+                    .out_desc = out_desc,
+                    .reuse_closure = false,
+                    .reuse_source = null,
+                }),
                 .next = continuation,
             },
         }, adapter_proc.origin);
@@ -6630,14 +6642,15 @@ const ProcedureBuilder = struct {
                 if (entry.found_existing) continue;
 
                 switch (self.result.store.getCFStmtImmediate(stmt_id).*) {
-                    .assign_boxy_desc_ref => |assign| {
-                        try stack.append(self.allocator, assign.next);
+                    .assign_boxy_desc_ref => |assign_stmt| {
+                        const assign = self.result.store.stmtRow(assign_stmt.data);
+                        try stack.append(self.allocator, assign_stmt.next);
                         const desc_id = switch (assign.desc) {
                             .static => |id| id,
                             .local, .runtime, .dict_method_hidden => continue,
                         };
                         const captures = capture_sets.items[@backingInt(desc_id)].items;
-                        if (std.mem.findScalar(LIR.LocalId, captures, assign.target) != null) {
+                        if (std.mem.findScalar(LIR.LocalId, captures, assign_stmt.target) != null) {
                             boxyLowerInvariant("boxy descriptor materialization template captured its own output local");
                         }
                         var updated = assign;
@@ -6645,7 +6658,8 @@ const ProcedureBuilder = struct {
                             LIR.LocalSpan.empty()
                         else
                             try self.result.store.addLocalSpan(captures);
-                        self.result.store.getCFStmtPtr(stmt_id).* = .{ .assign_boxy_desc_ref = updated };
+                        const data = try self.result.store.addStmtRow(LIR.BoxyDescRefData, updated);
+                        self.result.store.getCFStmtPtr(stmt_id).assign_boxy_desc_ref.data = data;
                     },
                     inline .assign_ref,
                     .assign_literal,
@@ -7326,7 +7340,7 @@ const ProcedureBuilder = struct {
         defer accessor.deinit();
         const value = try accessor.addFrameLocalForRep(initializer.rep);
         const ret = try self.result.store.addCFStmt(.{ .ret = .{ .value = value } }, origin);
-        const read = try self.result.store.addCFStmt(.{ .assign_literal = .{ .target = value, .value = .{ .static_data = value_slot }, .next = ret } }, origin);
+        const read = try self.result.store.addCFStmt(.{ .assign_literal = .{ .target = value, .value = .{ .static_data = .{ .id = value_slot } }, .next = ret } }, origin);
         const symbol = self.symbols.fresh();
         const accessor_id = try self.result.store.addProcSpec(.{
             .name = lirSymbol(symbol),
@@ -7875,7 +7889,7 @@ const ProcedureBuilder = struct {
         } }, proc.derivedOrigin());
         continuation = try self.result.store.addCFStmt(.{ .assign_ref = .{
             .target = runtime_id,
-            .op = .{ .field = .{ .source = proc.arg_locals.items[0], .field_idx = 1 } },
+            .op = .field(proc.arg_locals.items[0], 1),
             .next = continuation,
         } }, proc.derivedOrigin());
         continuation = try proc.generatedParserReadRecordField(
@@ -8267,7 +8281,7 @@ const ProcedureBuilder = struct {
         initial_jump = try proc.assignUnaryLowLevel(len, .list_len, source_items, initial_jump);
         initial_jump = try self.result.store.addCFStmt(.{ .assign_ref = .{
             .target = source_items,
-            .op = .{ .field = .{ .source = proc.arg_locals.items[0], .field_idx = 0 } },
+            .op = .field(proc.arg_locals.items[0], 0),
             .next = initial_jump,
         } }, proc.derivedOrigin());
 
@@ -8420,12 +8434,12 @@ const ProcedureBuilder = struct {
         );
         continuation = try self.result.store.addCFStmt(.{ .assign_ref = .{
             .target = source_index,
-            .op = .{ .field = .{ .source = source_field, .field_idx = 1 } },
+            .op = .field(source_field, 1),
             .next = continuation,
         } }, proc.derivedOrigin());
         continuation = try self.result.store.addCFStmt(.{ .assign_ref = .{
             .target = source_name,
-            .op = .{ .field = .{ .source = source_field, .field_idx = 0 } },
+            .op = .field(source_field, 0),
             .next = continuation,
         } }, proc.derivedOrigin());
         continuation = try proc.assignBinaryLowLevel(source_field, .list_get_unsafe, source_items, index, continuation);
@@ -8488,7 +8502,7 @@ const ProcedureBuilder = struct {
         continuation = try proc.assignUnaryLowLevel(len, .list_len, items, continuation);
         return try self.result.store.addCFStmt(.{ .assign_ref = .{
             .target = items,
-            .op = .{ .field = .{ .source = proc.arg_locals.items[0], .field_idx = 0 } },
+            .op = .field(proc.arg_locals.items[0], 0),
             .next = continuation,
         } }, proc.derivedOrigin());
     }
@@ -8670,7 +8684,7 @@ const ProcedureBuilder = struct {
             dispatch = try proc.assignBinaryLowLevel(matches, .num_is_eq, name_len, captures[3], dispatch);
             dispatch = try self.result.store.addCFStmt(.{ .assign_ref = .{
                 .target = name_len,
-                .op = .{ .field = .{ .source = raw_item, .field_idx = 2 } },
+                .op = .field(raw_item, 2),
                 .next = dispatch,
             } }, proc.derivedOrigin());
         }
@@ -8702,10 +8716,12 @@ const ProcedureBuilder = struct {
             // the field at the descriptor the creating frame captured.
             dispatch = try self.result.store.addCFStmt(.{ .assign_boxy_box = .{
                 .target = item,
-                .payload = raw_item,
-                .payload_layout = field_layout,
-                .payload_desc = try proc.descriptorRefForKnownRep(item_child.rep),
-                .payload_mode = .copy,
+                .data = try self.result.store.addStmtRow(LIR.BoxyBoxData, .{
+                    .payload = raw_item,
+                    .payload_layout = field_layout,
+                    .payload_desc = try proc.descriptorRefForKnownRep(item_child.rep),
+                    .payload_mode = .copy,
+                }),
                 .next = dispatch,
             } }, proc.derivedOrigin());
         } else {
@@ -8720,7 +8736,7 @@ const ProcedureBuilder = struct {
         dispatch = try proc.assignIntLiteral(one_literal, 1, dispatch);
         dispatch = try self.result.store.addCFStmt(.{ .assign_ref = .{
             .target = items,
-            .op = .{ .field = .{ .source = captures[0], .field_idx = 0 } },
+            .op = .field(captures[0], 0),
             .next = dispatch,
         } }, proc.derivedOrigin());
         const at_end = try proc.addFrameLocal(.bool);
@@ -9334,7 +9350,7 @@ const ProcedureBuilder = struct {
         const dispatch = try proc.generatedParserTagDispatch(field_value, field.rep, &variants, &bodies, impossible);
         return try self.result.store.addCFStmt(.{ .assign_ref = .{
             .target = field_value,
-            .op = .{ .field = .{ .source = record_value, .field_idx = @intCast(field.index) } },
+            .op = .field(record_value, @intCast(field.index)),
             .next = dispatch,
         } }, proc.derivedOrigin());
     }
@@ -10159,7 +10175,7 @@ const ProcedureBuilder = struct {
         }
         return try self.result.store.addCFStmt(.{ .assign_ref = .{
             .target = frame.field_slot,
-            .op = .{ .field = .{ .source = record_value, .field_idx = @intCast(field.index) } },
+            .op = .field(record_value, @intCast(field.index)),
             .next = continuation,
         } }, proc.derivedOrigin());
     }
@@ -12483,7 +12499,7 @@ const ProcedureBuilder = struct {
         } }, proc.derivedOrigin());
         var continuation = try self.result.store.addCFStmt(.{ .assign_ref = .{
             .target = index,
-            .op = .{ .field = .{ .source = field_handle, .field_idx = 1 } },
+            .op = .field(field_handle, 1),
             .next = field_switch,
         } }, proc.derivedOrigin());
         continuation = try proc.generatedParserReadRecordField(
@@ -12701,12 +12717,14 @@ const ProcedureBuilder = struct {
         const loop_body = try self.result.store.addCFStmt(.{ .join = .{
             .id = state.error_join,
             .params = try proc.joinParamSpan(&.{context.target}),
-            .retained = try self.result.store.addLocalSpan(retained[0..retained_len]),
-            .maybe_uninitialized_params = try self.result.store.addLocalSpan(maybe_payloads),
-            .maybe_uninitialized_conditions = try self.result.store.addLocalSpan(maybe_conditions),
-            .maybe_uninitialized_condition_masks = try self.result.store.addU64Span(maybe_masks),
             .body = error_body,
             .remainder = step_loop,
+            .extra = try self.result.store.addOptionalStmtRow(LIR.JoinExtra, .{
+                .maybe_uninitialized_params = try self.result.store.addLocalSpan(maybe_payloads),
+                .maybe_uninitialized_conditions = try self.result.store.addLocalSpan(maybe_conditions),
+                .maybe_uninitialized_condition_masks = try self.result.store.addU64Span(maybe_masks),
+                .retained = try self.result.store.addLocalSpan(retained[0..retained_len]),
+            }),
         } }, proc.derivedOrigin());
 
         // `parse_record_start` runs before the loop holds any payload, so its
@@ -12738,11 +12756,13 @@ const ProcedureBuilder = struct {
         const join = try self.result.store.addCFStmt(.{ .join = .{
             .id = context.join_id,
             .params = try proc.joinParamSpan(join_params),
-            .maybe_uninitialized_params = try self.result.store.addLocalSpan(maybe_payloads),
-            .maybe_uninitialized_conditions = try self.result.store.addLocalSpan(maybe_conditions),
-            .maybe_uninitialized_condition_masks = try self.result.store.addU64Span(maybe_masks),
             .body = loop_body,
             .remainder = initial,
+            .extra = try self.result.store.addOptionalStmtRow(LIR.JoinExtra, .{
+                .maybe_uninitialized_params = try self.result.store.addLocalSpan(maybe_payloads),
+                .maybe_uninitialized_conditions = try self.result.store.addLocalSpan(maybe_conditions),
+                .maybe_uninitialized_condition_masks = try self.result.store.addU64Span(maybe_masks),
+            }),
         } }, proc.derivedOrigin());
         const with_evidence = try self.lowerGeneratedFieldNamesValue(proc, context.evidence, fields, join);
         return try self.lowerGeneratedRecordFieldNamesSource(
@@ -12940,7 +12960,7 @@ const ProcedureBuilder = struct {
         var continuation = try self.result.store.addCFStmt(.{ .assign_struct = .{
             .target = value,
             .fields = try self.result.store.addLocalSpan(fields),
-            .contents_desc = aggregate_desc.contents_desc,
+            .contents_desc = try self.result.store.addStmtRowIfPresent(LIR.BoxyDescRef, aggregate_desc.contents_desc),
             .next = success,
         } }, proc.derivedOrigin());
         continuation = try proc.prependOptionalDescriptorMaterialization(aggregate_desc.materialize, continuation);
@@ -13284,7 +13304,7 @@ const ProcedureBuilder = struct {
         tag_rep: Plan.TypeRepId,
         /// The row node that explicitly declares this variant.
         owner_rep: Plan.TypeRepId,
-        index: u32,
+        index: layout.VariantIndex,
         variant: Plan.TagVariant,
     };
 
@@ -13505,7 +13525,7 @@ const ProcedureBuilder = struct {
             const field_index = try proc.addFrameLocal(.u64);
             continuation = try self.result.store.addCFStmt(.{ .assign_ref = .{
                 .target = fields[index].renamed,
-                .op = .{ .field = .{ .source = field, .field_idx = 0 } },
+                .op = .field(field, 0),
                 .next = continuation,
             } }, proc.derivedOrigin());
             continuation = try proc.assignBinaryLowLevel(field, .list_get_unsafe, items, field_index, continuation);
@@ -13513,7 +13533,7 @@ const ProcedureBuilder = struct {
         }
         continuation = try self.result.store.addCFStmt(.{ .assign_ref = .{
             .target = items,
-            .op = .{ .field = .{ .source = field_names, .field_idx = 0 } },
+            .op = .field(field_names, 0),
             .next = continuation,
         } }, proc.derivedOrigin());
         const record_index = try proc.addFrameLocal(.u64);
@@ -13527,7 +13547,7 @@ const ProcedureBuilder = struct {
         continuation = try proc.assignIntLiteral(record_index, @intCast(record_index_value), continuation);
         return try self.result.store.addCFStmt(.{ .assign_ref = .{
             .target = evidence_list,
-            .op = .{ .field = .{ .source = tag_source.spec, .field_idx = 0 } },
+            .op = .field(tag_source.spec, 0),
             .next = continuation,
         } }, proc.derivedOrigin());
     }
@@ -13976,7 +13996,7 @@ const ProcedureBuilder = struct {
         continuation = try self.result.store.addCFStmt(.{ .assign_struct = .{
             .target = context.value,
             .fields = try self.result.store.addLocalSpan(shape_fields),
-            .contents_desc = aggregate_desc.contents_desc,
+            .contents_desc = try self.result.store.addStmtRowIfPresent(LIR.BoxyDescRef, aggregate_desc.contents_desc),
             .next = continuation,
         } }, proc.derivedOrigin());
         continuation = try proc.prependOptionalDescriptorMaterialization(aggregate_desc.materialize, continuation);
@@ -14279,7 +14299,9 @@ const ProcedureBuilder = struct {
             .target = host_ret_local,
             .proc = try self.emitHostedExternalProc(proc.worker_layout.worker, resolved),
             .args = try self.result.store.addLocalSpan(host_arg_locals),
-            .result_desc = host_result_desc,
+            .extra = try self.result.store.addOptionalStmtRow(LIR.CallExtra, .{
+                .result_desc = host_result_desc,
+            }),
             .next = continuation,
         } }, proc.origin);
 
@@ -14397,8 +14419,10 @@ const ProcedureBuilder = struct {
             .target = raw_result,
             .proc = worker_proc,
             .args = try self.result.store.addLocalSpan(call_locals),
-            .result_desc = external_result_desc,
-            .out_desc = ret_desc_local,
+            .extra = try self.result.store.addOptionalStmtRow(LIR.CallExtra, .{
+                .result_desc = external_result_desc,
+                .out_desc = ret_desc_local,
+            }),
             .next = continuation,
         } }, proc.origin);
         if (host_function) |function| {
@@ -14446,7 +14470,9 @@ const ProcedureBuilder = struct {
             const param = hidden_desc_params[desc_index];
             continuation = try self.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
                 .target = call_locals[host_args.len + desc_index],
-                .desc = try self.staticDescRefForWorkerRepWithSourceMap(param.rep, null, &descriptor_sources, &desc_context),
+                .data = try self.result.store.addStmtRow(LIR.BoxyDescRefData, .{
+                    .desc = try self.staticDescRefForWorkerRepWithSourceMap(param.rep, null, &descriptor_sources, &desc_context),
+                }),
                 .next = continuation,
             } }, proc.origin);
         }
@@ -14628,9 +14654,12 @@ const ProcedureBuilder = struct {
                 try frame_locals.append(self.allocator, runtime_local);
                 for (return_edges.items) |edge| {
                     const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = edge.value } }, self.result.store.stmtOrigin(edge.stmt));
+                    const data = try self.result.store.addStmtRow(LIR.BoxyDescRefData, .{
+                        .desc = edge.desc orelse default_desc.?,
+                    });
                     self.result.store.getCFStmtPtr(edge.stmt).* = .{ .assign_boxy_desc_ref = .{
                         .target = runtime_local,
-                        .desc = edge.desc orelse default_desc.?,
+                        .data = data,
                         .next = ret_stmt,
                     } };
                 }
@@ -14659,15 +14688,19 @@ const ProcedureBuilder = struct {
             changed = false;
             for (statements) |stmt_id| {
                 switch (self.result.store.getCFStmtImmediate(stmt_id).*) {
-                    .assign_call => |assign| if (assign.out_desc) |out_desc| {
+                    .assign_call => |assign| if (self.result.store.stmtRowOrDefault(assign.extra).out_desc) |out_desc| {
                         const entry = try dynamic.getOrPut(out_desc);
                         changed = changed or !entry.found_existing;
                     },
-                    .assign_call_erased => |assign| if (assign.out_desc) |out_desc| {
-                        const entry = try dynamic.getOrPut(out_desc);
-                        changed = changed or !entry.found_existing;
+                    .assign_call_erased => |assign_stmt| blk_assign: {
+                        const assign = self.result.store.stmtRow(assign_stmt.data);
+                        break :blk_assign if (assign.out_desc) |out_desc| {
+                            const entry = try dynamic.getOrPut(out_desc);
+                            changed = changed or !entry.found_existing;
+                        };
                     },
-                    .assign_boxy_desc_ref => |assign| {
+                    .assign_boxy_desc_ref => |assign_stmt| {
+                        const assign = self.result.store.stmtRow(assign_stmt.data);
                         var depends = if (assign.desc.localOrNull()) |local| dynamic.contains(local) else false;
                         if (!depends) {
                             const captures = self.result.store.getLocalSpan(assign.captures);
@@ -14679,24 +14712,25 @@ const ProcedureBuilder = struct {
                             }
                         }
                         if (depends) {
-                            const entry = try dynamic.getOrPut(assign.target);
+                            const entry = try dynamic.getOrPut(assign_stmt.target);
                             changed = changed or !entry.found_existing;
                         }
                     },
-                    .assign_boxy_adapt => |assign| {
+                    .assign_boxy_adapt => |assign_stmt| {
+                        const assign = self.result.store.stmtRow(assign_stmt.data);
                         const source_local = if (assign.source_desc) |desc| desc.localOrNull() else null;
                         if (source_local == null or !dynamic.contains(source_local.?)) continue;
-                        const target_desc = self.result.store.getLocal(assign.target).boxy_desc orelse continue;
+                        const target_desc = self.result.store.getLocal(assign_stmt.target).boxy_desc orelse continue;
                         const target_local = target_desc.localOrNull() orelse continue;
                         const entry = try dynamic.getOrPut(target_local);
                         changed = changed or !entry.found_existing;
                     },
                     .assign_ref => |assign| {
-                        const source = switch (assign.op) {
-                            .local => |local| local,
-                            .field => |field| field.source,
-                            inline .discriminant, .tag_payload, .tag_payload_struct => |op| op.source,
-                            inline .list_reinterpret, .nominal => |op| op.backing_ref,
+                        const source = switch (assign.op.kind) {
+                            .local => assign.op.source,
+                            .field => assign.op.source,
+                            inline .discriminant, .tag_payload, .tag_payload_struct => assign.op.source,
+                            inline .list_reinterpret, .nominal => assign.op.source,
                         };
                         if (!dynamic.contains(source)) continue;
                         const entry = try dynamic.getOrPut(assign.target);
@@ -14776,10 +14810,11 @@ const ProcedureBuilder = struct {
                         );
                     }
                     if (!unused_static_calls.contains(stmt_id)) {
-                        if ((assign.out_desc != null) != (callee.runtime_ret_desc != null)) {
+                        const call_out_desc = self.result.store.stmtRowOrDefault(assign.extra).out_desc;
+                        if ((call_out_desc != null) != (callee.runtime_ret_desc != null)) {
                             base.invariant(
                                 "boxy lower invariant violated: direct-call descriptor output disagreed with finalized callee ABI: stmt={d} callee={d} call_out={any} callee_out={any}",
-                                .{ stmt_index, @backingInt(assign.proc), assign.out_desc != null, callee.runtime_ret_desc != null },
+                                .{ stmt_index, @backingInt(assign.proc), call_out_desc != null, callee.runtime_ret_desc != null },
                             );
                         }
                     }
@@ -14984,7 +15019,7 @@ const ProcBodyBuilder = struct {
         },
         tag_payload: struct {
             source: LIR.LocalId,
-            variant_index: u32,
+            variant_index: layout.VariantIndex,
             payload_index: ?u32,
             rep: Plan.TypeRepId,
         },
@@ -16472,7 +16507,7 @@ const ProcBodyBuilder = struct {
                 const wrapper_local = slot_wrapper_local.?;
                 continuation = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
                     .target = value_local,
-                    .op = .{ .field = .{ .source = wrapper_local, .field_idx = 0 } },
+                    .op = .field(wrapper_local, 0),
                     .next = continuation,
                 } }, self.glueOrigin());
                 continuation = try self.assignUnaryLowLevel(wrapper_local, .box_unbox, slot_local, continuation);
@@ -16510,7 +16545,7 @@ const ProcBodyBuilder = struct {
         return try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = capture_value,
             .op = .erased_capture_load,
-            .rc_effect = LIR.LowLevel.erased_capture_load.rcEffect(),
+            .rc_effect = try self.parent.result.store.addRcEffect(LIR.LowLevel.erased_capture_load.rcEffect()),
             .args = try self.parent.result.store.addLocalSpan(&args),
             .next = continuation,
         } }, self.scaffoldOrigin());
@@ -16561,10 +16596,7 @@ const ProcBodyBuilder = struct {
         if (self.isZstLocal(target)) return try self.assignZst(target, next);
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = target,
-            .op = .{ .field = .{
-                .source = capture_value,
-                .field_idx = field_index,
-            } },
+            .op = .field(capture_value, field_index),
             .next = next,
         } }, self.scaffoldOrigin());
     }
@@ -16706,7 +16738,7 @@ const ProcBodyBuilder = struct {
             for_: ForLoop,
             step: IteratorStepShape,
             step_local: LIR.LocalId,
-            variant_index: ?u32,
+            variant_index: ?layout.VariantIndex,
             iterator_param: LIR.LocalId,
             join_id: LIR.JoinPointId,
             next: LIR.CFStmtId,
@@ -17058,7 +17090,7 @@ const ProcBodyBuilder = struct {
                     break :blk try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
                         .target = concat.target,
                         .op = .str_concat,
-                        .rc_effect = LIR.LowLevel.str_concat.rcEffect(),
+                        .rc_effect = try self.parent.result.store.addRcEffect(LIR.LowLevel.str_concat.rcEffect()),
                         .args = try self.parent.result.store.addLocalSpan(&args),
                         .next = chain.current,
                     } }, self.origin);
@@ -17225,10 +17257,12 @@ const ProcBodyBuilder = struct {
                 self.parent.result.store.setLocalBoxyDesc(target, payload_desc);
                 const box = try self.parent.result.store.addCFStmt(.{ .assign_boxy_box = .{
                     .target = target,
-                    .payload = unit_local,
-                    .payload_layout = .zst,
-                    .payload_desc = payload_desc,
-                    .payload_mode = .move,
+                    .data = try self.parent.result.store.addStmtRow(LIR.BoxyBoxData, .{
+                        .payload = unit_local,
+                        .payload_layout = .zst,
+                        .payload_desc = payload_desc,
+                        .payload_mode = .move,
+                    }),
                     .next = next,
                 } }, self.origin);
                 break :blk .{ .tail = .{ .iterator_for = .{ .target = unit_local, .for_ = forLoop(for_), .next = box } } };
@@ -17666,7 +17700,7 @@ const ProcBodyBuilder = struct {
         var continuation = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
             .target = target,
             .fields = try self.parent.result.store.addLocalSpan(field_locals),
-            .contents_desc = aggregate_desc.contents_desc,
+            .contents_desc = try self.parent.result.store.addStmtRowIfPresent(LIR.BoxyDescRef, aggregate_desc.contents_desc),
             .next = next,
         } }, self.origin);
         continuation = try self.prependOptionalDescriptorMaterialization(aggregate_desc.materialize, continuation);
@@ -17787,13 +17821,15 @@ const ProcBodyBuilder = struct {
                     boxyLowerInvariant("descriptor-erased tag construction had no target descriptor");
                 break :blk try self.parent.result.store.addCFStmt(.{ .assign_boxy_tag = .{
                     .target = target,
-                    .target_desc = target_desc,
-                    .tag_name = try self.lirTagNameForLookup(variant),
+                    .data = try self.parent.result.store.addStmtRow(LIR.BoxyTagData, .{
+                        .target_desc = target_desc,
+                        .tag_name = try self.lirTagNameForLookup(variant),
+                    }),
                     .next = next,
                 } }, self.origin);
             } else try self.parent.result.store.addCFStmt(.{ .assign_tag = .{
                 .target = target,
-                .target_desc = target_desc_ref,
+                .target_desc = try self.parent.result.store.addStmtRowIfPresent(LIR.BoxyDescRef, target_desc_ref),
                 .variant_index = variant.index,
                 .discriminant = variant.index,
                 .payload = null,
@@ -17830,7 +17866,7 @@ const ProcBodyBuilder = struct {
             else
                 try self.parent.result.store.addCFStmt(.{ .assign_tag = .{
                     .target = target,
-                    .target_desc = tag_desc.desc,
+                    .target_desc = try self.parent.result.store.addStmtRowIfPresent(LIR.BoxyDescRef, tag_desc.desc),
                     .variant_index = variant.index,
                     .discriminant = variant.index,
                     .payload = payload_local,
@@ -17873,7 +17909,7 @@ const ProcBodyBuilder = struct {
         else
             try self.parent.result.store.addCFStmt(.{ .assign_tag = .{
                 .target = target,
-                .target_desc = tag_desc.desc,
+                .target_desc = try self.parent.result.store.addStmtRowIfPresent(LIR.BoxyDescRef, tag_desc.desc),
                 .variant_index = variant.index,
                 .discriminant = variant.index,
                 .payload = payload_local,
@@ -17914,8 +17950,10 @@ const ProcBodyBuilder = struct {
                 boxyLowerInvariant("dynamic tag construction had no target descriptor");
             const assign_tag = try self.parent.result.store.addCFStmt(.{ .assign_boxy_tag = .{
                 .target = target,
-                .target_desc = target_desc,
-                .tag_name = try self.lirTagName(name),
+                .data = try self.parent.result.store.addStmtRow(LIR.BoxyTagData, .{
+                    .target_desc = target_desc,
+                    .tag_name = try self.lirTagName(name),
+                }),
                 .next = next,
             } }, self.origin);
             return exprDone(try self.prependOptionalDescriptorMaterialization(target_desc_info.materialize, assign_tag));
@@ -17955,12 +17993,14 @@ const ProcBodyBuilder = struct {
             null;
         const assign_tag = try self.parent.result.store.addCFStmt(.{ .assign_boxy_tag = .{
             .target = target,
-            .target_desc = target_desc,
-            .tag_name = try self.lirTagName(name),
-            .payload = payload.local,
-            .payload_layout = payload.layout_idx,
-            .payload_desc = payload_desc,
-            .payload_mode = .move,
+            .data = try self.parent.result.store.addStmtRow(LIR.BoxyTagData, .{
+                .target_desc = target_desc,
+                .tag_name = try self.lirTagName(name),
+                .payload = payload.local,
+                .payload_layout = payload.layout_idx,
+                .payload_desc = payload_desc,
+                .payload_mode = .move,
+            }),
             .next = next,
         } }, self.origin);
         var construct_tag = try self.prependOptionalDescriptorMaterialization(tag_desc.materialize, assign_tag);
@@ -18288,11 +18328,13 @@ const ProcBodyBuilder = struct {
             const fields_desc = try self.openRecordViewDescriptorSource(rep_id);
             const update = try self.parent.result.store.addCFStmt(.{ .assign_boxy_record_update = .{
                 .target = target,
-                .base = ext.local,
-                .base_desc = try self.descriptorRefForSourceLocalRep(ext.local, ext.rep),
-                .fields = payload,
-                .fields_layout = payload_layout,
-                .fields_desc = fields_desc.desc.?,
+                .data = try self.parent.result.store.addStmtRow(LIR.BoxyRecordUpdateData, .{
+                    .base = ext.local,
+                    .base_desc = try self.descriptorRefForSourceLocalRep(ext.local, ext.rep),
+                    .fields = payload,
+                    .fields_layout = payload_layout,
+                    .fields_desc = fields_desc.desc.?,
+                }),
                 .next = try self.prependSetLocalDescriptorTransfer(target, ext.local, .replace_existing, next),
             } }, self.origin);
             const with_fields_desc = try self.prependOptionalDescriptorMaterialization(fields_desc.materialize, update);
@@ -18303,10 +18345,12 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("dynamic record construction had no target descriptor");
         const assign_box = try self.parent.result.store.addCFStmt(.{ .assign_boxy_box = .{
             .target = target,
-            .payload = payload,
-            .payload_layout = payload_layout,
-            .payload_desc = payload_desc,
-            .payload_mode = .move,
+            .data = try self.parent.result.store.addStmtRow(LIR.BoxyBoxData, .{
+                .payload = payload,
+                .payload_layout = payload_layout,
+                .payload_desc = payload_desc,
+                .payload_mode = .move,
+            }),
             .next = next,
         } }, self.origin);
         return try self.beginRecordPayload(
@@ -18497,7 +18541,7 @@ const ProcBodyBuilder = struct {
         var continuation = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
             .target = target,
             .fields = try self.parent.result.store.addLocalSpan(field_locals),
-            .contents_desc = aggregate_desc.contents_desc,
+            .contents_desc = try self.parent.result.store.addStmtRowIfPresent(LIR.BoxyDescRef, aggregate_desc.contents_desc),
             .next = next,
         } }, self.origin);
         continuation = try self.prependOptionalDescriptorMaterialization(aggregate_desc.materialize, continuation);
@@ -19283,7 +19327,7 @@ const ProcBodyBuilder = struct {
                 continuation = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
                     .target = target,
                     .op = .bool_not,
-                    .rc_effect = LIR.LowLevel.bool_not.rcEffect(),
+                    .rc_effect = try self.parent.result.store.addRcEffect(LIR.LowLevel.bool_not.rcEffect()),
                     .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{raw}),
                     .next = next,
                 } }, self.origin);
@@ -19396,7 +19440,7 @@ const ProcBodyBuilder = struct {
             } }, self.glueOrigin());
             break :tested try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
                 .target = disc,
-                .op = .{ .discriminant = .{ .source = value } },
+                .op = LIR.RefOp.discriminant(value),
                 .next = switch_stmt,
             } }, self.glueOrigin());
         };
@@ -19794,21 +19838,21 @@ const ProcBodyBuilder = struct {
                 const impossible = try self.parent.result.store.addCFStmt(.runtime_error, self.glueOrigin());
                 const skip_match = try self.parent.result.store.addCFStmt(.{ .boxy_tag_match = .{
                     .source = step_local,
-                    .source_desc = source_desc,
+                    .source_desc = try self.parent.result.store.addStmtRow(LIR.BoxyDescRef, source_desc),
                     .tag_name = try self.parent.result.store.insertBoxyName(step.module.canonical_names.?.tagLabelText(step.skip_tag)),
                     .on_match = skip_body,
                     .on_miss = impossible,
                 } }, self.glueOrigin());
                 const one_match = try self.parent.result.store.addCFStmt(.{ .boxy_tag_match = .{
                     .source = step_local,
-                    .source_desc = source_desc,
+                    .source_desc = try self.parent.result.store.addStmtRow(LIR.BoxyDescRef, source_desc),
                     .tag_name = try self.parent.result.store.insertBoxyName(step.module.canonical_names.?.tagLabelText(step.one_tag)),
                     .on_match = one_body,
                     .on_miss = skip_match,
                 } }, self.glueOrigin());
                 const done_match = try self.parent.result.store.addCFStmt(.{ .boxy_tag_match = .{
                     .source = step_local,
-                    .source_desc = source_desc,
+                    .source_desc = try self.parent.result.store.addStmtRow(LIR.BoxyDescRef, source_desc),
                     .tag_name = try self.parent.result.store.insertBoxyName(step.module.canonical_names.?.tagLabelText(step.done_tag)),
                     .on_match = task.done_body,
                     .on_miss = one_match,
@@ -19840,7 +19884,7 @@ const ProcBodyBuilder = struct {
             } }, self.glueOrigin());
             const read_discriminant = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
                 .target = discriminant,
-                .op = .{ .discriminant = .{ .source = step_local } },
+                .op = .discriminant(step_local),
                 .next = switch_stmt,
             } }, self.glueOrigin());
             return .{ .tail = .{ .iter_dispatch = .{
@@ -20232,16 +20276,18 @@ const ProcBodyBuilder = struct {
 
         continuation = try self.parent.result.store.addCFStmt(.{ .assign_call_erased = .{
             .target = call_target,
-            .closure = callee_local,
-            .args = try self.parent.result.store.addLocalSpan(call_args),
-            .arg_layouts = try self.appendErasedArgumentLayouts(call_args),
-            .arg_plan = try self.erasedCallArgsPlan(call_args),
-            .arg_descs = arg_descs.locals,
-            .arg_desc_keys = arg_descs.keys,
-            .result_desc = expected_result_desc.desc,
-            .out_desc = out_desc,
-            .reuse_closure = false,
-            .reuse_source = null,
+            .data = try self.parent.result.store.addStmtRow(LIR.ErasedCallData, .{
+                .closure = callee_local,
+                .args = try self.parent.result.store.addLocalSpan(call_args),
+                .arg_layouts = try self.appendErasedArgumentLayouts(call_args),
+                .arg_plan = try self.erasedCallArgsPlan(call_args),
+                .arg_descs = arg_descs.locals,
+                .arg_desc_keys = arg_descs.keys,
+                .result_desc = expected_result_desc.desc,
+                .out_desc = out_desc,
+                .reuse_closure = false,
+                .reuse_source = null,
+            }),
             .next = continuation,
         } }, self.origin);
         continuation = try self.prependDescriptorArgMaterializations(arg_desc_initializers.items, continuation);
@@ -20297,13 +20343,13 @@ const ProcBodyBuilder = struct {
             defer self.parent.allocator.free(lowered);
             const alias = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
                 .target = target,
-                .op = .{ .local = lowered[0] },
+                .op = .local(lowered[0]),
                 .next = next,
             } }, self.origin);
             const hint = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
                 .target = try self.parent.addLocal(.zst),
                 .op = .list_prefetch,
-                .rc_effect = LIR.LowLevel.list_prefetch.rcEffect(),
+                .rc_effect = try self.parent.result.store.addRcEffect(LIR.LowLevel.list_prefetch.rcEffect()),
                 .args = try self.parent.result.store.addLocalSpan(lowered),
                 .next = alias,
             } }, self.origin);
@@ -20365,15 +20411,17 @@ const ProcBodyBuilder = struct {
             continuation = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
                 .target = concrete,
                 .op = lowered_op,
-                .rc_effect = lowered_op.rcEffect(),
+                .rc_effect = try self.parent.result.store.addRcEffect(lowered_op.rcEffect()),
                 .args = try self.parent.result.store.addLocalSpan(lowered),
                 .next = continuation,
             } }, self.origin);
             if (source_desc_local) |local| {
                 continuation = try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
                     .target = local,
-                    .desc = source_materialization.desc,
-                    .captures = source_materialization.captures,
+                    .data = try self.parent.result.store.addStmtRow(LIR.BoxyDescRefData, .{
+                        .desc = source_materialization.desc,
+                        .captures = source_materialization.captures,
+                    }),
                     .next = continuation,
                 } }, self.origin);
             }
@@ -20399,17 +20447,19 @@ const ProcBodyBuilder = struct {
             var continuation = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
                 .target = target,
                 .op = op,
-                .rc_effect = op.rcEffect(),
+                .rc_effect = try self.parent.result.store.addRcEffect(op.rcEffect()),
                 .args = try self.parent.result.store.addLocalSpan(&arg_locals),
                 .next = result_next,
             } }, self.origin);
             continuation = try self.parent.result.store.addCFStmt(.{ .assign_boxy_unbox = .{
                 .target = concrete,
-                .source = lowered[1],
-                .source_desc = source_desc,
-                .target_desc = null,
-                .target_layout = record_layout,
-                .source_mode = .copy,
+                .data = try self.parent.result.store.addStmtRow(LIR.BoxyUnboxData, .{
+                    .source = lowered[1],
+                    .source_desc = source_desc,
+                    .target_desc = null,
+                    .target_layout = record_layout,
+                    .source_mode = .copy,
+                }),
                 .next = continuation,
             } }, self.origin);
             sublist_record_adapt = continuation;
@@ -20432,18 +20482,20 @@ const ProcBodyBuilder = struct {
             self.parent.result.store.setLocalBoxyDesc(target, payload_desc);
             const box = try self.parent.result.store.addCFStmt(.{ .assign_boxy_box = .{
                 .target = target,
-                .payload = concrete,
-                .payload_layout = concrete_layout,
-                .source_desc = null,
-                .payload_desc = payload_desc,
-                .payload_mode = .move,
+                .data = try self.parent.result.store.addStmtRow(LIR.BoxyBoxData, .{
+                    .payload = concrete,
+                    .payload_layout = concrete_layout,
+                    .source_desc = null,
+                    .payload_desc = payload_desc,
+                    .payload_mode = .move,
+                }),
                 .next = next,
             } }, self.origin);
             const box_with_desc = try self.prependOptionalDescriptorMaterialization(payload_desc_info.materialize, box);
             replace_result_box = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
                 .target = concrete,
                 .op = op,
-                .rc_effect = op.rcEffect(),
+                .rc_effect = try self.parent.result.store.addRcEffect(op.rcEffect()),
                 .args = try self.parent.result.store.addLocalSpan(lowered),
                 .next = box_with_desc,
             } }, self.origin);
@@ -20452,7 +20504,7 @@ const ProcBodyBuilder = struct {
         var continuation = replace_result_box orelse sublist_record_adapt orelse try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = target,
             .op = lowered_op,
-            .rc_effect = lowered_op.rcEffect(),
+            .rc_effect = try self.parent.result.store.addRcEffect(lowered_op.rcEffect()),
             .args = try self.parent.result.store.addLocalSpan(lowered),
             .next = result_next,
         } }, self.origin);
@@ -20644,7 +20696,7 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("literal conversion result did not have a tag-union representation");
         const tag_rep = self.parent.plan.representations.items[@backingInt(tag_rep_id)];
         var ok_variant: ?Plan.TagVariant = null;
-        var ok_index: u32 = 0;
+        var ok_index: layout.VariantIndex = 0;
         for (self.parent.plan.tagVariantSlice(tag_rep.tag_variants), 0..) |variant, index| {
             if (!std.mem.eql(u8, self.tagVariantNameText(variant), "Ok")) continue;
             if (index > std.math.maxInt(u32)) {
@@ -20703,7 +20755,7 @@ const ProcBodyBuilder = struct {
         if (tag_rep.kind == .dynamic) {
             return try self.parent.result.store.addCFStmt(.{ .boxy_tag_match = .{
                 .source = source,
-                .source_desc = try self.descriptorRefForSourceLocalRep(source, source_rep),
+                .source_desc = try self.parent.result.store.addStmtRow(LIR.BoxyDescRef, try self.descriptorRefForSourceLocalRep(source, source_rep)),
                 .tag_name = try self.parent.result.store.insertBoxyName("Ok"),
                 .on_match = read_ok,
                 .on_miss = invalid,
@@ -20720,7 +20772,7 @@ const ProcBodyBuilder = struct {
         } }, self.origin);
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = discriminant,
-            .op = .{ .discriminant = .{ .source = source } },
+            .op = .discriminant(source),
             .next = switch_stmt,
         } }, self.origin);
     }
@@ -20778,7 +20830,7 @@ const ProcBodyBuilder = struct {
         } }, self.origin);
         const read_discriminant = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = discriminant,
-            .op = .{ .discriminant = .{ .source = error_value } },
+            .op = .discriminant(error_value),
             .next = select,
         } }, self.origin);
         return try self.assignConcreteTagPayloadRead(error_value, error_rep, null, source, try_rep, err_variant.name, @intCast(err_index), 0, 1, read_discriminant);
@@ -21117,12 +21169,12 @@ const ProcBodyBuilder = struct {
     /// selected by the slot's explicit Present discriminant.
     fn presenceSlotVariants(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) ?PresenceSlotVariants {
         const rep = self.parent.plan.representations.items[@backingInt(rep_id)];
-        const present: u32 = rep.presence_slot_present_discriminant orelse return null;
+        const present: layout.VariantIndex = @intCast(rep.presence_slot_present_discriminant orelse return null);
         const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
         if (variants.len != 2 or present >= variants.len) {
             boxyLowerInvariant("presence slot did not have exactly two variants");
         }
-        const missing: u32 = if (present == 0) 1 else 0;
+        const missing: layout.VariantIndex = if (present == 0) 1 else 0;
         if (variants[missing].payloads.len != 0) boxyLowerInvariant("presence slot Missing variant carried a payload");
         return .{
             .present = .{ .boundary_rep = rep_id, .tag_rep = rep_id, .owner_rep = rep_id, .index = present, .variant = variants[present] },
@@ -21211,7 +21263,7 @@ const ProcBodyBuilder = struct {
                 } }, self.derivedOrigin());
                 break :blk try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
                     .target = discriminant,
-                    .op = .{ .discriminant = .{ .source = source } },
+                    .op = .discriminant(source),
                     .next = switch_stmt,
                 } }, self.derivedOrigin());
             },
@@ -21223,7 +21275,7 @@ const ProcBodyBuilder = struct {
                     index -= 1;
                     dispatch = try self.parent.result.store.addCFStmt(.{ .boxy_tag_match = .{
                         .source = source,
-                        .source_desc = source_desc,
+                        .source_desc = try self.parent.result.store.addStmtRow(LIR.BoxyDescRef, source_desc),
                         .tag_name = try self.lirTagNameForVariant(variants[index].variant),
                         .on_match = bodies[index],
                         .on_miss = dispatch,
@@ -21428,7 +21480,7 @@ const ProcBodyBuilder = struct {
         }
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = target,
-            .op = .{ .field = .{ .source = self.arg_locals.items[0], .field_idx = 0 } },
+            .op = .field(self.arg_locals.items[0], 0),
             .next = next,
         } }, self.derivedOrigin());
     }
@@ -21447,7 +21499,7 @@ const ProcBodyBuilder = struct {
         }
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = target,
-            .op = .{ .field = .{ .source = self.arg_locals.items[0], .field_idx = field_index } },
+            .op = .field(self.arg_locals.items[0], field_index),
             .next = next,
         } }, self.derivedOrigin());
     }
@@ -21507,7 +21559,7 @@ const ProcBodyBuilder = struct {
                 defer tag_desc.deinit(self.parent.allocator);
                 const assign = try self.parent.result.store.addCFStmt(.{ .assign_tag = .{
                     .target = target,
-                    .target_desc = tag_desc.desc,
+                    .target_desc = try self.parent.result.store.addStmtRowIfPresent(LIR.BoxyDescRef, tag_desc.desc),
                     .variant_index = variant.index,
                     .discriminant = variant.index,
                     .payload = payload_storage,
@@ -21541,12 +21593,14 @@ const ProcBodyBuilder = struct {
                     null;
                 const assign = try self.parent.result.store.addCFStmt(.{ .assign_boxy_tag = .{
                     .target = target,
-                    .target_desc = tag_desc.desc orelse target_desc,
-                    .tag_name = try self.lirTagNameForVariant(variant.variant),
-                    .payload = dynamic_payload.local,
-                    .payload_layout = dynamic_payload.layout_idx,
-                    .payload_desc = payload_desc,
-                    .payload_mode = .move,
+                    .data = try self.parent.result.store.addStmtRow(LIR.BoxyTagData, .{
+                        .target_desc = tag_desc.desc orelse target_desc,
+                        .tag_name = try self.lirTagNameForVariant(variant.variant),
+                        .payload = dynamic_payload.local,
+                        .payload_layout = dynamic_payload.layout_idx,
+                        .payload_desc = payload_desc,
+                        .payload_mode = .move,
+                    }),
                     .next = next,
                 } }, self.derivedOrigin());
                 var continuation = try self.prependConstructedDescriptorRebindForRep(target_rep, assign);
@@ -21594,7 +21648,7 @@ const ProcBodyBuilder = struct {
             else
                 try self.parent.result.store.addCFStmt(.{ .assign_tag = .{
                     .target = target,
-                    .target_desc = tag_desc.desc,
+                    .target_desc = try self.parent.result.store.addStmtRowIfPresent(LIR.BoxyDescRef, tag_desc.desc),
                     .variant_index = variant.index,
                     .discriminant = variant.index,
                     .payload = payload.local,
@@ -21609,12 +21663,14 @@ const ProcBodyBuilder = struct {
                     null;
                 break :blk try self.parent.result.store.addCFStmt(.{ .assign_boxy_tag = .{
                     .target = target,
-                    .target_desc = target_desc,
-                    .tag_name = try self.lirTagNameForVariant(variant.variant),
-                    .payload = payload.local,
-                    .payload_layout = payload.layout_idx,
-                    .payload_desc = payload_desc,
-                    .payload_mode = .move,
+                    .data = try self.parent.result.store.addStmtRow(LIR.BoxyTagData, .{
+                        .target_desc = target_desc,
+                        .tag_name = try self.lirTagNameForVariant(variant.variant),
+                        .payload = payload.local,
+                        .payload_layout = payload.layout_idx,
+                        .payload_desc = payload_desc,
+                        .payload_mode = .move,
+                    }),
                     .next = next,
                 } }, self.derivedOrigin());
             },
@@ -21647,7 +21703,7 @@ const ProcBodyBuilder = struct {
                 const desc_info = try self.descriptorForConstructedTargetMaterialization(target, materialization);
                 const assign = try self.parent.result.store.addCFStmt(.{ .assign_tag = .{
                     .target = target,
-                    .target_desc = desc_info.desc,
+                    .target_desc = try self.parent.result.store.addStmtRowIfPresent(LIR.BoxyDescRef, desc_info.desc),
                     .variant_index = variant.index,
                     .discriminant = variant.index,
                     .payload = null,
@@ -21660,8 +21716,10 @@ const ProcBodyBuilder = struct {
                 const target_desc = try self.constructedTargetDescForRep(target_rep);
                 break :blk try self.parent.result.store.addCFStmt(.{ .assign_boxy_tag = .{
                     .target = target,
-                    .target_desc = target_desc,
-                    .tag_name = try self.lirTagNameForVariant(variant.variant),
+                    .data = try self.parent.result.store.addStmtRow(LIR.BoxyTagData, .{
+                        .target_desc = target_desc,
+                        .tag_name = try self.lirTagNameForVariant(variant.variant),
+                    }),
                     .next = next,
                 } }, self.derivedOrigin());
             },
@@ -21759,10 +21817,12 @@ const ProcBodyBuilder = struct {
                     boxyLowerInvariant("generated parser dynamic result record had no descriptor");
                 break :blk try self.parent.result.store.addCFStmt(.{ .assign_boxy_box = .{
                     .target = target,
-                    .payload = payload,
-                    .payload_layout = payload_layout,
-                    .payload_desc = payload_desc,
-                    .payload_mode = .move,
+                    .data = try self.parent.result.store.addStmtRow(LIR.BoxyBoxData, .{
+                        .payload = payload,
+                        .payload_layout = payload_layout,
+                        .payload_desc = payload_desc,
+                        .payload_mode = .move,
+                    }),
                     .next = next,
                 } }, self.derivedOrigin());
             },
@@ -21770,7 +21830,7 @@ const ProcBodyBuilder = struct {
         continuation = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
             .target = payload,
             .fields = try self.parent.result.store.addLocalSpan(&fields),
-            .contents_desc = aggregate_desc.contents_desc,
+            .contents_desc = try self.parent.result.store.addStmtRowIfPresent(LIR.BoxyDescRef, aggregate_desc.contents_desc),
             .next = continuation,
         } }, self.derivedOrigin());
         var index = fields.len;
@@ -21848,10 +21908,12 @@ const ProcBodyBuilder = struct {
                     boxyLowerInvariant("generated dynamic one-field record had no descriptor");
                 break :blk try self.parent.result.store.addCFStmt(.{ .assign_boxy_box = .{
                     .target = target,
-                    .payload = payload,
-                    .payload_layout = payload_layout,
-                    .payload_desc = payload_desc,
-                    .payload_mode = .move,
+                    .data = try self.parent.result.store.addStmtRow(LIR.BoxyBoxData, .{
+                        .payload = payload,
+                        .payload_layout = payload_layout,
+                        .payload_desc = payload_desc,
+                        .payload_mode = .move,
+                    }),
                     .next = next,
                 } }, self.derivedOrigin());
             },
@@ -21859,7 +21921,7 @@ const ProcBodyBuilder = struct {
         continuation = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
             .target = payload,
             .fields = try self.parent.result.store.addLocalSpan(&.{field}),
-            .contents_desc = aggregate_desc.contents_desc,
+            .contents_desc = try self.parent.result.store.addStmtRowIfPresent(LIR.BoxyDescRef, aggregate_desc.contents_desc),
             .next = continuation,
         } }, self.derivedOrigin());
         continuation = try self.assignGeneratedParserValueToStorage(
@@ -21886,7 +21948,7 @@ const ProcBodyBuilder = struct {
         if (self.isZstLocal(target)) return next;
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = target,
-            .op = .{ .local = source },
+            .op = .local(source),
             .next = next,
         } }, self.origin);
     }
@@ -22497,10 +22559,12 @@ const ProcBodyBuilder = struct {
                     boxyLowerInvariant("dynamic ConstStore record construction had no target descriptor");
                 const assign_box = try self.parent.result.store.addCFStmt(.{ .assign_boxy_box = .{
                     .target = target,
-                    .payload = payload,
-                    .payload_layout = payload_layout,
-                    .payload_desc = payload_desc,
-                    .payload_mode = .move,
+                    .data = try self.parent.result.store.addStmtRow(LIR.BoxyBoxData, .{
+                        .payload = payload,
+                        .payload_layout = payload_layout,
+                        .payload_desc = payload_desc,
+                        .payload_mode = .move,
+                    }),
                     .next = next,
                 } }, self.scaffoldOrigin());
                 break :blk .{ payload, try self.prependOptionalDescriptorMaterialization(payload_desc_info.materialize, assign_box) };
@@ -22556,7 +22620,7 @@ const ProcBodyBuilder = struct {
         var continuation = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
             .target = record_target,
             .fields = try self.parent.result.store.addLocalSpan(field_locals),
-            .contents_desc = aggregate_desc.contents_desc,
+            .contents_desc = try self.parent.result.store.addStmtRowIfPresent(LIR.BoxyDescRef, aggregate_desc.contents_desc),
             .next = record_next,
         } }, self.scaffoldOrigin());
         continuation = try self.prependOptionalDescriptorMaterialization(aggregate_desc.materialize, continuation);
@@ -22707,8 +22771,10 @@ const ProcBodyBuilder = struct {
         if (tag.payloads.len == 0) {
             const assign_tag = try self.parent.result.store.addCFStmt(.{ .assign_boxy_tag = .{
                 .target = target,
-                .target_desc = target_desc,
-                .tag_name = try self.lirTagName(checked_tag.name),
+                .data = try self.parent.result.store.addStmtRow(LIR.BoxyTagData, .{
+                    .target_desc = target_desc,
+                    .tag_name = try self.lirTagName(checked_tag.name),
+                }),
                 .next = next,
             } }, self.scaffoldOrigin());
             return exprDone(try self.prependOptionalDescriptorMaterialization(target_desc_info.materialize, assign_tag));
@@ -22722,12 +22788,14 @@ const ProcBodyBuilder = struct {
         const payload_desc = if (payload.desc_rep) |payload_rep| try self.descriptorRefForKnownRep(payload_rep) else null;
         const assign_tag = try self.parent.result.store.addCFStmt(.{ .assign_boxy_tag = .{
             .target = target,
-            .target_desc = target_desc,
-            .tag_name = try self.lirTagName(checked_tag.name),
-            .payload = payload.local,
-            .payload_layout = payload.layout_idx,
-            .payload_desc = payload_desc,
-            .payload_mode = .move,
+            .data = try self.parent.result.store.addStmtRow(LIR.BoxyTagData, .{
+                .target_desc = target_desc,
+                .tag_name = try self.lirTagName(checked_tag.name),
+                .payload = payload.local,
+                .payload_layout = payload.layout_idx,
+                .payload_desc = payload_desc,
+                .payload_mode = .move,
+            }),
             .next = next,
         } }, self.scaffoldOrigin());
         var continuation = try self.prependOptionalDescriptorMaterialization(target_desc_info.materialize, assign_tag);
@@ -23139,10 +23207,12 @@ const ProcBodyBuilder = struct {
         self.parent.result.store.setLocalBoxyDesc(elem_local, payload_desc);
         return try self.parent.result.store.addCFStmt(.{ .assign_boxy_box = .{
             .target = elem_local,
-            .payload = source,
-            .payload_layout = self.parent.result.store.getLocal(source).layout_idx,
-            .payload_desc = payload_desc,
-            .payload_mode = .move,
+            .data = try self.parent.result.store.addStmtRow(LIR.BoxyBoxData, .{
+                .payload = source,
+                .payload_layout = self.parent.result.store.getLocal(source).layout_idx,
+                .payload_desc = payload_desc,
+                .payload_mode = .move,
+            }),
             .next = continuation,
         } }, self.scaffoldOrigin());
     }
@@ -23537,11 +23607,13 @@ const ProcBodyBuilder = struct {
             }
             const stmt = try self.parent.result.store.addCFStmt(.{ .assign_packed_erased_fn = .{
                 .target = target,
-                .proc = erased_proc,
-                .capture = null,
-                .capture_layout = null,
-                .on_drop = .none,
-                .result_desc = result_desc.desc,
+                .data = try self.parent.result.store.addStmtRow(LIR.PackedErasedFnData, .{
+                    .proc = erased_proc,
+                    .capture = null,
+                    .capture_layout = null,
+                    .on_drop = .none,
+                    .result_desc = result_desc.desc,
+                }),
                 .next = next,
             } }, self.origin);
             if (adapter) |boundary| try self.finishCallableAdapterBoundary(boundary);
@@ -23735,11 +23807,13 @@ const ProcBodyBuilder = struct {
 
         const assign = try self.parent.result.store.addCFStmt(.{ .assign_packed_erased_fn = .{
             .target = target,
-            .proc = erased_proc,
-            .capture = capture_local,
-            .capture_layout = capture_layout,
-            .on_drop = on_drop,
-            .result_desc = result_desc.desc,
+            .data = try self.parent.result.store.addStmtRow(LIR.PackedErasedFnData, .{
+                .proc = erased_proc,
+                .capture = capture_local,
+                .capture_layout = capture_layout,
+                .on_drop = on_drop,
+                .result_desc = result_desc.desc,
+            }),
             .next = next,
         } }, self.origin);
 
@@ -23749,7 +23823,7 @@ const ProcBodyBuilder = struct {
             try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
                 .target = capture_local,
                 .fields = try self.parent.result.store.addLocalSpan(capture_fields),
-                .contents_desc = capture_contents_desc,
+                .contents_desc = try self.parent.result.store.addStmtRowIfPresent(LIR.BoxyDescRef, capture_contents_desc),
                 .next = assign,
             } }, self.origin);
         continuation = try self.prependDescriptorArgMaterializations(result_desc_initializers.items, continuation);
@@ -24318,11 +24392,13 @@ const ProcBodyBuilder = struct {
         }
         const pack = try self.parent.result.store.addCFStmt(.{ .assign_packed_erased_fn = .{
             .target = target,
-            .proc = erased_proc,
-            .capture = capture_local,
-            .capture_layout = capture_layout,
-            .on_drop = on_drop,
-            .result_desc = result_desc.desc,
+            .data = try self.parent.result.store.addStmtRow(LIR.PackedErasedFnData, .{
+                .proc = erased_proc,
+                .capture = capture_local,
+                .capture_layout = capture_layout,
+                .on_drop = on_drop,
+                .result_desc = result_desc.desc,
+            }),
             .next = next,
         } }, self.derivedOrigin());
         var continuation = if (self.isZstLocal(capture_local))
@@ -24331,7 +24407,7 @@ const ProcBodyBuilder = struct {
             try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
                 .target = capture_local,
                 .fields = try self.parent.result.store.addLocalSpan(capture_fields),
-                .contents_desc = capture_contents_desc,
+                .contents_desc = try self.parent.result.store.addStmtRowIfPresent(LIR.BoxyDescRef, capture_contents_desc),
                 .next = pack,
             } }, self.derivedOrigin());
         continuation = try self.prependDescriptorArgMaterializations(result_desc_initializers.items, continuation);
@@ -24471,16 +24547,18 @@ const ProcBodyBuilder = struct {
 
         continuation = try self.parent.result.store.addCFStmt(.{ .assign_call_erased = .{
             .target = call_target,
-            .closure = callee_local,
-            .args = try self.parent.result.store.addLocalSpan(call_args),
-            .arg_layouts = try self.appendErasedArgumentLayouts(call_args),
-            .arg_plan = try self.erasedCallArgsPlan(call_args),
-            .arg_descs = arg_descs.locals,
-            .arg_desc_keys = arg_descs.keys,
-            .result_desc = expected_result_desc.desc,
-            .out_desc = out_desc,
-            .reuse_closure = false,
-            .reuse_source = null,
+            .data = try self.parent.result.store.addStmtRow(LIR.ErasedCallData, .{
+                .closure = callee_local,
+                .args = try self.parent.result.store.addLocalSpan(call_args),
+                .arg_layouts = try self.appendErasedArgumentLayouts(call_args),
+                .arg_plan = try self.erasedCallArgsPlan(call_args),
+                .arg_descs = arg_descs.locals,
+                .arg_desc_keys = arg_descs.keys,
+                .result_desc = expected_result_desc.desc,
+                .out_desc = out_desc,
+                .reuse_closure = false,
+                .reuse_source = null,
+            }),
             .next = continuation,
         } }, self.origin);
         continuation = try self.prependDescriptorArgMaterializations(descriptor_initializers.items, continuation);
@@ -24989,7 +25067,7 @@ const ProcBodyBuilder = struct {
                 continuation = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
                     .target = target,
                     .op = .bool_not,
-                    .rc_effect = LIR.LowLevel.bool_not.rcEffect(),
+                    .rc_effect = try self.parent.result.store.addRcEffect(LIR.LowLevel.bool_not.rcEffect()),
                     .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{raw}),
                     .next = next,
                 } }, self.origin);
@@ -25034,13 +25112,15 @@ const ProcBodyBuilder = struct {
 
         continuation = try self.parent.result.store.addCFStmt(.{ .assign_call_dict = .{
             .target = call_target,
-            .dict = .{ .local = dict_local },
-            .method = required_method,
-            .method_slot = match.slot,
-            .args = try self.parent.result.store.addLocalSpan(lowered),
-            .arg_descs = try self.parent.result.store.addLocalSpan(argument_desc_locals),
-            .hidden_args = try self.parent.result.store.addLocalSpan(hidden_arg_locals),
-            .result_desc = result_desc_info.desc,
+            .data = try self.parent.result.store.addStmtRow(LIR.CallDictData, .{
+                .dict = .{ .local = dict_local },
+                .method = required_method,
+                .method_slot = match.slot,
+                .args = try self.parent.result.store.addLocalSpan(lowered),
+                .arg_descs = try self.parent.result.store.addLocalSpan(argument_desc_locals),
+                .hidden_args = try self.parent.result.store.addLocalSpan(hidden_arg_locals),
+                .result_desc = result_desc_info.desc,
+            }),
             .next = continuation,
         } }, self.origin);
         if (result_desc_info.materialize) |materialize| {
@@ -25429,8 +25509,10 @@ const ProcBodyBuilder = struct {
             .target = call_target,
             .proc = callee_proc,
             .args = call_args,
-            .result_desc = result_desc,
-            .out_desc = out_desc,
+            .extra = try self.parent.result.store.addOptionalStmtRow(LIR.CallExtra, .{
+                .result_desc = result_desc,
+                .out_desc = out_desc,
+            }),
             .next = call_next,
         } }, self.origin);
         if (provisional_runtime_result_desc) {
@@ -25439,8 +25521,10 @@ const ProcBodyBuilder = struct {
                 .target = call_target,
                 .proc = callee_proc,
                 .args = call_args,
-                .result_desc = static_result_desc_info.desc,
-                .out_desc = null,
+                .extra = try self.parent.result.store.addOptionalStmtRow(LIR.CallExtra, .{
+                    .result_desc = static_result_desc_info.desc,
+                    .out_desc = null,
+                }),
                 .next = call_next,
             } }, self.origin);
             var static_replacement = static_call;
@@ -25625,11 +25709,13 @@ const ProcBodyBuilder = struct {
         );
         continuation = try self.parent.result.store.addCFStmt(.{ .assign_boxy_adapt = .{
             .target = target,
-            .source = source,
-            .adapter = adapter,
-            .source_desc = source_desc,
-            .target_desc = target_desc,
-            .source_mode = source_mode,
+            .data = try self.parent.result.store.addStmtRow(LIR.BoxyAdaptData, .{
+                .source = source,
+                .adapter = adapter,
+                .source_desc = source_desc,
+                .target_desc = target_desc,
+                .source_mode = source_mode,
+            }),
             .next = continuation,
         } }, self.glueOrigin());
         continuation = try self.prependOptionalDescriptorMaterialization(target_desc_info.materialize, continuation);
@@ -27998,7 +28084,7 @@ const ProcBodyBuilder = struct {
         } }, self.origin);
         const read_discriminant = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = discriminant,
-            .op = .{ .discriminant = .{ .source = optional.slot_local } },
+            .op = .discriminant(optional.slot_local),
             .next = switch_stmt,
         } }, self.origin);
         return try self.lowerRecordFieldFromLocalInto(
@@ -28141,29 +28227,30 @@ const ProcBodyBuilder = struct {
             if (field_desc) |desc| self.parent.result.store.setLocalBoxyDesc(stored_field_local, desc);
             break :blk try self.parent.result.store.addCFStmt(.{ .assign_boxy_adapt = .{
                 .target = read_target,
-                .source = stored_field_local,
-                .adapter = try self.internAdapter(.materialize, physical_field_layout, read_target_layout, false),
-                .source_desc = field_desc,
-                .target_desc = field_desc,
-                .source_mode = .borrow,
+                .data = try self.parent.result.store.addStmtRow(LIR.BoxyAdaptData, .{
+                    .source = stored_field_local,
+                    .adapter = try self.internAdapter(.materialize, physical_field_layout, read_target_layout, false),
+                    .source_desc = field_desc,
+                    .target_desc = field_desc,
+                    .source_mode = .borrow,
+                }),
                 .next = after_read,
             } }, self.origin);
         };
         const read = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = stored_field_local,
-            .op = .{ .field = .{
-                .source = read_source,
-                .field_idx = access.field_idx,
-            } },
+            .op = .field(read_source, access.field_idx),
             .next = after_stored_field_read,
         } }, self.origin);
         const before_read = if (field_desc_local) |desc_local| blk: {
             if (self.localIsReadOnlyDescriptorInput(desc_local)) break :blk read;
             break :blk try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
                 .target = desc_local,
-                .desc = record_desc orelse
-                    boxyLowerInvariant("record field descriptor bind had no source descriptor"),
-                .nested_index = nested_desc_index.?,
+                .data = try self.parent.result.store.addStmtRow(LIR.BoxyDescRefData, .{
+                    .desc = record_desc orelse
+                        boxyLowerInvariant("record field descriptor bind had no source descriptor"),
+                    .nested_index = nested_desc_index.?,
+                }),
                 .next = read,
             } }, self.origin);
         } else read;
@@ -28173,15 +28260,17 @@ const ProcBodyBuilder = struct {
                 const unbox = try self.parent.result.store.addCFStmt(.{
                     .assign_boxy_unbox = .{
                         .target = read_source,
-                        .source = receiver_local,
-                        .source_desc = receiver_desc orelse
-                            boxyLowerInvariant("dynamic record field unbox had no source descriptor"),
-                        .target_desc = unboxed_receiver_desc_info.desc,
-                        .target_layout = self.parent.result.store.getLocal(read_source).layout_idx,
-                        // This read materializes a field view. Conversion can
-                        // allocate fields, so the view owns its result; copying
-                        // retains only fields that still share the source.
-                        .source_mode = .copy,
+                        .data = try self.parent.result.store.addStmtRow(LIR.BoxyUnboxData, .{
+                            .source = receiver_local,
+                            .source_desc = receiver_desc orelse
+                                boxyLowerInvariant("dynamic record field unbox had no source descriptor"),
+                            .target_desc = unboxed_receiver_desc_info.desc,
+                            .target_layout = self.parent.result.store.getLocal(read_source).layout_idx,
+                            // This read materializes a field view. Conversion can
+                            // allocate fields, so the view owns its result; copying
+                            // retains only fields that still share the source.
+                            .source_mode = .copy,
+                        }),
                         .next = before_read,
                     },
                 }, self.origin);
@@ -28215,8 +28304,10 @@ const ProcBodyBuilder = struct {
         if (self.localIsReadOnlyDescriptorInput(desc_local)) return next;
         return try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
             .target = desc_local,
-            .desc = record_desc,
-            .nested_index = nested_desc_index,
+            .data = try self.parent.result.store.addStmtRow(LIR.BoxyDescRefData, .{
+                .desc = record_desc,
+                .nested_index = nested_desc_index,
+            }),
             .next = next,
         } }, self.glueOrigin());
     }
@@ -28233,10 +28324,7 @@ const ProcBodyBuilder = struct {
 
         const read = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = target,
-            .op = .{ .field = .{
-                .source = source,
-                .field_idx = elem_index,
-            } },
+            .op = .field(source, elem_index),
             .next = next,
         } }, self.origin);
         const tuple_rep = self.tupleRepForBoundary(source_rep) orelse
@@ -28249,8 +28337,10 @@ const ProcBodyBuilder = struct {
         }
         return try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
             .target = desc_local,
-            .desc = try self.descriptorRefForLocalOrKnownRep(source, tuple_rep),
-            .nested_index = nested_index,
+            .data = try self.parent.result.store.addStmtRow(LIR.BoxyDescRefData, .{
+                .desc = try self.descriptorRefForLocalOrKnownRep(source, tuple_rep),
+                .nested_index = nested_index,
+            }),
             .next = read,
         } }, self.origin);
     }
@@ -28268,7 +28358,9 @@ const ProcBodyBuilder = struct {
         try self.markDescriptorLocalBound(target_desc_local);
         return try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
             .target = target_desc_local,
-            .desc = source_desc,
+            .data = try self.parent.result.store.addStmtRow(LIR.BoxyDescRefData, .{
+                .desc = source_desc,
+            }),
             .next = next,
         } }, self.glueOrigin());
     }
@@ -28399,8 +28491,10 @@ const ProcBodyBuilder = struct {
             const materialization = try self.descriptorMaterializationForKnownRepExcludingLocal(scoped.rep, scoped.local);
             continuation = try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
                 .target = scoped.local,
-                .desc = materialization.desc,
-                .captures = materialization.captures,
+                .data = try self.parent.result.store.addStmtRow(LIR.BoxyDescRefData, .{
+                    .desc = materialization.desc,
+                    .captures = materialization.captures,
+                }),
                 .next = continuation,
             } }, self.glueOrigin());
         }
@@ -29521,7 +29615,7 @@ const ProcBodyBuilder = struct {
         pub fn readDiscriminant(ctx: BoxyMatchCtx, target: LIR.LocalId, source: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
             return try ctx.b.parent.result.store.addCFStmt(.{ .assign_ref = .{
                 .target = target,
-                .op = .{ .discriminant = .{ .source = source } },
+                .op = LIR.RefOp.discriminant(source),
                 .next = next,
             } }, ctx.b.glueOrigin());
         }
@@ -29575,7 +29669,7 @@ const ProcBodyBuilder = struct {
                     source,
                     payload.source_tag_rep,
                     payload.tag_name,
-                    variant_index,
+                    @intCast(variant_index),
                     payload.payload_index,
                     payload.payload_count,
                     next,
@@ -29753,7 +29847,7 @@ const ProcBodyBuilder = struct {
             const match_desc = try b.descriptorRefForSourceLocalRep(source, source_rep);
             return try b.parent.result.store.addCFStmt(.{ .boxy_tag_match = .{
                 .source = source,
-                .source_desc = match_desc,
+                .source_desc = try b.parent.result.store.addStmtRow(LIR.BoxyDescRef, match_desc),
                 .tag_name = try b.lirTagName(name),
                 .on_match = on_match,
                 .on_miss = on_miss,
@@ -30087,11 +30181,13 @@ const ProcBodyBuilder = struct {
         const unbox = field_read.unbox orelse return next;
         const stmt = try self.parent.result.store.addCFStmt(.{ .assign_boxy_unbox = .{
             .target = field_read.local,
-            .source = unbox.source,
-            .source_desc = unbox.source_desc,
-            .target_desc = unbox.target_desc,
-            .target_layout = unbox.target_layout,
-            .source_mode = .copy,
+            .data = try self.parent.result.store.addStmtRow(LIR.BoxyUnboxData, .{
+                .source = unbox.source,
+                .source_desc = unbox.source_desc,
+                .target_desc = unbox.target_desc,
+                .target_layout = unbox.target_layout,
+                .source_mode = .copy,
+            }),
             .next = next,
         } }, self.origin);
         return try self.prependOptionalDescriptorMaterialization(field_read.materialize, stmt);
@@ -30128,10 +30224,7 @@ const ProcBodyBuilder = struct {
         else
             try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
                 .target = read_target,
-                .op = .{ .field = .{
-                    .source = field_read.local,
-                    .field_idx = access.field_idx,
-                } },
+                .op = .field(field_read.local, access.field_idx),
                 .next = after_read,
             } }, self.origin);
         if (nested_desc_index) |index| {
@@ -30142,9 +30235,11 @@ const ProcBodyBuilder = struct {
             if (self.localIsReadOnlyDescriptorInput(desc_local)) return read;
             return try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
                 .target = desc_local,
-                .desc = record_desc orelse
-                    boxyLowerInvariant("record pattern field descriptor bind had no source descriptor"),
-                .nested_index = index,
+                .data = try self.parent.result.store.addStmtRow(LIR.BoxyDescRefData, .{
+                    .desc = record_desc orelse
+                        boxyLowerInvariant("record pattern field descriptor bind had no source descriptor"),
+                    .nested_index = index,
+                }),
                 .next = read,
             } }, self.origin);
         }
@@ -30283,12 +30378,14 @@ const ProcBodyBuilder = struct {
             null;
         return try self.parent.result.store.addCFStmt(.{ .assign_boxy_tag_payload = .{
             .target = target,
-            .target_desc = writable_target_desc,
-            .source = source,
-            .source_desc = try self.descriptorRefForLocalOrKnownRep(source, source_rep),
-            .tag_name = tag_name,
-            .payload_index = payload_index,
-            .source_mode = .copy,
+            .data = try self.parent.result.store.addStmtRow(LIR.BoxyTagPayloadData, .{
+                .target_desc = writable_target_desc,
+                .source = source,
+                .source_desc = try self.descriptorRefForLocalOrKnownRep(source, source_rep),
+                .tag_name = tag_name,
+                .payload_index = payload_index,
+                .source_mode = .copy,
+            }),
             .next = next,
         } }, self.origin);
     }
@@ -30315,11 +30412,11 @@ const ProcBodyBuilder = struct {
         if (self.dynamicLiteralRuntimeDesc(target)) |desc_ref| {
             const literal = try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
                 .target = target,
-                .value = .{ .boxy_dynamic_frac_literal = .{
+                .value = .{ .boxy_dynamic_frac_literal = try self.parent.result.store.addStmtRow(LIR.BoxyDynamicFracLiteral, .{
                     .dec_bits = value.num,
                     .desc = desc_ref,
                     .default_layout = .dec,
-                } },
+                }) },
                 .next = next,
             } }, self.origin);
             return try self.prependLiteralTargetDescriptorMaterialization(target, literal);
@@ -30377,7 +30474,7 @@ const ProcBodyBuilder = struct {
         return try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = target,
             .op = .list_append_unsafe,
-            .rc_effect = LIR.LowLevel.RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(0b11, 0),
+            .rc_effect = try self.parent.result.store.addRcEffect(LIR.LowLevel.RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(0b11, 0)),
             .args = try self.parent.result.store.addLocalSpan(&args),
             .next = next,
         } }, self.origin);
@@ -30410,7 +30507,7 @@ const ProcBodyBuilder = struct {
         return try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = target,
             .op = op,
-            .rc_effect = op.rcEffect(),
+            .rc_effect = try self.parent.result.store.addRcEffect(op.rcEffect()),
             .args = try self.parent.result.store.addLocalSpan(args),
             .next = next,
         } }, self.origin);
@@ -30824,7 +30921,7 @@ const ProcBodyBuilder = struct {
         self: *ProcBodyBuilder,
         step: IteratorStepShape,
         step_local: LIR.LocalId,
-        variant_index: ?u32,
+        variant_index: ?layout.VariantIndex,
         iterator_param: LIR.LocalId,
         join_id: LIR.JoinPointId,
     ) Allocator.Error!LIR.CFStmtId {
@@ -30847,7 +30944,7 @@ const ProcBodyBuilder = struct {
         source: LIR.LocalId,
         source_rep: Plan.TypeRepId,
         tag_name: names.TagNameId,
-        variant_index: ?u32,
+        variant_index: ?layout.VariantIndex,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const source_tag_rep = self.tagVariantRepForBoundary(source_rep) orelse
@@ -30988,13 +31085,15 @@ const ProcBodyBuilder = struct {
 
         var continuation = try self.parent.result.store.addCFStmt(.{ .assign_call_dict = .{
             .target = target,
-            .dict = .{ .local = dict_local },
-            .method = required_method,
-            .method_slot = match.slot,
-            .args = try self.parent.result.store.addLocalSpan(arg_locals),
-            .arg_descs = try self.parent.result.store.addLocalSpan(argument_desc_locals),
-            .hidden_args = try self.parent.result.store.addLocalSpan(hidden_arg_locals),
-            .result_desc = result_desc_info.desc,
+            .data = try self.parent.result.store.addStmtRow(LIR.CallDictData, .{
+                .dict = .{ .local = dict_local },
+                .method = required_method,
+                .method_slot = match.slot,
+                .args = try self.parent.result.store.addLocalSpan(arg_locals),
+                .arg_descs = try self.parent.result.store.addLocalSpan(argument_desc_locals),
+                .hidden_args = try self.parent.result.store.addLocalSpan(hidden_arg_locals),
+                .result_desc = result_desc_info.desc,
+            }),
             .next = next,
         } }, self.glueOrigin());
         if (result_desc_info.materialize) |materialize| {
@@ -31159,7 +31258,7 @@ const ProcBodyBuilder = struct {
             if (source_desc != null or target_desc != null) {
                 const assign = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
                     .target = target,
-                    .op = .{ .local = source },
+                    .op = .local(source),
                     .next = next,
                 } }, self.glueOrigin());
                 switch (boxyLowLevelKind(op)) {
@@ -31182,8 +31281,10 @@ const ProcBodyBuilder = struct {
                             try self.markDescriptorLocalBound(local);
                             return try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
                                 .target = local,
-                                .desc = resolved_source_desc,
-                                .box_payload_layout = source_layout,
+                                .data = try self.parent.result.store.addStmtRow(LIR.BoxyDescRefData, .{
+                                    .desc = resolved_source_desc,
+                                    .box_payload_layout = source_layout,
+                                }),
                                 .next = assign,
                             } }, self.glueOrigin());
                         }
@@ -31251,10 +31352,12 @@ const ProcBodyBuilder = struct {
         const continuation = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = target,
             .op = .list_map_can_reuse,
-            .rc_effect = LIR.LowLevel.list_map_can_reuse.rcEffect(),
+            .rc_effect = try self.parent.result.store.addRcEffect(LIR.LowLevel.list_map_can_reuse.rcEffect()),
             .args = try self.parent.result.store.addLocalSpan(lowered),
-            .interchangeable = interchangeable,
-            .map_output_elem = map_output_elem,
+            .extra = try self.parent.result.store.addOptionalStmtRow(LIR.LowLevelExtra, .{
+                .interchangeable = interchangeable,
+                .map_output_elem = map_output_elem,
+            }),
             .next = next,
         } }, self.origin);
         return try self.loweredExprsChain(args, lowered, continuation);
@@ -32512,11 +32615,13 @@ const ProcBodyBuilder = struct {
             self.parent.result.store.setLocalBoxyDesc(target, target_desc);
             const unbox = try self.parent.result.store.addCFStmt(.{ .assign_boxy_unbox = .{
                 .target = target,
-                .source = source,
-                .source_desc = source_desc,
-                .target_desc = target_desc,
-                .target_layout = target_layout,
-                .source_mode = .borrow,
+                .data = try self.parent.result.store.addStmtRow(LIR.BoxyUnboxData, .{
+                    .source = source,
+                    .source_desc = source_desc,
+                    .target_desc = target_desc,
+                    .target_layout = target_layout,
+                    .source_mode = .borrow,
+                }),
                 .next = next,
             } }, self.glueOrigin());
             return try self.prependOptionalDescriptorMaterialization(target_desc_info.materialize, unbox);
@@ -32530,11 +32635,13 @@ const ProcBodyBuilder = struct {
             self.parent.result.store.setLocalBoxyDesc(target, target_desc);
             const box = try self.parent.result.store.addCFStmt(.{ .assign_boxy_box = .{
                 .target = target,
-                .payload = source,
-                .payload_layout = source_layout,
-                .source_desc = if (std.meta.eql(source_desc, target_desc)) null else source_desc,
-                .payload_desc = target_desc,
-                .payload_mode = .borrow,
+                .data = try self.parent.result.store.addStmtRow(LIR.BoxyBoxData, .{
+                    .payload = source,
+                    .payload_layout = source_layout,
+                    .source_desc = if (std.meta.eql(source_desc, target_desc)) null else source_desc,
+                    .payload_desc = target_desc,
+                    .payload_mode = .borrow,
+                }),
                 .next = next,
             } }, self.glueOrigin());
             return try self.prependOptionalDescriptorMaterialization(target_desc_info.materialize, box);
@@ -33297,8 +33404,10 @@ const ProcBodyBuilder = struct {
         const materialization = try self.descriptorMaterializationForSourceRep(source_rep);
         return try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
             .target = target_desc_local,
-            .desc = materialization.desc,
-            .captures = materialization.captures,
+            .data = try self.parent.result.store.addStmtRow(LIR.BoxyDescRefData, .{
+                .desc = materialization.desc,
+                .captures = materialization.captures,
+            }),
             .next = next,
         } }, self.glueOrigin());
     }
@@ -34139,13 +34248,15 @@ const ProcBodyBuilder = struct {
         const result_desc = try self.exactCallResultDescriptorRef(self.repForType(ty));
         const body = try self.parent.result.store.addCFStmt(.{ .assign_call_dict = .{
             .target = target,
-            .dict = try self.literalReference(argument),
-            .method = dispatch.method,
-            .method_slot = 0,
-            .args = .empty(),
-            .arg_descs = .empty(),
-            .hidden_args = .empty(),
-            .result_desc = result_desc.desc,
+            .data = try self.parent.result.store.addStmtRow(LIR.CallDictData, .{
+                .dict = try self.literalReference(argument),
+                .method = dispatch.method,
+                .method_slot = 0,
+                .args = .empty(),
+                .arg_descs = .empty(),
+                .hidden_args = .empty(),
+                .result_desc = result_desc.desc,
+            }),
             .next = next,
         } }, self.origin);
         return try self.prependOptionalDescriptorMaterialization(result_desc.materialize, body);
@@ -34202,11 +34313,13 @@ const ProcBodyBuilder = struct {
         if (read_path.len == 0) {
             return try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
                 .target = hidden.local,
-                .desc = desc,
-                .nested_index = hidden.nested_index,
-                .tag_ext = hidden.tag_ext,
-                .tag_residual_for = hidden.tag_residual_for,
-                .captures = hidden.captures,
+                .data = try self.parent.result.store.addStmtRow(LIR.BoxyDescRefData, .{
+                    .desc = desc,
+                    .nested_index = hidden.nested_index,
+                    .tag_ext = hidden.tag_ext,
+                    .tag_residual_for = hidden.tag_residual_for,
+                    .captures = hidden.captures,
+                }),
                 .next = next,
             } }, self.glueOrigin());
         }
@@ -34234,27 +34347,29 @@ const ProcBodyBuilder = struct {
             const step = read_path[read_index];
             continuation = try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
                 .target = target,
-                .desc = source_desc,
-                .nested_index = switch (step) {
-                    .nested => |nested_index| nested_index,
-                    .tag_payload, .tag_ext, .box_payload => null,
-                },
-                .box_payload_layout = switch (step) {
-                    .box_payload => |box_layout| box_layout,
-                    .nested, .tag_payload, .tag_ext => null,
-                },
-                .tag_payload = switch (step) {
-                    .tag_payload => |payload| .{
-                        .tag_name = payload.tag_name,
-                        .payload_index = payload.payload_index,
+                .data = try self.parent.result.store.addStmtRow(LIR.BoxyDescRefData, .{
+                    .desc = source_desc,
+                    .nested_index = switch (step) {
+                        .nested => |nested_index| nested_index,
+                        .tag_payload, .tag_ext, .box_payload => null,
                     },
-                    .nested, .tag_ext, .box_payload => null,
-                },
-                .tag_ext = switch (step) {
-                    .tag_ext => true,
-                    .nested, .tag_payload, .box_payload => false,
-                },
-                .captures = if (read_index == 0) hidden.captures else LIR.LocalSpan.empty(),
+                    .box_payload_layout = switch (step) {
+                        .box_payload => |box_layout| box_layout,
+                        .nested, .tag_payload, .tag_ext => null,
+                    },
+                    .tag_payload = switch (step) {
+                        .tag_payload => |payload| .{
+                            .tag_name = payload.tag_name,
+                            .payload_index = payload.payload_index,
+                        },
+                        .nested, .tag_ext, .box_payload => null,
+                    },
+                    .tag_ext = switch (step) {
+                        .tag_ext => true,
+                        .nested, .tag_payload, .box_payload => false,
+                    },
+                    .captures = if (read_index == 0) hidden.captures else LIR.LocalSpan.empty(),
+                }),
                 .next = continuation,
             } }, self.glueOrigin());
         }
@@ -34453,7 +34568,7 @@ const ProcBodyBuilder = struct {
             presence: struct {
                 request: InspectRequest,
                 done: LIR.JoinPointId,
-                present_discriminant: u32,
+                present_discriminant: layout.VariantIndex,
                 missing_discriminant: u32,
                 value: LIR.LocalId,
             },
@@ -34723,7 +34838,7 @@ const ProcBodyBuilder = struct {
                     }
                     break :part .{ .tag_payload = .{
                         .source = sink.source,
-                        .variant_index = variant_index,
+                        .variant_index = @intCast(variant_index),
                         .payload_index = if (payloads.len == 1) null else index,
                         .rep = payload_child.rep,
                     } };
@@ -34829,20 +34944,8 @@ const ProcBodyBuilder = struct {
                     .target = value,
                     .op = switch (state.parts[state.remaining]) {
                         .literal => unreachable,
-                        .field => |field| .{ .field = .{
-                            .source = field.source,
-                            .field_idx = field.field_index,
-                        } },
-                        .tag_payload => |payload| if (payload.payload_index) |index| .{ .tag_payload = .{
-                            .source = payload.source,
-                            .payload_idx = index,
-                            .variant_index = payload.variant_index,
-                            .tag_discriminant = payload.variant_index,
-                        } } else .{ .tag_payload_struct = .{
-                            .source = payload.source,
-                            .variant_index = payload.variant_index,
-                            .tag_discriminant = payload.variant_index,
-                        } },
+                        .field => |field| LIR.RefOp.field(field.source, field.field_index),
+                        .tag_payload => |payload| if (payload.payload_index) |index| LIR.RefOp.tagPayload(payload.source, index, payload.variant_index, payload.variant_index) else LIR.RefOp.tagPayloadStruct(payload.source, payload.variant_index, payload.variant_index),
                     },
                     .next = continuation,
                 } }, self.derivedOrigin());
@@ -34926,8 +35029,9 @@ const ProcBodyBuilder = struct {
 
     fn beginPresenceSlotInspect(self: *ProcBodyBuilder, frames: *std.ArrayList(InspectFrame), request: InspectRequest) Allocator.Error!?LIR.CFStmtId {
         const rep = self.parent.plan.representations.items[@backingInt(request.rep_id)];
-        const present_discriminant = rep.presence_slot_present_discriminant orelse
-            boxyLowerInvariant("presence-slot inspect lacked its Present discriminant");
+        // The presence slot's tag union layout bounds its discriminants.
+        const present_discriminant: layout.VariantIndex = @intCast(rep.presence_slot_present_discriminant orelse
+            boxyLowerInvariant("presence-slot inspect lacked its Present discriminant"));
         const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
         const present_index: usize = present_discriminant;
         if (variants.len != 2 or present_index >= variants.len) {
@@ -35077,7 +35181,7 @@ const ProcBodyBuilder = struct {
                 } }, self.derivedOrigin());
                 const read_discriminant = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
                     .target = tag.discriminant,
-                    .op = .{ .discriminant = .{ .source = request.source } },
+                    .op = .discriminant(request.source),
                     .next = switch_stmt,
                 } }, self.derivedOrigin());
                 return self.finishInspectFrame(frames, try self.derivedResultJoin(tag.done, request.target, request.next, read_discriminant));
@@ -35088,11 +35192,7 @@ const ProcBodyBuilder = struct {
                 if (!self.isZstLocal(presence.value)) {
                     present_body = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
                         .target = presence.value,
-                        .op = .{ .tag_payload_struct = .{
-                            .source = request.source,
-                            .variant_index = presence.present_discriminant,
-                            .tag_discriminant = presence.present_discriminant,
-                        } },
+                        .op = .tagPayloadStruct(request.source, presence.present_discriminant, presence.present_discriminant),
                         .next = present_body,
                     } }, self.derivedOrigin());
                 }
@@ -35110,7 +35210,7 @@ const ProcBodyBuilder = struct {
                 } }, self.derivedOrigin());
                 const read_discriminant = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
                     .target = discriminant,
-                    .op = .{ .discriminant = .{ .source = request.source } },
+                    .op = .discriminant(request.source),
                     .next = switch_stmt,
                 } }, self.derivedOrigin());
                 return self.finishInspectFrame(frames, try self.derivedResultJoin(presence.done, request.target, request.next, read_discriminant));
@@ -35208,9 +35308,11 @@ const ProcBodyBuilder = struct {
         const desc = try self.descriptorRefForSourceLocalRep(value, rep_id);
         return try self.parent.result.store.addCFStmt(.{ .assign_boxy_hash = .{
             .target = target,
-            .value = value,
-            .hasher = hasher,
-            .desc = desc,
+            .data = try self.parent.result.store.addStmtRow(LIR.BoxyHashData, .{
+                .value = value,
+                .hasher = hasher,
+                .desc = desc,
+            }),
             .next = next,
         } }, self.derivedOrigin());
     }
@@ -35231,9 +35333,11 @@ const ProcBodyBuilder = struct {
         const after = if (negated) try self.negateBoolInto(target, raw, next) else next;
         return try self.parent.result.store.addCFStmt(.{ .assign_boxy_eq = .{
             .target = raw,
-            .lhs = lhs,
-            .rhs = rhs,
-            .desc = desc,
+            .data = try self.parent.result.store.addStmtRow(LIR.BoxyEqData, .{
+                .lhs = lhs,
+                .rhs = rhs,
+                .desc = desc,
+            }),
             .next = after,
         } }, self.derivedOrigin());
     }
@@ -35248,9 +35352,11 @@ const ProcBodyBuilder = struct {
         const source_desc = try self.descriptorRefForSourceLocalRep(source, rep_id);
         return try self.parent.result.store.addCFStmt(.{ .assign_boxy_inspect = .{
             .target = target,
-            .source = source,
-            .source_desc = source_desc,
-            .source_mode = .borrow,
+            .data = try self.parent.result.store.addStmtRow(LIR.BoxyInspectData, .{
+                .source = source,
+                .source_desc = source_desc,
+                .source_mode = .borrow,
+            }),
             .next = next,
         } }, self.derivedOrigin());
     }
@@ -35282,7 +35388,7 @@ const ProcBodyBuilder = struct {
         return try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = target,
             .op = op,
-            .rc_effect = op.rcEffect(),
+            .rc_effect = try self.parent.result.store.addRcEffect(op.rcEffect()),
             .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{source}),
             .next = next,
         } }, self.derivedOrigin());
@@ -35306,7 +35412,7 @@ const ProcBodyBuilder = struct {
         } }, self.derivedOrigin());
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = discriminant,
-            .op = .{ .discriminant = .{ .source = source } },
+            .op = .discriminant(source),
             .next = switch_stmt,
         } }, self.derivedOrigin());
     }
@@ -35362,7 +35468,7 @@ const ProcBodyBuilder = struct {
         return try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = target,
             .op = .str_concat,
-            .rc_effect = LIR.LowLevel.str_concat.rcEffect(),
+            .rc_effect = try self.parent.result.store.addRcEffect(LIR.LowLevel.str_concat.rcEffect()),
             .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{ lhs, rhs }),
             .next = next,
         } }, self.origin);
@@ -35585,7 +35691,7 @@ const ProcBodyBuilder = struct {
             return try ctx.builder.parent.result.store.addCFStmt(.{ .assign_low_level = .{
                 .target = target,
                 .op = .num_is_eq,
-                .rc_effect = LIR.LowLevel.num_is_eq.rcEffect(),
+                .rc_effect = try ctx.builder.parent.result.store.addRcEffect(LIR.LowLevel.num_is_eq.rcEffect()),
                 .args = try ctx.builder.parent.result.store.addLocalSpan(&[_]LIR.LocalId{ lhs, rhs }),
                 .next = next,
             } }, ctx.builder.derivedOrigin());
@@ -35707,7 +35813,7 @@ const ProcBodyBuilder = struct {
             source,
             rep_id,
             variant.name,
-            variant_index,
+            @intCast(variant_index),
             index,
             self.parent.plan.childSlice(variant.payloads).len,
             next,
@@ -35717,7 +35823,7 @@ const ProcBodyBuilder = struct {
     fn derivedFieldRead(self: *ProcBodyBuilder, dest: LIR.LocalId, source: LIR.LocalId, field_index: u32, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = dest,
-            .op = .{ .field = .{ .source = source, .field_idx = field_index } },
+            .op = LIR.RefOp.field(source, field_index),
             .next = next,
         } }, self.derivedOrigin());
     }
@@ -35725,7 +35831,7 @@ const ProcBodyBuilder = struct {
     fn derivedDiscriminantRead(self: *ProcBodyBuilder, dest: LIR.LocalId, source: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = dest,
-            .op = .{ .discriminant = .{ .source = source } },
+            .op = LIR.RefOp.discriminant(source),
             .next = next,
         } }, self.derivedOrigin());
     }
@@ -35882,7 +35988,9 @@ const ProcBodyBuilder = struct {
         const materialize = operand_desc orelse return call;
         return try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
             .target = materialize.local,
-            .desc = materialize.desc,
+            .data = try self.parent.result.store.addStmtRow(LIR.BoxyDescRefData, .{
+                .desc = materialize.desc,
+            }),
             .next = call,
         } }, self.derivedOrigin());
     }
@@ -35916,14 +36024,14 @@ const ProcBodyBuilder = struct {
                 const lower_rhs = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
                     .target = rhs_bits,
                     .op = .simd_to_u128_bits,
-                    .rc_effect = LIR.LowLevel.simd_to_u128_bits.rcEffect(),
+                    .rc_effect = try self.parent.result.store.addRcEffect(LIR.LowLevel.simd_to_u128_bits.rcEffect()),
                     .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{rhs}),
                     .next = compare,
                 } }, self.derivedOrigin());
                 return try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
                     .target = lhs_bits,
                     .op = .simd_to_u128_bits,
-                    .rc_effect = LIR.LowLevel.simd_to_u128_bits.rcEffect(),
+                    .rc_effect = try self.parent.result.store.addRcEffect(LIR.LowLevel.simd_to_u128_bits.rcEffect()),
                     .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{lhs}),
                     .next = lower_rhs,
                 } }, self.derivedOrigin());
@@ -35976,7 +36084,7 @@ const ProcBodyBuilder = struct {
             return try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
                 .target = target,
                 .op = eq_op,
-                .rc_effect = eq_op.rcEffect(),
+                .rc_effect = try self.parent.result.store.addRcEffect(eq_op.rcEffect()),
                 .args = try self.parent.result.store.addLocalSpan(&args),
                 .next = next,
             } }, self.derivedOrigin());
@@ -35986,14 +36094,14 @@ const ProcBodyBuilder = struct {
         const not_stmt = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = target,
             .op = .bool_not,
-            .rc_effect = LIR.LowLevel.bool_not.rcEffect(),
+            .rc_effect = try self.parent.result.store.addRcEffect(LIR.LowLevel.bool_not.rcEffect()),
             .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{raw}),
             .next = next,
         } }, self.derivedOrigin());
         return try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = raw,
             .op = eq_op,
-            .rc_effect = eq_op.rcEffect(),
+            .rc_effect = try self.parent.result.store.addRcEffect(eq_op.rcEffect()),
             .args = try self.parent.result.store.addLocalSpan(&args),
             .next = not_stmt,
         } }, self.derivedOrigin());
@@ -36012,12 +36120,12 @@ const ProcBodyBuilder = struct {
         const compare = try self.lowerScalarEqLocalsInto(target, lhs_disc, rhs_disc, .num_is_eq, negated, next);
         const read_rhs = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = rhs_disc,
-            .op = .{ .discriminant = .{ .source = rhs } },
+            .op = .discriminant(rhs),
             .next = compare,
         } }, self.derivedOrigin());
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = lhs_disc,
-            .op = .{ .discriminant = .{ .source = lhs } },
+            .op = .discriminant(lhs),
             .next = read_rhs,
         } }, self.derivedOrigin());
     }
@@ -36171,13 +36279,15 @@ const ProcBodyBuilder = struct {
         }
         var continuation = try self.parent.result.store.addCFStmt(.{ .assign_call_dict = .{
             .target = target,
-            .dict = .{ .local = dict_local },
-            .method = requirement.fn_name,
-            .method_slot = requirement.slot,
-            .args = try self.parent.result.store.addLocalSpan(args),
-            .arg_descs = try self.parent.result.store.addLocalSpan(argument_desc_locals),
-            .hidden_args = try self.parent.result.store.addLocalSpan(hidden_arg_locals),
-            .result_desc = result_desc_info.desc,
+            .data = try self.parent.result.store.addStmtRow(LIR.CallDictData, .{
+                .dict = .{ .local = dict_local },
+                .method = requirement.fn_name,
+                .method_slot = requirement.slot,
+                .args = try self.parent.result.store.addLocalSpan(args),
+                .arg_descs = try self.parent.result.store.addLocalSpan(argument_desc_locals),
+                .hidden_args = try self.parent.result.store.addLocalSpan(hidden_arg_locals),
+                .result_desc = result_desc_info.desc,
+            }),
             .next = next,
         } }, self.derivedOrigin());
         if (result_desc_info.materialize) |materialize| {
@@ -36222,7 +36332,7 @@ const ProcBodyBuilder = struct {
         return try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = target,
             .op = .bool_not,
-            .rc_effect = LIR.LowLevel.bool_not.rcEffect(),
+            .rc_effect = try self.parent.result.store.addRcEffect(LIR.LowLevel.bool_not.rcEffect()),
             .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{source}),
             .next = next,
         } }, self.derivedOrigin());
@@ -36423,16 +36533,16 @@ const ProcBodyBuilder = struct {
             const write = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
                 .target = target,
                 .op = .hasher_write_u64,
-                .rc_effect = LIR.LowLevel.hasher_write_u64.rcEffect(),
+                .rc_effect = try self.parent.result.store.addRcEffect(LIR.LowLevel.hasher_write_u64.rcEffect()),
                 .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{ hasher, index_value }),
                 .next = next,
             } }, self.derivedOrigin());
             return try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
                 .target = index_value,
-                .value = .{ .i128_literal = .{
+                .value = .{ .i128_literal = try self.parent.result.store.addStmtRow(LIR.I128Literal, .{
                     .value = variant,
                     .layout_idx = .u64,
-                } },
+                }) },
                 .next = write,
             } }, self.derivedOrigin());
         }
@@ -36474,7 +36584,7 @@ const ProcBodyBuilder = struct {
         return try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = target,
             .op = op,
-            .rc_effect = op.rcEffect(),
+            .rc_effect = try self.parent.result.store.addRcEffect(op.rcEffect()),
             .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{ hasher, value }),
             .next = next,
         } }, self.derivedOrigin());
@@ -36563,10 +36673,12 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         return try self.parent.result.store.addCFStmt(.{ .assign_boxy_box = .{
             .target = target,
-            .payload = payload,
-            .payload_layout = info.payload_layout,
-            .payload_desc = info.payload_desc,
-            .payload_mode = .move,
+            .data = try self.parent.result.store.addStmtRow(LIR.BoxyBoxData, .{
+                .payload = payload,
+                .payload_layout = info.payload_layout,
+                .payload_desc = info.payload_desc,
+                .payload_mode = .move,
+            }),
             .next = next,
         } }, self.origin);
     }
@@ -36582,16 +36694,16 @@ const ProcBodyBuilder = struct {
         if (self.dynamicLiteralRuntimeDesc(target)) |desc_ref| {
             const exact = self.module.module_env.?.exactNumeral(literal);
             const value: LIR.LiteralValue = switch (default_layout) {
-                .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 => .{ .boxy_dynamic_num_literal = .{
+                .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 => .{ .boxy_dynamic_num_literal = try self.parent.result.store.addStmtRow(LIR.BoxyDynamicNumLiteral, .{
                     .value = exactIntBitsForLayout(exact, default_layout) orelse return try self.invalidNumeralLiteral(),
                     .desc = desc_ref,
                     .default_layout = default_layout,
-                } },
-                .f32, .f64, .dec => .{ .boxy_dynamic_frac_literal = .{
+                }) },
+                .f32, .f64, .dec => .{ .boxy_dynamic_frac_literal = try self.parent.result.store.addStmtRow(LIR.BoxyDynamicFracLiteral, .{
                     .dec_bits = (try exact_numeral.decBits(self.parent.allocator, exact)) orelse return try self.invalidNumeralLiteral(),
                     .desc = desc_ref,
                     .default_layout = default_layout,
-                } },
+                }) },
                 .bool, .str, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, _ => boxyLowerInvariant("builtin numeral resolved to a non-numeric layout"),
             };
             const assigned = try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
@@ -36628,7 +36740,7 @@ const ProcBodyBuilder = struct {
                     break :blk try self.invalidNumeralLiteral();
                 break :blk try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
                     .target = target,
-                    .value = .{ .i128_literal = .{ .value = value, .layout_idx = payload_layout } },
+                    .value = .{ .i128_literal = try self.parent.result.store.addStmtRow(LIR.I128Literal, .{ .value = value, .layout_idx = payload_layout }) },
                     .next = next,
                 } }, self.origin);
             },
@@ -36815,10 +36927,12 @@ const ProcBodyBuilder = struct {
                     boxyLowerInvariant("dynamic Numeral record had no descriptor");
                 break :blk try self.parent.result.store.addCFStmt(.{ .assign_boxy_box = .{
                     .target = target,
-                    .payload = payload,
-                    .payload_layout = payload_layout,
-                    .payload_desc = payload_desc,
-                    .payload_mode = .move,
+                    .data = try self.parent.result.store.addStmtRow(LIR.BoxyBoxData, .{
+                        .payload = payload,
+                        .payload_layout = payload_layout,
+                        .payload_desc = payload_desc,
+                        .payload_mode = .move,
+                    }),
                     .next = next,
                 } }, self.derivedOrigin());
             },
@@ -36826,7 +36940,7 @@ const ProcBodyBuilder = struct {
         continuation = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
             .target = payload,
             .fields = try self.parent.result.store.addLocalSpan(&fields),
-            .contents_desc = aggregate_desc.contents_desc,
+            .contents_desc = try self.parent.result.store.addStmtRowIfPresent(LIR.BoxyDescRef, aggregate_desc.contents_desc),
             .next = continuation,
         } }, self.derivedOrigin());
 
@@ -36894,17 +37008,17 @@ const ProcBodyBuilder = struct {
         };
         if (self.dynamicLiteralRuntimeDesc(target)) |desc_ref| {
             const exact = self.module.module_env.?.exactNumeral(literal);
-            const value: LIR.LiteralValue = if (exact.is_fractional) .{ .boxy_dynamic_frac_literal = .{
+            const value: LIR.LiteralValue = if (exact.is_fractional) .{ .boxy_dynamic_frac_literal = try self.parent.result.store.addStmtRow(LIR.BoxyDynamicFracLiteral, .{
                 .dec_bits = (try exact_numeral.decBits(self.parent.allocator, exact)) orelse
                     return try self.invalidNumeralLiteral(),
                 .desc = desc_ref,
                 .default_layout = .dec,
-            } } else .{ .boxy_dynamic_num_literal = .{
+            }) } else .{ .boxy_dynamic_num_literal = try self.parent.result.store.addStmtRow(LIR.BoxyDynamicNumLiteral, .{
                 .value = exactIntBitsForLayout(exact, if (exact.is_negative) .i128 else .u128) orelse
                     return try self.invalidNumeralLiteral(),
                 .desc = desc_ref,
                 .default_layout = .dec,
-            } };
+            }) };
             const assigned = try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
                 .target = target,
                 .value = value,
@@ -36951,11 +37065,11 @@ const ProcBodyBuilder = struct {
             // runtime descriptor; the literal encodes itself against it.
             const literal = try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
                 .target = target,
-                .value = .{ .boxy_dynamic_num_literal = .{
+                .value = .{ .boxy_dynamic_num_literal = try self.parent.result.store.addStmtRow(LIR.BoxyDynamicNumLiteral, .{
                     .value = value,
                     .desc = desc_ref,
                     .default_layout = .dec,
-                } },
+                }) },
                 .next = next,
             } }, self.origin);
             return try self.prependLiteralTargetDescriptorMaterialization(target, literal);
@@ -36965,19 +37079,19 @@ const ProcBodyBuilder = struct {
             const box = try self.assignBoxedLiteralPayload(target, payload, info, next);
             return try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
                 .target = payload,
-                .value = .{ .i128_literal = .{
+                .value = .{ .i128_literal = try self.parent.result.store.addStmtRow(LIR.I128Literal, .{
                     .value = value,
                     .layout_idx = info.payload_layout,
-                } },
+                }) },
                 .next = box,
             } }, self.origin);
         }
         return try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
             .target = target,
-            .value = .{ .i128_literal = .{
+            .value = .{ .i128_literal = try self.parent.result.store.addStmtRow(LIR.I128Literal, .{
                 .value = value,
                 .layout_idx = self.parent.result.store.getLocal(target).layout_idx,
-            } },
+            }) },
             .next = next,
         } }, self.origin);
     }
@@ -37120,7 +37234,7 @@ const ProcBodyBuilder = struct {
         if (try self.assignToFixedDescriptorBoundary(target, source, next)) |adapted| return adapted;
         const assign = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = target,
-            .op = .{ .local = source },
+            .op = .local(source),
             .next = next,
         } }, self.origin);
         var transferred = try self.prependSetLocalDescriptorTransfer(target, source, .replace_existing, assign);
@@ -37169,11 +37283,13 @@ const ProcBodyBuilder = struct {
         const adapter = try self.internMoveAdapter(.materialize, source_layout, target_layout);
         return try self.parent.result.store.addCFStmt(.{ .assign_boxy_adapt = .{
             .target = target,
-            .source = source,
-            .adapter = adapter,
-            .source_desc = source_desc,
-            .target_desc = target_desc,
-            .source_mode = .move,
+            .data = try self.parent.result.store.addStmtRow(LIR.BoxyAdaptData, .{
+                .source = source,
+                .adapter = adapter,
+                .source_desc = source_desc,
+                .target_desc = target_desc,
+                .source_mode = .move,
+            }),
             .next = next,
         } }, self.glueOrigin());
     }
@@ -37215,10 +37331,12 @@ const ProcBodyBuilder = struct {
             self.parent.result.store.setLocalBoxyDesc(target, payload_desc);
             return try self.parent.result.store.addCFStmt(.{ .assign_boxy_box = .{
                 .target = target,
-                .payload = source,
-                .payload_layout = source_layout,
-                .payload_desc = payload_desc,
-                .payload_mode = .move,
+                .data = try self.parent.result.store.addStmtRow(LIR.BoxyBoxData, .{
+                    .payload = source,
+                    .payload_layout = source_layout,
+                    .payload_desc = payload_desc,
+                    .payload_mode = .move,
+                }),
                 .next = next,
             } }, self.glueOrigin());
         }
@@ -37232,7 +37350,7 @@ const ProcBodyBuilder = struct {
         }
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = target,
-            .op = .{ .nominal = .{ .backing_ref = source } },
+            .op = .nominal(source),
             .next = next,
         } }, self.glueOrigin());
     }
@@ -37392,11 +37510,13 @@ const ProcBodyBuilder = struct {
 
         const assign_callable = try self.parent.result.store.addCFStmt(.{ .assign_packed_erased_fn = .{
             .target = target,
-            .proc = adapter.proc,
-            .capture = capture_local,
-            .capture_layout = adapter.capture_layout,
-            .on_drop = self.erasedCallableOnDrop(adapter.capture_layout),
-            .result_desc = result_desc.desc,
+            .data = try self.parent.result.store.addStmtRow(LIR.PackedErasedFnData, .{
+                .proc = adapter.proc,
+                .capture = capture_local,
+                .capture_layout = adapter.capture_layout,
+                .on_drop = self.erasedCallableOnDrop(adapter.capture_layout),
+                .result_desc = result_desc.desc,
+            }),
             .next = next,
         } }, self.glueOrigin());
 
@@ -37769,7 +37889,7 @@ const ProcBodyBuilder = struct {
         return try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = capture_value,
             .op = .erased_capture_load,
-            .rc_effect = LIR.LowLevel.erased_capture_load.rcEffect(),
+            .rc_effect = try self.parent.result.store.addRcEffect(LIR.LowLevel.erased_capture_load.rcEffect()),
             .args = try self.parent.result.store.addLocalSpan(&args),
             .next = continuation,
         } }, self.scaffoldOrigin());
@@ -38621,7 +38741,7 @@ const ProcBodyBuilder = struct {
         source: LIR.LocalId,
         source_tag_rep: Plan.TypeRepId,
         tag_name: names.TagNameId,
-        variant_index: u32,
+        variant_index: layout.VariantIndex,
         /// The payload being converted; the payloads after it are done.
         remaining: usize,
         current: LIR.CFStmtId,
@@ -38770,16 +38890,18 @@ const ProcBodyBuilder = struct {
             const target_desc = self.parent.result.store.getLocal(target).boxy_desc;
             return .{ .done = try self.parent.result.store.addCFStmt(.{ .assign_boxy_adapt = .{
                 .target = target,
-                .source = source,
-                .adapter = try self.internAdapter(
-                    .relabel,
-                    source_layout,
-                    target_layout,
-                    dynamic_box_source_mode == .move,
-                ),
-                .source_desc = source_desc,
-                .target_desc = target_desc,
-                .source_mode = dynamic_box_source_mode,
+                .data = try self.parent.result.store.addStmtRow(LIR.BoxyAdaptData, .{
+                    .source = source,
+                    .adapter = try self.internAdapter(
+                        .relabel,
+                        source_layout,
+                        target_layout,
+                        dynamic_box_source_mode == .move,
+                    ),
+                    .source_desc = source_desc,
+                    .target_desc = target_desc,
+                    .source_mode = dynamic_box_source_mode,
+                }),
                 .next = next,
             } }, self.glueOrigin()) };
         }
@@ -38859,11 +38981,13 @@ const ProcBodyBuilder = struct {
                     } else null;
                     const box = try self.parent.result.store.addCFStmt(.{ .assign_boxy_box = .{
                         .target = target,
-                        .payload = source,
-                        .payload_layout = source_layout,
-                        .source_desc = if (std.meta.eql(source_desc, desc_for_payload)) null else source_desc,
-                        .payload_desc = payload_desc,
-                        .payload_mode = .move,
+                        .data = try self.parent.result.store.addStmtRow(LIR.BoxyBoxData, .{
+                            .payload = source,
+                            .payload_layout = source_layout,
+                            .source_desc = if (std.meta.eql(source_desc, desc_for_payload)) null else source_desc,
+                            .payload_desc = payload_desc,
+                            .payload_mode = .move,
+                        }),
                         .next = next,
                     } }, self.glueOrigin());
                     var continuation = box;
@@ -38872,7 +38996,9 @@ const ProcBodyBuilder = struct {
                             continuation = try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
                                 .target = desc.localOrNull() orelse
                                     boxyLowerInvariant("boxy target descriptor local disappeared"),
-                                .desc = desc_for_payload,
+                                .data = try self.parent.result.store.addStmtRow(LIR.BoxyDescRefData, .{
+                                    .desc = desc_for_payload,
+                                }),
                                 .next = continuation,
                             } }, self.glueOrigin());
                         }
@@ -38880,12 +39006,14 @@ const ProcBodyBuilder = struct {
                     if (source_info.materialize) |materialize| {
                         continuation = try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
                             .target = materialize.local,
-                            .desc = materialize.materialize orelse
-                                boxyLowerInvariant("boxy concrete-to-dynamic source descriptor materialization had no descriptor"),
-                            .nested_index = materialize.nested_index,
-                            .tag_ext = materialize.tag_ext,
-                            .tag_residual_for = materialize.tag_residual_for,
-                            .captures = materialize.captures,
+                            .data = try self.parent.result.store.addStmtRow(LIR.BoxyDescRefData, .{
+                                .desc = materialize.materialize orelse
+                                    boxyLowerInvariant("boxy concrete-to-dynamic source descriptor materialization had no descriptor"),
+                                .nested_index = materialize.nested_index,
+                                .tag_ext = materialize.tag_ext,
+                                .tag_residual_for = materialize.tag_residual_for,
+                                .captures = materialize.captures,
+                            }),
                             .next = continuation,
                         } }, self.glueOrigin());
                     }
@@ -39028,10 +39156,7 @@ const ProcBodyBuilder = struct {
                     const index = state.remaining;
                     const read_field = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
                         .target = state.source_fields[index],
-                        .op = .{ .field = .{
-                            .source = state.fields_source,
-                            .field_idx = state.source_field_indices[index],
-                        } },
+                        .op = .field(state.fields_source, state.source_field_indices[index]),
                         .next = converted,
                     } }, self.glueOrigin());
                     state.current = try self.prependAggregateFieldDescriptorBind(
@@ -39285,20 +39410,24 @@ const ProcBodyBuilder = struct {
             self.parent.result.store.setLocalBoxyDesc(boxed_source, source_desc);
             var continuation = try self.parent.result.store.addCFStmt(.{ .assign_boxy_unbox = .{
                 .target = target,
-                .source = boxed_source,
-                .source_desc = source_desc,
-                .target_desc = target_desc,
-                .target_layout = target_layout,
-                .source_mode = .move,
+                .data = try self.parent.result.store.addStmtRow(LIR.BoxyUnboxData, .{
+                    .source = boxed_source,
+                    .source_desc = source_desc,
+                    .target_desc = target_desc,
+                    .target_layout = target_layout,
+                    .source_mode = .move,
+                }),
                 .next = next,
             } }, self.glueOrigin());
             continuation = try self.prependConstructedDescriptorRebindForRep(target_rep, continuation);
             return .{ .done = try self.parent.result.store.addCFStmt(.{ .assign_boxy_box = .{
                 .target = boxed_source,
-                .payload = source,
-                .payload_layout = source_layout,
-                .payload_desc = source_desc,
-                .payload_mode = .borrow,
+                .data = try self.parent.result.store.addStmtRow(LIR.BoxyBoxData, .{
+                    .payload = source,
+                    .payload_layout = source_layout,
+                    .payload_desc = source_desc,
+                    .payload_mode = .borrow,
+                }),
                 .next = continuation,
             } }, self.glueOrigin()) };
         }
@@ -39413,7 +39542,7 @@ const ProcBodyBuilder = struct {
         const assign_struct = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
             .target = state.target,
             .fields = try self.parent.result.store.addLocalSpan(state.target_fields),
-            .contents_desc = state.aggregate_desc.contents_desc,
+            .contents_desc = try self.parent.result.store.addStmtRowIfPresent(LIR.BoxyDescRef, state.aggregate_desc.contents_desc),
             .next = request.next,
         } }, self.glueOrigin());
         state.current = try self.prependOptionalDescriptorMaterialization(state.aggregate_desc.materialize, assign_struct);
@@ -39427,11 +39556,13 @@ const ProcBodyBuilder = struct {
         const fields_ready = if (state.unbox) |unbox|
             try self.parent.result.store.addCFStmt(.{ .assign_boxy_unbox = .{
                 .target = state.fields_source,
-                .source = unbox.source,
-                .source_desc = try self.descriptorRefForSourceLocalRep(unbox.source, unbox.source_rep),
-                .target_desc = unbox.payload_desc,
-                .target_layout = unbox.payload_layout,
-                .source_mode = .borrow,
+                .data = try self.parent.result.store.addStmtRow(LIR.BoxyUnboxData, .{
+                    .source = unbox.source,
+                    .source_desc = try self.descriptorRefForSourceLocalRep(unbox.source, unbox.source_rep),
+                    .target_desc = unbox.payload_desc,
+                    .target_layout = unbox.payload_layout,
+                    .source_mode = .borrow,
+                }),
                 .next = state.current,
             } }, self.glueOrigin())
         else
@@ -39571,15 +39702,17 @@ const ProcBodyBuilder = struct {
                 boxyLowerInvariant("contextual list element storage had no exact source descriptor");
             continuation = try self.parent.result.store.addCFStmt(.{ .assign_boxy_adapt = .{
                 .target = state.target_elem,
-                .source = state.source_elem,
-                .adapter = try self.internMoveAdapter(
-                    if (source_storage_layout == target_storage_layout) .relabel else .materialize,
-                    source_storage_layout,
-                    target_storage_layout,
-                ),
-                .source_desc = source_desc,
-                .target_desc = if (target_elem_desc_local) |local| .{ .local = local } else try self.parent.staticDescRefForRep(target_elem.rep),
-                .source_mode = .move,
+                .data = try self.parent.result.store.addStmtRow(LIR.BoxyAdaptData, .{
+                    .source = state.source_elem,
+                    .adapter = try self.internMoveAdapter(
+                        if (source_storage_layout == target_storage_layout) .relabel else .materialize,
+                        source_storage_layout,
+                        target_storage_layout,
+                    ),
+                    .source_desc = source_desc,
+                    .target_desc = if (target_elem_desc_local) |local| .{ .local = local } else try self.parent.staticDescRefForRep(target_elem.rep),
+                    .source_mode = .move,
+                }),
                 .next = continuation,
             } }, self.glueOrigin());
         } else if (state.target_elem != state.source_elem) {
@@ -39615,7 +39748,9 @@ const ProcBodyBuilder = struct {
                 boxyLowerInvariant("boxy list boundary initial element descriptor had no target descriptor");
             initial_jump = try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
                 .target = elem_desc_local,
-                .desc = target_elem_desc,
+                .data = try self.parent.result.store.addStmtRow(LIR.BoxyDescRefData, .{
+                    .desc = target_elem_desc,
+                }),
                 .next = initial_jump,
             } }, self.glueOrigin());
             initial_jump = try self.prependDescriptorArgMaterializations(state.elem_desc_initializers.items, initial_jump);
@@ -39750,7 +39885,7 @@ const ProcBodyBuilder = struct {
             const target_desc_info = try self.stableDescriptorForConstructedValue(target, target_rep);
             const assign_tag = try self.parent.result.store.addCFStmt(.{ .assign_tag = .{
                 .target = target,
-                .target_desc = target_desc_info.desc,
+                .target_desc = try self.parent.result.store.addStmtRowIfPresent(LIR.BoxyDescRef, target_desc_info.desc),
                 .variant_index = target_variant_index,
                 .discriminant = target_variant_index,
                 .payload = null,
@@ -39791,7 +39926,7 @@ const ProcBodyBuilder = struct {
             payloads.tag_desc = try self.constructedTagDescriptorForPayloadFields(target, target_rep, &descriptor_fields);
             const assign_tag = try self.parent.result.store.addCFStmt(.{ .assign_tag = .{
                 .target = target,
-                .target_desc = payloads.tag_desc.?.desc,
+                .target_desc = try self.parent.result.store.addStmtRowIfPresent(LIR.BoxyDescRef, payloads.tag_desc.?.desc),
                 .variant_index = target_variant_index,
                 .discriminant = target_variant_index,
                 .payload = target_payload,
@@ -39822,7 +39957,7 @@ const ProcBodyBuilder = struct {
         payloads.tag_desc = try self.constructedTagDescriptorForPayloadFields(target, target_rep, descriptor_fields);
         const assign_tag = try self.parent.result.store.addCFStmt(.{ .assign_tag = .{
             .target = target,
-            .target_desc = payloads.tag_desc.?.desc,
+            .target_desc = try self.parent.result.store.addStmtRowIfPresent(LIR.BoxyDescRef, payloads.tag_desc.?.desc),
             .variant_index = target_variant_index,
             .discriminant = target_variant_index,
             .payload = target_payload,
@@ -39891,11 +40026,13 @@ const ProcBodyBuilder = struct {
                 }
                 const box = try self.parent.result.store.addCFStmt(.{ .assign_boxy_box = .{
                     .target = target,
-                    .payload = source,
-                    .payload_layout = source_layout,
-                    .source_desc = source_desc,
-                    .payload_desc = target_desc,
-                    .payload_mode = .move,
+                    .data = try self.parent.result.store.addStmtRow(LIR.BoxyBoxData, .{
+                        .payload = source,
+                        .payload_layout = source_layout,
+                        .source_desc = source_desc,
+                        .payload_desc = target_desc,
+                        .payload_mode = .move,
+                    }),
                     .next = next,
                 } }, self.glueOrigin());
                 return .{ .done = try self.prependOptionalDescriptorMaterialization(target_desc_info.materialize, box) };
@@ -39921,7 +40058,7 @@ const ProcBodyBuilder = struct {
         }
         state.branches[variant_position].value = @intCast(variant_position);
         const variant = state.source_variants[variant_position];
-        const variant_index: u32 = @intCast(variant_position);
+        const variant_index: layout.VariantIndex = @intCast(variant_position);
         const target = state.request.target;
         const target_rep = state.request.target_rep;
         const source = state.request.source;
@@ -39939,8 +40076,10 @@ const ProcBodyBuilder = struct {
             const target_desc = try self.constructedTargetDescForRep(target_rep);
             const assign_tag = try self.parent.result.store.addCFStmt(.{ .assign_boxy_tag = .{
                 .target = target,
-                .target_desc = target_desc,
-                .tag_name = tag_name,
+                .data = try self.parent.result.store.addStmtRow(LIR.BoxyTagData, .{
+                    .target_desc = target_desc,
+                    .tag_name = tag_name,
+                }),
                 .next = state.request.next,
             } }, self.glueOrigin());
             return .{ .done = try self.prependConstructedDescriptorRebindForRep(target_rep, assign_tag) };
@@ -39995,12 +40134,14 @@ const ProcBodyBuilder = struct {
             null;
         const assign_tag = try self.parent.result.store.addCFStmt(.{ .assign_boxy_tag = .{
             .target = target,
-            .target_desc = target_desc,
-            .tag_name = tag_name,
-            .payload = payload.local,
-            .payload_layout = payload.layout_idx,
-            .payload_desc = payload_desc,
-            .payload_mode = .move,
+            .data = try self.parent.result.store.addStmtRow(LIR.BoxyTagData, .{
+                .target_desc = target_desc,
+                .tag_name = tag_name,
+                .payload = payload.local,
+                .payload_layout = payload.layout_idx,
+                .payload_desc = payload_desc,
+                .payload_mode = .move,
+            }),
             .next = state.request.next,
         } }, self.glueOrigin());
         payloads.current = try self.prependOptionalDescriptorMaterialization(payloads.tag_desc.?.materialize, assign_tag);
@@ -40039,7 +40180,7 @@ const ProcBodyBuilder = struct {
         } }, self.glueOrigin());
         const read_discriminant = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = discriminant,
-            .op = .{ .discriminant = .{ .source = state.request.source } },
+            .op = .discriminant(state.request.source),
             .next = switch_stmt,
         } }, self.glueOrigin());
         const scope = state.scope orelse return read_discriminant;
@@ -40183,16 +40324,18 @@ const ProcBodyBuilder = struct {
         const target_layout = self.parent.result.store.getLocal(target).layout_idx;
         return try self.parent.result.store.addCFStmt(.{ .assign_boxy_adapt = .{
             .target = target,
-            .source = source,
-            .adapter = try self.internAdapter(
-                .materialize,
-                source_layout,
-                target_layout,
-                source_mode == .move,
-            ),
-            .source_desc = source_desc,
-            .target_desc = target_desc,
-            .source_mode = source_mode,
+            .data = try self.parent.result.store.addStmtRow(LIR.BoxyAdaptData, .{
+                .source = source,
+                .adapter = try self.internAdapter(
+                    .materialize,
+                    source_layout,
+                    target_layout,
+                    source_mode == .move,
+                ),
+                .source_desc = source_desc,
+                .target_desc = target_desc,
+                .source_mode = source_mode,
+            }),
             .next = next,
         } }, self.glueOrigin());
     }
@@ -40213,7 +40356,9 @@ const ProcBodyBuilder = struct {
                         if (std.meta.eql(target_desc, source_desc)) return next;
                         return try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
                             .target = target_desc_local,
-                            .desc = source_desc,
+                            .data = try self.parent.result.store.addStmtRow(LIR.BoxyDescRefData, .{
+                                .desc = source_desc,
+                            }),
                             .next = next,
                         } }, self.glueOrigin());
                     }
@@ -40237,7 +40382,9 @@ const ProcBodyBuilder = struct {
                 self.parent.result.store.setLocalBoxyDesc(target, .{ .local = target_desc });
                 const rebind = try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
                     .target = target_desc,
-                    .desc = source_desc,
+                    .data = try self.parent.result.store.addStmtRow(LIR.BoxyDescRefData, .{
+                        .desc = source_desc,
+                    }),
                     .next = if (target == source) next else try self.assignLocal(target, source, next),
                 } }, self.glueOrigin());
                 return rebind;
@@ -40321,7 +40468,7 @@ const ProcBodyBuilder = struct {
                     if (self.parent.plan.childSlice(target_variant.payloads).len != 0) return null;
                     return try self.parent.result.store.addCFStmt(.{ .assign_tag = .{
                         .target = target,
-                        .target_desc = try self.boundaryTargetDesc(target, target_rep),
+                        .target_desc = try self.parent.result.store.addStmtRowIfPresent(LIR.BoxyDescRef, try self.boundaryTargetDesc(target, target_rep)),
                         .variant_index = @intCast(index),
                         .discriminant = @intCast(index),
                         .payload = null,
@@ -40359,7 +40506,7 @@ const ProcBodyBuilder = struct {
                 // Only a target whose variants all have zero-sized payloads is
                 // a bare discriminant; other unions need payload conversion.
                 const target_info = self.parent.result.layouts.getTagUnionInfo(target_layout_value);
-                var variant_index: u32 = 0;
+                var variant_index: layout.VariantIndex = 0;
                 while (variant_index < target_info.variants.len) : (variant_index += 1) {
                     const payload_layout = target_info.variants.get(variant_index).payload_layout;
                     if (!self.parent.result.layouts.isZeroSized(self.parent.result.layouts.getLayout(payload_layout))) return null;
@@ -40400,7 +40547,7 @@ const ProcBodyBuilder = struct {
         } }, self.glueOrigin());
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = discriminant,
-            .op = .{ .discriminant = .{ .source = source } },
+            .op = .discriminant(source),
             .next = switch_stmt,
         } }, self.glueOrigin());
     }
@@ -40702,7 +40849,7 @@ const ProcBodyBuilder = struct {
         source: LIR.LocalId,
         source_tag_rep: Plan.TypeRepId,
         tag_name: names.TagNameId,
-        variant_index: u32,
+        variant_index: layout.VariantIndex,
         payload_index: u32,
         payload_count: usize,
         next: LIR.CFStmtId,
@@ -40728,12 +40875,14 @@ const ProcBodyBuilder = struct {
                 null;
             return try self.parent.result.store.addCFStmt(.{ .assign_boxy_tag_payload = .{
                 .target = target,
-                .target_desc = writable_target_desc,
-                .source = source,
-                .source_desc = try self.descriptorRefForLocalOrKnownRep(source, source_tag_rep),
-                .tag_name = try self.lirTagNameForRep(source_tag_rep, tag_name),
-                .payload_index = payload_index,
-                .source_mode = .copy,
+                .data = try self.parent.result.store.addStmtRow(LIR.BoxyTagPayloadData, .{
+                    .target_desc = writable_target_desc,
+                    .source = source,
+                    .source_desc = try self.descriptorRefForLocalOrKnownRep(source, source_tag_rep),
+                    .tag_name = try self.lirTagNameForRep(source_tag_rep, tag_name),
+                    .payload_index = payload_index,
+                    .source_mode = .copy,
+                }),
                 .next = after_read,
             } }, self.glueOrigin());
         }
@@ -40758,7 +40907,7 @@ const ProcBodyBuilder = struct {
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
         source: LIR.LocalId,
-        variant_index: u32,
+        variant_index: layout.VariantIndex,
         payload_index: u32,
         payload_count: usize,
         after_read: LIR.CFStmtId,
@@ -40766,22 +40915,13 @@ const ProcBodyBuilder = struct {
         if (payload_count == 1) {
             return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
                 .target = target,
-                .op = .{ .tag_payload_struct = .{
-                    .source = source,
-                    .variant_index = variant_index,
-                    .tag_discriminant = variant_index,
-                } },
+                .op = .tagPayloadStruct(source, variant_index, variant_index),
                 .next = after_read,
             } }, self.glueOrigin());
         }
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = target,
-            .op = .{ .tag_payload = .{
-                .source = source,
-                .payload_idx = @intCast(payload_index),
-                .variant_index = variant_index,
-                .tag_discriminant = variant_index,
-            } },
+            .op = .tagPayload(source, @intCast(payload_index), variant_index, variant_index),
             .next = after_read,
         } }, self.glueOrigin());
     }
@@ -40953,7 +41093,9 @@ const ProcBodyBuilder = struct {
             } }, self.glueOrigin());
             return try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
                 .target = local,
-                .desc = source_desc,
+                .data = try self.parent.result.store.addStmtRow(LIR.BoxyDescRefData, .{
+                    .desc = source_desc,
+                }),
                 .next = transfer,
             } }, self.glueOrigin());
         };
@@ -41760,8 +41902,10 @@ const ProcBodyBuilder = struct {
         if (materialization.captures.len == 0) return next;
         return try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
             .target = local,
-            .desc = materialization.desc,
-            .captures = materialization.captures,
+            .data = try self.parent.result.store.addStmtRow(LIR.BoxyDescRefData, .{
+                .desc = materialization.desc,
+                .captures = materialization.captures,
+            }),
             .next = next,
         } }, self.glueOrigin());
     }
@@ -41798,20 +41942,24 @@ const ProcBodyBuilder = struct {
                 const materialization = try self.descriptorMaterializationForKnownRep(slot_rep);
                 continuation = try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
                     .target = local,
-                    .desc = materialization.desc,
-                    .captures = materialization.captures,
+                    .data = try self.parent.result.store.addStmtRow(LIR.BoxyDescRefData, .{
+                        .desc = materialization.desc,
+                        .captures = materialization.captures,
+                    }),
                     .next = continuation,
                 } }, self.glueOrigin());
                 continue;
             }
             continuation = try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
                 .target = local,
-                .desc = try self.parent.staticDescRefForWorkerRepWithSourceMap(
-                    slot_rep,
-                    null,
-                    sources,
-                    context,
-                ),
+                .data = try self.parent.result.store.addStmtRow(LIR.BoxyDescRefData, .{
+                    .desc = try self.parent.staticDescRefForWorkerRepWithSourceMap(
+                        slot_rep,
+                        null,
+                        sources,
+                        context,
+                    ),
+                }),
                 .next = continuation,
             } }, self.glueOrigin());
         }
@@ -41859,8 +42007,10 @@ const ProcBodyBuilder = struct {
             if (runtime_initialized) continue;
             continuation = try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
                 .target = local,
-                .desc = materialization.desc,
-                .captures = materialization.captures,
+                .data = try self.parent.result.store.addStmtRow(LIR.BoxyDescRefData, .{
+                    .desc = materialization.desc,
+                    .captures = materialization.captures,
+                }),
                 .next = continuation,
             } }, self.glueOrigin());
         }
@@ -41870,7 +42020,9 @@ const ProcBodyBuilder = struct {
             const static_init = static_inits.items[static_index];
             continuation = try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
                 .target = static_init.local,
-                .desc = static_init.desc,
+                .data = try self.parent.result.store.addStmtRow(LIR.BoxyDescRefData, .{
+                    .desc = static_init.desc,
+                }),
                 .next = continuation,
             } }, self.glueOrigin());
         }
@@ -42986,7 +43138,7 @@ const ProcBodyBuilder = struct {
     }
 
     const TagVariantLookup = struct {
-        index: u32,
+        index: layout.VariantIndex,
         name: names.TagNameId,
         name_module: checked.ModuleId,
         payloads: Plan.Span,
@@ -44341,7 +44493,9 @@ test "descriptor materialization captures close over recursive template graphs" 
     const ret = try result.store.addCFStmt(.{ .ret = .{ .value = target } }, ProcedureBuilder.constructlessOrigin(.scaffold));
     const materialize = try result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
         .target = target,
-        .desc = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
+        .data = try result.store.addStmtRow(LIR.BoxyDescRefData, .{
+            .desc = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
+        }),
         .next = ret,
     } }, ProcedureBuilder.constructlessOrigin(.scaffold));
     _ = try result.store.addProcSpec(.{
@@ -44356,7 +44510,7 @@ test "descriptor materialization captures close over recursive template graphs" 
     var builder = ProcedureBuilder.init(gpa, undefined, undefined, undefined, &result, .{});
     try builder.finalizeDescriptorMaterializationCaptures();
 
-    const assign = result.store.getCFStmtImmediate(materialize).assign_boxy_desc_ref;
+    const assign = result.store.stmtRow(result.store.getCFStmtImmediate(materialize).assign_boxy_desc_ref.data);
     const captures = result.store.getLocalSpan(assign.captures);
     try std.testing.expectEqual(@as(usize, 1), GuardedList.borrowLen(captures));
     try std.testing.expectEqual(captured, GuardedList.at(captures, 0));
@@ -44488,7 +44642,9 @@ test "boxy lowerer emits private worker proc for zero-arg numeric lambda root" {
 
     const assign = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (assign.value) {
-        .i128_literal => |literal| {
+        .i128_literal => |literal_id| {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+
             try std.testing.expectEqual(@as(i128, 42), literal.value);
             try std.testing.expectEqual(@as(@TypeOf(literal.layout_idx), .u64), literal.layout_idx);
         },
@@ -44665,7 +44821,9 @@ fn expectBoxyTopLevelConstLookup(kind: ConstLookupExprKind, stored: ConstLookupS
     }
     const assign = body.assign_literal;
     switch (assign.value) {
-        .i128_literal => |literal| {
+        .i128_literal => |literal_id| {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+
             try std.testing.expectEqual(@as(i128, 5), literal.value);
             try std.testing.expectEqual(@as(@TypeOf(literal.layout_idx), .u64), literal.layout_idx);
         },
@@ -44934,7 +45092,10 @@ test "boxy lowerer emits direct calls to planned private workers" {
     const root_proc = out.lir_result.store.getProcSpec(root_proc_id);
     const arg = out.lir_result.store.getCFStmtImmediate(root_proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (arg.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 41), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 41), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const call = out.lir_result.store.getCFStmtImmediate(arg.next).assign_call;
@@ -44948,8 +45109,8 @@ test "boxy lowerer emits direct calls to planned private workers" {
     const callee_args = out.lir_result.store.getLocalSpan(callee_proc.args);
     try std.testing.expectEqual(@as(usize, 1), callee_args.len);
     const callee_copy = out.lir_result.store.getCFStmtImmediate(callee_proc.body orelse return error.TestUnexpectedResult).assign_ref;
-    switch (callee_copy.op) {
-        .local => |local| try std.testing.expectEqual(GuardedList.at(callee_args, 0), local),
+    switch (callee_copy.op.kind) {
+        .local => try std.testing.expectEqual(GuardedList.at(callee_args, 0), callee_copy.op.source),
         .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = callee_copy.target } }, out.lir_result.store.getCFStmt(callee_copy.next));
@@ -45216,16 +45377,19 @@ test "boxy lowerer emits direct calls to planned imported workers" {
     const return_stmt = out.lir_result.store.getCFStmt(call.next);
     const returned = switch (return_stmt) {
         .assign_ref => |return_copy| blk: {
-            switch (return_copy.op) {
-                .local => |local| try std.testing.expectEqual(call.target, local),
+            switch (return_copy.op.kind) {
+                .local => try std.testing.expectEqual(call.target, return_copy.op.source),
                 .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
             }
             break :blk .{ return_copy.target, return_copy.next };
         },
-        .assign_boxy_adapt => |adapt| blk: {
-            try std.testing.expectEqual(call.target, adapt.source);
-            try std.testing.expectEqual(LIR.BoxyTransferMode.move, adapt.source_mode);
-            break :blk .{ adapt.target, adapt.next };
+        .assign_boxy_adapt => |adapt_stmt| blk_adapt: {
+            const adapt = out.lir_result.store.stmtRow(adapt_stmt.data);
+            break :blk_adapt blk: {
+                try std.testing.expectEqual(call.target, adapt.source);
+                try std.testing.expectEqual(LIR.BoxyTransferMode.move, adapt.source_mode);
+                break :blk .{ adapt_stmt.target, adapt_stmt.next };
+            };
         },
         .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => return error.TestUnexpectedResult,
     };
@@ -45244,7 +45408,10 @@ test "boxy lowerer emits direct calls to planned imported workers" {
     try std.testing.expect(helper_proc.args.isEmpty());
     const literal = out.lir_result.store.getCFStmtImmediate(helper_proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (literal.value) {
-        .i128_literal => |value| try std.testing.expectEqual(@as(i128, 99), value.value),
+        .i128_literal => |value_id| blk_value: {
+            const value = out.lir_result.store.stmtRow(value_id);
+            break :blk_value try std.testing.expectEqual(@as(i128, 99), value.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = literal.target } }, out.lir_result.store.getCFStmt(literal.next));
@@ -45385,7 +45552,7 @@ test "boxy lowerer emits recursive direct calls to the current private worker" {
     try std.testing.expect(call.args.isEmpty());
     // A U64 result carries no descriptor, so the call to the unfinished
     // worker needs no provisional descriptor form.
-    try std.testing.expect(call.out_desc == null);
+    try std.testing.expect(out.lir_result.store.stmtRowOrDefault(call.extra).out_desc == null);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = call.target } }, out.lir_result.store.getCFStmt(call.next));
 }
 
@@ -45624,11 +45791,14 @@ test "boxy lowerer emits checked return expressions as terminal ret" {
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     const assign = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (assign.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 7), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 7), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const copy = out.lir_result.store.getCFStmtImmediate(assign.next).assign_ref;
-    try std.testing.expectEqual(LIR.RefOp{ .local = assign.target }, copy.op);
+    try std.testing.expectEqual(LIR.RefOp.local(assign.target), copy.op);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = copy.target } }, out.lir_result.store.getCFStmt(copy.next));
 }
 
@@ -45727,11 +45897,14 @@ test "boxy lowerer emits checked return statements as terminal ret" {
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     const assign = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (assign.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 7), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 7), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const copy = out.lir_result.store.getCFStmtImmediate(assign.next).assign_ref;
-    try std.testing.expectEqual(LIR.RefOp{ .local = assign.target }, copy.op);
+    try std.testing.expectEqual(LIR.RefOp.local(assign.target), copy.op);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = copy.target } }, out.lir_result.store.getCFStmt(copy.next));
 }
 
@@ -46025,7 +46198,10 @@ test "boxy lowerer emits checked while statements as join-backed loops" {
 
     const after_loop = out.lir_result.store.getCFStmtImmediate(switch_stmt.default_branch).assign_literal;
     switch (after_loop.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 99), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 99), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = after_loop.target } }, out.lir_result.store.getCFStmt(after_loop.next));
@@ -46155,7 +46331,10 @@ test "boxy lowerer emits checked break as the active loop exit" {
 
     const after_loop = out.lir_result.store.getCFStmtImmediate(break_unit.next).assign_literal;
     switch (after_loop.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 41), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 41), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = after_loop.target } }, out.lir_result.store.getCFStmt(after_loop.next));
@@ -46283,14 +46462,20 @@ test "boxy lowerer emits checked if expressions with a shared continuation join"
 
     const then_value = out.lir_result.store.getCFStmtImmediate(GuardedList.at(branches, 0).body).assign_literal;
     switch (then_value.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 11), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 11), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .jump = .{ .target = join.id } }, out.lir_result.store.getCFStmt(then_value.next));
 
     const else_value = out.lir_result.store.getCFStmtImmediate(switch_stmt.default_branch).assign_literal;
     switch (else_value.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 22), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 22), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .jump = .{ .target = join.id } }, out.lir_result.store.getCFStmt(else_value.next));
@@ -46477,9 +46662,10 @@ test "boxy lowerer emits checked tag matches as one discriminant switch" {
     try std.testing.expectEqual(@as(u32, 1), cond_tag.variant_index);
 
     const disc = store.getCFStmtImmediate(cond_tag.next).assign_ref;
-    switch (disc.op) {
-        .discriminant => |read| try std.testing.expectEqual(cond_tag.target, read.source),
-        .local, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
+    if (disc.op.kind != .discriminant) return error.TestUnexpectedResult;
+    {
+        const read = disc.op;
+        try std.testing.expectEqual(cond_tag.target, read.source);
     }
     const switch_stmt = store.getCFStmtImmediate(disc.next).switch_stmt;
     try std.testing.expectEqual(disc.target, switch_stmt.cond);
@@ -46488,12 +46674,18 @@ test "boxy lowerer emits checked tag matches as one discriminant switch" {
     try std.testing.expectEqual(@as(u64, 0), GuardedList.at(branches, 0).value);
     const first_value = store.getCFStmtImmediate(GuardedList.at(branches, 0).body).assign_literal;
     switch (first_value.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 11), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 11), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const second_value = store.getCFStmtImmediate(switch_stmt.default_branch).assign_literal;
     switch (second_value.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 22), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 22), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
@@ -46658,7 +46850,10 @@ test "boxy lowerer binds checked tag payload match patterns before branch bodies
     const outer_join = store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).join;
     const payload_literal = store.getCFStmtImmediate(outer_join.remainder).assign_literal;
     switch (payload_literal.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 41), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 41), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const cond_tag = store.getCFStmtImmediate(payload_literal.next).assign_tag;
@@ -46670,25 +46865,26 @@ test "boxy lowerer binds checked tag payload match patterns before branch bodies
     try std.testing.expectEqual(@as(u64, 0), GuardedList.at(branches, 0).value);
 
     const payload_read = store.getCFStmtImmediate(GuardedList.at(branches, 0).body).assign_ref;
-    switch (payload_read.op) {
-        .tag_payload_struct => |payload| {
+    if (payload_read.op.kind != .tag_payload_struct) return error.TestUnexpectedResult;
+    {
+        const payload = payload_read.op;
             try std.testing.expectEqual(cond_tag.target, payload.source);
             try std.testing.expectEqual(@as(u32, 0), payload.variant_index);
             try std.testing.expectEqual(@as(u32, 0), payload.tag_discriminant);
-        },
-        .local, .discriminant, .field, .tag_payload, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
 
     const binder_assign = store.getCFStmtImmediate(payload_read.next).assign_ref;
-    switch (binder_assign.op) {
-        .local => |source| try std.testing.expectEqual(payload_read.target, source),
-        .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
+    if (binder_assign.op.kind != .local) return error.TestUnexpectedResult;
+    {
+        const source = binder_assign.op.source;
+        try std.testing.expectEqual(payload_read.target, source);
     }
 
     const branch_result = store.getCFStmtImmediate(binder_assign.next).assign_ref;
-    switch (branch_result.op) {
-        .local => |source| try std.testing.expectEqual(binder_assign.target, source),
-        .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
+    if (branch_result.op.kind != .local) return error.TestUnexpectedResult;
+    {
+        const source = branch_result.op.source;
+        try std.testing.expectEqual(binder_assign.target, source);
     }
     try std.testing.expectEqual(LIR.CFStmt{ .jump = .{ .target = outer_join.id } }, store.getCFStmt(branch_result.next));
 }
@@ -46874,9 +47070,9 @@ test "boxy lowerer emits checked list match patterns as a length switch and elem
     try std.testing.expectEqual(item_index.target, GuardedList.at(item_args, 1));
 
     const bind = store.getCFStmtImmediate(item.next).assign_ref;
-    try std.testing.expectEqual(item.target, bind.op.local);
+    try std.testing.expectEqual(item.target, bind.op.source);
     const branch_result = store.getCFStmtImmediate(bind.next).assign_ref;
-    try std.testing.expectEqual(bind.target, branch_result.op.local);
+    try std.testing.expectEqual(bind.target, branch_result.op.source);
     try std.testing.expectEqual(LIR.CFStmt{ .jump = .{ .target = outer_join.id } }, store.getCFStmt(branch_result.next));
 }
 
@@ -47035,9 +47231,9 @@ test "boxy lowerer emits checked string interpolation match patterns" {
     };
 
     const bind = store.getCFStmtImmediate(arm.on_match).assign_ref;
-    try std.testing.expectEqual(capture, bind.op.local);
+    try std.testing.expectEqual(capture, bind.op.source);
     const branch_result = store.getCFStmtImmediate(bind.next).assign_ref;
-    try std.testing.expectEqual(bind.target, branch_result.op.local);
+    try std.testing.expectEqual(bind.target, branch_result.op.source);
     try std.testing.expectEqual(LIR.CFStmt{ .jump = .{ .target = outer_join.id } }, store.getCFStmt(branch_result.next));
 }
 
@@ -47220,21 +47416,24 @@ test "boxy lowerer maps checked alternative binders onto representative match lo
     var representative: ?LIR.LocalId = null;
     for (arm_bodies) |arm_body| {
         const payload_read = store.getCFStmtImmediate(arm_body).assign_ref;
-        switch (payload_read.op) {
-            .tag_payload_struct => |payload| try std.testing.expectEqual(cond_tag.target, payload.source),
-            .local, .discriminant, .field, .tag_payload, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
+        if (payload_read.op.kind != .tag_payload_struct) return error.TestUnexpectedResult;
+        {
+            const payload = payload_read.op;
+            try std.testing.expectEqual(cond_tag.target, payload.source);
         }
         const remapped_assign = store.getCFStmtImmediate(payload_read.next).assign_ref;
-        switch (remapped_assign.op) {
-            .local => |source| try std.testing.expectEqual(payload_read.target, source),
-            .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
+        if (remapped_assign.op.kind != .local) return error.TestUnexpectedResult;
+        {
+            const source = remapped_assign.op.source;
+            try std.testing.expectEqual(payload_read.target, source);
         }
         if (representative) |local| try std.testing.expectEqual(local, remapped_assign.target);
         representative = remapped_assign.target;
         const branch_result = store.getCFStmtImmediate(remapped_assign.next).assign_ref;
-        switch (branch_result.op) {
-            .local => |source| try std.testing.expectEqual(remapped_assign.target, source),
-            .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
+        if (branch_result.op.kind != .local) return error.TestUnexpectedResult;
+        {
+            const source = branch_result.op.source;
+            try std.testing.expectEqual(remapped_assign.target, source);
         }
     }
 }
@@ -47366,12 +47565,15 @@ test "boxy lowerer emits checked integer literal match patterns as an integer sw
     try std.testing.expectEqual(@as(u64, 42), GuardedList.at(branches, 0).value);
     const matched_value = store.getCFStmtImmediate(GuardedList.at(branches, 0).body).assign_literal;
     switch (matched_value.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 11), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 11), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const missed_value = store.getCFStmtImmediate(switch_stmt.default_branch).assign_literal;
     switch (missed_value.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 22), literal.value),
+        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 22), store.stmtRow(literal).value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 }
@@ -47527,7 +47729,10 @@ test "boxy lowerer emits checked small decimal match patterns as Dec equality te
     try std.testing.expectEqual(@as(u64, 1), GuardedList.at(branches, 0).value);
     const matched_value = store.getCFStmtImmediate(GuardedList.at(branches, 0).body).assign_literal;
     switch (matched_value.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 11), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 11), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 }
@@ -47667,12 +47872,12 @@ test "boxy lowerer emits checked string literal match patterns as a string match
     try std.testing.expectEqual(@as(usize, 0), store.getStrMatchSteps(arm.steps).len);
     const matched_value = store.getCFStmtImmediate(arm.on_match).assign_literal;
     switch (matched_value.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 11), literal.value),
+        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 11), store.stmtRow(literal).value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const missed_value = store.getCFStmtImmediate(str_match.on_miss).assign_literal;
     switch (missed_value.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 22), literal.value),
+        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 22), store.stmtRow(literal).value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 }
@@ -47974,12 +48179,18 @@ test "boxy lowerer emits primitive structural equality as low-level equality" {
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     const lhs = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (lhs.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 42), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 42), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const rhs = out.lir_result.store.getCFStmtImmediate(lhs.next).assign_literal;
     switch (rhs.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 42), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 42), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const eq = out.lir_result.store.getCFStmtImmediate(rhs.next).assign_low_level;
@@ -48132,11 +48343,11 @@ test "boxy lowerer emits tuple structural equality with field short-circuiting" 
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = result } }, out.lir_result.store.getCFStmt(result_join.body));
 
     const read_lhs_field0 = out.lir_result.store.getCFStmtImmediate(result_join.remainder).assign_ref;
-    try std.testing.expectEqual(lhs_tuple.target, read_lhs_field0.op.field.source);
-    try std.testing.expectEqual(@as(u32, 0), read_lhs_field0.op.field.field_idx);
+    try std.testing.expectEqual(lhs_tuple.target, read_lhs_field0.op.source);
+    try std.testing.expectEqual(@as(u32, 0), read_lhs_field0.op.index);
     const read_rhs_field0 = out.lir_result.store.getCFStmtImmediate(read_lhs_field0.next).assign_ref;
-    try std.testing.expectEqual(rhs_tuple.target, read_rhs_field0.op.field.source);
-    try std.testing.expectEqual(@as(u32, 0), read_rhs_field0.op.field.field_idx);
+    try std.testing.expectEqual(rhs_tuple.target, read_rhs_field0.op.source);
+    try std.testing.expectEqual(@as(u32, 0), read_rhs_field0.op.index);
 
     const compare_field0 = out.lir_result.store.getCFStmtImmediate(read_rhs_field0.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .num_is_eq), compare_field0.op);
@@ -48152,8 +48363,8 @@ test "boxy lowerer emits tuple structural equality with field short-circuiting" 
     try std.testing.expectEqual(LIR.CFStmt{ .jump = .{ .target = result_join.id } }, out.lir_result.store.getCFStmt(failed.next));
 
     const read_lhs_field1 = out.lir_result.store.getCFStmtImmediate(GuardedList.at(branches, 0).body).assign_ref;
-    try std.testing.expectEqual(lhs_tuple.target, read_lhs_field1.op.field.source);
-    try std.testing.expectEqual(@as(u32, 1), read_lhs_field1.op.field.field_idx);
+    try std.testing.expectEqual(lhs_tuple.target, read_lhs_field1.op.source);
+    try std.testing.expectEqual(@as(u32, 1), read_lhs_field1.op.index);
 }
 
 test "boxy lowerer emits primitive structural hash as hasher low-level" {
@@ -48241,12 +48452,18 @@ test "boxy lowerer emits primitive structural hash as hasher low-level" {
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     const value = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (value.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 5), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 5), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const seed = out.lir_result.store.getCFStmtImmediate(value.next).assign_literal;
     switch (seed.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 99), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 99), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const hash = out.lir_result.store.getCFStmtImmediate(seed.next).assign_low_level;
@@ -48371,8 +48588,8 @@ test "boxy lowerer emits tuple structural hash by threading hasher through field
     const seed = out.lir_result.store.getCFStmtImmediate(tuple.next).assign_literal;
 
     const read_field0 = out.lir_result.store.getCFStmtImmediate(seed.next).assign_ref;
-    try std.testing.expectEqual(tuple.target, read_field0.op.field.source);
-    try std.testing.expectEqual(@as(u32, 0), read_field0.op.field.field_idx);
+    try std.testing.expectEqual(tuple.target, read_field0.op.source);
+    try std.testing.expectEqual(@as(u32, 0), read_field0.op.index);
     const hash_field0 = out.lir_result.store.getCFStmtImmediate(read_field0.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .hasher_write_u64), hash_field0.op);
     const first_args = out.lir_result.store.getLocalSpan(hash_field0.args);
@@ -48380,8 +48597,8 @@ test "boxy lowerer emits tuple structural hash by threading hasher through field
     try std.testing.expectEqual(read_field0.target, GuardedList.at(first_args, 1));
 
     const read_field1 = out.lir_result.store.getCFStmtImmediate(hash_field0.next).assign_ref;
-    try std.testing.expectEqual(tuple.target, read_field1.op.field.source);
-    try std.testing.expectEqual(@as(u32, 1), read_field1.op.field.field_idx);
+    try std.testing.expectEqual(tuple.target, read_field1.op.source);
+    try std.testing.expectEqual(@as(u32, 1), read_field1.op.index);
     const hash_field1 = out.lir_result.store.getCFStmtImmediate(read_field1.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .hasher_write_u64), hash_field1.op);
     const second_args = out.lir_result.store.getLocalSpan(hash_field1.args);
@@ -48761,7 +48978,10 @@ test "boxy lowerer emits checked dbg expressions before unit result" {
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     const value = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (value.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 7), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 7), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const message = out.lir_result.store.getCFStmtImmediate(value.next).assign_low_level;
@@ -48949,7 +49169,10 @@ test "boxy lowerer emits expect_err messages from inspected payloads" {
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     const payload = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (payload.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 42), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 42), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
@@ -49088,7 +49311,10 @@ test "boxy lowerer emits checked dbg statements in block order" {
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     const value = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (value.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 13), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 13), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const message = out.lir_result.store.getCFStmtImmediate(value.next).assign_low_level;
@@ -49212,7 +49438,9 @@ test "boxy lowerer emits block declaration bindings with checked type layouts" {
 
     const decl_assign = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (decl_assign.value) {
-        .i128_literal => |literal| {
+        .i128_literal => |literal_id| {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+
             try std.testing.expectEqual(@as(i128, 99), literal.value);
             try std.testing.expectEqual(@as(@TypeOf(literal.layout_idx), .u64), literal.layout_idx);
         },
@@ -49220,7 +49448,7 @@ test "boxy lowerer emits block declaration bindings with checked type layouts" {
     }
 
     const final_copy = out.lir_result.store.getCFStmtImmediate(decl_assign.next).assign_ref;
-    try std.testing.expectEqual(decl_assign.target, final_copy.op.local);
+    try std.testing.expectEqual(decl_assign.target, final_copy.op.source);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = final_copy.target } }, out.lir_result.store.getCFStmt(final_copy.next));
 }
 
@@ -49326,7 +49554,10 @@ test "boxy lowerer emits uninitialized mutable block bindings" {
     const final_assign = out.lir_result.store.getCFStmtImmediate(init.next).assign_literal;
     try std.testing.expect(init.target != final_assign.target);
     switch (final_assign.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 5), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 5), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = final_assign.target } }, out.lir_result.store.getCFStmt(final_assign.next));
@@ -49460,13 +49691,19 @@ test "boxy lowerer emits mutable reassignment as set_local replace" {
 
     const initial = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (initial.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 1), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 1), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
     const replacement = out.lir_result.store.getCFStmtImmediate(initial.next).assign_literal;
     switch (replacement.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 2), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 2), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
@@ -49476,7 +49713,7 @@ test "boxy lowerer emits mutable reassignment as set_local replace" {
     try std.testing.expectEqual(LIR.SetLocalWriteMode.replace_existing, write.mode);
 
     const final_copy = out.lir_result.store.getCFStmtImmediate(write.next).assign_ref;
-    try std.testing.expectEqual(write.target, final_copy.op.local);
+    try std.testing.expectEqual(write.target, final_copy.op.source);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = final_copy.target } }, out.lir_result.store.getCFStmt(final_copy.next));
 }
 
@@ -49651,20 +49888,20 @@ test "boxy lowerer destructures tuple declaration patterns" {
     const final_copy = store.getCFStmtImmediate(bind_second.next).assign_ref;
 
     switch (first.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 1), literal.value),
+        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 1), store.stmtRow(literal).value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     switch (second.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 2), literal.value),
+        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 2), store.stmtRow(literal).value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
-    try std.testing.expectEqual(tuple.target, read_first.op.field.source);
-    try std.testing.expectEqual(@as(u32, 0), read_first.op.field.field_idx);
-    try std.testing.expectEqual(tuple.target, read_second.op.field.source);
-    try std.testing.expectEqual(@as(u32, 1), read_second.op.field.field_idx);
-    try std.testing.expectEqual(read_first.target, bind_first.op.local);
-    try std.testing.expectEqual(read_second.target, bind_second.op.local);
-    try std.testing.expectEqual(bind_second.target, final_copy.op.local);
+    try std.testing.expectEqual(tuple.target, read_first.op.source);
+    try std.testing.expectEqual(@as(u32, 0), read_first.op.index);
+    try std.testing.expectEqual(tuple.target, read_second.op.source);
+    try std.testing.expectEqual(@as(u32, 1), read_second.op.index);
+    try std.testing.expectEqual(read_first.target, bind_first.op.source);
+    try std.testing.expectEqual(read_second.target, bind_second.op.source);
+    try std.testing.expectEqual(bind_second.target, final_copy.op.source);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = final_copy.target } }, store.getCFStmt(final_copy.next));
 }
 
@@ -49853,20 +50090,26 @@ test "boxy lowerer materializes record rest declaration patterns" {
     const final_read = out.lir_result.store.getCFStmtImmediate(final_receiver.next).assign_ref;
 
     switch (first.value) {
-        .i128_literal => |value| try std.testing.expectEqual(@as(i128, 11), value.value),
+        .i128_literal => |value_id| blk_value: {
+            const value = out.lir_result.store.stmtRow(value_id);
+            break :blk_value try std.testing.expectEqual(@as(i128, 11), value.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     switch (second.value) {
-        .i128_literal => |value| try std.testing.expectEqual(@as(i128, 22), value.value),
+        .i128_literal => |value_id| blk_value: {
+            const value = out.lir_result.store.stmtRow(value_id);
+            break :blk_value try std.testing.expectEqual(@as(i128, 22), value.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
-    try std.testing.expectEqual(source_record.target, read_rest_field.op.field.source);
-    try std.testing.expectEqual(@as(u32, 1), read_rest_field.op.field.field_idx);
+    try std.testing.expectEqual(source_record.target, read_rest_field.op.source);
+    try std.testing.expectEqual(@as(u32, 1), read_rest_field.op.index);
     try std.testing.expectEqual(read_rest_field.target, GuardedList.at(out.lir_result.store.getLocalSpan(rest_record.fields), 0));
-    try std.testing.expectEqual(rest_record.target, bind_rest.op.local);
-    try std.testing.expectEqual(bind_rest.target, final_receiver.op.local);
-    try std.testing.expectEqual(final_receiver.target, final_read.op.field.source);
-    try std.testing.expectEqual(@as(u32, 0), final_read.op.field.field_idx);
+    try std.testing.expectEqual(rest_record.target, bind_rest.op.source);
+    try std.testing.expectEqual(bind_rest.target, final_receiver.op.source);
+    try std.testing.expectEqual(final_receiver.target, final_read.op.source);
+    try std.testing.expectEqual(@as(u32, 0), final_read.op.index);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = final_read.target } }, out.lir_result.store.getCFStmt(final_read.next));
 }
 
@@ -50016,15 +50259,15 @@ test "boxy lowerer binds irrefutable list rest declaration patterns" {
     const final_copy = store.getCFStmtImmediate(bind_rest.next).assign_ref;
 
     switch (first.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 3), literal.value),
+        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 3), store.stmtRow(literal).value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     switch (second.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 4), literal.value),
+        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 4), store.stmtRow(literal).value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
-    try std.testing.expectEqual(list.target, bind_rest.op.local);
-    try std.testing.expectEqual(bind_rest.target, final_copy.op.local);
+    try std.testing.expectEqual(list.target, bind_rest.op.source);
+    try std.testing.expectEqual(bind_rest.target, final_copy.op.source);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = final_copy.target } }, store.getCFStmt(final_copy.next));
 }
 
@@ -50124,12 +50367,18 @@ test "boxy lowerer emits tuple construction in element order" {
 
     const first = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (first.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 1), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 1), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const second = out.lir_result.store.getCFStmtImmediate(first.next).assign_literal;
     switch (second.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 2), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 2), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const build = out.lir_result.store.getCFStmtImmediate(second.next).assign_struct;
@@ -50242,10 +50491,10 @@ test "boxy lowerer emits tuple access as field_read" {
     const second = out.lir_result.store.getCFStmtImmediate(first.next).assign_literal;
     const build = out.lir_result.store.getCFStmtImmediate(second.next).assign_struct;
     const read = out.lir_result.store.getCFStmtImmediate(build.next).assign_ref;
-    switch (read.op) {
-        .field => |field| {
-            try std.testing.expectEqual(build.target, field.source);
-            try std.testing.expectEqual(@as(u32, 1), field.field_idx);
+    switch (read.op.kind) {
+        .field => {
+            try std.testing.expectEqual(build.target, read.op.source);
+            try std.testing.expectEqual(@as(u32, 1), read.op.index);
         },
         .local, .discriminant, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
@@ -50356,12 +50605,18 @@ test "boxy lowerer emits record construction in layout order after source-order 
 
     const first = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (first.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 2), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 2), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const second = out.lir_result.store.getCFStmtImmediate(first.next).assign_literal;
     switch (second.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 1), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 1), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const build = out.lir_result.store.getCFStmtImmediate(second.next).assign_struct;
@@ -50479,7 +50734,10 @@ test "boxy lowerer evaluates empty record extensions before explicit fields" {
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     const extension_value = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (extension_value.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 5), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 5), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const extension_message = out.lir_result.store.getCFStmtImmediate(extension_value.next).assign_low_level;
@@ -50493,7 +50751,10 @@ test "boxy lowerer evaluates empty record extensions before explicit fields" {
     try std.testing.expect(extension_unit.fields.isEmpty());
     const field_value = out.lir_result.store.getCFStmtImmediate(extension_unit.next).assign_literal;
     switch (field_value.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 9), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 9), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const build = out.lir_result.store.getCFStmtImmediate(field_value.next).assign_struct;
@@ -50622,10 +50883,10 @@ test "boxy lowerer emits record field access using layout field index" {
     const second = out.lir_result.store.getCFStmtImmediate(first.next).assign_literal;
     const build = out.lir_result.store.getCFStmtImmediate(second.next).assign_struct;
     const read = out.lir_result.store.getCFStmtImmediate(build.next).assign_ref;
-    switch (read.op) {
-        .field => |field| {
-            try std.testing.expectEqual(build.target, field.source);
-            try std.testing.expectEqual(@as(u32, 1), field.field_idx);
+    switch (read.op.kind) {
+        .field => {
+            try std.testing.expectEqual(build.target, read.op.source);
+            try std.testing.expectEqual(@as(u32, 1), read.op.index);
         },
         .local, .discriminant, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
@@ -50738,11 +50999,14 @@ test "boxy lowerer emits nominal construction for representation-equivalent back
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     const literal = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (literal.value) {
-        .i128_literal => |value| try std.testing.expectEqual(@as(i128, 5), value.value),
+        .i128_literal => |value_id| blk_value: {
+            const value = out.lir_result.store.stmtRow(value_id);
+            break :blk_value try std.testing.expectEqual(@as(i128, 5), value.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const copy = out.lir_result.store.getCFStmtImmediate(literal.next).assign_ref;
-    try std.testing.expectEqual(literal.target, copy.op.local);
+    try std.testing.expectEqual(literal.target, copy.op.source);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = copy.target } }, out.lir_result.store.getCFStmt(copy.next));
 }
 
@@ -50765,10 +51029,10 @@ fn expectDeclaredNominalRecordBoundary(
     var idx: u32 = 0;
     while (idx < 2) : (idx += 1) {
         const read = store.getCFStmtImmediate(cursor).assign_ref;
-        try std.testing.expectEqual(source, read.op.field.source);
-        try std.testing.expectEqual(idx, read.op.field.field_idx);
+        try std.testing.expectEqual(source, read.op.source);
+        try std.testing.expectEqual(idx, read.op.index);
         const copy = store.getCFStmtImmediate(read.next).assign_ref;
-        try std.testing.expectEqual(read.target, copy.op.local);
+        try std.testing.expectEqual(read.target, copy.op.source);
         field_locals[idx] = copy.target;
         cursor = copy.next;
     }
@@ -50995,11 +51259,17 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
     const backing_record = out.lir_result.store.getCFStmtImmediate(second.next).assign_struct;
 
     switch (first.value) {
-        .i128_literal => |value| try std.testing.expectEqual(@as(i128, 7), value.value),
+        .i128_literal => |value_id| blk_value: {
+            const value = out.lir_result.store.stmtRow(value_id);
+            break :blk_value try std.testing.expectEqual(@as(i128, 7), value.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     switch (second.value) {
-        .i128_literal => |value| try std.testing.expectEqual(@as(i128, 500), value.value),
+        .i128_literal => |value_id| blk_value: {
+            const value = out.lir_result.store.stmtRow(value_id);
+            break :blk_value try std.testing.expectEqual(@as(i128, 500), value.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
@@ -51013,10 +51283,10 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
     const bind_field = out.lir_result.store.getCFStmtImmediate(read_field.next).assign_ref;
     const final_copy = out.lir_result.store.getCFStmtImmediate(bind_field.next).assign_ref;
 
-    try std.testing.expectEqual(destruct_backing.target, read_field.op.field.source);
-    try std.testing.expectEqual(@as(u32, 0), read_field.op.field.field_idx);
-    try std.testing.expectEqual(read_field.target, bind_field.op.local);
-    try std.testing.expectEqual(bind_field.target, final_copy.op.local);
+    try std.testing.expectEqual(destruct_backing.target, read_field.op.source);
+    try std.testing.expectEqual(@as(u32, 0), read_field.op.index);
+    try std.testing.expectEqual(read_field.target, bind_field.op.source);
+    try std.testing.expectEqual(bind_field.target, final_copy.op.source);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = final_copy.target } }, out.lir_result.store.getCFStmt(final_copy.next));
 }
 
@@ -51189,11 +51459,11 @@ test "boxy lowerer inspects declared-field nominals through backing field_read" 
     while (guard < 100) : (guard += 1) {
         switch (out.lir_result.store.getCFStmtImmediate(cursor).*) {
             .assign_ref => |assign| {
-                switch (assign.op) {
-                    .field => |field| {
-                        try std.testing.expectEqual(destruct_backing.target, field.source);
+                switch (assign.op.kind) {
+                    .field => {
+                        try std.testing.expectEqual(destruct_backing.target, assign.op.source);
                         if (read_count >= reads.len) return error.TestUnexpectedResult;
-                        reads[read_count] = field.field_idx;
+                        reads[read_count] = assign.op.index;
                         read_count += 1;
                     },
                     .local, .discriminant, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => {},
@@ -51396,11 +51666,11 @@ test "boxy lowerer hashes declared-field nominals through backing field_read" {
     while (guard < 32) : (guard += 1) {
         switch (out.lir_result.store.getCFStmtImmediate(cursor).*) {
             .assign_ref => |assign| {
-                switch (assign.op) {
-                    .field => |field| {
-                        try std.testing.expectEqual(destruct_backing.target, field.source);
+                switch (assign.op.kind) {
+                    .field => {
+                        try std.testing.expectEqual(destruct_backing.target, assign.op.source);
                         if (read_count >= reads.len) return error.TestUnexpectedResult;
-                        reads[read_count] = field.field_idx;
+                        reads[read_count] = assign.op.index;
                         read_count += 1;
                     },
                     .local, .discriminant, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => {},
@@ -51606,11 +51876,17 @@ test "boxy lowerer emits payload tag construction using planned variant payload 
     const payload = out.lir_result.store.getCFStmtImmediate(second.next).assign_struct;
     const tag = out.lir_result.store.getCFStmtImmediate(payload.next).assign_tag;
     switch (first.value) {
-        .i128_literal => |value| try std.testing.expectEqual(@as(i128, 3), value.value),
+        .i128_literal => |value_id| blk_value: {
+            const value = out.lir_result.store.stmtRow(value_id);
+            break :blk_value try std.testing.expectEqual(@as(i128, 3), value.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     switch (second.value) {
-        .i128_literal => |value| try std.testing.expectEqual(@as(i128, 4), value.value),
+        .i128_literal => |value_id| blk_value: {
+            const value = out.lir_result.store.stmtRow(value_id);
+            break :blk_value try std.testing.expectEqual(@as(i128, 4), value.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(first.target, GuardedList.at(out.lir_result.store.getLocalSpan(payload.fields), 0));
@@ -51714,11 +51990,17 @@ test "boxy lowerer emits list construction with committed element layout" {
     const second = out.lir_result.store.getCFStmtImmediate(first.next).assign_literal;
     const list = out.lir_result.store.getCFStmtImmediate(second.next).assign_list;
     switch (first.value) {
-        .i128_literal => |value| try std.testing.expectEqual(@as(i128, 8), value.value),
+        .i128_literal => |value_id| blk_value: {
+            const value = out.lir_result.store.stmtRow(value_id);
+            break :blk_value try std.testing.expectEqual(@as(i128, 8), value.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     switch (second.value) {
-        .i128_literal => |value| try std.testing.expectEqual(@as(i128, 9), value.value),
+        .i128_literal => |value_id| blk_value: {
+            const value = out.lir_result.store.stmtRow(value_id);
+            break :blk_value try std.testing.expectEqual(@as(i128, 9), value.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(first.target, GuardedList.at(out.lir_result.store.getLocalSpan(list.elems), 0));
@@ -51861,8 +52143,8 @@ test "boxy lowerer stores dynamic list elements with boxy storage layout" {
         };
     }
     const first = out.lir_result.store.getCFStmtImmediate(cursor).assign_ref;
-    switch (first.op) {
-        .local => |local| try std.testing.expectEqual(GuardedList.at(args, 0), local),
+    switch (first.op.kind) {
+        .local => try std.testing.expectEqual(GuardedList.at(args, 0), first.op.source),
         .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
     cursor = first.next;
@@ -51874,8 +52156,8 @@ test "boxy lowerer stores dynamic list elements with boxy storage layout" {
         };
     }
     const second = out.lir_result.store.getCFStmtImmediate(cursor).assign_ref;
-    switch (second.op) {
-        .local => |local| try std.testing.expectEqual(GuardedList.at(args, 1), local),
+    switch (second.op.kind) {
+        .local => try std.testing.expectEqual(GuardedList.at(args, 1), second.op.source),
         .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
     cursor = second.next;
@@ -52030,7 +52312,10 @@ test "boxy lowerer inspects concrete lists with an index and string accumulator 
 
     const step_zero = out.lir_result.store.getCFStmtImmediate(switch_stmt.default_branch).assign_literal;
     switch (step_zero.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 0), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 0), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const separator_check = out.lir_result.store.getCFStmtImmediate(step_zero.next).assign_low_level;
@@ -52206,17 +52491,23 @@ test "boxy lowerer emits checked low-level calls after source-order argument low
 
     const first = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (first.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 10), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 10), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const second = out.lir_result.store.getCFStmtImmediate(first.next).assign_literal;
     switch (second.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 20), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 20), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const add = out.lir_result.store.getCFStmtImmediate(second.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .num_int_add_crash_on_overflow), add.op);
-    try std.testing.expectEqual(LIR.LowLevel.num_int_add_crash_on_overflow.rcEffect(), add.rc_effect);
+    try std.testing.expectEqual(LIR.LowLevel.num_int_add_crash_on_overflow.rcEffect(), out.lir_result.store.stmtRow(add.rc_effect));
     const args = out.lir_result.store.getLocalSpan(add.args);
     try std.testing.expectEqual(@as(usize, 2), args.len);
     try std.testing.expectEqual(first.target, GuardedList.at(args, 0));
@@ -52309,7 +52600,10 @@ test "boxy lowerer boxes concrete values with ordinary box low-level" {
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     const value = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (value.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 42), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 42), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const boxed = out.lir_result.store.getCFStmtImmediate(value.next).assign_low_level;
@@ -52430,8 +52724,8 @@ test "boxy lowerer reuses dynamic boxes for Box(a)" {
         };
     }
     const from_arg = out.lir_result.store.getCFStmtImmediate(cursor).assign_ref;
-    switch (from_arg.op) {
-        .local => |local| try std.testing.expectEqual(GuardedList.at(args, 0), local),
+    switch (from_arg.op.kind) {
+        .local => try std.testing.expectEqual(GuardedList.at(args, 0), from_arg.op.source),
         .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
 
@@ -52439,21 +52733,24 @@ test "boxy lowerer reuses dynamic boxes for Box(a)" {
     var descriptor_materialization_target: ?LIR.LocalId = null;
     while (true) {
         cursor = switch (out.lir_result.store.getCFStmtImmediate(cursor).*) {
-            .assign_boxy_desc_ref => |assign| blk: {
-                var uses_source_desc = assign.desc.localOrNull() == GuardedList.at(args, 1);
-                const captures = out.lir_result.store.getLocalSpan(assign.captures);
-                for (0..captures.len) |index| {
-                    uses_source_desc = uses_source_desc or GuardedList.at(captures, index) == GuardedList.at(args, 1);
-                }
-                if (uses_source_desc) descriptor_materialization_target = assign.target;
-                break :blk assign.next;
+            .assign_boxy_desc_ref => |assign_stmt| blk_assign: {
+                const assign = out.lir_result.store.stmtRow(assign_stmt.data);
+                break :blk_assign blk: {
+                    var uses_source_desc = assign.desc.localOrNull() == GuardedList.at(args, 1);
+                    const captures = out.lir_result.store.getLocalSpan(assign.captures);
+                    for (0..captures.len) |index| {
+                        uses_source_desc = uses_source_desc or GuardedList.at(captures, index) == GuardedList.at(args, 1);
+                    }
+                    if (uses_source_desc) descriptor_materialization_target = assign_stmt.target;
+                    break :blk assign_stmt.next;
+                };
             },
             .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => break,
         };
     }
     const reused = out.lir_result.store.getCFStmtImmediate(cursor).assign_ref;
-    switch (reused.op) {
-        .local => |local| try std.testing.expectEqual(from_arg.target, local),
+    switch (reused.op.kind) {
+        .local => try std.testing.expectEqual(from_arg.target, reused.op.source),
         .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
     const reused_desc = out.lir_result.store.getLocal(reused.target).boxy_desc orelse return error.TestUnexpectedResult;
@@ -52561,7 +52858,10 @@ test "boxy lowerer unboxes concrete values with ordinary box low-level" {
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     const value = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (value.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 99), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 99), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const boxed = out.lir_result.store.getCFStmtImmediate(value.next).assign_low_level;
@@ -52670,7 +52970,10 @@ test "boxy lowerer inspects concrete Box payloads" {
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     const value = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (value.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 42), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 42), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const boxed = out.lir_result.store.getCFStmtImmediate(value.next).assign_low_level;
@@ -52726,23 +53029,24 @@ test "boxy lowerer emits list_map_can_reuse when list map layouts are interchang
     try std.testing.expectEqual(@as(usize, 2), proc_args.len);
 
     const list_arg = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_ref;
-    switch (list_arg.op) {
-        .local => |local| try std.testing.expectEqual(GuardedList.at(proc_args, 0), local),
+    switch (list_arg.op.kind) {
+        .local => try std.testing.expectEqual(GuardedList.at(proc_args, 0), list_arg.op.source),
         .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
 
     const transform_arg = out.lir_result.store.getCFStmtImmediate(list_arg.next).assign_ref;
-    switch (transform_arg.op) {
-        .local => |local| try std.testing.expectEqual(GuardedList.at(proc_args, 1), local),
+    switch (transform_arg.op.kind) {
+        .local => try std.testing.expectEqual(GuardedList.at(proc_args, 1), transform_arg.op.source),
         .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
 
     const reuse = out.lir_result.store.getCFStmtImmediate(transform_arg.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .list_map_can_reuse), reuse.op);
-    try std.testing.expectEqual(@as(?layout.Idx, .u64), reuse.map_output_elem);
-    try std.testing.expectEqual(LIR.LowLevel.list_map_can_reuse.rcEffect(), reuse.rc_effect);
-    try std.testing.expect(reuse.interchangeable.get(.u32));
-    try std.testing.expect(reuse.interchangeable.get(.u64));
+    const reuse_extra = out.lir_result.store.stmtRowOrDefault(reuse.extra);
+    try std.testing.expectEqual(@as(?layout.Idx, .u64), reuse_extra.map_output_elem);
+    try std.testing.expectEqual(LIR.LowLevel.list_map_can_reuse.rcEffect(), out.lir_result.store.stmtRow(reuse.rc_effect));
+    try std.testing.expect(reuse_extra.interchangeable.get(.u32));
+    try std.testing.expect(reuse_extra.interchangeable.get(.u64));
 
     const reuse_args = out.lir_result.store.getLocalSpan(reuse.args);
     try std.testing.expectEqual(@as(usize, 2), reuse_args.len);
@@ -52973,8 +53277,8 @@ test "boxy lowerer publishes host wrapper proc for exported roots" {
     const worker_args = out.lir_result.store.getLocalSpan(worker.args);
     try std.testing.expectEqual(@as(usize, 1), worker_args.len);
     const worker_copy = out.lir_result.store.getCFStmtImmediate(worker.body orelse return error.TestUnexpectedResult).assign_ref;
-    switch (worker_copy.op) {
-        .local => |local| try std.testing.expectEqual(GuardedList.at(worker_args, 0), local),
+    switch (worker_copy.op.kind) {
+        .local => try std.testing.expectEqual(GuardedList.at(worker_args, 0), worker_copy.op.source),
         .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = worker_copy.target } }, out.lir_result.store.getCFStmt(worker_copy.next));

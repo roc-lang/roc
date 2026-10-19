@@ -506,8 +506,11 @@ pub fn procCallClosure(allocator: Allocator, store: *const LirStore, root: LIR.L
             seen[@backingInt(stmt_id)] = true;
             const callee: ?LIR.LirProcSpecId = switch (store.getCFStmtImmediate(stmt_id).*) {
                 .assign_call => |call| call.proc,
-                .assign_packed_erased_fn => |packed_fn| packed_fn.proc,
-                .assign_literal => |literal| literal.fresh_alternative,
+                .assign_packed_erased_fn => |packed_fn_stmt| blk_packed_fn: {
+                    const packed_fn = store.stmtRow(packed_fn_stmt.data);
+                    break :blk_packed_fn packed_fn.proc;
+                },
+                .assign_literal => |literal| store.literalExtra(literal.value).fresh_alternative,
                 .init_uninitialized,
                 .assign_ref,
                 .assign_call_erased,

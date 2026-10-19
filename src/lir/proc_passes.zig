@@ -397,7 +397,7 @@ test "issue 11325 procedure counting reuses lane storage across distant local ID
     const high = try store.addLocal(.{ .layout_idx = .u64 });
     for (0..16) |index| {
         const ret = try store.addCFStmt(.{ .ret = .{ .value = high } }, .test_fixture);
-        const body = try store.addCFStmt(.{ .assign_ref = .{ .target = high, .op = .{ .local = low }, .next = ret } }, .test_fixture);
+        const body = try store.addCFStmt(.{ .assign_ref = .{ .target = high, .op = .local(low), .next = ret } }, .test_fixture);
         _ = try store.addProcSpec(.{
             .name = store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(@intCast(index)),

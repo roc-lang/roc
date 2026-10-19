@@ -5476,18 +5476,18 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
     const crash_text = "suspended consumer locals changed";
     const corrupt = try result.store.addCFStmt(.{ .crash = .{ .msg = .{ .literal = try result.store.insertString(crash_text) } } }, .test_fixture);
     const float_branch = try result.store.addCFStmt(.{ .switch_stmt = .{ .cond = equal_float, .branches = try result.store.addCFSwitchBranches(&.{.{ .value = 1, .body = consumer_ret }}), .default_branch = corrupt } }, .test_fixture);
-    const float_compare = try result.store.addCFStmt(.{ .assign_low_level = .{ .target = equal_float, .op = .num_is_eq, .rc_effect = .{}, .args = try result.store.addLocalSpan(&.{ live_float, expected_float }), .next = float_branch } }, .test_fixture);
+    const float_compare = try result.store.addCFStmt(.{ .assign_low_level = .{ .target = equal_float, .op = .num_is_eq, .rc_effect = try result.store.addRcEffect(.{}), .args = try result.store.addLocalSpan(&.{ live_float, expected_float }), .next = float_branch } }, .test_fixture);
     const int_branch = try result.store.addCFStmt(.{ .switch_stmt = .{ .cond = equal_int, .branches = try result.store.addCFSwitchBranches(&.{.{ .value = 1, .body = float_compare }}), .default_branch = corrupt } }, .test_fixture);
-    const int_compare = try result.store.addCFStmt(.{ .assign_low_level = .{ .target = equal_int, .op = .num_is_eq, .rc_effect = .{}, .args = try result.store.addLocalSpan(&.{ live_int, expected_int }), .next = int_branch } }, .test_fixture);
+    const int_compare = try result.store.addCFStmt(.{ .assign_low_level = .{ .target = equal_int, .op = .num_is_eq, .rc_effect = try result.store.addRcEffect(.{}), .args = try result.store.addLocalSpan(&.{ live_int, expected_int }), .next = int_branch } }, .test_fixture);
     const expected_float_stmt = try result.store.addCFStmt(.{ .assign_literal = .{ .target = expected_float, .value = .{ .f64_literal = 13.25 }, .next = int_compare } }, .test_fixture);
     const expected_int_stmt = try result.store.addCFStmt(.{ .assign_literal = .{ .target = expected_int, .value = .{ .i64_literal = .{ .value = 12345, .layout_idx = .u64 } }, .next = expected_float_stmt } }, .test_fixture);
-    const consumer_load = try result.store.addCFStmt(.{ .assign_literal = .{ .target = consumer_local, .value = .{ .static_data = value_slot }, .next = expected_int_stmt } }, .test_fixture);
+    const consumer_load = try result.store.addCFStmt(.{ .assign_literal = .{ .target = consumer_local, .value = .{ .static_data = .{ .id = value_slot } }, .next = expected_int_stmt } }, .test_fixture);
     const input_int = try result.store.addLocal(.{ .layout_idx = .u64 });
     const addend_int = try result.store.addLocal(.{ .layout_idx = .u64 });
     const input_float = try result.store.addLocal(.{ .layout_idx = .f64 });
     const addend_float = try result.store.addLocal(.{ .layout_idx = .f64 });
-    const live_float_stmt = try result.store.addCFStmt(.{ .assign_low_level = .{ .target = live_float, .op = .num_float_add, .rc_effect = .{}, .args = try result.store.addLocalSpan(&.{ input_float, addend_float }), .next = consumer_load } }, .test_fixture);
-    const live_int_stmt = try result.store.addCFStmt(.{ .assign_low_level = .{ .target = live_int, .op = .num_int_add_wrap, .rc_effect = .{}, .args = try result.store.addLocalSpan(&.{ input_int, addend_int }), .next = live_float_stmt } }, .test_fixture);
+    const live_float_stmt = try result.store.addCFStmt(.{ .assign_low_level = .{ .target = live_float, .op = .num_float_add, .rc_effect = try result.store.addRcEffect(.{}), .args = try result.store.addLocalSpan(&.{ input_float, addend_float }), .next = consumer_load } }, .test_fixture);
+    const live_int_stmt = try result.store.addCFStmt(.{ .assign_low_level = .{ .target = live_int, .op = .num_int_add_wrap, .rc_effect = try result.store.addRcEffect(.{}), .args = try result.store.addLocalSpan(&.{ input_int, addend_int }), .next = live_float_stmt } }, .test_fixture);
     const float_addend_stmt = try result.store.addCFStmt(.{ .assign_literal = .{ .target = addend_float, .value = .{ .f64_literal = 3.25 }, .next = live_int_stmt } }, .test_fixture);
     const float_input_stmt = try result.store.addCFStmt(.{ .assign_literal = .{ .target = input_float, .value = .{ .f64_literal = 10.0 }, .next = float_addend_stmt } }, .test_fixture);
     const int_addend_stmt = try result.store.addCFStmt(.{ .assign_literal = .{ .target = addend_int, .value = .{ .i64_literal = .{ .value = 345, .layout_idx = .u64 } }, .next = float_input_stmt } }, .test_fixture);
@@ -5715,8 +5715,16 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
     const closure = try program.store.addLocal(.{ .layout_idx = erased_layout });
     const call_result = try program.store.addLocal(.{ .layout_idx = .bool });
     const caller_ret = try program.store.addCFStmt(.{ .ret = .{ .value = call_result } }, .test_fixture);
-    const call = try program.store.addCFStmt(.{ .assign_call_erased = .{ .target = call_result, .closure = closure, .args = .empty(), .arg_plan = arg_plan, .next = caller_ret } }, .test_fixture);
-    const caller_body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = closure, .value = .{ .static_data = closure_slot }, .next = call } }, .test_fixture);
+    const call = try program.store.addCFStmt(.{ .assign_call_erased = .{
+        .target = call_result,
+        .data = try program.store.addStmtRow(lir.LIR.ErasedCallData, .{
+            .closure = closure,
+            .args = .empty(),
+            .arg_plan = arg_plan,
+        }),
+        .next = caller_ret,
+    } }, .test_fixture);
+    const caller_body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = closure, .value = .{ .static_data = .{ .id = closure_slot } }, .next = call } }, .test_fixture);
     const caller = try program.store.addProcSpec(.{ .name = .fromRaw(56), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = try program.store.addLocalSpan(&.{ closure, call_result }), .body = caller_body, .ret_layout = .bool }, .none);
     const closure_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
     const erased_set: LirProgram.ErasedFnsId = @fromBackingInt(@intCast(program.erased_fns.items.len));
@@ -5840,9 +5848,17 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
     const inspected_bool = try program.store.addLocal(.{ .layout_idx = .bool });
     const inspected_str = try program.store.addLocal(.{ .layout_idx = .str });
     const inspected_ret = try program.store.addCFStmt(.{ .ret = .{ .value = inspected_str } }, .test_fixture);
-    const inspected_load = try program.store.addCFStmt(.{ .assign_literal = .{ .target = inspected_str, .value = .{ .static_data = result_slot }, .next = inspected_ret } }, .test_fixture);
-    const inspected_call = try program.store.addCFStmt(.{ .assign_call_erased = .{ .target = inspected_bool, .closure = inspected_closure, .args = .empty(), .arg_plan = arg_plan, .next = inspected_load } }, .test_fixture);
-    const inspected_body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = inspected_closure, .value = .{ .static_data = closure_slot }, .next = inspected_call } }, .test_fixture);
+    const inspected_load = try program.store.addCFStmt(.{ .assign_literal = .{ .target = inspected_str, .value = .{ .static_data = .{ .id = result_slot } }, .next = inspected_ret } }, .test_fixture);
+    const inspected_call = try program.store.addCFStmt(.{ .assign_call_erased = .{
+        .target = inspected_bool,
+        .data = try program.store.addStmtRow(lir.LIR.ErasedCallData, .{
+            .closure = inspected_closure,
+            .args = .empty(),
+            .arg_plan = arg_plan,
+        }),
+        .next = inspected_load,
+    } }, .test_fixture);
+    const inspected_body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = inspected_closure, .value = .{ .static_data = .{ .id = closure_slot } }, .next = inspected_call } }, .test_fixture);
     const inspected_root = try program.store.addProcSpec(.{ .name = .fromRaw(57), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = try program.store.addLocalSpan(&.{ inspected_closure, inspected_bool, inspected_str }), .body = inspected_body, .ret_layout = .str }, .none);
     const result_name = try LirProgram.staticDataSymbolName(allocator, result_slot);
     defer allocator.free(result_name);
@@ -5877,7 +5893,7 @@ test "inspected runners consume frozen string slots on every backend" {
         try program.static_data_values.append(allocator, .{ .initializer = null, .layout_idx = .str });
         const value = try program.store.addLocal(.{ .layout_idx = .str });
         const ret = try program.store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
-        const body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = value, .value = .{ .static_data = slot }, .next = ret } }, .test_fixture);
+        const body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = value, .value = .{ .static_data = .{ .id = slot } }, .next = ret } }, .test_fixture);
         const root = try program.store.addProcSpec(.{ .name = .fromRaw(101), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = try program.store.addLocalSpan(&.{value}), .body = body, .ret_layout = .str }, .none);
         const name = try LirProgram.staticDataSymbolName(allocator, slot);
         defer allocator.free(name);

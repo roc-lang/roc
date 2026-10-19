@@ -47,6 +47,7 @@
 //! site, `runtime_error` otherwise.
 
 const std = @import("std");
+const layout = @import("layout");
 const base = @import("base");
 const collections = @import("collections");
 
@@ -108,7 +109,7 @@ pub const Step = union(enum) {
     field: u32,
     /// Tag payload `index` of `variant`; `single` payloads extract through
     /// `tag_payload_struct` rather than `tag_payload`.
-    tag_payload: struct { variant: u32, index: u32, single: bool },
+    tag_payload: struct { variant: layout.VariantIndex, index: u32, single: bool },
     /// Callable payload of `variant` (Lambda Mono only).
     callable_payload: struct { variant: u32 },
     /// List element at a fixed index from the front.
@@ -567,7 +568,7 @@ pub fn Compiler(comptime Ctx: type) type {
                         while (i < count) : (i += 1) {
                             const sub = try self.ctx.tagPayload(col.pat, col.ty, i);
                             const child = try self.intern(col.occ, .{ .tag_payload = .{
-                                .variant = variant,
+                                .variant = @intCast(variant),
                                 .index = sub.index,
                                 .single = single,
                             } }, sub.ty);
@@ -1971,7 +1972,7 @@ const MockPat = union(enum) {
     record: []const MockSub,
     tuple: []const MockSub,
     nominal: MockSub,
-    tag: struct { variant: u32, payloads: []const MockSub },
+    tag: struct { variant: layout.VariantIndex, payloads: []const MockSub },
     int_lit: struct { value: i64, switchable: bool = true },
     dec_lit: i128,
     str_lit: u32,
@@ -2049,7 +2050,7 @@ const MockCtx = struct {
         return self.get(pat).nominal;
     }
 
-    pub fn tagVariant(self: MockCtx, pat: u32, _: u32) u32 {
+    pub fn tagVariant(self: MockCtx, pat: u32, _: u32) layout.VariantIndex {
         return self.get(pat).tag.variant;
     }
 
