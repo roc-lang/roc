@@ -202,6 +202,15 @@ const Engine = struct {
     bytes: std.ArrayList(u8) = .empty,
     /// Nodes discovered but not yet encoded.
     pending: std.ArrayList(u32) = .empty,
+    /// Scratch `resolveCyclicComponent` keeps across the components of one
+    /// run. `position_of_node` covers every node and holds `no_position`
+    /// except at the members of the component being resolved.
+    position_of_node: std.ArrayList(u32) = .empty,
+    label_scratch: std.ArrayList(Identity) = .empty,
+    distinct_labels: std.AutoHashMapUnmanaged(Identity, u32) = .empty,
+    sorted_labels: std.ArrayList(Identity) = .empty,
+    rank_of_member: std.ArrayList(u32) = .empty,
+    block_rep: std.ArrayList(u32) = .empty,
 
     fn init(renderer: *const Renderer) Engine {
         return .{
@@ -218,6 +227,12 @@ const Engine = struct {
         self.children.deinit(self.gpa);
         self.bytes.deinit(self.gpa);
         self.pending.deinit(self.gpa);
+        self.position_of_node.deinit(self.gpa);
+        self.label_scratch.deinit(self.gpa);
+        self.distinct_labels.deinit(self.gpa);
+        self.sorted_labels.deinit(self.gpa);
+        self.rank_of_member.deinit(self.gpa);
+        self.block_rep.deinit(self.gpa);
     }
 
     fn run(self: *Engine, root: SolvedType.TypeVarId) Allocator.Error!Identity {
@@ -536,10 +551,15 @@ const Engine = struct {
     /// every member as its position in that one group rendering.
     fn resolveCyclicComponent(self: *Engine, members: []const u32) Allocator.Error!void {
         const member_count = members.len;
-        const position_of_node = try self.gpa.alloc(u32, self.nodes.items.len);
-        defer self.gpa.free(position_of_node);
-        @memset(position_of_node, no_position);
+        const known_nodes = self.position_of_node.items.len;
+        if (known_nodes < self.nodes.items.len) {
+            try self.position_of_node.appendNTimes(self.gpa, no_position, self.nodes.items.len - known_nodes);
+        }
+        const position_of_node = self.position_of_node.items;
         for (members, 0..) |node, pos| position_of_node[node] = @intCast(pos);
+        defer for (members) |node| {
+            position_of_node[node] = no_position;
+        };
 
         // Refine to the stable bisimulation partition. Every member starts
         // from its content label: its encoding with every out-of-component
@@ -551,12 +571,11 @@ const Engine = struct {
         // equal labels exactly when they are bisimilar, and the labels are
         // identical for bisimilar positions of any two knots regardless of
         // how many nodes either knot uses.
-        var labels = try self.gpa.alloc(Identity, member_count);
-        defer self.gpa.free(labels);
-        var next_labels = try self.gpa.alloc(Identity, member_count);
-        defer self.gpa.free(next_labels);
-        var distinct_labels = std.AutoHashMap(Identity, u32).init(self.gpa);
-        defer distinct_labels.deinit();
+        try self.label_scratch.resize(self.gpa, 2 * member_count);
+        var labels = self.label_scratch.items[0..member_count];
+        var next_labels = self.label_scratch.items[member_count..];
+        const distinct_labels = &self.distinct_labels;
+        distinct_labels.clearRetainingCapacity();
         for (members, 0..) |node, pos| {
             var hasher = TypeDigestHasher.init();
             writeBytes(&hasher, "label");
@@ -576,7 +595,7 @@ const Engine = struct {
                 },
             };
             labels[pos] = hasher.finalResult();
-            try distinct_labels.put(labels[pos], no_position);
+            try distinct_labels.put(self.gpa, labels[pos], no_position);
         }
         var label_count: u32 = distinct_labels.count();
         while (true) {
@@ -594,7 +613,7 @@ const Engine = struct {
                     hasher.update(&labels[target_pos]);
                 }
                 next_labels[pos] = hasher.finalResult();
-                try distinct_labels.put(next_labels[pos], no_position);
+                try distinct_labels.put(self.gpa, next_labels[pos], no_position);
             }
             const next_count: u32 = distinct_labels.count();
             const stable = next_count == label_count;
@@ -606,8 +625,8 @@ const Engine = struct {
         // Group order: the reduced positions sorted by label. Labels are
         // intrinsic to the infinite type, so the order is too.
         const block_count = label_count;
-        const sorted_labels = try self.gpa.alloc(Identity, block_count);
-        defer self.gpa.free(sorted_labels);
+        try self.sorted_labels.resize(self.gpa, block_count);
+        const sorted_labels = self.sorted_labels.items;
         {
             var it = distinct_labels.keyIterator();
             var next: usize = 0;
@@ -623,10 +642,10 @@ const Engine = struct {
             const slot = distinct_labels.getPtr(label) orelse unreachable;
             slot.* = @intCast(rank);
         }
-        const rank_of_member = try self.gpa.alloc(u32, member_count);
-        defer self.gpa.free(rank_of_member);
-        const block_rep = try self.gpa.alloc(u32, block_count);
-        defer self.gpa.free(block_rep);
+        try self.rank_of_member.resize(self.gpa, member_count);
+        const rank_of_member = self.rank_of_member.items;
+        try self.block_rep.resize(self.gpa, block_count);
+        const block_rep = self.block_rep.items;
         @memset(block_rep, no_position);
         for (members, 0..) |node, pos| {
             const rank = distinct_labels.get(labels[pos]) orelse unreachable;

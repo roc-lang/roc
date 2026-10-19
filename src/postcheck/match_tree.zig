@@ -1158,10 +1158,13 @@ pub fn Compiler(comptime Ctx: type) type {
             tree_stats: Stats,
             done: Ctx.JoinPointId,
             uses: collections.DenseMap(OccId, OccUse),
+            /// Each test's run of `scoped_use_items`, by the test's
+            /// `scopeOwnerIndex`.
+            scoped_uses: collections.DenseMapUnmanaged(u32, ScopedUseRun) = .empty,
             /// Every used occurrence in interning order, grouped by the test
             /// whose scope establishes it.
-            scoped_uses: std.AutoHashMapUnmanaged(ScopeOwner, std.ArrayList(ScopedUse)) = .empty,
-            exit_joins: std.AutoHashMap(u32, Ctx.JoinPointId),
+            scoped_use_items: []ScopedUse = &.{},
+            exit_joins: collections.DenseMap(u32, Ctx.JoinPointId),
             /// Statements added by delegated body/guard lowering, excluded
             /// from the lint's machinery count.
             delegated_stmts: usize,
@@ -1477,42 +1480,59 @@ pub fn Compiler(comptime Ctx: type) type {
                 extractions: *std.ArrayList(Extraction),
             ) Ctx.LowerError!void {
                 // Deterministic iteration: occs in interning order.
-                const scoped = self.scoped_uses.get(scopeOwner(scope)) orelse return;
-                for (scoped.items) |entry| {
+                const run = self.scoped_uses.get(try scopeOwnerIndex(scope)) orelse return;
+                for (self.scoped_use_items[run.start..][0..run.len]) |entry| {
                     if (!scopeSatisfies(scope, entry.needed)) continue;
                     try self.materialize(env, entry.occ, self.uses.get(entry.occ).?, extractions);
                 }
             }
 
-            /// The test a scope belongs to: only a scope of the same test can
-            /// satisfy another.
-            const ScopeOwner = struct {
-                kind: std.meta.Tag(Scope),
-                occ: OccId,
-            };
-
             const ScopedUse = struct { occ: OccId, needed: Scope };
+            const ScopedUseRun = struct { start: u32, len: u32 };
 
-            fn scopeOwner(scope: Scope) ScopeOwner {
-                return switch (scope) {
-                    .top => .{ .kind = .top, .occ = .root },
-                    .tag_arm => |s| .{ .kind = .tag_arm, .occ = s.occ },
-                    .callable_arm => |s| .{ .kind = .callable_arm, .occ = s.occ },
-                    .list_len => |s| .{ .kind = .list_len, .occ = s.occ },
-                    .str_arm => |s| .{ .kind = .str_arm, .occ = s.occ },
+            /// The test a scope belongs to, as a dense index: only a scope of
+            /// the same test can satisfy another, and a test is its kind on
+            /// its occurrence.
+            fn scopeOwnerIndex(scope: Scope) error{OutOfMemory}!u32 {
+                const kind_count = @typeInfo(std.meta.Tag(Scope)).@"enum".field_names.len;
+                const occ: OccId = switch (scope) {
+                    .top => .root,
+                    .tag_arm => |s| s.occ,
+                    .callable_arm => |s| s.occ,
+                    .list_len => |s| s.occ,
+                    .str_arm => |s| s.occ,
                 };
+                const by_occ = std.math.mul(u32, @backingInt(occ), kind_count) catch return error.OutOfMemory;
+                return std.math.add(u32, by_occ, @backingInt(std.meta.activeTag(scope))) catch return error.OutOfMemory;
             }
 
             /// Group the used occurrences by the test establishing them, once
-            /// every use is marked.
+            /// every use is marked: each test's uses form one run, in
+            /// interning order.
             fn indexScopedUses(self: *Emitter) error{OutOfMemory}!void {
+                var used = std.ArrayList(ScopedUse).empty;
                 for (0..self.occs.len) |i| {
                     const occ: OccId = @fromBackingInt(@intCast(i));
                     if (!self.uses.contains(occ)) continue;
-                    const needed = self.establishingScope(occ);
-                    const gop = try self.scoped_uses.getOrPut(self.arena, scopeOwner(needed));
-                    if (!gop.found_existing) gop.value_ptr.* = .empty;
-                    try gop.value_ptr.append(self.arena, .{ .occ = occ, .needed = needed });
+                    try used.append(self.arena, .{ .occ = occ, .needed = self.establishingScope(occ) });
+                }
+                for (used.items) |entry| {
+                    const gop = try self.scoped_uses.getOrPut(self.arena, try scopeOwnerIndex(entry.needed));
+                    if (!gop.found_existing) gop.value_ptr.* = .{ .start = 0, .len = 0 };
+                    gop.value_ptr.len += 1;
+                }
+                var next: u32 = 0;
+                var runs = self.scoped_uses.valueIterator();
+                while (runs.next()) |run| {
+                    run.start = next;
+                    next += run.len;
+                    run.len = 0;
+                }
+                self.scoped_use_items = try self.arena.alloc(ScopedUse, used.items.len);
+                for (used.items) |entry| {
+                    const run = self.scoped_uses.getPtr(try scopeOwnerIndex(entry.needed)).?;
+                    self.scoped_use_items[run.start + run.len] = entry;
+                    run.len += 1;
                 }
             }
 
