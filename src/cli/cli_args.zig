@@ -389,7 +389,9 @@ const FlagForm = enum {
     /// `--name`, matched exactly. Sets a `bool` field; a flag with no field is
     /// accepted and changes nothing.
     toggle,
-    /// `--name=<value>`. Its short spelling takes the value directly after it.
+    /// `--name=<value>`: matched when the argument is `--name` exactly (a
+    /// missing value) or starts with `--name=`. The short spelling's value
+    /// follows it directly, so the short spelling is matched by prefix.
     attached,
     /// `--name <value>`, matched exactly, taking the next argument as its value.
     separate,
@@ -2483,6 +2485,36 @@ test "roc run subcommand" {
         defer result.deinit(gpa);
         try testing.expect(result.run.explicit_opt);
     }
+}
+
+// A flag that merely starts with the name of a real flag is not that flag.
+test "flags are not matched by prefix" {
+    const gpa = testing.allocator;
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "run", "--optBORK=speed", "main.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(.problem, std.meta.activeTag(result));
+        try testing.expectEqualStrings("--optBORK=speed", result.problem.unknown_flag.arg);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "--optBORK=speed", "main.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(.problem, std.meta.activeTag(result));
+        try testing.expectEqualStrings("--optBORK=speed", result.problem.unknown_flag.arg);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "build", "--optBORK=speed", "main.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(.problem, std.meta.activeTag(result));
+        try testing.expectEqualStrings("--optBORK=speed", result.problem.unknown_flag.arg);
+    }
+}
+
+test "an attached flag's value is everything after its first =" {
+    const gpa = testing.allocator;
+    const result = try parse(gpa, testing.io, &[_][]const u8{ "build", "--output=out/a=b", "main.roc" });
+    defer result.deinit(gpa);
+    try testing.expectEqualStrings("out/a=b", result.build.output.?);
 }
 
 test "bare shorthand requires the run subcommand" {
