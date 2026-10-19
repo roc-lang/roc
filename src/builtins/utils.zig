@@ -369,7 +369,7 @@ pub fn increfRcPtr(ptr_to_refcount: *isize, amount: isize, atomicity: RcAtomicit
                 }
             },
         }
-        if (comptime builtin.os.tag != .freestanding) {
+        if (comptime tracker_hooks_enabled) {
             DebugRefcountTracker.onIncref(@intFromPtr(ptr_to_refcount), amount);
         }
     }
@@ -566,7 +566,7 @@ inline fn free_ptr_to_refcount(
     if (RC_TYPE == .none) return;
 
     // Debug-only: Track the free in the shadow refcount tracker.
-    if (comptime builtin.os.tag != .freestanding) {
+    if (comptime tracker_hooks_enabled) {
         DebugRefcountTracker.onFree(@intFromPtr(refcount_ptr));
     }
 
@@ -622,7 +622,7 @@ inline fn decref_ptr_to_refcount(
         }
     }
 
-    if (comptime builtin.os.tag != .freestanding) {
+    if (comptime tracker_hooks_enabled) {
         DebugRefcountTracker.onDecref(@intFromPtr(refcount_ptr), site);
     }
 
@@ -783,7 +783,7 @@ pub fn allocateWithRefcount(
     const refcount_ptr: [*]usize = alignedPtrCast([*]usize, data_ptr - @sizeOf(usize), @src());
     refcount_ptr[0] = if (RC_TYPE == .none) REFCOUNT_STATIC_DATA else 1;
 
-    if (comptime builtin.os.tag != .freestanding) {
+    if (comptime tracker_hooks_enabled) {
         DebugRefcountTracker.trackAlloc(@intFromPtr(refcount_ptr));
     }
 
@@ -826,7 +826,7 @@ pub fn unsafeReallocate(
     const reallocated = roc_ops.realloc(old_allocation, new_width, allocation_alignment);
 
     const new_source = @as([*]u8, @ptrCast(reallocated)) + extra_bytes;
-    if (comptime builtin.os.tag != .freestanding) {
+    if (comptime tracker_hooks_enabled) {
         const old_rc_addr = @intFromPtr(source_ptr - @sizeOf(usize));
         const new_rc_addr = @intFromPtr(new_source - @sizeOf(usize));
         DebugRefcountTracker.onRealloc(old_rc_addr, new_rc_addr);
@@ -870,6 +870,10 @@ test "Dict runtime seed carries its internal marker" {
     const runtime_marker = @as(u64, 1) << 63;
     try std.testing.expect(dictPseudoSeed() & runtime_marker != 0);
 }
+
+/// Whether refcount operations report to `DebugRefcountTracker`. Release
+/// builds compile the hooks out entirely.
+const tracker_hooks_enabled = builtin.mode == .debug and builtin.os.tag != .freestanding;
 
 /// Debug-only shadow refcount tracker.
 ///
