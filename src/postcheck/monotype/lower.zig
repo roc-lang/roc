@@ -4391,6 +4391,35 @@ const SpecJobStoreEpoch = struct {
 /// Exactly one mutable graph/draft writer may borrow it at a time. Completed
 /// results read its stores through prefix views, so they do not retain that
 /// borrow and the next writer can begin before ordered coordinator acceptance.
+/// Bind a specialization worker domain to the one coordinator program it
+/// serves; `domain` names it in the compiler-bug report.
+fn bindCoordinatorProgram(bound: *?*Ast.Program, program: *Ast.Program, comptime domain: []const u8) void {
+    if (bound.*) |existing| {
+        if (existing != program) {
+            Common.compilerBug("Monotype specialization " ++ domain ++ " changed coordinator programs");
+        }
+    } else {
+        bound.* = program;
+    }
+}
+
+/// The cumulative relocation from a specialization worker's type/name domain
+/// into `program`, created on first use. The worker's own workspace and the
+/// coordinator's commit domain over that worker each hold one.
+fn committedTypeRelocation(domain: anytype, program: *Ast.Program) *Type.Store.TypeRelocation {
+    bindCoordinatorProgram(&domain.program, program, @TypeOf(domain.*).domain_name);
+    if (domain.workspace_to_program == null) {
+        domain.workspace_to_program = Type.Store.TypeRelocation.init(
+            domain.allocator,
+            &domain.types,
+            &domain.name_store,
+            &program.types,
+            &program.names,
+        );
+    }
+    return &domain.workspace_to_program.?;
+}
+
 const SpecJobWorkspace = struct {
     allocator: Allocator,
     types: Type.Store,
@@ -4425,18 +4454,10 @@ const SpecJobWorkspace = struct {
         };
     }
 
-    fn bindProgram(self: *SpecJobWorkspace, program: *Ast.Program) void {
-        if (self.program) |bound| {
-            if (bound != program) {
-                Common.compilerBug("Monotype specialization workspace changed coordinator programs");
-            }
-        } else {
-            self.program = program;
-        }
-    }
+    const domain_name = "workspace";
 
     fn beginEpoch(self: *SpecJobWorkspace, program: *Ast.Program) SpecJobEpoch {
-        self.bindProgram(program);
+        bindCoordinatorProgram(&self.program, program, domain_name);
         if (self.active_epoch != null) {
             Common.compilerBug("Monotype specialization workspace began overlapping epochs");
         }
@@ -4504,7 +4525,7 @@ const SpecJobWorkspace = struct {
         self: *SpecJobWorkspace,
         program: *Ast.Program,
     ) *Type.Store.TypeRelocation {
-        self.bindProgram(program);
+        bindCoordinatorProgram(&self.program, program, domain_name);
         if (self.program_to_workspace == null) {
             self.program_to_workspace = Type.Store.TypeRelocation.init(
                 self.allocator,
@@ -4515,23 +4536,6 @@ const SpecJobWorkspace = struct {
             );
         }
         return &self.program_to_workspace.?;
-    }
-
-    fn committedTypeRelocation(
-        self: *SpecJobWorkspace,
-        program: *Ast.Program,
-    ) *Type.Store.TypeRelocation {
-        self.bindProgram(program);
-        if (self.workspace_to_program == null) {
-            self.workspace_to_program = Type.Store.TypeRelocation.init(
-                self.allocator,
-                &self.types,
-                &self.name_store,
-                &program.types,
-                &program.names,
-            );
-        }
-        return &self.workspace_to_program.?;
     }
 
     fn deinit(self: *SpecJobWorkspace) void {
@@ -4664,11 +4668,13 @@ const SpecJobCommitDomain = struct {
     types: Type.Store,
     name_store: names.NameStore,
     program: ?*Ast.Program = null,
-    relocation: ?Type.Store.TypeRelocation = null,
+    workspace_to_program: ?Type.Store.TypeRelocation = null,
     releases: SpecJobReleases = .{},
     /// The latest absorbed epoch whose summaries the coordinator has not
     /// shared with workers yet. Coordinator only.
     unshared: ?SpecJobEpoch = null,
+
+    const domain_name = "commit domain";
 
     fn init(allocator: Allocator) SpecJobCommitDomain {
         return .{
@@ -4691,31 +4697,8 @@ const SpecJobCommitDomain = struct {
         self.unshared = epoch.epoch;
     }
 
-    fn committedTypeRelocation(
-        self: *SpecJobCommitDomain,
-        program: *Ast.Program,
-    ) *Type.Store.TypeRelocation {
-        if (self.program) |bound| {
-            if (bound != program) {
-                Common.compilerBug("Monotype specialization commit domain changed coordinator programs");
-            }
-        } else {
-            self.program = program;
-        }
-        if (self.relocation == null) {
-            self.relocation = Type.Store.TypeRelocation.init(
-                self.allocator,
-                &self.types,
-                &self.name_store,
-                &program.types,
-                &program.names,
-            );
-        }
-        return &self.relocation.?;
-    }
-
     fn deinit(self: *SpecJobCommitDomain) void {
-        if (self.relocation) |*relocation| relocation.deinit();
+        if (self.workspace_to_program) |*relocation| relocation.deinit();
         self.releases.deinit(self.allocator);
         self.types.deinit();
         self.name_store.deinit();
@@ -5471,7 +5454,9 @@ const Builder = struct {
     /// under `ProgramTypeDestination` or with no private body destination at
     /// all, where this is also `activeTypeStore()`.
     fn coordinatorTypes(self: *Builder) *Type.Store {
-        std.debug.assert(!self.hasPrivateTypeDestination());
+        if (self.hasPrivateTypeDestination()) {
+            Common.invariant("coordinator adapter work read types under a private specialization destination");
+        }
         return &self.program.types;
     }
 
@@ -5491,11 +5476,6 @@ const Builder = struct {
     const ConstExprSpan = Ast.Span(Ast.ExprId);
     const ConstFieldExpr = Ast.FieldExpr;
     const ConstFieldExprSpan = Ast.Span(Ast.FieldExpr);
-
-    /// This scope's mapping from a stored scalar to expression data.
-    fn constScalarData(_: *Builder, scalar: checked.ConstScalar) ConstExprData {
-        return restoreScalar(Ast.ExprData, scalar);
-    }
 
     /// An empty compile-time list restores as the `with_capacity` it was
     /// evaluated with, so the first append at runtime goes in place; one
@@ -6833,7 +6813,7 @@ const Builder = struct {
                 &commit_domain.name_store,
                 &self.program.types,
                 &self.program.names,
-                commit_domain.committedTypeRelocation(self.program),
+                committedTypeRelocation(commit_domain, self.program),
             );
             fn_tys[context.request_index] = try committed_types.commitType(shard.fn_ty);
             context.shard = null;
@@ -9462,7 +9442,7 @@ const Builder = struct {
                         &commit_domain.name_store,
                         &self.program.types,
                         &self.program.names,
-                        commit_domain.committedTypeRelocation(self.program),
+                        committedTypeRelocation(commit_domain, self.program),
                     );
                     try self.commitInterfaceSummaries(shard.interface_summaries, &committed_types);
                     shard.deinit();
@@ -9899,7 +9879,8 @@ const Builder = struct {
         const commit_domain = shard.commit_domain;
         try self.absorbStoreEpoch(commit_domain, &shard.store_epoch);
         shard.store_epoch_absorbed = true;
-        const committed_type_relocation = commit_domain.committedTypeRelocation(
+        const committed_type_relocation = committedTypeRelocation(
+            commit_domain,
             self.program,
         );
         var committed_types = CommittedGraphTypes.relocatedStore(
@@ -9957,7 +9938,7 @@ const Builder = struct {
             &commit_domain.name_store,
             &self.program.types,
             &self.program.names,
-            commit_domain.committedTypeRelocation(self.program),
+            committedTypeRelocation(commit_domain, self.program),
         );
         try self.commitInterfaceSummaries(shard.interface_summaries, &committed_types);
         if (shard.worker_local_symbol_count != shard.body_draft.worker_local_symbol_count) {
@@ -10254,7 +10235,7 @@ const Builder = struct {
             .digest = .{
                 .prefix = lookup_prefix,
                 .kind = .closed,
-                .digest = source_ctx.specializationTypeDigest(request_fn_ty).bytes,
+                .digest = source_ctx.builder.specializationTypeDigestIn(source_ctx.typeStore(), source_ctx.nameStore(), request_fn_ty).bytes,
             },
         } else null;
         if (resolved_lookup_address) |address| {
@@ -12242,7 +12223,9 @@ const Builder = struct {
         if (owner_names != &self.program.names) {
             return self.findMethodTargetByNameFromStore(scope, owner_names, owner, method_name);
         }
-        std.debug.assert(self.activeNameStore() == &self.program.names);
+        if (self.activeNameStore() != &self.program.names) {
+            Common.invariant("program-domain method owner was looked up under a private name destination");
+        }
         const method = try self.program.names.internMethodName(method_name);
         const address = ScopedMethodDispatch.init(scope.key, owner, method);
         if (self.scoped_method_targets.get(address)) |resolution| {
@@ -12276,7 +12259,9 @@ const Builder = struct {
         if (owner_names != &self.program.names) {
             return self.findInspectOverrideFromStore(scope, owner_names, owner);
         }
-        std.debug.assert(self.activeNameStore() == &self.program.names);
+        if (self.activeNameStore() != &self.program.names) {
+            Common.invariant("program-domain method owner was looked up under a private name destination");
+        }
         const method = try self.program.names.internMethodName("to_inspect");
         const address = ScopedMethodDispatch.init(scope.key, owner, method);
         if (self.scoped_inspect_overrides.get(address)) |resolution| return resolution;
@@ -12880,7 +12865,7 @@ const Builder = struct {
             .digest = .{
                 .prefix = lookup_prefix,
                 .kind = .closed,
-                .digest = source_ctx.specializationTypeDigest(request_fn_ty).bytes,
+                .digest = source_ctx.builder.specializationTypeDigestIn(source_ctx.typeStore(), source_ctx.nameStore(), request_fn_ty).bytes,
             },
         } else null;
         const open_request_shape: ?solve.OpenFunctionInterfaceShape = if (resolved_request_ty == null)
@@ -13235,7 +13220,7 @@ const Builder = struct {
                 .digest = .{
                     .prefix = draft.lookup_prefix,
                     .kind = .closed,
-                    .digest = source_ctx.specializationTypeDigest(completed_fn_ty).bytes,
+                    .digest = source_ctx.builder.specializationTypeDigestIn(source_ctx.typeStore(), source_ctx.nameStore(), completed_fn_ty).bytes,
                 },
             }, @intCast(draft.spec_index));
         }
@@ -22360,10 +22345,6 @@ const BodyContext = struct {
         return optionalFieldSlotForType(self.typeStore(), self.nameStore(), slot_ty);
     }
 
-    fn specializationTypeDigest(self: *BodyContext, ty: Type.TypeId) names.TypeDigest {
-        return self.builder.specializationTypeDigestIn(self.typeStore(), self.nameStore(), ty);
-    }
-
     fn recordField(self: *const BodyContext, ty: Type.TypeId, name: names.RecordFieldNameId) Type.Field {
         return sortedRecordField(self.typeStore().fieldSpan(recordFieldsSpan(self.typeStore(), ty)), self.nameStore(), name);
     }
@@ -22505,11 +22486,6 @@ const BodyContext = struct {
     const ConstExprSpan = DraftSpan(DraftExprId);
     const ConstFieldExpr = DraftFieldExpr;
     const ConstFieldExprSpan = DraftSpan(DraftFieldExpr);
-
-    /// This scope's mapping from a stored scalar to expression data.
-    fn constScalarData(_: *BodyContext, scalar: checked.ConstScalar) ConstExprData {
-        return restoreScalar(BodyExprData, scalar);
-    }
 
     /// An empty compile-time list restores as the `with_capacity` it was
     /// evaluated with, so the first append at runtime goes in place; one
@@ -45947,7 +45923,7 @@ const BodyContext = struct {
             .digest = .{
                 .prefix = lookup_prefix,
                 .kind = .closed,
-                .digest = self.specializationTypeDigest(completed_ty).bytes,
+                .digest = self.builder.specializationTypeDigestIn(self.typeStore(), self.nameStore(), completed_ty).bytes,
             },
         }, raw_spec);
         return completed_node;
@@ -66566,6 +66542,8 @@ test "frozen runtime impossibility proofs evaluate node constants alternatives a
     const all_proof = try appendRuntimeImpossibilityProof(&draft, gpa, .{ .all = .{ .start = 2, .len = 2 } });
     try draft.impossibility_proof_ids.appendSlice(gpa, &.{ empty_proof, never_proof });
     const failed_all_proof = try appendRuntimeImpossibilityProof(&draft, gpa, .{ .all = .{ .start = 4, .len = 2 } });
+    const forward_proof = try appendRuntimeImpossibilityProof(&draft, gpa, .{ .forward = empty_proof });
+    const failed_forward_proof = try appendRuntimeImpossibilityProof(&draft, gpa, .{ .forward = inhabited_proof });
 
     var evaluator = FrozenRuntimeImpossibilityProofEvaluator.init(gpa, .{ .graph = graph }, &draft);
     defer evaluator.deinit();
@@ -66576,7 +66554,188 @@ test "frozen runtime impossibility proofs evaluate node constants alternatives a
     try std.testing.expect(try evaluator.holds(any_proof));
     try std.testing.expect(try evaluator.holds(all_proof));
     try std.testing.expect(!try evaluator.holds(failed_all_proof));
+    try std.testing.expect(try evaluator.holds(forward_proof));
+    try std.testing.expect(!try evaluator.holds(failed_forward_proof));
     try std.testing.expect(!try evaluator.holds(null));
+}
+
+test "runtime impossibility proof evaluation applies one rule set whatever decides its leaves" {
+    // Graph sealing and deferred preparation evaluate proofs with the same
+    // policy and differ only in their leaf predicate, so a leaf that answers
+    // from a table pins the composite rules both share, `.forward` included.
+    const gpa = std.testing.allocator;
+
+    const TableLeaf = struct {
+        uninhabited: NodeId,
+
+        const stage = "in this test";
+
+        fn nodeHolds(self: @This(), node: NodeId) Allocator.Error!bool {
+            return node == self.uninhabited;
+        }
+    };
+
+    var draft = BodyDraftStore.init(gpa);
+    defer draft.deinit();
+    const uninhabited: NodeId = @fromBackingInt(7);
+    const inhabited: NodeId = @fromBackingInt(8);
+    const holds_leaf = try appendRuntimeImpossibilityProof(&draft, gpa, .{ .node = uninhabited });
+    const fails_leaf = try appendRuntimeImpossibilityProof(&draft, gpa, .{ .node = inhabited });
+    const forward_holds = try appendRuntimeImpossibilityProof(&draft, gpa, .{ .forward = holds_leaf });
+    const forward_fails = try appendRuntimeImpossibilityProof(&draft, gpa, .{ .forward = fails_leaf });
+    try draft.impossibility_proof_ids.appendSlice(gpa, &.{ fails_leaf, forward_holds });
+    const any_through_forward = try appendRuntimeImpossibilityProof(&draft, gpa, .{ .any = .{ .start = 0, .len = 2 } });
+    try draft.impossibility_proof_ids.appendSlice(gpa, &.{ forward_holds, forward_fails });
+    const all_through_forward = try appendRuntimeImpossibilityProof(&draft, gpa, .{ .all = .{ .start = 2, .len = 2 } });
+
+    var evaluation = RuntimeImpossibilityProofEvaluation(TableLeaf).init(gpa, .{ .uninhabited = uninhabited }, &draft);
+    defer evaluation.deinit();
+    try std.testing.expect(try evaluation.holds(forward_holds));
+    try std.testing.expect(!try evaluation.holds(forward_fails));
+    try std.testing.expect(try evaluation.holds(any_through_forward));
+    try std.testing.expect(!try evaluation.holds(all_through_forward));
+    // Memoized answers are the answers.
+    try std.testing.expect(try evaluation.holds(forward_holds));
+    try std.testing.expect(!try evaluation.holds(forward_fails));
+}
+
+/// A `Builder` and a `BodyContext` whose active destination is a private
+/// specialization workspace, as inside an ordinary specialization shard.
+const PrivateDestinationFixture = struct {
+    program: Ast.Program,
+    workspace: SpecJobWorkspace,
+    epoch: SpecJobEpoch,
+    graph: *InstGraph,
+    draft: BodyDraftStore,
+    builder: Builder,
+    ctx: BodyContext,
+
+    fn init(self: *PrivateDestinationFixture, gpa: Allocator) Allocator.Error!void {
+        self.program = Ast.Program.init(gpa);
+        self.workspace = SpecJobWorkspace.init(gpa);
+        self.epoch = self.workspace.beginEpoch(&self.program);
+        self.graph = try InstGraph.create(gpa, &self.workspace.types, &self.workspace.name_store);
+        self.draft = BodyDraftStore.init(gpa);
+        self.draft.spec_job_workspace = &self.workspace;
+        self.draft.mutable_graph_names = &self.workspace.name_store;
+        self.builder = undefined;
+        self.builder.program = &self.program;
+        self.builder.force_program_type_destination = false;
+        self.builder.active_body_draft = &self.draft;
+        self.builder.active_graph = self.graph;
+        self.ctx = undefined;
+        self.ctx.spare_inst_frames = .empty;
+        self.ctx.allocator = gpa;
+        self.ctx.builder = &self.builder;
+        self.ctx.graph = self.graph;
+        self.ctx.draft = &self.draft;
+    }
+
+    fn deinit(self: *PrivateDestinationFixture) void {
+        self.ctx.deinitSpareInstFrames();
+        self.draft.deinit();
+        self.graph.destroy();
+        self.workspace.finishEpoch(self.epoch);
+        self.workspace.deinit();
+        self.program.deinit();
+    }
+};
+
+test "both lowering scopes read one tag row under a private specialization destination" {
+    const gpa = std.testing.allocator;
+    var fixture: PrivateDestinationFixture = undefined;
+    try fixture.init(gpa);
+    defer fixture.deinit();
+    const workspace = &fixture.workspace;
+
+    // The program holds a different type at the row's id, so a query that
+    // read the program store here would answer about the wrong type.
+    const program_ty = try fixture.program.types.add(.{ .primitive = .bool });
+    const str_ty = try workspace.types.add(.{ .primitive = .str });
+    const ok = try workspace.name_store.internTagLabel("Ok");
+    const err = try workspace.name_store.internTagLabel("Err");
+    const row = try workspace.types.add(.{ .tag_union = try workspace.types.addTagVariants(&workspace.name_store, &.{
+        .{ .name = ok, .checked_name = ok, .payloads = try workspace.types.addSpan(&.{str_ty}) },
+        .{ .name = err, .checked_name = err, .payloads = try workspace.types.addSpan(&.{}) },
+    }) });
+    try std.testing.expectEqual(@backingInt(program_ty), @backingInt(str_ty));
+
+    const builder_types = fixture.builder.activeTypeStore();
+    const body_types = fixture.ctx.typeStore();
+    try std.testing.expect(builder_types == body_types);
+    const builder_tags = tagUnionTags(builder_types, row);
+    const body_tags = tagUnionTags(body_types, row);
+    try std.testing.expectEqual(GuardedList.borrowLen(builder_tags), GuardedList.borrowLen(body_tags));
+    for (0..GuardedList.borrowLen(builder_tags)) |index| {
+        try std.testing.expectEqual(GuardedList.at(builder_tags, index), GuardedList.at(body_tags, index));
+    }
+
+    // Lookup by tag and lookup of a tag's payloads find the same tag, from
+    // either scope's name store.
+    try std.testing.expect(fixture.builder.activeNameStore() == fixture.ctx.nameStore());
+    for ([_]names.TagNameId{ ok, err }) |name| {
+        const by_tag = tagByName(builder_types, fixture.builder.activeNameStore(), row, name);
+        const payloads = tagPayloadTypes(body_types, fixture.ctx.nameStore(), row, name);
+        const by_tag_payloads = body_types.span(by_tag.payloads);
+        try std.testing.expectEqual(GuardedList.borrowLen(by_tag_payloads), GuardedList.borrowLen(payloads));
+        for (0..GuardedList.borrowLen(payloads)) |index| {
+            try std.testing.expectEqual(GuardedList.at(by_tag_payloads, index), GuardedList.at(payloads, index));
+        }
+    }
+    try std.testing.expect(tagByNameOrNull(body_types, fixture.ctx.nameStore(), row, try workspace.name_store.internTagLabel("Missing")) == null);
+}
+
+fn readCoordinatorTypesUnderPrivateDestination() Allocator.Error!void {
+    var fixture: PrivateDestinationFixture = undefined;
+    try fixture.init(std.testing.allocator);
+    defer fixture.deinit();
+    _ = fixture.builder.coordinatorTypes();
+}
+
+test "coordinator adapter type reads require the program destination" {
+    try @import("base").death_test.expectPanic(
+        "coordinator adapter work read types under a private specialization destination",
+        readCoordinatorTypesUnderPrivateDestination,
+        .{},
+    );
+}
+
+test "shape queries cross alias layers for every aggregate a constant restores at" {
+    // A constant is restored at its checked type, which may name an alias of
+    // the aggregate; both lowering scopes read the shape through the backing.
+    const gpa = std.testing.allocator;
+    var types = Type.Store.init(gpa);
+    defer types.deinit();
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const elem = try types.add(.{ .primitive = .u8 });
+    const list = try types.add(.{ .list = elem });
+    const box = try types.add(.{ .box = elem });
+    const field = try name_store.internRecordFieldLabel("value");
+    const record = try types.add(.{ .record = try types.addRecordFields(&name_store, &.{
+        .{ .name = field, .ty = elem, .default = null },
+    }) });
+    const tuple = try types.add(.{ .tuple = try types.addSpan(&.{ elem, elem }) });
+    const alias_name = try name_store.internTypeName("Alias");
+    const module = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xCD))));
+    const Aliased = struct {
+        fn of(store: *Type.Store, store_names: *const names.NameStore, def: Type.TypeDef, backing: Type.TypeId) Allocator.Error!Type.TypeId {
+            return try store.internNamed(store_names, .{
+                .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(@backingInt(backing))) },
+                .def = def,
+                .kind = .alias,
+                .backing = .{ .ty = backing, .use = .inspectable },
+            });
+        }
+    };
+    const def: Type.TypeDef = .{ .module = module, .type_name = alias_name };
+
+    try std.testing.expectEqual(elem, listElemType(&types, try Aliased.of(&types, &name_store, def, list)));
+    try std.testing.expectEqual(elem, boxPayloadType(&types, try Aliased.of(&types, &name_store, def, box)));
+    try std.testing.expectEqual(@as(usize, 1), GuardedList.borrowLen(recordFields(&types, try Aliased.of(&types, &name_store, def, record))));
+    try std.testing.expectEqual(@as(usize, 2), GuardedList.borrowLen(tupleItemTypes(&types, try Aliased.of(&types, &name_store, def, tuple))));
+    try std.testing.expect(nominalExprBackingType(&types, try Aliased.of(&types, &name_store, def, record)) == null);
 }
 
 test "runtime impossibility proof constructors canonicalize boolean constants" {
@@ -67550,17 +67709,21 @@ fn moduleViewIdentityMatches(view: ModuleView, origin_hash: *const [32]u8) bool 
     return base.ModuleIdentity.eql(&view.module_identity.stable_hash, origin_hash);
 }
 
-/// Restore a `ConstStore` value into one lowering scope's expression data.
-///
-/// `Builder` and `BodyContext` emit into different stores and different
-/// expression-data types, but the restoration itself is one set of rules:
-/// which const shapes map to which expression forms, plus the length
-/// invariants relating a stored aggregate to its checked type. `restorer` is
-/// scope is emitting; it supplies its own store through `constEmit()`, its data
-/// type through `ConstExprData`, its scalar mapping through `constScalarData`,
-/// its type and name queries through scope-owned methods, and the recursive descent
-/// through `restoreConstNodeAtTypeWithStaticRoot`, which genuinely differs
-/// between the two.
+// Restore a `ConstStore` value into one lowering scope's expression data.
+//
+// `Builder` and `BodyContext` emit into different stores and different
+// expression-data types, but the restoration itself is one set of rules:
+// which const shapes map to which expression forms, plus the length
+// invariants relating a stored aggregate to its checked type. `restorer` is
+// the scope that is emitting. It supplies its expression store through
+// `constEmit()`, its expression types through `ConstExprData`,
+// `ConstExprId`, and `ConstFieldExpr`, and the stores its type ids and labels
+// belong to through `constTypeStore()` and `constNameStore()`, which the
+// shared type-shape queries read. How an empty list is rebuilt
+// (`constEmptyListData`) and how a node starts and finishes, including reuse
+// and caching (`startConstRestore`, `finishConstRestoreLayer`,
+// `finishConstRestoreData`), genuinely differ between the two scopes.
+
 /// How a restorer starts one stored constant node.
 fn ConstRestoreStart(comptime Id: type) type {
     return union(enum) {
@@ -67722,7 +67885,7 @@ fn constRestoreData(
     return switch (frame.value) {
         .pending => Common.invariant("pending ConstStore node reached Monotype restore"),
         .zst => .unit,
-        .scalar => |scalar| restorer.constScalarData(scalar),
+        .scalar => |scalar| restoreScalar(@TypeOf(restorer.*).ConstExprData, scalar),
         .str => |str| .{ .str_lit = try emit.addStringView(
             store_view.const_store.blobData(str.data),
             str.offset,
@@ -69770,7 +69933,7 @@ test "specialization workspace retains bidirectional type relocation across seri
                 program.names.recordFieldLabelCount(),
             );
 
-            const committed = workspace.committedTypeRelocation(&program);
+            const committed = committedTypeRelocation(&workspace, &program);
             var exported = try program.types.importTypes(
                 &program.names,
                 &workspace.types,
@@ -69811,7 +69974,7 @@ test "specialization workspace retains bidirectional type relocation across seri
             defer workspace.finishEpoch(epoch);
 
             const ingress = workspace.programTypeRelocation(&program);
-            const committed = workspace.committedTypeRelocation(&program);
+            const committed = committedTypeRelocation(&workspace, &program);
             try std.testing.expectEqual(ingress_count_after_first_epoch, ingress.mappedCount());
             try std.testing.expectEqual(committed_count_after_first_epoch, committed.mappedCount());
             try std.testing.expectEqual(ingress_name_count_after_first_epoch, ingress.namesRelocation().mappedCount());
@@ -69934,7 +70097,7 @@ test "specialization store epochs are read in place while the workspace grows" {
         "epoch_value",
         commit_domain.name_store.recordFieldLabelText(GuardedList.at(private_fields, 0).name),
     );
-    const relocation = commit_domain.committedTypeRelocation(&program);
+    const relocation = committedTypeRelocation(&commit_domain, &program);
     var imported_record = try program.types.importTypes(
         &program.names,
         &commit_domain.types,

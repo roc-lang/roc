@@ -1791,3 +1791,436 @@ test "hoist-preserving iterator producers are reachable through their method nam
         try std.testing.expect(reachable);
     }
 }
+
+/// One function definition found in a source file: its name and the token
+/// text of its body, braces included.
+const SourceFn = struct {
+    name: []const u8,
+    body: []const u8,
+};
+
+fn isIdentChar(c: u8) bool {
+    return std.ascii.isAlphanumeric(c) or c == '_' or c == '@';
+}
+
+/// Index just past the token starting at `start` in Zig source: a string or
+/// character literal, a comment or multiline-string line, an identifier, or
+/// one punctuation byte.
+fn sourceTokenEnd(source: []const u8, start: usize) usize {
+    const c = source[start];
+    if (c == '"' or c == '\'') {
+        var i = start + 1;
+        while (i < source.len and source[i] != c) : (i += 1) {
+            if (source[i] == '\\') i += 1;
+        }
+        return @min(i + 1, source.len);
+    }
+    if ((c == '/' or c == '\\') and start + 1 < source.len and source[start + 1] == c) {
+        return std.mem.findScalarPos(u8, source, start, '\n') orelse source.len;
+    }
+    if (isIdentChar(c)) {
+        var i = start + 1;
+        while (i < source.len and isIdentChar(source[i])) i += 1;
+        return i;
+    }
+    return start + 1;
+}
+
+fn isCommentToken(token: []const u8) bool {
+    return std.mem.startsWith(u8, token, "//");
+}
+
+/// Whether the `{` at `brace` opens a type expression (`struct {`,
+/// `union(enum) {`, `error{`, ...) rather than a function body.
+fn braceOpensTypeExpr(source: []const u8, brace: usize) bool {
+    var end = brace;
+    while (end > 0 and std.ascii.isWhitespace(source[end - 1])) end -= 1;
+    if (end > 0 and source[end - 1] == ')') {
+        var depth: usize = 0;
+        while (end > 0) {
+            end -= 1;
+            switch (source[end]) {
+                ')' => depth += 1,
+                '(' => {
+                    depth -= 1;
+                    if (depth == 0) break;
+                },
+                else => {},
+            }
+        }
+    }
+    var start = end;
+    while (start > 0 and isIdentChar(source[start - 1])) start -= 1;
+    const word = source[start..end];
+    const type_words = [_][]const u8{ "struct", "union", "enum", "error", "opaque" };
+    for (type_words) |type_word| {
+        if (std.mem.eql(u8, word, type_word)) return true;
+    }
+    return false;
+}
+
+/// The index of the `}` closing the `{` at `open`.
+fn matchingBrace(source: []const u8, open: usize) usize {
+    var depth: usize = 0;
+    var i = open;
+    while (i < source.len) {
+        const token_end = sourceTokenEnd(source, i);
+        if (token_end == i + 1) switch (source[i]) {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if (depth == 0) return i;
+            },
+            else => {},
+        };
+        i = token_end;
+    }
+    @panic("unbalanced braces in embedded source");
+}
+
+/// Every function definition with a body in `source`, in order.
+fn collectSourceFns(allocator: std.mem.Allocator, source: []const u8) ![]SourceFn {
+    var fns: std.ArrayList(SourceFn) = .empty;
+    errdefer fns.deinit(allocator);
+    var line_start: usize = 0;
+    while (line_start < source.len) {
+        const line_end = std.mem.findScalarPos(u8, source, line_start, '\n') orelse source.len;
+        defer line_start = line_end + 1;
+        var cursor = line_start;
+        while (cursor < line_end and (source[cursor] == ' ' or source[cursor] == '\t')) cursor += 1;
+        const qualifiers = [_][]const u8{ "pub ", "inline ", "export " };
+        for (qualifiers) |qualifier| {
+            if (std.mem.startsWith(u8, source[cursor..line_end], qualifier)) cursor += qualifier.len;
+        }
+        if (!std.mem.startsWith(u8, source[cursor..line_end], "fn ")) continue;
+        const name_start = cursor + "fn ".len;
+        var name_end = name_start;
+        while (name_end < line_end and isIdentChar(source[name_end])) name_end += 1;
+        if (name_end == name_start or name_end >= line_end or source[name_end] != '(') continue;
+
+        // Skip the parameter list, then find the body's opening brace,
+        // stepping over any type expression in the return type.
+        var i = name_end;
+        var parens: usize = 0;
+        var body_start: ?usize = null;
+        while (i < source.len) {
+            const token_end = sourceTokenEnd(source, i);
+            if (token_end != i + 1) {
+                i = token_end;
+                continue;
+            }
+            switch (source[i]) {
+                '(' => parens += 1,
+                ')' => parens -= 1,
+                ';' => if (parens == 0) break,
+                '{' => if (parens == 0) {
+                    if (!braceOpensTypeExpr(source, i)) {
+                        body_start = i;
+                        break;
+                    }
+                    i = matchingBrace(source, i);
+                },
+                else => {},
+            }
+            i += 1;
+        }
+        const start = body_start orelse continue;
+        const end = matchingBrace(source, start);
+        try fns.append(allocator, .{ .name = source[name_start..name_end], .body = source[start .. end + 1] });
+        // Nested definitions are found by continuing line by line.
+    }
+    return try fns.toOwnedSlice(allocator);
+}
+
+/// A body's tokens without comments, with each scope's receiver plumbing
+/// (`self.program.`, `self.builder.`, `self.parent.`) read as `self.`, so two
+/// copies of one helper that differ only in which scope they hang off
+/// compare equal.
+fn normalizedBodyTokens(allocator: std.mem.Allocator, body: []const u8) ![]const []const u8 {
+    var raw: std.ArrayList([]const u8) = .empty;
+    defer raw.deinit(allocator);
+    var i: usize = 0;
+    while (i < body.len) {
+        if (std.ascii.isWhitespace(body[i])) {
+            i += 1;
+            continue;
+        }
+        const end = sourceTokenEnd(body, i);
+        const token = body[i..end];
+        if (!isCommentToken(token)) try raw.append(allocator, token);
+        i = end;
+    }
+    var tokens: std.ArrayList([]const u8) = .empty;
+    errdefer tokens.deinit(allocator);
+    var index: usize = 0;
+    while (index < raw.items.len) : (index += 1) {
+        try tokens.append(allocator, raw.items[index]);
+        if (std.mem.eql(u8, raw.items[index], "self") and index + 3 < raw.items.len and
+            std.mem.eql(u8, raw.items[index + 1], ".") and std.mem.eql(u8, raw.items[index + 3], "."))
+        {
+            const plumbing = raw.items[index + 2];
+            if (std.mem.eql(u8, plumbing, "program") or std.mem.eql(u8, plumbing, "builder") or std.mem.eql(u8, plumbing, "parent")) {
+                index += 2;
+            }
+        }
+    }
+    return try tokens.toOwnedSlice(allocator);
+}
+
+/// `2 * LCS / (len(a) + len(b))` over token sequences: 1.0 for identical
+/// bodies, 0.0 for bodies sharing no token in order.
+fn tokenSimilarity(allocator: std.mem.Allocator, a: []const []const u8, b: []const []const u8) !f64 {
+    if (a.len + b.len == 0) return 1.0;
+    const prev = try allocator.alloc(u32, b.len + 1);
+    defer allocator.free(prev);
+    const row = try allocator.alloc(u32, b.len + 1);
+    defer allocator.free(row);
+    @memset(prev, 0);
+    for (a) |a_token| {
+        row[0] = 0;
+        for (b, 1..) |b_token, j| {
+            row[j] = if (std.mem.eql(u8, a_token, b_token)) prev[j - 1] + 1 else @max(prev[j], row[j - 1]);
+        }
+        @memcpy(prev, row);
+    }
+    const lcs: f64 = @floatFromInt(prev[b.len]);
+    const total: f64 = @floatFromInt(a.len + b.len);
+    return 2.0 * lcs / total;
+}
+
+const near_duplicate_threshold = 0.70;
+
+/// Names defined more than once in `source` whose closest pair of bodies is
+/// at least `near_duplicate_threshold` similar.
+fn nearDuplicateFnNames(allocator: std.mem.Allocator, source: []const u8) ![]const []const u8 {
+    const fns = try collectSourceFns(allocator, source);
+    defer allocator.free(fns);
+    var by_name: std.StringArrayHashMapUnmanaged(std.ArrayList(usize)) = .empty;
+    defer {
+        for (by_name.values()) |*list| list.deinit(allocator);
+        by_name.deinit(allocator);
+    }
+    for (fns, 0..) |source_fn, index| {
+        const entry = try by_name.getOrPut(allocator, source_fn.name);
+        if (!entry.found_existing) entry.value_ptr.* = .empty;
+        try entry.value_ptr.append(allocator, index);
+    }
+    var flagged: std.ArrayList([]const u8) = .empty;
+    errdefer flagged.deinit(allocator);
+    for (by_name.keys(), by_name.values()) |name, indices| {
+        if (indices.items.len < 2) continue;
+        const token_lists = try allocator.alloc([]const []const u8, indices.items.len);
+        defer allocator.free(token_lists);
+        for (indices.items, 0..) |fn_index, k| token_lists[k] = try normalizedBodyTokens(allocator, fns[fn_index].body);
+        defer for (token_lists) |tokens| allocator.free(tokens);
+        var best: f64 = 0;
+        for (token_lists, 0..) |left, k| {
+            for (token_lists[k + 1 ..]) |right| best = @max(best, try tokenSimilarity(allocator, left, right));
+        }
+        if (best >= near_duplicate_threshold) try flagged.append(allocator, name);
+    }
+    return try flagged.toOwnedSlice(allocator);
+}
+
+test "post-check lowerers define no helper twice with near-identical bodies" {
+    // `Builder` / `BodyContext` and `ProcedureBuilder` / `ProcBodyBuilder` are
+    // two scopes of one lowering's state. A helper written against one
+    // scope's fields used to get copied into the other, and the copies
+    // drifted: one read a different store, or matched tags by a different
+    // identity, for what was meant to be one query. Shared helpers take the
+    // stores they read as parameters instead, so any name defined twice with
+    // near-identical bodies is either listed here, with its reason, or a new
+    // copy.
+    const intended_per_scope = [_][]const u8{
+        // The const-restorer interface `runConstRestore` walks over: each
+        // scope's own expression store, id types, and node bookkeeping.
+        "constEmit",
+        "constNameStore",
+        "constTypeStore",
+        "constEmptyListData",
+        "finishConstRestoreLayer",
+        "finishConstRestoreData",
+        // Each scope's emission primitives into its own expression store
+        // (`Ast.Program` for `Builder`, the body draft for `BodyContext`),
+        // and each store's record of a restored root read.
+        "localExpr",
+        "bindPat",
+        "recordRestoredRootRead",
+        // `AnyAll.Evaluation` leaf policies and the `EqDeriver` /
+        // `HashDeriver` walker callbacks: one generic walk, one policy
+        // struct per question.
+        "nodeHolds",
+        "defAddress",
+        "defCache",
+        "expansionStack",
+        "fnType",
+        "callArgs",
+        "helperOperand",
+        "helperSecondArgType",
+        "methodArgTypes",
+        "leaf",
+        "namedEnter",
+        "tagPayloadOperand",
+        "tagUnionExit",
+        // Conventional method names on unrelated types (sort orders,
+        // lifecycle, map access, timing scopes, worker task entry points).
+        "lessThan",
+        "init",
+        "deinit",
+        "begin",
+        "end",
+        "contains",
+        "get",
+        "childCount",
+        "run",
+    };
+    // Near-duplicates not yet extracted. This list only shrinks.
+    const pending_extraction = [_][]const u8{};
+
+    const allocator = std.testing.allocator;
+    const sources = [_]struct { path: []const u8, text: []const u8 }{
+        .{ .path = "monotype/lower.zig", .text = @embedFile("monotype/lower.zig") },
+        .{ .path = "boxy/lower.zig", .text = @embedFile("boxy/lower.zig") },
+    };
+    var unexpected: usize = 0;
+    var still_used: [intended_per_scope.len + pending_extraction.len]bool = @splat(false);
+    for (sources) |source| {
+        const flagged = try nearDuplicateFnNames(allocator, source.text);
+        defer allocator.free(flagged);
+        next_name: for (flagged) |name| {
+            for (intended_per_scope ++ pending_extraction, 0..) |allowed, index| {
+                if (std.mem.eql(u8, name, allowed)) {
+                    still_used[index] = true;
+                    continue :next_name;
+                }
+            }
+            std.debug.print("{s}: `{s}` is defined twice with near-identical bodies\n", .{ source.path, name });
+            unexpected += 1;
+        }
+    }
+    for (intended_per_scope ++ pending_extraction, still_used) |allowed, used| {
+        if (!used) {
+            std.debug.print("allowlisted `{s}` is no longer a near-duplicate; remove it\n", .{allowed});
+            unexpected += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 0), unexpected);
+}
+
+test "the near-duplicate lint finds doubled helpers across scopes" {
+    const source =
+        \\const A = struct {
+        \\    fn shape(self: *A, ty: u32) u32 {
+        \\        // reads A's store
+        \\        return switch (self.program.types.get(ty)) {
+        \\            .named => |named| named.backing,
+        \\            else => ty,
+        \\        };
+        \\    }
+        \\    fn only(self: *A) error{Bad}!struct { x: u32 } {
+        \\        return .{ .x = self.n };
+        \\    }
+        \\};
+        \\const B = struct {
+        \\    fn shape(self: *B, ty: u32) u32 {
+        \\        return switch (self.builder.types.get(ty)) {
+        \\            .named => |named| named.backing,
+        \\            else => ty,
+        \\        };
+        \\    }
+        \\    fn only(self: *B) u32 {
+        \\        const text = "} {";
+        \\        return text.len + self.unrelated.count() * 7 - 1;
+        \\    }
+        \\};
+    ;
+    const allocator = std.testing.allocator;
+    const fns = try collectSourceFns(allocator, source);
+    defer allocator.free(fns);
+    try std.testing.expectEqual(@as(usize, 4), fns.len);
+    try std.testing.expect(std.mem.endsWith(u8, fns[1].body, "return .{ .x = self.n };\n    }"));
+    const flagged = try nearDuplicateFnNames(allocator, source);
+    defer allocator.free(flagged);
+    try std.testing.expectEqual(@as(usize, 1), flagged.len);
+    try std.testing.expectEqualStrings("shape", flagged[0]);
+}
+
+test "Monotype lowering scopes share one definition of each type-shape, name-import, and method-lookup helper" {
+    const source = @embedFile("monotype/lower.zig");
+    // Store-parameterized free functions, called by both scopes with their own
+    // stores; a scope-local method of the same name would shadow them.
+    const free_functions = [_][]const u8{
+        "shapeContent",
+        "functionShape",
+        "recordFieldsSpan",
+        "recordFields",
+        "tupleItemTypes",
+        "listElemType",
+        "boxPayloadType",
+        "tagUnionTags",
+        "tagByNameOrNull",
+        "tagByName",
+        "tagPayloadTypes",
+        "namedBackingType",
+        "nominalExprBackingType",
+        "nominalConstructionLayer",
+        "recordFieldName",
+        "tagName",
+        "typeDef",
+    };
+    inline for (free_functions) |name| {
+        try std.testing.expectEqual(@as(usize, 1), countDefinitions(source, "fn " ++ name ++ "("));
+        try expectContains(source, "\nfn " ++ name ++ "(");
+    }
+    // Method lookup takes the name store its owner belongs to; `BodyContext`
+    // calls the `Builder` implementation with its own.
+    const lookups = [_][]const u8{ "lookupMethodTarget", "lookupMethodTargetByName", "lookupInspectOverride" };
+    inline for (lookups) |name| {
+        try std.testing.expectEqual(@as(usize, 1), countDefinitions(source, "fn " ++ name ++ "("));
+        try expectContains(source, "    fn " ++ name ++ "(\n        self: *Builder,\n        scope: ModuleView,\n        owner_names: *const names.NameStore,");
+    }
+    // The restore walker reads shapes through the shared queries rather than
+    // through restorer-specific copies.
+    try expectNotContains(source, "fn constListElemType(");
+    try expectNotContains(source, "fn constBoxPayloadType(");
+    try expectNotContains(source, "fn constRecordFields(");
+    try expectNotContains(source, "fn constScalarData(");
+    try expectNotContains(source, "fn restoreConstNodeAtType(");
+    try expectNotContains(source, "fn restoreConstNodeAtTypeWithStaticRoot(");
+}
+
+test "Monotype type-shape queries switch exhaustively over every type content variant" {
+    // A new `Type.Content` variant must fail to compile in each query rather
+    // than fall into a default answer, so every switch in the block names
+    // every variant and none has an `else` prong.
+    const source = @embedFile("monotype/lower.zig");
+    const block = sourceSliceBetween(source, "// Type-shape queries.", "// Name import helpers.");
+    try expectNotContains(block, "else =>");
+    const variants = @typeInfo(MonoType.Content).@"union".field_names;
+    var queries = std.mem.splitSequence(u8, block, "\nfn ");
+    _ = queries.next();
+    var switching_queries: usize = 0;
+    while (queries.next()) |query| {
+        const content_switch = std.mem.find(u8, query, ".get(") orelse std.mem.find(u8, query, "switch (shapeContent(") orelse continue;
+        switching_queries += 1;
+        const switch_text = query[content_switch..];
+        inline for (variants) |variant| {
+            const prong = "." ++ variant;
+            if (std.mem.find(u8, switch_text, prong) == null) {
+                std.debug.print("type-shape query lacks a `{s}` prong:\nfn {s}\n", .{ prong, query });
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
+    try std.testing.expect(switching_queries >= 10);
+}
+
+test "boxy procedure-body accessors are defined once on the procedure builder" {
+    const source = @embedFile("boxy/lower.zig");
+    const accessors = [_][]const u8{ "repQuery", "namedQuery", "moduleNames", "tagVariantNameText", "descriptorStorageRep" };
+    inline for (accessors) |name| {
+        try std.testing.expectEqual(@as(usize, 1), countDefinitions(source, "fn " ++ name ++ "("));
+    }
+    try expectContains(source, "self.parent.repQuery()");
+    try expectContains(source, "self.parent.descriptorStorageRep(");
+}

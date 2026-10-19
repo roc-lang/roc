@@ -43713,11 +43713,6 @@ const ConstPlanBuilder = struct {
         return try self.procedure_builder.typeDescForWorkerRepWithSourceMap(rep, null, &sources, &context);
     }
 
-    /// Shared read-only queries over the representation plan.
-    fn repQuery(self: *const ConstPlanBuilder) Plan.RepQuery {
-        return .{ .plan = self.plan, .allocator = self.allocator };
-    }
-
     fn init(
         allocator: Allocator,
         modules: Common.CheckedModules,
@@ -43977,7 +43972,7 @@ const ConstPlanBuilder = struct {
             .alias => {
                 const child = child_plan orelse {
                     frame.awaiting = true;
-                    return .{ .request = self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep };
+                    return .{ .request = self.procedure_builder.repQuery().requiredSingleChild(rep_id, .alias_backing).rep };
                 };
                 try self.memoizeConstPlan(rep_id, child);
                 var finished = frames.pop().?;
@@ -44014,7 +44009,7 @@ const ConstPlanBuilder = struct {
                 };
                 const child = child_plan orelse {
                     frame.awaiting = true;
-                    return .{ .request = self.repQuery().requiredSingleChild(rep_id, role).rep };
+                    return .{ .request = self.procedure_builder.repQuery().requiredSingleChild(rep_id, role).rep };
                 };
                 const rep = self.plan.representations.items[@backingInt(rep_id)];
                 return self.finishConstPlanFrame(frames, switch (frame.state) {
