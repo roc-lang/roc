@@ -30,6 +30,8 @@ pub const SafeRange = @import("safe_list.zig").SafeRange;
 pub const SafeMultiList = @import("safe_list.zig").SafeMultiList;
 pub const validateRelocatedSpan = @import("safe_list.zig").validateRelocatedSpan;
 pub const GuardedList = @import("GuardedList.zig");
+/// Backings a growing list replaced while readers may still hold slices of them.
+pub const SupersededBackings = @import("SupersededBackings.zig");
 
 pub const IndexedStack = @import("IndexedStack.zig").IndexedStack;
 pub const WorkStacks = @import("WorkStacks.zig").WorkStacks;
@@ -103,6 +105,7 @@ test "collections tests" {
     std.testing.refAllDecls(@import("ExposedItems.zig"));
     std.testing.refAllDecls(@import("safe_list.zig"));
     std.testing.refAllDecls(@import("GuardedList.zig"));
+    std.testing.refAllDecls(@import("SupersededBackings.zig"));
     std.testing.refAllDecls(@import("serialization.zig"));
     std.testing.refAllDecls(@import("SortedArrayBuilder.zig"));
     std.testing.refAllDecls(@import("SingleThreadArena.zig"));

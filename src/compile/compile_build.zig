@@ -1132,6 +1132,7 @@ pub const BuildEnv = struct {
             // and app-less builds (platform/package/module roots) record that
             // explicitly so every module takes the transform.
             if (is_main_pkg) {
+                coord.markRootPackage(coord_pkg.name);
                 if (pkg.kind == .app or pkg.kind == .default_app) {
                     coord.markAppPackage(coord_pkg.name);
                 } else {
@@ -2336,6 +2337,10 @@ pub const BuildEnv = struct {
     fn remapSyntheticRootReport(self: *BuildEnv, report: *Report) Allocator.Error!void {
         if (self.synthetic_root_original_path == null or self.synthetic_root_original_source == null) return;
 
+        if (report.file) |file| {
+            if (self.syntheticRootDisplayPath(file)) |original_path| try report.setFile(original_path);
+        }
+
         var original_line_starts = try base.RegionInfo.findLineStarts(self.gpa, self.synthetic_root_original_source.?);
         defer original_line_starts.deinit(self.gpa);
         for (report.document.elements.items) |*element| {
@@ -3397,6 +3402,7 @@ pub const BuildEnv = struct {
         self: *BuildEnv,
         writer: anytype,
         opt_name: []const u8,
+        debug_opt_name: []const u8,
         config: reporting.ReportingConfig,
     ) Allocator.Error!usize {
         const modules = try self.getCompiledModules(self.gpa);
@@ -3413,7 +3419,7 @@ pub const BuildEnv = struct {
 
             try collectDbgRegionsInModule(self.gpa, mod.semantic.env, &regions);
             for (regions.items) |region| {
-                try self.renderOptimizedDbgWarning(writer, mod.semantic.env, mod.path, opt_name, region, config);
+                try self.renderOptimizedDbgWarning(writer, mod.semantic.env, mod.path, opt_name, debug_opt_name, region, config);
                 total += 1;
             }
         }
@@ -3426,6 +3432,7 @@ pub const BuildEnv = struct {
         env: *const ModuleEnv,
         path: []const u8,
         opt_name: []const u8,
+        debug_opt_name: []const u8,
         region: base.Region,
         config: reporting.ReportingConfig,
     ) Allocator.Error!void {
@@ -3449,6 +3456,15 @@ pub const BuildEnv = struct {
         try report.document.addReflowingText(" output, but ");
         try report.document.addInlineCode("dbg");
         try report.document.addReflowingText(" is intended for debugging.");
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("To build for debugging, use ");
+        const debug_opt_arg = try std.fmt.allocPrint(self.gpa, "--opt={s}", .{debug_opt_name});
+        defer self.gpa.free(debug_opt_arg);
+        const owned_debug_opt_arg = try report.addOwnedString(debug_opt_arg);
+        try report.document.addInlineCode(owned_debug_opt_arg);
+        try report.document.addReflowingText(".");
 
         const palette = reporting.ColorUtils.getPaletteForConfig(config);
         reporting.renderReportToTerminal(&report, writer, palette, config) catch {};

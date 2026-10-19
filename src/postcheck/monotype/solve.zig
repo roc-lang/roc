@@ -26,6 +26,9 @@ const names = check.CheckedNames;
 const static_dispatch = check.StaticDispatchRegistry;
 const Ident = base.Ident;
 
+/// Whether the graph checks that reads keep every existing class's root.
+const debug_reads = @import("builtin").mode == .debug;
+
 /// A compile-time entry root qualified by the checked module that owns it.
 /// `ComptimeRootId`s are module-local, so a root that travels across template
 /// requests must carry its owning module to stay comparable: the same integer
@@ -605,10 +608,25 @@ pub const InterfaceConstraints = struct {
         };
     }
 
+    /// The domain of constraints whose settled leaves and names already
+    /// belong to the instantiating graph's stores.
+    pub const GraphDomain = struct {
+        pub fn mapScalar(_: GraphDomain, comptime T: type, value: T) Allocator.Error!T {
+            return value;
+        }
+    };
+
     pub fn instantiate(self: InterfaceConstraints, graph: *InstGraph) Allocator.Error![]const NodeId {
+        return self.instantiateFrom(graph, GraphDomain{});
+    }
+
+    /// Instantiate constraints whose settled leaves and names belong to
+    /// another store domain, reading them in place: `domain.mapScalar` maps
+    /// each leaf and name into the graph's stores as instantiation reaches it.
+    pub fn instantiateFrom(self: InterfaceConstraints, graph: *InstGraph, domain: anytype) Allocator.Error![]const NodeId {
         const node_ids = try graph.allocator.alloc(NodeId, self.nodes.len);
         defer graph.allocator.free(node_ids);
-        try self.instantiateNodes(graph, node_ids);
+        try self.instantiateNodes(graph, node_ids, domain);
         const roots = try graph.arena().alloc(NodeId, self.roots.len);
         for (self.roots, roots) |root, *out| out.* = node_ids[@backingInt(root)];
         return roots;
@@ -616,15 +634,16 @@ pub const InterfaceConstraints = struct {
 
     /// Instantiate every captured node, writing the graph node standing for
     /// each into `node_ids`.
-    fn instantiateNodes(self: InterfaceConstraints, graph: *InstGraph, node_ids: []NodeId) Allocator.Error!void {
+    fn instantiateNodes(self: InterfaceConstraints, graph: *InstGraph, node_ids: []NodeId, domain: anytype) Allocator.Error!void {
         std.debug.assert(node_ids.len == self.nodes.len);
         const kind_ids = try graph.allocator.alloc(FieldKindId, self.kinds.len);
         defer graph.allocator.free(kind_ids);
-        var instance = Instance{
+        var instance = Instance(@TypeOf(domain)){
             .graph = graph,
             .allocator = graph.arena(),
             .nodes = node_ids,
             .kinds = kind_ids,
+            .domain = domain,
         };
         // A settled leaf that backs a captured nominal becomes a backing cell
         // owned by that nominal, like any imported nominal's backing.
@@ -644,10 +663,13 @@ pub const InterfaceConstraints = struct {
                 // Each settled leaf enters as its own occurrence, so marks a
                 // graph accumulated on its shared import of the same type
                 // cannot reach what the summary relates.
-                .mono => |ty| if (owned_backings.bit_length != 0 and owned_backings.isSet(index))
-                    try graph.importOwnedBacking(ty)
-                else
-                    try graph.importMonoIndependent(ty),
+                .mono => |source_ty| blk: {
+                    const ty = try domain.mapScalar(Type.TypeId, source_ty);
+                    break :blk if (owned_backings.bit_length != 0 and owned_backings.isSet(index))
+                        try graph.importOwnedBacking(ty)
+                    else
+                        try graph.importMonoIndependent(ty);
+                },
                 .open => try graph.newNode(.{ .unresolved = InstVariable.placeholder() }),
             };
         }
@@ -663,7 +685,7 @@ pub const InterfaceConstraints = struct {
                 .open => |index| self.open_nodes[index],
             };
             _ = try graph.replaceContentWithoutSnapshotInvalidation(id, try mapValue(&instance, InstNode, node.content));
-            if (node.finished) |ty| try graph.registerImportedMono(id, ty);
+            if (node.finished) |ty| try graph.registerImportedMono(id, try domain.mapScalar(Type.TypeId, ty));
             graph.private_backing_roots.items[@backingInt(id)] = graph.private_backing_roots.items[@backingInt(id)] or node.private_backing;
             if (node.recursive_slot) graph.markRecursiveValueSlot(id);
             if (node.forced_dynamic) graph.markForcedDynamicIteratorRoot(id);
@@ -765,7 +787,7 @@ pub const InterfaceConstraints = struct {
         // An open class without a witness reads its settled type from an
         // instance of these constraints.
         const instance = try arena.allocator().alloc(NodeId, self.nodes.len);
-        try self.instantiateNodes(graph, instance);
+        try self.instantiateNodes(graph, instance, GraphDomain{});
         var renumberer = EquivalenceRenumberer{ .source = self, .graph = graph, .instance = instance, .types = graph.types, .name_store = graph.name_store, .allocator = arena.allocator() };
         const constraints = try renumberer.run();
         var writer = IdentityWriter{ .graph = graph };
@@ -1489,6 +1511,13 @@ pub const InterfaceConstraints = struct {
                 if (graph.private_backing_roots.items[@backingInt(root)]) return .{ .value = false };
                 if (graph.requestSourceInterface(raw) != null or graph.requestPropagatesConstructorEvidence(raw)) return .{ .value = false };
                 if (graph.representation_membership.items[@backingInt(root)].forced_dynamic) return .{ .value = false };
+                // As for sharing, an unread leaf without iterator machinery or
+                // generated-private backing holds nothing below it that could
+                // stop neutrality, so it stays unread.
+                if (graph.leafType(root)) |ty| {
+                    if (!try graph.types.containsIteratorInterface(ty) and
+                        !try graph.types.containsGeneratedPrivateBacking(ty)) return .{ .value = true };
+                }
                 const content = (try graph.content(root));
                 switch (content) {
                     .named => |named| {
@@ -1687,22 +1716,26 @@ pub const InterfaceConstraints = struct {
         }
     };
 
-    const Instance = struct {
-        graph: *InstGraph,
-        allocator: Allocator,
-        nodes: []NodeId,
-        kinds: []FieldKindId,
+    fn Instance(comptime Domain: type) type {
+        return struct {
+            graph: *InstGraph,
+            allocator: Allocator,
+            nodes: []NodeId,
+            kinds: []FieldKindId,
+            /// Maps the constraints' settled leaves and names into the graph's stores.
+            domain: Domain,
 
-        fn node(self: *Instance, id: NodeId) Allocator.Error!NodeId {
-            return self.nodes[@backingInt(id)];
-        }
-        fn kind(self: *Instance, id: FieldKindId) Allocator.Error!FieldKindId {
-            return self.kinds[@backingInt(id)];
-        }
-        fn scalar(_: *Instance, comptime T: type, value: T) Allocator.Error!T {
-            return value;
-        }
-    };
+            fn node(self: *@This(), id: NodeId) Allocator.Error!NodeId {
+                return self.nodes[@backingInt(id)];
+            }
+            fn kind(self: *@This(), id: FieldKindId) Allocator.Error!FieldKindId {
+                return self.kinds[@backingInt(id)];
+            }
+            fn scalar(self: *@This(), comptime T: type, value: T) Allocator.Error!T {
+                return self.domain.mapScalar(T, value);
+            }
+        };
+    }
 
     fn Copier(comptime Context: type) type {
         return struct {
@@ -2282,6 +2315,11 @@ pub const InstGraph = struct {
     /// Unifications in progress, so leaf-scope cell joins wait for the
     /// outermost to finish instead of changing roots it is relating.
     unify_depth: u32 = 0,
+    /// In debug builds, the node count when the outermost read of an unread
+    /// leaf began, or null outside one. A read joins only cells it created
+    /// into the classes that existed before it, so `union_` asserts that no
+    /// class older than this floor loses its root.
+    read_floor: if (debug_reads) ?u32 else void = if (debug_reads) null else {},
     /// Further origins of an unread leaf class, gained when unread leaves of
     /// its type joined it. Reading the class reads each of them too and
     /// relates their components to its own, exactly as relating the eager
@@ -4067,11 +4105,17 @@ pub const InstGraph = struct {
         return try self.rootContent(self.find(id));
     }
 
-    /// `content` of a class root.
+    /// `content` of a class root. Reading never changes the root of a class
+    /// that existed before the read, so callers may hold roots across it.
     fn rootContent(self: *InstGraph, root: NodeId) Allocator.Error!InstNode {
         const root_content = self.nodes.items[@backingInt(root)];
         return switch (root_content) {
             .leaf => |leaf| blk: {
+                const outermost_read = if (debug_reads) self.read_floor == null else false;
+                if (debug_reads and outermost_read) self.read_floor = @intCast(self.nodes.items.len);
+                defer if (debug_reads and outermost_read) {
+                    self.read_floor = null;
+                };
                 const expanded = try self.expandLeaf(root, leaf);
                 try self.drainLeafScopeCellJoins();
                 break :blk expanded;
@@ -6581,6 +6625,9 @@ pub const InstGraph = struct {
         const winner = self.find(raw_winner);
         const loser = self.find(raw_loser);
         if (winner == loser) return;
+        if (debug_reads) if (self.read_floor) |floor| if (@backingInt(loser) < floor) {
+            Common.invariant("reading a leaf moved the root of a class that existed before the read");
+        };
         // Only `unionLeaves` joins an unread leaf class that has aliases, and
         // it hands them to the winner first.
         std.debug.assert(!self.leaf_alias_origins.contains(loser));
@@ -6795,10 +6842,17 @@ pub const InstGraph = struct {
     /// Join two classes that already denote one type: components of one
     /// leaf type reached through different origins. Joining them changes
     /// which cells are one class, never what any class denotes, so reading a
-    /// leaf may do this after relations freeze.
+    /// leaf may do this after relations freeze. Each join keeps the older
+    /// class's root: node ids grow, so a cell a read creates joins the class
+    /// that existed before the read, and roots held across a read stay roots.
     fn unifyKnownEqual(self: *InstGraph, a: NodeId, b: NodeId) Allocator.Error!void {
-        try self.unifyRootsTransitivelyUnchecked(a, b, false, .exact);
+        try self.unifyRootsTransitivelyUnchecked(a, b, false, .exact, .known_equal);
     }
+
+    /// Whether a unification relates two types, choosing each joined class's
+    /// root by content, or joins classes already known to denote one type,
+    /// keeping the older class's root.
+    const UnifyJoin = enum { relate, known_equal };
 
     fn unifyRootsTransitively(
         self: *InstGraph,
@@ -6808,7 +6862,7 @@ pub const InstGraph = struct {
         row_width: RowWidthRelation,
     ) Allocator.Error!void {
         self.requireRelationProduction();
-        try self.unifyRootsTransitivelyUnchecked(a, b, allow_private_selection, row_width);
+        try self.unifyRootsTransitivelyUnchecked(a, b, allow_private_selection, row_width, .relate);
     }
 
     fn unifyRootsTransitivelyUnchecked(
@@ -6817,6 +6871,7 @@ pub const InstGraph = struct {
         b: NodeId,
         allow_private_selection: bool,
         row_width: RowWidthRelation,
+        comptime join: UnifyJoin,
     ) Allocator.Error!void {
         self.countDiagnostic("unify_requests");
         var scratch = self.unify_scratch_pool.pop() orelse UnifyScratch{ .related = NodePairSet.init(self.allocator) };
@@ -6840,7 +6895,7 @@ pub const InstGraph = struct {
             self.unify_depth += 1;
             defer self.unify_depth -= 1;
             while (scratch.pending.pop()) |pair| {
-                try self.unifyRoots(pair.left, pair.right, pair.row_width, &scratch.pending, &scratch.related, allow_private_selection);
+                try self.unifyRoots(pair.left, pair.right, pair.row_width, &scratch.pending, &scratch.related, allow_private_selection, join);
             }
         }
         try self.drainLeafScopeCellJoins();
@@ -6854,10 +6909,16 @@ pub const InstGraph = struct {
         pending: *std.ArrayList(NodePair),
         related: *NodePairSet,
         allow_private_selection: bool,
+        comptime join: UnifyJoin,
     ) Allocator.Error!void {
-        const left = self.find(raw_left);
-        const right = self.find(raw_right);
-        if (left == right) return;
+        const found_left = self.find(raw_left);
+        const found_right = self.find(raw_right);
+        if (found_left == found_right) return;
+        // Equal content joins keep the left class's root, so a known-equal
+        // join puts the older class on the left.
+        const swap = join == .known_equal and @backingInt(found_right) < @backingInt(found_left);
+        const left = if (swap) found_right else found_left;
+        const right = if (swap) found_left else found_right;
         const pair = NodePair{ .left = left, .right = right, .row_width = row_width };
         if ((try related.getOrPut(pair)).found_existing) return;
 
@@ -12121,6 +12182,37 @@ test "finished Monotype detection reads an unread checked leaf as containing non
     try std.testing.expect(try graph.containsFinishedMono(mixed));
 }
 
+test "reading a joined leaf keeps the root of each component class that existed before the read" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const item_ty = try type_store.add(.{ .primitive = .u64 });
+    const list_ty = try type_store.add(.{ .list = item_ty });
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    // The joined class reads as the first scope's leaf, and only that scope
+    // has a cell for the item type, so the read creates the second scope's
+    // cell and joins it to the existing one.
+    const first = try graph.newLeafScope();
+    const second = try graph.newLeafScope();
+    const existing_item = try graph.checkedLeaf(first, item_ty);
+    _ = try graph.content(existing_item);
+    const item_root = graph.find(existing_item);
+
+    const first_list = try graph.checkedLeaf(first, list_ty);
+    try graph.unify(first_list, try graph.checkedLeaf(second, list_ty));
+
+    const read = try graph.content(first_list);
+    try std.testing.expectEqual(item_root, graph.find(existing_item));
+    try std.testing.expectEqual(item_root, graph.find(read.list));
+}
+
 test "opaque interface relation preserves distinct public and generated-private backing authority" {
     const gpa = std.testing.allocator;
 
@@ -14220,6 +14312,86 @@ test "interface constraints preserve open rows and independent request variables
     const closed = try InterfaceConstraints.capture(graph, graph.arena(), first);
     const closed_identity = try closed.identity(graph);
     try std.testing.expect(!std.mem.eql(u8, before.bytes, closed_identity.bytes));
+}
+
+test "interface constraints instantiate in place from another store domain like a relocated copy" {
+    const allocator = std.testing.allocator;
+    var source_types = Type.Store.init(allocator);
+    defer source_types.deinit();
+    var source_names = names.NameStore.init(allocator);
+    defer source_names.deinit();
+    var types = Type.Store.init(allocator);
+    defer types.deinit();
+    var name_store = names.NameStore.init(allocator);
+    defer name_store.deinit();
+    // Equal text has unrelated ids in the two name stores.
+    _ = try name_store.internTagLabel("Unrelated");
+
+    const source_graph = try InstGraph.create(allocator, &source_types, &source_names);
+    defer source_graph.destroy();
+    const found = try source_names.internTagLabel("Found");
+    const str_node = try source_graph.newNode(.{ .primitive = .str });
+    const settled = try source_graph.newNode(.{ .list = str_node });
+    const tail = try source_graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_tag_union) });
+    const row = try source_graph.newNode(.{ .tag_union = .{
+        .tags = try source_graph.arena().dupe(InstTag, &.{.{ .name = found, .checked_name = found, .payloads = try source_graph.arena().dupe(NodeId, &.{settled}) }}),
+        .ext = tail,
+    } });
+    const constraints = try InterfaceConstraints.capture(source_graph, source_graph.arena(), &.{ row, tail });
+    try std.testing.expect(for (constraints.nodes) |node| {
+        if (node == .mono) break true;
+    } else false);
+
+    const graph = try InstGraph.create(allocator, &types, &name_store);
+    defer graph.destroy();
+    var relocation = Type.Store.TypeRelocation.init(allocator, &source_types, &source_names, &types, &name_store);
+    defer relocation.deinit();
+    const Domain = struct {
+        relocation: *Type.Store.TypeRelocation,
+        types: *Type.Store,
+        name_store: *names.NameStore,
+        source_types: *const Type.Store,
+        source_names: *const names.NameStore,
+
+        pub fn mapScalar(self: @This(), comptime T: type, value: T) Allocator.Error!T {
+            if (T == Type.TypeId) {
+                if (self.relocation.get(self.source_types, value)) |mapped| return mapped;
+                var imported = try self.types.importTypes(self.name_store, self.source_types, self.source_names, self.relocation, &.{value});
+                defer imported.deinit();
+                return imported.roots[0];
+            }
+            const name_relocation = self.relocation.namesRelocation();
+            if (T == names.TagNameId) return name_relocation.relocateTagLabel(self.source_names, value);
+            if (T == names.RecordFieldNameId) return name_relocation.relocateRecordFieldLabel(self.source_names, value);
+            if (T == names.TypeNameId) return name_relocation.relocateTypeName(self.source_names, value);
+            if (T == names.ModuleIdentityId) return name_relocation.relocateModuleIdentity(self.source_names, value);
+            return value;
+        }
+    };
+    const domain = Domain{
+        .relocation = &relocation,
+        .types = &types,
+        .name_store = &name_store,
+        .source_types = &source_types,
+        .source_names = &source_names,
+    };
+
+    const in_place = try constraints.instantiateFrom(graph, domain);
+    const copied = try constraints.copy(graph.arena(), domain);
+    const from_copy = try copied.instantiate(graph);
+    const in_place_identity = try (try InterfaceConstraints.capture(graph, graph.arena(), in_place)).identity(graph);
+    const copy_identity = try (try InterfaceConstraints.capture(graph, graph.arena(), from_copy)).identity(graph);
+    try std.testing.expect(try in_place_identity.eql(copy_identity, &types, &name_store));
+    // The two instances stay independent.
+    try std.testing.expect(!graph.sameClass(in_place[1], from_copy[1]));
+
+    // Names and settled leaves crossed into the instantiating graph's stores.
+    const tags = (try graph.content(in_place[0])).tag_union.tags;
+    try std.testing.expectEqual(@as(usize, 1), tags.len);
+    try std.testing.expectEqualStrings("Found", name_store.tagLabelText(tags[0].name));
+    try std.testing.expect(tags[0].name != found);
+    const payload = try graph.content(tags[0].payloads[0]);
+    try std.testing.expect(payload == .list);
 }
 
 test "interface constraints preserve recursive and field-presence topology" {

@@ -16,8 +16,4 @@ pub const SpecializationStrategy = enum {
         if (std.mem.eql(u8, value, "no")) return .boxy;
         return null;
     }
-
-    pub fn cliOptions() []const u8 {
-        return "yes,no";
-    }
 };

@@ -71,8 +71,22 @@ pub const ArgProblem = union(enum) {
     invalid_flag_value: struct {
         value: []const u8,
         flag: []const u8,
-        valid_options: []const u8,
+        expected: ExpectedValue,
     },
+};
+
+/// What a flag's value must be, for the problem reported when it is not.
+pub const ExpectedValue = union(enum) {
+    /// One of these values.
+    choices: []const Choice,
+    /// A sentence stating what the value must be.
+    stated: []const u8,
+};
+
+/// A value a flag accepts, and what choosing it means.
+pub const Choice = struct {
+    name: []const u8,
+    description: []const u8,
 };
 
 /// The optimization strategy for the compilation of a Roc program
@@ -173,7 +187,7 @@ fn extractReplaceDeps(alloc: mem.Allocator, args: []const []const u8) mem.Alloca
                 problem = .{ .invalid_flag_value = .{
                     .flag = replace_dep_flag,
                     .value = arg[replace_dep_flag.len + 1 ..],
-                    .valid_options = "two separate arguments: --replace-dep OLD NEW",
+                    .expected = .{ .stated = "The flag takes two separate arguments instead: --replace-dep OLD NEW." },
                 } };
                 continue;
             }
@@ -188,7 +202,7 @@ fn extractReplaceDeps(alloc: mem.Allocator, args: []const []const u8) mem.Alloca
             if (problem == null) problem = .{ .invalid_flag_value = .{
                 .flag = replace_dep_flag,
                 .value = args[i + 1],
-                .valid_options = "at most 32 replacements per invocation",
+                .expected = .{ .stated = std.fmt.comptimePrint("A single invocation can replace at most {d} dependencies.", .{ReplaceDepArgs.max}) },
             } };
         } else {
             replace_deps.items[replace_deps.len] = .{ .old = args[i + 1], .new = args[i + 2] };
@@ -378,7 +392,9 @@ const FlagForm = enum {
     /// `--name`, matched exactly. Sets a `bool` field; a flag with no field is
     /// accepted and changes nothing.
     toggle,
-    /// `--name=<value>`, matched by prefix.
+    /// `--name=<value>`: matched when the argument is `--name` exactly (a
+    /// missing value) or starts with `--name=`. The short spelling's value
+    /// follows it directly, so the short spelling is matched by prefix.
     attached,
     /// `--name <value>`, matched exactly, taking the next argument as its value.
     separate,
@@ -386,7 +402,7 @@ const FlagForm = enum {
     terminator,
     /// Matched exactly; the command answers with the compiler's version.
     version,
-    /// Matched by prefix and refused as an unexpected argument.
+    /// Matched like `attached` and refused as an unexpected argument.
     rejected,
     /// Listed in help only; another part of argument parsing consumes it.
     documented,
@@ -411,7 +427,8 @@ const Flag = struct {
     /// appends what the declaration already states: the accepted `levels`,
     /// the `range`, and the field's default.
     help: ?[]const u8 = null,
-    /// What an integer value must be, for the problem reported when it is not.
+    /// What an integer value must be, as the end of "The value must be ...",
+    /// for the problem reported when it is not.
     valid: []const u8 = "",
     /// Inclusive bounds of an integer value.
     range: ?[2]i32 = null,
@@ -433,7 +450,7 @@ const Flag = struct {
         var text: []const u8 = flag.help.?;
         const path = flag.field orelse return text;
         const field = fieldInfoAt(Parsed, path);
-        if (field.type == OptLevel) text = text ++ " " ++ optLevelList(flag.levels, .described);
+        if (field.type == OptLevel) text = text ++ " " ++ optLevelHelp(flag.levels);
         if (flag.range) |range| text = text ++ std.fmt.comptimePrint(" ({d}-{d})", .{ range[0], range[1] });
         const default = field.defaultValue() orelse return text;
         if (field.type == OptLevel) return text ++ " [default: " ++ @tagName(default) ++ "]";
@@ -443,19 +460,33 @@ const Flag = struct {
     }
 };
 
-/// `levels` by name: comma-separated for a problem's valid options, or each
-/// with its description for help.
-fn optLevelList(comptime levels: []const OptLevel, comptime style: enum { names, described }) []const u8 {
+/// `levels`, each with its description, for help.
+fn optLevelHelp(comptime levels: []const OptLevel) []const u8 {
     var text: []const u8 = "";
     for (levels, 0..) |level, index| {
-        text = text ++ switch (style) {
-            .names => (if (index == 0) "" else ",") ++ @tagName(level),
-            .described => (if (index == 0) "" else if (index + 1 == levels.len) ", or " else ", ") ++
-                @tagName(level) ++ " (" ++ level.description() ++ ")",
-        };
+        text = text ++ (if (index == 0) "" else if (index + 1 == levels.len) ", or " else ", ") ++
+            @tagName(level) ++ " (" ++ level.description() ++ ")";
     }
     return text;
 }
+
+/// `levels` as the choices a problem with an `OptLevel` value lists.
+fn optLevelChoices(comptime levels: []const OptLevel) []const Choice {
+    comptime {
+        var choices: [levels.len]Choice = undefined;
+        for (levels, &choices) |level, *choice| {
+            choice.* = .{ .name = @tagName(level), .description = level.description() };
+        }
+        const final = choices;
+        return &final;
+    }
+}
+
+/// The values `--specialize` accepts, as `SpecializationStrategy.fromCliValue` reads them.
+const specialization_choices = [_]Choice{
+    .{ .name = "yes", .description = "lambda-set specialization (default)" },
+    .{ .name = "no", .description = "experimental boxy lowering" },
+};
 
 /// A struct field's name, type and default, in the shape the argument checks read.
 const FieldInfo = struct {
@@ -537,8 +568,9 @@ const Command = struct {
     rest: ?[]const u8 = null,
     /// The one element `rest` holds when no argument reached it.
     rest_default: ?[]const u8 = null,
-    /// Which unrecognized arguments are problems rather than positional arguments.
-    refuses: enum { nothing, dashed, double_dashed } = .nothing,
+    /// Which unrecognized arguments are problems rather than positional
+    /// arguments. An argument after `--` is never refused.
+    refuses: enum { double_dashed, dashed } = .double_dashed,
     /// The fields no argument sets: the command's implementation fills them.
     derived: []const []const u8 = &.{},
 
@@ -570,18 +602,10 @@ const Command = struct {
     /// Compile error unless the command and its args struct account for each
     /// other: every struct field is set by exactly one of a flag, a positional
     /// argument, `rest`, or the implementation (`derived`); a field with no
-    /// default is always set; and no prefix-matched flag shadows another.
+    /// default is always set.
     fn check(comptime cmd: Command) void {
         @setEvalBranchQuota(100_000);
         const flags = cmd.allFlags();
-        for (flags, 0..) |flag, index| {
-            if (flag.form != .attached and flag.form != .rejected) continue;
-            for (flags, 0..) |other, other_index| {
-                if (index != other_index and other.form != .documented and mem.startsWith(u8, other.name, flag.name)) {
-                    @compileError(flag.name ++ " is matched by prefix, so it would also match " ++ other.name);
-                }
-            }
-        }
 
         const Parsed = cmd.Args();
         if (Parsed == void) return;
@@ -660,7 +684,7 @@ const limit_flags = [_]Flag{
         .form = .attached,
         .field = "resolve_limits.max_package_mb",
         .value_name = "<N>",
-        .valid = "size in MB (0 for unlimited)",
+        .valid = "a size in MB (0 for unlimited)",
         .help = std.fmt.comptimePrint("Per-package decompressed size limit in MB (default: {d}, 0 for unlimited)", .{
             ResolutionConfig.default_max_package_expanded_bytes / bytes_per_mb,
         }),
@@ -670,7 +694,7 @@ const limit_flags = [_]Flag{
         .form = .attached,
         .field = "resolve_limits.max_transitive_mb",
         .value_name = "<N>",
-        .valid = "size in MB (0 for unlimited)",
+        .valid = "a size in MB (0 for unlimited)",
         .help = std.fmt.comptimePrint(
             \\Combined size limit in MB for each direct dependency's transitive packages
             \\(defaults: packages {d}, platforms {d}; 0 for unlimited)
@@ -723,7 +747,7 @@ const tier2_objects_flag: Flag = .{ .name = "--tier2-objects", .form = .attached
 const watch_inputs_file_flag: Flag = .{ .name = "--watch-inputs-file", .form = .attached, .field = "watch_inputs_file" };
 
 fn jobsFlag(comptime help: []const u8) Flag {
-    return .{ .name = "--jobs", .short = "-j", .form = .attached, .field = "max_threads", .value_name = "<N>", .valid = "positive integer", .help = help };
+    return .{ .name = "--jobs", .short = "-j", .form = .attached, .field = "max_threads", .value_name = "<N>", .valid = "a positive integer", .help = help };
 }
 
 const jobs_flag = jobsFlag("Max worker threads for parallel compilation (default: auto-detect CPU count)");
@@ -812,8 +836,8 @@ const commands = [_]Command{
             watch_inputs_file_flag,
             tier2_objects_flag,
             jobs_flag,
-            .{ .name = "--wasm-memory", .form = .attached, .field = "wasm_memory", .value_name = "<bytes>", .valid = "positive integer (bytes)", .help = "Initial memory size for WASM targets in bytes (default: sized from data segments plus the stack)" },
-            .{ .name = "--wasm-stack-size", .form = .attached, .field = "wasm_stack_size", .value_name = "<bytes>", .valid = "positive integer (bytes)", .help = std.fmt.comptimePrint("Stack size for WASM targets in bytes (default: {d} = {d}MB)", .{ linker.DEFAULT_WASM_STACK_SIZE, linker.DEFAULT_WASM_STACK_SIZE / bytes_per_mb }) },
+            .{ .name = "--wasm-memory", .form = .attached, .field = "wasm_memory", .value_name = "<bytes>", .valid = "a positive integer number of bytes", .help = "Initial memory size for WASM targets in bytes (default: sized from data segments plus the stack)" },
+            .{ .name = "--wasm-stack-size", .form = .attached, .field = "wasm_stack_size", .value_name = "<bytes>", .valid = "a positive integer number of bytes", .help = std.fmt.comptimePrint("Stack size for WASM targets in bytes (default: {d} = {d}MB)", .{ linker.DEFAULT_WASM_STACK_SIZE, linker.DEFAULT_WASM_STACK_SIZE / bytes_per_mb }) },
         },
         .resolve = .limits_and_replace_deps,
         .min_column = 37,
@@ -844,7 +868,6 @@ const commands = [_]Command{
         },
         .rest = "paths",
         .rest_default = default_roc_file,
-        .refuses = .double_dashed,
     },
     .{
         .name = "unbundle",
@@ -1061,7 +1084,6 @@ const commands = [_]Command{
         },
         .resolve = .limits,
         .positionals = &.{.{ .field = "path" }},
-        .refuses = .double_dashed,
         .derived = &.{"root_source_url"},
     },
     .{
@@ -1269,9 +1291,11 @@ fn parseArgsFor(comptime cmd: Command, alloc: mem.Allocator, args: []const []con
                     .attached => {
                         var written: ?[]const u8 = null;
                         var maybe_value: ?[]const u8 = null;
-                        if (mem.startsWith(u8, arg, flag.name)) {
+                        if (mem.eql(u8, arg, flag.name)) {
                             written = flag.name;
-                            maybe_value = getFlagValue(arg);
+                        } else if (mem.startsWith(u8, arg, flag.name ++ "=")) {
+                            written = flag.name;
+                            maybe_value = arg[flag.name.len + 1 ..];
                         } else if (flag.short) |short| {
                             if (mem.startsWith(u8, arg, short)) {
                                 written = short;
@@ -1298,13 +1322,12 @@ fn parseArgsFor(comptime cmd: Command, alloc: mem.Allocator, args: []const []con
                         continue :next_arg;
                     },
                     .version => if (mem.eql(u8, arg, flag.name) or mem.eql(u8, arg, flag.short.?)) return .version,
-                    .rejected => if (mem.startsWith(u8, arg, flag.name)) return unexpectedArgument(cmd.name, arg),
+                    .rejected => if (mem.eql(u8, arg, flag.name) or mem.startsWith(u8, arg, flag.name ++ "=")) return unexpectedArgument(cmd.name, arg),
                     .documented => {},
                 }
             }
 
             const refused = switch (cmd.refuses) {
-                .nothing => false,
                 .dashed => mem.startsWith(u8, arg, "-"),
                 .double_dashed => mem.startsWith(u8, arg, "--"),
             };
@@ -1346,15 +1369,15 @@ fn parseArgsFor(comptime cmd: Command, alloc: mem.Allocator, args: []const []con
 /// the field accepts; `written` is the spelling of the flag to report.
 fn setFlagValue(comptime flag: Flag, field: anytype, written: []const u8, value: []const u8) ?ArgProblem {
     const Field = @TypeOf(field.*);
-    const valid_options: []const u8 = comptime if (Field == OptLevel)
-        optLevelList(flag.levels, .names)
+    const expected: ExpectedValue = comptime if (Field == OptLevel)
+        .{ .choices = optLevelChoices(flag.levels) }
     else if (Field == ?SpecializationStrategy)
-        SpecializationStrategy.cliOptions()
+        .{ .choices = &specialization_choices }
     else if (flag.range) |range|
-        std.fmt.comptimePrint("integer between {d} and {d}", .{ range[0], range[1] })
+        .{ .stated = std.fmt.comptimePrint("The value must be an integer between {d} and {d}.", .{ range[0], range[1] }) }
     else
-        flag.valid;
-    const invalid: ArgProblem = .{ .invalid_flag_value = .{ .flag = written, .value = value, .valid_options = valid_options } };
+        .{ .stated = "The value must be " ++ flag.valid ++ "." };
+    const invalid: ArgProblem = .{ .invalid_flag_value = .{ .flag = written, .value = value, .expected = expected } };
 
     if (Field == []const u8 or Field == ?[]const u8) {
         field.* = value;
@@ -1369,6 +1392,7 @@ fn setFlagValue(comptime flag: Flag, field: anytype, written: []const u8, value:
     } else if (Field == ?SpecializationStrategy) {
         field.* = SpecializationStrategy.fromCliValue(value) orelse return invalid;
     } else {
+        if (comptime flag.range == null and flag.valid.len == 0) @compileError(flag.name ++ " takes an integer, so it must state what the integer must be");
         const Int = if (@typeInfo(Field) == .optional) @typeInfo(Field).optional.child else Field;
         const number = std.fmt.parseInt(Int, value, 10) catch return invalid;
         if (flag.range) |range| {
@@ -1421,13 +1445,6 @@ fn isHelpFlag(arg: []const u8) bool {
     return mem.eql(u8, arg, "-h") or mem.eql(u8, arg, "--help");
 }
 
-fn getFlagValue(arg: []const u8) ?[]const u8 {
-    var iter = mem.splitScalar(u8, arg, '=');
-    // ignore the flag key
-    _ = iter.next();
-    return iter.next();
-}
-
 test "specialization strategy parsing" {
     const gpa = testing.allocator;
 
@@ -1462,7 +1479,7 @@ test "specialization strategy parsing" {
         defer result.deinit(gpa);
         try testing.expectEqualStrings("--specialize", result.problem.invalid_flag_value.flag);
         try testing.expectEqualStrings("maybe", result.problem.invalid_flag_value.value);
-        try testing.expectEqualStrings("yes,no", result.problem.invalid_flag_value.valid_options);
+        try expectChoiceNames(&.{ "yes", "no" }, result.problem.invalid_flag_value.expected);
     }
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "build", "--specialize=no" });
@@ -1748,7 +1765,12 @@ test "roc build" {
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "build", "--thisisactuallyafile" });
         defer result.deinit(gpa);
-        try testing.expectEqualStrings("--thisisactuallyafile", result.build.path);
+        try testing.expectEqualStrings("--thisisactuallyafile", result.problem.unexpected_argument.arg);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "build", "./--thisisactuallyafile" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("./--thisisactuallyafile", result.build.path);
     }
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "build", "--keep-temp" });
@@ -2107,7 +2129,7 @@ test "roc glue" {
         defer result.deinit(gpa);
         try testing.expectEqualStrings("--opt", result.problem.invalid_flag_value.flag);
         try testing.expectEqualStrings("interpreter", result.problem.invalid_flag_value.value);
-        try testing.expectEqualStrings("dev,size,speed", result.problem.invalid_flag_value.valid_options);
+        try expectChoiceNames(&.{ "dev", "size", "speed" }, result.problem.invalid_flag_value.expected);
     }
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "glue", "-h" });
@@ -2466,6 +2488,36 @@ test "roc run subcommand" {
     }
 }
 
+// A flag that merely starts with the name of a real flag is not that flag.
+test "flags are not matched by prefix" {
+    const gpa = testing.allocator;
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "run", "--optBORK=speed", "main.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(.problem, std.meta.activeTag(result));
+        try testing.expectEqualStrings("--optBORK=speed", result.problem.unexpected_argument.arg);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "--optBORK=speed", "main.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(.problem, std.meta.activeTag(result));
+        try testing.expectEqualStrings("--optBORK=speed", result.problem.unexpected_argument.arg);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "build", "--optBORK=speed", "main.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(.problem, std.meta.activeTag(result));
+        try testing.expectEqualStrings("--optBORK=speed", result.problem.unexpected_argument.arg);
+    }
+}
+
+test "an attached flag's value is everything after its first =" {
+    const gpa = testing.allocator;
+    const result = try parse(gpa, testing.io, &[_][]const u8{ "build", "--output=out/a=b", "main.roc" });
+    defer result.deinit(gpa);
+    try testing.expectEqualStrings("out/a=b", result.build.output.?);
+}
+
 test "bare shorthand requires the run subcommand" {
     const gpa = testing.allocator;
     {
@@ -2745,34 +2797,39 @@ test "roc test takes --main with an attached value, as its help says" {
     }
 }
 
+fn expectChoiceNames(names: []const []const u8, expected: ExpectedValue) error{TestExpectedEqual}!void {
+    try testing.expectEqual(names.len, expected.choices.len);
+    for (names, expected.choices) |name, choice| try testing.expectEqualStrings(name, choice.name);
+}
+
 test "the valid options of --opt are the levels the command accepts" {
     const gpa = testing.allocator;
     {
         const result = try parse(gpa, testing.io, &.{ "build", "--opt=fast" });
-        try testing.expectEqualStrings("dev,interpreter,speed,size", result.problem.invalid_flag_value.valid_options);
+        try expectChoiceNames(&.{ "dev", "interpreter", "speed", "size" }, result.problem.invalid_flag_value.expected);
     }
     {
         const result = try parse(gpa, testing.io, &.{ "glue", "--opt=fast", "Glue.roc", "out" });
-        try testing.expectEqualStrings("dev,size,speed", result.problem.invalid_flag_value.valid_options);
+        try expectChoiceNames(&.{ "dev", "size", "speed" }, result.problem.invalid_flag_value.expected);
     }
 }
 
 test "numeric flag values report what they must be" {
     const gpa = testing.allocator;
-    const cases = [_]struct { args: []const []const u8, flag: []const u8, valid_options: []const u8 }{
-        .{ .args = &.{ "bundle", "--compression", "23" }, .flag = "--compression", .valid_options = "integer between 1 and 22" },
-        .{ .args = &.{ "bundle", "--compression", "0" }, .flag = "--compression", .valid_options = "integer between 1 and 22" },
-        .{ .args = &.{ "bundle", "--compression", "x" }, .flag = "--compression", .valid_options = "integer between 1 and 22" },
-        .{ .args = &.{ "build", "--wasm-memory=x" }, .flag = "--wasm-memory", .valid_options = "positive integer (bytes)" },
-        .{ .args = &.{ "build", "--wasm-stack-size=-1" }, .flag = "--wasm-stack-size", .valid_options = "positive integer (bytes)" },
-        .{ .args = &.{ "check", "--max-package-mb=x" }, .flag = "--max-package-mb", .valid_options = "size in MB (0 for unlimited)" },
-        .{ .args = &.{ "check", "--jobs=x" }, .flag = "--jobs", .valid_options = "positive integer" },
+    const cases = [_]struct { args: []const []const u8, flag: []const u8, stated: []const u8 }{
+        .{ .args = &.{ "bundle", "--compression", "23" }, .flag = "--compression", .stated = "The value must be an integer between 1 and 22." },
+        .{ .args = &.{ "bundle", "--compression", "0" }, .flag = "--compression", .stated = "The value must be an integer between 1 and 22." },
+        .{ .args = &.{ "bundle", "--compression", "x" }, .flag = "--compression", .stated = "The value must be an integer between 1 and 22." },
+        .{ .args = &.{ "build", "--wasm-memory=x" }, .flag = "--wasm-memory", .stated = "The value must be a positive integer number of bytes." },
+        .{ .args = &.{ "build", "--wasm-stack-size=-1" }, .flag = "--wasm-stack-size", .stated = "The value must be a positive integer number of bytes." },
+        .{ .args = &.{ "check", "--max-package-mb=x" }, .flag = "--max-package-mb", .stated = "The value must be a size in MB (0 for unlimited)." },
+        .{ .args = &.{ "check", "--jobs=x" }, .flag = "--jobs", .stated = "The value must be a positive integer." },
     };
     for (cases) |case| {
         const result = try parse(gpa, testing.io, case.args);
         defer result.deinit(gpa);
         try testing.expectEqualStrings(case.flag, result.problem.invalid_flag_value.flag);
-        try testing.expectEqualStrings(case.valid_options, result.problem.invalid_flag_value.valid_options);
+        try testing.expectEqualStrings(case.stated, result.problem.invalid_flag_value.expected.stated);
     }
     {
         const result = try parse(gpa, testing.io, &.{ "bundle", "--compression", "22", "--output-dir", "out", "a.roc" });

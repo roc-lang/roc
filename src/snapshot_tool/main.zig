@@ -220,8 +220,11 @@ const ProblemEntry = struct {
     start_col: u32,
     end_line: u32,
     end_col: u32,
+    /// The report is about `file` as a whole and has no position in it.
+    file_level: bool,
 
     fn format(self: ProblemEntry, writer: anytype) (Allocator.Error || error{WriteFailed})!void {
+        if (self.file_level) return writer.print("{s} - {s}", .{ self.problem_type, self.file });
         try writer.print("{s} - {s}:{d}:{d}:{d}:{d}", .{
             self.problem_type,
             self.file,
@@ -400,9 +403,10 @@ fn shoutedDupe(allocator: std.mem.Allocator, s: []const u8) Allocator.Error![]u8
     return try shouted.toOwnedSlice();
 }
 
-const RegionLoc = struct { file: []const u8, sl: u32, sc: u32, el: u32, ec: u32 };
+const RegionLoc = struct { file: []const u8, sl: u32, sc: u32, el: u32, ec: u32, file_level: bool = false };
 
-/// Pull the first source region out of a report for the EXPECTED location.
+/// Pull the first source region out of a report for the EXPECTED location, or
+/// the file a report without one is about.
 fn reportRegionLoc(report: *const reporting.Report) RegionLoc {
     for (report.document.elements.items) |el| {
         switch (el) {
@@ -441,6 +445,7 @@ fn reportRegionLoc(report: *const reporting.Report) RegionLoc {
             => {},
         }
     }
+    if (report.file) |file| return .{ .file = sanitiseSnapshotPath(file), .sl = 0, .sc = 0, .el = 0, .ec = 0, .file_level = true };
     return .{ .file = "", .sl = 0, .sc = 0, .el = 0, .ec = 0 };
 }
 
@@ -470,6 +475,7 @@ fn renderReportsToExpectedContent(allocator: std.mem.Allocator, reports: *const 
             .start_col = loc.sc,
             .end_line = loc.el,
             .end_col = loc.ec,
+            .file_level = loc.file_level,
         });
     }
 

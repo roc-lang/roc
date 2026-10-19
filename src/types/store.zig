@@ -300,6 +300,13 @@ pub const Store = struct {
     /// these so a folded relation's dispatch names the retained relation's
     /// target instantiation.
     static_dispatch_relation_merges: std.ArrayListUnmanaged(StaticDispatchRelationMerge) = .empty,
+    /// Unused room reserved directly after a constraint range, keyed by the
+    /// range's end and holding the room's end, so a receiver whose
+    /// requirements grow one use at a time extends its own list in place
+    /// rather than copying it (`appendStaticDispatchConstraintsAfter`). Room
+    /// is neither reserved nor used while a savepoint is active, so a
+    /// rollback never has room to forget.
+    static_dispatch_constraint_room: std.AutoHashMapUnmanaged(u32, u32) = .empty,
 
     /// Init the unification table with default capacity.
     /// For production use with source files, prefer initFromSourceLen() which
@@ -371,6 +378,7 @@ pub const Store = struct {
         self.interpolation_parts.deinit(self.gpa);
         self.static_dispatch_constraints.deinit(self.gpa);
         self.static_dispatch_relation_merges.deinit(self.gpa);
+        self.static_dispatch_constraint_room.deinit(self.gpa);
 
         // nominal declaration table
         self.nominal_decls.deinit(self.gpa);
@@ -1512,6 +1520,54 @@ pub const Store = struct {
     pub fn appendInterpolationParts(self: *Self, slice: []const InterpolationPartMetadata) std.mem.Allocator.Error!InterpolationPartMetadata.SafeList.Range {
         return try self.interpolation_parts.appendSlice(self.gpa, slice);
     }
+
+    /// The range holding `prefix`'s constraints followed by `suffix`. When the
+    /// room reserved after `prefix` fits `suffix`, `prefix` grows in place;
+    /// otherwise both are copied to the end of the list, and a list of at
+    /// least `min_constraint_room` constraints reserves as much room again
+    /// after itself, so a list built one append at a time is copied a
+    /// logarithmic number of times.
+    pub fn appendStaticDispatchConstraintsAfter(
+        self: *Self,
+        prefix: StaticDispatchConstraint.SafeList.Range,
+        suffix: []const StaticDispatchConstraint,
+    ) std.mem.Allocator.Error!StaticDispatchConstraint.SafeList.Range {
+        const list = &self.static_dispatch_constraints.items;
+        const start: u32 = @backingInt(prefix.start);
+        const end: u32 = start + @as(u32, @intCast(prefix.count));
+        if (!self.savepoint_active) {
+            if (self.static_dispatch_constraint_room.get(end)) |room_end| {
+                if (room_end - end >= suffix.len) {
+                    std.debug.assert(room_end <= list.items.len);
+                    @memcpy(list.items[end..][0..suffix.len], suffix);
+                    std.debug.assert(self.static_dispatch_constraint_room.remove(end));
+                    const new_end: u32 = end + @as(u32, @intCast(suffix.len));
+                    if (new_end < room_end) try self.static_dispatch_constraint_room.put(self.gpa, new_end, room_end);
+                    return .{ .start = prefix.start, .count = @intCast(new_end - start) };
+                }
+            }
+        }
+        const total: usize = @as(usize, prefix.count) + suffix.len;
+        const room = if (!self.savepoint_active and total >= min_constraint_room) total else 0;
+        try list.ensureUnusedCapacity(self.gpa, total + room);
+        if (room != 0) try self.static_dispatch_constraint_room.ensureUnusedCapacity(self.gpa, 1);
+        const new_start: u32 = @intCast(list.items.len);
+        list.appendSliceAssumeCapacity(list.items[start..end]);
+        list.appendSliceAssumeCapacity(suffix);
+        if (room != 0) {
+            // The room holds copies of the last constraint until a later
+            // append overwrites them; no range covers them.
+            const last = list.items[list.items.len - 1];
+            list.appendNTimesAssumeCapacity(last, room);
+            const new_end: u32 = new_start + @as(u32, @intCast(total));
+            self.static_dispatch_constraint_room.putAssumeCapacity(new_end, new_end + @as(u32, @intCast(room)));
+        }
+        return .{ .start = @fromBackingInt(new_start), .count = @intCast(total) };
+    }
+
+    /// The smallest constraint list `appendStaticDispatchConstraintsAfter`
+    /// reserves room after.
+    const min_constraint_room = 8;
 
     /// Append static dispatch constraints to the backing list, returning the range
     pub fn appendStaticDispatchConstraints(self: *Self, s: []const StaticDispatchConstraint) std.mem.Allocator.Error!StaticDispatchConstraint.SafeList.Range {

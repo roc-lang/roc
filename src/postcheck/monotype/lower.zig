@@ -110,7 +110,7 @@ const CommittedGraphTypes = struct {
         };
     }
 
-    /// Commit already-sealed types from an immutable copied workspace
+    /// Commit already-sealed types from an immutable view of a workspace
     /// domain. Coordinator commit deliberately has no graph or graph sealer.
     fn relocatedStore(
         source_store: *Type.Store,
@@ -287,9 +287,10 @@ pub const Options = struct {
     proc_debug_names: bool = false,
     /// The object cache to ask for closed specializations at reservation.
     spec_cache: ?Common.SpecCacheLookup = null,
-    /// Whether this program's code is linked, so the cache may serve it a
-    /// linked-object entry (`Common.SpecCacheHit.c_abi_entry`).
-    spec_cache_accepts_linked: bool = false,
+    /// Which cache entries can serve this program: whether its code is
+    /// linked, so a linked-object entry (`Common.SpecCacheHit.c_abi_entry`)
+    /// can, and whether its emitter splices dev code.
+    spec_cache_takes: Common.SpecCacheTakes = .dev_code,
     /// Optional deterministic counters for specialization-shape tests.
     specialization_counters: ?*SpecializationCounters = null,
     /// Optional deterministic workload diagnostics. The checked pipeline
@@ -4198,31 +4199,37 @@ const SpecJobEpoch = enum(u64) { _ };
 /// Stable specialization workspace identity used to preserve per-worker epochs.
 pub const SpecJobWorkerId = enum(u32) { serial = std.math.maxInt(u32), _ };
 
-/// Result-owned type/name suffix from one specialization workspace epoch.
+/// The type and name stores of one specialization workspace epoch, as prefix
+/// views the coordinator reads in place.
 ///
-/// Dense ids remain in the workspace domain. Ordered coordinator absorption
-/// copies that domain before relocating reachable roots into the program.
+/// Dense ids remain in the workspace domain. The workspace never moves or
+/// rewrites a row below a captured boundary, and it keeps every backing a
+/// view reads alive until the coordinator has absorbed the epoch, so the
+/// views stay valid while the lane keeps lowering past them.
 const SpecJobStoreEpoch = struct {
-    types: Type.Store.EpochDelta,
-    names: names.NameStore.EpochDelta,
-
-    fn deinit(self: *SpecJobStoreEpoch) void {
-        self.names.deinit();
-        self.types.deinit();
-        self.* = undefined;
-    }
+    epoch: SpecJobEpoch,
+    /// The boundaries at which the workspace's previous epoch ended.
+    begin_types: Type.Store.EpochBoundary,
+    begin_names: names.NameStore.EpochBoundary,
+    types: Type.Store.PrefixView,
+    names: names.NameStore.PrefixView,
 };
 
 /// Persistent private type/name domain for serialized ordinary specialization jobs.
-/// Exactly one mutable graph/draft writer may borrow it at a time. Captured
-/// type/name suffixes own their bytes, so completed results do not retain that
+/// Exactly one mutable graph/draft writer may borrow it at a time. Completed
+/// results read its stores through prefix views, so they do not retain that
 /// borrow and the next writer can begin before ordered coordinator acceptance.
 const SpecJobWorkspace = struct {
     allocator: Allocator,
     types: Type.Store,
     name_store: names.NameStore,
+    /// Store backings growth replaced while an unabsorbed epoch's views may
+    /// still read them. A backing replaced after epoch `e` was captured is
+    /// tagged `e + 1`: only views of epochs up to `e` can reach it.
+    superseded: collections.SupersededBackings = .{},
+    /// This lane's own summaries the coordinator has not yet shared back to
+    /// it; summaries the coordinator shares are read from its table.
     interface_summaries: InterfaceSummaryCache,
-    captured_interface_summaries: usize = 0,
     checked_type_cache: std.AutoHashMap(CheckedTypeAddress, Type.TypeId),
     captured_types: Type.Store.EpochBoundary,
     captured_names: names.NameStore.EpochBoundary,
@@ -4264,6 +4271,10 @@ const SpecJobWorkspace = struct {
         if (self.next_epoch == std.math.maxInt(u64)) {
             Common.compilerBug("Monotype specialization workspace exhausted epoch identities");
         }
+        // The workspace has its final address once it lowers an epoch, and
+        // every view is captured after this point.
+        self.types.superseded = &self.superseded;
+        self.name_store.superseded = &self.superseded;
         const epoch: SpecJobEpoch = @fromBackingInt(@intCast(self.next_epoch));
         self.next_epoch += 1;
         self.active_epoch = epoch;
@@ -4281,29 +4292,40 @@ const SpecJobWorkspace = struct {
         self.active_epoch = null;
     }
 
+    /// Capture this epoch's stores as prefix views and hand the epoch's own
+    /// interface summaries to its shard: they stay in this cache, sealed
+    /// under the epoch, until the coordinator shares them back.
     fn captureStoreEpoch(
         self: *SpecJobWorkspace,
         epoch: SpecJobEpoch,
     ) Allocator.Error!SpecJobStoreEpoch {
         self.requireEpoch(epoch);
-        const type_end = self.types.epochBoundary();
-        const name_end = self.name_store.epochBoundary();
-        var type_segment = try Type.Store.EpochDelta.capture(
-            self.allocator,
-            &self.types,
-            self.captured_types,
-            type_end,
-        );
-        errdefer type_segment.deinit();
-        const name_segment = try names.NameStore.EpochDelta.capture(
-            self.allocator,
-            &self.name_store,
-            self.captured_names,
-            name_end,
-        );
-        self.captured_types = type_end;
-        self.captured_names = name_end;
-        return .{ .types = type_segment, .names = name_segment };
+        try self.interface_summaries.sealSegment(epoch);
+        const captured: SpecJobStoreEpoch = .{
+            .epoch = epoch,
+            .begin_types = self.captured_types,
+            .begin_names = self.captured_names,
+            .types = self.types.capturePrefix(self.captured_types),
+            .names = self.name_store.capturePrefix(),
+        };
+        self.captured_types = captured.types.boundary();
+        self.captured_names = captured.names.boundary();
+        // A backing replaced from now on may be read by this epoch's views,
+        // so it stays alive until the coordinator absorbs a later epoch.
+        self.superseded.generation = @backingInt(epoch) + 1;
+        return captured;
+    }
+
+    /// Release what the coordinator no longer reads: store backings no
+    /// absorbed view can reach, and own summaries the coordinator has
+    /// shared within `visible_summary_end`, the entry count of the
+    /// coordinator table this lane's next task reads. A null end means the
+    /// lane reads the coordinator's table directly, so every absorbed
+    /// epoch's summaries are visible.
+    fn releaseCoordinatorReads(self: *SpecJobWorkspace, releases: *SpecJobReleases, visible_summary_end: ?usize) Allocator.Error!void {
+        const released = releases.take(visible_summary_end);
+        if (released.absorbed) |absorbed| self.superseded.releaseThrough(self.allocator, @backingInt(absorbed));
+        if (released.summaries) |summaries| try self.interface_summaries.releaseSegmentsThrough(summaries);
     }
 
     fn programTypeRelocation(
@@ -4350,6 +4372,7 @@ const SpecJobWorkspace = struct {
         self.checked_type_cache.deinit();
         self.types.deinit();
         self.name_store.deinit();
+        self.superseded.deinit(self.allocator);
         self.* = undefined;
     }
 };
@@ -4391,37 +4414,109 @@ pub const SpecJobWorkerState = struct {
     }
 };
 
-/// Cumulative copy of one worker's type/name domain. Executor lanes own their
-/// copy for the pool lifetime; the serial path owns an equivalent directly.
-/// Only the coordinator mutates it, in dispatch order, before any contained id
-/// is read.
+/// Coordinator-to-lane notices of the captured epochs the coordinator has
+/// finished reading. The coordinator writes them in ordered commit; the lane
+/// takes them before each task, while no view it captured is being built.
+const SpecJobReleases = struct {
+    mutex: std.atomic.Mutex = .unlocked,
+    /// The latest epoch the coordinator absorbed. It reads only that epoch's
+    /// views and newer ones, which reach no backing replaced during it.
+    absorbed: ?SpecJobEpoch = null,
+    /// Absorbed epochs whose interface summaries the coordinator shared with
+    /// workers, each with the first shared entry count that includes them.
+    shared: std.ArrayList(SharedSummaryEpoch) = .empty,
+
+    const SharedSummaryEpoch = struct {
+        epoch: SpecJobEpoch,
+        visible_end: usize,
+    };
+
+    const Taken = struct {
+        absorbed: ?SpecJobEpoch,
+        summaries: ?SpecJobEpoch,
+    };
+
+    fn lock(self: *SpecJobReleases) void {
+        while (!self.mutex.tryLock()) std.atomic.spinLoopHint();
+    }
+
+    fn noteAbsorbed(self: *SpecJobReleases, epoch: SpecJobEpoch) void {
+        self.lock();
+        defer self.mutex.unlock();
+        self.absorbed = epoch;
+    }
+
+    fn noteShared(self: *SpecJobReleases, allocator: Allocator, shared: SharedSummaryEpoch) Allocator.Error!void {
+        self.lock();
+        defer self.mutex.unlock();
+        try self.shared.append(allocator, shared);
+    }
+
+    /// Take the notices a lane may act on before a task whose coordinator
+    /// summary table ends at `visible_summary_end`, or that reads the
+    /// coordinator's table directly when it is null.
+    fn take(self: *SpecJobReleases, visible_summary_end: ?usize) Taken {
+        self.lock();
+        defer self.mutex.unlock();
+        const end = visible_summary_end orelse {
+            self.shared.clearRetainingCapacity();
+            return .{ .absorbed = self.absorbed, .summaries = self.absorbed };
+        };
+        var summaries: ?SpecJobEpoch = null;
+        var taken: usize = 0;
+        for (self.shared.items) |shared| {
+            if (shared.visible_end > end) break;
+            summaries = shared.epoch;
+            taken += 1;
+        }
+        const remaining = self.shared.items.len - taken;
+        std.mem.copyForwards(SharedSummaryEpoch, self.shared.items[0..remaining], self.shared.items[taken..]);
+        self.shared.shrinkRetainingCapacity(remaining);
+        return .{ .absorbed = self.absorbed, .summaries = summaries };
+    }
+
+    fn deinit(self: *SpecJobReleases, allocator: Allocator) void {
+        self.shared.deinit(allocator);
+        self.* = undefined;
+    }
+};
+
+/// The coordinator's read access to one worker's type/name domain: views of
+/// the latest absorbed epoch's stores, read in place, and the cumulative
+/// relocation from that domain into the program. Executor lanes own their
+/// domain for the pool lifetime; the serial path owns an equivalent directly.
+/// Only the coordinator absorbs epochs, in dispatch order, before any
+/// contained id is read.
 const SpecJobCommitDomain = struct {
     allocator: Allocator,
     types: Type.Store,
     name_store: names.NameStore,
     program: ?*Ast.Program = null,
     relocation: ?Type.Store.TypeRelocation = null,
+    releases: SpecJobReleases = .{},
+    /// The latest absorbed epoch whose summaries the coordinator has not
+    /// shared with workers yet. Coordinator only.
+    unshared: ?SpecJobEpoch = null,
 
     fn init(allocator: Allocator) SpecJobCommitDomain {
         return .{
             .allocator = allocator,
-            .types = Type.Store.init(allocator),
-            .name_store = names.NameStore.init(allocator),
+            .types = Type.Store.borrowPrefix(allocator, Type.Store.PrefixView.empty),
+            .name_store = names.NameStore.borrowPrefix(allocator, names.NameStore.PrefixView.empty),
         };
     }
 
-    fn absorb(self: *SpecJobCommitDomain, epoch: *const SpecJobStoreEpoch) Allocator.Error!void {
-        if (!std.meta.eql(self.name_store.epochBoundary(), epoch.names.begin) or
-            !std.meta.eql(self.types.epochBoundary(), epoch.types.begin))
+    /// Read the worker's domain through `epoch`'s views from now on.
+    fn absorb(self: *SpecJobCommitDomain, epoch: *const SpecJobStoreEpoch) void {
+        if (!std.meta.eql(self.name_store.epochBoundary(), epoch.begin_names) or
+            !std.meta.eql(self.types.epochBoundary(), epoch.begin_types))
         {
             Common.compilerBug("specialization worker epochs reached ordered commit out of sequence");
         }
-        // Reserve both stores before advancing either durable boundary. An OOM
-        // leaves the epoch retryable and preserves exact cross-store continuity.
-        try epoch.names.prepareAppend(&self.name_store);
-        try epoch.types.prepareAppend(&self.types);
-        epoch.names.appendPrepared(&self.name_store);
-        epoch.types.appendPrepared(&self.types);
+        self.types = Type.Store.borrowPrefix(self.allocator, epoch.types);
+        self.name_store = names.NameStore.borrowPrefix(self.allocator, epoch.names);
+        self.releases.noteAbsorbed(epoch.epoch);
+        self.unshared = epoch.epoch;
     }
 
     fn committedTypeRelocation(
@@ -4449,6 +4544,7 @@ const SpecJobCommitDomain = struct {
 
     fn deinit(self: *SpecJobCommitDomain) void {
         if (self.relocation) |*relocation| relocation.deinit();
+        self.releases.deinit(self.allocator);
         self.types.deinit();
         self.name_store.deinit();
         self.* = undefined;
@@ -4456,7 +4552,7 @@ const SpecJobCommitDomain = struct {
 };
 
 /// Monotype state retained by one executor lane. Keeping the source
-/// workspace and its ordered destination copy together makes their cumulative
+/// workspace and the coordinator's view of it together makes their cumulative
 /// relocation domains follow the worker rather than a particular coordinator
 /// `Builder`. A new Monotype run reinitializes the same retained entry because
 /// its stores belong to a different destination program.
@@ -4509,7 +4605,6 @@ const CompletedSpecJobShard = struct {
         const allocator = self.body_draft.allocator;
         self.body_draft.deinit();
         allocator.free(self.interface_summaries);
-        self.store_epoch.deinit();
         if (self.diagnostics) |diagnostics| {
             allocator.destroy(diagnostics);
         }
@@ -4537,7 +4632,6 @@ const CompletedProcedureRootShard = struct {
         const allocator = self.body_draft.allocator;
         self.body_draft.deinit();
         allocator.free(self.interface_summaries);
-        self.store_epoch.deinit();
         if (self.diagnostics) |diagnostics| allocator.destroy(diagnostics);
         self.* = undefined;
     }
@@ -4954,7 +5048,7 @@ const Builder = struct {
     field_kind_scope_pool: std.ArrayList(*collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind)) = .empty,
     /// The object cache consulted for closed specializations, if any.
     spec_cache: ?Common.SpecCacheLookup,
-    spec_cache_accepts_linked: bool,
+    spec_cache_takes: Common.SpecCacheTakes,
     counters: ?*SpecializationCounters,
     diagnostics: ?*Diagnostics,
     /// Result-owned sink while one ordinary specialization shard is lowering or
@@ -5033,10 +5127,12 @@ const Builder = struct {
     /// Serial execution uses the same worker-tagged ownership protocol as
     /// executor callbacks.
     spec_job_worker: ?SpecJobWorkerState = null,
-    /// Coordinator-owned exact-prefix copy of immutable specialization
-    /// epochs. It is the concrete source for cumulative workspace-to-program
-    /// relocation after worker results stop borrowing the mutable workspace.
+    /// The coordinator's view of the serial worker's absorbed epochs. It is
+    /// the source for cumulative workspace-to-program relocation.
     spec_job_commit_domain: ?SpecJobCommitDomain = null,
+    /// Commit domains with an absorbed epoch whose interface summaries the
+    /// next worker input capture shares.
+    unshared_summary_domains: std.ArrayList(*SpecJobCommitDomain) = .empty,
     spec_job_task_buffers: SpecJobTaskBuffers = .{},
     worker_inputs: WorkerInputs.ProgramInputs = .{},
     shared_summaries: ?SharedSummaries = null,
@@ -5068,11 +5164,6 @@ const Builder = struct {
     /// identity and status live on the `Ast.SpecRecord`.
     lowered_nested_by_fn: collections.DenseMap(Ast.FnId, Ast.SpecId),
     nested_site_cache: std.AutoHashMap(NestedSiteAddress, names.ProcSiteId),
-    /// Each checked expression's reassigned binders in source order (see
-    /// `collectReassignedBindersInExpr`), as spans of
-    /// `reassigned_binder_pool`. They depend only on the checked expression
-    /// and the compilation's expect mode, so every body shares them.
-    reassigned_binders_memo: std.AutoHashMapUnmanaged(ReassignedBinderAddress, ReassignedBinderSpan) = .empty,
     /// Whether each checked type reaches the error type (see
     /// `checkedTypeContainsError`).
     checked_type_contains_error: std.AutoHashMapUnmanaged(CheckedTypeAddress, bool) = .empty,
@@ -5083,7 +5174,6 @@ const Builder = struct {
     /// variable list, for resolving an enclosing variable to its evidence
     /// frame's substitution.
     scheme_var_slots: std.AutoHashMapUnmanaged(SchemeVarsAddress, collections.DenseMapUnmanaged(checked.CheckedTypeId, u32)) = .empty,
-    reassigned_binder_pool: std.ArrayList(checked.PatternBinderId) = .empty,
     const_expr_cache: std.AutoHashMap(ConstExprAddress, Ast.ExprId),
     static_data_ids: std.AutoHashMap(StaticDataUse, Common.StaticDataId),
     /// Static-data uses indexed by `StaticDataId`. These types have crossed the
@@ -5253,7 +5343,7 @@ const Builder = struct {
             .current_region = program.current_region,
             .proc_debug_names = options.proc_debug_names,
             .spec_cache = options.spec_cache,
-            .spec_cache_accepts_linked = options.spec_cache_accepts_linked,
+            .spec_cache_takes = options.spec_cache_takes,
             .counters = counters,
             .diagnostics = options.diagnostics,
             .active_spec_job_diagnostics = null,
@@ -5514,6 +5604,7 @@ const Builder = struct {
         self.comptime_demand.deinit(self.allocator);
         self.module_index.deinit();
         self.spec_job_task_buffers.deinit(self.allocator);
+        self.unshared_summary_domains.deinit(self.allocator);
         if (self.spec_job_commit_domain) |*domain| domain.deinit();
         if (self.spec_job_worker) |*worker| worker.deinit();
         self.scoped_method_targets.deinit(self.allocator);
@@ -5524,13 +5615,11 @@ const Builder = struct {
         self.static_data_ids.deinit();
         self.const_expr_cache.deinit();
         self.nested_site_cache.deinit();
-        self.reassigned_binders_memo.deinit(self.allocator);
         self.checked_type_contains_error.deinit(self.allocator);
         self.checked_type_representation_fixed.deinit(self.allocator);
         var scheme_var_slots = self.scheme_var_slots.valueIterator();
         while (scheme_var_slots.next()) |slots| slots.deinit(self.allocator);
         self.scheme_var_slots.deinit(self.allocator);
-        self.reassigned_binder_pool.deinit(self.allocator);
         self.lowered_nested_by_fn.deinit();
         self.lowered_templates.deinit();
         self.function_mentions.deinit(self.allocator);
@@ -6538,9 +6627,6 @@ const Builder = struct {
             tasks[task_id] = .{ .id = task_id, .context = &contexts[task_id], .run = runRootTypeTask };
             task_id += 1;
         }
-        defer for (contexts) |*context| {
-            if (context.shard) |*shard| shard.store_epoch.deinit();
-        };
         var run_error: ?Allocator.Error = null;
         {
             var wait_timing_scope = ProcedureTimingScope.begin(self.timing, .parallel_wait);
@@ -6576,7 +6662,7 @@ const Builder = struct {
         for (contexts) |*context| {
             const shard = &context.shard.?;
             const commit_domain = shard.commit_domain;
-            try commit_domain.absorb(&shard.store_epoch);
+            try self.absorbStoreEpoch(commit_domain, &shard.store_epoch);
             var committed_types = CommittedGraphTypes.relocatedStore(
                 &commit_domain.types,
                 &commit_domain.name_store,
@@ -6585,7 +6671,6 @@ const Builder = struct {
                 commit_domain.committedTypeRelocation(self.program),
             );
             fn_tys[context.request_index] = try committed_types.commitType(shard.fn_ty);
-            shard.store_epoch.deinit();
             context.shard = null;
         }
     }
@@ -6604,6 +6689,10 @@ const Builder = struct {
             Common.compilerBug("post-check executor returned an invalid root type worker id");
         }
         const lane = Builder.ensureSpecJobLaneState(executor_worker, context.inputs) catch {
+            context.failed = true;
+            return context;
+        };
+        lane.worker.workspace.releaseCoordinatorReads(&lane.commit_domain.releases, context.inputs.interface_summary_end) catch {
             context.failed = true;
             return context;
         };
@@ -6661,8 +6750,7 @@ const Builder = struct {
         if (!std.meta.eql(program_types_before, self.program.types.epochBoundary())) {
             Common.compilerBug("parallel root type lowering mutated the coordinator type store");
         }
-        var store_epoch = try workspace.captureStoreEpoch(epoch);
-        errdefer store_epoch.deinit();
+        const store_epoch = try workspace.captureStoreEpoch(epoch);
         workspace.finishEpoch(epoch);
         return .{
             .worker_id = worker.worker_id,
@@ -6678,7 +6766,22 @@ const Builder = struct {
         for (self.interface_summaries.entries.items[summaries.count..]) |entry| {
             try summaries.insert(entry.address, entry);
         }
+        // Every absorbed epoch's summaries are now in the shared table, so
+        // its lane can drop its own copies once a task reads this far.
+        for (self.unshared_summary_domains.items) |domain| {
+            const epoch = domain.unshared orelse continue;
+            try domain.releases.noteShared(domain.allocator, .{ .epoch = epoch, .visible_end = summaries.count });
+            domain.unshared = null;
+        }
+        self.unshared_summary_domains.clearRetainingCapacity();
         return self.worker_inputs.capture(self.allocator, self.program);
+    }
+
+    /// Read a worker's domain through a newly completed epoch's views, in
+    /// the worker's epoch order, and queue its summaries for sharing.
+    fn absorbStoreEpoch(self: *Builder, commit_domain: *SpecJobCommitDomain, epoch: *const SpecJobStoreEpoch) Allocator.Error!void {
+        if (commit_domain.unshared == null) try self.unshared_summary_domains.append(self.allocator, commit_domain);
+        commit_domain.absorb(epoch);
     }
 
     fn rootSourceModule(self: *Builder, source_modules: []const checked.ModuleId, index: usize) checked.ModuleId {
@@ -6973,9 +7076,11 @@ const Builder = struct {
         source_module: checked.ModuleId,
     ) Allocator.Error!Ast.DefId {
         const worker = self.ensureSerialSpecJobWorker();
+        const commit_domain = self.ensureSpecJobCommitDomain();
+        try worker.workspace.releaseCoordinatorReads(&commit_domain.releases, null);
         var shard = try self.lowerProcedureUseRootToShard(
             worker,
-            self.ensureSpecJobCommitDomain(),
+            commit_domain,
             request,
             procedure,
             source_module,
@@ -7163,11 +7268,9 @@ const Builder = struct {
                 Common.compilerBug("parallel root lowering mutated coordinator source scratch");
             }
         }
-        const summaries = try self.allocator.dupe(InterfaceSummaryEntry, workspace.interface_summaries.entries.items[workspace.captured_interface_summaries..]);
+        const summaries = try self.allocator.dupe(InterfaceSummaryEntry, workspace.interface_summaries.entries.items[workspace.interface_summaries.sealedEnd()..]);
         errdefer self.allocator.free(summaries);
-        var store_epoch = try workspace.captureStoreEpoch(epoch);
-        workspace.captured_interface_summaries = workspace.interface_summaries.entries.items.len;
-        errdefer store_epoch.deinit();
+        const store_epoch = try workspace.captureStoreEpoch(epoch);
         workspace.finishEpoch(epoch);
         return .{
             .worker_id = worker.worker_id,
@@ -7918,7 +8021,7 @@ const Builder = struct {
                 std.debug.print("CENSUS_KEY\t{s}\t{x}\tev={x}\tcodec={x}\treq={x}\tcallable={s}\n", .{ name, key.bytes[0..8], spec_identity.evidence_digest.bytes[0..6], spec_identity.codec_contract_digest.bytes[0..6], spec_identity.request_fn_ty_digest.bytes[0..6], @tagName(spec_identity.callable) });
             }
             if (self.spec_cache) |cache| {
-                if (cache.lookup(key.bytes, self.spec_cache_accepts_linked)) |hit| {
+                if (cache.lookup(key.bytes, self.spec_cache_takes)) |hit| {
                     fn_template.cached = hit;
                     self.count("spec_cache_hits");
                     if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup monotype key={x} hit\n", .{key.bytes[0..8]});
@@ -9187,7 +9290,7 @@ const Builder = struct {
                 // later epochs from that worker retain exact ids.
                 if (context.shard) |*shard| {
                     const commit_domain = shard.commit_domain;
-                    try commit_domain.absorb(&shard.store_epoch);
+                    try self.absorbStoreEpoch(commit_domain, &shard.store_epoch);
                     shard.store_epoch_absorbed = true;
                     var committed_types = CommittedGraphTypes.relocatedStore(
                         &commit_domain.types,
@@ -9244,6 +9347,10 @@ const Builder = struct {
             return context;
         };
         const worker = &lane.worker;
+        worker.workspace.releaseCoordinatorReads(&lane.commit_domain.releases, context.inputs.interface_summary_end) catch {
+            context.failed = true;
+            return context;
+        };
         context.lane_task_started = true;
         context.first_task_on_lane = worker.tasks_started == 0;
         if (context.inputs.timing_std_io != null) worker.tasks_started +%= 1;
@@ -9298,6 +9405,10 @@ const Builder = struct {
             return context;
         };
         const worker = &lane.worker;
+        worker.workspace.releaseCoordinatorReads(&lane.commit_domain.releases, context.inputs.interface_summary_end) catch {
+            context.failed = true;
+            return context;
+        };
         context.lane_task_started = true;
         context.first_task_on_lane = worker.tasks_started == 0;
         if (context.inputs.timing_std_io != null) worker.tasks_started +%= 1;
@@ -9390,9 +9501,11 @@ const Builder = struct {
             return;
         }
         const worker = self.ensureSerialSpecJobWorker();
+        const commit_domain = self.ensureSpecJobCommitDomain();
+        try worker.workspace.releaseCoordinatorReads(&commit_domain.releases, null);
         var shard = try self.lowerPendingSpecJobToShard(
             worker,
-            self.ensureSpecJobCommitDomain(),
+            commit_domain,
             job,
             view,
             self.moduleForId(job.method_scope),
@@ -9581,11 +9694,9 @@ const Builder = struct {
                 Common.compilerBug("parallel specialization lowering mutated coordinator source scratch");
             }
         }
-        const summaries = try self.allocator.dupe(InterfaceSummaryEntry, workspace.interface_summaries.entries.items[workspace.captured_interface_summaries..]);
+        const summaries = try self.allocator.dupe(InterfaceSummaryEntry, workspace.interface_summaries.entries.items[workspace.interface_summaries.sealedEnd()..]);
         errdefer self.allocator.free(summaries);
-        var store_epoch = try workspace.captureStoreEpoch(epoch);
-        workspace.captured_interface_summaries = workspace.interface_summaries.entries.items.len;
-        errdefer store_epoch.deinit();
+        const store_epoch = try workspace.captureStoreEpoch(epoch);
         self.countBodyDiagnostic("spec_job_shards_lowered");
         workspace.finishEpoch(epoch);
         return .{
@@ -9621,7 +9732,7 @@ const Builder = struct {
         defer self.active_spec_job_diagnostics = null;
 
         const commit_domain = shard.commit_domain;
-        try commit_domain.absorb(&shard.store_epoch);
+        try self.absorbStoreEpoch(commit_domain, &shard.store_epoch);
         shard.store_epoch_absorbed = true;
         const committed_type_relocation = commit_domain.committedTypeRelocation(
             self.program,
@@ -9674,7 +9785,7 @@ const Builder = struct {
             Common.compilerBug("procedure root shard was committed more than once");
         }
         const commit_domain = shard.commit_domain;
-        try commit_domain.absorb(&shard.store_epoch);
+        try self.absorbStoreEpoch(commit_domain, &shard.store_epoch);
         shard.store_epoch_absorbed = true;
         var committed_types = CommittedGraphTypes.relocatedStore(
             &commit_domain.types,
@@ -14792,7 +14903,7 @@ const Builder = struct {
     }
 
     /// Ordered coordinator suffix for a graph-free specialization result.
-    /// Type/name IDs are read only from the copied immutable epoch domain;
+    /// Type/name IDs are read only from the absorbed epoch's immutable views;
     /// all final Ast IDs and specialization decisions remain coordinator-owned.
     fn commitSealedBodyDraft(
         self: *Builder,
@@ -21403,6 +21514,23 @@ const InterfaceSummary = union(enum) {
     }
 };
 
+/// An interface summary a body found for replay, with the store domain its
+/// settled leaves and names belong to. A lane reads a coordinator summary in
+/// place, in the program's domain, and maps each leaf and name into its own
+/// stores as replay reaches them, instead of keeping a copy of its own.
+const FoundInterfaceSummary = struct {
+    summary: InterfaceSummary,
+    domain: Domain,
+
+    const Domain = enum {
+        /// The finding body's own type and name stores.
+        graph,
+        /// The coordinator program's stores, read through the lane's
+        /// program-to-workspace relocation.
+        program,
+    };
+};
+
 const InterfaceSummaryCopy = struct {
     pub fn mapScalar(_: InterfaceSummaryCopy, comptime T: type, value: T) Allocator.Error!T {
         return value;
@@ -21425,6 +21553,17 @@ const InterfaceSummaryRelocation = struct {
             return self.importing.?.importProgramType(value);
         }
         if (self.source_names == self.destination_names) return value;
+        if (self.importing) |body| {
+            // The lane's program-to-workspace relocation owns a cumulative
+            // name relocation, so each program name is interned once per lane.
+            const relocation = body.draft.ensureProgramTypeRelocation(body.graph, body.builder.program).namesRelocation();
+            std.debug.assert(relocation.source == self.source_names and relocation.destination == self.destination_names);
+            if (T == names.ModuleIdentityId) return relocation.relocateModuleIdentity(self.source_names, value);
+            if (T == names.TypeNameId) return relocation.relocateTypeName(self.source_names, value);
+            if (T == names.RecordFieldNameId) return relocation.relocateRecordFieldLabel(self.source_names, value);
+            if (T == names.TagNameId) return relocation.relocateTagLabel(self.source_names, value);
+            return value;
+        }
         if (self.committed) |committed| if (committed.destination) |destination| {
             // A committed domain owns a cumulative name relocation, so each
             // source name is interned once per domain rather than per use.
@@ -21445,9 +21584,20 @@ const InterfaceSummaryRelocation = struct {
 
 const InterfaceSummaryCache = struct {
     allocator: Allocator,
+    /// Storage of the entries after the last sealed segment.
     evidence_arena: base.SingleThreadArena,
     entries: std.ArrayList(InterfaceSummaryEntry) = .empty,
     buckets: std.AutoHashMap(InterfaceReplayAddress, std.ArrayList(u32)),
+    /// A lane's segments, oldest first: each holds the entries a shard
+    /// captured, up to `end`, and their storage. The coordinator's cache
+    /// never seals one.
+    sealed: std.ArrayList(SealedSegment) = .empty,
+
+    const SealedSegment = struct {
+        epoch: SpecJobEpoch,
+        end: usize,
+        arena: base.SingleThreadArena,
+    };
 
     fn init(allocator: Allocator) InterfaceSummaryCache {
         return .{
@@ -21462,7 +21612,74 @@ const InterfaceSummaryCache = struct {
         while (buckets.next()) |bucket| bucket.deinit(self.allocator);
         self.buckets.deinit();
         self.entries.deinit(self.allocator);
+        for (self.sealed.items) |*segment| segment.arena.deinit();
+        self.sealed.deinit(self.allocator);
         self.evidence_arena.deinit();
+    }
+
+    /// The entries before this index belong to sealed segments.
+    fn sealedEnd(self: *const InterfaceSummaryCache) usize {
+        return if (self.sealed.items.len == 0) 0 else self.sealed.items[self.sealed.items.len - 1].end;
+    }
+
+    /// Seal the entries since the last segment under `epoch`, the shard
+    /// epoch that captured them. Their storage stays alive, unmoved, until
+    /// the segment is released.
+    fn sealSegment(self: *InterfaceSummaryCache, epoch: SpecJobEpoch) Allocator.Error!void {
+        if (self.entries.items.len == self.sealedEnd()) return;
+        try self.sealed.ensureUnusedCapacity(self.allocator, 1);
+        self.sealed.appendAssumeCapacity(.{ .epoch = epoch, .end = self.entries.items.len, .arena = self.evidence_arena });
+        self.evidence_arena = base.SingleThreadArena.init(self.allocator);
+    }
+
+    /// Drop every segment sealed at or before `epoch`, with its entries.
+    fn releaseSegmentsThrough(self: *InterfaceSummaryCache, epoch: SpecJobEpoch) Allocator.Error!void {
+        var released: usize = 0;
+        while (released < self.sealed.items.len and @backingInt(self.sealed.items[released].epoch) <= @backingInt(epoch)) released += 1;
+        if (released == 0) return;
+        const dropped = self.sealed.items[released - 1].end;
+        // Index the surviving entries before anything is released, so an
+        // allocation failure leaves the cache as it was.
+        var buckets = std.AutoHashMap(InterfaceReplayAddress, std.ArrayList(u32)).init(self.allocator);
+        errdefer {
+            var lists = buckets.valueIterator();
+            while (lists.next()) |list| list.deinit(self.allocator);
+            buckets.deinit();
+        }
+        for (self.entries.items[dropped..], 0..) |entry, index| {
+            const bucket = try buckets.getOrPut(entry.address);
+            if (!bucket.found_existing) bucket.value_ptr.* = .empty;
+            try bucket.value_ptr.append(self.allocator, @intCast(index));
+        }
+        var old_buckets = self.buckets.valueIterator();
+        while (old_buckets.next()) |list| list.deinit(self.allocator);
+        self.buckets.deinit();
+        self.buckets = buckets;
+        for (self.sealed.items[0..released]) |*segment| segment.arena.deinit();
+        const kept_segments = self.sealed.items.len - released;
+        std.mem.copyForwards(SealedSegment, self.sealed.items[0..kept_segments], self.sealed.items[released..]);
+        self.sealed.shrinkRetainingCapacity(kept_segments);
+        for (self.sealed.items) |*segment| segment.end -= dropped;
+        const kept_entries = self.entries.items.len - dropped;
+        std.mem.copyForwards(InterfaceSummaryEntry, self.entries.items[0..kept_entries], self.entries.items[dropped..]);
+        self.entries.shrinkRetainingCapacity(kept_entries);
+    }
+
+    /// The resident summary for an equal request, if any.
+    fn find(
+        self: *const InterfaceSummaryCache,
+        address: InterfaceReplayAddress,
+        evidence: StoredConstFnEvidence,
+        request: InterfaceConstraints.Identity,
+        types_: *Type.Store,
+        name_store: *const names.NameStore,
+    ) Allocator.Error!?InterfaceSummary {
+        const candidates = self.buckets.get(address) orelse return null;
+        for (candidates.items) |index| {
+            const entry = self.entries.items[index];
+            if (storedConstFnEvidenceEql(entry.evidence, evidence) and try entry.request.eql(request, types_, name_store)) return entry.summary;
+        }
+        return null;
     }
 
     fn insert(self: *InterfaceSummaryCache, types_: *Type.Store, name_store: *const names.NameStore, entry: InterfaceSummaryEntry) Allocator.Error!InterfaceSummary {
@@ -27377,18 +27594,17 @@ const BodyContext = struct {
         return .{ .cache = &workspace.interface_summaries, .types_are_durable = false };
     }
 
-    fn findInterfaceSummary(self: *BodyContext, address: InterfaceReplayAddress, evidence: StoredConstFnEvidence, request: InterfaceConstraints.Identity) Allocator.Error!?InterfaceSummary {
+    fn findInterfaceSummary(self: *BodyContext, address: InterfaceReplayAddress, evidence: StoredConstFnEvidence, request: InterfaceConstraints.Identity) Allocator.Error!?FoundInterfaceSummary {
         if (!self.builder.replay_interface_summaries.enabled()) return null;
         const local = self.interfaceSummaryCache().cache;
-        if (local.buckets.get(address)) |candidates| for (candidates.items) |index| {
-            const entry = local.entries.items[index];
-            if (storedConstFnEvidenceEql(entry.evidence, evidence) and try entry.request.eql(request, self.typeStore(), self.nameStore())) return entry.summary;
-        };
+        if (try local.find(address, evidence, request, self.typeStore(), self.nameStore())) |summary| {
+            return .{ .summary = summary, .domain = .graph };
+        }
         if (self.builder.coordinator_interface_summaries) |published| {
             var candidates = published.get(address, self.builder.coordinator_interface_summary_end);
             while (candidates.next()) |entry| {
                 if (!storedConstFnEvidenceEql(entry.evidence, evidence) or !std.mem.eql(u8, entry.request.bytes, request.bytes)) continue;
-                if (try self.importInterfaceSummary(entry, request)) |summary| return summary;
+                if (try self.programRequestMatches(entry.request, request)) return .{ .summary = entry.summary, .domain = .program };
             }
             return null;
         }
@@ -27397,23 +27613,48 @@ const BodyContext = struct {
         if (coordinator.buckets.get(address)) |candidates| for (candidates.items) |index| {
             const entry = coordinator.entries.items[index];
             if (!storedConstFnEvidenceEql(entry.evidence, evidence) or !std.mem.eql(u8, entry.request.bytes, request.bytes)) continue;
-            if (try self.importInterfaceSummary(entry, request)) |summary| return summary;
+            if (try self.programRequestMatches(entry.request, request)) return .{ .summary = entry.summary, .domain = .program };
         };
         return null;
     }
 
-    fn importInterfaceSummary(self: *BodyContext, entry: InterfaceSummaryEntry, request: InterfaceConstraints.Identity) Allocator.Error!?InterfaceSummary {
-        const relocation = InterfaceSummaryRelocation{
+    /// Whether a coordinator request, whose leaves belong to the program's
+    /// store domain, equals `request` in this body's domain. The identity
+    /// bytes are domain-independent and already compared equal, so only
+    /// the request's leaves cross into this body's stores.
+    fn programRequestMatches(self: *BodyContext, program_request: InterfaceConstraints.Identity, request: InterfaceConstraints.Identity) Allocator.Error!bool {
+        std.debug.assert(std.mem.eql(u8, program_request.bytes, request.bytes));
+        if (program_request.leaves.len != request.leaves.len) return false;
+        for (program_request.leaves, request.leaves) |program_leaf, leaf| {
+            if (!try self.typeStore().typeEql(self.nameStore(), try self.importProgramType(program_leaf), leaf)) return false;
+        }
+        return true;
+    }
+
+    /// Maps a coordinator summary's program-domain leaves and names into
+    /// this body's stores as replay reaches them.
+    fn programSummaryDomain(self: *BodyContext) InterfaceSummaryRelocation {
+        return .{
             .source_names = &self.builder.program.names,
             .destination_names = self.nameStoreMut(),
             .importing = self,
         };
-        var scratch = self.graph.acquireArena();
-        defer self.graph.releaseArena(scratch);
-        const imported_request = try entry.request.copy(scratch.allocator(), relocation);
-        if (!try imported_request.eql(request, self.typeStore(), self.nameStore())) return null;
-        const summary = try entry.summary.copy(scratch.allocator(), relocation);
-        return try self.insertInterfaceSummary(.{ .address = entry.address, .evidence = entry.evidence, .request = imported_request, .summary = summary });
+    }
+
+    fn instantiateFoundConstraints(self: *BodyContext, domain: FoundInterfaceSummary.Domain, constraints: InterfaceConstraints) Allocator.Error![]const NodeId {
+        return switch (domain) {
+            .graph => try constraints.instantiate(self.graph),
+            .program => try constraints.instantiateFrom(self.graph, self.programSummaryDomain()),
+        };
+    }
+
+    /// A found summary expressed in this body's own domain, for comparison
+    /// against a fresh expansion.
+    fn graphDomainSummary(self: *BodyContext, found: FoundInterfaceSummary) Allocator.Error!InterfaceSummary {
+        return switch (found.domain) {
+            .graph => found.summary,
+            .program => try found.summary.copy(self.graph.arena(), self.programSummaryDomain()),
+        };
     }
 
     fn insertInterfaceSummary(self: *BodyContext, entry: InterfaceSummaryEntry) Allocator.Error!InterfaceSummary {
@@ -27651,7 +27892,7 @@ const BodyContext = struct {
             .input_digest = interfaceRequestBucket(request.bytes),
         };
 
-        var cached: ?InterfaceSummary = null;
+        var cached: ?FoundInterfaceSummary = null;
         if (replay_state.buckets.get(address)) |candidates| for (candidates.items) |raw_entry| {
             const entry = replay_state.entries.items[raw_entry];
             if (!storedConstFnEvidenceEql(entry.evidence, stored_evidence) or !try entry.request.eql(request, self.typeStore(), self.nameStore())) continue;
@@ -27669,7 +27910,10 @@ const BodyContext = struct {
                 },
                 .ready => {
                     if (!replay_state.use_finished_summaries or !self.builder.replay_interface_summaries.enabled()) continue;
-                    cached = entry.summary orelse continue;
+                    // Read the summary before writing `cached`, which the
+                    // result location would otherwise leave half-written.
+                    const summary = entry.summary orelse continue;
+                    cached = .{ .summary = summary, .domain = .graph };
                     break;
                 },
             }
@@ -27679,20 +27923,20 @@ const BodyContext = struct {
         const saved_use_summaries = replay_state.use_finished_summaries;
         expansion.saved_use_summaries = saved_use_summaries;
         expansion.restores_use_summaries = true;
-        if (cached) |summary| {
+        if (cached) |found| {
             self.builder.count("interface_summary_hits");
             if (std.debug.runtime_safety and self.builder.diagnostics != null and self.builder.interface_summary_checks < 16) {
                 self.builder.interface_summary_checks += 1;
                 self.builder.count("interface_summary_verifications");
-                verify_summary = summary;
+                verify_summary = try self.graphDomainSummary(found);
                 replay_state.use_finished_summaries = false;
-            } else switch (summary) {
+            } else switch (found.summary) {
                 .unchanged => {
                     self.builder.count("interface_summary_unchanged_hits");
                     return null;
                 },
                 .constraints => |constraints| {
-                    try self.relateInterfaceRoots(try constraints.instantiate(self.graph), request_roots.items);
+                    try self.relateInterfaceRoots(try self.instantiateFoundConstraints(found.domain, constraints), request_roots.items);
                     return null;
                 },
             }
@@ -31697,7 +31941,7 @@ const BodyContext = struct {
         select: *bool,
         unwrap_state: *?DraftTypeCell,
     ) Allocator.Error!BranchOutput {
-        merge_binders.* = try self.stateMergeBinders(expr_id);
+        merge_binders.* = try self.stateMergeBinders(self.view.bodies.exprStateMerge(expr_id));
         if (merge_binders.len == 0) return .{ .value = result_cell };
         const state_cell = try self.stateResultTypeCell(merge_binders.*, result_cell);
         select.* = false;
@@ -32219,7 +32463,7 @@ const BodyContext = struct {
                 return requestLowerTask(self, .{ .loop = try self.boxLowerTask(LoopTask, .{ .kind = .{ .for_ = checkedForLoop(for_) } }) });
             },
             .if_, .match_ => {
-                task.nested_merge_binders = try self.stateMergeBinders(body);
+                task.nested_merge_binders = try self.stateMergeBinders(self.view.bodies.exprStateMerge(body));
                 const output: BranchOutput = if (task.nested_merge_binders.len == 0) blk: {
                     task.stage = .value;
                     break :blk .{ .value = task.result_cell };
@@ -32309,7 +32553,7 @@ const BodyContext = struct {
         }
         switch (checked_expr.data) {
             .if_, .match_ => {
-                task.merge_binders = try self.stateMergeBinders(expr_id);
+                task.merge_binders = try self.stateMergeBinders(self.view.bodies.exprStateMerge(expr_id));
                 if (task.merge_binders.len != 0) {
                     task.state_cell = try self.stateOnlyTypeCell(task.merge_binders);
                     task.stage = .state_only;
@@ -32431,7 +32675,7 @@ const BodyContext = struct {
                 return requestLowerTask(self, .{ .inspected = .{ .expr = child } });
             },
             .expr => |child| {
-                task.merge_binders = try self.stateMergeBinders(child);
+                task.merge_binders = try self.stateMergeBinders(self.view.bodies.exprStatementStateMerge(task.statement));
                 if (task.merge_binders.len == 0) {
                     task.stage = .expr_value;
                     task.saved_in_place = self.in_place_statement_expr;
@@ -38205,23 +38449,21 @@ const BodyContext = struct {
         return info.item_fields;
     }
 
-    const GeneratedParseTagUnionSpecBackingInfo = struct {
-        record_fields: TypeFieldSpanBorrow,
-    };
-
-    fn generatedParseTagUnionSpecBackingInfo(
-        self: *BodyContext,
-        spec_ty: Type.TypeId,
-    ) ?GeneratedParseTagUnionSpecBackingInfo {
+    /// The generated backing of a tag-union spec, or null when `spec_ty` is
+    /// not a tag-union spec.
+    fn generatedParseTagUnionSpecBackingType(self: *BodyContext, spec_ty: Type.TypeId) ?Type.TypeId {
         if (!self.typeHasBuiltinOwner(spec_ty, .parse_tag_union_spec)) return null;
-        const backing_ty = self.namedBackingType(spec_ty) orelse return null;
-        const record_fields = switch (self.shapeContent(backing_ty)) {
+        return self.namedBackingType(spec_ty) orelse Common.invariant("generated tag-union spec had no backing type");
+    }
+
+    /// The label fields of a generated tag-union spec backing, which is empty
+    /// when no payload record has a field.
+    fn generatedParseTagUnionSpecLabels(self: *BodyContext, spec_backing_ty: Type.TypeId) TypeFieldSpanBorrow {
+        return switch (self.shapeContent(spec_backing_ty)) {
             .record => |span| self.typeStore().fieldSpan(span),
             .zst => self.typeStore().fieldSpan(.empty()),
-            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased => return null,
+            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased => Common.invariant("generated tag-union spec backing was not a record"),
         };
-        if (record_fields.len == 0) return null;
-        return .{ .record_fields = record_fields };
     }
 
     fn isGeneratedIteratorEvidenceNode(self: *BodyContext, node: NodeId) Allocator.Error!bool {
@@ -39894,16 +40136,7 @@ const BodyContext = struct {
         }
     }
 
-    fn generatedParseTagUnionSpecBackingRecordFieldName(
-        self: *BodyContext,
-        index: usize,
-    ) Allocator.Error!names.RecordFieldNameId {
-        const label = try std.fmt.allocPrint(self.allocator, "record_{d:0>20}", .{index});
-        defer self.allocator.free(label);
-        return try self.nameStoreMut().internRecordFieldLabel(label);
-    }
-
-    fn generatedParseTagUnionSpecBackingFieldName(
+    fn generatedFieldNamesItemFieldName(
         self: *BodyContext,
         index: usize,
     ) Allocator.Error!names.RecordFieldNameId {
@@ -39912,51 +40145,62 @@ const BodyContext = struct {
         return try self.nameStoreMut().internRecordFieldLabel(label);
     }
 
+    /// The renamed field name each record field label reads, from every
+    /// precomputed record the tag union's payload parsers reach.
+    fn parserPrecomputedLabelLocals(
+        self: *BodyContext,
+        plan: *const ParserPrecomputedPlan,
+        union_ty: Type.TypeId,
+    ) Allocator.Error!collections.DenseMap(names.RecordFieldNameId, DraftLocalId) {
+        const record_shapes = try self.parserPrecomputedRecordShapesForTagUnion(plan, union_ty);
+        defer self.allocator.free(record_shapes);
+
+        var label_locals = collections.DenseMap(names.RecordFieldNameId, DraftLocalId).init(self.allocator);
+        errdefer label_locals.deinit();
+        for (record_shapes) |record_shape| {
+            const precomputed = self.parserPlanGet(plan, record_shape) orelse
+                Common.invariant("generated tag-union spec requested missing parser precomputed record");
+            const fields = try self.dupeRecordFieldsForShape(record_shape);
+            defer self.allocator.free(fields);
+            if (fields.len != precomputed.renamed_field_locals.len) {
+                Common.invariant("generated tag-union spec record arity differed from precomputed record");
+            }
+            for (fields, precomputed.renamed_field_locals) |field, renamed_local| {
+                const entry = try label_locals.getOrPut(field.name);
+                if (!entry.found_existing) entry.value_ptr.* = renamed_local;
+            }
+        }
+        return label_locals;
+    }
+
     fn lowerParseTagUnionSpecValue(
         self: *BodyContext,
         spec_ty: Type.TypeId,
         spec_backing_ty: Type.TypeId,
-        record_shapes: []const Type.TypeId,
+        union_ty: Type.TypeId,
         plan: *const ParserPrecomputedPlan,
     ) Allocator.Error!DraftExprId {
         const str_ty = try self.primitiveType(.str);
-        const backing_fields = try GuardedList.dupe(self.allocator, Type.Field, self.typeStore().fieldSpan(self.recordFieldsSpan(spec_backing_ty)));
+        var label_locals = try self.parserPrecomputedLabelLocals(plan, union_ty);
+        defer label_locals.deinit();
+
+        const backing_fields = try GuardedList.dupe(self.allocator, Type.Field, self.generatedParseTagUnionSpecLabels(spec_backing_ty));
         defer self.allocator.free(backing_fields);
-        if (backing_fields.len != record_shapes.len) Common.invariant("generated tag-union spec backing arity differed from record shape count");
-
-        const outer_values = try self.allocator.alloc(DraftFieldExpr, record_shapes.len);
-        defer self.allocator.free(outer_values);
-
-        for (record_shapes, backing_fields, 0..) |record_shape, backing_field, record_index| {
-            const precomputed = self.parserPlanGet(plan, record_shape) orelse
-                Common.invariant("generated tag-union spec requested missing parser precomputed record");
-            const inner_fields = try GuardedList.dupe(self.allocator, Type.Field, self.typeStore().fieldSpan(self.recordFieldsSpan(backing_field.ty)));
-            defer self.allocator.free(inner_fields);
-            if (inner_fields.len != precomputed.renamed_field_locals.len) {
-                Common.invariant("generated tag-union spec record arity differed from precomputed record");
-            }
-
-            const inner_values = try self.allocator.alloc(DraftFieldExpr, inner_fields.len);
-            defer self.allocator.free(inner_values);
-            for (inner_fields, precomputed.renamed_field_locals, 0..) |inner_field, renamed_local, field_index| {
-                inner_values[field_index] = .{
-                    .name = inner_field.name,
-                    .value = try self.localExpr(renamed_local, str_ty),
-                };
-            }
-
-            outer_values[record_index] = .{
+        const values = try self.allocator.alloc(DraftFieldExpr, backing_fields.len);
+        defer self.allocator.free(values);
+        for (backing_fields, values) |backing_field, *value| {
+            self.assertSameType(backing_field.ty, str_ty, "generated tag-union spec field name value was not Str");
+            const renamed_local = label_locals.get(backing_field.name) orelse
+                Common.invariant("generated tag-union spec label had no precomputed renamed field name");
+            value.* = .{
                 .name = backing_field.name,
-                .value = try self.addExpr(.{
-                    .ty = backing_field.ty,
-                    .data = .{ .record = try self.addFieldExprSpan(inner_values) },
-                }),
+                .value = try self.localExpr(renamed_local, str_ty),
             };
         }
 
         const backing_expr = try self.addExpr(.{
             .ty = spec_backing_ty,
-            .data = .{ .record = try self.addFieldExprSpan(outer_values) },
+            .data = .{ .record = try self.addFieldExprSpan(values) },
         });
         return try self.addExpr(.{
             .ty = spec_ty,
@@ -39964,34 +40208,43 @@ const BodyContext = struct {
         });
     }
 
+    /// Record every record shape the tag union's payload parsers reach into
+    /// `plan`, each field reading its label's renamed name from the spec. A
+    /// spec with no labels has no backing local to read.
     fn buildParserPrecomputedPlanFromTagUnionSpec(
         self: *BodyContext,
         plan: *ParserPrecomputedPlan,
-        spec_backing_local: DraftLocalId,
+        spec_backing_local: ?DraftLocalId,
         spec_backing_ty: Type.TypeId,
         union_ty: Type.TypeId,
     ) Allocator.Error!void {
-        const record_shapes = try self.parserPrecomputedRecordShapesForTagUnion(null, union_ty);
-        defer self.allocator.free(record_shapes);
-
-        const backing_fields = try GuardedList.dupe(self.allocator, Type.Field, self.typeStore().fieldSpan(self.recordFieldsSpan(spec_backing_ty)));
+        const str_ty = try self.primitiveType(.str);
+        const backing_fields = try GuardedList.dupe(self.allocator, Type.Field, self.generatedParseTagUnionSpecLabels(spec_backing_ty));
         defer self.allocator.free(backing_fields);
-        if (backing_fields.len != record_shapes.len) {
-            Common.invariant("generated tag-union spec backing arity differed from payload record shape count");
+
+        var label_captures = collections.DenseMap(names.RecordFieldNameId, ParserPrecomputedCapture).init(self.allocator);
+        defer label_captures.deinit();
+        for (backing_fields) |backing_field| {
+            self.assertSameType(backing_field.ty, str_ty, "generated tag-union spec field name value was not Str");
+            const capture = ParserPrecomputedCapture{
+                .local = try self.addLocal(self.builder.symbols.fresh(), str_ty),
+                .value = try self.addFieldAccessExpr(
+                    try self.localExpr(spec_backing_local orelse Common.invariant("generated tag-union spec labels had no backing local"), spec_backing_ty),
+                    backing_field.name,
+                    str_ty,
+                ),
+            };
+            try label_captures.put(backing_field.name, capture);
+            try plan.captures.append(self.allocator, capture);
         }
 
-        const str_ty = try self.primitiveType(.str);
-        for (record_shapes, backing_fields) |record_shape, backing_field| {
+        const record_shapes = try self.parserPrecomputedRecordShapesForTagUnion(null, union_ty);
+        defer self.allocator.free(record_shapes);
+        for (record_shapes) |record_shape| {
             if (self.parserPlanContains(plan, record_shape)) continue;
 
             const record_fields = try self.dupeRecordFieldsForShape(record_shape);
             defer self.allocator.free(record_fields);
-            const backing_record_fields = try GuardedList.dupe(self.allocator, Type.Field, self.typeStore().fieldSpan(self.recordFieldsSpan(backing_field.ty)));
-            defer self.allocator.free(backing_record_fields);
-            if (backing_record_fields.len != record_fields.len) {
-                Common.invariant("generated tag-union spec record arity differed from payload record arity");
-            }
-
             const locals = try self.allocator.alloc(DraftLocalId, record_fields.len);
             const values = try self.allocator.alloc(DraftExprId, record_fields.len);
             var inserted = false;
@@ -39999,17 +40252,11 @@ const BodyContext = struct {
                 self.allocator.free(locals);
                 self.allocator.free(values);
             };
-
-            const record_expr = try self.addFieldAccessExpr(
-                try self.localExpr(spec_backing_local, spec_backing_ty),
-                backing_field.name,
-                backing_field.ty,
-            );
-
-            for (backing_record_fields, 0..) |field, index| {
-                self.assertSameType(field.ty, str_ty, "generated tag-union spec field name value was not Str");
-                locals[index] = try self.addLocal(self.builder.symbols.fresh(), str_ty);
-                values[index] = try self.addFieldAccessExpr(record_expr, field.name, str_ty);
+            for (record_fields, locals, values) |field, *local, *value| {
+                const capture = label_captures.get(field.name) orelse
+                    Common.invariant("generated tag-union spec had no label for a payload record field");
+                local.* = capture.local;
+                value.* = capture.value;
             }
 
             try self.parserPlanPut(plan, record_shape, .{
@@ -40019,8 +40266,6 @@ const BodyContext = struct {
                 .renamed_field_texts = null,
             });
             inserted = true;
-
-            try self.appendParserPrecomputedCaptures(plan, record_fields, locals, values);
         }
     }
 
@@ -40034,12 +40279,11 @@ const BodyContext = struct {
         ret_ty: Type.TypeId,
         precomputed_plan: ?*const ParserPrecomputedPlan,
     ) Allocator.Error!DraftExprId {
-        // A nominal opaque with a scalar backing and no custom parser (e.g. `Username := Str`)
-        // parses its backing scalar, then rewraps the value in the nominal.
-        if (self.nominalExprBackingType(shape_ty)) |backing_ty| {
-            if (self.scalarCodecMethodName(backing_ty, "parse_") != null) {
-                return try self.lowerParseNominalScalarFromState(shape_ty, backing_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan);
-            }
+        // A derived parser for a nominal backed by a scalar or another nominal
+        // (`Username := Str.{ parser_for : _ }`) parses its backing, then rewraps
+        // the value in the nominal.
+        if (self.derivedCodecLayerBackingType(shape_ty, "parse_")) |backing_ty| {
+            return try self.lowerParseNominalLayerFromState(shape_ty, backing_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan);
         }
         const selected = self.parseShapeSelection(shape_ty);
         if (Ident.textEql(selected.tag_text, "Record")) {
@@ -40089,12 +40333,6 @@ const BodyContext = struct {
         self.assertSameType(GuardedList.at(parse_arg_tys, 0), encoding_ty, "parser target tag-union encoding type differed from input encoding type");
         self.assertSameType(GuardedList.at(parse_arg_tys, 2), state_ty, "parser target tag-union state type differed from input state type");
 
-        const record_shapes = if (precomputed_plan) |plan|
-            try self.parserPrecomputedRecordShapesForTagUnion(plan, shape_ty)
-        else
-            &.{};
-        defer if (precomputed_plan != null) self.allocator.free(record_shapes);
-
         const callable_mono_ty = parse_mono_ty;
         const callable_fn = self.functionShape(callable_mono_ty, "parser target tag-union method was not a function");
         const callable_arg_tys = self.typeStore().span(callable_fn.args);
@@ -40108,7 +40346,7 @@ const BodyContext = struct {
             const plan = precomputed_plan orelse Common.invariant("generated tag-union spec requested without a precomputed plan");
             const spec_backing_ty = self.namedBackingType(spec_ty) orelse
                 Common.invariant("generated tag-union spec had no backing type");
-            break :blk try self.lowerParseTagUnionSpecValue(spec_ty, spec_backing_ty, record_shapes, plan);
+            break :blk try self.lowerParseTagUnionSpecValue(spec_ty, spec_backing_ty, shape_ty, plan);
         };
         const result = try self.addExpr(.{
             .ty = callable_fn.ret,
@@ -40165,7 +40403,7 @@ const BodyContext = struct {
         return wrapped;
     }
 
-    fn lowerParseNominalScalarFromState(
+    fn lowerParseNominalLayerFromState(
         self: *BodyContext,
         nominal_ty: Type.TypeId,
         backing_ty: Type.TypeId,
@@ -43167,19 +43405,22 @@ const BodyContext = struct {
 
         var precomputed_plan = ParserPrecomputedPlan.init(self.allocator);
         defer precomputed_plan.deinit();
-        const maybe_spec_backing_ty = if (self.generatedParseTagUnionSpecBackingInfo(spec_ty) != null)
-            self.namedBackingType(spec_ty) orelse Common.invariant("generated tag-union spec had no backing type")
+        const maybe_spec_backing_ty = self.generatedParseTagUnionSpecBackingType(spec_ty);
+        const spec_has_labels = if (maybe_spec_backing_ty) |spec_backing_ty|
+            self.generatedParseTagUnionSpecLabels(spec_backing_ty).len != 0
         else
-            null;
-        const spec_local = if (maybe_spec_backing_ty != null)
+            false;
+        const spec_local = if (spec_has_labels)
             try self.addLocal(self.builder.symbols.fresh(), spec_ty)
         else
             null;
-        const spec_backing_local = if (maybe_spec_backing_ty) |spec_backing_ty| blk: {
-            const local = try self.addLocal(self.builder.symbols.fresh(), spec_backing_ty);
-            try self.buildParserPrecomputedPlanFromTagUnionSpec(&precomputed_plan, local, spec_backing_ty, value_ty);
-            break :blk local;
-        } else null;
+        const spec_backing_local = if (spec_has_labels)
+            try self.addLocal(self.builder.symbols.fresh(), maybe_spec_backing_ty orelse Common.invariant("generated tag-union spec labels had no backing type"))
+        else
+            null;
+        if (maybe_spec_backing_ty) |spec_backing_ty| {
+            try self.buildParserPrecomputedPlanFromTagUnionSpec(&precomputed_plan, spec_backing_local, spec_backing_ty, value_ty);
+        }
 
         var body = try self.unknownDecodedTagErr(ret_ty, missing_local, missing_ty);
         var index = tags.len;
@@ -43216,14 +43457,14 @@ const BodyContext = struct {
         body = try self.wrapLet(encoding_local, encoding_ty, encoding_value, body, ret_ty);
         body = try self.wrapLet(key_local, key_ty, key_value, body, ret_ty);
         body = try self.wrapLet(options_local, options_ty, options_value, body, ret_ty);
-        if (maybe_spec_backing_ty) |spec_backing_ty| {
+        if (spec_backing_local) |backing_local| {
+            const spec_backing_ty = maybe_spec_backing_ty orelse Common.invariant("generated tag-union spec backing local had no backing type");
             var capture_index = precomputed_plan.captures.items.len;
             while (capture_index > 0) {
                 capture_index -= 1;
                 const capture = precomputed_plan.captures.items[capture_index];
                 body = try self.wrapLet(capture.local, try self.primitiveType(.str), capture.value, body, ret_ty);
             }
-            const backing_local = spec_backing_local orelse Common.invariant("generated tag-union spec backing local was missing");
             const spec_pat = try self.addPat(.{
                 .ty = spec_ty,
                 .data = .{ .nominal = try self.bindPat(backing_local, spec_backing_ty) },
@@ -50841,6 +51082,19 @@ const BodyContext = struct {
         return try self.lowerUnaryContainerMethodCall(.encoder, "to_list", "Dict.to_list", "Dict type", "generated List type", dict_ty, dict_ty, list_ty, dict_expr);
     }
 
+    /// The backing a derived codec for nominal `ty` reads or writes after
+    /// unwrapping exactly one nominal layer: a builtin scalar, or another user
+    /// nominal whose own codec then handles it. Null for any other backing,
+    /// which the structural shape walk reaches through the nominal directly.
+    fn derivedCodecLayerBackingType(self: *BodyContext, ty: Type.TypeId, comptime prefix: []const u8) ?Type.TypeId {
+        const backing_ty = self.nominalExprBackingType(ty) orelse return null;
+        if (self.scalarCodecMethodName(backing_ty, prefix) != null) return backing_ty;
+        return switch (methodOwnerFromType(self.typeStore(), backing_ty) orelse return null) {
+            .builtin => null,
+            .nominal => backing_ty,
+        };
+    }
+
     /// The format method (`prefix` plus the scalar's name) that reads or
     /// writes a builtin scalar type, or null when the type is not one.
     fn scalarCodecMethodName(self: *BodyContext, ty: Type.TypeId, comptime prefix: []const u8) ?[]const u8 {
@@ -52524,17 +52778,17 @@ const BodyContext = struct {
             .input_digest = interfaceRequestBucket(request.bytes),
         };
         var verify_summary: ?InterfaceSummary = null;
-        if (try self.findInterfaceSummary(address, evidence, request)) |summary| {
+        if (try self.findInterfaceSummary(address, evidence, request)) |found| {
             self.builder.count("interface_summary_hits");
             if (std.debug.runtime_safety and self.builder.diagnostics != null and self.builder.interface_summary_checks < 16) {
                 self.builder.interface_summary_checks += 1;
                 self.builder.count("interface_summary_verifications");
-                verify_summary = summary;
+                verify_summary = try self.graphDomainSummary(found);
             } else {
-                switch (summary) {
+                switch (found.summary) {
                     .unchanged => self.builder.count("interface_summary_unchanged_hits"),
                     .constraints => |constraints| {
-                        for (try constraints.instantiate(self.graph), roots.items) |produced, root| {
+                        for (try self.instantiateFoundConstraints(found.domain, constraints), roots.items) |produced, root| {
                             try self.graph.unify(produced, root);
                         }
                     },
@@ -52645,10 +52899,10 @@ const BodyContext = struct {
         };
         const use_summaries = self.draft.interface_replay.use_finished_summaries;
         if (use_summaries) {
-            if (try self.findInterfaceSummary(address, evidence, request)) |summary| {
-                switch (summary) {
+            if (try self.findInterfaceSummary(address, evidence, request)) |found| {
+                switch (found.summary) {
                     .unchanged => {},
-                    .constraints => |constraints| try self.graph.unify((try constraints.instantiate(self.graph))[0], constraint_node),
+                    .constraints => |constraints| try self.graph.unify((try self.instantiateFoundConstraints(found.domain, constraints))[0], constraint_node),
                 }
                 return;
             }
@@ -52705,9 +52959,9 @@ const BodyContext = struct {
         const evidence = StoredConstFnEvidence.empty();
         const request: InterfaceConstraints.Identity = .{ .bytes = &.{}, .leaves = &.{} };
         if (cacheable) {
-            if (try self.findInterfaceSummary(address, evidence, request)) |summary| {
-                return switch (summary) {
-                    .constraints => |constraints| (try constraints.instantiate(self.graph))[0],
+            if (try self.findInterfaceSummary(address, evidence, request)) |found| {
+                return switch (found.summary) {
+                    .constraints => |constraints| (try self.instantiateFoundConstraints(found.domain, constraints))[0],
                     .unchanged => Common.invariant("checked method signature snapshot had no root"),
                 };
             }
@@ -54611,11 +54865,8 @@ const BodyContext = struct {
         if (runtime_arg_tys.len != 1) Common.invariant("structural parser runtime function must have one state argument");
 
         const top_level_null_try = self.tryNullInfo(shape_ty);
-        const nominal_scalar_backing = if (self.nominalExprBackingType(shape_ty)) |backing_ty|
-            self.scalarCodecMethodName(backing_ty, "parse_") != null
-        else
-            false;
-        if (self.scalarCodecMethodName(shape_ty, "parse_") == null and top_level_null_try == null and !nominal_scalar_backing) {
+        const nominal_layer_backing = self.derivedCodecLayerBackingType(shape_ty, "parse_") != null;
+        if (self.scalarCodecMethodName(shape_ty, "parse_") == null and top_level_null_try == null and !nominal_layer_backing) {
             if (self.setPayloadType(shape_ty)) |elem_ty| {
                 if (!try self.codecFieldTypeIsSupported(.parser, elem_ty, false)) Common.invariant("structural parser set element type was not supported");
             } else if (self.dictEntryShape(shape_ty)) |dict| {
@@ -55703,18 +55954,17 @@ const BodyContext = struct {
         if (self.scalarCodecMethodName(shape_ty, "encode_")) |method_name| {
             return encodeExpr(try self.lowerEncodeFormatMethod(method_name, &.{ value.value_expr, value.state_expr }, &.{ shape_ty, value.state_ty }, shape_ty, value.ret_ty));
         }
-        // A nominal opaque with a scalar backing and no custom encoder (e.g. `Username := Str`)
-        // encodes as its backing: unwrap one nominal layer and encode the scalar.
-        if (self.nominalExprBackingType(shape_ty)) |backing_ty| {
-            if (self.scalarCodecMethodName(backing_ty, "encode_") != null) {
-                task.backing_ty = backing_ty;
-                task.value_local = try self.addLocal(self.builder.symbols.fresh(), shape_ty);
-                task.backing_local = try self.addLocal(self.builder.symbols.fresh(), backing_ty);
-                var backing = value;
-                backing.shape_ty = backing_ty;
-                backing.value_expr = try self.localExpr(task.backing_local, backing_ty);
-                return .{ .child = .{ .shape = .{ .inputs = task.inputs, .value = backing } } };
-            }
+        // A derived encoder for a nominal backed by a scalar or another nominal
+        // (`Username := Str.{ encoder_for : _ }`) encodes as its backing: unwrap
+        // one nominal layer and encode the backing value.
+        if (self.derivedCodecLayerBackingType(shape_ty, "encode_")) |backing_ty| {
+            task.backing_ty = backing_ty;
+            task.value_local = try self.addLocal(self.builder.symbols.fresh(), shape_ty);
+            task.backing_local = try self.addLocal(self.builder.symbols.fresh(), backing_ty);
+            var backing = value;
+            backing.shape_ty = backing_ty;
+            backing.value_expr = try self.localExpr(task.backing_local, backing_ty);
+            return .{ .child = .{ .shape = .{ .inputs = task.inputs, .value = backing } } };
         }
         return switch (self.shapeContent(shape_ty)) {
             .record, .zst => .{ .tail = .{ .record = .{ .inputs = task.inputs, .value = value } } },
@@ -57017,8 +57267,9 @@ const BodyContext = struct {
             return true;
         }
         if (self.frozenCustomCodecCallForShape(kind, ty) != null) return true;
-        if (self.nominalExprBackingType(ty)) |backing_ty| {
-            if (self.scalarCodecMethodName(backing_ty, scalar_prefix) != null) return true;
+        if (self.derivedCodecLayerBackingType(ty, scalar_prefix)) |backing_ty| {
+            try pending.append(self.allocator, .{ .check = .{ .ty = backing_ty } });
+            return true;
         }
         if (self.setPayloadType(ty)) |payload_ty| {
             try pending.append(self.allocator, .{ .check = .{ .ty = payload_ty } });
@@ -58437,6 +58688,10 @@ const BodyContext = struct {
         }
     }
 
+    /// The generated tag-union spec backing: one `Str` field per distinct
+    /// field label of the record shapes the union's payload parsers reach,
+    /// holding that label's renamed name. Renamed names depend only on the
+    /// label, so each record field reads its name by label.
     fn generatedParseTagUnionSpecBackingNode(
         self: *BodyContext,
         union_node: NodeId,
@@ -58448,30 +58703,21 @@ const BodyContext = struct {
         try self.appendGraphParserRecordShapes(union_node, &record_shapes, &seen);
 
         const str_node = try self.graph.newNode(.{ .primitive = .str });
-        const outer_fields = try self.graph.arena().alloc(InstField, record_shapes.items.len);
-        for (record_shapes.items, outer_fields, 0..) |record_shape, *outer_field, record_index| {
-            const record_fields = (try self.graph.recordNodes(record_shape)).fields;
-            const inner_fields = try self.graph.arena().alloc(InstField, record_fields.len);
-            for (inner_fields, 0..) |*inner_field, field_index| {
-                inner_field.* = .{
-                    .name = try self.generatedParseTagUnionSpecBackingFieldName(field_index),
+        var label_fields = std.ArrayList(InstField).empty;
+        defer label_fields.deinit(self.allocator);
+        var seen_labels = collections.DenseMap(names.RecordFieldNameId, void).init(self.allocator);
+        defer seen_labels.deinit();
+        for (record_shapes.items) |record_shape| {
+            for ((try self.graph.recordNodes(record_shape)).fields) |field| {
+                if ((try seen_labels.getOrPut(field.name)).found_existing) continue;
+                try label_fields.append(self.allocator, .{
+                    .name = field.name,
                     .ty = str_node,
                     .default = null,
-                };
+                });
             }
-            outer_field.* = .{
-                .name = try self.generatedParseTagUnionSpecBackingRecordFieldName(record_index),
-                .ty = try self.graph.newNode(.{ .record = .{
-                    .fields = inner_fields,
-                    .ext = try self.graph.newNode(.empty_record),
-                } }),
-                .default = null,
-            };
         }
-        return try self.graph.newNode(.{ .record = .{
-            .fields = outer_fields,
-            .ext = try self.graph.newNode(.empty_record),
-        } });
+        return try self.graphClosedRecord(label_fields.items);
     }
 
     fn cloneGraphNamedWithBackingAuthority(
@@ -58642,7 +58888,7 @@ const BodyContext = struct {
         const item_fields = try self.graph.arena().alloc(InstField, record_fields.len);
         for (item_fields, 0..) |*field, index| {
             field.* = .{
-                .name = try self.generatedParseTagUnionSpecBackingFieldName(index),
+                .name = try self.generatedFieldNamesItemFieldName(index),
                 .ty = field_handle,
                 .default = null,
             };
@@ -58782,6 +59028,21 @@ const BodyContext = struct {
 
     fn graphNodeHasJsonScalarParser(self: *BodyContext, node: NodeId) Allocator.Error!bool {
         return (try self.graphScalarCodecMethodName(node, "parse_")) != null;
+    }
+
+    /// The graph counterpart of `derivedCodecLayerBackingType`: the backing
+    /// node a derived codec for `node` reaches after unwrapping exactly one
+    /// named layer, when that backing is a builtin scalar or a user nominal.
+    fn graphDerivedCodecLayerBackingNode(self: *BodyContext, node: NodeId, comptime prefix: []const u8) Allocator.Error!?NodeId {
+        const backing = switch ((try self.graph.content(node))) {
+            .named => |named| named.backing orelse return null,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
+        };
+        if ((try self.graphScalarCodecMethodName(backing.node, prefix)) != null) return backing.node;
+        return switch ((try self.methodOwnerFromNode(backing.node)) orelse return null) {
+            .builtin => null,
+            .nominal => backing.node,
+        };
     }
 
     /// The format method (`prefix` plus the scalar's name) that reads or
@@ -59480,19 +59741,15 @@ const BodyContext = struct {
             );
         }
 
-        // A nominal opaque with a scalar backing (e.g. `Username := Str`) prepares the codec for
-        // its backing scalar; the encoder/parser reaches it after unwrapping the nominal.
-        switch ((try self.graph.content(shape_node))) {
-            .named => |named| if (named.backing) |backing| {
-                const backing_is_scalar = if (kind == .parser)
-                    (try self.graphScalarCodecMethodName(backing.node, "parse_")) != null
-                else
-                    (try self.graphScalarCodecMethodName(backing.node, "encode_")) != null;
-                if (backing_is_scalar) {
-                    return try self.prepareCustomCodecCallsAtNode(boundary_expr, kind, backing.node, boundary_callable_node, seen);
-                }
-            },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => {},
+        // A derived codec for a nominal backed by a scalar or another nominal
+        // (`Username := Str.{ encoder_for : _ }`) prepares the codec for its
+        // backing; the encoder/parser reaches it after unwrapping one nominal layer.
+        const layer_backing = switch (kind) {
+            .parser => try self.graphDerivedCodecLayerBackingNode(shape_node, "parse_"),
+            .encoder => try self.graphDerivedCodecLayerBackingNode(shape_node, "encode_"),
+        };
+        if (layer_backing) |backing_node| {
+            return try self.prepareCustomCodecCallsAtNode(boundary_expr, kind, backing_node, boundary_callable_node, seen);
         }
 
         if ((try self.graphNodeIsBuiltinTry(shape_node))) {
@@ -62605,14 +62862,12 @@ const BodyContext = struct {
             selection.declared;
     }
 
-    fn stateMergeBinders(self: *BodyContext, expr_id: checked.CheckedExprId) Allocator.Error![]MergeBinder {
-        var reassigned = std.ArrayList(checked.PatternBinderId).empty;
-        defer reassigned.deinit(self.allocator);
-        try self.collectReassignedBindersInExpr(expr_id, &reassigned);
-
+    /// The binders a construct threads as explicit state: those its checked
+    /// state merge plan names that are bound before it.
+    fn stateMergeBinders(self: *BodyContext, plan: checked.StateMergePlanId) Allocator.Error![]MergeBinder {
         var merge_binders = std.ArrayList(MergeBinder).empty;
         errdefer merge_binders.deinit(self.allocator);
-        for (reassigned.items) |binder| {
+        for (self.view.bodies.stateMergeBinders(plan)) |binder| {
             const before = self.binders.get(binder) orelse continue;
             try merge_binders.append(self.allocator, .{
                 .binder = binder,
@@ -63158,7 +63413,7 @@ const BodyContext = struct {
         self.builder.current_loc = try self.sourceLocFor(statement.source_region);
         self.builder.current_region = statement.source_region;
         const merge_binders: []MergeBinder = switch (self.view.bodies.expr(decl.expr).data) {
-            .if_, .match_, .for_ => try self.stateMergeBinders(decl.expr),
+            .if_, .match_, .for_ => try self.stateMergeBinders(self.view.bodies.exprStateMerge(decl.expr)),
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .hosted_lambda, .run_low_level, .row_coerce => try self.allocator.alloc(MergeBinder, 0),
         };
         defer self.allocator.free(merge_binders);
@@ -63318,7 +63573,7 @@ const BodyContext = struct {
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .hosted_lambda, .run_low_level => return null,
         }
 
-        task.expanded_merge_binders = try self.stateMergeBinders(expr_id);
+        task.expanded_merge_binders = try self.stateMergeBinders(self.view.bodies.exprStateMerge(expr_id));
         const merge_binders = task.expanded_merge_binders;
         if (merge_binders.len == 0) {
             self.allocator.free(task.expanded_merge_binders);
@@ -63939,6 +64194,12 @@ const BodyContext = struct {
         return try self.typeStore().internRecord(self.nameStore(), &.{});
     }
 
+    /// The published binders a loop carries.
+    fn loopMutationBinders(self: *BodyContext, plan: ?checked.LoopMutationPlanId) []const checked.PatternBinderId {
+        const range = self.view.bodies.loopMutations(plan orelse Common.invariant("checked loop omitted its mutation plan")).binders;
+        return self.view.bodies.patternBinderIdPool()[range.start..][0..range.len];
+    }
+
     fn prepareLoopCarries(self: *BodyContext, plan: ?checked.LoopMutationPlanId) Allocator.Error![]LoopCarry {
         var carries = std.ArrayList(LoopCarry).empty;
         errdefer carries.deinit(self.allocator);
@@ -63978,272 +64239,6 @@ const BodyContext = struct {
             items[i] = try self.addPatWithTypeCell(carry.ty, .{ .bind = local });
         }
         return try self.addPatWithTypeCell(result_cell, .{ .tuple = try self.addPatSpan(items) });
-    }
-
-    const ReassignedBinderItem = union(enum) {
-        expr: checked.CheckedExprId,
-        loop_mutations: ?checked.LoopMutationPlanId,
-        /// A binder a statement reassigns directly, in its source position.
-        binder: checked.PatternBinderId,
-    };
-
-    /// One expression whose reassigned binders are being collected: its
-    /// parts in `items[items_start..items_end]`, and its unique binders so
-    /// far in `binders[binders_start..]`.
-    const ReassignedBinderFrame = struct {
-        expr: checked.CheckedExprId,
-        items_start: usize,
-        items_end: usize,
-        next: usize,
-        binders_start: usize,
-    };
-
-    /// Collect the binders an expression reassigns, in source order. Each
-    /// expression's binders are its parts' binders in order, first occurrence
-    /// kept, so every expression's list is memoized for the compilation: a
-    /// nest of stateful expressions each asking for its own binders reads its
-    /// children's lists instead of walking them again.
-    fn collectReassignedBindersInExpr(
-        self: *BodyContext,
-        root: checked.CheckedExprId,
-        out: *std.ArrayList(checked.PatternBinderId),
-    ) Allocator.Error!void {
-        const gpa = self.allocator;
-        if (self.builder.reassigned_binders_memo.get(self.reassignedBinderAddress(root)) == null) {
-            var frames: std.ArrayList(ReassignedBinderFrame) = .empty;
-            defer frames.deinit(gpa);
-            var items: std.ArrayList(ReassignedBinderItem) = .empty;
-            defer items.deinit(gpa);
-            var binders: std.ArrayList(checked.PatternBinderId) = .empty;
-            defer binders.deinit(gpa);
-            try self.pushReassignedBinderFrame(&frames, &items, &binders, root);
-            while (frames.items.len != 0) {
-                const frame = &frames.items[frames.items.len - 1];
-                if (frame.next == frame.items_end) {
-                    const finished = frames.pop().?;
-                    const span = try self.memoizeReassignedBinders(finished.expr, binders.items[finished.binders_start..]);
-                    binders.shrinkRetainingCapacity(finished.binders_start);
-                    items.shrinkRetainingCapacity(finished.items_start);
-                    if (frames.items.len != 0) {
-                        const parent_start = frames.items[frames.items.len - 1].binders_start;
-                        for (self.builder.reassigned_binder_pool.items[span.start..][0..span.len]) |binder| {
-                            try appendUniqueBinderFrom(gpa, &binders, parent_start, binder);
-                        }
-                    }
-                    continue;
-                }
-                const item = items.items[frame.next];
-                frame.next += 1;
-                const binders_start = frame.binders_start;
-                switch (item) {
-                    .binder => |binder| try appendUniqueBinderFrom(gpa, &binders, binders_start, binder),
-                    .loop_mutations => |plan| for (self.loopMutationBinders(plan)) |binder| {
-                        try appendUniqueBinderFrom(gpa, &binders, binders_start, binder);
-                    },
-                    .expr => |expr_id| if (self.builder.reassigned_binders_memo.get(self.reassignedBinderAddress(expr_id))) |span| {
-                        for (self.builder.reassigned_binder_pool.items[span.start..][0..span.len]) |binder| {
-                            try appendUniqueBinderFrom(gpa, &binders, binders_start, binder);
-                        }
-                    } else {
-                        try self.pushReassignedBinderFrame(&frames, &items, &binders, expr_id);
-                    },
-                }
-            }
-        }
-        const span = self.builder.reassigned_binders_memo.get(self.reassignedBinderAddress(root)).?;
-        for (self.builder.reassigned_binder_pool.items[span.start..][0..span.len]) |binder| try self.appendUniqueBinder(out, binder);
-    }
-
-    fn pushReassignedBinderFrame(
-        self: *BodyContext,
-        frames: *std.ArrayList(ReassignedBinderFrame),
-        items: *std.ArrayList(ReassignedBinderItem),
-        binders: *const std.ArrayList(checked.PatternBinderId),
-        expr_id: checked.CheckedExprId,
-    ) Allocator.Error!void {
-        const items_start = items.items.len;
-        try self.pushReassignedExprParts(items, expr_id);
-        try frames.append(self.allocator, .{
-            .expr = expr_id,
-            .items_start = items_start,
-            .items_end = items.items.len,
-            .next = items_start,
-            .binders_start = binders.items.len,
-        });
-    }
-
-    fn reassignedBinderAddress(self: *const BodyContext, expr_id: checked.CheckedExprId) ReassignedBinderAddress {
-        return .{ .module = self.view.key, .expr = expr_id };
-    }
-
-    fn memoizeReassignedBinders(
-        self: *BodyContext,
-        expr_id: checked.CheckedExprId,
-        binders: []const checked.PatternBinderId,
-    ) Allocator.Error!ReassignedBinderSpan {
-        const span: ReassignedBinderSpan = .{ .start = self.builder.reassigned_binder_pool.items.len, .len = binders.len };
-        try self.builder.reassigned_binder_pool.appendSlice(self.builder.allocator, binders);
-        try self.builder.reassigned_binders_memo.put(self.builder.allocator, self.reassignedBinderAddress(expr_id), span);
-        return span;
-    }
-
-    fn appendUniqueBinderFrom(
-        gpa: Allocator,
-        binders: *std.ArrayList(checked.PatternBinderId),
-        start: usize,
-        binder: checked.PatternBinderId,
-    ) Allocator.Error!void {
-        for (binders.items[start..]) |existing| {
-            if (existing == binder) return;
-        }
-        try binders.append(gpa, binder);
-    }
-
-    fn pushReassignedExprParts(self: *BodyContext, pending: *std.ArrayList(ReassignedBinderItem), expr_id: checked.CheckedExprId) Allocator.Error!void {
-        const gpa = self.allocator;
-        const expr = self.view.bodies.expr(expr_id);
-        switch (expr.data) {
-            .str => |segments| for (segments) |segment| try pending.append(gpa, .{ .expr = segment }),
-            .list, .tuple => |items| for (items) |child| try pending.append(gpa, .{ .expr = child }),
-            .match_ => |match| {
-                try pending.append(gpa, .{ .expr = match.cond });
-                for (match.branches) |branch| {
-                    if (branch.guard) |guard| try pending.append(gpa, .{ .expr = guard });
-                    try pending.append(gpa, .{ .expr = branch.value });
-                }
-            },
-            .if_ => |if_| {
-                for (if_.branches) |branch| {
-                    try pending.append(gpa, .{ .expr = branch.cond });
-                    try pending.append(gpa, .{ .expr = branch.body });
-                }
-                try pending.append(gpa, .{ .expr = if_.final_else });
-            },
-            .call => |call| {
-                try pending.append(gpa, .{ .expr = call.func });
-                for (call.args) |arg| try pending.append(gpa, .{ .expr = arg });
-            },
-            .record => |record| {
-                if (record.ext) |ext| try pending.append(gpa, .{ .expr = ext });
-                for (record.fields) |field| try pending.append(gpa, .{ .expr = field.value });
-            },
-            .block => |block| {
-                for (block.statements) |statement| try self.pushReassignedStatementParts(pending, statement);
-                try pending.append(gpa, .{ .expr = block.final_expr });
-            },
-            .tag => |tag| for (tag.args) |arg| try pending.append(gpa, .{ .expr = arg }),
-            .nominal => |nominal| try pending.append(gpa, .{ .expr = nominal.backing_expr }),
-            .row_coerce => |coerce| try pending.append(gpa, .{ .expr = coerce.value }),
-            .binop => |binop| {
-                try pending.append(gpa, .{ .expr = binop.lhs });
-                try pending.append(gpa, .{ .expr = binop.rhs });
-            },
-            .unary_minus,
-            .unary_not,
-            .dbg,
-            => |child| try pending.append(gpa, .{ .expr = child }),
-            // An expect body can only reassign vars declared inside it, so
-            // it never changes state an enclosing construct carries.
-            .expect => {},
-            .expect_err => |expect_err| try pending.append(gpa, .{ .expr = expect_err.expr }),
-            .field_access => |field| try pending.append(gpa, .{ .expr = field.receiver }),
-            .structural_eq => |eq| {
-                try pending.append(gpa, .{ .expr = eq.lhs });
-                try pending.append(gpa, .{ .expr = eq.rhs });
-            },
-            .structural_hash => |h| {
-                try pending.append(gpa, .{ .expr = h.value });
-                try pending.append(gpa, .{ .expr = h.hasher });
-            },
-            .tuple_access => |access| try pending.append(gpa, .{ .expr = access.tuple }),
-            .return_ => |ret| try pending.append(gpa, .{ .expr = ret.expr }),
-            .for_ => |for_| {
-                try pending.append(gpa, .{ .expr = for_.expr });
-                try pending.append(gpa, .{ .loop_mutations = for_.mutations });
-            },
-            .run_low_level => |low_level| for (low_level.args) |arg| try pending.append(gpa, .{ .expr = arg }),
-            .lambda,
-            .closure,
-            .hosted_lambda,
-            .pending,
-            .numeral,
-            .str_from_quote,
-            .str_segment,
-            .bytes_literal,
-            .lookup_local,
-            .lookup_external,
-            .lookup_required,
-            .empty_list,
-            .empty_record,
-            .zero_argument_tag,
-            .dispatch_call,
-            .interpolation,
-            .method_eq,
-            .type_dispatch_call,
-            .runtime_error,
-            .crash,
-            .ellipsis,
-            .anno_only,
-            .break_,
-            => {},
-        }
-    }
-
-    /// A statement's reassigned binders come before those of its parts.
-    fn pushReassignedStatementParts(
-        self: *BodyContext,
-        pending: *std.ArrayList(ReassignedBinderItem),
-        statement_id: checked.CheckedStatementId,
-    ) Allocator.Error!void {
-        const gpa = self.allocator;
-        const statement = self.view.bodies.statement(statement_id);
-        switch (statement.data) {
-            .decl => |decl| try pending.append(gpa, .{ .expr = decl.expr }),
-            .var_ => |var_| try pending.append(gpa, .{ .expr = var_.expr }),
-            .var_uninitialized, .promoted_proc => {},
-            .reassign => |reassign| {
-                for (reassign.reassigned_binders) |binder| try pending.append(gpa, .{ .binder = binder });
-                try pending.append(gpa, .{ .expr = reassign.expr });
-            },
-            .dbg,
-            .expr,
-            => |expr| try pending.append(gpa, .{ .expr = expr }),
-            .expect => {},
-            .for_ => |for_| {
-                try pending.append(gpa, .{ .expr = for_.expr });
-                try pending.append(gpa, .{ .loop_mutations = for_.mutations });
-            },
-            inline .while_, .infinite_loop, .breakable_loop => |loop| try pending.append(gpa, .{ .loop_mutations = loop.mutations }),
-            .return_ => |ret| try pending.append(gpa, .{ .expr = ret.expr }),
-            .pending,
-            .crash,
-            .break_,
-            .import_,
-            .alias_decl,
-            .where_alias_decl,
-            .nominal_decl,
-            .type_anno,
-            .type_var_alias,
-            .runtime_error,
-            => {},
-        }
-    }
-
-    /// The published binders a loop carries.
-    fn loopMutationBinders(self: *BodyContext, plan: ?checked.LoopMutationPlanId) []const checked.PatternBinderId {
-        const range = self.view.bodies.loopMutations(plan orelse Common.invariant("checked loop omitted its mutation plan")).binders;
-        return self.view.bodies.patternBinderIdPool()[range.start..][0..range.len];
-    }
-
-    fn appendUniqueBinder(
-        self: *BodyContext,
-        out: *std.ArrayList(checked.PatternBinderId),
-        binder: checked.PatternBinderId,
-    ) Allocator.Error!void {
-        for (out.items) |existing| {
-            if (existing == binder) return;
-        }
-        try out.append(self.allocator, binder);
     }
 
     const IterStepShape = struct {
@@ -68827,13 +68822,6 @@ fn checkedTypeAddress(view: ModuleView, checked_ty: checked.CheckedTypeId) Check
     };
 }
 
-const ReassignedBinderSpan = struct { start: usize, len: usize };
-
-const ReassignedBinderAddress = struct {
-    module: checked.ModuleId,
-    expr: checked.CheckedExprId,
-};
-
 const NestedSiteAddress = struct {
     module_bytes: [32]u8,
     owner_proc_base: u32,
@@ -70187,71 +70175,61 @@ test "specialization workspace retains bidirectional type relocation across seri
     );
 }
 
-test "specialization store epochs survive workspace teardown and absorb cumulatively" {
+test "specialization store epochs are read in place while the workspace grows" {
     const allocator = std.testing.allocator;
     var program = Ast.Program.init(allocator);
     defer program.deinit();
+    var workspace = SpecJobWorkspace.init(allocator);
+    defer workspace.deinit();
 
-    var first_epoch: ?SpecJobStoreEpoch = null;
-    defer if (first_epoch) |*epoch| epoch.deinit();
-    var empty_epoch: ?SpecJobStoreEpoch = null;
-    defer if (empty_epoch) |*epoch| epoch.deinit();
-    var second_epoch: ?SpecJobStoreEpoch = null;
-    defer if (second_epoch) |*epoch| epoch.deinit();
-    var private_record: Type.TypeId = undefined;
-    var private_union: Type.TypeId = undefined;
+    const first = workspace.beginEpoch(&program);
+    const field_name = try workspace.name_store.internRecordFieldLabel("epoch_value");
+    const primitive = try workspace.types.internPrimitive(&workspace.name_store, .u64);
+    const private_record = try workspace.types.internRecord(&workspace.name_store, &.{
+        .{ .name = field_name, .ty = primitive, .default = null },
+    });
+    const first_epoch = try workspace.captureStoreEpoch(first);
+    workspace.finishEpoch(first);
 
-    {
-        var workspace = SpecJobWorkspace.init(allocator);
-        defer workspace.deinit();
+    const empty = workspace.beginEpoch(&program);
+    const empty_epoch = try workspace.captureStoreEpoch(empty);
+    workspace.finishEpoch(empty);
 
-        const first = workspace.beginEpoch(&program);
-        const field_name = try workspace.name_store.internRecordFieldLabel("epoch_value");
-        const primitive = try workspace.types.internPrimitive(&workspace.name_store, .u64);
-        private_record = try workspace.types.internRecord(&workspace.name_store, &.{
-            .{ .name = field_name, .ty = primitive, .default = null },
-        });
-        first_epoch = try workspace.captureStoreEpoch(first);
-        workspace.finishEpoch(first);
+    const second = workspace.beginEpoch(&program);
+    const tag_name = try workspace.name_store.internTagLabel("EpochValue");
+    const private_union = try workspace.types.internTagUnion(&workspace.name_store, &.{
+        .{
+            .name = tag_name,
+            .checked_name = tag_name,
+            .payloads = &.{private_record},
+        },
+    });
+    const second_epoch = try workspace.captureStoreEpoch(second);
+    workspace.finishEpoch(second);
 
-        const empty = workspace.beginEpoch(&program);
-        empty_epoch = try workspace.captureStoreEpoch(empty);
-        workspace.finishEpoch(empty);
-
-        const second = workspace.beginEpoch(&program);
-        const tag_name = try workspace.name_store.internTagLabel("EpochValue");
-        private_union = try workspace.types.internTagUnion(&workspace.name_store, &.{
-            .{
-                .name = tag_name,
-                .checked_name = tag_name,
-                .payloads = &.{private_record},
-            },
-        });
-        second_epoch = try workspace.captureStoreEpoch(second);
-        workspace.finishEpoch(second);
-
-        // Result epochs must not borrow source arrays: grow both stores after
-        // capture, then destroy the workspace before coordinator absorption.
-        var index: u32 = 0;
-        while (index < 256) : (index += 1) {
-            var digest = @as([32]u8, @splat(0));
-            std.mem.writeInt(u32, digest[0..4], index, .little);
-            _ = try workspace.types.internErased(
-                &workspace.name_store,
-                .{ .bytes = digest },
-            );
-            var text_buffer: [32]u8 = undefined;
-            const text = try std.fmt.bufPrint(&text_buffer, "post_epoch_{d}", .{index});
-            _ = try workspace.name_store.internRecordFieldLabel(text);
-        }
+    // Captured epochs read the workspace in place: grow both stores after
+    // capture, and every view keeps reading the backing it captured.
+    const third = workspace.beginEpoch(&program);
+    var index: u32 = 0;
+    while (index < 256) : (index += 1) {
+        var digest = @as([32]u8, @splat(0));
+        std.mem.writeInt(u32, digest[0..4], index, .little);
+        _ = try workspace.types.internErased(
+            &workspace.name_store,
+            .{ .bytes = digest },
+        );
+        var text_buffer: [32]u8 = undefined;
+        const text = try std.fmt.bufPrint(&text_buffer, "post_epoch_{d}", .{index});
+        _ = try workspace.name_store.internRecordFieldLabel(text);
     }
+    try std.testing.expect(workspace.superseded.count() != 0);
 
     var commit_domain = SpecJobCommitDomain.init(allocator);
     defer commit_domain.deinit();
-    try commit_domain.absorb(&first_epoch.?);
+    commit_domain.absorb(&first_epoch);
     try std.testing.expect(std.meta.eql(
         commit_domain.types.epochBoundary(),
-        first_epoch.?.types.end,
+        first_epoch.types.boundary(),
     ));
     const private_fields = commit_domain.types.fieldSpan(switch (commit_domain.types.get(private_record)) {
         .record => |fields| fields,
@@ -70274,14 +70252,14 @@ test "specialization store epochs survive workspace teardown and absorb cumulati
 
     const types_before_empty = commit_domain.types.epochBoundary();
     const names_before_empty = commit_domain.name_store.epochBoundary();
-    try commit_domain.absorb(&empty_epoch.?);
+    commit_domain.absorb(&empty_epoch);
     try std.testing.expect(std.meta.eql(types_before_empty, commit_domain.types.epochBoundary()));
     try std.testing.expect(std.meta.eql(names_before_empty, commit_domain.name_store.epochBoundary()));
 
-    try commit_domain.absorb(&second_epoch.?);
+    commit_domain.absorb(&second_epoch);
     try std.testing.expect(std.meta.eql(
         commit_domain.types.epochBoundary(),
-        second_epoch.?.types.end,
+        second_epoch.types.boundary(),
     ));
     const private_tags = commit_domain.types.tagSpan(switch (commit_domain.types.get(private_union)) {
         .tag_union => |tags| tags,
@@ -70297,6 +70275,11 @@ test "specialization store epochs survive workspace teardown and absorb cumulati
         GuardedList.at(commit_domain.types.span(private_tag.payloads), 0),
     );
 
+    // The latest absorbed view still reads backings replaced after its
+    // epoch was captured, so the lane keeps them.
+    try workspace.releaseCoordinatorReads(&commit_domain.releases, null);
+    try std.testing.expect(workspace.superseded.count() != 0);
+
     var imported = try program.types.importTypes(
         &program.names,
         &commit_domain.types,
@@ -70307,8 +70290,13 @@ test "specialization store epochs survive workspace teardown and absorb cumulati
     defer imported.deinit();
     const committed_union = imported.roots[0];
 
-    commit_domain.deinit();
-    commit_domain = SpecJobCommitDomain.init(allocator);
+    // Once a later epoch is absorbed, no view reaches the replaced backings.
+    const third_epoch = try workspace.captureStoreEpoch(third);
+    workspace.finishEpoch(third);
+    commit_domain.absorb(&third_epoch);
+    try workspace.releaseCoordinatorReads(&commit_domain.releases, null);
+    try std.testing.expectEqual(@as(usize, 0), workspace.superseded.count());
+
     const committed_tags = program.types.tagSpan(switch (program.types.get(committed_union)) {
         .tag_union => |tags| tags,
         .primitive, .named, .record, .tuple, .box, .list, .func, .erased, .zst => return error.TestExpectedEqual,
@@ -70325,96 +70313,63 @@ test "specialization store epochs survive workspace teardown and absorb cumulati
     try std.testing.expect(program.types.verify(&program.names) == null);
 }
 
-test "specialization store epoch absorption preserves boundaries on allocation failure" {
+test "specialization lanes release their own interface summaries once a task can read them shared" {
     const allocator = std.testing.allocator;
     var program = Ast.Program.init(allocator);
     defer program.deinit();
     var workspace = SpecJobWorkspace.init(allocator);
     defer workspace.deinit();
+    var commit_domain = SpecJobCommitDomain.init(allocator);
+    defer commit_domain.deinit();
 
-    const workspace_epoch = workspace.beginEpoch(&program);
-    const field_name = try workspace.name_store.internRecordFieldLabel("retry_value");
-    const primitive = try workspace.types.internPrimitive(&workspace.name_store, .u64);
-    const record = try workspace.types.internRecord(&workspace.name_store, &.{
-        .{ .name = field_name, .ty = primitive, .default = null },
-    });
-    var first_epoch = try workspace.captureStoreEpoch(workspace_epoch);
-    defer first_epoch.deinit();
-    workspace.finishEpoch(workspace_epoch);
+    var entries: [3]InterfaceSummaryEntry = undefined;
+    for (&entries, 0..) |*entry, index| {
+        var address = std.mem.zeroes(InterfaceReplayAddress);
+        address.input_digest[0] = @intCast(index);
+        entry.* = .{
+            .address = address,
+            .evidence = StoredConstFnEvidence.empty(),
+            .request = .{ .bytes = &.{}, .leaves = &.{} },
+            .summary = .unchanged,
+        };
+    }
+    const cache = &workspace.interface_summaries;
+    var epochs: [2]SpecJobStoreEpoch = undefined;
+    for (&epochs, entries[0..2]) |*captured, entry| {
+        const epoch = workspace.beginEpoch(&program);
+        _ = try cache.insert(&workspace.types, &workspace.name_store, entry);
+        captured.* = try workspace.captureStoreEpoch(epoch);
+        workspace.finishEpoch(epoch);
+    }
+    // A later task's own summary, not yet captured by a shard.
+    _ = try cache.insert(&workspace.types, &workspace.name_store, entries[2]);
+    try std.testing.expectEqual(@as(usize, 3), cache.entries.items.len);
 
-    const next_workspace_epoch = workspace.beginEpoch(&program);
-    const tag_name = try workspace.name_store.internTagLabel("RetryValue");
-    const union_ty = try workspace.types.internTagUnion(&workspace.name_store, &.{
-        .{
-            .name = tag_name,
-            .checked_name = tag_name,
-            .payloads = &.{record},
-        },
-    });
-    var second_epoch = try workspace.captureStoreEpoch(next_workspace_epoch);
-    defer second_epoch.deinit();
-    workspace.finishEpoch(next_workspace_epoch);
+    commit_domain.absorb(&epochs[0]);
+    try commit_domain.releases.noteShared(allocator, .{ .epoch = epochs[0].epoch, .visible_end = 1 });
+    commit_domain.absorb(&epochs[1]);
+    try commit_domain.releases.noteShared(allocator, .{ .epoch = epochs[1].epoch, .visible_end = 2 });
 
-    const Helper = struct {
-        fn absorbWithRetry(
-            domain: *SpecJobCommitDomain,
-            source_epoch: *const SpecJobStoreEpoch,
-            injected_error: *?Allocator.Error,
-        ) Allocator.Error!void {
-            const types_before = domain.types.epochBoundary();
-            const names_before = domain.name_store.epochBoundary();
-            domain.absorb(source_epoch) catch |err| {
-                std.debug.assert(std.meta.eql(types_before, domain.types.epochBoundary()));
-                std.debug.assert(std.meta.eql(names_before, domain.name_store.epochBoundary()));
-                std.debug.assert(injected_error.* == null);
-                try domain.absorb(source_epoch);
-                injected_error.* = err;
-            };
-            std.debug.assert(std.meta.eql(source_epoch.types.end, domain.types.epochBoundary()));
-            std.debug.assert(std.meta.eql(source_epoch.names.end, domain.name_store.epochBoundary()));
-        }
-
-        fn run(
-            failing_allocator: Allocator,
-            source_first: *const SpecJobStoreEpoch,
-            source_second: *const SpecJobStoreEpoch,
-            expected_record: Type.TypeId,
-            expected_union: Type.TypeId,
-        ) Allocator.Error!void {
-            var domain = SpecJobCommitDomain.init(failing_allocator);
-            defer domain.deinit();
-            var injected_error: ?Allocator.Error = null;
-            try absorbWithRetry(&domain, source_first, &injected_error);
-            try absorbWithRetry(&domain, source_second, &injected_error);
-
-            const fields = domain.types.fieldSpan(switch (domain.types.get(expected_record)) {
-                .record => |span| span,
-                .primitive, .named, .tuple, .tag_union, .box, .list, .func, .erased, .zst => unreachable,
-            });
-            std.debug.assert(std.mem.eql(
-                u8,
-                "retry_value",
-                domain.name_store.recordFieldLabelText(GuardedList.at(fields, 0).name),
-            ));
-            const tags = domain.types.tagSpan(switch (domain.types.get(expected_union)) {
-                .tag_union => |span| span,
-                .primitive, .named, .record, .tuple, .box, .list, .func, .erased, .zst => unreachable,
-            });
-            const tag = GuardedList.at(tags, 0);
-            std.debug.assert(std.mem.eql(
-                u8,
-                "RetryValue",
-                domain.name_store.tagLabelText(tag.name),
-            ));
-            std.debug.assert(GuardedList.at(domain.types.span(tag.payloads), 0) == expected_record);
-            if (injected_error) |err| return err;
+    const Found = struct {
+        fn present(summaries: *const InterfaceSummaryCache, entry: InterfaceSummaryEntry, space: *SpecJobWorkspace) Allocator.Error!bool {
+            return try summaries.find(entry.address, entry.evidence, entry.request, &space.types, &space.name_store) != null;
         }
     };
-    try std.testing.checkAllAllocationFailures(
-        allocator,
-        Helper.run,
-        .{ &first_epoch, &second_epoch, record, union_ty },
-    );
+    // A task whose snapshot predates both shares keeps both copies.
+    try workspace.releaseCoordinatorReads(&commit_domain.releases, 0);
+    try std.testing.expectEqual(@as(usize, 3), cache.entries.items.len);
+    // One that reads the first share drops only the first epoch's.
+    try workspace.releaseCoordinatorReads(&commit_domain.releases, 1);
+    try std.testing.expectEqual(@as(usize, 2), cache.entries.items.len);
+    try std.testing.expectEqual(@as(usize, 1), cache.sealedEnd());
+    try std.testing.expect(!try Found.present(cache, entries[0], &workspace));
+    try std.testing.expect(try Found.present(cache, entries[1], &workspace));
+    try std.testing.expect(try Found.present(cache, entries[2], &workspace));
+    try workspace.releaseCoordinatorReads(&commit_domain.releases, 2);
+    try std.testing.expectEqual(@as(usize, 1), cache.entries.items.len);
+    try std.testing.expectEqual(@as(usize, 0), cache.sealedEnd());
+    try std.testing.expect(!try Found.present(cache, entries[1], &workspace));
+    try std.testing.expect(try Found.present(cache, entries[2], &workspace));
 }
 
 test "executor lane retains Monotype state within a run and resets it between runs" {
