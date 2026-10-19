@@ -28,6 +28,23 @@ pub fn StoreSpanBorrow(comptime T: type, comptime field_name: []const u8) type {
 /// Identifier for a monomorphic type in this store.
 pub const TypeId = enum(u32) { _ };
 
+/// A type id or none in one id's width. `Store.add` never issues the `none`
+/// value as an id.
+pub const MaybeTypeId = enum(u32) {
+    none = std.math.maxInt(u32),
+    _,
+
+    pub fn of(ty: ?TypeId) MaybeTypeId {
+        const present = ty orelse return .none;
+        return @fromBackingInt(@backingInt(present));
+    }
+
+    pub fn get(self: MaybeTypeId) ?TypeId {
+        if (self == .none) return null;
+        return @fromBackingInt(@backingInt(self));
+    }
+};
+
 /// Slice descriptor for type, field, or tag arrays in this store.
 pub const Span = extern struct {
     start: u32,
@@ -671,6 +688,8 @@ pub const Store = struct {
     pub fn add(self: *Store, content: Content) std.mem.Allocator.Error!TypeId {
         self.assertMutable();
         const index = self.types.len();
+        // `MaybeTypeId.none` is never an id.
+        if (index >= std.math.maxInt(u32)) return error.OutOfMemory;
         try self.reservePrefixList(&self.types, 1);
         try self.ensureSideCapacity(content);
         const named_nodes_len = self.named_nodes.len();

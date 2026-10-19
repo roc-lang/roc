@@ -5967,7 +5967,7 @@ const Builder = struct {
                 .open => {},
             };
             for (summary.open_nodes) |node| {
-                if (node.finished) |ty| try roots.append(self.allocator, ty);
+                if (node.finished.get()) |ty| try roots.append(self.allocator, ty);
             }
         }
         const committed = try committed_types.commitTypes(self.allocator, roots.items);
@@ -26590,7 +26590,7 @@ const BodyContext = struct {
             },
             .measuring => |scope| blk: {
                 if (!self.checkedTypeIsClosed(checked_ty)) return null;
-                break :blk .{ scope, self.graph.closedCheckedMono(self.view.key.bytes, checked_ty) orelse return null };
+                break :blk .{ scope, self.graph.closedCheckedMono(checkedTypeAddress(self.view, checked_ty)) orelse return null };
             },
         };
         const node = try self.graph.checkedLeaf(scope, mono);
@@ -26604,7 +26604,7 @@ const BodyContext = struct {
     /// stays a leaf, and sealed together with every closed type the build
     /// reached.
     fn closedCheckedMono(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!Type.TypeId {
-        if (self.graph.closedCheckedMono(self.view.key.bytes, checked_ty)) |known| return known;
+        if (self.graph.closedCheckedMono(checkedTypeAddress(self.view, checked_ty))) |known| return known;
         const previous = self.instantiation;
         self.instantiation = try TypeInstantiationContext.initPooled(self.builder, self.builder.allocateInstantiationScope(), self.view.key.bytes);
         defer {
@@ -26613,8 +26613,8 @@ const BodyContext = struct {
         }
         self.instantiation.closed_types = .{ .measuring = try self.graph.newLeafScope() };
         _ = try self.instNode(checked_ty);
-        try self.graph.recordClosedCheckedMonos(self.view.key.bytes, self.instantiation.measured.items);
-        return self.graph.closedCheckedMono(self.view.key.bytes, checked_ty) orelse
+        try self.graph.recordClosedCheckedMonos(checkedTypeAddress(self.view, checked_ty).module, self.instantiation.measured.items);
+        return self.graph.closedCheckedMono(checkedTypeAddress(self.view, checked_ty)) orelse
             Common.invariant("measuring a closed checked type did not record its Monotype");
     }
 
@@ -26796,7 +26796,7 @@ const BodyContext = struct {
     /// gives.
     fn pureInstanceKey(self: *const BodyContext, checked_ty: checked.CheckedTypeId) solve.PureInstanceKey {
         return .{
-            .module_bytes = self.view.key.bytes,
+            .module = checkedTypeAddress(self.view, checked_ty).module,
             .checked_ty = @backingInt(checked_ty),
             .scheme_vars_ptr = if (self.evidence.schema) |schema| @intFromPtr(schema.scheme_vars.ptr) else 0,
             .subst_ptr = @intFromPtr(self.evidence.subst.ptr),
@@ -68957,39 +68957,8 @@ fn sameTypeDefAcrossStores(
         left.source_decl == right.source_decl;
 }
 
-/// A checked type by its owning module's dense lowering id.
-const CheckedTypeAddress = struct {
-    module: Common.LoweringModuleId,
-    type_id: checked.CheckedTypeId,
-};
-
-/// Answers memoized per checked type: one dense column per lowering module.
-fn CheckedTypeMemo(comptime V: type) type {
-    return struct {
-        const Self = @This();
-        const Column = collections.DenseMapUnmanaged(checked.CheckedTypeId, V);
-        columns: std.ArrayList(Column) = .empty,
-
-        pub const empty: Self = .{};
-
-        fn deinit(self: *Self, allocator: Allocator) void {
-            for (self.columns.items) |*column| column.deinit(allocator);
-            self.columns.deinit(allocator);
-        }
-
-        fn get(self: *const Self, address: CheckedTypeAddress) ?V {
-            const index = @backingInt(address.module);
-            if (index >= self.columns.items.len) return null;
-            return self.columns.items[index].get(address.type_id);
-        }
-
-        fn put(self: *Self, allocator: Allocator, address: CheckedTypeAddress, value: V) Allocator.Error!void {
-            const index = @backingInt(address.module);
-            if (index >= self.columns.items.len) try self.columns.appendNTimes(allocator, .empty, index + 1 - self.columns.items.len);
-            try self.columns.items[index].put(allocator, address.type_id, value);
-        }
-    };
-}
+const CheckedTypeAddress = solve.CheckedTypeAddress;
+const CheckedTypeMemo = solve.CheckedTypeMemo;
 
 /// A scheme's quantified-variable list, by the identity of its storage.
 const SchemeVarsAddress = struct {

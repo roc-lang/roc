@@ -38,6 +38,23 @@ pub const EntryRoot = struct {
 /// Identity of a node in a specialization's instantiation graph.
 pub const NodeId = enum(u32) { _ };
 
+/// A node id or none in one id's width. `InstGraph.newNode` never issues the
+/// `none` value as an id.
+const MaybeNodeId = enum(u32) {
+    none = std.math.maxInt(u32),
+    _,
+
+    fn of(node: ?NodeId) MaybeNodeId {
+        const present = node orelse return .none;
+        return @fromBackingInt(@backingInt(present));
+    }
+
+    fn get(self: MaybeNodeId) ?NodeId {
+        if (self == .none) return null;
+        return @fromBackingInt(@backingInt(self));
+    }
+};
+
 /// Tag variant inside an instantiation-graph row. Names are program NameStore
 /// ids translated at instantiation so rows from different checked modules
 /// compare uniformly.
@@ -230,11 +247,39 @@ pub const LeafOrigin = union(enum) {
 /// `InstGraph.newLeafScope`.
 pub const LeafScopeId = enum(u32) { _ };
 
-/// A closed checked type: its module's identity and its id there.
-pub const ClosedCheckedKey = struct {
-    module: [32]u8,
-    ty: checked.CheckedTypeId,
+/// A checked type by its owning module's dense lowering id.
+pub const CheckedTypeAddress = struct {
+    module: Common.LoweringModuleId,
+    type_id: checked.CheckedTypeId,
 };
+
+/// Answers memoized per checked type: one dense column per lowering module.
+pub fn CheckedTypeMemo(comptime V: type) type {
+    return struct {
+        const Self = @This();
+        const Column = collections.DenseMapUnmanaged(checked.CheckedTypeId, V);
+        columns: std.ArrayList(Column) = .empty,
+
+        pub const empty: Self = .{};
+
+        pub fn deinit(self: *Self, allocator: Allocator) void {
+            for (self.columns.items) |*column| column.deinit(allocator);
+            self.columns.deinit(allocator);
+        }
+
+        pub fn get(self: *const Self, address: CheckedTypeAddress) ?V {
+            const index = @backingInt(address.module);
+            if (index >= self.columns.items.len) return null;
+            return self.columns.items[index].get(address.type_id);
+        }
+
+        pub fn put(self: *Self, allocator: Allocator, address: CheckedTypeAddress, value: V) Allocator.Error!void {
+            const index = @backingInt(address.module);
+            if (index >= self.columns.items.len) try self.columns.appendNTimes(allocator, .empty, index + 1 - self.columns.items.len);
+            try self.columns.items[index].put(allocator, address.type_id, value);
+        }
+    };
+}
 
 /// A store type and a type it may hold, packed into one key.
 fn typePairKey(root: Type.TypeId, target: Type.TypeId) u64 {
@@ -374,7 +419,7 @@ pub const InstNode = union(enum) {
 /// identities Monotype lowering supplies: the checked module and type, and
 /// the evidence chain whose substitutions bind the type's variables.
 pub const PureInstanceKey = struct {
-    module_bytes: [32]u8,
+    module: Common.LoweringModuleId,
     checked_ty: u32,
     scheme_vars_ptr: usize,
     subst_ptr: usize,
@@ -410,15 +455,34 @@ pub const InterfaceConstraints = struct {
     // Settled leaves need only their interned identity. Keep the larger open
     // structure and producer evidence in a separate, densely indexed array.
     pub const Node = union(enum) { mono: Type.TypeId, open: u32 };
+    /// The optional fields are stored in one id's width; mapping, copying
+    /// and identity bytes treat them exactly as optionals.
     pub const OpenNode = struct {
         content: InstNode,
-        source: ?NodeId = null,
+        source: MaybeNodeId = .none,
         recursive_slot: bool = false,
         forced_dynamic: bool = false,
         constructor_evidence: bool = false,
-        related_group: ?u32 = null,
+        related_group: MaybeRelatedGroup = .none,
         private_backing: bool = false,
-        finished: ?Type.TypeId = null,
+        finished: Type.MaybeTypeId = .none,
+    };
+    /// A related group index or none. Groups are numbered densely among a
+    /// capture's open nodes, so an index never reaches `none`.
+    pub const MaybeRelatedGroup = enum(u32) {
+        none = std.math.maxInt(u32),
+        _,
+
+        fn of(group: ?u32) MaybeRelatedGroup {
+            const present = group orelse return .none;
+            std.debug.assert(present != std.math.maxInt(u32));
+            return @fromBackingInt(present);
+        }
+
+        fn get(self: MaybeRelatedGroup) ?u32 {
+            if (self == .none) return null;
+            return @backingInt(self);
+        }
     };
     pub const Kind = struct {
         resolved: ?ResolvedFieldKind,
@@ -682,12 +746,12 @@ pub const InterfaceConstraints = struct {
                 .open => |index| self.open_nodes[index],
             };
             _ = try graph.replaceContentWithoutSnapshotInvalidation(id, try mapValue(&instance, InstNode, node.content));
-            if (node.finished) |ty| try graph.registerImportedMono(id, try domain.mapScalar(Type.TypeId, ty));
+            if (node.finished.get()) |ty| try graph.registerImportedMono(id, try domain.mapScalar(Type.TypeId, ty));
             graph.private_backing_roots.items[@backingInt(id)] = graph.private_backing_roots.items[@backingInt(id)] or node.private_backing;
             if (node.recursive_slot) graph.markRecursiveValueSlot(id);
             if (node.forced_dynamic) graph.markForcedDynamicIteratorRoot(id);
             if (node.constructor_evidence) graph.registerConstructorEvidenceRequest(id);
-            if (node.source) |source| graph.request_source_interfaces.items[@backingInt(id)] = instance.nodes[@backingInt(source)];
+            if (node.source.get()) |source| graph.request_source_interfaces.items[@backingInt(id)] = .of(instance.nodes[@backingInt(source)]);
         }
         var related = collections.DenseMap(u32, NodeId).init(graph.allocator);
         defer related.deinit();
@@ -696,7 +760,7 @@ pub const InterfaceConstraints = struct {
                 .mono => continue,
                 .open => |index| self.open_nodes[index],
             };
-            const group = node.related_group orelse continue;
+            const group = node.related_group.get() orelse continue;
             const entry = try related.getOrPut(group);
             if (entry.found_existing) {
                 try graph.relateNamedInstances(entry.value_ptr.*, id);
@@ -779,18 +843,24 @@ pub const InterfaceConstraints = struct {
     /// expansions of one request constrain its interface identically exactly
     /// when these bytes agree.
     pub fn equivalenceIdentityInto(self: InterfaceConstraints, graph: *InstGraph, allocator: Allocator) Allocator.Error![]const u8 {
-        var arena = base.SingleThreadArena.init(graph.allocator);
-        defer arena.deinit();
+        var arena = graph.acquireArena();
+        defer graph.releaseArena(arena);
         // An open class without a witness reads its settled type from an
         // instance of these constraints.
         const instance = try arena.allocator().alloc(NodeId, self.nodes.len);
         try self.instantiateNodes(graph, instance, GraphDomain{});
         var renumberer = EquivalenceRenumberer{ .source = self, .graph = graph, .instance = instance, .types = graph.types, .name_store = graph.name_store, .allocator = arena.allocator() };
         const constraints = try renumberer.run();
-        var writer = IdentityWriter{ .graph = graph };
+        var writer = IdentityWriter{
+            .graph = graph,
+            .bytes = graph.identity_bytes_scratch,
+            .leaves = graph.identity_leaves_scratch,
+        };
         defer {
-            writer.bytes.deinit(graph.allocator);
-            writer.leaves.deinit(graph.allocator);
+            writer.bytes.clearRetainingCapacity();
+            writer.leaves.clearRetainingCapacity();
+            graph.identity_bytes_scratch = writer.bytes;
+            graph.identity_leaves_scratch = writer.leaves;
         }
         try writer.write(InterfaceConstraints, constraints);
         return try allocator.dupe(u8, writer.bytes.items);
@@ -850,14 +920,14 @@ pub const InterfaceConstraints = struct {
                         continue;
                     }
                     var open = try mapValue(self, OpenNode, try self.sortedRows(self.source.open_nodes[index]));
-                    open.finished = null;
-                    if (open.related_group) |group| if (self.group_sizes.get(group).? == 1) {
-                        open.related_group = null;
+                    open.finished = .none;
+                    if (open.related_group.get()) |group| if (self.group_sizes.get(group).? == 1) {
+                        open.related_group = .none;
                     };
-                    if (open.related_group) |group| {
+                    if (open.related_group.get()) |group| {
                         const entry = try self.group_ids.getOrPut(self.allocator, group);
                         if (!entry.found_existing) entry.value_ptr.* = self.group_ids.count() - 1;
-                        open.related_group = entry.value_ptr.*;
+                        open.related_group = .of(entry.value_ptr.*);
                     }
                     out.* = .{ .open = @intCast(open_nodes.items.len) };
                     try open_nodes.append(self.allocator, open);
@@ -894,7 +964,7 @@ pub const InterfaceConstraints = struct {
         /// other members of the set, each with its settled type: its witness,
         /// or the type its instance settles as.
         fn collapseSettled(self: *EquivalenceRenumberer) Allocator.Error!void {
-            for (self.source.open_nodes) |open| if (open.related_group) |group| {
+            for (self.source.open_nodes) |open| if (open.related_group.get()) |group| {
                 const entry = try self.group_sizes.getOrPut(self.allocator, group);
                 entry.value_ptr.* = if (entry.found_existing) entry.value_ptr.* + 1 else 1;
             };
@@ -911,8 +981,8 @@ pub const InterfaceConstraints = struct {
                     .named => |named| if (named.generated_iterator != null) continue,
                     .redirect, .leaf, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => {},
                 }
-                const vacuous_group = if (open.related_group) |group| self.group_sizes.get(group).? == 1 else true;
-                if (open.source != null or open.constructor_evidence or open.private_backing or !vacuous_group) continue;
+                const vacuous_group = if (open.related_group.get()) |group| self.group_sizes.get(group).? == 1 else true;
+                if (open.source != .none or open.constructor_evidence or open.private_backing or !vacuous_group) continue;
                 var collected = Children{ .allocator = self.allocator };
                 _ = try mapValue(&collected, InstNode, open.content);
                 if (collected.kinds != 0) continue;
@@ -927,7 +997,7 @@ pub const InterfaceConstraints = struct {
             var it = candidates.keyIterator();
             while (it.next()) |id| {
                 const open = self.source.open_nodes[self.source.nodes[@backingInt(id.*)].open];
-                const ty = open.finished orelse try self.graph.activeTypeViewForNode(self.instance[@backingInt(id.*)]);
+                const ty = open.finished.get() orelse try self.graph.activeTypeViewForNode(self.instance[@backingInt(id.*)]);
                 if ((open.recursive_slot or open.forced_dynamic) and try self.containsIterator(ty)) {
                     try iterator_evidence.append(self.allocator, id.*);
                 }
@@ -1101,6 +1171,9 @@ pub const InterfaceConstraints = struct {
             if (T == names.TypeNameId) return self.text(ns.typeNameText(value));
             if (T == names.RecordFieldNameId) return self.text(ns.recordFieldLabelText(value));
             if (T == names.TagNameId) return self.text(ns.tagLabelText(value));
+            if (T == MaybeNodeId) return self.write(?NodeId, value.get());
+            if (T == Type.MaybeTypeId) return self.write(?Type.TypeId, value.get());
+            if (T == MaybeRelatedGroup) return self.write(?u32, value.get());
             switch (@typeInfo(T)) {
                 .@"struct" => |info| inline for (info.field_names, info.field_types) |field_name, field_type| {
                     try self.write(field_type, @field(value, field_name));
@@ -1375,7 +1448,7 @@ pub const InterfaceConstraints = struct {
             const root = frame.root;
             const raw = frame.raw;
             var captured = frame.captured.?;
-            if (self.graph.requestSourceInterface(raw)) |source| captured.source = self.node_ids.get(self.graph.find(source)).?;
+            if (self.graph.requestSourceInterface(raw)) |source| captured.source = .of(self.node_ids.get(self.graph.find(source)).?);
             const membership = self.graph.representation_membership.items[@backingInt(root)];
             captured.recursive_slot = membership.recursive_slot;
             captured.forced_dynamic = membership.forced_dynamic;
@@ -1383,7 +1456,7 @@ pub const InterfaceConstraints = struct {
             captured.private_backing = self.graph.private_backing_roots.items[@backingInt(root)];
             switch (self.finished_witnesses) {
                 .record => if (self.graph.classFinishedMono(root)) |ty| {
-                    captured.finished = try self.retained.sealType(ty);
+                    captured.finished = .of(try self.retained.sealType(ty));
                 },
                 .omit => {},
             }
@@ -1399,7 +1472,7 @@ pub const InterfaceConstraints = struct {
                     .arg_count = named.args.len,
                 });
                 if (!group.found_existing) group.value_ptr.* = next_group;
-                captured.related_group = group.value_ptr.*;
+                captured.related_group = .of(group.value_ptr.*);
             }
             self.open_nodes.items[frame.open_index] = captured;
         }
@@ -1748,6 +1821,9 @@ pub const InterfaceConstraints = struct {
     fn mapValue(context: anytype, comptime T: type, value: T) Allocator.Error!T {
         if (T == NodeId) return context.node(value);
         if (T == FieldKindId) return context.kind(value);
+        if (T == MaybeNodeId) return .of(try mapValue(context, ?NodeId, value.get()));
+        if (T == Type.MaybeTypeId) return .of(try mapValue(context, ?Type.TypeId, value.get()));
+        if (T == MaybeRelatedGroup) return .of(try mapValue(context, ?u32, value.get()));
         return switch (@typeInfo(T)) {
             .@"struct" => |info| blk: {
                 var result: T = undefined;
@@ -2162,6 +2238,49 @@ const NominalBackingOccurrence = struct {
     arg_index: u32,
 };
 
+/// Emptied lists kept with their capacity for the graph's next per-node list
+/// of the same element type, so a graph reset and the next specialization
+/// reuse the previous one's lists.
+fn ListPool(comptime T: type) type {
+    return struct {
+        const Self = @This();
+        spare: std.ArrayList(std.ArrayList(T)) = .empty,
+
+        fn take(self: *Self) std.ArrayList(T) {
+            return self.spare.pop() orelse .empty;
+        }
+
+        /// Keep `list` for reuse; a pool whose growth fails frees it.
+        fn give(self: *Self, allocator: Allocator, list: *std.ArrayList(T)) void {
+            defer list.* = .empty;
+            if (list.capacity == 0) return;
+            list.clearRetainingCapacity();
+            self.spare.append(allocator, list.*) catch list.deinit(allocator);
+        }
+
+        fn deinit(self: *Self, allocator: Allocator) void {
+            for (self.spare.items) |*list| list.deinit(allocator);
+            self.spare.deinit(allocator);
+        }
+    };
+}
+
+const InstGraphListPools = struct {
+    snapshots: ListPool(Type.TypeId) = .{},
+    leaf_origins: ListPool(LeafOrigin) = .{},
+    backing_occurrences: ListPool(NominalBackingOccurrence) = .{},
+    iterator_occurrences: ListPool(GeneratedIteratorOccurrence) = .{},
+    dependencies: ListPool(ContainmentDependency) = .{},
+
+    fn deinit(self: *InstGraphListPools, allocator: Allocator) void {
+        self.snapshots.deinit(allocator);
+        self.leaf_origins.deinit(allocator);
+        self.backing_occurrences.deinit(allocator);
+        self.iterator_occurrences.deinit(allocator);
+        self.dependencies.deinit(allocator);
+    }
+};
+
 const ContainmentDependency = struct {
     node: NodeId,
     root: NodeId,
@@ -2197,6 +2316,11 @@ const ContainmentCacheEntry = struct {
     fn deinit(self: *ContainmentCacheEntry, allocator: Allocator) void {
         self.generated_private.dependencies.deinit(allocator);
         self.iterator_interface.dependencies.deinit(allocator);
+    }
+
+    fn release(self: *ContainmentCacheEntry, allocator: Allocator, pool: *ListPool(ContainmentDependency)) void {
+        pool.give(allocator, &self.generated_private.dependencies);
+        pool.give(allocator, &self.iterator_interface.dependencies);
     }
 };
 
@@ -2253,13 +2377,17 @@ pub const InstGraph = struct {
     diagnostics: ?*GraphDiagnostics,
     arena_impl: base.SingleThreadArena,
     nodes: std.ArrayList(InstNode),
+    /// Union-find parent of each node: itself for a class root, else the
+    /// node its `.redirect` content names. `find` walks this column so each
+    /// hop reads one id rather than a whole node.
+    parents: std.ArrayList(NodeId),
     field_kinds: std.ArrayList(FieldKindNode),
     versions: std.ArrayList(u32),
     /// Intrusive chain of permanent node ids in each live union class. Draft
     /// request lookup indexes an open function under one permanent interface
     /// node and probes the current class members, so later unions never stale
     /// the key. Roots own the head/tail; every node owns one next link.
-    class_member_next: std.ArrayList(?NodeId),
+    class_member_next: std.ArrayList(MaybeNodeId),
     class_member_head: std.ArrayList(NodeId),
     class_member_tail: std.ArrayList(NodeId),
     /// Explicit equivalence classes for matching nominal applications whose
@@ -2276,6 +2404,11 @@ pub const InstGraph = struct {
     /// retain their original provenance while `find` resolves that node to its
     /// current class root; unions therefore never move or reindex snapshots.
     node_snapshots: collections.DenseMap(NodeId, std.ArrayList(Type.TypeId)),
+    /// Emptied lists of the per-node list maps (`node_snapshots`,
+    /// `leaf_alias_origins`, `nominal_backings_by_root`,
+    /// `generated_iterators_by_root`, and the containment cache's
+    /// dependencies), reused across graph resets.
+    list_pools: InstGraphListPools = .{},
     /// Latest immutable snapshot for a root. Any relation mutation clears this
     /// cache; a subsequent inspection materializes a fresh snapshot.
     current_snapshots: collections.DenseMap(NodeId, Type.TypeId),
@@ -2313,7 +2446,7 @@ pub const InstGraph = struct {
     /// The finished Monotype each closed checked type of a module
     /// instantiates to, in this graph's cumulative type store. Store types
     /// are immutable, so entries outlive every graph reset.
-    closed_checked_monos: std.AutoHashMapUnmanaged(ClosedCheckedKey, Type.TypeId) = .empty,
+    closed_checked_monos: CheckedTypeMemo(Type.TypeId) = .empty,
     /// The types a store type holds below its root, sorted, for each type
     /// whose list was built (see `heldMemoTypesWithin`), and the answers to
     /// single holds questions (see `typeHoldsMemoComponent`). Store types
@@ -2368,7 +2501,7 @@ pub const InstGraph = struct {
     /// function was constructed. A generic source interface may itself carry
     /// upstream generated-private arguments; retaining that producer node is
     /// what lets the callee instantiate those relations without reconstruction.
-    request_source_interfaces: std.ArrayList(?NodeId),
+    request_source_interfaces: std.ArrayList(MaybeNodeId),
     constructor_evidence_requests: std.ArrayList(bool),
     /// Producer-marked representation witnesses must retain request-local
     /// identity even when the backing's runtime structure is fully settled.
@@ -2470,6 +2603,7 @@ pub const InstGraph = struct {
             .diagnostics = null,
             .arena_impl = base.SingleThreadArena.init(allocator),
             .nodes = .empty,
+            .parents = .empty,
             .field_kinds = .empty,
             .versions = .empty,
             .class_member_next = .empty,
@@ -2530,6 +2664,7 @@ pub const InstGraph = struct {
         self.relation_state = .producing;
         self.diagnostics = null;
         self.nodes.clearRetainingCapacity();
+        self.parents.clearRetainingCapacity();
         self.field_kinds.clearRetainingCapacity();
         self.versions.clearRetainingCapacity();
         self.class_member_next.clearRetainingCapacity();
@@ -2538,7 +2673,7 @@ pub const InstGraph = struct {
         self.related_named_instances.clearRetainingCapacity();
         self.related_named_backings.clearRetainingCapacity();
         var views = self.node_snapshots.valueIterator();
-        while (views.next()) |list| list.deinit(self.allocator);
+        while (views.next()) |list| self.list_pools.snapshots.give(self.allocator, list);
         self.node_snapshots.clearRetainingCapacity();
         self.current_snapshots.clearRetainingCapacity();
         self.current_snapshots_dirty = false;
@@ -2550,14 +2685,14 @@ pub const InstGraph = struct {
         self.leaf_scope_joined_classes.clearRetainingCapacity();
         self.leaf_scope_cell_joins.clearRetainingCapacity();
         var alias_lists = self.leaf_alias_origins.valueIterator();
-        while (alias_lists.next()) |list| list.deinit(self.allocator);
+        while (alias_lists.next()) |list| self.list_pools.leaf_origins.give(self.allocator, list);
         self.leaf_alias_origins.clearRetainingCapacity();
         self.imported_monos.clearRetainingCapacity();
         self.class_finished_monos.clearRetainingCapacity();
         self.nominal_backing_index.clearRetainingUsedCapacity();
         self.nominal_backing_instances.clearRetainingCapacity();
         var backing_occurrences = self.nominal_backings_by_root.valueIterator();
-        while (backing_occurrences.next()) |occurrences| occurrences.deinit(self.allocator);
+        while (backing_occurrences.next()) |occurrences| self.list_pools.backing_occurrences.give(self.allocator, occurrences);
         self.nominal_backings_by_root.clearRetainingCapacity();
         self.nominal_backing_affected.clearRetainingCapacity();
         self.nominal_backing_migration_epochs.clearRetainingCapacity();
@@ -2572,7 +2707,7 @@ pub const InstGraph = struct {
         self.containment_visit_epochs.clearRetainingCapacity();
         self.containment_visit_epoch = 0;
         var containment_entries = self.containment_cache.valueIterator();
-        while (containment_entries.next()) |entry| entry.deinit(self.allocator);
+        while (containment_entries.next()) |entry| entry.release(self.allocator, &self.list_pools.dependencies);
         self.containment_cache.clearRetainingCapacity();
         self.resolved_roots.clearRetainingCapacity();
         self.pure_instances.clearRetainingCapacity();
@@ -2584,7 +2719,7 @@ pub const InstGraph = struct {
         self.generated_iterator_index.clearRetainingUsedCapacity();
         self.generated_iterator_entries.clearRetainingCapacity();
         var iterator_occurrences = self.generated_iterators_by_root.valueIterator();
-        while (iterator_occurrences.next()) |occurrences| occurrences.deinit(self.allocator);
+        while (iterator_occurrences.next()) |occurrences| self.list_pools.iterator_occurrences.give(self.allocator, occurrences);
         self.generated_iterators_by_root.clearRetainingCapacity();
         self.current_durable.clearRetainingCapacity();
         _ = self.arena_impl.reset(.retain_capacity);
@@ -2615,6 +2750,7 @@ pub const InstGraph = struct {
             list.deinit(allocator);
         }
         self.node_snapshots.deinit();
+        self.list_pools.deinit(allocator);
         self.current_snapshots.deinit();
         var backing_occurrences = self.nominal_backings_by_root.valueIterator();
         while (backing_occurrences.next()) |occurrences| {
@@ -2701,6 +2837,7 @@ pub const InstGraph = struct {
         self.class_member_head.deinit(allocator);
         self.class_member_next.deinit(allocator);
         self.versions.deinit(allocator);
+        self.parents.deinit(allocator);
         self.nodes.deinit(allocator);
         self.field_kinds.deinit(allocator);
         self.arena_impl.deinit();
@@ -2935,17 +3072,17 @@ pub const InstGraph = struct {
         self.assertPermanentNode(request_fn);
         self.assertPermanentNode(source_fn);
         const entry = &self.request_source_interfaces.items[@backingInt(request_fn)];
-        if (entry.*) |existing| {
+        if (entry.get()) |existing| {
             if (self.find(existing) != self.find(source_fn)) {
                 Common.invariant("generated-private request was registered with two source interfaces");
             }
         } else {
-            entry.* = source_fn;
+            entry.* = .of(source_fn);
         }
     }
 
     pub fn requestSourceInterface(self: *InstGraph, request_fn: NodeId) ?NodeId {
-        const source_fn = self.request_source_interfaces.items[@backingInt(request_fn)] orelse return null;
+        const source_fn = self.request_source_interfaces.items[@backingInt(request_fn)].get() orelse return null;
         return self.find(source_fn);
     }
 
@@ -3069,7 +3206,7 @@ pub const InstGraph = struct {
             };
             for (stored.args, 0..) |root, arg_index| {
                 const occurrences = try self.generated_iterators_by_root.getOrPut(root);
-                if (!occurrences.found_existing) occurrences.value_ptr.* = .empty;
+                if (!occurrences.found_existing) occurrences.value_ptr.* = self.list_pools.iterator_occurrences.take();
                 try occurrences.value_ptr.append(self.allocator, .{ .node = node, .arg_index = arg_index });
                 staged += 1;
             }
@@ -3086,11 +3223,11 @@ pub const InstGraph = struct {
         const occurrences = self.generated_iterators_by_root.get(loser) orelse return;
         if (occurrences.items.len == 0) return;
         const winner_occurrences = try self.generated_iterators_by_root.getOrPut(winner);
-        if (!winner_occurrences.found_existing) winner_occurrences.value_ptr.* = .empty;
+        if (!winner_occurrences.found_existing) winner_occurrences.value_ptr.* = self.list_pools.iterator_occurrences.take();
         try winner_occurrences.value_ptr.ensureUnusedCapacity(self.allocator, occurrences.items.len);
         try self.generated_iterator_index.ensureTotalCapacity(self.generated_iterator_index.count());
         var moved = self.generated_iterators_by_root.fetchRemove(loser).?.value;
-        defer moved.deinit(self.allocator);
+        defer self.list_pools.iterator_occurrences.give(self.allocator, &moved);
         for (moved.items) |occurrence| self.unlinkGeneratedIterator(occurrence.node);
         for (moved.items) |occurrence| {
             self.generated_iterator_entries.getPtr(occurrence.node).?.key.args[occurrence.arg_index] = winner;
@@ -3157,7 +3294,7 @@ pub const InstGraph = struct {
             while (true) {
                 if (member == node) return true;
                 if (member == self.last) return false;
-                member = graph.class_member_next.items[@backingInt(member)] orelse
+                member = graph.class_member_next.items[@backingInt(member)].get() orelse
                     Common.invariant("argument class snapshot lost an interior link");
             }
         }
@@ -3822,6 +3959,7 @@ pub const InstGraph = struct {
     /// Evidence columns must always address the same append-only inventory.
     pub fn assertPermanentNode(self: *const InstGraph, node: NodeId) void {
         std.debug.assert(@backingInt(node) < self.nodes.items.len);
+        std.debug.assert(self.parents.items.len == self.nodes.items.len);
         std.debug.assert(self.request_source_interfaces.items.len == self.nodes.items.len);
         std.debug.assert(self.constructor_evidence_requests.items.len == self.nodes.items.len);
         std.debug.assert(self.private_backing_roots.items.len == self.nodes.items.len);
@@ -3837,29 +3975,37 @@ pub const InstGraph = struct {
     /// `newNode` without the relation-production requirement. Reading a
     /// leaf's structure after relations freeze adds nodes that denote parts
     /// of an already-imported finished type; that relates nothing.
+    /// The per-node columns that grow with `nodes`, one entry per node.
+    const node_columns = .{ "parents", "versions", "class_member_next", "class_member_head", "class_member_tail", "containment_visit_epochs", "request_source_interfaces", "constructor_evidence_requests", "private_backing_roots", "representation_membership", "class_finished_monos" };
+
+    /// Room for one more node in `nodes` and every per-node column. Each
+    /// column's capacity is kept at least `nodes`'s, so a node fitting in
+    /// `nodes` fits everywhere and costs one capacity check.
+    fn reserveNode(self: *InstGraph) Allocator.Error!void {
+        // `MaybeNodeId.none` is never an id.
+        if (self.nodes.items.len >= std.math.maxInt(u32)) return error.OutOfMemory;
+        if (self.nodes.items.len < self.nodes.capacity) return;
+        const capacity = std.math.add(usize, self.nodes.capacity, @max(self.nodes.capacity / 2, 8)) catch return error.OutOfMemory;
+        // `nodes` grows last: a failed column growth leaves it within every
+        // column's capacity.
+        inline for (node_columns) |column| try @field(self, column).ensureTotalCapacityPrecise(self.allocator, capacity);
+        try self.nodes.ensureTotalCapacityPrecise(self.allocator, capacity);
+    }
+
     fn newNodeUnchecked(self: *InstGraph, node_content: InstNode) Allocator.Error!NodeId {
-        const id: NodeId = @fromBackingInt(@as(u32, @intCast(self.nodes.items.len)));
         // Reserve every per-node column before appending a permanent identity.
-        try self.nodes.ensureUnusedCapacity(self.allocator, 1);
-        try self.versions.ensureUnusedCapacity(self.allocator, 1);
-        try self.class_member_next.ensureUnusedCapacity(self.allocator, 1);
-        try self.class_member_head.ensureUnusedCapacity(self.allocator, 1);
-        try self.class_member_tail.ensureUnusedCapacity(self.allocator, 1);
-        try self.containment_visit_epochs.ensureUnusedCapacity(self.allocator, 1);
-        try self.request_source_interfaces.ensureUnusedCapacity(self.allocator, 1);
-        try self.constructor_evidence_requests.ensureUnusedCapacity(self.allocator, 1);
-        try self.private_backing_roots.ensureUnusedCapacity(self.allocator, 1);
-        try self.representation_membership.ensureUnusedCapacity(self.allocator, 1);
-        try self.class_finished_monos.ensureUnusedCapacity(self.allocator, 1);
+        try self.reserveNode();
+        const id: NodeId = @fromBackingInt(@as(u32, @intCast(self.nodes.items.len)));
         try self.updateGeneratedIterator(id, node_content);
         if (contentHasGeneratedPrivateBacking(node_content)) self.generated_private_nodes += 1;
         self.nodes.appendAssumeCapacity(node_content);
+        self.parents.appendAssumeCapacity(id);
         self.versions.appendAssumeCapacity(0);
-        self.class_member_next.appendAssumeCapacity(null);
+        self.class_member_next.appendAssumeCapacity(.none);
         self.class_member_head.appendAssumeCapacity(id);
         self.class_member_tail.appendAssumeCapacity(id);
         self.containment_visit_epochs.appendAssumeCapacity(0);
-        self.request_source_interfaces.appendAssumeCapacity(null);
+        self.request_source_interfaces.appendAssumeCapacity(.none);
         self.constructor_evidence_requests.appendAssumeCapacity(false);
         self.private_backing_roots.appendAssumeCapacity(false);
         self.representation_membership.appendAssumeCapacity(.{});
@@ -3938,7 +4084,7 @@ pub const InstGraph = struct {
         try self.nominal_backing_index.putNoClobber(.{ .instance = instance_id }, instance_id);
         for (stored_args, 0..) |root, arg_index| {
             const occurrences = try self.nominal_backings_by_root.getOrPut(root);
-            if (!occurrences.found_existing) occurrences.value_ptr.* = .empty;
+            if (!occurrences.found_existing) occurrences.value_ptr.* = self.list_pools.backing_occurrences.take();
             try occurrences.value_ptr.append(self.allocator, .{
                 .instance = instance_id,
                 .arg_index = @intCast(arg_index),
@@ -3959,14 +4105,14 @@ pub const InstGraph = struct {
         const occurrence_count = loser_occurrences.items.len;
 
         const winner_occurrences = try self.nominal_backings_by_root.getOrPut(winner);
-        if (!winner_occurrences.found_existing) winner_occurrences.value_ptr.* = .empty;
+        if (!winner_occurrences.found_existing) winner_occurrences.value_ptr.* = self.list_pools.backing_occurrences.take();
         try winner_occurrences.value_ptr.ensureUnusedCapacity(self.allocator, occurrence_count);
         try self.nominal_backing_affected.ensureUnusedCapacity(self.allocator, occurrence_count);
         try self.nominal_backing_collisions.ensureUnusedCapacity(self.allocator, occurrence_count);
         try self.nominal_backing_index.ensureTotalCapacity(self.nominal_backing_index.count());
 
         var removed_occurrences = self.nominal_backings_by_root.fetchRemove(loser).?;
-        defer removed_occurrences.value.deinit(self.allocator);
+        defer self.list_pools.backing_occurrences.give(self.allocator, &removed_occurrences.value);
         const moved = removed_occurrences.value.items;
 
         self.nominal_backing_affected.clearRetainingCapacity();
@@ -4067,18 +4213,23 @@ pub const InstGraph = struct {
 
     fn find(self: *InstGraph, id: NodeId) NodeId {
         self.countDiagnostic("union_find_resolutions");
+        const parents = self.parents.items;
         var current = id;
         while (true) {
-            const node = self.nodes.items[@backingInt(current)];
-            if (node == .redirect) current = node.redirect else break;
+            const parent = parents[@backingInt(current)];
+            if (parent == current) break;
+            current = parent;
         }
-        // Path compression: repoint every redirect on the chain at the root.
+        // Path compression: repoint every redirect on the chain at the root,
+        // keeping each `.redirect` content equal to its parent.
         var walk = id;
         while (walk != current) {
-            const redirect = self.nodes.items[@backingInt(walk)];
-            if (redirect != .redirect) unreachable;
-            const next = redirect.redirect;
-            self.nodes.items[@backingInt(walk)] = .{ .redirect = current };
+            const next = parents[@backingInt(walk)];
+            std.debug.assert(self.nodes.items[@backingInt(walk)] == .redirect and self.nodes.items[@backingInt(walk)].redirect == next);
+            if (next != current) {
+                parents[@backingInt(walk)] = current;
+                self.nodes.items[@backingInt(walk)] = .{ .redirect = current };
+            }
             walk = next;
         }
         return current;
@@ -4143,7 +4294,7 @@ pub const InstGraph = struct {
         self.structure_epoch +%= 1;
         if (self.leaf_alias_origins.fetchRemove(root)) |aliases| {
             var alias_origins = aliases.value;
-            defer alias_origins.deinit(self.allocator);
+            defer self.list_pools.leaf_origins.give(self.allocator, &alias_origins);
             for (alias_origins.items) |origin| {
                 const alias: InstLeaf = .{ .ty = leaf.ty, .origin = origin };
                 for (components.items, component_nodes) |component, node| {
@@ -4225,23 +4376,22 @@ pub const InstGraph = struct {
     }
 
     /// The Monotype a closed checked type denotes, once measured.
-    pub fn closedCheckedMono(self: *const InstGraph, module: [32]u8, ty: checked.CheckedTypeId) ?Type.TypeId {
-        return self.closed_checked_monos.get(.{ .module = module, .ty = ty });
+    pub fn closedCheckedMono(self: *const InstGraph, address: CheckedTypeAddress) ?Type.TypeId {
+        return self.closed_checked_monos.get(address);
     }
 
     /// Seal the closed checked types a measuring instantiation built and
     /// record the Monotype each denotes.
-    pub fn recordClosedCheckedMonos(self: *InstGraph, module: [32]u8, built: []const ClosedTypeBuild) Allocator.Error!void {
+    pub fn recordClosedCheckedMonos(self: *InstGraph, module: Common.LoweringModuleId, built: []const ClosedTypeBuild) Allocator.Error!void {
         var sealer = GraphTypeFinals.initSettledInterface(
             self,
             collections.DenseMap(NodeId, Type.TypeId).init(self.allocator),
             collections.DenseMap(Type.TypeId, Type.TypeId).init(self.allocator),
         );
         defer sealer.deinit();
-        try self.closed_checked_monos.ensureUnusedCapacity(self.allocator, @intCast(built.len));
         for (built) |entry| {
             const mono = try sealer.sealNode(entry.node);
-            self.closed_checked_monos.putAssumeCapacity(.{ .module = module, .ty = entry.checked_ty }, mono);
+            try self.closed_checked_monos.put(self.allocator, .{ .module = module, .type_id = entry.checked_ty }, mono);
         }
     }
 
@@ -4255,15 +4405,15 @@ pub const InstGraph = struct {
         const winner_registered = self.leaf_alias_origins.contains(winner);
         const loser_registered = self.leaf_alias_origins.contains(loser);
         var loser_aliases = self.leaf_alias_origins.fetchRemove(loser);
-        defer if (loser_aliases) |*entry| entry.value.deinit(self.allocator);
+        defer if (loser_aliases) |*entry| self.list_pools.leaf_origins.give(self.allocator, &entry.value);
         const entry = try self.leaf_alias_origins.getOrPut(winner);
-        if (!entry.found_existing) entry.value_ptr.* = .empty;
+        if (!entry.found_existing) entry.value_ptr.* = self.list_pools.leaf_origins.take();
         try self.addLeafAlias(entry.value_ptr, winner_leaf.origin, loser_leaf.origin);
         if (loser_aliases) |aliases| {
             for (aliases.value.items) |origin| try self.addLeafAlias(entry.value_ptr, winner_leaf.origin, origin);
         }
         if (entry.value_ptr.items.len == 0) {
-            entry.value_ptr.deinit(self.allocator);
+            self.list_pools.leaf_origins.give(self.allocator, entry.value_ptr);
             _ = self.leaf_alias_origins.remove(winner);
         }
         try self.union_(winner, loser);
@@ -4886,7 +5036,7 @@ pub const InstGraph = struct {
 
         pub fn next(self: *ClassMemberIterator) ?NodeId {
             const member = self.current orelse return null;
-            self.current = self.graph.class_member_next.items[@backingInt(member)];
+            self.current = self.graph.class_member_next.items[@backingInt(member)].get();
             return member;
         }
     };
@@ -5277,7 +5427,10 @@ pub const InstGraph = struct {
     ) Allocator.Error!bool {
         const query_root = self.find(root);
         const cache = try self.containment_cache.getOrPut(query_root);
-        if (!cache.found_existing) cache.value_ptr.* = .{};
+        if (!cache.found_existing) cache.value_ptr.* = .{
+            .generated_private = .{ .dependencies = self.list_pools.dependencies.take() },
+            .iterator_interface = .{ .dependencies = self.list_pools.dependencies.take() },
+        };
         const entry = cache.value_ptr.forQuery(query);
         if (entry.valid and entry.verified_epoch != self.structure_epoch) {
             if (self.containmentQueryCacheValid(entry)) {
@@ -6624,7 +6777,7 @@ pub const InstGraph = struct {
         self.removeGeneratedIterator(loser);
         const winner_tail = self.class_member_tail.items[@backingInt(winner)];
         const loser_head = self.class_member_head.items[@backingInt(loser)];
-        self.class_member_next.items[@backingInt(winner_tail)] = loser_head;
+        self.class_member_next.items[@backingInt(winner_tail)] = .of(loser_head);
         self.class_member_tail.items[@backingInt(winner)] = self.class_member_tail.items[@backingInt(loser)];
         const winner_finished = &self.class_finished_monos.items[@backingInt(winner)];
         if (winner_finished.* == null) winner_finished.* = self.class_finished_monos.items[@backingInt(loser)];
@@ -6643,6 +6796,7 @@ pub const InstGraph = struct {
         const joins_iterator_representations = winner_content == .named and loser_content == .named and
             self.iteratorRelation(winner_content.named, loser_content.named) != .ordinary;
         self.nodes.items[@backingInt(loser)] = .{ .redirect = winner };
+        self.parents.items[@backingInt(loser)] = winner;
         self.versions.items[@backingInt(winner)] +%= 1;
         self.structure_epoch +%= 1;
         self.countDiagnostic("class_unions");
@@ -8375,7 +8529,7 @@ pub const InstGraph = struct {
             const snapshot_node = self.find(item.key_ptr.*);
             const snapshot_ty = item.value_ptr.*;
             const entry = try self.node_snapshots.getOrPut(snapshot_node);
-            if (!entry.found_existing) entry.value_ptr.* = .empty;
+            if (!entry.found_existing) entry.value_ptr.* = self.list_pools.snapshots.take();
             try entry.value_ptr.append(self.allocator, snapshot_ty);
             try self.active_snapshot_nodes.put(snapshot_ty, snapshot_node);
             try self.current_snapshots.put(snapshot_node, snapshot_ty);
@@ -14616,8 +14770,8 @@ test "interface agreement ignores finished witnesses of open classes" {
     const live_capture = try InterfaceConstraints.capture(graph, graph.arena(), &.{live});
     const witnessed_capture = try InterfaceConstraints.capture(graph, graph.arena(), &.{witnessed});
     const settled_capture = try InterfaceConstraints.capture(graph, graph.arena(), &.{settled});
-    try std.testing.expect(live_capture.nodes[0] == .open and live_capture.open_nodes[0].finished == null);
-    try std.testing.expect(witnessed_capture.nodes[0] == .open and witnessed_capture.open_nodes[0].finished != null);
+    try std.testing.expect(live_capture.nodes[0] == .open and live_capture.open_nodes[0].finished == .none);
+    try std.testing.expect(witnessed_capture.nodes[0] == .open and witnessed_capture.open_nodes[0].finished != .none);
     try std.testing.expect(settled_capture.nodes[0] == .mono);
     const expected = try settled_capture.equivalenceIdentityInto(graph, graph.arena());
     try std.testing.expectEqualSlices(u8, expected, try live_capture.equivalenceIdentityInto(graph, graph.arena()));
@@ -14816,7 +14970,7 @@ test "finished witness capture work is independent of permanent class history" {
                     defer scratch.deinit();
                     const captured = try InterfaceConstraints.capture(graph, scratch.allocator(), &.{root});
                     try std.testing.expectEqual(@as(usize, 1), captured.open_nodes.len);
-                    try std.testing.expectEqual(with_witness, captured.open_nodes[0].finished != null);
+                    try std.testing.expectEqual(with_witness, captured.open_nodes[0].finished != .none);
                 }
                 try std.testing.expectEqual(capture_count, diagnostics.finished_mono_witness_queries);
                 if (expected_resolutions) |expected| try std.testing.expectEqual(expected, diagnostics.union_find_resolutions);
@@ -14869,7 +15023,7 @@ test "finished witnesses preserve member order and original occurrence views thr
         graph.markRecursiveValueSlot(second);
         const captured = try InterfaceConstraints.capture(graph, graph.arena(), &.{ first, second });
         try std.testing.expectEqual(@as(usize, 1), captured.open_nodes.len);
-        try std.testing.expect(captured.open_nodes[0].finished != null);
+        try std.testing.expect(captured.open_nodes[0].finished != .none);
         const replayed = try captured.instantiate(graph);
         try std.testing.expect(graph.sameClass(replayed[0], replayed[1]));
         try std.testing.expect(!graph.sameClass(first, replayed[0]));
@@ -14891,14 +15045,14 @@ test "finished witness absence updates after registration and import and resets 
     graph.markRecursiveValueSlot(slot);
     const parent = try graph.newNode(.{ .list = slot });
     const before = try InterfaceConstraints.capture(graph, graph.arena(), &.{slot});
-    try std.testing.expect(before.open_nodes[0].finished == null);
+    try std.testing.expect(before.open_nodes[0].finished == .none);
     try std.testing.expect(!try graph.containsFinishedMono(parent));
     const ty = try types.add(.{ .primitive = .str });
     try graph.registerImportedMono(slot, ty);
     const after = try InterfaceConstraints.capture(graph, graph.arena(), &.{slot});
-    try std.testing.expect(after.open_nodes[0].finished != null);
+    try std.testing.expect(after.open_nodes[0].finished != .none);
     try std.testing.expect(try graph.containsFinishedMono(parent));
-    try std.testing.expect(before.open_nodes[0].finished == null);
+    try std.testing.expect(before.open_nodes[0].finished == .none);
 
     const plain = try graph.newNode(.{ .primitive = .str });
     graph.markRecursiveValueSlot(plain);
@@ -14906,7 +15060,7 @@ test "finished witness absence updates after registration and import and resets 
     try graph.unify(plain, try graph.importMonoIndependent(ty));
     try std.testing.expect(try graph.containsFinishedMono(plain));
     const joined = try InterfaceConstraints.capture(graph, graph.arena(), &.{plain});
-    try std.testing.expect(joined.open_nodes[0].finished != null);
+    try std.testing.expect(joined.open_nodes[0].finished != .none);
 
     graph.reset();
     const fresh = try graph.newNode(.{ .primitive = .str });
@@ -14914,5 +15068,5 @@ test "finished witness absence updates after registration and import and resets 
     graph.markRecursiveValueSlot(fresh);
     try std.testing.expect(!try graph.containsFinishedMono(fresh));
     const reset_capture = try InterfaceConstraints.capture(graph, graph.arena(), &.{fresh});
-    try std.testing.expect(reset_capture.open_nodes[0].finished == null);
+    try std.testing.expect(reset_capture.open_nodes[0].finished == .none);
 }
