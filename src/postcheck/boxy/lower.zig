@@ -46868,9 +46868,9 @@ test "boxy lowerer binds checked tag payload match patterns before branch bodies
     if (payload_read.op.kind != .tag_payload_struct) return error.TestUnexpectedResult;
     {
         const payload = payload_read.op;
-            try std.testing.expectEqual(cond_tag.target, payload.source);
-            try std.testing.expectEqual(@as(u32, 0), payload.variant_index);
-            try std.testing.expectEqual(@as(u32, 0), payload.tag_discriminant);
+        try std.testing.expectEqual(cond_tag.target, payload.source);
+        try std.testing.expectEqual(@as(u32, 0), payload.variant_index);
+        try std.testing.expectEqual(@as(u32, 0), payload.tag_discriminant);
     }
 
     const binder_assign = store.getCFStmtImmediate(payload_read.next).assign_ref;
