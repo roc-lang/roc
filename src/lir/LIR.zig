@@ -106,13 +106,32 @@ pub const ProcIdentity = extern struct {
     /// Identity of a procedure a pass derives from this one: the same role
     /// and key from the same origin yields the same identity.
     pub fn derived(self: ProcIdentity, role: []const u8, key: []const u8) ProcIdentity {
+        var builder = self.deriving(role);
+        builder.update(key);
+        return builder.finish();
+    }
+
+    /// Streams the key of a derived identity: `finish` returns `derived(role,
+    /// key)` for `key` the concatenation of every `update`.
+    pub fn deriving(self: ProcIdentity, role: []const u8) DerivedBuilder {
         var hasher = base.TypeDigestHasher.init();
         hasher.update("roc.proc.derived.v1");
         hasher.update(&self.bytes);
         hasher.update(role);
-        hasher.update(key);
-        return .{ .bytes = hasher.finalResult() };
+        return .{ .hasher = hasher };
     }
+
+    pub const DerivedBuilder = struct {
+        hasher: base.TypeDigestHasher,
+
+        pub fn update(self: *DerivedBuilder, key_part: []const u8) void {
+            self.hasher.update(key_part);
+        }
+
+        pub fn finish(self: *DerivedBuilder) ProcIdentity {
+            return .{ .bytes = self.hasher.finalResult() };
+        }
+    };
 
     /// Identity of a procedure that exists only within one program and is
     /// never an object-cache entry: Boxy lowering output, whose programs do

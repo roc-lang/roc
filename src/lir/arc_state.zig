@@ -62,9 +62,9 @@ pub var structural_node_visits: WorkCounter = .{};
 
 /// A bounded-depth radix tree whose absent entries have one caller-declared
 /// value. Copying a snapshot shares its root; changing one entry allocates
-/// only the nodes on that entry's path. Depth grows only as needed and is
-/// bounded for every `u32` index, so update cost does not depend on procedure
-/// width.
+/// only the nodes on that entry's path, in the allocator the change names.
+/// Depth grows only as needed and is bounded for every `u32` index, so update
+/// cost does not depend on procedure width.
 pub fn Snapshot(comptime T: type, comptime empty: T) type {
     return struct {
         const Self = @This();
@@ -85,15 +85,14 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
             values: [radix]T,
         };
 
-        allocator: Allocator,
-        depth: u8,
         root: ?*const anyopaque = null,
+        depth: u8,
 
-        pub fn init(allocator: Allocator, entry_count: usize) Self {
+        pub fn init(entry_count: usize) Self {
             const highest: u32 = if (entry_count == 0) 0 else @intCast(entry_count - 1);
             const depth = depthFor(highest);
             std.debug.assert(depth <= max_branch_depth);
-            return .{ .allocator = allocator, .depth = depth };
+            return .{ .depth = depth };
         }
 
         pub fn clone(self: *const Self) Self {
@@ -249,35 +248,35 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
             return false;
         }
 
-        pub fn put(self: *Self, index: u32, value: T) Allocator.Error!void {
+        pub fn put(self: *Self, allocator: Allocator, index: u32, value: T) Allocator.Error!void {
             if (std.meta.eql(self.get(index), value)) return;
             const required_depth = depthFor(index);
             while (self.depth < required_depth) {
                 var children = @as([radix]?*const anyopaque, @splat(null));
                 children[0] = self.root;
-                const branch = try self.allocator.create(Branch);
+                const branch = try allocator.create(Branch);
                 branch.* = .{ .children = children };
                 self.root = branch;
                 self.depth += 1;
             }
-            self.root = try self.putNode(self.root, self.depth, index, value);
+            self.root = try putNode(allocator, self.root, self.depth, index, value);
         }
 
         /// Updates a snapshot whose entire tree is known to have exactly one
         /// owner. This is for constructing a fresh path state before its first
         /// control-flow fork; shared snapshots must use `put`.
-        pub fn putUnique(self: *Self, index: u32, value: T) Allocator.Error!void {
+        pub fn putUnique(self: *Self, allocator: Allocator, index: u32, value: T) Allocator.Error!void {
             if (std.meta.eql(self.get(index), value)) return;
             const required_depth = depthFor(index);
             while (self.depth < required_depth) {
                 var children = @as([radix]?*const anyopaque, @splat(null));
                 children[0] = self.root;
-                const branch = try self.allocator.create(Branch);
+                const branch = try allocator.create(Branch);
                 branch.* = .{ .children = children };
                 self.root = branch;
                 self.depth += 1;
             }
-            self.root = try self.putNodeUnique(self.root, self.depth, index, value);
+            self.root = try putNodeUnique(allocator, self.root, self.depth, index, value);
         }
 
         pub fn eql(self: *const Self, other: *const Self) bool {
@@ -332,6 +331,7 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
         /// lattice laws that permit pointer sharing and absent-subtree skips.
         pub fn meetWith(
             self: *Self,
+            allocator: Allocator,
             other: *const Self,
             context: anytype,
             comptime meetFn: fn (@TypeOf(context), T, T) T,
@@ -339,7 +339,7 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
             if (self.root == other.root) return false;
             std.debug.assert(self.depth == other.depth);
             const old_root = self.root;
-            self.root = try self.meetNode(self.root, other.root, self.depth, context, meetFn);
+            self.root = try meetNode(allocator, self.root, other.root, self.depth, context, meetFn);
             return self.root != old_root;
         }
 
@@ -347,6 +347,7 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
         /// must return its nonempty input when the other input is `empty`.
         pub fn joinWith(
             self: *Self,
+            allocator: Allocator,
             other: *const Self,
             context: anytype,
             comptime joinFn: fn (@TypeOf(context), T, T) T,
@@ -354,12 +355,12 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
             if (self.root == other.root or other.root == null) return false;
             std.debug.assert(self.depth == other.depth);
             const old_root = self.root;
-            self.root = try self.joinNode(self.root, other.root, self.depth, context, joinFn);
+            self.root = try joinNode(allocator, self.root, other.root, self.depth, context, joinFn);
             return self.root != old_root;
         }
 
         fn putNode(
-            self: *Self,
+            allocator: Allocator,
             maybe_node: ?*const anyopaque,
             depth: usize,
             index: u32,
@@ -380,7 +381,7 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
                     }
                 }
                 if (all_empty) return null;
-                const leaf = try self.allocator.create(Leaf);
+                const leaf = try allocator.create(Leaf);
                 leaf.* = .{ .values = values };
                 return leaf;
             }
@@ -392,10 +393,10 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
             }
             const shift: u5 = @intCast(leaf_bits + (depth - 1) * radix_bits);
             const slot: usize = @intCast((index >> shift) & radix_mask);
-            children[slot] = try self.putNode(children[slot], depth - 1, index, value);
+            children[slot] = try putNode(allocator, children[slot], depth - 1, index, value);
             for (children) |child| {
                 if (child != null) {
-                    const branch = try self.allocator.create(Branch);
+                    const branch = try allocator.create(Branch);
                     branch.* = .{ .children = children };
                     return branch;
                 }
@@ -404,7 +405,7 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
         }
 
         fn putNodeUnique(
-            self: *Self,
+            allocator: Allocator,
             maybe_node: ?*const anyopaque,
             depth: usize,
             index: u32,
@@ -414,7 +415,7 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
                 const leaf = if (maybe_node) |node|
                     @as(*Leaf, @ptrCast(@alignCast(@constCast(node))))
                 else blk: {
-                    const fresh = try self.allocator.create(Leaf);
+                    const fresh = try allocator.create(Leaf);
                     fresh.* = .{ .values = @as([radix]T, @splat(empty)) };
                     break :blk fresh;
                 };
@@ -428,13 +429,13 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
             const branch = if (maybe_node) |node|
                 @as(*Branch, @ptrCast(@alignCast(@constCast(node))))
             else blk: {
-                const fresh = try self.allocator.create(Branch);
+                const fresh = try allocator.create(Branch);
                 fresh.* = .{ .children = @as([radix]?*const anyopaque, @splat(null)) };
                 break :blk fresh;
             };
             const shift: u5 = @intCast(leaf_bits + (depth - 1) * radix_bits);
             const slot: usize = @intCast((index >> shift) & radix_mask);
-            branch.children[slot] = try self.putNodeUnique(branch.children[slot], depth - 1, index, value);
+            branch.children[slot] = try putNodeUnique(allocator, branch.children[slot], depth - 1, index, value);
             for (branch.children) |child| {
                 if (child != null) return branch;
             }
@@ -442,7 +443,7 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
         }
 
         fn meetNode(
-            self: *Self,
+            allocator: Allocator,
             lhs: ?*const anyopaque,
             rhs: ?*const anyopaque,
             depth: usize,
@@ -466,7 +467,7 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
                 }
                 if (same_as_lhs) return lhs;
                 if (all_empty) return null;
-                const leaf = try self.allocator.create(Leaf);
+                const leaf = try allocator.create(Leaf);
                 leaf.* = .{ .values = values };
                 return leaf;
             }
@@ -477,19 +478,19 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
             var same_as_lhs = true;
             var all_empty = true;
             for (&children, lhs_branch.children, rhs_branch.children) |*result, left, right| {
-                result.* = try self.meetNode(left, right, depth - 1, context, meetFn);
+                result.* = try meetNode(allocator, left, right, depth - 1, context, meetFn);
                 if (result.* != left) same_as_lhs = false;
                 if (result.* != null) all_empty = false;
             }
             if (same_as_lhs) return lhs;
             if (all_empty) return null;
-            const branch = try self.allocator.create(Branch);
+            const branch = try allocator.create(Branch);
             branch.* = .{ .children = children };
             return branch;
         }
 
         fn joinNode(
-            self: *Self,
+            allocator: Allocator,
             lhs: ?*const anyopaque,
             rhs: ?*const anyopaque,
             depth: usize,
@@ -510,7 +511,7 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
                     if (!std.meta.eql(result.*, left)) same_as_lhs = false;
                 }
                 if (same_as_lhs) return lhs;
-                const leaf = try self.allocator.create(Leaf);
+                const leaf = try allocator.create(Leaf);
                 leaf.* = .{ .values = values };
                 return leaf;
             }
@@ -520,11 +521,11 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
             var children: [radix]?*const anyopaque = undefined;
             var same_as_lhs = true;
             for (&children, lhs_branch.children, rhs_branch.children) |*result, left, right| {
-                result.* = try self.joinNode(left, right, depth - 1, context, joinFn);
+                result.* = try joinNode(allocator, left, right, depth - 1, context, joinFn);
                 if (result.* != left) same_as_lhs = false;
             }
             if (same_as_lhs) return lhs;
-            const branch = try self.allocator.create(Branch);
+            const branch = try allocator.create(Branch);
             branch.* = .{ .children = children };
             return branch;
         }
@@ -566,13 +567,13 @@ test "persistent sparse snapshots share forks and meet exactly" {
     defer arena.deinit();
 
     const Sparse = Snapshot(u32, 0);
-    var left = Sparse.init(arena.allocator(), 100_000);
-    try left.putUnique(4, 7);
-    try left.putUnique(70_000, 9);
+    var left = Sparse.init(100_000);
+    try left.putUnique(arena.allocator(), 4, 7);
+    try left.putUnique(arena.allocator(), 70_000, 9);
 
     var right = left.clone();
-    try right.put(4, 3);
-    try right.put(90_000, 11);
+    try right.put(arena.allocator(), 4, 3);
+    try right.put(arena.allocator(), 90_000, 11);
 
     try std.testing.expectEqual(@as(u32, 7), left.get(4));
     try std.testing.expectEqual(@as(u32, 0), left.get(90_000));
@@ -584,7 +585,7 @@ test "persistent sparse snapshots share forks and meet exactly" {
             return @min(lhs, rhs);
         }
     }.run;
-    try std.testing.expect(try left.meetWith(&right, {}, meet));
+    try std.testing.expect(try left.meetWith(arena.allocator(), &right, {}, meet));
     try std.testing.expectEqual(@as(u32, 3), left.get(4));
     try std.testing.expectEqual(@as(u32, 9), left.get(70_000));
     try std.testing.expectEqual(@as(u32, 0), left.get(90_000));
@@ -595,12 +596,12 @@ test "sparse range queries are exact across tree boundaries and shared updates" 
     var arena = collections.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const Sparse = Snapshot(u32, 0);
-    var original = Sparse.init(arena.allocator(), 1);
+    var original = Sparse.init(1);
     const keys = [_]u32{ 0, 7, 8, 63, 64, 511, 512, 99999, std.math.maxInt(u32) };
-    for (keys) |key| try original.putUnique(key, 1);
+    for (keys) |key| try original.putUnique(arena.allocator(), key, 1);
     var changed = original.clone();
     for (keys, 0..) |key, i| {
-        if (i % 2 == 0) try changed.put(key, 0);
+        if (i % 2 == 0) try changed.put(arena.allocator(), key, 0);
     }
     const boundaries = [_]u64{ 0, 1, 7, 8, 9, 63, 64, 65, 511, 512, 513, 99999, 100000, std.math.maxInt(u32), @as(u64, 1) << 32 };
     for (boundaries[0 .. boundaries.len - 1]) |start| {
@@ -624,7 +625,7 @@ test "sparse range queries are exact across tree boundaries and shared updates" 
     if (@import("builtin").mode == .debug) {
         try std.testing.expect(range_query_node_visits.read() - before <= 2 * 8 * 11);
     }
-    for (keys) |key| try changed.put(key, 0);
+    for (keys) |key| try changed.put(arena.allocator(), key, 0);
     try std.testing.expect(!changed.hasNonEmptyInRange(0, @as(u64, 1) << 32));
     try std.testing.expect(original.hasNonEmptyInRange(0, @as(u64, 1) << 32));
 }
@@ -633,16 +634,16 @@ test "sparse iteration preserves forks and skips absent history" {
     var arena = collections.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const Sparse = Snapshot(i32, 0);
-    var original = Sparse.init(arena.allocator(), 0);
+    var original = Sparse.init(0);
     var empty_iter = original.iterator();
     try std.testing.expectEqual(null, empty_iter.next());
 
     const keys = [_]u32{ 0, 7, 8, 63, 64, 511, 512, 99999, std.math.maxInt(u32) };
-    for (keys, 0..) |key, i| try original.putUnique(key, @intCast(i + 1));
+    for (keys, 0..) |key, i| try original.putUnique(arena.allocator(), key, @intCast(i + 1));
     var changed = original.clone();
     var original_iter = original.iterator();
-    for (keys) |key| try changed.put(key, 0);
-    try changed.put(99999, -1);
+    for (keys) |key| try changed.put(arena.allocator(), key, 0);
+    try changed.put(arena.allocator(), 99999, -1);
     for (keys, 0..) |key, i| {
         const entry = original_iter.next().?;
         try std.testing.expectEqual(key, entry.index);
@@ -661,11 +662,11 @@ test "sparse structural difference skips shared subtrees and preserves exact val
     var arena = collections.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const Sparse = Snapshot(u64, 0);
-    var owned = Sparse.init(arena.allocator(), 512);
-    for (0..512) |index| try owned.putUnique(@intCast(index), 15);
+    var owned = Sparse.init(512);
+    for (0..512) |index| try owned.putUnique(arena.allocator(), @intCast(index), 15);
     var keep = owned.clone();
-    try keep.put(3, 5);
-    try keep.put(6, 0);
+    try keep.put(arena.allocator(), 3, 5);
+    try keep.put(arena.allocator(), 6, 0);
     const Difference = struct {
         const Entry = struct { index: u32, lhs: u64, rhs: u64 };
         entries: std.ArrayList(Entry) = .empty,
@@ -693,7 +694,7 @@ test "sparse structural difference skips shared subtrees and preserves exact val
     difference.calls = 0;
     try owned.differenceWith(&owned, &difference, Difference.emit);
     try std.testing.expectEqual(@as(usize, 0), difference.calls);
-    var absent = Sparse.init(arena.allocator(), 512);
+    var absent = Sparse.init(512);
     try absent.differenceWith(&owned, &difference, Difference.emit);
     try std.testing.expectEqual(@as(usize, 0), difference.calls);
     try keep.differenceWith(&absent, &difference, Difference.emit);
@@ -712,9 +713,9 @@ test "sparse reverse iteration carries values across radix boundaries" {
     var arena = collections.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const Sparse = Snapshot(u32, 0);
-    var state = Sparse.init(arena.allocator(), 1);
+    var state = Sparse.init(1);
     const keys = [_]u32{ 0, 7, 8, 63, 64, 511, 512, 99999, std.math.maxInt(u32) };
-    for (keys, 0..) |key, index| try state.putUnique(key, @intCast(index + 1));
+    for (keys, 0..) |key, index| try state.putUnique(arena.allocator(), key, @intCast(index + 1));
     var iter = state.iteratorDirection(.reverse);
     var remaining = keys.len;
     while (remaining != 0) {
@@ -733,9 +734,9 @@ test "sparse range iteration excludes populated subtrees and preserves exact bou
     var arena = collections.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const Sparse = Snapshot(u32, 0);
-    var snapshot = Sparse.init(arena.allocator(), 0);
+    var snapshot = Sparse.init(0);
     const keys = [_]u32{ 0, 7, 8, 63, 64, 511, 512, 99999, std.math.maxInt(u32) };
-    for (keys, 0..) |key, i| try snapshot.putUnique(key, @intCast(i + 1));
+    for (keys, 0..) |key, i| try snapshot.putUnique(arena.allocator(), key, @intCast(i + 1));
     const boundaries = [_]u64{ 0, 1, 7, 8, 63, 64, 65, 511, 512, 513, 99999, 100000, std.math.maxInt(u32), @as(u64, 1) << 32 };
     for (boundaries[0 .. boundaries.len - 1]) |start| {
         for (boundaries) |end| {
@@ -750,11 +751,11 @@ test "sparse range iteration excludes populated subtrees and preserves exact bou
         }
     }
     var retained = snapshot.iteratorRange(99999, 100000);
-    try snapshot.put(99999, 0);
+    try snapshot.put(arena.allocator(), 99999, 0);
     try std.testing.expectEqual(@as(u32, 99999), retained.next().?.index);
     try std.testing.expectEqual(null, retained.next());
 
-    for (0..4096) |key| try snapshot.put(@intCast(key), 1);
+    for (0..4096) |key| try snapshot.put(arena.allocator(), @intCast(key), 1);
     const before = iterator_node_visits.read();
     var empty = snapshot.iteratorRange(8192, 65536);
     try std.testing.expectEqual(null, empty.next());

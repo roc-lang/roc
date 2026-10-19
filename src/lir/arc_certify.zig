@@ -1072,6 +1072,8 @@ const State = struct {
     /// True until the state first forks. Before that point its tree nodes have
     /// one owner and construction can update them in place.
     unique: bool = true,
+    /// The state arena every snapshot of this state allocates its nodes in.
+    allocator: Allocator,
     /// Dense proc-local position per store local, owned by the certifier and
     /// stable for the lifetime of every state for the current proc.
     local_dense: []const u32,
@@ -1135,19 +1137,20 @@ const State = struct {
 
     fn init(allocator: Allocator, local_dense: []const u32, proc_local_count: usize) Allocator.Error!State {
         return .{
+            .allocator = allocator,
             .local_dense = local_dense,
-            .local_value = ArcSnapshot(ValueId, no_value).init(allocator, proc_local_count),
-            .balance = ArcSnapshot(i32, 0).init(allocator, proc_local_count),
-            .holder = ArcSnapshot(ValueId, no_value).init(allocator, proc_local_count),
-            .conditional = ArcSnapshot(ConditionalEntry, .{}).init(allocator, proc_local_count),
-            .claims = ArcSnapshot(ClaimSet, .{}).init(allocator, proc_local_count),
-            .outcome_discriminants = ArcSnapshot(ValueId, no_value).init(allocator, local_dense.len),
-            .known_variants = ArcSnapshot(u32, no_variant).init(allocator, proc_local_count),
-            .variant_discriminants = ArcSnapshot(ValueId, no_value).init(allocator, local_dense.len),
+            .local_value = ArcSnapshot(ValueId, no_value).init(proc_local_count),
+            .balance = ArcSnapshot(i32, 0).init(proc_local_count),
+            .holder = ArcSnapshot(ValueId, no_value).init(proc_local_count),
+            .conditional = ArcSnapshot(ConditionalEntry, .{}).init(proc_local_count),
+            .claims = ArcSnapshot(ClaimSet, .{}).init(proc_local_count),
+            .outcome_discriminants = ArcSnapshot(ValueId, no_value).init(local_dense.len),
+            .known_variants = ArcSnapshot(u32, no_variant).init(proc_local_count),
+            .variant_discriminants = ArcSnapshot(ValueId, no_value).init(local_dense.len),
             .result_discriminant = no_dense,
-            .maybe_uninitialized_unresolved = ArcSnapshot(bool, false).init(allocator, proc_local_count),
-            .maybe_uninitialized_released = ArcSnapshot(bool, false).init(allocator, proc_local_count),
-            .negative_balance = ArcSnapshot(u64, 0).init(allocator, (proc_local_count + 63) / 64),
+            .maybe_uninitialized_unresolved = ArcSnapshot(bool, false).init(proc_local_count),
+            .maybe_uninitialized_released = ArcSnapshot(bool, false).init(proc_local_count),
+            .negative_balance = ArcSnapshot(u64, 0).init((proc_local_count + 63) / 64),
         };
     }
 
@@ -1162,9 +1165,9 @@ const State = struct {
 
     fn put(self: *State, snapshot: anytype, index: u32, value: anytype) Allocator.Error!void {
         if (self.unique) {
-            try snapshot.putUnique(index, value);
+            try snapshot.putUnique(self.allocator, index, value);
         } else {
-            try snapshot.put(index, value);
+            try snapshot.put(self.allocator, index, value);
         }
     }
 

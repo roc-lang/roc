@@ -87,7 +87,7 @@ pub fn layoutMayContainBoxyDynamic(
     allocator: Allocator,
     layouts: *const layout_mod.Store,
     layout_idx: layout_mod.Idx,
-    visited: *std.AutoHashMap(layout_mod.Idx, void),
+    visited: *collections.DenseMap(layout_mod.Idx, void),
     stack: *std.ArrayList(layout_mod.Idx),
 ) Error!bool {
     visited.clearRetainingCapacity();
@@ -550,7 +550,7 @@ const Analysis = struct {
     /// Per-layout answers of `layoutMayContainBoxyDynamic` for field layouts
     /// the gate has asked about, and the scratch that answers them.
     boxy_dynamic_layouts: collections.DenseMap(layout_mod.Idx, bool),
-    layout_visited: std.AutoHashMap(layout_mod.Idx, void),
+    layout_visited: collections.DenseMap(layout_mod.Idx, void),
     layout_stack: std.ArrayList(layout_mod.Idx) = .empty,
 
     fn deinit(self: *Analysis) void {
@@ -2769,7 +2769,7 @@ pub fn compute(
         .owned_demand = try gpa.alloc(bool, store.localCount()),
         .mention_heads = try gpa.alloc(u32, store.localCount()),
         .boxy_dynamic_layouts = collections.DenseMap(layout_mod.Idx, bool).init(gpa),
-        .layout_visited = std.AutoHashMap(layout_mod.Idx, void).init(gpa),
+        .layout_visited = collections.DenseMap(layout_mod.Idx, void).init(gpa),
     };
     defer analysis.deinit();
     @memset(analysis.state, .unknown);
