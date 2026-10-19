@@ -1528,7 +1528,8 @@ pub const ConstStore = struct {
 
     /// Whether the value graph at `root` of a store read from outside the
     /// running compiler is well formed and holds no function value: every
-    /// node, child, blob and name range it reaches is inside the store.
+    /// node, child, blob and name range it reaches is inside the store, and
+    /// every packed list's bytes hold exactly its items.
     pub fn validValueGraph(self: *const ConstStore, root: ConstNodeId) Allocator.Error!bool {
         var seen = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, self.values.items.len);
         defer seen.deinit(self.allocator);
@@ -1547,7 +1548,10 @@ pub const ConstStore = struct {
                 .nominal => |nominal| try pending.append(self.allocator, @backingInt(nominal.backing)),
                 .list => |list| switch (list) {
                     .nodes => |range| if (!try self.appendValidRange(&pending, range)) return false,
-                    .packed_bytes => |packed_list| if (!self.validBlob(packed_list.bytes)) return false,
+                    .packed_bytes => |packed_list| {
+                        if (!self.validBlob(packed_list.bytes)) return false;
+                        if (@as(u64, packed_list.len) * packed_list.byteWidth() != packed_list.bytes.len) return false;
+                    },
                     .empty => {},
                 },
                 .tuple, .record => |range| if (!try self.appendValidRange(&pending, range)) return false,
