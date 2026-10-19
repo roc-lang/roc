@@ -9091,7 +9091,8 @@ test "literal conversion ownership includes nested codec evidence" {
         try std.testing.expectEqual(@as(usize, 0), resources.checker.problems.problems.items.len);
         try std.testing.expect((try artifact.validateDispatchEvidence()) == null);
         var dependent_conversions: usize = 0;
-        for (artifact.checked_bodies.stored_exprs.items) |expr| {
+        for (artifact.checked_bodies.stored_exprs.items, 0..) |expr, expr_index| {
+            const expr_id: check.CheckedArtifact.CheckedExprId = @fromBackingInt(@intCast(expr_index));
             const plan_id = switch (expr.data) {
                 .numeral => |numeral| numeral.plan orelse continue,
                 .str_from_quote => |quote| quote.plan orelse continue,
@@ -9144,7 +9145,7 @@ test "literal conversion ownership includes nested codec evidence" {
             };
             const plan = artifact.static_dispatch_plans.plans[@backingInt(plan_id)];
             try std.testing.expect(plan.resolution == .direct_parametric);
-            try std.testing.expect(artifact.checked_bodies.literalConversionRoot(expr.id) == null);
+            try std.testing.expect(artifact.checked_bodies.literalConversionRoot(expr_id) == null);
             dependent_conversions += 1;
         }
         try std.testing.expectEqual(@as(usize, 1), dependent_conversions);
@@ -9471,10 +9472,10 @@ test "dispatch evidence boundary validator reports a removed dispatch plan by ex
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     var removed: ?check.CheckedArtifact.CheckedExprId = null;
-    for (resources.checked_artifact.checked_bodies.stored_exprs.items) |*expr| {
+    for (resources.checked_artifact.checked_bodies.stored_exprs.items, 0..) |*expr, expr_index| {
         if (std.meta.activeTag(expr.data) == .dispatch_call and expr.data.dispatch_call != null) {
             expr.data = .{ .dispatch_call = null };
-            removed = expr.id;
+            removed = @fromBackingInt(@intCast(expr_index));
             break;
         }
     }
