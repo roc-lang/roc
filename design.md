@@ -22051,7 +22051,11 @@ inside a builtin; the host walks frame pointers from its own frame and records
 every return address into generated code, innermost first. Generated code, the
 builtins the compiler links in-process, and the host's callbacks keep frame
 pointers, so the chain is intact, and the walk reads only stack between the
-failing frame and the frame that entered generated code. A stack overflow is
+failing frame and the frame that entered generated code. On Windows x64,
+compiled host and builtin code points its frame pointer into the middle of its
+frame rather than at a saved-frame-pointer record, so the host unwinds those
+frames with the system unwind tables until it reaches generated code, then
+walks the generated frame-pointer chain from there. A stack overflow is
 caught by the guard-page handler, which records the faulting program counter,
 frame pointer, and stack pointer before escaping; the host records the counter
 when it is in generated code and walks the chain from the frame pointer.

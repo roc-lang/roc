@@ -6,6 +6,7 @@
 //! the finalizer can replay them deterministically in root request order.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const builtins = @import("builtins");
 
@@ -177,6 +178,11 @@ fn inGeneratedCode(self: *const CompileTimeHost, address: usize) bool {
 /// into generated code, which is live stack.
 fn generatedCalls(self: *CompileTimeHost, frame: usize, low: usize) []const usize {
     var calls = std.ArrayListUnmanaged(usize).empty;
+    self.appendGeneratedCalls(&calls, frame, low);
+    return calls.items;
+}
+
+fn appendGeneratedCalls(self: *CompileTimeHost, calls: *std.ArrayListUnmanaged(usize), frame: usize, low: usize) void {
     var fp = frame;
     while (fp % @alignOf(usize) == 0 and fp >= low and fp + 2 * @sizeOf(usize) <= self.entry_frame) {
         const record: *const [2]usize = @ptrFromInt(fp);
@@ -184,13 +190,42 @@ fn generatedCalls(self: *CompileTimeHost, frame: usize, low: usize) []const usiz
         if (record[0] <= fp) break;
         fp = record[0];
     }
-    return calls.items;
 }
 
 /// Where in generated code the failure being reported from this host
 /// callback happened.
 fn currentFailurePoint(self: *CompileTimeHost, frame: usize) FailurePoint {
+    if (comptime builtin.os.tag == .windows and builtin.cpu.arch == .x86_64) return self.windowsX64FailurePoint();
     return .{ .calls = self.generatedCalls(frame, frame) };
+}
+
+/// On Windows x64, compiled host and builtin code points its frame pointer
+/// into the middle of its frame rather than at a saved-frame-pointer record,
+/// so the frames between this callback and generated code are unwound with
+/// the system unwind tables. Generated frames are frame-pointer records, so
+/// the chain is walked from the innermost one.
+fn windowsX64FailurePoint(self: *CompileTimeHost) FailurePoint {
+    const windows = std.os.windows;
+    var context: windows.CONTEXT = undefined;
+    windows.ntdll.RtlCaptureContext(&context);
+    var history: windows.UNWIND_HISTORY_TABLE = undefined;
+    @memset(@as(*[@sizeOf(windows.UNWIND_HISTORY_TABLE)]u8, @ptrCast(&history)), 0);
+    while (!self.inGeneratedCode(context.Rip)) {
+        if (context.Rsp >= self.entry_frame) return .{};
+        var image_base: usize = undefined;
+        if (windows.ntdll.RtlLookupFunctionEntry(context.Rip, &image_base, &history)) |function| {
+            var handler_data: ?*anyopaque = null;
+            var establisher_frame: usize = undefined;
+            _ = windows.ntdll.RtlVirtualUnwind(windows.UNW_FLAG_NHANDLER, image_base, context.Rip, function, &context, &handler_data, &establisher_frame, null);
+        } else {
+            context.Rip = @as(*const usize, @ptrFromInt(context.Rsp)).*;
+            context.Rsp += @sizeOf(usize);
+        }
+    }
+    var calls = std.ArrayListUnmanaged(usize).empty;
+    calls.append(self.host_arena.allocator(), context.Rip) catch self.jump(.host_oom);
+    self.appendGeneratedCalls(&calls, context.Rbp, context.Rsp);
+    return .{ .calls = calls.items };
 }
 
 /// Install a crash boundary before calling generated root code.

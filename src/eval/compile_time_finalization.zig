@@ -2913,7 +2913,7 @@ fn evalInterpreterProgramRoots(
         try reportInterpreterDebugMessages(
             allocator,
             options,
-            module.key,
+            module.key.digest(),
             compile_time_root,
             host.debugMessages(),
         );
