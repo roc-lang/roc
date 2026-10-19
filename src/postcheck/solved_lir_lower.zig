@@ -167,9 +167,10 @@ pub const RootManifest = struct {
 pub const Options = struct {
     /// The object cache asked for closed specializations.
     spec_cache: ?Common.SpecCacheLookup = null,
-    /// Whether this program's code is linked, so the cache may serve it a
-    /// linked-object entry (`Common.SpecCacheHit.c_abi_entry`).
-    spec_cache_accepts_linked: bool = false,
+    /// Which cache entries can serve this program: whether its code is
+    /// linked, so a linked-object entry (`Common.SpecCacheHit.c_abi_entry`)
+    /// can, and whether its emitter splices dev code.
+    spec_cache_takes: Common.SpecCacheTakes = .dev_code,
     /// Whether the cache may also serve specializations the compile-time
     /// roots reach. The evaluator splices those entries into its own image,
     /// which is only faithful when no compile-time-only exhaustiveness site
@@ -775,7 +776,7 @@ const Lowerer = struct {
     completed_scalar_values: ?*const ComptimeScalarValues.CompletedScalarValues,
     proc_debug_names: bool,
     spec_cache: ?Common.SpecCacheLookup,
-    spec_cache_accepts_linked: bool,
+    spec_cache_takes: Common.SpecCacheTakes,
     comptime_closure_hits: bool,
     /// This consumer's explicit share of the producer's roots and requests.
     root_manifest: ?RootManifest,
@@ -1077,7 +1078,7 @@ const Lowerer = struct {
             .completed_scalar_values = options.completed_scalar_values,
             .proc_debug_names = options.proc_debug_names,
             .spec_cache = options.spec_cache,
-            .spec_cache_accepts_linked = options.spec_cache_accepts_linked,
+            .spec_cache_takes = options.spec_cache_takes,
             .comptime_closure_hits = options.comptime_closure_hits,
             .root_manifest = options.root_manifest,
             .comptime_phase = true,
@@ -2944,7 +2945,7 @@ const Lowerer = struct {
             if (self.spec_cache) |cache| {
                 if (source_fn.source) |template| {
                     if (template.spec_key) |key| {
-                        if (cache.lookup(key.bytes, self.spec_cache_accepts_linked)) |hit| {
+                        if (cache.lookup(key.bytes, self.spec_cache_takes)) |hit| {
                             if (std.mem.eql(u8, &hit.identity, &identity.bytes)) {
                                 cached = hit;
                                 cached_key = key.bytes;
@@ -2970,7 +2971,7 @@ const Lowerer = struct {
         {
             if (self.spec_cache) |cache| {
                 const key = Common.procIdentityCacheKey(if (code_key) |code| code else identity.bytes);
-                if (cache.lookup(key, self.spec_cache_accepts_linked)) |hit| {
+                if (cache.lookup(key, self.spec_cache_takes)) |hit| {
                     if (std.mem.eql(u8, &hit.identity, &identity.bytes)) {
                         cached = hit;
                         cached_key = key;
@@ -5311,10 +5312,10 @@ const Lowerer = struct {
     /// the same procedure when there is one, with that entry's ownership
     /// signature.
     fn linkedEntryFor(self: *Lowerer, template: Mono.FnTemplate, monotype_hit: Common.SpecCacheHit) Common.SpecCacheHit {
-        if (monotype_hit.c_abi_entry or !self.spec_cache_accepts_linked) return monotype_hit;
+        if (monotype_hit.c_abi_entry or !self.spec_cache_takes.takesLinkedObjects()) return monotype_hit;
         const cache = self.spec_cache orelse return monotype_hit;
         const key = template.spec_key orelse return monotype_hit;
-        const linked = cache.lookup(key.bytes, true) orelse return monotype_hit;
+        const linked = cache.lookup(key.bytes, self.spec_cache_takes) orelse return monotype_hit;
         if (!linked.c_abi_entry or !std.mem.eql(u8, &linked.identity, &monotype_hit.identity)) return monotype_hit;
         return linked;
     }

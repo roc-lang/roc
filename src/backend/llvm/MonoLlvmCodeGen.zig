@@ -12841,7 +12841,9 @@ pub const MonoLlvmCodeGen = struct {
         } else if (arch == .x86_64) {
             return if (self.target.os.tag == .windows) .x86_64_windows else .x86_64_sysv;
         } else if (arch == .wasm32) {
-            return .wasm32;
+            // WebAssembly 1.0 has no vector values, so a target without
+            // simd128 passes vectors by lane, as the other backends do.
+            return if (std.Target.wasm.featureSetHas(self.target.cpu.features, .simd128)) .wasm32 else .wasm32v1;
         } else if (arch == .wasm64) {
             return .wasm64;
         } else {
@@ -12873,7 +12875,7 @@ pub const MonoLlvmCodeGen = struct {
     /// and returns travel as i32 values with explicit extension/truncation at
     /// the ABI boundary.
     fn cAbiPieceLlvmType(self: *MonoLlvmCodeGen, builder: *LlvmBuilder, piece: layout.abi.RegPiece) Error!LlvmBuilder.Type {
-        if ((self.abiTarget() == .wasm32 or self.abiTarget() == .wasm64) and
+        if ((self.abiTarget() == .wasm32 or self.abiTarget() == .wasm32v1 or self.abiTarget() == .wasm64) and
             piece.class == .integer and piece.size < 4)
         {
             return .i32;
@@ -12883,7 +12885,7 @@ pub const MonoLlvmCodeGen = struct {
 
     fn cAbiPieceIsSigned(self: *MonoLlvmCodeGen, layout_idx: layout.Idx) bool {
         const abi_target = self.abiTarget();
-        const direct_idx = if (abi_target == .wasm32 or abi_target == .wasm64)
+        const direct_idx = if (abi_target == .wasm32 or abi_target == .wasm32v1 or abi_target == .wasm64)
             switch (layout.abi.wasm.classifyType(self.layouts(), layout_idx)) {
                 .direct => |idx| idx,
                 .indirect => layout_idx,
@@ -14414,4 +14416,20 @@ test "issue 11451: forced inlining at deep call sites is capped per caller" {
         .{ forced_sites, deep_sites, callee_stmts + 1 },
     );
     try std.testing.expect(forced_sites <= max_forced_sites);
+}
+
+test "wasm C-ABI classification follows the target's SIMD support" {
+    const allocator = std.testing.allocator;
+    const cases = [_]struct { target: roc_target.RocTarget, abi: layout.abi.Target }{
+        .{ .target = .wasm32, .abi = .wasm32 },
+        .{ .target = .wasm32v1, .abi = .wasm32v1 },
+    };
+    for (cases) |case| {
+        var store = lir.LirStore.init(allocator);
+        defer store.deinit();
+        const target = try std.zig.system.resolveTargetQuery(std.testing.io, case.target.llvmTargetQuery());
+        var codegen = MonoLlvmCodeGen.initForLinkedObject(allocator, &store, &.{}, &.{}, &.{}, target);
+        defer codegen.deinit();
+        try std.testing.expectEqual(case.abi, codegen.abiTarget());
+    }
 }

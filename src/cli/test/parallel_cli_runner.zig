@@ -433,6 +433,8 @@ const CustomCase = enum {
     boxed_closure_object_cache,
     spliced_procedure_debug_lines,
     linked_object_pack,
+    wasm_linked_object_pack,
+    wasm32v1_vector_lowering,
     run_object_cache,
     tier2_object_cache,
     proc_identity_object_cache,
@@ -3048,6 +3050,8 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "object cache: editing an app lambda's body keeps the package specializations that receive it cached, calling the edited lambda", .timeout_ms = 600_000, .body = .{ .custom = .edited_lambda_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: an edited app is served higher-order specializations by their procedure identity", .timeout_ms = 600_000, .body = .{ .custom = .proc_identity_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: a dev build links a URL package's optimized object pack and behaves like the uncached build", .timeout_ms = 900_000, .body = .{ .custom = .linked_object_pack } },
+    .{ .id = 0, .suite = .subcommands, .name = "object cache: a wasm32 dev build composes a URL package's size-optimized object pack and behaves like the uncached build", .timeout_ms = 900_000, .backend = .size, .body = .{ .custom = .wasm_linked_object_pack } },
+    .{ .id = 0, .suite = .subcommands, .name = "wasm32v1 builds lower vector code to WebAssembly 1.0 at every optimization level", .timeout_ms = 900_000, .backend = .size, .body = .{ .custom = .wasm32v1_vector_lowering } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: roc run links URL package objects into its host executable and splices the app's dev packs", .timeout_ms = 900_000, .body = .{ .custom = .run_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: a dev build compiles its tier 2 entries with LLVM and an edited rebuild links them", .timeout_ms = 900_000, .body = .{ .custom = .tier2_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: spliced procedures keep the debug lines of the cold build", .timeout_ms = 600_000, .body = .{ .custom = .spliced_procedure_debug_lines } },
@@ -4990,6 +4994,8 @@ fn runCustomCase(
         .boxed_closure_object_cache => customBoxedClosureObjectCache(io, allocator, &env, &timer, timeout_ms),
         .spliced_procedure_debug_lines => customSplicedProcedureDebugLines(io, allocator, &env, &timer, timeout_ms),
         .linked_object_pack => customLinkedObjectPack(io, allocator, &env, &timer, timeout_ms),
+        .wasm_linked_object_pack => customWasmLinkedObjectPack(io, allocator, &env, &timer, timeout_ms),
+        .wasm32v1_vector_lowering => customWasm32v1VectorLowering(io, allocator, &env, &timer, timeout_ms),
         .run_object_cache => customRunObjectCache(io, allocator, &env, &timer, timeout_ms),
         .tier2_object_cache => customTier2ObjectCache(io, allocator, &env, &timer, timeout_ms),
         .proc_identity_object_cache => customProcIdentityObjectCache(io, allocator, &env, &timer, timeout_ms),
@@ -8372,6 +8378,210 @@ fn customLinkedObjectPack(
     return null;
 }
 
+/// A wasm32 dev build whose store lacks a URL package's object pack builds
+/// it with `--opt=size` once the package is checked and composes it into the
+/// app's object, and so does every later build; each module must return
+/// exactly what a module built without the store returns and leave the same
+/// allocations outstanding. One entry takes and returns a vector, which
+/// `wasm32v1` passes by lane, and every `wasm32v1` module must use no feature
+/// past WebAssembly 1.0. Two independent stores must write byte-identical
+/// object packs.
+fn customWasmLinkedObjectPack(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const roc_file = "test/wasm/linked_object_pack/App.roc";
+    const expected = "sum of squares to 10: 385\n506\nU8x16(20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20)";
+    // `describe`, `double_lanes`, and `sum_squares_from`, which the
+    // one-line `sum_squares` inlines into the app.
+    const package_entries = 3;
+    for ([_][]const u8{ "wasm32", "wasm32v1" }) |target_name| {
+        if (wasmLinkedObjectPackForTarget(io, allocator, env, timer, timeout_ms, roc_file, expected, package_entries, target_name)) |failure| return failure;
+    }
+    return null;
+}
+
+fn wasmLinkedObjectPackForTarget(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    roc_file: []const u8,
+    expected: []const u8,
+    package_entries: usize,
+    target_name: []const u8,
+) ?TestResult {
+    const target_arg = std.fmt.allocPrint(allocator, "--target={s}", .{target_name}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate target argument: {}", .{err});
+    const size_namespace = std.fmt.allocPrint(allocator, "{s}-size", .{target_name}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate store namespace: {}", .{err});
+    const dev_namespace = std.fmt.allocPrint(allocator, "{s}-dev", .{target_name}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate store namespace: {}", .{err});
+    var stores: [2][]const u8 = undefined;
+    var uncached_outstanding: ?i64 = null;
+    for (&stores, 0..) |*store_root, store_index| {
+        const cache_root = std.fmt.allocPrint(allocator, "{s}/wasm_linked_pack_cache_{s}_{d}", .{ env.dirs.work_dir, target_name, store_index }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate cache root: {}", .{err});
+        seedLinkedObjectPackage(io, allocator, cache_root) catch |err|
+            return customInfraFailure(allocator, timer, "failed to seed the URL package: {}", .{err});
+        store_root.* = cache_root;
+        var store_env = CaseEnv{
+            .dirs = env.dirs,
+            .env_map = env.env_map.clone(allocator) catch |err|
+                return customInfraFailure(allocator, timer, "failed to clone the store environment: {}", .{err}),
+        };
+        defer store_env.env_map.deinit();
+        for ([_][]const u8{ "ROC_CACHE_DIR", "XDG_CACHE_HOME" }) |key| {
+            store_env.env_map.put(key, cache_root) catch |err|
+                return customInfraFailure(allocator, timer, "failed to set the cache root: {}", .{err});
+        }
+        store_env.env_map.put("ROC_PACK_STATS", "1") catch |err|
+            return customInfraFailure(allocator, timer, "failed to enable pack statistics: {}", .{err});
+        const builds = [_]struct { name: []const u8, cache: bool }{
+            .{ .name = "uncached", .cache = false },
+            .{ .name = "cold", .cache = true },
+            .{ .name = "warm", .cache = true },
+        };
+        for (builds) |build| {
+            const output_path = std.fmt.allocPrint(allocator, "{s}/wasm_linked_pack_{s}_{d}_{s}.wasm", .{ env.dirs.work_dir, target_name, store_index, build.name }) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+            const out_arg = outputArg(allocator, output_path) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate output argument: {}", .{err});
+            const build_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+                return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a build");
+            const args: []const []const u8 = if (build.cache)
+                &.{ "build", target_arg, "--opt=dev", out_arg }
+            else
+                &.{ "build", target_arg, "--no-cache", "--opt=dev", out_arg };
+            const built = runRocInEnv(io, allocator, &store_env, args, roc_file, .relative, &.{}, null, build_timeout) catch |err|
+                return customInfraFailure(allocator, timer, "build spawn error: {}", .{err});
+            if (!processSucceeded(built.term) or std.mem.find(u8, built.stdout, "successfully building") == null or std.mem.find(u8, built.stderr, "panic") != null) {
+                return failureFromRun(allocator, timer, built, "wasm32 dev build did not succeed");
+            }
+            if (build.cache) {
+                const marker = "linked procs: ";
+                const at = std.mem.find(u8, built.stderr, marker) orelse
+                    return failureFromRun(allocator, timer, built, "the cached build did not report pack statistics");
+                if (countAfterMarker(built.stderr[at + marker.len ..]) != package_entries) {
+                    return failureFromRun(allocator, timer, built, "the cached build did not serve every package export from the URL package's object pack");
+                }
+            }
+            if (validateWasmOutput(io, allocator, timer, output_path)) |failure| return failure;
+            if (std.mem.eql(u8, target_name, "wasm32v1")) {
+                if (validateWasm10Output(io, allocator, timer, output_path)) |failure| return failure;
+            }
+
+            var wasm = setupGlueRuntimeWasm(io, allocator, output_path) catch |err|
+                return customFailure(allocator, timer, "failed to load the {s} {s} module: {}", .{ target_name, build.name, err });
+            defer wasm.deinit();
+            const result = callGlueRuntimeWasmMain(&wasm, allocator) catch |err|
+                return customFailure(allocator, timer, "the {s} {s} module failed: {}", .{ target_name, build.name, err });
+            if (!std.mem.eql(u8, result, expected)) {
+                return customFailure(allocator, timer, "the {s} {s} module returned \"{s}\"", .{ target_name, build.name, result });
+            }
+            const outstanding = wasmOutstandingAllocations(&wasm) catch |err|
+                return customFailure(allocator, timer, "failed to read the {s} {s} module's allocation counts: {}", .{ target_name, build.name, err });
+            if (uncached_outstanding) |reference| {
+                if (outstanding != reference) {
+                    return customFailure(allocator, timer, "the {s} {s} module left {d} allocations outstanding, the uncached one {d}", .{ target_name, build.name, outstanding, reference });
+                }
+            } else uncached_outstanding = outstanding;
+        }
+    }
+    var first = PackStoreFiles.read(io, allocator, stores[0]) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read the first store's packs: {}", .{err});
+    defer first.deinit(allocator);
+    var second = PackStoreFiles.read(io, allocator, stores[1]) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read the second store's packs: {}", .{err});
+    defer second.deinit(allocator);
+    var object_packs: usize = 0;
+    for (first.paths.items, first.contents.items) |path, bytes| {
+        if (std.mem.find(u8, path, size_namespace) == null) continue;
+        object_packs += 1;
+        const key_name = std.fs.path.basename(path);
+        const other = for (second.paths.items, second.contents.items) |other_path, other_bytes| {
+            if (std.mem.find(u8, other_path, size_namespace) != null and std.mem.eql(u8, std.fs.path.basename(other_path), key_name)) break other_bytes;
+        } else return customFailure(allocator, timer, "size-optimized pack {s} was written by one store and not the other", .{key_name});
+        if (!std.mem.eql(u8, bytes, other)) {
+            return customFailure(allocator, timer, "size-optimized pack {s} differs between two stores", .{key_name});
+        }
+    }
+    if (object_packs == 0) return customFailure(allocator, timer, "no size-optimized object pack was written", .{});
+    for (first.paths.items) |path| {
+        if (std.mem.find(u8, path, dev_namespace) != null) {
+            return customFailure(allocator, timer, "a wasm32 build wrote dev pack {s}, which no wasm32 build can splice", .{path});
+        }
+    }
+    return null;
+}
+
+/// A program of vector operations and a string pattern builds for wasm32 and
+/// wasm32v1 at every optimization level, each module returns the same
+/// value, and every wasm32v1 module uses nothing past WebAssembly 1.0.
+fn customWasm32v1VectorLowering(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const expected = "(U8x16(144, 144, 144, 2, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144, 144), U8x16(255, 255, 255, 2, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255), U16x8(24464, 24464, 24464, 24464, 24464, 24464, 24464, 24464), 1, \"width is 16\")";
+    for ([_][]const u8{ "wasm32", "wasm32v1" }) |target_name| {
+        for ([_][]const u8{ "dev", "size", "speed" }) |opt| {
+            const output_path = std.fmt.allocPrint(allocator, "{s}/vector_{s}_{s}.wasm", .{ env.dirs.work_dir, target_name, opt }) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+            const args = [_][]const u8{
+                "build",
+                std.fmt.allocPrint(allocator, "--target={s}", .{target_name}) catch |err|
+                    return customInfraFailure(allocator, timer, "failed to allocate target argument: {}", .{err}),
+                std.fmt.allocPrint(allocator, "--opt={s}", .{opt}) catch |err|
+                    return customInfraFailure(allocator, timer, "failed to allocate opt argument: {}", .{err}),
+                "--no-cache",
+                outputArg(allocator, output_path) catch |err|
+                    return customInfraFailure(allocator, timer, "failed to allocate output argument: {}", .{err}),
+            };
+            if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+                .args = &args,
+                .roc_file = "test/wasm/wasm32v1_vector_app.roc",
+                .exit = .success,
+                .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+                .not_contains = &.{.{ .stream = .stderr, .text = "panic" }},
+            })) |failure| return failure;
+            if (validateWasmOutput(io, allocator, timer, output_path)) |failure| return failure;
+            if (std.mem.eql(u8, target_name, "wasm32v1")) {
+                if (validateWasm10Output(io, allocator, timer, output_path)) |failure| return failure;
+            }
+            var wasm = setupGlueRuntimeWasm(io, allocator, output_path) catch |err|
+                return customFailure(allocator, timer, "failed to load the {s} {s} module: {}", .{ target_name, opt, err });
+            defer wasm.deinit();
+            const result = callGlueRuntimeWasmMain(&wasm, allocator) catch |err|
+                return customFailure(allocator, timer, "the {s} {s} module failed: {}", .{ target_name, opt, err });
+            if (!std.mem.eql(u8, result, expected)) {
+                return customFailure(allocator, timer, "the {s} {s} module returned \"{s}\"", .{ target_name, opt, result });
+            }
+        }
+    }
+    return null;
+}
+
+/// Allocations a wasm test module made that it has not freed, from the test
+/// platform's counters.
+fn wasmOutstandingAllocations(wasm: *const GlueRuntimeWasmInterface) (bytebox.ExportError || bytebox.TrapError)!i64 {
+    var counts: [2]i64 = undefined;
+    for ([_][]const u8{ "wasm_alloc_count", "wasm_dealloc_count" }, &counts) |name, *count| {
+        const handle = try wasm.module_instance.getFunctionHandle(name);
+        var params: [0]bytebox.Val = undefined;
+        var returns: [1]bytebox.Val = undefined;
+        _ = try wasm.module_instance.invoke(handle, &params, &returns, .{});
+        count.* = returns[0].I32;
+    }
+    return counts[0] - counts[1];
+}
+
 /// `roc run` reads the object cache: its host executable links a URL
 /// package's optimized object pack, which the streamed image calls by name,
 /// and its image splices the dev packs a build of the same app wrote. Every
@@ -9993,6 +10203,61 @@ fn validateWasmOutput(
     defer module_def.destroy();
     module_def.decode(wasm_bytes) catch |err|
         return customFailure(allocator, timer, "generated invalid wasm {s}: {}", .{ path, err });
+    return null;
+}
+
+/// Fail unless the wasm module at `path` uses nothing past WebAssembly 1.0:
+/// no instruction, value type, multiple result, or block signature from a
+/// later proposal.
+fn validateWasm10Output(
+    io: std.Io,
+    allocator: Allocator,
+    timer: *harness.Timer,
+    path: []const u8,
+) ?TestResult {
+    const wasm_bytes = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .unlimited) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read wasm output {s}: {}", .{ path, err });
+    defer allocator.free(wasm_bytes);
+    var module_def = bytebox.createModuleDefinition(allocator, .{ .debug_name = "cli_wasm_1_0_output" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to create wasm validator: {}", .{err});
+    defer module_def.destroy();
+    module_def.decode(wasm_bytes) catch |err|
+        return customFailure(allocator, timer, "generated invalid wasm {s}: {}", .{ path, err });
+    if (wasm10Violation(module_def)) |violation| {
+        return customFailure(allocator, timer, "{s} is not WebAssembly 1.0: {s}", .{ path, violation });
+    }
+    return null;
+}
+
+fn wasm10ValType(vt: bytebox.ValType) bool {
+    return switch (vt) {
+        .I32, .I64, .F32, .F64 => true,
+        .V128, .FuncRef, .ExternRef => false,
+    };
+}
+
+/// What in a decoded module is past WebAssembly 1.0, or null.
+fn wasm10Violation(module_def: anytype) ?[]const u8 {
+    for (module_def.types.items) |func_type| {
+        if (func_type.getReturns().len > 1) return "a function type with several results";
+        for (func_type.types.items) |vt| if (!wasm10ValType(vt)) return "a function type with a non-numeric value";
+    }
+    for (module_def.code.locals.items) |vt| if (!wasm10ValType(vt)) return "a non-numeric local";
+    for (module_def.globals.items) |global| if (!wasm10ValType(global.valtype)) return "a non-numeric global";
+    const instructions = module_def.code.instructions.items;
+    const immediates = module_def.code.validation_immediates.items;
+    if (immediates.len != instructions.len) return "instructions the check cannot pair with their block types";
+    const Opcode = @FieldType(@TypeOf(instructions[0]), "opcode");
+    for (instructions, immediates) |instruction, immediate| {
+        const opcode = instruction.opcode;
+        // bytebox orders its opcodes with every later proposal's after the
+        // 1.0 conversions, from sign extension on.
+        if (@backingInt(opcode) >= @backingInt(Opcode.I32_Extend8_S)) return @tagName(opcode);
+        const later_opcodes = [_]Opcode{ .Select_T, .Table_Get, .Table_Set, .Drop_V128, .Select_V128, .Local_Get_V128, .Local_Set_V128, .Local_Tee_V128, .Global_Get_V128, .Global_Set_V128 };
+        if (std.mem.findScalar(Opcode, &later_opcodes, opcode) != null) return @tagName(opcode);
+        const block_opcodes = [_]Opcode{ .Block, .Loop, .If, .IfNoElse };
+        if (std.mem.findScalar(Opcode, &block_opcodes, opcode) != null and immediate.BlockOrIf.block_type == .TypeIndex) return "a block with a signature type";
+    }
     return null;
 }
 

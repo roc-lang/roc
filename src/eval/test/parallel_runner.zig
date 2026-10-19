@@ -1259,7 +1259,7 @@ fn runAllocationTest(
     const eval_fns = [NUM_BACKENDS]BackendEvalWithStatsFn{
         helpers.lirInterpreterStrWithStats,
         helpers.devEvaluatorStrWithStats,
-        helpers.wasmEvaluatorStrWithStats,
+        wasmBothCpuLevelsStrWithStats,
         helpers.devEvaluatorStrWithStats, // unused; LLVM allocation stats are not implemented
     };
 
@@ -1398,7 +1398,7 @@ fn runInspectTest(
     const eval_fns = [NUM_BACKENDS]BackendEvalFn{
         helpers.lirInterpreterInspectedStr,
         helpers.devEvaluatorInspectedStr,
-        helpers.wasmEvaluatorInspectedStr,
+        wasmBothCpuLevelsInspectedStr,
         helpers.llvmEvaluatorInspectedStr,
     };
 
@@ -1639,7 +1639,7 @@ fn runCrashTest(
     const eval_fns = [NUM_BACKENDS]BackendEvalFn{
         helpers.lirInterpreterInspectedStr,
         helpers.devEvaluatorInspectedStr,
-        helpers.wasmEvaluatorInspectedStr,
+        wasmBothCpuLevelsInspectedStr,
         helpers.llvmEvaluatorInspectedStr,
     };
 
@@ -2944,4 +2944,25 @@ pub fn main(init: std.process.Init) RunnerError!void {
     if (failed > 0 or crashed > 0 or timed_out > 0) {
         std.process.exit(1);
     }
+}
+
+/// Evaluate via the wasm backend for both CPU levels. A WebAssembly 1.0
+/// result that differs from the default one, in output or allocation count,
+/// is reported as the output, so it never agrees with the expected value.
+fn wasmBothCpuLevelsStrWithStats(allocator: std.mem.Allocator, lowered: *const LoweredProgram) helpers.Error!helpers.EvalRunResult {
+    const default = try helpers.wasmEvaluatorStrWithStats(allocator, lowered);
+    const v1 = try helpers.wasmRunAt(allocator, lowered, .v1);
+    defer allocator.free(v1.output);
+    if (std.mem.eql(u8, default.output, v1.output) and default.allocation_count == v1.allocation_count) return default;
+    defer allocator.free(default.output);
+    return .{
+        .output = try std.fmt.allocPrint(allocator, "{s} ({d} allocations), but wasm32v1: {s} ({d} allocations)", .{ default.output, default.allocation_count, v1.output, v1.allocation_count }),
+        .allocation_count = default.allocation_count,
+    };
+}
+
+/// The output of `wasmBothCpuLevelsStrWithStats`.
+fn wasmBothCpuLevelsInspectedStr(allocator: std.mem.Allocator, lowered: *const LoweredProgram) helpers.Error![]u8 {
+    const result = try wasmBothCpuLevelsStrWithStats(allocator, lowered);
+    return result.output;
 }
