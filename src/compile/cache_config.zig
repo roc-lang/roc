@@ -338,7 +338,7 @@ pub const Constants = struct {
     ///      `public_type_not_defined`.
     /// 154: canonical diagnostics drop `execution_requires_app_or_default_app`,
     ///      and file-level diagnostics store no region.
-    /// 155: a module records which top-level definitions' calls can invoke a
+    /// 156: a module records which top-level definitions' calls can invoke a
     ///      function value they do not name, and its strict-demand relation
     ///      follows function values and every selected dispatch.
     pub const CACHE_VERSION = 156;

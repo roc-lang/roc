@@ -9207,7 +9207,7 @@ fn forgetRecordedProgramOutputs(io: std.Io, allocator: Allocator, env: *const Ca
 
 /// Delete every recorded program output (`objects-v*/<mode>/programs/`) under
 /// `cache_root`.
-fn deleteRecordedProgramOutputs(io: std.Io, allocator: Allocator, cache_root: []const u8) !void {
+fn deleteRecordedProgramOutputs(io: std.Io, allocator: Allocator, cache_root: []const u8) CliRunnerError!void {
     var root = std.Io.Dir.cwd().openDir(io, cache_root, .{ .iterate = true }) catch |err| switch (err) {
         error.FileNotFound => return,
         else => return err,
