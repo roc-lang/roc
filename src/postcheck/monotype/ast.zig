@@ -257,7 +257,7 @@ pub const FnTemplate = struct {
     /// an evaluation lowers from the same template and types.
     discovery: bool = false,
     /// The `spec_key` a procedure lowered only for discovery was reserved
-    /// under. Its discovery summary is published under this key (design.md
+    /// under. Its discovery summary is recorded under this key (design.md
     /// "Discovery Summaries"); the procedure itself has no object-cache key.
     discovery_key: ?names.TypeDigest = null,
     /// Explicit dispatch selections captured when this specialization was
