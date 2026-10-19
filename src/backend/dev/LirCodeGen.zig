@@ -7074,8 +7074,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .simd_sub_sat => try self.codegen.emit.simdThreeReg((if (kind.isSigned()) @as(u32, 0x4E202C00) else 0x6E202C00) | size, dst, lhs, r.?),
                 .simd_neg_wrap => try self.codegen.emit.simdTwoReg(0x6E20B800 | size, dst, lhs),
                 .simd_abs_wrap => try self.codegen.emit.simdTwoReg(0x4E20B800 | size, dst, lhs),
-                .simd_min => try self.codegen.emit.simdThreeReg((if (kind.isSigned()) @as(u32, 0x4E206C00) else 0x6E206C00) | size, dst, lhs, r.?),
-                .simd_max => try self.codegen.emit.simdThreeReg((if (kind.isSigned()) @as(u32, 0x4E206400) else 0x6E206400) | size, dst, lhs, r.?),
+                .simd_min, .simd_max => {
+                    const is_max = basic_op == .simd_max;
+                    const opcode: u32 = switch (kind) {
+                        .u8x16, .u16x8, .u32x4 => if (is_max) 0x6E206400 else 0x6E206C00,
+                        .i8x16, .i16x8, .i32x4 => if (is_max) 0x4E206400 else 0x4E206C00,
+                        .u64x2, .i64x2 => unreachable,
+                    };
+                    try self.codegen.emit.simdThreeReg(opcode | size, dst, lhs, r.?);
+                },
                 .simd_abs_diff => try self.codegen.emit.simdThreeReg(0x6E207400 | size, dst, lhs, r.?),
                 .simd_avg_rounded => try self.codegen.emit.simdThreeReg(0x6E201400 | size, dst, lhs, r.?),
                 .simd_and => try self.codegen.emit.simdThreeReg(0x4E201C00, dst, lhs, r.?),

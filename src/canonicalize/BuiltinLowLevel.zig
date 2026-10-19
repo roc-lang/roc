@@ -150,11 +150,20 @@ fn putLowLevelFmt(
     comptime fmt: []const u8,
     args: anytype,
     op: CIR.Expr.LowLevel,
-) std.mem.Allocator.Error!void {
-    const name = try scratchFmt(scratch, env.gpa, fmt, args);
-    if (env.common.findIdent(name)) |ident| {
-        try low_level_map.put(ident, op);
-    }
+) error{ OutOfMemory, LowLevelOperationsNotFound }!void {
+    try putLowLevel(low_level_map, env, try scratchFmt(scratch, env.gpa, fmt, args), op);
+}
+
+/// Maps a builtin declaration to its low-level operation. Every mapped name
+/// must be declared in Builtin.roc; a name that is not is a stale entry.
+fn putLowLevel(
+    low_level_map: *LowLevelMap,
+    env: *ModuleEnv,
+    name: []const u8,
+    op: CIR.Expr.LowLevel,
+) error{ OutOfMemory, LowLevelOperationsNotFound }!void {
+    const ident = env.common.findIdent(name) orelse return error.LowLevelOperationsNotFound;
+    try low_level_map.put(ident, op);
 }
 
 /// Replace specific `e_anno_only` builtin declarations with `e_lambda` wrappers
@@ -292,7 +301,7 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
         .{ "crypto_blake3_hasher_write", .crypto_blake3_hasher_write },
         .{ "crypto_blake3_hasher_finish", .crypto_blake3_hasher_finish },
     }) |entry| {
-        if (env.common.findIdent(entry[0])) |ident| try low_level_map.put(ident, entry[1]);
+        try putLowLevel(&low_level_map, env, entry[0], entry[1]);
     }
     const numeric_types = numeric_type_names;
     const signed_types = [_][]const u8{ "I8", "I16", "I32", "I64", "I128", "Dec", "F32", "F64" };
@@ -309,39 +318,22 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     // Note: Types like Dec are nested under Num in Builtin.roc, so the canonical identifier is
     // "Builtin.Num.Dec.to_str". But Dec is auto-imported as "Dec", so user code
     // calling Dec.to_str looks up "Builtin.Dec.to_str". We need the canonical name here.
-    for (numeric_types) |num_type| {
-        const to_str_name = try scratchFmt(&name_scratch, gpa, "Builtin.Num.{s}.to_str", .{num_type});
-        if (env.common.findIdent(to_str_name)) |ident| {
-            const low_level_op: CIR.Expr.LowLevel = if (std.mem.eql(u8, num_type, "U8"))
-                .u8_to_str
-            else if (std.mem.eql(u8, num_type, "I8"))
-                .i8_to_str
-            else if (std.mem.eql(u8, num_type, "U16"))
-                .u16_to_str
-            else if (std.mem.eql(u8, num_type, "I16"))
-                .i16_to_str
-            else if (std.mem.eql(u8, num_type, "U32"))
-                .u32_to_str
-            else if (std.mem.eql(u8, num_type, "I32"))
-                .i32_to_str
-            else if (std.mem.eql(u8, num_type, "U64"))
-                .u64_to_str
-            else if (std.mem.eql(u8, num_type, "I64"))
-                .i64_to_str
-            else if (std.mem.eql(u8, num_type, "U128"))
-                .u128_to_str
-            else if (std.mem.eql(u8, num_type, "I128"))
-                .i128_to_str
-            else if (std.mem.eql(u8, num_type, "Dec"))
-                .dec_to_str
-            else if (std.mem.eql(u8, num_type, "F32"))
-                .f32_to_str
-            else if (std.mem.eql(u8, num_type, "F64"))
-                .f64_to_str
-            else
-                continue;
-            try low_level_map.put(ident, low_level_op);
-        }
+    for ([_]NamedLowLevel{
+        .{ "Builtin.Num.U8.to_str", .u8_to_str },
+        .{ "Builtin.Num.I8.to_str", .i8_to_str },
+        .{ "Builtin.Num.U16.to_str", .u16_to_str },
+        .{ "Builtin.Num.I16.to_str", .i16_to_str },
+        .{ "Builtin.Num.U32.to_str", .u32_to_str },
+        .{ "Builtin.Num.I32.to_str", .i32_to_str },
+        .{ "Builtin.Num.U64.to_str", .u64_to_str },
+        .{ "Builtin.Num.I64.to_str", .i64_to_str },
+        .{ "Builtin.Num.U128.to_str", .u128_to_str },
+        .{ "Builtin.Num.I128.to_str", .i128_to_str },
+        .{ "Builtin.Num.Dec.to_str", .dec_to_str },
+        .{ "Builtin.Num.F32.to_str", .f32_to_str },
+        .{ "Builtin.Num.F64.to_str", .f64_to_str },
+    }) |entry| {
+        try putLowLevel(&low_level_map, env, entry[0], entry[1]);
     }
     try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.F32.to_bits", .{}, .f32_to_bits);
     try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.F32.from_bits", .{}, .f32_from_bits);
@@ -408,9 +400,7 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
         .{ .name = "f64_from_utf8_prefix_raw", .op = .f64_from_utf8_prefix },
     };
     for (internal_from_str_primitives) |primitive| {
-        if (env.common.findIdent(primitive.name)) |ident| {
-            try low_level_map.put(ident, primitive.op);
-        }
+        try putLowLevel(&low_level_map, env, primitive.name, primitive.op);
     }
 
     // Numeric arithmetic operations (all numeric types have plus, minus, times, div_by, rem_by)
@@ -505,42 +495,97 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
         .{ .owner = "U8x16", .name = "table_lookup", .op = .simd_table_lookup },
         .{ .owner = "U64x2", .name = "carryless_times_lo", .op = .simd_clmul_lo },
         .{ .owner = "U64x2", .name = "carryless_times_hi", .op = .simd_clmul_hi },
+        .{ .owner = "U8x16", .name = "gt_lanes", .op = .simd_gt_lanes },
+        .{ .owner = "I8x16", .name = "gt_lanes", .op = .simd_gt_lanes },
+        .{ .owner = "U16x8", .name = "gt_lanes", .op = .simd_gt_lanes },
+        .{ .owner = "I16x8", .name = "gt_lanes", .op = .simd_gt_lanes },
+        .{ .owner = "U32x4", .name = "gt_lanes", .op = .simd_gt_lanes },
+        .{ .owner = "I32x4", .name = "gt_lanes", .op = .simd_gt_lanes },
+        .{ .owner = "I64x2", .name = "gt_lanes", .op = .simd_gt_lanes },
+        .{ .owner = "U8x16", .name = "gte_lanes", .op = .simd_gte_lanes },
+        .{ .owner = "I8x16", .name = "gte_lanes", .op = .simd_gte_lanes },
+        .{ .owner = "U16x8", .name = "gte_lanes", .op = .simd_gte_lanes },
+        .{ .owner = "I16x8", .name = "gte_lanes", .op = .simd_gte_lanes },
+        .{ .owner = "U32x4", .name = "gte_lanes", .op = .simd_gte_lanes },
+        .{ .owner = "I32x4", .name = "gte_lanes", .op = .simd_gte_lanes },
+        .{ .owner = "I64x2", .name = "gte_lanes", .op = .simd_gte_lanes },
+        .{ .owner = "U8x16", .name = "min", .op = .simd_min },
+        .{ .owner = "I8x16", .name = "min", .op = .simd_min },
+        .{ .owner = "U16x8", .name = "min", .op = .simd_min },
+        .{ .owner = "I16x8", .name = "min", .op = .simd_min },
+        .{ .owner = "U32x4", .name = "min", .op = .simd_min },
+        .{ .owner = "I32x4", .name = "min", .op = .simd_min },
+        .{ .owner = "U8x16", .name = "max", .op = .simd_max },
+        .{ .owner = "I8x16", .name = "max", .op = .simd_max },
+        .{ .owner = "U16x8", .name = "max", .op = .simd_max },
+        .{ .owner = "I16x8", .name = "max", .op = .simd_max },
+        .{ .owner = "U32x4", .name = "max", .op = .simd_max },
+        .{ .owner = "I32x4", .name = "max", .op = .simd_max },
+        .{ .owner = "U16x8", .name = "times_wrap", .op = .simd_mul_wrap },
+        .{ .owner = "I16x8", .name = "times_wrap", .op = .simd_mul_wrap },
+        .{ .owner = "U32x4", .name = "times_wrap", .op = .simd_mul_wrap },
+        .{ .owner = "I32x4", .name = "times_wrap", .op = .simd_mul_wrap },
+        .{ .owner = "U8x16", .name = "times_wide_lo", .op = .simd_mul_wide_lo },
+        .{ .owner = "I8x16", .name = "times_wide_lo", .op = .simd_mul_wide_lo },
+        .{ .owner = "U16x8", .name = "times_wide_lo", .op = .simd_mul_wide_lo },
+        .{ .owner = "I16x8", .name = "times_wide_lo", .op = .simd_mul_wide_lo },
+        .{ .owner = "U32x4", .name = "times_wide_lo", .op = .simd_mul_wide_lo },
+        .{ .owner = "I32x4", .name = "times_wide_lo", .op = .simd_mul_wide_lo },
+        .{ .owner = "U8x16", .name = "times_wide_hi", .op = .simd_mul_wide_hi },
+        .{ .owner = "I8x16", .name = "times_wide_hi", .op = .simd_mul_wide_hi },
+        .{ .owner = "U16x8", .name = "times_wide_hi", .op = .simd_mul_wide_hi },
+        .{ .owner = "I16x8", .name = "times_wide_hi", .op = .simd_mul_wide_hi },
+        .{ .owner = "U32x4", .name = "times_wide_hi", .op = .simd_mul_wide_hi },
+        .{ .owner = "I32x4", .name = "times_wide_hi", .op = .simd_mul_wide_hi },
+        .{ .owner = "U8x16", .name = "even_lanes", .op = .simd_even_lanes },
+        .{ .owner = "I8x16", .name = "even_lanes", .op = .simd_even_lanes },
+        .{ .owner = "U16x8", .name = "even_lanes", .op = .simd_even_lanes },
+        .{ .owner = "I16x8", .name = "even_lanes", .op = .simd_even_lanes },
+        .{ .owner = "U32x4", .name = "even_lanes", .op = .simd_even_lanes },
+        .{ .owner = "I32x4", .name = "even_lanes", .op = .simd_even_lanes },
+        .{ .owner = "U8x16", .name = "odd_lanes", .op = .simd_odd_lanes },
+        .{ .owner = "I8x16", .name = "odd_lanes", .op = .simd_odd_lanes },
+        .{ .owner = "U16x8", .name = "odd_lanes", .op = .simd_odd_lanes },
+        .{ .owner = "I16x8", .name = "odd_lanes", .op = .simd_odd_lanes },
+        .{ .owner = "U32x4", .name = "odd_lanes", .op = .simd_odd_lanes },
+        .{ .owner = "I32x4", .name = "odd_lanes", .op = .simd_odd_lanes },
+        .{ .owner = "U8x16", .name = "sum_lanes", .op = .simd_sum_lanes },
+        .{ .owner = "I8x16", .name = "sum_lanes", .op = .simd_sum_lanes },
+        .{ .owner = "U16x8", .name = "sum_lanes", .op = .simd_sum_lanes },
+        .{ .owner = "I16x8", .name = "sum_lanes", .op = .simd_sum_lanes },
+        .{ .owner = "U32x4", .name = "sum_lanes", .op = .simd_sum_lanes },
+        .{ .owner = "I32x4", .name = "sum_lanes", .op = .simd_sum_lanes },
+        .{ .owner = "U64x2", .name = "sum_lanes_wrap", .op = .simd_sum_lanes_wrap },
+        .{ .owner = "I64x2", .name = "sum_lanes_wrap", .op = .simd_sum_lanes_wrap },
+        .{ .owner = "U8x16", .name = "to_u16x8_lo", .op = .simd_widen_lo },
+        .{ .owner = "I8x16", .name = "to_i16x8_lo", .op = .simd_widen_lo },
+        .{ .owner = "U16x8", .name = "to_u32x4_lo", .op = .simd_widen_lo },
+        .{ .owner = "I16x8", .name = "to_i32x4_lo", .op = .simd_widen_lo },
+        .{ .owner = "U32x4", .name = "to_u64x2_lo", .op = .simd_widen_lo },
+        .{ .owner = "I32x4", .name = "to_i64x2_lo", .op = .simd_widen_lo },
+        .{ .owner = "U8x16", .name = "to_u16x8_hi", .op = .simd_widen_hi },
+        .{ .owner = "I8x16", .name = "to_i16x8_hi", .op = .simd_widen_hi },
+        .{ .owner = "U16x8", .name = "to_u32x4_hi", .op = .simd_widen_hi },
+        .{ .owner = "I16x8", .name = "to_i32x4_hi", .op = .simd_widen_hi },
+        .{ .owner = "U32x4", .name = "to_u64x2_hi", .op = .simd_widen_hi },
+        .{ .owner = "I32x4", .name = "to_i64x2_hi", .op = .simd_widen_hi },
+        .{ .owner = "U8x16", .name = "pairwise_plus_to_u16x8", .op = .simd_pairwise_add_widen },
+        .{ .owner = "I8x16", .name = "pairwise_plus_to_i16x8", .op = .simd_pairwise_add_widen },
+        .{ .owner = "U16x8", .name = "pairwise_plus_to_u32x4", .op = .simd_pairwise_add_widen },
+        .{ .owner = "I16x8", .name = "pairwise_plus_to_i32x4", .op = .simd_pairwise_add_widen },
+        .{ .owner = "U16x8", .name = "narrow_to_u8x16_wrap", .op = .simd_narrow_wrap },
+        .{ .owner = "U32x4", .name = "narrow_to_u16x8_wrap", .op = .simd_narrow_wrap },
+        .{ .owner = "U64x2", .name = "narrow_to_u32x4_wrap", .op = .simd_narrow_wrap },
+        .{ .owner = "U16x8", .name = "narrow_to_u8x16_saturated", .op = .simd_narrow_sat },
+        .{ .owner = "I16x8", .name = "narrow_to_u8x16_saturated", .op = .simd_narrow_sat },
+        .{ .owner = "I16x8", .name = "narrow_to_i8x16_saturated", .op = .simd_narrow_sat },
+        .{ .owner = "U32x4", .name = "narrow_to_u16x8_saturated", .op = .simd_narrow_sat },
+        .{ .owner = "I32x4", .name = "narrow_to_u16x8_saturated", .op = .simd_narrow_sat },
+        .{ .owner = "I32x4", .name = "narrow_to_i16x8_saturated", .op = .simd_narrow_sat },
     };
     for (simd_method_mappings) |mapping| {
         try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.{s}", .{ mapping.owner, mapping.name }, mapping.op);
     }
-
-    for (simd_types) |simd_type| {
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.gt_lanes", .{simd_type}, .simd_gt_lanes);
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.gte_lanes", .{simd_type}, .simd_gte_lanes);
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.min", .{simd_type}, .simd_min);
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.max", .{simd_type}, .simd_max);
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.times_wrap", .{simd_type}, .simd_mul_wrap);
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.times_wide_lo", .{simd_type}, .simd_mul_wide_lo);
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.times_wide_hi", .{simd_type}, .simd_mul_wide_hi);
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.even_lanes", .{simd_type}, .simd_even_lanes);
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.odd_lanes", .{simd_type}, .simd_odd_lanes);
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.sum_lanes", .{simd_type}, .simd_sum_lanes);
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.sum_lanes_wrap", .{simd_type}, .simd_sum_lanes_wrap);
-    }
-
-    const width_method_mappings = [_]struct { name: []const u8, op: CIR.Expr.LowLevel }{
-        .{ .name = "to_u16x8_lo", .op = .simd_widen_lo },                      .{ .name = "to_i16x8_lo", .op = .simd_widen_lo },
-        .{ .name = "to_u32x4_lo", .op = .simd_widen_lo },                      .{ .name = "to_i32x4_lo", .op = .simd_widen_lo },
-        .{ .name = "to_u64x2_lo", .op = .simd_widen_lo },                      .{ .name = "to_i64x2_lo", .op = .simd_widen_lo },
-        .{ .name = "to_u16x8_hi", .op = .simd_widen_hi },                      .{ .name = "to_i16x8_hi", .op = .simd_widen_hi },
-        .{ .name = "to_u32x4_hi", .op = .simd_widen_hi },                      .{ .name = "to_i32x4_hi", .op = .simd_widen_hi },
-        .{ .name = "to_u64x2_hi", .op = .simd_widen_hi },                      .{ .name = "to_i64x2_hi", .op = .simd_widen_hi },
-        .{ .name = "pairwise_plus_to_u16x8", .op = .simd_pairwise_add_widen }, .{ .name = "pairwise_plus_to_i16x8", .op = .simd_pairwise_add_widen },
-        .{ .name = "pairwise_plus_to_u32x4", .op = .simd_pairwise_add_widen }, .{ .name = "pairwise_plus_to_i32x4", .op = .simd_pairwise_add_widen },
-        .{ .name = "narrow_to_u8x16_wrap", .op = .simd_narrow_wrap },          .{ .name = "narrow_to_u16x8_wrap", .op = .simd_narrow_wrap },
-        .{ .name = "narrow_to_u32x4_wrap", .op = .simd_narrow_wrap },          .{ .name = "narrow_to_u8x16_saturated", .op = .simd_narrow_sat },
-        .{ .name = "narrow_to_i8x16_saturated", .op = .simd_narrow_sat },      .{ .name = "narrow_to_u16x8_saturated", .op = .simd_narrow_sat },
-        .{ .name = "narrow_to_i16x8_saturated", .op = .simd_narrow_sat },
-    };
-    for (simd_types) |simd_type| for (width_method_mappings) |mapping| {
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.{s}", .{ simd_type, mapping.name }, mapping.op);
-    };
 
     // Numeric negate operation (signed types only)
     for (signed_types) |num_type| {
@@ -888,7 +933,7 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
         .{ "dec_to_f32_try_unsafe", .dec_to_f32_try_unsafe },
         .{ "Builtin.Num.Dec.to_f64", .dec_to_f64 },
     }) |entry| {
-        if (env.common.findIdent(entry[0])) |ident| try low_level_map.put(ident, entry[1]);
+        try putLowLevel(&low_level_map, env, entry[0], entry[1]);
     }
 
     // Iterate through all defs and replace matching anno-only defs with low-level implementations
