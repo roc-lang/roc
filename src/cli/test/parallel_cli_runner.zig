@@ -544,6 +544,7 @@ const CustomCase = enum {
     glue_zig_keyword_tag_names,
     glue_package_nominal_api_alias,
     glue_nominal_canonical_field,
+    glue_imported_nominal_field,
     glue_unlisted_hosted_declaration,
     glue_try_box_model_unknown_payload,
     glue_unresolved_by_value_errors,
@@ -2148,6 +2149,7 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "issue 11196: ZigGlue emits parseable Zig for tags named after Zig keywords", .body = .{ .custom = .glue_zig_keyword_tag_names } },
     .{ .id = 0, .suite = .glue, .name = "issue 9865: RustGlue does not panic for package nominal record API alias", .body = .{ .custom = .glue_package_nominal_api_alias } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: nominal scalar field resolves canonical backing", .body = .{ .custom = .glue_nominal_canonical_field } },
+    .{ .id = 0, .suite = .glue, .name = "glue regression: imported nominal record field keeps its own identity", .body = .{ .custom = .glue_imported_nominal_field } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: platform hosted declaration missing from the hosted section stops without panic", .body = .{ .custom = .glue_unlisted_hosted_declaration } },
     .{ .id = 0, .suite = .glue, .name = "issue 9824: ZigGlue sizes an unknown Box payload as a pointer at both widths", .body = .{ .custom = .glue_try_box_model_unknown_payload } },
     .{ .id = 0, .suite = .glue, .name = "issue 9824: glue reports an error for a by-value unresolved type variable", .body = .{ .custom = .glue_unresolved_by_value_errors } },
@@ -5091,6 +5093,7 @@ fn runCustomCase(
         .glue_zig_keyword_tag_names => customGlueZigKeywordTagNames(io, allocator, &env, &timer, timeout_ms),
         .glue_package_nominal_api_alias => customGluePackageNominalApiAlias(io, allocator, &env, &timer, timeout_ms),
         .glue_nominal_canonical_field => customGlueNominalCanonicalField(io, allocator, &env, &timer, timeout_ms),
+        .glue_imported_nominal_field => customGlueImportedNominalField(io, allocator, &env, &timer, timeout_ms),
         .glue_unlisted_hosted_declaration => customGlueUnlistedHostedDeclaration(io, allocator, &env, &timer, timeout_ms),
         .glue_try_box_model_unknown_payload => customGlueTryBoxModelUnknownPayload(io, allocator, &env, &timer, timeout_ms),
         .glue_unresolved_by_value_errors => customGlueUnresolvedByValueErrors(io, allocator, &env, &timer, timeout_ms),
@@ -15040,6 +15043,38 @@ fn customGlueNominalCanonicalField(io: std.Io, allocator: Allocator, env: *const
             .{ .stream = .stderr, .text = "unreachable" },
         },
     })) |failure| return failure;
+    return null;
+}
+
+/// Issue #12377: `Outer := { inner : Inner }` where `Inner` is imported and
+/// sits at the same statement index in its own module as `Outer` does in
+/// `Outer.roc`. Glue must emit `inner` as `Inner` with its own `leaf` field,
+/// never as a self-reference to `Outer`.
+fn customGlueImportedNominalField(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    const output_dir = createWorkSubdir(io, allocator, env, "glue-out") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "glue", "src/glue/src/ZigGlue.roc", output_dir, "test/glue/imported-nominal-field/main.roc" },
+        .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "unreachable" } },
+    })) |failure| return failure;
+
+    const generated_path = std.fs.path.join(allocator, &.{ output_dir, "roc_platform_abi.zig" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate generated Zig path: {}", .{err});
+    const generated = std.Io.Dir.cwd().readFileAlloc(io, generated_path, allocator, .limited(1024 * 1024)) catch |err|
+        return customFailure(allocator, timer, "failed to read generated Zig file: {}", .{err});
+
+    if (std.mem.find(u8, generated, "    @\"inner\": Outer,") != null) {
+        return customFailure(allocator, timer, "generated Zig file describes Outer.inner as Outer itself", .{});
+    }
+    for ([_][]const u8{
+        "    @\"inner\": Inner,",
+        "pub const Inner = ",
+        "    @\"leaf\": u64,",
+    }) |needle| {
+        if (std.mem.find(u8, generated, needle) == null) {
+            return customFailure(allocator, timer, "generated Zig file missing imported nominal text {s}", .{needle});
+        }
+    }
     return null;
 }
 
