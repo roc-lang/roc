@@ -3743,7 +3743,11 @@ The annotation root's type variable is also the static-dispatch constraint's
 callable variable. Checking declares that identity before completing owned
 constraints, then generates its type through ordinary annotation generation and
 unification. It allocates no second callable placeholder or bridging relation.
-Inference holes retain the existing body-checking and generalization rules, and
+A callable written through a function type alias is therefore an alias view
+whose backing carries the function structure, so every reader of a
+requirement's function structure resolves the callable through its aliases.
+A written type that is not a function through its aliases, or a bare type
+variable, is reported at its where clause. Inference holes retain the existing body-checking and generalization rules, and
 the named method's static-dispatch constraint is preserved even when its type
 is incomplete.
 

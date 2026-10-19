@@ -761,6 +761,46 @@ test "where clause - function type aliases retain their meaning" {
     try test_env.assertDefType("helper", "a -> Str where [a.render : Render(a)]");
 }
 
+test "where clause - aliased method signatures are satisfied at call sites" {
+    const source =
+        \\Render(a) : a -> Str
+        \\
+        \\Thing := [T(Str)].{
+        \\    render : Thing -> Str
+        \\    render = |T(s)| s
+        \\}
+        \\
+        \\helper : a -> Str where [a.render : Render(a)]
+        \\helper = |value| value.render()
+        \\
+        \\main = helper(Thing.T("ok"))
+    ;
+    var test_env = try TestEnv.init("AliasedMethodCall", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("helper", "a -> Str where [a.render : Render(a)]");
+}
+
+test "where clause - aliased and plain method signatures forward to each other" {
+    const source =
+        \\Render(a) : a -> Str
+        \\
+        \\aliased : a -> Str where [a.to_str : Render(a)]
+        \\aliased = |value| plain(value)
+        \\
+        \\plain : a -> Str where [a.to_str : a -> Str]
+        \\plain = |value| nested(value)
+        \\
+        \\nested : a -> Str where [a.to_str : Render(a)]
+        \\nested = |value| value.to_str()
+        \\
+        \\main = aliased(1.U8)
+    ;
+    var test_env = try TestEnv.init("AliasedMethodForwarding", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
 test "where clause - whole method hole accepts a nullary effectful implementation" {
     const source =
         \\Nom := [Nom].{
