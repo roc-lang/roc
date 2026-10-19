@@ -3,7 +3,8 @@
 //! interpreted as addresses and no initializer is evaluated.
 const std = @import("std");
 const collections = @import("collections");
-const compilerInvariant = @import("base").invariant;
+const base = @import("base");
+const compilerInvariant = base.invariant;
 const builtins = @import("builtins");
 const layout = @import("layout");
 const lir = @import("lir");
@@ -30,14 +31,15 @@ pub fn transcodeValueSlot(allocator: Allocator, source_program: *const Program.R
 }
 
 fn transcodePlans(allocator: Allocator, source_program: *const Program.Result, source_root: PlanView, source_exports: []const static_data.StaticDataExport, source_symbol: SymbolId, target_program: *const Program.Result, target_root: PlanView, target_slot: lir.LIR.StaticDataId) Allocator.Error![]static_data.StaticDataExport {
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = base.SingleThreadArena.init(allocator);
     defer arena.deinit();
-    var builder = Builder{ .graph = .{ .allocator = arena.allocator(), .program = target_program, .slot = target_slot }, .source_program = source_program, .source_exports = source_exports };
-    const symbol = try builder.graph.addNode(try Program.staticDataSymbolName(builder.graph.allocator, target_slot), builder.graph.size(target_root.layout_idx), builder.graph.alignment(target_root.layout_idx));
+    var builder = Builder{ .graph = .{ .allocator = arena.allocator(), .output = allocator, .program = target_program, .slot = target_slot }, .source_program = source_program, .source_exports = source_exports };
+    defer builder.graph.deinit();
+    const symbol = try builder.graph.addNode(try Program.staticDataSymbolName(allocator, target_slot), builder.graph.size(target_root.layout_idx), builder.graph.alignment(target_root.layout_idx));
     try builder.enqueue(source_root.plan, source_root.layout_idx, target_root.plan, target_root.layout_idx, .{ .symbol = source_symbol, .offset = source_exports[@backingInt(source_symbol)].symbol_offset }, .{ .symbol = symbol }, .value, .value);
     var index: usize = 0;
     while (index < builder.jobs.items.len) : (index += 1) try builder.visit(builder.jobs.items[index]);
-    return builder.graph.finish(allocator);
+    return builder.graph.finish();
 }
 
 /// Re-encode failure status and message using the paired slots' explicit fields.
@@ -48,13 +50,14 @@ pub fn transcodeFailure(allocator: Allocator, source_program: *const Program.Res
     if (!std.meta.eql(source_identity.module, target_identity.module) or !source_identity.root.eql(target_identity.root) or std.meta.activeTag(source_identity.role) != std.meta.activeTag(target_identity.role)) invariant("paired slots do not name the same producer role");
     const source_fields = source_slot.compile_time_root.?.role.failure_message;
     const target_fields = target.compile_time_root.?.role.failure_message;
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = base.SingleThreadArena.init(allocator);
     defer arena.deinit();
-    var builder = Builder{ .graph = .{ .allocator = arena.allocator(), .program = target_program, .slot = target_slot }, .source_program = source_program, .source_exports = source_exports };
-    const symbol = try builder.graph.addNode(try Program.staticDataSymbolName(builder.graph.allocator, target_slot), builder.graph.size(target.layout_idx), builder.graph.alignment(target.layout_idx));
+    var builder = Builder{ .graph = .{ .allocator = arena.allocator(), .output = allocator, .program = target_program, .slot = target_slot }, .source_program = source_program, .source_exports = source_exports };
+    defer builder.graph.deinit();
+    const symbol = try builder.graph.addNode(try Program.staticDataSymbolName(allocator, target_slot), builder.graph.size(target.layout_idx), builder.graph.alignment(target.layout_idx));
     builder.graph.bytes(.{ .symbol = symbol, .offset = target_fields.failed_offset }, 1)[0] = builder.sourceBytes(.{ .symbol = source_symbol, .offset = source_exports[@backingInt(source_symbol)].symbol_offset + source_fields.failed_offset }, 1)[0];
     try builder.stringValue(.{ .symbol = source_symbol, .offset = source_exports[@backingInt(source_symbol)].symbol_offset + source_fields.message_offset }, .{ .symbol = symbol, .offset = target_fields.message_offset });
-    return builder.graph.finish(allocator);
+    return builder.graph.finish();
 }
 
 const Destination = frozen_graph.Destination;

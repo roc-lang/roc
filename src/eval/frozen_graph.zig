@@ -26,7 +26,8 @@ pub const Destination = struct {
     }
 };
 
-/// One readonly data symbol being built.
+/// One readonly data symbol being built. `name` and `bytes` are allocated
+/// by the graph's `output` allocator and become the export's own slices.
 pub const Node = struct {
     name: []const u8,
     bytes: []u8,
@@ -43,11 +44,25 @@ pub fn Graph(comptime AllocationKey: type) type {
     return struct {
         const Self = @This();
 
+        /// Scratch for building the graph, released by the caller.
         allocator: Allocator,
+        /// Owner of every node's name and bytes, which `finish` hands to
+        /// the exports; `deinit` frees them when the graph never finishes.
+        output: Allocator,
         program: *const Program.Result,
         slot: lir.LIR.StaticDataId,
         nodes: std.ArrayList(Node) = .empty,
         allocations: std.AutoHashMapUnmanaged(AllocationKey, Destination) = .empty,
+        finished: bool = false,
+
+        /// Free the node names and bytes `finish` did not hand out.
+        pub fn deinit(self: *Self) void {
+            if (self.finished) return;
+            for (self.nodes.items) |built| {
+                self.output.free(built.name);
+                self.output.free(built.bytes);
+            }
+        }
 
         /// The target pointer width in bytes.
         pub fn word(self: *const Self) usize {
@@ -64,9 +79,12 @@ pub fn Graph(comptime AllocationKey: type) type {
             return @intCast(self.program.layouts.getLayout(idx).alignment(self.program.layouts.targetUsize()).toByteUnits());
         }
 
-        /// Append a zeroed node.
+        /// Append a zeroed node named `name`, which `output` allocated and
+        /// the graph owns from here on, including when this fails.
         pub fn addNode(self: *Self, name: []const u8, byte_count: usize, alignment_: u32) Allocator.Error!SymbolId {
-            const node_bytes = try self.allocator.alloc(u8, byte_count);
+            errdefer self.output.free(name);
+            const node_bytes = try self.output.alloc(u8, byte_count);
+            errdefer self.output.free(node_bytes);
             @memset(node_bytes, 0);
             const symbol: SymbolId = @fromBackingInt(@intCast(self.nodes.items.len));
             try self.nodes.append(self.allocator, .{ .name = name, .bytes = node_bytes, .alignment = alignment_ });
@@ -74,7 +92,7 @@ pub fn Graph(comptime AllocationKey: type) type {
         }
 
         fn addChildNode(self: *Self, byte_count: usize, alignment_: u32) Allocator.Error!SymbolId {
-            const name = try Program.staticDataNodeSymbolName(self.allocator, @backingInt(self.slot), @intCast(self.nodes.items.len));
+            const name = try Program.staticDataNodeSymbolName(self.output, @backingInt(self.slot), @intCast(self.nodes.items.len));
             return self.addNode(name, byte_count, alignment_);
         }
 
@@ -143,15 +161,14 @@ pub fn Graph(comptime AllocationKey: type) type {
             return dest;
         }
 
-        /// Copy the graph into exports owned by `allocator`. The first export
-        /// is the requested slot.
-        pub fn finish(self: *Self, allocator: Allocator) Allocator.Error![]static_data.StaticDataExport {
+        /// Hand the graph to exports owned by `output`: each export takes
+        /// its node's name and bytes. The first export is the requested slot.
+        pub fn finish(self: *Self) Allocator.Error![]static_data.StaticDataExport {
+            const allocator = self.output;
             const exports = try allocator.alloc(static_data.StaticDataExport, self.nodes.items.len);
             var done: usize = 0;
             errdefer {
                 for (exports[0..done]) |export_| {
-                    allocator.free(export_.symbol_name);
-                    allocator.free(export_.bytes);
                     for (export_.relocations) |relocation| {
                         if (relocation.owns_target_symbol_name) allocator.free(relocation.target_symbol_name);
                     }
@@ -161,20 +178,15 @@ pub fn Graph(comptime AllocationKey: type) type {
                 allocator.free(exports);
             }
             for (self.nodes.items, exports, 0..) |source, *dest, index| {
-                const name = try allocator.dupe(u8, source.name);
-                errdefer allocator.free(name);
-                const owned_bytes = try allocator.dupe(u8, source.bytes);
-                errdefer allocator.free(owned_bytes);
                 const relocations = try allocator.dupe(static_data.StaticDataRelocation, source.relocations.items);
                 errdefer allocator.free(relocations);
                 const capacities = try allocator.dupe(static_data.EmptyListCapacity, source.empty_list_capacities.items);
-                errdefer allocator.free(capacities);
                 // All names are assigned in a separate pass once every symbol exists.
                 for (relocations) |*relocation| relocation.owns_target_symbol_name = false;
                 dest.* = .{
-                    .symbol_name = name,
+                    .symbol_name = source.name,
                     .value_id = if (index == 0) self.slot else null,
-                    .bytes = owned_bytes,
+                    .bytes = source.bytes,
                     .alignment = source.alignment,
                     .is_global = false,
                     .is_exported = false,
@@ -195,6 +207,7 @@ pub fn Graph(comptime AllocationKey: type) type {
                     }
                 }
             }
+            self.finished = true;
             return exports;
         }
     };
