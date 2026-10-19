@@ -205,6 +205,18 @@ const State = struct {
             base.invariant("compile-time value identity asked for a definition outside the module's definitions", .{});
     }
 
+    /// A method's identity. A method the module's definition graph does not
+    /// contain (a compiler-created method binding) has no component; its own
+    /// contribution and the definitions its body names identify it.
+    fn methodIdentity(self: *State, def_idx: CIR.Def.Idx) Allocator.Error![32]u8 {
+        if (self.definition.get(def_idx)) |identity| return identity;
+        var hasher = Sha256.init(.{});
+        hashTag(&hasher, "method-outside-definitions");
+        hasher.update(&try self.localDigest(def_idx));
+        hashDigests(&hasher, try self.referencedIdentities(self.inputs.env.store.getDef(def_idx).expr));
+        return hasher.finalResult();
+    }
+
     /// The sorted identities of the definitions `expr` names.
     fn referencedIdentities(self: *State, expr: CIR.Expr.Idx) Allocator.Error![]const [32]u8 {
         self.refs.clearRetainingCapacity();
@@ -334,7 +346,7 @@ const State = struct {
         sortDigests(texts.items);
         var methods = std.ArrayList([32]u8).empty;
         defer methods.deinit(self.allocator);
-        for (env.method_defs.entries.items) |entry| try methods.append(self.allocator, self.definitionIdentity(entry.value.def_idx));
+        for (env.method_defs.entries.items) |entry| try methods.append(self.allocator, try self.methodIdentity(entry.value.def_idx));
         sortDigests(methods.items);
         var hasher = Sha256.init(.{});
         hashTag(&hasher, "type-world");
