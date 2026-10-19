@@ -5530,7 +5530,9 @@ const Inserter = struct {
     /// whole-value operands and RC-bearing projections of any place member
     /// do. An owned pure alias of a member retains through the place at its
     /// bind, so that bind is a use even though the alias itself then carries
-    /// its own unit.
+    /// its own unit. String and Boxy tag matches use only their operands: a
+    /// borrowed capture view reaches `source`'s place through its borrow
+    /// link, and an owned capture retains through `source` at the match.
     fn stmtPlaceFacts(self: *const Inserter, stmt: LIR.CFStmtId, uses: *std.ArrayList(LIR.LocalId)) Allocator.Error!StmtPlaceFacts {
         const gpa = self.emission_allocator;
         const node = self.store.getCFStmt(stmt);
@@ -5611,7 +5613,12 @@ const Inserter = struct {
             .ret => |ret_stmt| try uses.append(gpa, ret_stmt.value),
             .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| try uses.append(gpa, message),
             .expect_err => |expect_err_stmt| try uses.append(gpa, expect_err_stmt.message),
-            .decref, .decref_if_initialized, .free, .str_match, .str_match_set, .boxy_tag_match => return .{ .uses_every_place = true },
+            .decref, .decref_if_initialized, .free => return .{ .uses_every_place = true },
+            inline .str_match, .str_match_set => |match| try uses.append(gpa, match.source),
+            .boxy_tag_match => |tag_match| {
+                try uses.append(gpa, tag_match.source);
+                if (tag_match.source_desc.localOrNull()) |local| try uses.append(gpa, local);
+            },
             .assign_literal,
             .init_uninitialized,
             .assign_boxy_desc_ref,
@@ -5626,8 +5633,7 @@ const Inserter = struct {
     }
 
     /// The statements control reaches after `stmt` for the place-use query.
-    /// Releases and string or tag matches use every place, so the walk ends
-    /// at them.
+    /// Releases use every place, so the walk ends at them.
     fn appendStmtWalkSuccessors(self: *Inserter, stmt: LIR.CFStmtId, out: *std.ArrayList(LIR.CFStmtId)) Allocator.Error!void {
         const gpa = self.emission_allocator;
         switch (self.store.getCFStmtImmediate(stmt).*) {
@@ -5677,12 +5683,22 @@ const Inserter = struct {
                 if (join_index >= joins.len) arcInvariant("ARC ownership-place use query exceeded its join table");
                 try out.append(gpa, joins[join_index].body);
             },
+            .str_match => |str_match| {
+                try out.append(gpa, str_match.on_match);
+                try out.append(gpa, str_match.on_miss);
+            },
+            .str_match_set => |str_match_set| {
+                const arms = self.store.getStrMatchArms(str_match_set.arms);
+                for (0..GuardedList.borrowLen(arms)) |index| try out.append(gpa, GuardedList.at(arms, index).on_match);
+                try out.append(gpa, str_match_set.on_miss);
+            },
+            .boxy_tag_match => |tag_match| {
+                try out.append(gpa, tag_match.on_match);
+                try out.append(gpa, tag_match.on_miss);
+            },
             .decref,
             .decref_if_initialized,
             .free,
-            .str_match,
-            .str_match_set,
-            .boxy_tag_match,
             .ret,
             .crash,
             .expect_err,
