@@ -615,12 +615,12 @@ const Solver = struct {
             const ty: Type.TypeVarId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
             switch (self.program.types.get(ty)) {
                 .lambda_set => |members| if (try self.canonicalMemberSpan(members, &sorted)) |span| {
-                    self.program.types.set(ty, .{ .lambda_set = span });
+                    try self.program.types.set(ty, .{ .lambda_set = span });
                 },
                 .erased => |erased| if (try self.canonicalMemberSpan(erased.members, &sorted)) |span| {
                     var sorted_erased = erased;
                     sorted_erased.members = span;
-                    self.program.types.set(ty, .{ .erased = sorted_erased });
+                    try self.program.types.set(ty, .{ .erased = sorted_erased });
                 },
                 .link, .unbound, .forall, .primitive, .zst, .func, .list, .box, .tuple, .record, .tag_union, .named, .mono => {},
             }
@@ -931,7 +931,7 @@ const Solver = struct {
     ) Allocator.Error!void {
         const root = self.program.types.rootCompressed(callable);
         switch (self.program.types.get(root)) {
-            .unbound => self.program.types.set(root, .{ .lambda_set = .empty() }),
+            .unbound => try self.program.types.set(root, .{ .lambda_set = .empty() }),
             .lambda_set,
             .erased,
             => try pending.append(self.allocator, root),
@@ -1701,7 +1701,7 @@ const Solver = struct {
         // `Fields` or `Field` nominal, whose backing is compiler-generated.
         // Preserve that explicit generated backing deterministically;
         // structural size is not an authority signal.
-        self.program.types.set(expected, .{ .link = generated });
+        self.program.types.setLink(expected, generated);
     }
 
     fn expectExpr(self: *Solver, expr_id: Lifted.ExprId, expected: Type.TypeVarId) Allocator.Error!Type.TypeVarId {
@@ -1949,7 +1949,7 @@ const Solver = struct {
         if (self.leaf_contexts.items[ctx].get(leaf.id)) |existing| {
             const existing_root = self.program.types.rootCompressed(existing);
             if (existing_root != root) {
-                self.program.types.set(root, .{ .link = existing_root });
+                self.program.types.setLink(root, existing_root);
                 return try self.resolvedContentAt(existing_root);
             }
         } else {
@@ -1959,7 +1959,7 @@ const Solver = struct {
         cloner.lazy_ctx = ctx;
         defer cloner.deinit();
         const content = try cloner.lowerContent(self.lifted.types.get(leaf.id));
-        self.program.types.set(root, content);
+        try self.program.types.set(root, content);
         self.registerNamedBacking(content);
         return content;
     }
@@ -2059,7 +2059,7 @@ const Solver = struct {
                 .link => Common.invariant("Lambda Solved root returned a link"),
                 .mono => |leaf| {
                     const clone = try self.finalMonoClone(leaf.id);
-                    self.program.types.set(root, .{ .link = self.program.types.rootCompressed(clone) });
+                    self.program.types.setLink(root, self.program.types.rootCompressed(clone));
                 },
                 .unbound, .forall, .primitive, .zst => {},
                 .list, .box => |elem| try work.append(self.allocator, elem),
@@ -2368,7 +2368,7 @@ const Solver = struct {
             if (read_root == shared) return;
             const raw = self.program.types.get(read_root);
             if (raw == .mono and raw.mono.id == read_mono and raw.mono.ctx == Type.no_leaf_context) {
-                self.program.types.set(read_root, .{ .link = shared });
+                self.program.types.setLink(read_root, shared);
                 return;
             }
             return self.unify(read_ty, shared);
@@ -2460,7 +2460,7 @@ const Solver = struct {
         const raw_right = self.program.types.get(b);
         if (raw_left == .mono and raw_right == .mono and raw_left.mono.id == raw_right.mono.id) {
             self.retireContextLeaf(raw_right.mono);
-            self.program.types.set(b, .{ .link = a });
+            self.program.types.setLink(b, a);
             return;
         }
         if (try self.linkUntouchedLeafToInstance(a, raw_left, rhs, b)) return;
@@ -2476,7 +2476,7 @@ const Solver = struct {
         const left_tag = std.meta.activeTag(left);
         if (left_tag == .link) Common.invariant("Lambda Solved root returned a link");
         if (left_tag == .unbound) {
-            self.program.types.set(a, .{ .link = b });
+            self.program.types.setLink(a, b);
             return;
         }
         if (left_tag == .forall) Common.invariant("generalized Lambda Solved type reached local unification without instantiation");
@@ -2484,7 +2484,7 @@ const Solver = struct {
         const right_tag = std.meta.activeTag(right);
         if (right_tag == .link) Common.invariant("Lambda Solved root returned a link");
         if (right_tag == .unbound) {
-            self.program.types.set(b, .{ .link = a });
+            self.program.types.setLink(b, a);
             return;
         }
         if (right_tag == .forall) Common.invariant("generalized Lambda Solved type reached local unification without instantiation");
@@ -2534,7 +2534,7 @@ const Solver = struct {
         if (!self.leafOriginIs(other, id) and !self.leafOriginIs(other_root, id)) return false;
         if (try self.monoProvenUninhabited(id)) return false;
         self.retireContextLeaf(leaf);
-        self.program.types.set(leaf_root, .{ .link = other_root });
+        self.program.types.setLink(leaf_root, other_root);
         return true;
     }
 
@@ -2575,11 +2575,11 @@ const Solver = struct {
                 if (left_primitive != right.primitive) {
                     Common.invariant("primitive types failed Lambda Solved unification");
                 }
-                self.program.types.set(b, .{ .link = a });
+                self.program.types.setLink(b, a);
             },
             .zst => {
                 if (right != .zst) Common.invariant("zero-sized type failed Lambda Solved unification");
-                self.program.types.set(b, .{ .link = a });
+                self.program.types.setLink(b, a);
             },
             .erased => |left_erased| {
                 if (right == .erased) {
@@ -2588,7 +2588,7 @@ const Solver = struct {
                         Common.invariant("erased callable source function types failed Lambda Solved unification");
                     }
                     const merged = try self.mergeLambdaSets(left_erased.members, right_erased.members);
-                    self.setMergedLinkRight(a, b, .{ .erased = .{
+                    try self.setMergedLinkRight(a, b, .{ .erased = .{
                         .source_fn_ty = left_erased.source_fn_ty,
                         .members = merged,
                         .abi_fn = left_erased.abi_fn orelse right_erased.abi_fn,
@@ -2596,7 +2596,7 @@ const Solver = struct {
                 } else if (right == .lambda_set) {
                     const right_members = right.lambda_set;
                     const merged = try self.mergeLambdaSets(left_erased.members, right_members);
-                    self.setMergedLinkRight(a, b, .{ .erased = .{
+                    try self.setMergedLinkRight(a, b, .{ .erased = .{
                         .source_fn_ty = left_erased.source_fn_ty,
                         .members = merged,
                         .abi_fn = left_erased.abi_fn,
@@ -2609,7 +2609,7 @@ const Solver = struct {
                 if (right == .erased) {
                     const right_erased = right.erased;
                     const merged = try self.mergeLambdaSets(left_members, right_erased.members);
-                    self.setMergedLinkRight(a, b, .{ .erased = .{
+                    try self.setMergedLinkRight(a, b, .{ .erased = .{
                         .source_fn_ty = right_erased.source_fn_ty,
                         .members = merged,
                         .abi_fn = right_erased.abi_fn,
@@ -2617,7 +2617,7 @@ const Solver = struct {
                 } else if (right == .lambda_set) {
                     const right_members = right.lambda_set;
                     const merged = try self.mergeLambdaSets(left_members, right_members);
-                    self.setMergedLinkRight(a, b, .{ .lambda_set = merged });
+                    try self.setMergedLinkRight(a, b, .{ .lambda_set = merged });
                 } else {
                     Common.invariant("lambda set failed Lambda Solved unification");
                 }
@@ -2661,7 +2661,7 @@ const Solver = struct {
                     if (left_tags.count() != right_tags.count()) {
                         Common.invariant("empty tag row failed Lambda Solved unification");
                     }
-                    self.program.types.set(b, .{ .link = a });
+                    self.program.types.setLink(b, a);
                     return;
                 }
                 const pairs_start = self.payload_pairs.items.len;
@@ -2670,7 +2670,7 @@ const Solver = struct {
                 if (self.preserving_lifted_roots) {
                     stack.items[finish_index].finish.action = .{ .merge_root_slot_tags = .{ .lhs = a, .rhs = b } };
                 } else {
-                    self.setMergedLinkRight(a, b, .{ .tag_union = merged });
+                    try self.setMergedLinkRight(a, b, .{ .tag_union = merged });
                 }
                 try self.pushPayloadSpanPairs(stack, self.payload_pairs.items[pairs_start..]);
             },
@@ -2727,9 +2727,9 @@ const Solver = struct {
     /// as soon as the pair is processed. The payload or capture pairs pushed
     /// after this see one class, so a nested unification that reaches either
     /// side extends the merged content rather than a stale copy of it.
-    fn setMergedLinkRight(self: *Solver, lhs: Type.TypeVarId, rhs: Type.TypeVarId, merged: Type.Content) void {
-        self.program.types.set(lhs, merged);
-        self.program.types.set(rhs, .{ .link = lhs });
+    fn setMergedLinkRight(self: *Solver, lhs: Type.TypeVarId, rhs: Type.TypeVarId, merged: Type.Content) Allocator.Error!void {
+        try self.program.types.set(lhs, merged);
+        self.program.types.setLink(rhs, lhs);
     }
 
     fn applyUnifyFinish(
@@ -2753,14 +2753,14 @@ const Solver = struct {
                 const pairs_start = self.payload_pairs.items.len;
                 defer self.payload_pairs.shrinkRetainingCapacity(pairs_start);
                 const merged = try self.mergeTags(left, right, &self.payload_pairs);
-                self.setMergedLinkRight(link.lhs, link.rhs, .{ .tag_union = merged });
+                try self.setMergedLinkRight(link.lhs, link.rhs, .{ .tag_union = merged });
                 try self.pushPayloadSpanPairs(stack, self.payload_pairs.items[pairs_start..]);
             },
             .link_rhs_to_lhs => |link| {
                 if (self.program.types.rootCompressed(link.lhs) == link.lhs and
                     self.program.types.rootCompressed(link.rhs) == link.rhs)
                 {
-                    if (link.lhs != link.rhs) self.program.types.set(link.rhs, .{ .link = link.lhs });
+                    if (link.lhs != link.rhs) self.program.types.setLink(link.rhs, link.lhs);
                     return;
                 }
                 try self.reunifyMovedPair(stack, link.lhs, link.rhs, structural_isolated);
@@ -2769,7 +2769,7 @@ const Solver = struct {
                 // The alias resolves to whatever its backing's class is now.
                 if (self.program.types.rootCompressed(link.var_) == link.var_) {
                     const target = self.program.types.rootCompressed(link.target);
-                    if (target != link.var_) self.program.types.set(link.var_, .{ .link = target });
+                    if (target != link.var_) self.program.types.setLink(link.var_, target);
                     return;
                 }
                 try self.reunifyMovedPair(stack, link.var_, link.target, structural_isolated);
@@ -2778,7 +2778,7 @@ const Solver = struct {
                 const structural_root = self.program.types.rootCompressed(link.structural);
                 const named_root = self.program.types.rootCompressed(link.named);
                 if (structural_root == named_root or self.program.types.isOwnedNamedBacking(structural_root)) return;
-                self.program.types.set(structural_root, .{ .link = named_root });
+                self.program.types.setLink(structural_root, named_root);
             },
         }
     }
@@ -2885,7 +2885,7 @@ const Solver = struct {
         const backing_root = self.program.types.rootCompressed(backing_ty);
         const named_root = self.program.types.rootCompressed(named_ty);
         if (backing_root != named_root) {
-            self.program.types.set(backing_root, .{ .link = named_root });
+            self.program.types.setLink(backing_root, named_root);
         }
         return true;
     }
@@ -4291,7 +4291,7 @@ const TypeCloner = struct {
             const shareable = finished.shareable;
             self.solver.releaseCloneLists(&finished.build);
             frames.items.len -= 1;
-            self.solver.program.types.set(reserved, lowered);
+            try self.solver.program.types.set(reserved, lowered);
             self.solver.registerNamedBacking(lowered);
             if (shareable) try self.solver.shared_clones.put(finished_ty, reserved);
             if (frames.items.len == 0) return reserved;
@@ -4736,7 +4736,7 @@ test "solved type digest is stable across clone-isomorphic cycles" {
         .ret = record_a,
     } });
     const fields_a = try program.types.addFields(&.{.{ .name = field_name, .ty = function_a, .default = null }});
-    program.types.set(record_a, .{ .record = fields_a });
+    try program.types.set(record_a, .{ .record = fields_a });
 
     const record_b = try program.types.add(.unbound);
     const function_b = try program.types.add(.{ .func = .{
@@ -4745,7 +4745,7 @@ test "solved type digest is stable across clone-isomorphic cycles" {
         .ret = record_b,
     } });
     const fields_b = try program.types.addFields(&.{.{ .name = field_name, .ty = function_b, .default = null }});
-    program.types.set(record_b, .{ .record = fields_b });
+    try program.types.set(record_b, .{ .record = fields_b });
 
     const digest_a = try solver.solvedTypeDigest(record_a);
     const digest_b = try solver.solvedTypeDigest(record_b);
@@ -4948,7 +4948,7 @@ test "inspectable backing unification never redirects an owned backing to its no
     solver.unify_stack = .empty;
     defer solver.unify_stack.deinit(allocator);
     program.types.markNamedBacking(backing);
-    program.types.set(backing, .{ .link = backing_representative });
+    program.types.setLink(backing, backing_representative);
     solver.solved_set_pool = collections.DenseMapPool(Type.TypeVarId, void).init(allocator);
     defer solver.solved_set_pool.deinit();
     solver.mono_set_pool = collections.DenseMapPool(MonoType.TypeId, void).init(allocator);
@@ -5030,11 +5030,11 @@ test "unifying a cyclic function type keeps a class its endpoint joined during t
     // A and B finish.
     const x_record = try program.types.add(.unbound);
     const x_fn = try program.types.add(.{ .func = .{ .args = .empty(), .callable = callable, .ret = x_record } });
-    program.types.set(x_record, .{ .record = try program.types.addFields(&.{.{ .name = field_name, .ty = x_fn, .default = null }}) });
+    try program.types.set(x_record, .{ .record = try program.types.addFields(&.{.{ .name = field_name, .ty = x_fn, .default = null }}) });
 
     const b_record = try program.types.add(.unbound);
     const b_fn = try program.types.add(.{ .func = .{ .args = .empty(), .callable = callable, .ret = b_record } });
-    program.types.set(b_record, .{ .record = try program.types.addFields(&.{.{ .name = field_name, .ty = b_fn, .default = null }}) });
+    try program.types.set(b_record, .{ .record = try program.types.addFields(&.{.{ .name = field_name, .ty = b_fn, .default = null }}) });
 
     const a_record = try program.types.add(.{ .record = try program.types.addFields(&.{.{ .name = field_name, .ty = x_fn, .default = null }}) });
     const a_fn = try program.types.add(.{ .func = .{ .args = .empty(), .callable = callable, .ret = a_record } });
@@ -5479,10 +5479,10 @@ test "lambda solved return boundaries preserve rows and propagate callable paylo
     // A recursive payload follows the same directed pair only once.
     const source_cycle = try program.types.add(.unbound);
     const target_cycle = try program.types.add(.unbound);
-    program.types.set(source_cycle, .{ .tag_union = try program.types.addTags(&.{
+    try program.types.set(source_cycle, .{ .tag_union = try program.types.addTags(&.{
         .{ .name = ok_name, .checked_name = ok_name, .payloads = try program.types.addSpan(&.{source_cycle}) },
     }) });
-    program.types.set(target_cycle, .{ .tag_union = try program.types.addTags(&.{
+    try program.types.set(target_cycle, .{ .tag_union = try program.types.addTags(&.{
         .{ .name = ok_name, .checked_name = ok_name, .payloads = try program.types.addSpan(&.{target_cycle}) },
         .{ .name = err_name, .checked_name = err_name, .payloads = .empty() },
     }) });

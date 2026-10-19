@@ -147,6 +147,55 @@ pub const Content = union(enum) {
     },
 };
 
+/// Payload stored by `Content.named`.
+pub const NamedContent = std.meta.fieldInfo(Content, .named).type;
+
+/// Payload stored by `Content.erased`.
+pub const ErasedContent = std.meta.fieldInfo(Content, .erased).type;
+
+/// A type variable as the store keeps it. A named payload and an erased
+/// payload are far larger than every other variant, so they live in side
+/// lists and the node holds their index; every node is then a few words,
+/// and a link walk reads only these.
+pub const StoredNode = union(enum(u8)) {
+    link: TypeVarId,
+    unbound,
+    forall,
+    primitive: MonoType.Primitive,
+    named: u32,
+    record: Span,
+    tuple: Span,
+    tag_union: Span,
+    list: TypeVarId,
+    box: TypeVarId,
+    func: @FieldType(Content, "func"),
+    lambda_set: Span,
+    erased: u32,
+    zst,
+    mono: @FieldType(Content, "mono"),
+};
+
+/// The content `node` stores, reading its payload from the side lists.
+fn contentOf(node: StoredNode, named_payloads: []const NamedContent, erased_payloads: []const ErasedContent) Content {
+    return switch (node) {
+        .link => |target| .{ .link = target },
+        .unbound => .unbound,
+        .forall => .forall,
+        .primitive => |primitive| .{ .primitive = primitive },
+        .named => |index| .{ .named = named_payloads[index] },
+        .record => |span_| .{ .record = span_ },
+        .tuple => |span_| .{ .tuple = span_ },
+        .tag_union => |span_| .{ .tag_union = span_ },
+        .list => |elem| .{ .list = elem },
+        .box => |elem| .{ .box = elem },
+        .func => |func| .{ .func = func },
+        .lambda_set => |span_| .{ .lambda_set = span_ },
+        .erased => |index| .{ .erased = erased_payloads[index] },
+        .zst => .zst,
+        .mono => |leaf| .{ .mono = leaf },
+    };
+}
+
 /// Sentinel for a lazy leaf that has not been reached by any expansion yet.
 pub const no_leaf_context: u32 = std.math.maxInt(u32);
 
@@ -171,7 +220,11 @@ test "lambda solved named backing preserves generated-private authority" {
 /// Store for Lambda Solved type variables and their shared spans.
 pub const Store = struct {
     allocator: std.mem.Allocator,
-    vars: std.ArrayList(Content),
+    vars: std.ArrayList(StoredNode),
+    /// Payloads of the named nodes in `vars`, by `StoredNode.named` index.
+    named_payloads: std.ArrayList(NamedContent),
+    /// Payloads of the erased nodes in `vars`, by `StoredNode.erased` index.
+    erased_payloads: std.ArrayList(ErasedContent),
     owned_named_backings: std.ArrayList(bool),
     spans: std.ArrayList(TypeVarId),
     fields: std.ArrayList(Field),
@@ -187,6 +240,8 @@ pub const Store = struct {
         return .{
             .allocator = allocator,
             .vars = .empty,
+            .named_payloads = .empty,
+            .erased_payloads = .empty,
             .owned_named_backings = .empty,
             .spans = .empty,
             .fields = .empty,
@@ -205,25 +260,75 @@ pub const Store = struct {
         self.fields.deinit(self.allocator);
         self.spans.deinit(self.allocator);
         self.owned_named_backings.deinit(self.allocator);
+        self.erased_payloads.deinit(self.allocator);
+        self.named_payloads.deinit(self.allocator);
         self.vars.deinit(self.allocator);
+    }
+
+    /// The node storing `content`, appending a named or erased payload to its
+    /// side list. `previous` is the node being replaced, whose payload slot a
+    /// payload of the same kind takes over.
+    fn storeNode(self: *Store, content: Content, previous: ?StoredNode) std.mem.Allocator.Error!StoredNode {
+        return switch (content) {
+            .link => |target| .{ .link = target },
+            .unbound => .unbound,
+            .forall => .forall,
+            .primitive => |primitive| .{ .primitive = primitive },
+            .named => |named| blk: {
+                if (previous) |node| if (node == .named) {
+                    self.named_payloads.items[node.named] = named;
+                    break :blk node;
+                };
+                const index = std.math.cast(u32, self.named_payloads.items.len) orelse return error.OutOfMemory;
+                try self.named_payloads.append(self.allocator, named);
+                break :blk .{ .named = index };
+            },
+            .record => |span_| .{ .record = span_ },
+            .tuple => |span_| .{ .tuple = span_ },
+            .tag_union => |span_| .{ .tag_union = span_ },
+            .list => |elem| .{ .list = elem },
+            .box => |elem| .{ .box = elem },
+            .func => |func| .{ .func = func },
+            .lambda_set => |span_| .{ .lambda_set = span_ },
+            .erased => |erased| blk: {
+                if (previous) |node| if (node == .erased) {
+                    self.erased_payloads.items[node.erased] = erased;
+                    break :blk node;
+                };
+                const index = std.math.cast(u32, self.erased_payloads.items.len) orelse return error.OutOfMemory;
+                try self.erased_payloads.append(self.allocator, erased);
+                break :blk .{ .erased = index };
+            },
+            .zst => .zst,
+            .mono => |leaf| .{ .mono = leaf },
+        };
     }
 
     pub fn add(self: *Store, content: Content) std.mem.Allocator.Error!TypeVarId {
         if (self.vars.items.len >= @backingInt(MaybeTypeVarId.none)) return error.OutOfMemory;
         const id: TypeVarId = @fromBackingInt(@as(u32, @intCast(self.vars.items.len)));
-        try self.vars.append(self.allocator, content);
-        errdefer _ = self.vars.pop();
-        try self.owned_named_backings.append(self.allocator, false);
+        try self.vars.ensureUnusedCapacity(self.allocator, 1);
+        try self.owned_named_backings.ensureUnusedCapacity(self.allocator, 1);
+        self.vars.appendAssumeCapacity(try self.storeNode(content, null));
+        self.owned_named_backings.appendAssumeCapacity(false);
         return id;
     }
 
-    pub fn set(self: *Store, id: TypeVarId, content: Content) void {
+    pub fn set(self: *Store, id: TypeVarId, content: Content) std.mem.Allocator.Error!void {
+        if (content == .link) return self.setLink(id, content.link);
+        const node = try self.storeNode(content, self.vars.items[@backingInt(id)]);
         self.mutation_epoch +%= 1;
-        if (content == .link and self.owned_named_backings.items[@backingInt(id)]) {
-            const target = self.root(content.link);
-            self.owned_named_backings.items[@backingInt(target)] = true;
+        self.vars.items[@backingInt(id)] = node;
+    }
+
+    /// Link `id` to `target`, carrying an owned named backing to its root.
+    pub fn setLink(self: *Store, id: TypeVarId, target: TypeVarId) void {
+        self.mutation_epoch +%= 1;
+        if (self.owned_named_backings.items[@backingInt(id)]) {
+            const target_root = self.root(target);
+            self.owned_named_backings.items[@backingInt(target_root)] = true;
         }
-        self.vars.items[@backingInt(id)] = content;
+        self.vars.items[@backingInt(id)] = .{ .link = target };
     }
 
     pub fn markNamedBacking(self: *Store, id: TypeVarId) void {
@@ -237,15 +342,16 @@ pub const Store = struct {
     }
 
     pub fn get(self: *const Store, id: TypeVarId) Content {
-        return self.vars.items[@backingInt(id)];
+        return contentOf(self.vars.items[@backingInt(id)], self.named_payloads.items, self.erased_payloads.items);
     }
 
     pub fn root(self: *const Store, id: TypeVarId) TypeVarId {
         var current = id;
         while (true) {
-            const content = self.get(current);
-            if (std.meta.activeTag(content) != .link) return current;
-            current = content.link;
+            switch (self.vars.items[@backingInt(current)]) {
+                .link => |target| current = target,
+                else => return current,
+            }
         }
     }
 
@@ -254,24 +360,19 @@ pub const Store = struct {
     }
 
     pub fn rootCompressed(self: *Store, id: TypeVarId) TypeVarId {
-        var current = id;
-        while (true) {
-            const content = self.get(current);
-            if (std.meta.activeTag(content) != .link) break;
-            current = content.link;
-        }
-
-        const root_id = current;
+        const root_id = self.root(id);
         // Path compression preserves every variable's meaning, so it is not a
         // mutation observers must see.
         const epoch = self.mutation_epoch;
         defer self.mutation_epoch = epoch;
-        current = id;
+        var current = id;
         while (current != root_id) {
-            const content = self.get(current);
-            if (std.meta.activeTag(content) != .link) break;
-            self.set(current, .{ .link = root_id });
-            current = content.link;
+            const next = switch (self.vars.items[@backingInt(current)]) {
+                .link => |target| target,
+                else => break,
+            };
+            self.setLink(current, root_id);
+            current = next;
         }
 
         return root_id;
@@ -385,7 +486,9 @@ pub const Store = struct {
     }
 
     pub const View = struct {
-        vars: []const Content,
+        vars: []const StoredNode,
+        named_payloads: []const NamedContent,
+        erased_payloads: []const ErasedContent,
         spans: []const TypeVarId,
         fields: []const Field,
         tags: []const Tag,
@@ -394,15 +497,16 @@ pub const Store = struct {
         declared_fields: []const DeclaredField,
 
         pub fn get(self: View, id: TypeVarId) Content {
-            return self.vars[@backingInt(id)];
+            return contentOf(self.vars[@backingInt(id)], self.named_payloads, self.erased_payloads);
         }
 
         pub fn root(self: View, id: TypeVarId) TypeVarId {
             var current = id;
             while (true) {
-                const content = self.get(current);
-                if (std.meta.activeTag(content) != .link) return current;
-                current = content.link;
+                switch (self.vars[@backingInt(current)]) {
+                    .link => |target| current = target,
+                    else => return current,
+                }
             }
         }
 
@@ -438,6 +542,8 @@ pub const Store = struct {
     pub fn view(self: *const Store) View {
         return .{
             .vars = self.vars.items,
+            .named_payloads = self.named_payloads.items,
+            .erased_payloads = self.erased_payloads.items,
             .spans = self.spans.items,
             .fields = self.fields.items,
             .tags = self.tags.items,

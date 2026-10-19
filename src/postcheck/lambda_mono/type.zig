@@ -122,11 +122,40 @@ pub const Content = union(enum) {
     zst,
 };
 
+/// Payload stored by `Content.named`.
+pub const NamedContent = std.meta.fieldInfo(Content, .named).type;
+
+/// Payload stored by `Content.erased_fn`.
+pub const ErasedFnContent = std.meta.fieldInfo(Content, .erased_fn).type;
+
+/// A type as the store keeps it. A named payload and an erased callable's
+/// digest are far larger than every other variant, so they live in side
+/// lists and the node holds their index; every node is then a few words.
+pub const StoredNode = union(enum(u8)) {
+    primitive: MonoType.Primitive,
+    named: u32,
+    record: Span,
+    capture_record: Span,
+    tuple: Span,
+    tag_union: Span,
+    callable: Span,
+    list: TypeId,
+    box: TypeId,
+    erased_fn: u32,
+    erased_capture_ptr,
+    zst,
+};
+
 /// Store for Lambda Mono types and their shared spans.
 pub const Store = struct {
     allocator: std.mem.Allocator,
     digest_scratch: DigestScratch,
-    types: StoreList(Content, "types"),
+    types: StoreList(StoredNode, "types"),
+    /// Payloads of the named nodes in `types`, by `StoredNode.named` index.
+    named_payloads: StoreList(NamedContent, "named_payloads"),
+    /// Payloads of the erased callable nodes in `types`, by
+    /// `StoredNode.erased_fn` index.
+    erased_fn_payloads: StoreList(ErasedFnContent, "erased_fn_payloads"),
     spans: StoreList(TypeId, "spans"),
     fields: StoreList(Field, "fields"),
     capture_fields: StoreList(CaptureField, "capture_fields"),
@@ -143,6 +172,8 @@ pub const Store = struct {
             .allocator = allocator,
             .digest_scratch = DigestScratch.init(allocator),
             .types = .empty,
+            .named_payloads = .empty,
+            .erased_fn_payloads = .empty,
             .spans = .empty,
             .fields = .empty,
             .capture_fields = .empty,
@@ -160,22 +191,80 @@ pub const Store = struct {
         self.capture_fields.deinit(self.allocator);
         self.fields.deinit(self.allocator);
         self.spans.deinit(self.allocator);
+        self.erased_fn_payloads.deinit(self.allocator);
+        self.named_payloads.deinit(self.allocator);
         self.types.deinit(self.allocator);
     }
 
+    /// The node storing `content`, appending a named or erased payload to its
+    /// side list. `previous` is the node being replaced, whose payload slot a
+    /// payload of the same kind takes over.
+    fn storeNode(self: *Store, content: Content, previous: ?StoredNode) std.mem.Allocator.Error!StoredNode {
+        return switch (content) {
+            .primitive => |primitive| .{ .primitive = primitive },
+            .named => |named| blk: {
+                if (previous) |node| if (node == .named) {
+                    self.named_payloads.set(node.named, named);
+                    break :blk node;
+                };
+                const index = std.math.cast(u32, self.named_payloads.len()) orelse return error.OutOfMemory;
+                try self.named_payloads.append(self.allocator, named);
+                break :blk .{ .named = index };
+            },
+            .record => |span_| .{ .record = span_ },
+            .capture_record => |span_| .{ .capture_record = span_ },
+            .tuple => |span_| .{ .tuple = span_ },
+            .tag_union => |span_| .{ .tag_union = span_ },
+            .callable => |span_| .{ .callable = span_ },
+            .list => |elem| .{ .list = elem },
+            .box => |elem| .{ .box = elem },
+            .erased_fn => |erased| blk: {
+                if (previous) |node| if (node == .erased_fn) {
+                    self.erased_fn_payloads.set(node.erased_fn, erased);
+                    break :blk node;
+                };
+                const index = std.math.cast(u32, self.erased_fn_payloads.len()) orelse return error.OutOfMemory;
+                try self.erased_fn_payloads.append(self.allocator, erased);
+                break :blk .{ .erased_fn = index };
+            },
+            .erased_capture_ptr => .erased_capture_ptr,
+            .zst => .zst,
+        };
+    }
+
+    /// The content `node` stores, reading its payload from the side lists.
+    fn contentOf(self: *const Store, node: StoredNode) Content {
+        return switch (node) {
+            .primitive => |primitive| .{ .primitive = primitive },
+            .named => |index| .{ .named = self.named_payloads.unsafeRawItemsForView()[index] },
+            .record => |span_| .{ .record = span_ },
+            .capture_record => |span_| .{ .capture_record = span_ },
+            .tuple => |span_| .{ .tuple = span_ },
+            .tag_union => |span_| .{ .tag_union = span_ },
+            .callable => |span_| .{ .callable = span_ },
+            .list => |elem| .{ .list = elem },
+            .box => |elem| .{ .box = elem },
+            .erased_fn => |index| .{ .erased_fn = self.erased_fn_payloads.unsafeRawItemsForView()[index] },
+            .erased_capture_ptr => .erased_capture_ptr,
+            .zst => .zst,
+        };
+    }
+
     pub fn add(self: *Store, content: Content) std.mem.Allocator.Error!TypeId {
-        const id: TypeId = @fromBackingInt(@intCast(@as(u32, @intCast(self.types.len()))));
-        try self.types.append(self.allocator, content);
+        const id: TypeId = @fromBackingInt(std.math.cast(u32, self.types.len()) orelse return error.OutOfMemory);
+        const node = try self.storeNode(content, null);
+        try self.types.append(self.allocator, node);
         return id;
     }
 
-    pub fn set(self: *Store, id: TypeId, content: Content) void {
-        self.types.set(@backingInt(id), content);
+    pub fn set(self: *Store, id: TypeId, content: Content) std.mem.Allocator.Error!void {
+        const node = try self.storeNode(content, self.types.unsafeRawItemsForView()[@backingInt(id)]);
+        self.types.set(@backingInt(id), node);
         self.sets += 1;
     }
 
     pub fn get(self: *const Store, id: TypeId) Content {
-        return self.types.unsafeRawItemsForView()[@backingInt(id)];
+        return self.contentOf(self.types.unsafeRawItemsForView()[@backingInt(id)]);
     }
 
     pub fn typeCount(self: *const Store) usize {
@@ -269,7 +358,9 @@ pub const Store = struct {
     }
 
     pub const View = struct {
-        types: []const Content,
+        types: []const StoredNode,
+        named_payloads: []const NamedContent,
+        erased_fn_payloads: []const ErasedFnContent,
         spans: []const TypeId,
         fields: []const Field,
         capture_fields: []const CaptureField,
@@ -281,6 +372,8 @@ pub const Store = struct {
     pub fn view(self: *const Store) View {
         return .{
             .types = self.types.unsafeRawItemsForView(),
+            .named_payloads = self.named_payloads.unsafeRawItemsForView(),
+            .erased_fn_payloads = self.erased_fn_payloads.unsafeRawItemsForView(),
             .spans = self.spans.unsafeRawItemsForView(),
             .fields = self.fields.unsafeRawItemsForView(),
             .capture_fields = self.capture_fields.unsafeRawItemsForView(),
@@ -569,18 +662,18 @@ test "Lambda Mono digest terminates recursive erased captures independent of all
         const capture = if (i == 0) first else third;
         const record = second;
         const callable = if (i == 0) third else first;
-        store.set(capture, .{ .capture_record = try store.addCaptureFields(&.{.{
+        try store.set(capture, .{ .capture_record = try store.addCaptureFields(&.{.{
             .symbol = @fromBackingInt(@intCast(7)),
             .binder = null,
             .ty = record,
             .storage_ty = record,
         }}) });
-        store.set(record, .{ .record = try store.addFields(&.{.{
+        try store.set(record, .{ .record = try store.addFields(&.{.{
             .name = field_name,
             .ty = callable,
             .default = null,
         }}) });
-        store.set(callable, .{
+        try store.set(callable, .{
             .erased_fn = .{
                 .source_fn_ty = .{ .bytes = @splat(13) },
                 .members = try store.addFnVariants(&.{.{
@@ -596,7 +689,7 @@ test "Lambda Mono digest terminates recursive erased captures independent of all
     const expected = try store.typeDigest(&name_store, roots[0]);
     try std.testing.expectEqual(expected, try store.typeDigest(&name_store, roots[1]));
     // No traversal state or digest may survive a mutation of this store.
-    store.set(roots[1], .{ .box = roots[1] });
+    try store.set(roots[1], .{ .box = roots[1] });
     try std.testing.expect(!std.meta.eql(expected, try store.typeDigest(&name_store, roots[1])));
     try std.testing.expectEqual(expected, try store.typeDigest(&name_store, roots[0]));
 }
@@ -608,13 +701,13 @@ test "Lambda Mono digest distinguishes recursive edges and callable targets" {
     defer store.deinit();
     const root = try store.add(.zst);
     const child = try store.add(.{ .box = root });
-    store.set(root, .{ .tuple = try store.addSpan(&.{child}) });
+    try store.set(root, .{ .tuple = try store.addSpan(&.{child}) });
     const outer_cycle = try store.typeDigest(&name_store, root);
-    store.set(child, .{ .box = child });
+    try store.set(child, .{ .box = child });
     try std.testing.expect(!std.meta.eql(outer_cycle, try store.typeDigest(&name_store, root)));
     var digests: [2]names.TypeDigest = undefined;
     for (&digests, 0..) |*digest, i| {
-        store.set(root, .{
+        try store.set(root, .{
             .callable = try store.addFnVariants(&.{.{
                 .id = undefined, // Assigned by addFnVariants.
                 .source = @fromBackingInt(@intCast(1)),
@@ -649,7 +742,7 @@ test "Lambda Mono recursive digest propagates allocation failure" {
             var store = Store.init(allocator);
             defer store.deinit();
             const root = try store.add(.zst);
-            store.set(root, .{ .box = root });
+            try store.set(root, .{ .box = root });
             _ = try store.typeDigest(&name_store, root);
         }
     };
@@ -663,7 +756,7 @@ test "Lambda Mono digest reuses scratch capacity for shared graphs and cycles" {
     var store = Store.init(allocations.allocator());
     defer store.deinit();
     const cyclic = try store.add(.zst);
-    store.set(cyclic, .{ .box = cyclic });
+    try store.set(cyclic, .{ .box = cyclic });
     var root = cyclic;
     // A tree walk expands 2^4096 paths. Discovery must visit only these
     // 4097 nodes, and its depth must not consume the machine stack.
@@ -684,16 +777,16 @@ test "Lambda Mono digest ignores recursive knot size and unrolling" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
     const single = try store.add(.zst);
-    store.set(single, .{ .box = single });
+    try store.set(single, .{ .box = single });
     const expected = try store.typeDigest(&name_store, single);
     const first = try store.add(.zst);
     var last = first;
     for (0..350) |_| {
         const next = try store.add(.zst);
-        store.set(last, .{ .box = next });
+        try store.set(last, .{ .box = next });
         last = next;
     }
-    store.set(last, .{ .box = first });
+    try store.set(last, .{ .box = first });
     try std.testing.expectEqual(expected, try store.typeDigest(&name_store, first));
     const unrolled = try store.add(.{ .box = first });
     try std.testing.expectEqual(expected, try store.typeDigest(&name_store, unrolled));
@@ -706,7 +799,7 @@ test "Lambda Mono digest retries after every scratch allocation failure" {
     defer expected_store.deinit();
     const expected_root = try expected_store.add(.zst);
     const expected_child = try expected_store.add(.{ .box = expected_root });
-    expected_store.set(expected_root, .{ .tuple = try expected_store.addSpan(&.{ expected_child, expected_root }) });
+    try expected_store.set(expected_root, .{ .tuple = try expected_store.addSpan(&.{ expected_child, expected_root }) });
     const expected = try expected_store.typeDigest(&name_store, expected_root);
     var budget: usize = 0;
     while (true) : (budget += 1) {
@@ -715,7 +808,7 @@ test "Lambda Mono digest retries after every scratch allocation failure" {
         defer store.deinit();
         const root = try store.add(.zst);
         const child = try store.add(.{ .box = root });
-        store.set(root, .{ .tuple = try store.addSpan(&.{ child, root }) });
+        try store.set(root, .{ .tuple = try store.addSpan(&.{ child, root }) });
         failing.fail_index = failing.alloc_index + budget;
         const completed = if (store.typeDigest(&name_store, root)) |actual| blk: {
             try std.testing.expectEqual(expected, actual);

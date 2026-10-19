@@ -4031,7 +4031,7 @@ const Lowerer = struct {
 
     fn finishTypeVar(self: *Lowerer, task: *TypeVarTask, content: Type.Content) Common.LowerError!TypeStep {
         const root = task.root;
-        self.types.set(task.reserved, content);
+        try self.types.set(task.reserved, content);
         const solved_content = self.solved.types.get(root);
         if (solved_content == .named and solved_content.named.backing != null) {
             const backing_root = self.solved.types.root(solved_content.named.backing.?.ty);
@@ -4336,7 +4336,7 @@ const Lowerer = struct {
         }
         const capture_items = self.captureSpan(task.captures);
         if (task.fields.items.len < capture_items.len) return typeVarStep(capture_items[task.fields.items.len].ty);
-        self.types.set(task.ty, .{ .capture_record = try self.types.addCaptureFields(task.fields.items) });
+        try self.types.set(task.ty, .{ .capture_record = try self.types.addCaptureFields(task.fields.items) });
         return .{ .ret = .{ .ty = task.ty } };
     }
 
@@ -4402,9 +4402,9 @@ const Lowerer = struct {
         types: SolvedType.Store.View,
         owners: *collections.DenseMap(SolvedType.TypeVarId, SolvedType.TypeVarId),
     ) Common.LowerError!void {
-        for (types.vars, 0..) |content, index| {
-            if (content != .named) continue;
-            const named = content.named;
+        for (types.vars, 0..) |node, index| {
+            if (node != .named) continue;
+            const named = types.named_payloads[node.named];
             if (named.kind == .alias or named.declared_order.len == 0) continue;
             const backing = named.backing orelse continue;
             const backing_root = types.root(backing.ty);
@@ -15542,7 +15542,7 @@ test "named layout index reuses structurally equivalent recursive types" {
     const first_backing = try lowerer.types.add(.{ .record = first_fields });
     const equivalent_backing = try lowerer.types.add(.{ .record = equivalent_fields });
 
-    lowerer.types.set(first_ty, .{
+    try lowerer.types.set(first_ty, .{
         .named = .{
             .named_type = .{ .module = .{}, .ty = undefined },
             .def = .{ .module = module_identity, .type_name = first_name, .source_decl = 43 },
@@ -15551,7 +15551,7 @@ test "named layout index reuses structurally equivalent recursive types" {
             .backing = .{ .ty = first_backing, .use = .inspectable },
         },
     });
-    lowerer.types.set(equivalent_ty, .{
+    try lowerer.types.set(equivalent_ty, .{
         .named = .{
             .named_type = .{ .module = .{}, .ty = undefined },
             .def = .{ .module = module_identity, .type_name = equivalent_name, .source_decl = 43 },
@@ -15763,7 +15763,7 @@ test "layout lowering preserves recursive slots across cached children (issue 11
             .{ .name = first, .ty = union_ty, .default = null },
             .{ .name = second, .ty = union_ty, .default = null },
         });
-        lowerer.types.set(record, .{ .record = fields });
+        try lowerer.types.set(record, .{ .record = fields });
         const unrolled = try lowerer.types.add(.{ .record = fields });
 
         const first_layout = try lowerer.layoutOfType(if (unrolled_first) unrolled else record);
