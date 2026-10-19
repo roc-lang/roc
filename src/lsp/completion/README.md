@@ -214,8 +214,8 @@ imported module names, all loaded module names, and all 21 builtin types
 position.
 
 **What happens:**
-1. `addLocalCompletions(module_env, cursor_offset)`—builds a `ScopeMap` from
-   CIR, then adds every binding visible at the cursor. Also adds top-level
+1. `addLocalCompletions(module_env, cursor_offset)`—takes the module's `ScopeMap`
+   (built from CIR), then adds every binding visible at the cursor. Also adds top-level
    defs (from `all_defs`) and statement-level defs (from `all_statements`).
    Closures/lambdas get kind `function`; everything else gets `variable`.
 2. `addModuleNameCompletions(module_env)`—imported module names.
@@ -283,11 +283,16 @@ Defined in `completion/builder.zig:33`. Key fields:
 ```zig
 pub const CompletionBuilder = struct {
     allocator: Allocator,
+    strings: Allocator,                          // request arena: items and their strings
     items: *std.ArrayList(CompletionItem),
-    seen_labels: std.StringHashMap(void),   // deduplication
-    builtin_module_env: ?*ModuleEnv,         // for Str.concat, List.map, etc.
+    seen_labels: std.StringHashMapUnmanaged(void), // deduplication
+    builtin_module_env: ?*ModuleEnv,             // for Str.concat, List.map, etc.
+    module_handle: *BuildEnvHandle,              // holds the document module's scope map
 };
 ```
+
+The items and every string in them live in one arena owned by the returned
+`CompletionResult`; `CompletionResult.deinit` frees them together.
 
 ### ModuleEnv (abbreviated)
 
@@ -328,6 +333,9 @@ pub const Binding = struct {
 expressions to populate a list of `Binding`s sorted by `visible_from`.
 `isVisibleAt(binding, offset)` checks if a binding is in scope at a cursor
 position.
+`BuildEnvHandle.scopeBindings(module_env)` builds a module's map on first use
+and keeps it for as long as the handle's build env lives, so requests against
+the same build share it.
 
 ---
 
