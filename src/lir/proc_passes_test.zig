@@ -865,9 +865,9 @@ test "LIR proc pass deletes pure definitions that only fed pruned join parameter
     const write_kept = try store.addCFStmt(.{ .set_local = .{ .target = dead_kept, .value = kept, .mode = .initialize_join_param, .next = jump } }, .test_fixture);
     const write_sum = try store.addCFStmt(.{ .set_local = .{ .target = dead_sum, .value = sum, .mode = .initialize_join_param, .next = write_kept } }, .test_fixture);
     const write_reread = try store.addCFStmt(.{ .set_local = .{ .target = dead_reread, .value = reread, .mode = .initialize_join_param, .next = write_sum } }, .test_fixture);
-    const define_kept = try store.addCFStmt(.{ .assign_ref = .{ .target = kept, .op = .{ .local = value }, .next = write_reread } }, .test_fixture);
-    const define_reread = try store.addCFStmt(.{ .assign_ref = .{ .target = reread, .op = .{ .local = alias }, .next = define_kept } }, .test_fixture);
-    const define_alias = try store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = .{ .local = value }, .next = define_reread } }, .test_fixture);
+    const define_kept = try store.addCFStmt(.{ .assign_ref = .{ .target = kept, .op = LIR.RefOp.local(value), .next = write_reread } }, .test_fixture);
+    const define_reread = try store.addCFStmt(.{ .assign_ref = .{ .target = reread, .op = LIR.RefOp.local(alias), .next = define_kept } }, .test_fixture);
+    const define_alias = try store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = LIR.RefOp.local(value), .next = define_reread } }, .test_fixture);
     const define_sum = try store.addLowLevelStmt(sum, .num_int_add_crash_on_overflow, &.{ value, value }, define_alias, .test_fixture);
     const body = try store.addCFStmt(.{ .ret = .{ .value = kept } }, .test_fixture);
     const join = try store.addCFStmt(.{ .join = .{
