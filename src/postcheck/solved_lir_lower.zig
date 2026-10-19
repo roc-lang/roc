@@ -4725,7 +4725,7 @@ const Lowerer = struct {
 
     fn freeConstCallableEntry(allocator: Allocator, captures: []const LirProgram.CaptureSlot, template: LirProgram.FnTemplate) void {
         if (captures.len > 0) allocator.free(captures);
-        if (template.evidence.len > 0) allocator.free(template.evidence);
+        check.ConstStore.freeVector(allocator, template.evidence);
         if (template.evidence_frames.len > 0) allocator.free(template.evidence_frames);
     }
 
@@ -14798,8 +14798,8 @@ fn constFnTemplateForFn(self: *Lowerer, fn_id: Type.FnId) std.mem.Allocator.Erro
     const spec = self.fn_entries.items[@backingInt(fn_id)].spec;
     requireConstFnEvidenceTopology(template);
     const lifted = self.solved.lifted.view();
-    const evidence = try self.allocator.dupe(check.ConstStore.ConstFnEvidence, lifted.const_fn_evidence[template.const_evidence.start..][0..template.const_evidence.len]);
-    errdefer self.allocator.free(evidence);
+    const evidence = try check.ConstStore.dupeVector(self.allocator, lifted.constFnEvidence(template.const_evidence));
+    errdefer check.ConstStore.freeVector(self.allocator, evidence);
     const evidence_frames = try self.allocator.dupe(check.ConstStore.ConstFnEvidenceFrame, lifted.const_fn_evidence_frames[template.const_evidence_frames.start..][0..template.const_evidence_frames.len]);
     return .{
         .frozen_fn = if (template.frozen_fn) |id| @backingInt(id) else null,
@@ -14871,6 +14871,8 @@ fn emptyLiftedProgramForTest(allocator: std.mem.Allocator) Lifted.Program {
         NameStore.init(allocator),
         MonoType.Store.init(allocator),
         .empty, // const_fn_evidence
+        .empty, // const_fn_evidence_targets
+        .empty, // const_fn_evidence_structurals
         .empty, // const_fn_evidence_frames
         .empty, // exprs
         .empty, // pats

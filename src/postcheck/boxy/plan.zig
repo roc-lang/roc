@@ -8380,50 +8380,41 @@ const Builder = struct {
         if (coordinate.index >= frame.roots_len) boxyPlanInvariant("stored function evidence index exceeded its frame");
         var cursor: usize = frame.roots_start;
         skipStoredEvidenceEntries(stored.evidence, &cursor, coordinate.index);
-        if (cursor >= stored.evidence.len) boxyPlanInvariant("stored function evidence ended before its selected entry");
-        var entry = stored.evidence[cursor];
+        if (cursor >= stored.evidence.nodes.len) boxyPlanInvariant("stored function evidence ended before its selected entry");
+        var entry = stored.evidence.nodes[cursor];
         if (callable_contract) |contract_index| {
-            const contracts_len = storedEvidenceCallableContractCount(entry);
+            const contracts_len = stored.evidence.callableContracts(entry);
             if (contracts_len != 0) {
                 if (contract_index >= contracts_len) boxyPlanInvariant("stored function callable contract index exceeded its entry");
                 var contract_cursor = cursor + 1;
-                if (entry == .target) switch (entry.target.nested) {
+                if (entry == .target) switch (stored.evidence.target(entry.target).nested) {
                     .resolved => |resolved| contract_cursor += resolved.subtree_len,
                     .from_callable => {},
                 };
                 skipStoredEvidenceEntries(stored.evidence, &contract_cursor, contract_index);
-                if (contract_cursor >= stored.evidence.len) boxyPlanInvariant("stored function evidence ended before its selected contract");
-                entry = stored.evidence[contract_cursor];
+                if (contract_cursor >= stored.evidence.nodes.len) boxyPlanInvariant("stored function evidence ended before its selected contract");
+                entry = stored.evidence.nodes[contract_cursor];
             }
         }
         return switch (entry) {
-            .structural => |structural| structural,
+            .structural => |structural| stored.evidence.structural(structural).*,
             .target, .from_callable, .from_scheme, .unreachable_value, .checked_error => boxyPlanInvariant("stored generated codec evidence did not select a structural codec"),
-        };
-    }
-
-    fn storedEvidenceCallableContractCount(entry: check.ConstStore.ConstFnEvidence) u32 {
-        return switch (entry) {
-            .target => |target| target.callable_contracts,
-            .structural => |structural| structural.callable_contracts,
-            .from_callable => |use| use.callable_contracts,
-            .from_scheme, .unreachable_value, .checked_error => 0,
         };
     }
 
     /// Advance past `count` stored evidence entries, each with its nested
     /// evidence and callable contracts.
-    fn skipStoredEvidenceEntries(nodes: []const check.ConstStore.ConstFnEvidence, cursor: *usize, count: u32) void {
+    fn skipStoredEvidenceEntries(evidence: check.ConstStore.ConstFnEvidenceVector, cursor: *usize, count: u32) void {
         var remaining = count;
         while (remaining > 0) : (remaining -= 1) {
-            if (cursor.* >= nodes.len) boxyPlanInvariant("stored function evidence ended inside a skipped entry");
-            const entry = nodes[cursor.*];
+            if (cursor.* >= evidence.nodes.len) boxyPlanInvariant("stored function evidence ended inside a skipped entry");
+            const entry = evidence.nodes[cursor.*];
             cursor.* += 1;
-            if (entry == .target) switch (entry.target.nested) {
+            if (entry == .target) switch (evidence.target(entry.target).nested) {
                 .resolved => |resolved| cursor.* += resolved.subtree_len,
                 .from_callable => {},
             };
-            skipStoredEvidenceEntries(nodes, cursor, storedEvidenceCallableContractCount(entry));
+            skipStoredEvidenceEntries(evidence, cursor, evidence.callableContracts(entry));
         }
     }
 
@@ -19345,9 +19336,9 @@ const Builder = struct {
             .encoder => .encoder,
         };
         var selected: ?static_dispatch.StructuralEvidence = null;
-        for (fn_value.evidence) |entry| {
+        for (fn_value.evidence.nodes) |entry| {
             const structural = switch (entry) {
-                .structural => |structural| structural,
+                .structural => |structural| fn_value.evidence.structural(structural).*,
                 .target, .from_callable, .from_scheme, .unreachable_value, .checked_error => continue,
             };
             if (structural.derivation.kind() != expected) continue;

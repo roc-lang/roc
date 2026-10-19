@@ -5243,6 +5243,8 @@ fn emptyLiftedProgramForTest(allocator: Allocator) Lifted.Program {
         names.NameStore.init(allocator),
         MonoType.Store.init(allocator),
         .empty, // const_fn_evidence
+        .empty, // const_fn_evidence_targets
+        .empty, // const_fn_evidence_structurals
         .empty, // const_fn_evidence_frames
         .empty, // exprs
         .empty, // pats

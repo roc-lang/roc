@@ -320,20 +320,27 @@ pub const ConstFnStructuralEvidence = struct {
     }
 };
 
-/// Dispatch evidence selected for a stored compile-time function value. Target
-/// module identities make every checked id explicitly relative to its owning
-/// checked module when the function is restored in another compilation.
+/// Exact checked method edge retained by a stored function. Target module
+/// identities make every checked id explicitly relative to its owning checked
+/// module when the function is restored in another compilation.
+pub const ConstFnTargetEvidence = struct {
+    view: names.CheckedModuleDigest,
+    method: static_dispatch.MethodTarget,
+    /// Stable checked identity of `method.callable_ty`.
+    method_callable_key: names.CanonicalTypeKey,
+    instantiation: ?ConstFnCallableInstantiation,
+    nested: ConstFnNestedEvidence,
+    callable_contracts: u32 = 0,
+};
+
+/// Dispatch evidence selected for a stored compile-time function value. The
+/// two large payloads live in their vector's own columns
+/// (`ConstFnEvidenceVector`), so an entry takes a few words.
 pub const ConstFnEvidence = union(enum(u8)) {
-    target: struct {
-        view: names.CheckedModuleDigest,
-        method: static_dispatch.MethodTarget,
-        /// Stable checked identity of `method.callable_ty`.
-        method_callable_key: names.CanonicalTypeKey,
-        instantiation: ?ConstFnCallableInstantiation,
-        nested: ConstFnNestedEvidence,
-        callable_contracts: u32 = 0,
-    },
-    structural: ConstFnStructuralEvidence,
+    /// Index of the entry's payload in its vector's `targets`.
+    target: u32,
+    /// Index of the entry's payload in its vector's `structurals`.
+    structural: u32,
     /// A callable-reachable requirement that must be resolved from the
     /// concrete function type when this stored function is restored. Its
     /// position in its evidence vector selects the owning schema parameter,
@@ -347,6 +354,106 @@ pub const ConstFnEvidence = union(enum(u8)) {
     unreachable_value,
     checked_error,
 };
+
+/// One stored function's flattened evidence entries with the target and
+/// structural payloads they index. Entry indexes are relative to this
+/// vector's own payload columns, so a vector copies as three plain slices.
+pub const ConstFnEvidenceVector = struct {
+    nodes: []const ConstFnEvidence = &.{},
+    targets: []const ConstFnTargetEvidence = &.{},
+    structurals: []const ConstFnStructuralEvidence = &.{},
+
+    /// The target payload of a `.target` entry.
+    pub fn target(self: ConstFnEvidenceVector, index: u32) *const ConstFnTargetEvidence {
+        return &self.targets[index];
+    }
+
+    /// The structural payload of a `.structural` entry.
+    pub fn structural(self: ConstFnEvidenceVector, index: u32) *const ConstFnStructuralEvidence {
+        return &self.structurals[index];
+    }
+
+    /// How many callable-contract trees follow `entry`'s nested evidence.
+    pub fn callableContracts(self: ConstFnEvidenceVector, entry: ConstFnEvidence) u32 {
+        return switch (entry) {
+            .target => |index| self.targets[index].callable_contracts,
+            .structural => |index| self.structurals[index].callable_contracts,
+            .from_callable => |use| use.callable_contracts,
+            .from_scheme, .unreachable_value, .checked_error => 0,
+        };
+    }
+};
+
+/// Growable `ConstFnEvidenceVector`.
+pub const ConstFnEvidenceBuilder = struct {
+    nodes: std.ArrayList(ConstFnEvidence) = .empty,
+    targets: std.ArrayList(ConstFnTargetEvidence) = .empty,
+    structurals: std.ArrayList(ConstFnStructuralEvidence) = .empty,
+
+    /// Release every column.
+    pub fn deinit(self: *ConstFnEvidenceBuilder, allocator: Allocator) void {
+        self.nodes.deinit(allocator);
+        self.targets.deinit(allocator);
+        self.structurals.deinit(allocator);
+    }
+
+    /// The entries so far; invalidated by the next append.
+    pub fn vector(self: *const ConstFnEvidenceBuilder) ConstFnEvidenceVector {
+        return .{ .nodes = self.nodes.items, .targets = self.targets.items, .structurals = self.structurals.items };
+    }
+
+    /// Append a `.target` entry with its payload.
+    pub fn appendTarget(self: *ConstFnEvidenceBuilder, allocator: Allocator, payload: ConstFnTargetEvidence) Allocator.Error!void {
+        try self.targets.append(allocator, payload);
+        try self.nodes.append(allocator, .{ .target = @intCast(self.targets.items.len - 1) });
+    }
+
+    /// Append a `.structural` entry with its payload.
+    pub fn appendStructural(self: *ConstFnEvidenceBuilder, allocator: Allocator, payload: ConstFnStructuralEvidence) Allocator.Error!void {
+        try self.structurals.append(allocator, payload);
+        try self.nodes.append(allocator, .{ .structural = @intCast(self.structurals.items.len - 1) });
+    }
+
+    /// Append an entry with no out-of-line payload.
+    pub fn appendSmall(self: *ConstFnEvidenceBuilder, allocator: Allocator, entry: ConstFnEvidence) Allocator.Error!void {
+        switch (entry) {
+            .target, .structural => constStoreInvariant("evidence payload entries are appended with their payload"),
+            .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
+        }
+        try self.nodes.append(allocator, entry);
+    }
+
+    /// Set the callable-contract count of the entry at `node_index`.
+    pub fn setCallableContracts(self: *ConstFnEvidenceBuilder, node_index: usize, count: u32) void {
+        switch (self.nodes.items[node_index]) {
+            .target => |index| self.targets.items[index].callable_contracts = count,
+            .structural => |index| self.structurals.items[index].callable_contracts = count,
+            .from_callable => |*use| use.callable_contracts = count,
+            .from_scheme, .unreachable_value, .checked_error => constStoreInvariant("evidence entry without callable contracts was given some"),
+        }
+    }
+
+    /// Copy the columns into `allocator`-owned slices.
+    pub fn dupe(self: *const ConstFnEvidenceBuilder, allocator: Allocator) Allocator.Error!ConstFnEvidenceVector {
+        return dupeVector(allocator, self.vector());
+    }
+};
+
+/// Copy `source`'s columns into `allocator`-owned slices.
+pub fn dupeVector(allocator: Allocator, source: ConstFnEvidenceVector) Allocator.Error!ConstFnEvidenceVector {
+    const nodes = try allocator.dupe(ConstFnEvidence, source.nodes);
+    errdefer allocator.free(nodes);
+    const targets = try allocator.dupe(ConstFnTargetEvidence, source.targets);
+    errdefer allocator.free(targets);
+    return .{ .nodes = nodes, .targets = targets, .structurals = try allocator.dupe(ConstFnStructuralEvidence, source.structurals) };
+}
+
+/// Free a vector made by `dupeVector`.
+pub fn freeVector(allocator: Allocator, vector: ConstFnEvidenceVector) void {
+    allocator.free(vector.nodes);
+    allocator.free(vector.targets);
+    allocator.free(vector.structurals);
+}
 
 /// Stable checked dispatch scope identity stored without depending on checked
 /// artifact implementation types.
@@ -378,7 +485,7 @@ pub const ConstFn = struct {
     source_fn_ty: checked_ids.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     captures: []const ConstCapture = &.{},
-    evidence: []const ConstFnEvidence = &.{},
+    evidence: ConstFnEvidenceVector = .{},
     evidence_frames: []const ConstFnEvidenceFrame = &.{},
     evidence_frame_head: ?u32 = null,
 };
@@ -518,6 +625,8 @@ const StoredFn = struct {
     source_fn_key: names.TypeDigest,
     captures: ConstRange = .{},
     evidence: ConstRange = .{},
+    evidence_targets: ConstRange = .{},
+    evidence_structurals: ConstRange = .{},
     evidence_frames: ConstRange = .{},
     evidence_frame_head: ?u32 = null,
 };
@@ -985,6 +1094,8 @@ pub const ConstStore = struct {
     capture_pool: std.ArrayList(ConstCapture),
     /// Flat evidence vectors referenced by stored functions.
     evidence_pool: std.ArrayList(ConstFnEvidence),
+    evidence_target_pool: std.ArrayList(ConstFnTargetEvidence),
+    evidence_structural_pool: std.ArrayList(ConstFnStructuralEvidence),
     evidence_frame_pool: std.ArrayList(ConstFnEvidenceFrame),
     /// Flat pool of immutable backing bytes shared by strings and packed lists.
     blob_backing: std.ArrayList(u8),
@@ -1042,6 +1153,8 @@ pub const ConstStore = struct {
             .type_store = ConstTypeStore.init(allocator),
             .capture_pool = .empty,
             .evidence_pool = .empty,
+            .evidence_target_pool = .empty,
+            .evidence_structural_pool = .empty,
             .evidence_frame_pool = .empty,
             .blob_backing = .empty,
             .blob_views = .empty,
@@ -1106,7 +1219,9 @@ pub const ConstStore = struct {
         try validateEvidenceFrames(self.allocator, fn_value);
         const id: ConstFnId = @fromBackingInt(@intCast(@as(u32, @intCast(self.fns.items.len))));
         const captures_range = try artifact_serialize.appendSpan(ConstRange, ConstCapture, &self.capture_pool, self.allocator, fn_value.captures);
-        const evidence_range = try artifact_serialize.appendSpan(ConstRange, ConstFnEvidence, &self.evidence_pool, self.allocator, fn_value.evidence);
+        const evidence_range = try artifact_serialize.appendSpan(ConstRange, ConstFnEvidence, &self.evidence_pool, self.allocator, fn_value.evidence.nodes);
+        const evidence_targets = try artifact_serialize.appendSpan(ConstRange, ConstFnTargetEvidence, &self.evidence_target_pool, self.allocator, fn_value.evidence.targets);
+        const evidence_structurals = try artifact_serialize.appendSpan(ConstRange, ConstFnStructuralEvidence, &self.evidence_structural_pool, self.allocator, fn_value.evidence.structurals);
         const evidence_frames = try artifact_serialize.appendSpan(ConstRange, ConstFnEvidenceFrame, &self.evidence_frame_pool, self.allocator, fn_value.evidence_frames);
         try self.fns.append(self.allocator, .{
             .fn_def = fn_value.fn_def,
@@ -1114,6 +1229,8 @@ pub const ConstStore = struct {
             .source_fn_key = fn_value.source_fn_key,
             .captures = captures_range,
             .evidence = evidence_range,
+            .evidence_targets = evidence_targets,
+            .evidence_structurals = evidence_structurals,
             .evidence_frames = evidence_frames,
             .evidence_frame_head = fn_value.evidence_frame_head,
         });
@@ -1129,7 +1246,7 @@ pub const ConstStore = struct {
     fn evidenceFramesValid(allocator: Allocator, fn_value: ConstFn) Allocator.Error!bool {
         if (fn_value.evidence_frames.len == 0) {
             return switch (fn_value.fn_def) {
-                .parser_runtime, .encoder_for_runtime => fn_value.evidence_frame_head == null and fn_value.evidence.len == 0,
+                .parser_runtime, .encoder_for_runtime => fn_value.evidence_frame_head == null and fn_value.evidence.nodes.len == 0,
                 .local_template,
                 .imported_template,
                 .nested,
@@ -1156,13 +1273,14 @@ pub const ConstStore = struct {
             if (frame.roots_start != cursor) return false;
             cursor = try evidenceVectorEnd(allocator, fn_value.evidence, cursor, frame.roots_len) orelse return false;
         }
-        return cursor == fn_value.evidence.len;
+        return cursor == fn_value.evidence.nodes.len;
     }
 
     /// The end of a vector of `count` evidence trees starting at `start`, or
     /// null when a nested vector's declared subtree length disagrees with its
     /// entries. Open nested vectors are kept on an explicit stack.
-    fn evidenceVectorEnd(allocator: Allocator, nodes: []const ConstFnEvidence, start: usize, count: u32) Allocator.Error!?usize {
+    fn evidenceVectorEnd(allocator: Allocator, evidence: ConstFnEvidenceVector, start: usize, count: u32) Allocator.Error!?usize {
+        const nodes = evidence.nodes;
         const Open = struct {
             remaining: u32,
             /// Where a nested vector's entries start, and how many nodes they
@@ -1188,14 +1306,11 @@ pub const ConstStore = struct {
             cursor += 1;
             // A node's nested vector precedes its callable contracts, so the
             // contracts wait beneath it on the stack.
-            const contracts = switch (node) {
-                inline .target, .structural, .from_callable => |target| target.callable_contracts,
-                .from_scheme, .unreachable_value, .checked_error => 0,
-            };
+            const contracts = evidence.callableContracts(node);
             if (contracts != 0) try open.append(allocator, .{ .remaining = contracts, .nested = null });
             switch (node) {
                 .target => |target| {
-                    switch (target.nested) {
+                    switch (evidence.target(target).nested) {
                         .resolved => |nested| try open.append(allocator, .{
                             .remaining = nested.count,
                             .nested = .{ .start = cursor, .subtree_len = nested.subtree_len },
@@ -1210,14 +1325,15 @@ pub const ConstStore = struct {
     }
 
     test "callable-derived function evidence has no flattened child vector" {
-        const evidence = [_]ConstFnEvidence{.{ .target = .{
+        const targets = [_]ConstFnTargetEvidence{.{
             .view = .{},
             .method = undefined,
             .method_callable_key = .{},
             .instantiation = null,
             .nested = .from_callable,
-        } }};
-        try std.testing.expectEqual(@as(?usize, 1), try evidenceVectorEnd(std.testing.allocator, &evidence, 0, 1));
+        }};
+        const nodes = [_]ConstFnEvidence{.{ .target = 0 }};
+        try std.testing.expectEqual(@as(?usize, 1), try evidenceVectorEnd(std.testing.allocator, .{ .nodes = &nodes, .targets = &targets }, 0, 1));
     }
 
     test "issue 11737: stored evidence validates callable contract topology" {
@@ -1227,9 +1343,9 @@ pub const ConstStore = struct {
             .checked_error,
             .unreachable_value,
         };
-        try std.testing.expectEqual(@as(?usize, 4), try evidenceVectorEnd(std.testing.allocator, &nodes, 0, 2));
-        try std.testing.expectEqual(@as(?usize, null), try evidenceVectorEnd(std.testing.allocator, nodes[0..2], 0, 1));
-        try std.testing.expectEqual(@as(?usize, null), try evidenceVectorEnd(std.testing.allocator, &nodes, 0, 3));
+        try std.testing.expectEqual(@as(?usize, 4), try evidenceVectorEnd(std.testing.allocator, .{ .nodes = &nodes }, 0, 2));
+        try std.testing.expectEqual(@as(?usize, null), try evidenceVectorEnd(std.testing.allocator, .{ .nodes = nodes[0..2] }, 0, 1));
+        try std.testing.expectEqual(@as(?usize, null), try evidenceVectorEnd(std.testing.allocator, .{ .nodes = &nodes }, 0, 3));
     }
 
     pub fn addBlobData(self: *ConstStore, bytes: []const u8) Allocator.Error!ConstBlobDataId {
@@ -1288,7 +1404,11 @@ pub const ConstStore = struct {
             .source_fn_ty = stored.source_fn_ty,
             .source_fn_key = stored.source_fn_key,
             .captures = self.capture_pool.items[stored.captures.start .. stored.captures.start + stored.captures.len],
-            .evidence = self.evidence_pool.items[stored.evidence.start .. stored.evidence.start + stored.evidence.len],
+            .evidence = .{
+                .nodes = self.evidence_pool.items[stored.evidence.start .. stored.evidence.start + stored.evidence.len],
+                .targets = self.evidence_target_pool.items[stored.evidence_targets.start .. stored.evidence_targets.start + stored.evidence_targets.len],
+                .structurals = self.evidence_structural_pool.items[stored.evidence_structurals.start .. stored.evidence_structurals.start + stored.evidence_structurals.len],
+            },
             .evidence_frames = self.evidence_frame_pool.items[stored.evidence_frames.start .. stored.evidence_frames.start + stored.evidence_frames.len],
             .evidence_frame_head = stored.evidence_frame_head,
         };
@@ -1313,13 +1433,15 @@ pub const ConstStore = struct {
         type_store: ConstTypeStore.Serialized = .{},
         capture_pool: artifact_serialize.SerializedSlice(ConstCapture) = .{},
         evidence_pool: artifact_serialize.SerializedSlice(ConstFnEvidence) = .{},
+        evidence_target_pool: artifact_serialize.SerializedSlice(ConstFnTargetEvidence) = .{},
+        evidence_structural_pool: artifact_serialize.SerializedSlice(ConstFnStructuralEvidence) = .{},
         evidence_frame_pool: artifact_serialize.SerializedSlice(ConstFnEvidenceFrame) = .{},
         blob_backing: artifact_serialize.SerializedSlice(u8) = .{},
         blob_views: artifact_serialize.SerializedSlice(ConstRange) = .{},
 
         comptime {
-            // 9 value/function side lists + 5 nested type-store lists.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 16);
+            // 11 value/function side lists + 7 nested type-store lists.
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 18);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(ConstStore, @This());
@@ -1390,6 +1512,8 @@ pub const ConstStore = struct {
             self.tag_name_pool.deinit(self.allocator);
             self.capture_pool.deinit(self.allocator);
             self.evidence_pool.deinit(self.allocator);
+            self.evidence_target_pool.deinit(self.allocator);
+            self.evidence_structural_pool.deinit(self.allocator);
             self.evidence_frame_pool.deinit(self.allocator);
             self.blob_backing.deinit(self.allocator);
             self.blob_views.deinit(self.allocator);
@@ -1581,8 +1705,8 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     method_callable_key.bytes[0] = 0xC3;
     var instantiation_callable_key: names.CanonicalTypeKey = .{};
     instantiation_callable_key.bytes[0] = 0xD4;
-    const evidence = [_]ConstFnEvidence{
-        .{ .target = .{
+    const evidence_targets = [_]ConstFnTargetEvidence{
+        .{
             .view = target_view,
             .method = .{
                 .module_idx = 4,
@@ -1601,8 +1725,12 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
                 .callable_ty = @fromBackingInt(@intCast(7)),
             },
             .nested = .{ .resolved = .{ .count = 1, .subtree_len = 1 } },
-        } },
-        .{ .structural = .{ .derivation = .equality } },
+        },
+    };
+    const evidence_structurals = [_]ConstFnStructuralEvidence{.{ .derivation = .equality }};
+    const evidence = [_]ConstFnEvidence{
+        .{ .target = 0 },
+        .{ .structural = 0 },
         .checked_error,
         .{ .from_callable = .{ .independent_callable = true } },
         .{ .from_scheme = 3 },
@@ -1618,7 +1746,7 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
         .source_fn_ty = @fromBackingInt(@intCast(3)),
         .source_fn_key = .{},
         .captures = caps,
-        .evidence = &evidence,
+        .evidence = .{ .nodes = &evidence, .targets = &evidence_targets, .structurals = &evidence_structurals },
         .evidence_frames = &evidence_frames,
         .evidence_frame_head = 1,
     });
@@ -1670,12 +1798,12 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     try std.testing.expect(loaded_fn.captures[0].kind.eql(.lexical));
     try std.testing.expect(loaded_fn.captures[1].kind.eql(recursive_kind));
     try loaded.verifyComplete();
-    try std.testing.expectEqual(evidence.len, loaded_fn.evidence.len);
-    const loaded_target = loaded_fn.evidence[0].target;
+    try std.testing.expectEqualSlices(ConstFnEvidence, &evidence, loaded_fn.evidence.nodes);
+    const loaded_target = loaded_fn.evidence.target(loaded_fn.evidence.nodes[0].target);
     try std.testing.expectEqualSlices(u8, &target_view.bytes, &loaded_target.view.bytes);
     try std.testing.expectEqual(@as(u32, 4), loaded_target.method.module_idx);
     try std.testing.expectEqual(@as(u32, 5), @backingInt(loaded_target.method.def_idx));
-    try std.testing.expectEqual(evidence[0].target.method.kind, loaded_target.method.kind);
+    try std.testing.expectEqual(evidence_targets[0].method.kind, loaded_target.method.kind);
     try std.testing.expectEqual(@as(checked_ids.CheckedTypeId, @fromBackingInt(@intCast(6))), loaded_target.method.callable_ty);
     try std.testing.expectEqual(method_callable_key, loaded_target.method_callable_key);
     const loaded_instantiation = loaded_target.instantiation.?;
@@ -1685,10 +1813,7 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     const loaded_nested = loaded_target.nested.resolved;
     try std.testing.expectEqual(@as(u32, 1), loaded_nested.count);
     try std.testing.expectEqual(@as(u32, 1), loaded_nested.subtree_len);
-    try std.testing.expectEqual(ConstFnEvidence{ .structural = .{ .derivation = .equality } }, loaded_fn.evidence[1]);
-    try std.testing.expectEqual(ConstFnEvidence.checked_error, loaded_fn.evidence[2]);
-    try std.testing.expectEqual(ConstFnEvidence{ .from_callable = .{ .independent_callable = true } }, loaded_fn.evidence[3]);
-    try std.testing.expectEqual(ConstFnEvidence{ .from_scheme = 3 }, loaded_fn.evidence[4]);
+    try std.testing.expectEqual(ConstFnStructuralEvidence{ .derivation = .equality }, loaded_fn.evidence.structural(loaded_fn.evidence.nodes[1].structural).*);
     try std.testing.expectEqualSlices(ConstFnEvidenceFrame, &evidence_frames, loaded_fn.evidence_frames);
     try std.testing.expectEqual(@as(?u32, 1), loaded_fn.evidence_frame_head);
     try std.testing.expectEqual(ConstFnEvidenceScope{ .generalized = 9 }, loaded_fn.evidence_frames[1].scope());
@@ -1699,13 +1824,13 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
         ConstFnEvidenceFrame.init(.{ .generalized = 4 }, 1, 0, 0),
     };
     var empty_chain = loaded_fn;
-    empty_chain.evidence = &.{};
+    empty_chain.evidence = .{};
     empty_chain.evidence_frames = &empty_frames;
     empty_chain.evidence_frame_head = 2;
     try std.testing.expect(try ConstStore.evidenceFramesValid(std.testing.allocator, empty_chain));
 
     var absent_chain = loaded_fn;
-    absent_chain.evidence = &.{};
+    absent_chain.evidence = .{};
     absent_chain.evidence_frames = &.{};
     absent_chain.evidence_frame_head = null;
     try std.testing.expect(!try ConstStore.evidenceFramesValid(std.testing.allocator, absent_chain));

@@ -230,6 +230,8 @@ pub const ProgramView = struct {
     types: Type.Store.View,
     fns: []const Fn,
     const_fn_evidence: []const check.ConstStore.ConstFnEvidence,
+    const_fn_evidence_targets: []const check.ConstStore.ConstFnTargetEvidence,
+    const_fn_evidence_structurals: []const check.ConstStore.ConstFnStructuralEvidence,
     const_fn_evidence_frames: []const check.ConstStore.ConstFnEvidenceFrame,
     exprs: []const Expr,
     pats: []const Pat,
@@ -272,6 +274,15 @@ pub const ProgramView = struct {
     stmt_inline_scopes: []const InlineScopeId,
     local_names: []const Mono.LocalNameId,
     local_name_table: *const Mono.LocalNameTable,
+
+    /// A template's stored evidence vector in this program's evidence columns.
+    pub fn constFnEvidence(self: ProgramView, spans: Mono.ConstEvidenceSpans) check.ConstStore.ConstFnEvidenceVector {
+        return .{
+            .nodes = self.const_fn_evidence[spans.nodes.start..][0..spans.nodes.len],
+            .targets = self.const_fn_evidence_targets[spans.targets.start..][0..spans.targets.len],
+            .structurals = self.const_fn_evidence_structurals[spans.structurals.start..][0..spans.structurals.len],
+        };
+    }
 
     pub fn getComptimeValueRoot(self: ProgramView, id: Common.ComptimeValueRootId) Common.ComptimeValueRoot {
         return self.comptime_value_roots[@backingInt(id)];
@@ -424,6 +435,8 @@ pub const Program = struct {
     types: Type.Store,
     fns: ProgramList(Fn, "fns"),
     const_fn_evidence: ProgramList(check.ConstStore.ConstFnEvidence, "const_fn_evidence"),
+    const_fn_evidence_targets: ProgramList(check.ConstStore.ConstFnTargetEvidence, "const_fn_evidence_targets"),
+    const_fn_evidence_structurals: ProgramList(check.ConstStore.ConstFnStructuralEvidence, "const_fn_evidence_structurals"),
     const_fn_evidence_frames: ProgramList(check.ConstStore.ConstFnEvidenceFrame, "const_fn_evidence_frames"),
     exprs: ProgramList(Expr, "exprs"),
     pats: ProgramList(Pat, "pats"),
@@ -616,6 +629,8 @@ pub const Program = struct {
         name_store: names.NameStore,
         types: Type.Store,
         const_fn_evidence: std.ArrayList(check.ConstStore.ConstFnEvidence),
+        const_fn_evidence_targets: std.ArrayList(check.ConstStore.ConstFnTargetEvidence),
+        const_fn_evidence_structurals: std.ArrayList(check.ConstStore.ConstFnStructuralEvidence),
         const_fn_evidence_frames: std.ArrayList(check.ConstStore.ConstFnEvidenceFrame),
         exprs: std.ArrayList(Expr),
         pats: std.ArrayList(Pat),
@@ -656,6 +671,8 @@ pub const Program = struct {
             .types = types,
             .fns = .empty,
             .const_fn_evidence = ProgramList(check.ConstStore.ConstFnEvidence, "const_fn_evidence").fromArrayList(const_fn_evidence),
+            .const_fn_evidence_targets = ProgramList(check.ConstStore.ConstFnTargetEvidence, "const_fn_evidence_targets").fromArrayList(const_fn_evidence_targets),
+            .const_fn_evidence_structurals = ProgramList(check.ConstStore.ConstFnStructuralEvidence, "const_fn_evidence_structurals").fromArrayList(const_fn_evidence_structurals),
             .const_fn_evidence_frames = ProgramList(check.ConstStore.ConstFnEvidenceFrame, "const_fn_evidence_frames").fromArrayList(const_fn_evidence_frames),
             .exprs = ProgramList(Expr, "exprs").fromArrayList(exprs),
             .pats = ProgramList(Pat, "pats").fromArrayList(pats),
@@ -746,6 +763,8 @@ pub const Program = struct {
         self.exprs.deinit(self.allocator);
         self.fns.deinit(self.allocator);
         self.const_fn_evidence.deinit(self.allocator);
+        self.const_fn_evidence_targets.deinit(self.allocator);
+        self.const_fn_evidence_structurals.deinit(self.allocator);
         self.const_fn_evidence_frames.deinit(self.allocator);
         self.types.deinit();
         self.names.deinit();
@@ -759,6 +778,8 @@ pub const Program = struct {
             .types = self.types.view(),
             .fns = self.fns.unsafeRawItemsForView(),
             .const_fn_evidence = self.const_fn_evidence.unsafeRawItemsForView(),
+            .const_fn_evidence_targets = self.const_fn_evidence_targets.unsafeRawItemsForView(),
+            .const_fn_evidence_structurals = self.const_fn_evidence_structurals.unsafeRawItemsForView(),
             .const_fn_evidence_frames = self.const_fn_evidence_frames.unsafeRawItemsForView(),
             .exprs = self.exprs.unsafeRawItemsForView(),
             .pats = self.pats.unsafeRawItemsForView(),
@@ -2279,6 +2300,8 @@ fn testLiftedProgram(allocator: std.mem.Allocator) Program {
         names.NameStore.init(allocator),
         Type.Store.init(allocator),
         .empty, // const_fn_evidence
+        .empty, // const_fn_evidence_targets
+        .empty, // const_fn_evidence_structurals
         .empty, // const_fn_evidence_frames
         .empty, // exprs
         .empty, // pats

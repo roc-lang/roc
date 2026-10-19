@@ -33401,8 +33401,10 @@ pub const CheckedModuleArtifact = struct {
             // plans add one, and state merge plans one more. Promoted local
             // procedure templates and callable contract types add one each,
             // and the single-source-call template list one more. Nested procedure runtime captures add one. The
-            // compile-time root read table adds its rows and refs.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 238);
+            // compile-time root read table adds its rows and refs. Stored
+            // function evidence keeps its target and structural payloads in
+            // two pools of their own.
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 240);
         }
 
         /// Every field but the inline POD `key` and `module_identity`: the
@@ -39556,8 +39558,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xD5, 0x1F, 0x74, 0x32, 0xD0, 0x55, 0xFA, 0x55, 0x6E, 0x4D, 0xD0, 0x39, 0xAB, 0x68, 0xA9, 0x6C,
-        0x11, 0xC4, 0x21, 0x85, 0x26, 0xCC, 0x1E, 0x76, 0x49, 0xFA, 0x13, 0xD4, 0x74, 0xBD, 0x34, 0x8F,
+        0x4B, 0xDD, 0xA3, 0x53, 0x38, 0x4B, 0xE4, 0x7C, 0x4B, 0x9B, 0x41, 0x11, 0x42, 0x5E, 0x36, 0x2F,
+        0x32, 0xA8, 0x2D, 0xED, 0x0B, 0x49, 0x52, 0x4E, 0x47, 0xFC, 0xC2, 0x02, 0x39, 0xE8, 0x35, 0x63,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

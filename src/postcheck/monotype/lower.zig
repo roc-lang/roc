@@ -3904,7 +3904,7 @@ const RestoredLocalProcScope = struct {
 };
 
 const StoredConstFnEvidence = struct {
-    nodes: []const check.ConstStore.ConstFnEvidence,
+    entries: check.ConstStore.ConstFnEvidenceVector,
     frames: []const check.ConstStore.ConstFnEvidenceFrame,
     head: ?u32,
     /// `Ast.fnEvidenceDigest` of exactly these fields. It is computed once
@@ -3913,29 +3913,29 @@ const StoredConstFnEvidence = struct {
     digest: Ast.EvidenceDigest,
 
     fn init(
-        nodes: []const check.ConstStore.ConstFnEvidence,
+        entries: check.ConstStore.ConstFnEvidenceVector,
         frames: []const check.ConstStore.ConstFnEvidenceFrame,
         head: ?u32,
     ) StoredConstFnEvidence {
-        return .{ .nodes = nodes, .frames = frames, .head = head, .digest = Ast.fnEvidenceDigest(nodes, frames, head) };
+        return .{ .entries = entries, .frames = frames, .head = head, .digest = Ast.fnEvidenceDigest(entries, frames, head) };
     }
 
     fn empty() StoredConstFnEvidence {
-        return init(&.{}, &.{}, null);
+        return init(.{}, &.{}, null);
     }
 
     /// The evidence a function template recorded, with the digest it
     /// recorded for those same fields.
     fn recorded(
-        nodes: []const check.ConstStore.ConstFnEvidence,
+        entries: check.ConstStore.ConstFnEvidenceVector,
         frames: []const check.ConstStore.ConstFnEvidenceFrame,
         head: ?u32,
         digest: Ast.EvidenceDigest,
     ) StoredConstFnEvidence {
-        if (@import("builtin").mode == .debug and !std.meta.eql(digest, Ast.fnEvidenceDigest(nodes, frames, head))) {
+        if (@import("builtin").mode == .debug and !std.meta.eql(digest, Ast.fnEvidenceDigest(entries, frames, head))) {
             Common.invariant("function template evidence digest did not match its recorded topology");
         }
-        return .{ .nodes = nodes, .frames = frames, .head = head, .digest = digest };
+        return .{ .entries = entries, .frames = frames, .head = head, .digest = digest };
     }
 };
 
@@ -3962,13 +3962,24 @@ const StoredEvidenceSource = struct {
 const StoredEvidenceStorage = struct {
     nodes_ptr: usize,
     nodes_len: usize,
+    targets_ptr: usize,
+    structurals_ptr: usize,
     frames_ptr: usize,
     frames_len: usize,
 };
 
 const DraftEvidenceSpans = struct {
-    nodes: DraftSpan(check.ConstStore.ConstFnEvidence),
+    entries: DraftConstEvidence,
     frames: DraftSpan(check.ConstStore.ConstFnEvidenceFrame),
+};
+
+/// Where a draft function's stored evidence vector sits in its draft store's
+/// three evidence columns; payload indexes are relative to its own
+/// `targets` and `structurals` spans.
+const DraftConstEvidence = struct {
+    nodes: DraftSpan(check.ConstStore.ConstFnEvidence) = DraftSpan(check.ConstStore.ConstFnEvidence).empty(),
+    targets: DraftSpan(check.ConstStore.ConstFnTargetEvidence) = DraftSpan(check.ConstStore.ConstFnTargetEvidence).empty(),
+    structurals: DraftSpan(check.ConstStore.ConstFnStructuralEvidence) = DraftSpan(check.ConstStore.ConstFnStructuralEvidence).empty(),
 };
 
 const StoredEvidenceCacheEntry = struct {
@@ -3977,12 +3988,12 @@ const StoredEvidenceCacheEntry = struct {
 };
 
 fn specializationEvidenceView(evidence: StoredConstFnEvidence) specialize.EvidenceView {
-    return .{ .nodes = evidence.nodes, .frames = evidence.frames, .head = evidence.head, .digest = evidence.digest };
+    return .{ .entries = evidence.entries, .frames = evidence.frames, .head = evidence.head, .digest = evidence.digest };
 }
 
 fn storedConstFnEvidenceEql(left: StoredConstFnEvidence, right: StoredConstFnEvidence) bool {
     if (!std.meta.eql(left.digest, right.digest)) return false;
-    return Ast.fnEvidenceEql(left.nodes, left.frames, left.head, right.nodes, right.frames, right.head);
+    return Ast.fnEvidenceEql(left.entries, left.frames, left.head, right.entries, right.frames, right.head);
 }
 
 /// `Builder.site_evidence_memo`'s key: the site's checked evidence and
@@ -4051,8 +4062,8 @@ fn programViewFnEvidence(program: Ast.ProgramView, template: Ast.FnTemplate) Sto
 /// lists.
 fn programFnEvidenceSpan(template: Ast.FnTemplate) specialize.ProgramEvidenceSpan {
     return .{
-        .nodes_start = template.const_evidence.start,
-        .nodes_len = template.const_evidence.len,
+        .nodes_start = template.const_evidence.nodes.start,
+        .nodes_len = template.const_evidence.nodes.len,
         .frames_start = template.const_evidence_frames.start,
         .frames_len = template.const_evidence_frames.len,
         .head = template.const_evidence_frame_head,
@@ -7641,7 +7652,7 @@ const Builder = struct {
     /// compile-time function value can restore that vector without resolving
     /// its requirements again.
     fn constFnEvidence(self: *Builder, evidence: EvidenceChain) Allocator.Error!StoredConstFnEvidence {
-        var nodes = std.ArrayList(check.ConstStore.ConstFnEvidence).empty;
+        var nodes: check.ConstStore.ConstFnEvidenceBuilder = .{};
         defer nodes.deinit(self.allocator);
         var chain = std.ArrayList(*const EvidenceChain).empty;
         defer chain.deinit(self.allocator);
@@ -7656,7 +7667,7 @@ const Builder = struct {
         while (index > 0) {
             index -= 1;
             const frame = chain.items[index];
-            const roots_start: u32 = @intCast(nodes.items.len);
+            const roots_start: u32 = @intCast(nodes.nodes.items.len);
             try self.appendConstFnEvidence(&nodes, frame.vector);
             const scope: check.ConstStore.ConstFnEvidenceScope = switch (frame.scope.lexical) {
                 .root => .root,
@@ -7679,19 +7690,19 @@ const Builder = struct {
             .frames = frames.items.len,
         };
         if (self.const_evidence_memo.get(key)) |stored| {
-            if (Ast.fnEvidenceEql(stored.nodes, stored.frames, stored.head, nodes.items, frames.items, parent)) return stored;
+            if (Ast.fnEvidenceEql(stored.entries, stored.frames, stored.head, nodes.vector(), frames.items, parent)) return stored;
         }
         // Another request with equal evidence (uses checking replayed from
         // one source) already stored this conversion and its digest.
-        const bucket = Ast.fnEvidenceBucket(nodes.items, frames.items, parent);
+        const bucket = Ast.fnEvidenceBucket(nodes.vector(), frames.items, parent);
         if (self.const_evidence_by_content.get(bucket)) |stored| {
-            if (Ast.fnEvidenceEql(stored.nodes, stored.frames, stored.head, nodes.items, frames.items, parent)) {
+            if (Ast.fnEvidenceEql(stored.entries, stored.frames, stored.head, nodes.vector(), frames.items, parent)) {
                 try self.const_evidence_memo.put(key, stored);
                 return stored;
             }
         }
         const stored = StoredConstFnEvidence.init(
-            try self.evidence_arena.allocator().dupe(check.ConstStore.ConstFnEvidence, nodes.items),
+            try nodes.dupe(self.evidence_arena.allocator()),
             try self.evidence_arena.allocator().dupe(check.ConstStore.ConstFnEvidenceFrame, frames.items),
             parent,
         );
@@ -7704,7 +7715,7 @@ const Builder = struct {
     /// template can compare later requests against its exact topology.
     fn retainFnEvidence(self: *Builder, evidence: StoredConstFnEvidence) Allocator.Error!StoredConstFnEvidence {
         return .{
-            .nodes = try self.evidence_arena.allocator().dupe(check.ConstStore.ConstFnEvidence, evidence.nodes),
+            .entries = try check.ConstStore.dupeVector(self.evidence_arena.allocator(), evidence.entries),
             .frames = try self.evidence_arena.allocator().dupe(check.ConstStore.ConstFnEvidenceFrame, evidence.frames),
             .head = evidence.head,
             .digest = evidence.digest,
@@ -7726,7 +7737,7 @@ const Builder = struct {
     /// call.
     fn appendConstFnEvidence(
         self: *Builder,
-        nodes: *std.ArrayList(check.ConstStore.ConstFnEvidence),
+        nodes: *check.ConstStore.ConstFnEvidenceBuilder,
         evidence: []const SpecEvidence,
     ) Allocator.Error!void {
         var frames = std.ArrayList(ConstFnEvidenceFrame).empty;
@@ -7743,37 +7754,39 @@ const Builder = struct {
                 const entry = parent.evidence[parent.next];
                 switch (pending.stage) {
                     .nested => {
-                        setConstFnTargetNode(nodes, pending.root_index, entry.target, .{ .resolved = .{
+                        nodes.targets.items[nodes.nodes.items[pending.root_index].target].nested = .{ .resolved = .{
                             .count = @intCast(finished.evidence.len),
-                            .subtree_len = @intCast(nodes.items.len - pending.nested_start),
-                        } });
+                            .subtree_len = @intCast(nodes.nodes.items.len - pending.nested_start),
+                        } };
                         const contracts = evidenceCallableContracts(entry);
                         if (contracts.len != 0) {
-                            parent.pending = .{ .root_index = pending.root_index, .stage = .contracts, .nested_start = nodes.items.len };
+                            parent.pending = .{ .root_index = pending.root_index, .stage = .contracts, .nested_start = nodes.nodes.items.len };
                             try frames.append(self.allocator, .{ .evidence = contracts });
                             continue;
                         }
                     },
-                    .contracts => setConstFnCallableContractCount(nodes, pending.root_index, finished.evidence.len),
+                    .contracts => nodes.setCallableContracts(pending.root_index, @intCast(finished.evidence.len)),
                 }
                 parent.next += 1;
                 continue;
             }
             const entry = frame.evidence[frame.next];
-            const root_index = nodes.items.len;
+            const root_index = nodes.nodes.items.len;
             switch (entry) {
                 .target => |target| {
-                    try nodes.append(self.allocator, undefined);
+                    // A resolved target's nested bounds are known once its
+                    // child vector has been serialized after it.
+                    try nodes.appendTarget(self.allocator, constFnTargetPayload(target, .{ .resolved = .{ .count = 0, .subtree_len = 0 } }));
                     switch (target.nested) {
-                        .synthesize => setConstFnTargetNode(nodes, root_index, target, .from_callable),
+                        .synthesize => nodes.targets.items[nodes.targets.items.len - 1].nested = .from_callable,
                         .resolved => |resolved| {
-                            frame.pending = .{ .root_index = root_index, .stage = .nested, .nested_start = nodes.items.len };
+                            frame.pending = .{ .root_index = root_index, .stage = .nested, .nested_start = nodes.nodes.items.len };
                             try frames.append(self.allocator, .{ .evidence = resolved });
                             continue;
                         },
                     }
                 },
-                .structural => |structural| try nodes.append(self.allocator, .{ .structural = .{
+                .structural => |structural| try nodes.appendStructural(self.allocator, .{
                     .derivation = structural.derivation,
                     .checked = if (structural.checked) |checked_structural| .{
                         .view = .{ .bytes = checked_structural.view.key.bytes },
@@ -7784,19 +7797,19 @@ const Builder = struct {
                         .generated_codec_derivation = checked_structural.evidence.generated_codec_derivation,
                         .generated_codec_content = codecEvidenceContent(checked_structural),
                     } else null,
-                } }),
+                }),
                 .from_callable => |use| {
-                    try nodes.append(self.allocator, .{ .from_callable = .{
+                    try nodes.appendSmall(self.allocator, .{ .from_callable = .{
                         .independent_callable = use.independent_callable,
                     } });
                 },
-                .from_scheme => |index| try nodes.append(self.allocator, .{ .from_scheme = index }),
-                .unreachable_value => try nodes.append(self.allocator, .unreachable_value),
-                .checked_error => try nodes.append(self.allocator, .checked_error),
+                .from_scheme => |index| try nodes.appendSmall(self.allocator, .{ .from_scheme = index }),
+                .unreachable_value => try nodes.appendSmall(self.allocator, .unreachable_value),
+                .checked_error => try nodes.appendSmall(self.allocator, .checked_error),
             }
             const contracts = evidenceCallableContracts(entry);
             if (contracts.len != 0) {
-                frame.pending = .{ .root_index = root_index, .stage = .contracts, .nested_start = nodes.items.len };
+                frame.pending = .{ .root_index = root_index, .stage = .contracts, .nested_start = nodes.nodes.items.len };
                 try frames.append(self.allocator, .{ .evidence = contracts });
                 continue;
             }
@@ -7804,22 +7817,11 @@ const Builder = struct {
         }
     }
 
-    fn setConstFnCallableContractCount(nodes: *std.ArrayList(check.ConstStore.ConstFnEvidence), root_index: usize, contract_count: usize) void {
-        switch (nodes.items[root_index]) {
-            .target => |*target| target.callable_contracts = @intCast(contract_count),
-            .structural => |*structural| structural.callable_contracts = @intCast(contract_count),
-            .from_callable => |*use| use.callable_contracts = @intCast(contract_count),
-            .from_scheme, .unreachable_value, .checked_error => unreachable,
-        }
-    }
-
-    fn setConstFnTargetNode(
-        nodes: *std.ArrayList(check.ConstStore.ConstFnEvidence),
-        target_index: usize,
+    fn constFnTargetPayload(
         target: *const SpecEvidenceTarget,
         nested: check.ConstStore.ConstFnNestedEvidence,
-    ) void {
-        nodes.items[target_index] = .{ .target = .{
+    ) check.ConstStore.ConstFnTargetEvidence {
+        return .{
             .view = .{ .bytes = target.view.key.bytes },
             .method = target.target,
             .method_callable_key = target.view.types.rootKey(target.target.callable_ty),
@@ -7829,7 +7831,7 @@ const Builder = struct {
                 .callable_ty = instantiation.callable_ty,
             } else null,
             .nested = nested,
-        } };
+        };
     }
 
     fn completeRootTemplateEvidence(
@@ -8044,7 +8046,7 @@ const Builder = struct {
             };
         }
         if (stored_source_topology) |stored_evidence| {
-            fn_template.const_evidence = try self.program.addConstFnEvidence(stored_evidence.nodes);
+            fn_template.const_evidence = try self.program.addConstFnEvidence(stored_evidence.entries);
             fn_template.const_evidence_frames = try self.program.addConstFnEvidenceFrames(stored_evidence.frames);
             fn_template.const_evidence_frame_head = stored_evidence.head;
         }
@@ -10310,7 +10312,7 @@ const Builder = struct {
                 .source_fn_key = source_fn_key,
                 .mono_fn_ty = DraftTypeCell.fromGraphNode(request_fn_node),
                 .evidence_digest = evidence_digest,
-                .const_evidence = try source_ctx.draft.addConstFnEvidence(stored_evidence.nodes),
+                .const_evidence = try source_ctx.draft.addConstFnEvidence(stored_evidence.entries),
                 .const_evidence_frames = try source_ctx.draft.addConstFnEvidenceFrames(stored_evidence.frames),
                 .const_evidence_frame_head = stored_evidence.head,
             },
@@ -11602,8 +11604,8 @@ const Builder = struct {
     /// does not, or when the template recorded no evidence of its own.
     fn siteEvidenceDigest(self: *Builder, fn_template: Ast.FnTemplate) ?Ast.EvidenceDigest {
         const evidence = programViewFnEvidence(self.program.view(), fn_template);
-        if (evidence.nodes.len == 0) return null;
-        if (std.debug.runtime_safety and !std.meta.eql(Ast.fnEvidenceDigest(evidence.nodes, evidence.frames, evidence.head), fn_template.evidence_digest)) {
+        if (evidence.entries.nodes.len == 0) return null;
+        if (std.debug.runtime_safety and !std.meta.eql(Ast.fnEvidenceDigest(evidence.entries, evidence.frames, evidence.head), fn_template.evidence_digest)) {
             Common.invariant("a template's recorded evidence differs from the evidence its identity digests");
         }
         const SiteNames = struct {
@@ -11618,8 +11620,8 @@ const Builder = struct {
                 return names_.builder.templateSiteDigest(proc_template);
             }
         };
-        const site_digest = Ast.fnEvidenceSiteDigest(evidence.nodes, evidence.frames, evidence.head, SiteNames{ .builder = self });
-        if (std.meta.eql(site_digest, Ast.fnEvidenceSiteDigest(evidence.nodes, evidence.frames, evidence.head, NoSiteNames{}))) return null;
+        const site_digest = Ast.fnEvidenceSiteDigest(evidence.entries, evidence.frames, evidence.head, SiteNames{ .builder = self });
+        if (std.meta.eql(site_digest, Ast.fnEvidenceSiteDigest(evidence.entries, evidence.frames, evidence.head, NoSiteNames{}))) return null;
         return site_digest;
     }
 
@@ -13059,7 +13061,7 @@ const Builder = struct {
             .source_fn_key = source_fn_key,
             .mono_fn_ty = DraftTypeCell.fromGraphNode(request_fn_node),
             .evidence_digest = evidence_digest,
-            .const_evidence = draft_evidence.nodes,
+            .const_evidence = draft_evidence.entries,
             .const_evidence_frames = draft_evidence.frames,
             .const_evidence_frame_head = stored_evidence.head,
         }, .signature_relation = signature_relation });
@@ -14443,7 +14445,7 @@ const Builder = struct {
             }
 
             // Evidence does not participate in the specialization type digest.
-            const sealed_template = try BodyDraftStore.sealFnTemplate(committed_types, fn_.source, 0, 0);
+            const sealed_template = try BodyDraftStore.sealFnTemplate(committed_types, fn_.source, .{}, 0);
             const fn_ty = sealed_template.mono_fn_ty;
             solved_fn_tys[raw_index] = fn_ty;
             const requested_evidence = draftFnEvidence(body_draft, fn_.source);
@@ -15209,7 +15211,7 @@ const Builder = struct {
             .source_fn_ty = fn_value.source_fn_ty,
             .source_fn_key = fn_value.source_fn_key,
             .mono_fn_ty = mono_fn_ty,
-            .const_evidence = if (retain_program_evidence) try self.program.addConstFnEvidence(fn_value.evidence) else .empty(),
+            .const_evidence = if (retain_program_evidence) try self.program.addConstFnEvidence(fn_value.evidence) else .{},
             .const_evidence_frames = if (retain_program_evidence) try self.program.addConstFnEvidenceFrames(fn_value.evidence_frames) else .empty(),
             .const_evidence_frame_head = if (retain_program_evidence) fn_value.evidence_frame_head else null,
         };
@@ -15731,7 +15733,7 @@ const Builder = struct {
             .source_fn_ty = fn_value.source_fn_ty,
             .source_fn_key = fn_value.source_fn_key,
             .mono_fn_ty = ty,
-            .evidence_digest = Ast.fnEvidenceDigest(&.{}, &.{}, null),
+            .evidence_digest = Ast.fnEvidenceDigest(.{}, &.{}, null),
         });
         const lambda_args = switch (kind) {
             .parser => try fn_ctx.addTypedLocalSpan(&.{
@@ -16573,7 +16575,7 @@ const DraftFnTemplate = struct {
     source_fn_key: names.TypeDigest,
     mono_fn_ty: DraftTypeCell,
     evidence_digest: Ast.EvidenceDigest = .{},
-    const_evidence: DraftSpan(check.ConstStore.ConstFnEvidence) = DraftSpan(check.ConstStore.ConstFnEvidence).empty(),
+    const_evidence: DraftConstEvidence = .{},
     const_evidence_frames: DraftSpan(check.ConstStore.ConstFnEvidenceFrame) = DraftSpan(check.ConstStore.ConstFnEvidenceFrame).empty(),
     const_evidence_frame_head: ?u32 = null,
 };
@@ -18857,6 +18859,8 @@ const BodyDraftStore = struct {
     worker_local_symbol_count: u32,
     fns: std.ArrayList(DraftFn),
     const_fn_evidence: std.ArrayList(check.ConstStore.ConstFnEvidence),
+    const_fn_evidence_targets: std.ArrayList(check.ConstStore.ConstFnTargetEvidence),
+    const_fn_evidence_structurals: std.ArrayList(check.ConstStore.ConstFnStructuralEvidence),
     const_fn_evidence_frames: std.ArrayList(check.ConstStore.ConstFnEvidenceFrame),
     /// The spans already holding a stored evidence value, by the identity of
     /// its `Builder.evidence_arena` storage, so every function created from
@@ -19044,6 +19048,8 @@ const BodyDraftStore = struct {
             .worker_local_symbol_count = 0,
             .fns = .empty,
             .const_fn_evidence = .empty,
+            .const_fn_evidence_targets = .empty,
+            .const_fn_evidence_structurals = .empty,
             .const_fn_evidence_frames = .empty,
             .defs = .empty,
             .def_owners = .empty,
@@ -19341,6 +19347,8 @@ const BodyDraftStore = struct {
         self.defs.deinit(self.allocator);
         self.const_fn_evidence_frames.deinit(self.allocator);
         self.const_fn_evidence.deinit(self.allocator);
+        self.const_fn_evidence_targets.deinit(self.allocator);
+        self.const_fn_evidence_structurals.deinit(self.allocator);
         self.stored_evidence_spans.deinit(self.allocator);
         self.fns.deinit(self.allocator);
     }
@@ -19751,8 +19759,10 @@ const BodyDraftStore = struct {
     /// lives, so that storage's identity names its contents.
     fn addStoredConstFnEvidence(self: *BodyDraftStore, stored: StoredConstFnEvidence) Allocator.Error!DraftEvidenceSpans {
         const key: StoredEvidenceStorage = .{
-            .nodes_ptr = @intFromPtr(stored.nodes.ptr),
-            .nodes_len = stored.nodes.len,
+            .nodes_ptr = @intFromPtr(stored.entries.nodes.ptr),
+            .nodes_len = stored.entries.nodes.len,
+            .targets_ptr = @intFromPtr(stored.entries.targets.ptr),
+            .structurals_ptr = @intFromPtr(stored.entries.structurals.ptr),
             .frames_ptr = @intFromPtr(stored.frames.ptr),
             .frames_len = stored.frames.len,
         };
@@ -19760,17 +19770,23 @@ const BodyDraftStore = struct {
         if (!entry.found_existing) {
             errdefer _ = self.stored_evidence_spans.remove(key);
             entry.value_ptr.* = .{
-                .nodes = try self.addConstFnEvidence(stored.nodes),
+                .entries = try self.addConstFnEvidence(stored.entries),
                 .frames = try self.addConstFnEvidenceFrames(stored.frames),
             };
         }
         return entry.value_ptr.*;
     }
 
-    fn addConstFnEvidence(self: *BodyDraftStore, values: []const check.ConstStore.ConstFnEvidence) Allocator.Error!DraftSpan(check.ConstStore.ConstFnEvidence) {
-        const start: u32 = @intCast(self.const_fn_evidence.items.len);
-        try self.const_fn_evidence.appendSlice(self.allocator, values);
-        return .{ .start = start, .len = @intCast(values.len) };
+    fn addConstFnEvidence(self: *BodyDraftStore, values: check.ConstStore.ConstFnEvidenceVector) Allocator.Error!DraftConstEvidence {
+        const spans: DraftConstEvidence = .{
+            .nodes = .{ .start = @intCast(self.const_fn_evidence.items.len), .len = @intCast(values.nodes.len) },
+            .targets = .{ .start = @intCast(self.const_fn_evidence_targets.items.len), .len = @intCast(values.targets.len) },
+            .structurals = .{ .start = @intCast(self.const_fn_evidence_structurals.items.len), .len = @intCast(values.structurals.len) },
+        };
+        try self.const_fn_evidence.appendSlice(self.allocator, values.nodes);
+        try self.const_fn_evidence_targets.appendSlice(self.allocator, values.targets);
+        try self.const_fn_evidence_structurals.appendSlice(self.allocator, values.structurals);
+        return spans;
     }
 
     fn addConstFnEvidenceFrames(self: *BodyDraftStore, values: []const check.ConstStore.ConstFnEvidenceFrame) Allocator.Error!DraftSpan(check.ConstStore.ConstFnEvidenceFrame) {
@@ -19779,8 +19795,12 @@ const BodyDraftStore = struct {
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
-    fn constFnEvidence(self: *const BodyDraftStore, span: DraftSpan(check.ConstStore.ConstFnEvidence)) []const check.ConstStore.ConstFnEvidence {
-        return self.const_fn_evidence.items[span.start..][0..span.len];
+    fn constFnEvidence(self: *const BodyDraftStore, spans: DraftConstEvidence) check.ConstStore.ConstFnEvidenceVector {
+        return .{
+            .nodes = self.const_fn_evidence.items[spans.nodes.start..][0..spans.nodes.len],
+            .targets = self.const_fn_evidence_targets.items[spans.targets.start..][0..spans.targets.len],
+            .structurals = self.const_fn_evidence_structurals.items[spans.structurals.start..][0..spans.structurals.len],
+        };
     }
 
     fn constFnEvidenceFrames(self: *const BodyDraftStore, span: DraftSpan(check.ConstStore.ConstFnEvidenceFrame)) []const check.ConstStore.ConstFnEvidenceFrame {
@@ -20260,7 +20280,11 @@ const BodyDraftStore = struct {
         defer shared_literal_root_defs.deinit();
         var ids = draft_ids;
         ids.shared_literal_root_defs = &shared_literal_root_defs;
-        const evidence_span = try program.addConstFnEvidence(self.const_fn_evidence.items);
+        const evidence_span = try program.addConstFnEvidence(.{
+            .nodes = self.const_fn_evidence.items,
+            .targets = self.const_fn_evidence_targets.items,
+            .structurals = self.const_fn_evidence_structurals.items,
+        });
         const evidence_frames_span = try program.addConstFnEvidenceFrames(self.const_fn_evidence_frames.items);
 
         // The map belongs to this import, not the worker lane: independent
@@ -20497,7 +20521,7 @@ const BodyDraftStore = struct {
         for (self.fns.items, 0..) |fn_, index| {
             if (emit_fns) |emit| if (!emit[index]) continue;
             program.fns.appendAssumeCapacity(.{
-                .source = try BodyDraftStore.sealFnTemplate(committed_types, fn_.source, evidence_span.start, evidence_frames_span.start),
+                .source = try BodyDraftStore.sealFnTemplate(committed_types, fn_.source, evidence_span, evidence_frames_span.start),
                 .signature_relation = fn_.signature_relation,
             });
         }
@@ -20505,7 +20529,7 @@ const BodyDraftStore = struct {
         try program.defs.ensureUnusedCapacity(program.allocator, self.defs.items.len);
         for (self.defs.items, 0..) |def, index| {
             if (emit_defs) |emit| if (!emit[index]) continue;
-            const sealed_fn_def = if (def.fn_def) |template| try BodyDraftStore.sealFnTemplate(committed_types, template, evidence_span.start, evidence_frames_span.start) else null;
+            const sealed_fn_def = if (def.fn_def) |template| try BodyDraftStore.sealFnTemplate(committed_types, template, evidence_span, evidence_frames_span.start) else null;
             const sealed_fn_id = if (def.fn_id) |fn_id| ids.fnTarget(fn_id) else null;
             if (sealed_fn_def) |template| {
                 if (sealed_fn_id) |fn_id| {
@@ -20532,7 +20556,7 @@ const BodyDraftStore = struct {
         try program.nested_defs.ensureUnusedCapacity(program.allocator, self.nested_defs.items.len);
         for (self.nested_defs.items, 0..) |def, index| {
             if (emit_nested_defs) |emit| if (!emit[index]) continue;
-            const sealed_fn_def = try BodyDraftStore.sealFnTemplate(committed_types, def.fn_def, evidence_span.start, evidence_frames_span.start);
+            const sealed_fn_def = try BodyDraftStore.sealFnTemplate(committed_types, def.fn_def, evidence_span, evidence_frames_span.start);
             const sealed_fn_id = ids.fnTarget(def.fn_id);
             program.setFnSource(sealed_fn_id, sealed_fn_def);
             program.nested_defs.appendAssumeCapacity(.{
@@ -20598,7 +20622,7 @@ const BodyDraftStore = struct {
     fn sealFnTemplate(
         committed_types: *CommittedGraphTypes,
         template: DraftFnTemplate,
-        evidence_start: u32,
+        evidence_base: Ast.ConstEvidenceSpans,
         evidence_frames_start: u32,
     ) Allocator.Error!Ast.FnTemplate {
         return .{
@@ -20607,7 +20631,11 @@ const BodyDraftStore = struct {
             .source_fn_key = template.source_fn_key,
             .mono_fn_ty = try template.mono_fn_ty.sealCommitted(committed_types),
             .evidence_digest = template.evidence_digest,
-            .const_evidence = .{ .start = evidence_start + template.const_evidence.start, .len = template.const_evidence.len },
+            .const_evidence = .{
+                .nodes = .{ .start = evidence_base.nodes.start + template.const_evidence.nodes.start, .len = template.const_evidence.nodes.len },
+                .targets = .{ .start = evidence_base.targets.start + template.const_evidence.targets.start, .len = template.const_evidence.targets.len },
+                .structurals = .{ .start = evidence_base.structurals.start + template.const_evidence.structurals.start, .len = template.const_evidence.structurals.len },
+            },
             .const_evidence_frames = .{ .start = evidence_frames_start + template.const_evidence_frames.start, .len = template.const_evidence_frames.len },
             .const_evidence_frame_head = template.const_evidence_frame_head,
         };
@@ -21724,7 +21752,7 @@ const InterfaceSummaryCache = struct {
         const owned: InterfaceSummaryEntry = .{
             .address = source.address,
             .evidence = .{
-                .nodes = try arena.dupe(check.ConstStore.ConstFnEvidence, source.evidence.nodes),
+                .entries = try check.ConstStore.dupeVector(arena, source.evidence.entries),
                 .frames = try arena.dupe(check.ConstStore.ConstFnEvidenceFrame, source.evidence.frames),
                 .head = source.evidence.head,
                 .digest = source.evidence.digest,
@@ -23932,7 +23960,7 @@ const BodyContext = struct {
     }
 
     fn addFn(self: *BodyContext, source: Ast.FnTemplate) Allocator.Error!DraftFnId {
-        if (source.const_evidence.len != 0 or source.const_evidence_frames.len != 0 or source.const_evidence_frame_head != null) {
+        if (!source.const_evidence.isEmpty() or source.const_evidence_frames.len != 0 or source.const_evidence_frame_head != null) {
             Common.invariant("body-local function source carried evidence outside its lexical lowering context");
         }
         const stored_evidence = try self.storedEvidence(self.evidence);
@@ -23944,7 +23972,7 @@ const BodyContext = struct {
                 .source_fn_ty = source.source_fn_ty,
                 .source_fn_key = source.source_fn_key,
                 .mono_fn_ty = try self.draftTypeCell(source.mono_fn_ty),
-                .const_evidence = draft_evidence.nodes,
+                .const_evidence = draft_evidence.entries,
                 .const_evidence_frames = draft_evidence.frames,
                 .const_evidence_frame_head = stored_evidence.head,
                 .evidence_digest = evidence_digest,
@@ -47792,7 +47820,7 @@ const BodyContext = struct {
             .source_fn_ty = boundary.fn_value.source_fn_ty,
             .source_fn_key = boundary.fn_value.source_fn_key,
             .mono_fn_ty = request_cell,
-            .const_evidence = draft_evidence.nodes,
+            .const_evidence = draft_evidence.entries,
             .const_evidence_frames = draft_evidence.frames,
             .const_evidence_frame_head = stored_evidence.head,
             .evidence_digest = evidence_digest,
@@ -51340,7 +51368,7 @@ const BodyContext = struct {
                 .parent = &restored[index - 1],
             };
         }
-        if (cursor != fn_value.evidence.len) {
+        if (cursor != fn_value.evidence.nodes.len) {
             Common.invariant("stored function evidence contained unreferenced nodes");
         }
         const expected_head: LexicalDispatchScope = switch (fn_value.fn_def) {
@@ -51455,7 +51483,7 @@ const BodyContext = struct {
         pending: ?union(enum) {
             nested: struct {
                 materialized: *SpecEvidenceTarget,
-                stored: @FieldType(check.ConstStore.ConstFnEvidence, "target"),
+                stored: check.ConstStore.ConstFnTargetEvidence,
                 nested_start: usize,
                 subtree_len: usize,
             },
@@ -51470,7 +51498,7 @@ const BodyContext = struct {
     /// nesting, so each nested vector is a frame rather than a native call.
     fn materializeConstFnEvidenceVector(
         self: *BodyContext,
-        nodes: []const check.ConstStore.ConstFnEvidence,
+        evidence: check.ConstStore.ConstFnEvidenceVector,
         cursor: *usize,
         count: u32,
     ) Allocator.Error![]const SpecEvidence {
@@ -51504,12 +51532,13 @@ const BodyContext = struct {
                 parent.next += 1;
                 continue;
             }
-            if (cursor.* >= nodes.len) Common.invariant("stored function evidence ended before its declared vector length");
-            const stored = nodes[cursor.*];
+            if (cursor.* >= evidence.nodes.len) Common.invariant("stored function evidence ended before its declared vector length");
+            const stored = evidence.nodes[cursor.*];
             cursor.* += 1;
             var contracts_target: ?*SpecEvidenceTarget = null;
             frame.out[frame.next] = switch (stored) {
-                .target => |target| blk: {
+                .target => |target_index| blk: {
+                    const target = evidence.target(target_index).*;
                     const materialized = try arena.create(SpecEvidenceTarget);
                     switch (target.nested) {
                         .resolved => |resolved| {
@@ -51529,7 +51558,8 @@ const BodyContext = struct {
                         },
                     }
                 },
-                .structural => |stored_structural| blk: {
+                .structural => |structural_index| blk: {
+                    const stored_structural = evidence.structural(structural_index);
                     const restored_checked: ?CheckedSpecStructuralEvidence = if (stored_structural.checked) |stored_checked| restored: {
                         const view = self.builder.moduleForDigest(stored_checked.view);
                         if (!std.meta.eql(view.types.rootKey(stored_checked.dispatcher_ty), stored_checked.dispatcher_key) or
@@ -51565,12 +51595,7 @@ const BodyContext = struct {
                 .unreachable_value => .unreachable_value,
                 .checked_error => .checked_error,
             };
-            const contract_count: u32 = switch (stored) {
-                .target => |target| target.callable_contracts,
-                .structural => |stored_structural| stored_structural.callable_contracts,
-                .from_callable => |use| use.callable_contracts,
-                .from_scheme, .unreachable_value, .checked_error => 0,
-            };
+            const contract_count = evidence.callableContracts(stored);
             if (contract_count != 0) {
                 frame.pending = .{ .contracts = contracts_target };
                 try frames.append(self.allocator, .{ .out = try arena.alloc(SpecEvidence, contract_count) });
@@ -51592,7 +51617,7 @@ const BodyContext = struct {
     fn finishStoredEvidenceTarget(
         self: *BodyContext,
         materialized: *SpecEvidenceTarget,
-        target: @FieldType(check.ConstStore.ConstFnEvidence, "target"),
+        target: check.ConstStore.ConstFnTargetEvidence,
         nested: NestedSpecEvidence,
     ) Allocator.Error!void {
         materialized.* = .{
@@ -53515,7 +53540,7 @@ const BodyContext = struct {
             try self.replayStoredEvidenceRelations(self.evidence);
             return;
         }
-        if (fn_value.evidence.len != 0 or fn_value.evidence_frame_head != null) {
+        if (fn_value.evidence.nodes.len != 0 or fn_value.evidence_frame_head != null) {
             Common.invariant("stored generated runtime had malformed evidence topology");
         }
         switch (plan.resolution) {
@@ -54960,7 +54985,7 @@ const BodyContext = struct {
             .source_fn_ty = plan.callable_ty,
             .source_fn_key = generatedCodecRuntimeKey("roc.generated_structural_parser_runtime", self.current_fn_key, plan.expr),
             .mono_fn_ty = ret_ty,
-            .evidence_digest = Ast.fnEvidenceDigest(&.{}, &.{}, null),
+            .evidence_digest = Ast.fnEvidenceDigest(.{}, &.{}, null),
         });
         var parser_expr = try self.addExpr(.{ .ty = ret_ty, .data = .{ .lambda = .{
             .fn_id = .{ .draft = fn_id },
@@ -55069,7 +55094,7 @@ const BodyContext = struct {
             .source_fn_ty = plan.callable_ty,
             .source_fn_key = runtime_source_fn_key,
             .mono_fn_ty = ret_ty,
-            .evidence_digest = Ast.fnEvidenceDigest(&.{}, &.{}, null),
+            .evidence_digest = Ast.fnEvidenceDigest(.{}, &.{}, null),
         });
         var encoder_expr = try self.addExpr(.{ .ty = ret_ty, .data = .{ .lambda = .{
             .fn_id = .{ .draft = fn_id },
@@ -56521,7 +56546,7 @@ const BodyContext = struct {
             .source_fn_ty = source_fn_ty,
             .source_fn_key = generatedEncoderCallbackKey(self.current_fn_key, source_expr, lambda_index),
             .mono_fn_ty = lambda_ty,
-            .evidence_digest = Ast.fnEvidenceDigest(&.{}, &.{}, null),
+            .evidence_digest = Ast.fnEvidenceDigest(.{}, &.{}, null),
         });
         return try self.addExpr(.{ .ty = lambda_ty, .data = .{ .lambda = .{
             .fn_id = .{ .draft = fn_id },

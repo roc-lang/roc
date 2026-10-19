@@ -36,6 +36,8 @@ pub fn run(
         var types = owned.types;
         owned.types = @import("../monotype/type.zig").Store.init(allocator);
         var const_fn_evidence = owned.const_fn_evidence.takeArrayList();
+        var const_fn_evidence_targets = owned.const_fn_evidence_targets.takeArrayList();
+        var const_fn_evidence_structurals = owned.const_fn_evidence_structurals.takeArrayList();
         var const_fn_evidence_frames = owned.const_fn_evidence_frames.takeArrayList();
         var exprs = owned.exprs.takeArrayList();
         var pats = owned.pats.takeArrayList();
@@ -72,6 +74,8 @@ pub fn run(
             name_store,
             types,
             const_fn_evidence,
+            const_fn_evidence_targets,
+            const_fn_evidence_structurals,
             const_fn_evidence_frames,
             exprs,
             pats,
@@ -112,6 +116,8 @@ pub fn run(
         name_store = undefined;
         types = undefined;
         const_fn_evidence = undefined;
+        const_fn_evidence_targets = undefined;
+        const_fn_evidence_structurals = undefined;
         const_fn_evidence_frames = undefined;
         exprs = undefined;
         pats = undefined;
@@ -175,6 +181,8 @@ fn movedMonoView(source: *const Mono.Program, moved: *const Ast.Program) Mono.Pr
         .specs = source_view.specs,
         .fns = source_view.fns,
         .const_fn_evidence = moved_view.const_fn_evidence,
+        .const_fn_evidence_targets = moved_view.const_fn_evidence_targets,
+        .const_fn_evidence_structurals = moved_view.const_fn_evidence_structurals,
         .const_fn_evidence_frames = moved_view.const_fn_evidence_frames,
         .defs = source_view.defs,
         .nested_defs = source_view.nested_defs,
@@ -2569,6 +2577,8 @@ fn initCaptureTestProgram(allocator: Allocator) Ast.Program {
         @import("check").CheckedNames.NameStore.init(allocator),
         MonoType.Store.init(allocator),
         .empty, // const_fn_evidence
+        .empty, // const_fn_evidence_targets
+        .empty, // const_fn_evidence_structurals
         .empty, // const_fn_evidence_frames
         .empty, // exprs
         .empty, // pats
@@ -2610,6 +2620,8 @@ test "checkCaptureInvariants accepts a well-formed capture and catches a corrupt
         @import("check").CheckedNames.NameStore.init(allocator),
         MonoType.Store.init(allocator),
         .empty, // const_fn_evidence
+        .empty, // const_fn_evidence_targets
+        .empty, // const_fn_evidence_structurals
         .empty, // const_fn_evidence_frames
         .empty, // exprs
         .empty, // pats
@@ -2686,6 +2698,8 @@ test "capture finalization supplies the caller's active binder local" {
         @import("check").CheckedNames.NameStore.init(allocator),
         MonoType.Store.init(allocator),
         .empty, // const_fn_evidence
+        .empty, // const_fn_evidence_targets
+        .empty, // const_fn_evidence_structurals
         .empty, // const_fn_evidence_frames
         .empty, // exprs
         .empty, // pats
