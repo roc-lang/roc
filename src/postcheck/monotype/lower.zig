@@ -289,8 +289,8 @@ pub const Options = struct {
     spec_cache: ?Common.SpecCacheLookup = null,
     /// Which cache entries can serve this program: whether its code is
     /// linked, so a linked-object entry (`Common.SpecCacheHit.c_abi_entry`)
-    /// can, and whether its emitter splices dev artifacts.
-    spec_cache_takes: Common.SpecCacheTakes = .dev_artifacts,
+    /// can, and whether its emitter splices dev code.
+    spec_cache_takes: Common.SpecCacheTakes = .dev_code,
     /// Optional deterministic counters for specialization-shape tests.
     specialization_counters: ?*SpecializationCounters = null,
     /// Optional deterministic workload diagnostics. The checked pipeline

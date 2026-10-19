@@ -747,11 +747,9 @@ const EmbeddedTargetObjects = struct {
 const WasmCompilerRtObject = struct {
     fn forTarget(target: RocTarget) []const u8 {
         if (builtin.is_test) return &[_]u8{};
-        return switch (target) {
-            .wasm32 => @import("embedded_assets").file("targets/wasm32/roc_compiler_rt.o"),
-            .wasm32v1 => @import("embedded_assets").file("targets/wasm32v1/roc_compiler_rt.o"),
-            else => unreachable,
-        };
+        std.debug.assert(target == .wasm32 or target == .wasm32v1);
+        if (target == .wasm32v1) return @import("embedded_assets").file("targets/wasm32v1/roc_compiler_rt.o");
+        return @import("embedded_assets").file("targets/wasm32/roc_compiler_rt.o");
     }
 };
 

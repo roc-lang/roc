@@ -169,8 +169,8 @@ pub const Options = struct {
     spec_cache: ?Common.SpecCacheLookup = null,
     /// Which cache entries can serve this program: whether its code is
     /// linked, so a linked-object entry (`Common.SpecCacheHit.c_abi_entry`)
-    /// can, and whether its emitter splices dev artifacts.
-    spec_cache_takes: Common.SpecCacheTakes = .dev_artifacts,
+    /// can, and whether its emitter splices dev code.
+    spec_cache_takes: Common.SpecCacheTakes = .dev_code,
     /// Whether the cache may also serve specializations the compile-time
     /// roots reach. The evaluator splices those entries into its own image,
     /// which is only faithful when no compile-time-only exhaustiveness site

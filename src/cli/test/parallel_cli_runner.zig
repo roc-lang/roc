@@ -8547,7 +8547,7 @@ fn customWasm32v1VectorLowering(
 
 /// Allocations a wasm test module made that it has not freed, from the test
 /// platform's counters.
-fn wasmOutstandingAllocations(wasm: *const GlueRuntimeWasmInterface) !i64 {
+fn wasmOutstandingAllocations(wasm: *const GlueRuntimeWasmInterface) (bytebox.ExportError || bytebox.TrapError)!i64 {
     var counts: [2]i64 = undefined;
     for ([_][]const u8{ "wasm_alloc_count", "wasm_dealloc_count" }, &counts) |name, *count| {
         const handle = try wasm.module_instance.getFunctionHandle(name);
@@ -10230,11 +10230,10 @@ fn wasm10Violation(module_def: anytype) ?[]const u8 {
         // bytebox orders its opcodes with every later proposal's after the
         // 1.0 conversions, from sign extension on.
         if (@backingInt(opcode) >= @backingInt(Opcode.I32_Extend8_S)) return @tagName(opcode);
-        switch (opcode) {
-            .Select_T, .Table_Get, .Table_Set, .Drop_V128, .Select_V128, .Local_Get_V128, .Local_Set_V128, .Local_Tee_V128, .Global_Get_V128, .Global_Set_V128 => return @tagName(opcode),
-            .Block, .Loop, .If, .IfNoElse => if (immediate.BlockOrIf.block_type == .TypeIndex) return "a block with a signature type",
-            else => {},
-        }
+        const later_opcodes = [_]Opcode{ .Select_T, .Table_Get, .Table_Set, .Drop_V128, .Select_V128, .Local_Get_V128, .Local_Set_V128, .Local_Tee_V128, .Global_Get_V128, .Global_Set_V128 };
+        if (std.mem.findScalar(Opcode, &later_opcodes, opcode) != null) return @tagName(opcode);
+        const block_opcodes = [_]Opcode{ .Block, .Loop, .If, .IfNoElse };
+        if (std.mem.findScalar(Opcode, &block_opcodes, opcode) != null and immediate.BlockOrIf.block_type == .TypeIndex) return "a block with a signature type";
     }
     return null;
 }

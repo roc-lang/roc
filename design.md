@@ -635,10 +635,10 @@ dev code never needs an object it did not ask for. A build whose store lacks
 a URL-package module's object pack builds it once the module is checked and
 before the program lowers, so that build already links it.
 
-The wasm32 dev backend cannot splice dev artifacts, so a wasm32 dev build
+The wasm32 dev backend cannot splice dev code, so a wasm32 dev build
 reads and writes no dev packs and takes only object packs' entries
-(`CodeProvision.target_linked_objects`, whose lookups never return a dev
-artifact). It composes each object pack that served it into its own
+(`CodeProvision.target_linked_objects`, whose lookups never return dev
+code). It composes each object pack that served it into its own
 relocatable object before sealing (`WasmModule.mergeLinkedObject`): every
 definition of the object other than the entries it offers, and any entry an
 earlier object already defines, becomes local under a name in a namespace

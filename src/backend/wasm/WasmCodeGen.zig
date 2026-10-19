@@ -14155,7 +14155,7 @@ const SimdV1LaneOp = enum {
         return switch (op) {
             .splat => 0,
             .neg, .abs, .bitwise_not, .shl, .shr, .shr_zf => 1,
-            else => 2,
+            .add, .sub, .mul, .add_sat, .sub_sat, .min, .max, .abs_diff, .avg_rounded, .mul_high, .mul_q15_sat, .bitwise_and, .bitwise_or, .bitwise_xor, .eq, .gt, .gte => 2,
         };
     }
 };
@@ -14221,7 +14221,8 @@ fn emitSimdV1LaneOp(self: *Self, args: anytype, kind: layout.Vector, op: SimdV1L
             try self.emitConversion(.i32, vt);
             break :scalar try self.emitSetNewLocal(vt);
         },
-        else => undefined,
+        // Every other operation reads no scalar operand.
+        .add, .sub, .mul, .add_sat, .sub_sat, .neg, .abs, .min, .max, .abs_diff, .avg_rounded, .mul_high, .mul_q15_sat, .bitwise_and, .bitwise_or, .bitwise_xor, .bitwise_not, .eq, .gt, .gte => undefined,
     };
     const ta, const tb = try self.allocAnonymousLocals(vt, 2);
     const result = try self.allocSimdV1Result();
@@ -14252,7 +14253,7 @@ fn emitSimdV1LaneOp(self: *Self, args: anytype, kind: layout.Vector, op: SimdV1L
                     .bitwise_and => if (wide) Op.i64_and else Op.i32_and,
                     .bitwise_or => if (wide) Op.i64_or else Op.i32_or,
                     .bitwise_xor => if (wide) Op.i64_xor else Op.i32_xor,
-                    else => unreachable,
+                    .splat, .add_sat, .sub_sat, .neg, .abs, .min, .max, .abs_diff, .avg_rounded, .mul_high, .mul_q15_sat, .bitwise_not, .eq, .gt, .gte, .shl, .shr, .shr_zf => unreachable,
                 }) catch return error.OutOfMemory;
             },
             // Lanes of eight and sixteen bits only, so the exact sum fits.
@@ -14327,7 +14328,7 @@ fn emitSimdV1LaneOp(self: *Self, args: anytype, kind: layout.Vector, op: SimdV1L
                     .eq => if (wide) Op.i64_eq else Op.i32_eq,
                     .gt => gt,
                     .gte => ge,
-                    else => unreachable,
+                    .splat, .add, .sub, .mul, .add_sat, .sub_sat, .neg, .abs, .min, .max, .abs_diff, .avg_rounded, .mul_high, .mul_q15_sat, .bitwise_and, .bitwise_or, .bitwise_xor, .bitwise_not, .shl, .shr, .shr_zf => unreachable,
                 }) catch return error.OutOfMemory;
                 if (wide) self.currentCode().append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
                 self.currentCode().append(self.allocator, sub) catch return error.OutOfMemory;
@@ -14338,7 +14339,7 @@ fn emitSimdV1LaneOp(self: *Self, args: anytype, kind: layout.Vector, op: SimdV1L
                     .shl => if (wide) Op.i64_shl else Op.i32_shl,
                     .shr => if (wide) (if (signed) Op.i64_shr_s else Op.i64_shr_u) else (if (signed) Op.i32_shr_s else Op.i32_shr_u),
                     .shr_zf => if (wide) Op.i64_shr_u else Op.i32_shr_u,
-                    else => unreachable,
+                    .splat, .add, .sub, .mul, .add_sat, .sub_sat, .neg, .abs, .min, .max, .abs_diff, .avg_rounded, .mul_high, .mul_q15_sat, .bitwise_and, .bitwise_or, .bitwise_xor, .bitwise_not, .eq, .gt, .gte => unreachable,
                 }) catch return error.OutOfMemory;
             },
         }

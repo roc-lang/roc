@@ -433,21 +433,21 @@ pub fn procIdentityCacheKey(identity: [32]u8) [32]u8 {
 /// Which object-cache entries can serve a consumer, decided by how its code
 /// is emitted.
 pub const SpecCacheTakes = enum {
-    /// Dev artifacts only: the consumer splices code and links nothing.
-    dev_artifacts,
+    /// Dev code only: the consumer splices code and links nothing.
+    dev_code,
     /// A linked object's entry (`SpecCacheHit.c_abi_entry`) ahead of the dev
-    /// artifacts of the same specialization: the consumer splices code and
+    /// code of the same specialization: the consumer splices code and
     /// its output is linked.
-    dev_artifacts_and_linked_objects,
+    dev_code_and_linked_objects,
     /// Linked objects' entries only: the consumer's output is linked, and
-    /// its emitter cannot splice dev artifacts.
+    /// its emitter cannot splice dev code.
     linked_objects,
 
     pub fn takesLinkedObjects(self: SpecCacheTakes) bool {
-        return self != .dev_artifacts;
+        return self != .dev_code;
     }
 
-    pub fn takesDevArtifacts(self: SpecCacheTakes) bool {
+    pub fn takesDevCode(self: SpecCacheTakes) bool {
         return self != .linked_objects;
     }
 };

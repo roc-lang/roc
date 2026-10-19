@@ -162,7 +162,7 @@ test "object cache loading owns decoded packs and commits both indexes atomicall
             try std.testing.expectEqual(@as(usize, 1), packs.packs.items.len);
             packs.indexPacks() catch |err|
                 return rejected(&packs, expected_key, err);
-            const hit = packs.specCacheLookup().lookup(expected_key, .dev_artifacts) orelse return error.TestUnexpectedResult;
+            const hit = packs.specCacheLookup().lookup(expected_key, .dev_code) orelse return error.TestUnexpectedResult;
             try std.testing.expectEqualSlices(u8, &expected_identity.bytes, &hit.identity);
             try std.testing.expectEqual(@as(u64, 1), hit.rc_borrowed_params);
             // A consumer that cannot splice is never served dev artifacts.
@@ -176,7 +176,7 @@ test "object cache loading owns decoded packs and commits both indexes atomicall
             try std.testing.expectEqual(err, packs.failure.?);
             try std.testing.expect(packs.state == .unavailable);
             try std.testing.expectError(err, packs.indexPacks());
-            try std.testing.expect(packs.specCacheLookup().lookup(key_to_find, .dev_artifacts) == null);
+            try std.testing.expect(packs.specCacheLookup().lookup(key_to_find, .dev_code) == null);
             const splice = packs.spliceSource();
             try std.testing.expect(splice.find(splice.context, key_to_find) == null);
             try std.testing.expectEqual(@as(u64, 0), packs.hits);
@@ -205,7 +205,7 @@ test "object cache loading owns decoded packs and commits both indexes atomicall
     defer malformed.deinit();
     try std.testing.expectError(error.MalformedPack, malformed.loadDirInto(io, malformed_path, .cache_offers));
     try std.testing.expectEqual(error.MalformedPack, malformed.failure.?);
-    try std.testing.expect(malformed.specCacheLookup().lookup(key, .dev_artifacts) == null);
+    try std.testing.expect(malformed.specCacheLookup().lookup(key, .dev_code) == null);
     try std.testing.expect(malformed.spliceSource().find(malformed.spliceSource().context, key) == null);
 }
 
@@ -736,7 +736,7 @@ pub const LoadedPacks = struct {
                 return offer.hit;
             }
         }
-        if (!takes.takesDevArtifacts()) return null;
+        if (!takes.takesDevCode()) return null;
         const hit = self.specs.get(key) orelse return null;
         self.hits += 1;
         return hit;

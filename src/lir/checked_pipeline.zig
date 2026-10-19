@@ -1018,8 +1018,8 @@ pub const CodeProvision = enum {
     /// emitter splices them.
     pub fn specCacheTakes(self: CodeProvision) postcheck.Common.SpecCacheTakes {
         return switch (self) {
-            .source_bodies, .host_dev_objects, .target_dev_objects => .dev_artifacts,
-            .host_linked_dev_objects, .target_linked_dev_objects => .dev_artifacts_and_linked_objects,
+            .source_bodies, .host_dev_objects, .target_dev_objects => .dev_code,
+            .host_linked_dev_objects, .target_linked_dev_objects => .dev_code_and_linked_objects,
             .target_linked_objects => .linked_objects,
         };
     }
