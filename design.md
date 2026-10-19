@@ -730,10 +730,25 @@ known-empty assumption merely because their immutable structure is equal.
 Analysis view identities never escape in returned diagnostic patterns or
 unions, and memo keys use the reader's stable identity namespace.
 
+A declaration's formal-dependency graph is a function of its formals and
+backing template alone. Each reader computes it on first opening the
+declaration, except that a declaration whose template the checker reports
+final has its graph computed once and shared by every later reader of the
+same type store. Finality is explicit checker data, never inferred from the
+template: a declaration of the module being checked is final once
+declaration validity is final (every declaration is generated, and every
+invalid one poisoned, before value checking) and its generation completed,
+unless it is a declaration inside a function that names the function's type
+variables, whose template value checking still writes through them; a
+declaration copied from another module is final once its copy returns. No
+other graph outlives its reader.
+
 An inhabitedness memo stores complete query answers, not provisional answers
 obtained by cutting an active recursive path. Its key includes the resolved
 root and the exact sorted, deduplicated known-empty assumptions; its lifetime is one
-mutation-free analysis. Shared DAG nodes are not recursive cycles. A cyclic
+mutation-free analysis. Constructor-payload and known-absent-payload queries,
+which carry no assumptions, keep one memo per query mode with the same
+lifetime. Shared DAG nodes are not recursive cycles. A cyclic
 query implementation must distinguish those states and establish its fixed-point
 or traversal rule before producing a reusable result. The same restriction
 applies to completion-relation memoization in Monotype: no result outlives the

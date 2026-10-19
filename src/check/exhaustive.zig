@@ -81,23 +81,39 @@ fn exhaustiveInvariant(comptime message: []const u8, args: anytype) noreturn {
 pub const NominalOpenCache = struct {
     allocator: std.mem.Allocator,
     /// Complete queries only; shares the opening cache's mutation-free lifetime.
+    /// General queries carry their known-empty assumptions in the key;
+    /// constructor-payload and known-absent-payload queries carry none.
     inhabitedness: InhabitednessMemo = .{},
+    payload_inhabitedness: InhabitednessMemo = .{},
+    known_absent_inhabitedness: InhabitednessMemo = .{},
     views: ?TypeView = null,
+    /// Declaration dependency graphs kept across reads, if the caller keeps any.
+    shared: ?TypeView.Shared = null,
 
     /// Own nothing until analysis starts.
     pub fn init(allocator: std.mem.Allocator) NominalOpenCache {
         return .{ .allocator = allocator };
     }
 
+    /// Like `init`, with readers that reuse and extend `shared`'s graphs.
+    pub fn initShared(allocator: std.mem.Allocator, shared: TypeView.Shared) NominalOpenCache {
+        return .{ .allocator = allocator, .shared = shared };
+    }
+
     /// Release views and complete-query answers together.
     pub fn deinit(self: *NominalOpenCache) void {
         if (self.views) |*views| views.deinit();
         self.inhabitedness.deinit(self.allocator);
+        self.payload_inhabitedness.deinit(self.allocator);
+        self.known_absent_inhabitedness.deinit(self.allocator);
     }
 
     /// One namespace for the complete mutation-free analysis.
     fn reader(self: *NominalOpenCache, source: *types.Store) *TypeStore {
-        if (self.views == null) self.views = TypeView.init(self.allocator, source);
+        if (self.views == null) self.views = if (self.shared) |shared|
+            TypeView.initShared(self.allocator, source, shared)
+        else
+            TypeView.init(self.allocator, source);
         std.debug.assert(self.views.?.source == source);
         return &self.views.?;
     }
@@ -108,8 +124,18 @@ pub const NominalOpenCache = struct {
         self.views = null;
         self.inhabitedness.deinit(self.allocator);
         self.inhabitedness = .{};
+        self.payload_inhabitedness.deinit(self.allocator);
+        self.payload_inhabitedness = .{};
+        self.known_absent_inhabitedness.deinit(self.allocator);
+        self.known_absent_inhabitedness = .{};
     }
 };
+
+/// Declaration dependency graphs kept across reads of one source store
+/// (`TypeView.SharedDependencies`).
+pub const SharedNominalDependencies = TypeView.SharedDependencies;
+/// A reader's access to `SharedNominalDependencies` (`TypeView.Shared`).
+pub const SharedNominalDependenciesAccess = TypeView.Shared;
 
 /// Identifiers and per-entry-point state the exhaustiveness analysis needs
 /// from its caller: builtin type names for classifying nominal types, the
@@ -1558,6 +1584,22 @@ const InhabitedGraph = struct {
     }
 };
 
+/// A constructor-payload or known-absent-payload query without assumptions,
+/// answered once per root within one read.
+fn memoizedPayloadQuery(store: *TypeStore, idents: BuiltinIdents, root: Var, comptime mode: InhabitedMode) Allocator.Error!bool {
+    const cache = idents.open_cache;
+    const memo = switch (mode) {
+        .payload => &cache.payload_inhabitedness,
+        .known_absent => &cache.known_absent_inhabitedness,
+        .general => @compileError("general queries are memoized with their assumptions"),
+    };
+    const key: InhabitednessMemo.Key = .{ .root = resolveRoot(store, root), .known_empty = &.{} };
+    if (memo.get(key)) |answer| return answer;
+    const answer = try solveInhabitedGraph(store, idents, root, mode, &.{});
+    try memo.put(cache.allocator, key, answer);
+    return answer;
+}
+
 fn solveInhabitedGraph(store: *TypeStore, idents: BuiltinIdents, root: Var, mode: InhabitedMode, assumptions: []const Var) Allocator.Error!bool {
     var arena = base.SingleThreadArena.init(store.gpa);
     defer arena.deinit();
@@ -1606,7 +1648,7 @@ pub fn isCtorPayloadTypeInhabited(
     builtin_idents: BuiltinIdents,
     type_var: Var,
 ) error{OutOfMemory}!bool {
-    return solveInhabitedGraph(type_store, builtin_idents, type_var, .payload, &.{});
+    return memoizedPayloadQuery(type_store, builtin_idents, type_var, .payload);
 }
 
 /// Collects unresolved unbound type variables that make a constructor payload uninhabited.
@@ -1719,7 +1761,7 @@ fn collectRecordPayloadBlockers(
                 const presence = type_store.getRecordFieldAt(fields, @intCast(offset)).presence;
                 if (!try fieldIsAlwaysPresent(type_store, presence)) continue;
                 const field_var = presence.typeVar();
-                if (try solveInhabitedGraph(type_store, builtin_idents, field_var, mode, &.{})) continue;
+                if (try memoizedPayloadQuery(type_store, builtin_idents, field_var, mode)) continue;
                 switch (mode) {
                     .payload => try collectCtorPayloadBlockersHelp(type_store, builtin_idents, field_var, out, seen),
                     .known_absent => try collectKnownAbsentCtorPayloadBlockersHelp(allocator, type_store, builtin_idents, field_var, out, seen),
@@ -1811,7 +1853,7 @@ fn isKnownAbsentCtorPayloadTypeInhabited(
     builtin_idents: BuiltinIdents,
     type_var: Var,
 ) error{OutOfMemory}!bool {
-    return solveInhabitedGraph(type_store, builtin_idents, type_var, .known_absent, &.{});
+    return memoizedPayloadQuery(type_store, builtin_idents, type_var, .known_absent);
 }
 
 fn collectKnownAbsentCtorPayloadBlockers(
@@ -4896,7 +4938,10 @@ test "nominal views record rows preserve mode policies and graph-linear sharing"
 }
 
 test "nominal views record rows clean up every graph allocation failure" {
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, inhabitedRecordRowsCase, .{@as(usize, 2)});
+    // The fixture's own allocations share the testing allocator, so remaps in
+    // place would make the graph's allocation count depend on heap layout.
+    var deterministic = collections.DeterministicAllocator.init(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), inhabitedRecordRowsCase, .{@as(usize, 2)});
 }
 
 fn recordTailBlockersCase(analysis_allocator: Allocator, depth: usize) (Allocator.Error || Ident.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {

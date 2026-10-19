@@ -133,6 +133,74 @@ test "nominal views exhaustive boundary returns actual blockers only and permits
     try testing.expectEqual(before, f.store.len());
 }
 
+const FinalityFixture = struct {
+    final: bool,
+
+    fn isFinal(owner: *const anyopaque, _: types.NominalDecl.Idx) bool {
+        const self: *const FinalityFixture = @ptrCast(@alignCast(owner));
+        return self.final;
+    }
+};
+
+test "nominal views share a final declaration's dependency graph across reads" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const a = try f.rigid("a");
+    const b = try f.rigid("b");
+    const actual_a = try f.rigid("a");
+    const actual_b = try f.store.fresh();
+    const empty = try f.store.freshFromContent(.{ .structure = .empty_tag_union });
+    const ok = try f.ident("Ok");
+    const err = try f.ident("Err");
+    const tags = try f.store.appendTags(&.{
+        .{ .name = ok, .args = try f.store.appendVars(&.{a}) },
+        .{ .name = err, .args = try f.store.appendVars(&.{b}) },
+    });
+    const backing = try f.store.freshFromContent(.{ .structure = .{ .tag_union = .{ .tags = tags, .ext = empty } } });
+    const nominal = try f.declaration("TryLike", &.{ a, b }, backing);
+    const app = try f.application(nominal, &.{ actual_a, actual_b });
+    const root = try f.store.freshFromContent(.{ .structure = .{ .nominal_type = app } });
+
+    var shared = exhaustive.SharedNominalDependencies.init(testing.allocator, &f.store);
+    defer shared.deinit();
+    for ([_]bool{ false, true }) |final| {
+        var finality: FinalityFixture = .{ .final = final };
+        var arena = base.SingleThreadArena.init(testing.allocator);
+        defer arena.deinit();
+        var blockers: std.ArrayList(Var) = .empty;
+        defer blockers.deinit(testing.allocator);
+        var first_graph: ?*const anyopaque = null;
+        for (0..2) |_| {
+            var cache = exhaustive.NominalOpenCache.initShared(testing.allocator, .{
+                .graphs = &shared,
+                .owner = &finality,
+                .isFinal = FinalityFixture.isFinal,
+            });
+            defer cache.deinit();
+            const idents = try builtinIdents(&f, &cache);
+            blockers.clearRetainingCapacity();
+            try exhaustive.collectAbsentCtorPayloadBlockersForConstructedTags(
+                arena.allocator(),
+                &f.store,
+                idents,
+                root,
+                &.{ok},
+                &blockers,
+            );
+            try testing.expectEqualSlices(Var, &.{actual_b}, blockers.items);
+            // Only a final declaration's graph outlives the read, and a later
+            // read reuses it rather than computing another.
+            try testing.expectEqual(@as(usize, if (final) 1 else 0), shared.graphs.count());
+            if (final) {
+                var graphs = shared.graphs.valueIterator();
+                const graph: *const anyopaque = graphs.next().?.*;
+                if (first_graph) |previous| try testing.expectEqual(previous, graph);
+                first_graph = graph;
+            }
+        }
+    }
+}
+
 test "nominal views private unknown assumptions remain application scoped" {
     var f = try Fixture.init();
     defer f.deinit();

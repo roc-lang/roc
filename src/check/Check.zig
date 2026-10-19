@@ -366,6 +366,9 @@ type_decl_dependencies: std.ArrayListUnmanaged(TypeDeclDependency) = .empty,
 /// declarations are poisoned, so an annotation generated from here on
 /// resolves each reference to one as the error type.
 type_decl_validity_final: bool = false,
+/// The dependency graphs of nominal declarations whose backing templates are
+/// final (`nominalBackingIsFinal`), shared by every exhaustiveness read.
+nominal_dependencies: exhaustive.SharedNominalDependencies,
 /// Holds one match's exhaustiveness analysis and result; reset after each
 /// match, keeping a bounded chunk for the next one.
 exhaustiveness_arena: base.SingleThreadArena,
@@ -1606,6 +1609,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .type_decl_invalid = .keyed,
     .type_decl_dependencies = .keyed,
     .type_decl_validity_final = .keyed,
+    .nominal_dependencies = .keyed,
     .exhaustiveness_arena = .scratch,
     .exhaustiveness_arena_in_use = .lexical,
     .scratch_vars = .scratch,
@@ -4289,6 +4293,7 @@ fn initAssumePrepared(
     const self: Self = .{
         .gpa = gpa,
         .types = types,
+        .nominal_dependencies = exhaustive.SharedNominalDependencies.init(gpa, types),
         .cir = cir,
         .imported_modules = imported_modules,
         .owner_modules = owner_modules,
@@ -31513,7 +31518,7 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
         self.known_empty_payload_vars_match.clearRetainingCapacity();
         const cond_constructors_known = try self.collectKnownEmptyPayloadVarsForExpr(match.cond, cond_var, &self.known_empty_payload_vars_match);
 
-        var open_cache = exhaustive.NominalOpenCache.init(self.gpa);
+        var open_cache = exhaustive.NominalOpenCache.initShared(self.gpa, self.sharedNominalDependencies());
         defer open_cache.deinit();
         self.beginExhaustivenessArena();
         defer self.endExhaustivenessArena();
@@ -32586,6 +32591,29 @@ fn exprIsAllCrashConditional(self: *const Self, expr_idx: CIR.Expr.Idx) Allocato
     }
 }
 
+fn sharedNominalDependencies(self: *Self) exhaustive.SharedNominalDependenciesAccess {
+    return .{ .graphs = &self.nominal_dependencies, .owner = self, .isFinal = nominalBackingIsFinal };
+}
+
+/// Whether `declaration`'s backing template can no longer change, so its
+/// dependency graph is shared across exhaustiveness reads (design.md
+/// "Read-Only Type Analysis"). Every declaration of this module is generated,
+/// and every invalid one poisoned, before declaration validity is final;
+/// after that only a declaration inside a function that names the function's
+/// type variables (`local_type_context_depths`) has a template value checking
+/// still writes, through those variables. A declaration copied from another
+/// module is complete when the copy that registered it returns, and checking
+/// writes no imported template.
+fn nominalBackingIsFinal(owner: *const anyopaque, declaration: types_mod.NominalDecl.Idx) bool {
+    const self: *const Self = @ptrCast(@alignCast(owner));
+    if (!self.type_decl_validity_final) return false;
+    const decl = self.types.getNominalDecl(declaration);
+    if (decl.origin_module != self.cir.selfModuleIdentity()) return true;
+    const statement: CIR.Statement.Idx = @fromBackingInt(@intCast(decl.statement()));
+    if (self.typeDeclGenerationState(statement) != .generated) return false;
+    return !self.local_type_context_depths.contains(statement);
+}
+
 fn exhaustiveBuiltinIdents(self: *const Self, open_cache: *exhaustive.NominalOpenCache) exhaustive.BuiltinIdents {
     return .{
         .idents = self.cir.getIdentStoreConst(),
@@ -32725,7 +32753,7 @@ fn collectAbsentCtorPayloadBlockers(
     var arena = base.SingleThreadArena.init(self.gpa);
     defer arena.deinit();
 
-    var open_cache = exhaustive.NominalOpenCache.init(self.gpa);
+    var open_cache = exhaustive.NominalOpenCache.initShared(self.gpa, self.sharedNominalDependencies());
     defer open_cache.deinit();
 
     try exhaustive.collectAbsentCtorPayloadBlockersForConstructedTags(
@@ -32874,7 +32902,7 @@ fn checkPatternExhaustiveness(
     // pending record-destructure binds must be judged first.
     try self.judgeRecordDestructBinds(env);
 
-    var open_cache = exhaustive.NominalOpenCache.init(self.gpa);
+    var open_cache = exhaustive.NominalOpenCache.initShared(self.gpa, self.sharedNominalDependencies());
     defer open_cache.deinit();
     self.beginExhaustivenessArena();
     defer self.endExhaustivenessArena();
