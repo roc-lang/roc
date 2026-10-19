@@ -46,6 +46,95 @@ pub const ProcDebugName = extern struct {
 
 const Self = @This();
 
+/// Every out-of-line statement row type (see `LIR.StmtRowId`). Each has its
+/// own column in `stmt_rows`, at its position in this list.
+pub const stmt_row_types = .{
+    lir_defs.LowLevel.RcEffect,
+    lir_defs.CallExtra,
+    lir_defs.RefExtra,
+    lir_defs.LowLevelExtra,
+    lir_defs.StrMatchData,
+    lir_defs.LiteralExtra,
+    lir_defs.JoinExtra,
+    lir_defs.BoxyDescRef,
+    lir_defs.I128Literal,
+    lir_defs.BoxyDynamicNumLiteral,
+    lir_defs.BoxyDynamicFracLiteral,
+    lir_defs.ErasedCallData,
+    lir_defs.PackedErasedFnData,
+    lir_defs.BoxyDescRefData,
+    lir_defs.BoxyBoxData,
+    lir_defs.BoxyRecordUpdateData,
+    lir_defs.BoxyUnboxData,
+    lir_defs.BoxyAdaptData,
+    lir_defs.BoxyInspectData,
+    lir_defs.BoxyEqData,
+    lir_defs.BoxyHashData,
+    lir_defs.BoxyTagData,
+    lir_defs.BoxyTagPayloadData,
+    lir_defs.CallDictData,
+    lir_defs.DecrefIfInitializedData,
+    lir_defs.CrashExtra,
+};
+
+/// Number of out-of-line statement row columns.
+pub const stmt_row_column_count = stmt_row_types.len;
+
+/// One list per out-of-line statement row type, in `stmt_row_types` order.
+pub const StmtRowColumns = blk: {
+    var types: [stmt_row_column_count]type = undefined;
+    for (stmt_row_types, 0..) |T, index| types[index] = GuardedList.List(T, "LirStore.stmt_rows");
+    break :blk @Tuple(&types);
+};
+
+/// The column holding rows of type `T`.
+pub fn stmtRowColumn(comptime T: type) usize {
+    inline for (stmt_row_types, 0..) |Row, index| {
+        if (Row == T) return index;
+    }
+    @compileError("not an out-of-line statement row type: " ++ @typeName(T));
+}
+
+/// Whether `T` is a `LIR.StmtRowId`.
+pub fn isStmtRowId(comptime T: type) bool {
+    if (@typeInfo(T) != .@"enum" or !@hasDecl(T, "Row")) return false;
+    return T == lir_defs.StmtRowId(T.Row);
+}
+
+/// Whether a value of type `T` can hold an identity that a procedure rewrite
+/// prepares for mutation. Rows are immutable and never prepared, so no row
+/// may hold one.
+fn holdsRewriteIdentity(comptime T: type) bool {
+    @setEvalBranchQuota(100_000);
+    if (T == CFStmtId or T == lir_defs.TailCallLink or T == CFSwitchBranchSpan or T == StrMatchArmSpan or T == JoinPointSpan) return true;
+    if (isStmtRowId(T)) return true;
+    return anyFieldType(T, holdsRewriteIdentity);
+}
+
+/// Whether some optional payload, struct field, or union field type of `T`
+/// satisfies `holds`.
+fn anyFieldType(comptime T: type, comptime holds: fn (comptime type) bool) bool {
+    const info = @typeInfo(T);
+    if (info == .optional) return holds(info.optional.child);
+    const field_types: []const type = if (info == .@"struct")
+        info.@"struct".field_types
+    else if (info == .@"union")
+        info.@"union".field_types
+    else
+        return false;
+    for (field_types) |field_type| {
+        if (holds(field_type)) return true;
+    }
+    return false;
+}
+
+comptime {
+    @setEvalBranchQuota(100_000);
+    for (stmt_row_types) |T| {
+        if (holdsRewriteIdentity(T)) @compileError("an out-of-line statement row holds a rewritable identity: " ++ @typeName(T));
+    }
+}
+
 /// Hashes a row id by one multiplication. Row ids are distinct small
 /// integers, so spreading their bits is all a probe sequence needs.
 const RowIdContext = struct {
@@ -274,6 +363,12 @@ const ProcRewrite = struct {
             _ = try self.cf_stmts.prepare(allocator, @backingInt(value));
             return;
         }
+        if (T == lir_defs.TailCallLink) {
+            if (value.isSite()) {
+                if (value.next()) |next| try self.prepareValue(source, allocator, CFStmtId, next);
+            }
+            return;
+        }
         inline for (.{
             .{ CFSwitchBranchSpan, "cf_switch_branches", CFSwitchBranch },
             .{ StrMatchArmSpan, "str_match_arms", StrMatchArm },
@@ -359,6 +454,9 @@ pub fn procRewriteChanged(self: *const Self) bool {
     }) |field| {
         if (@field(self, field).len() != 0) return true;
     }
+    inline for (0..stmt_row_column_count) |column| {
+        if (self.stmt_rows[column].len() != 0) return true;
+    }
     return self.ownStringByteCount() != 0;
 }
 
@@ -395,6 +493,7 @@ pub const BodyPrefix = struct {
     u64s: u32,
     u32s: u32,
     erased_call_arg_plans: u32,
+    stmt_rows: [stmt_row_column_count]u32,
     inline_scopes: u32,
     string_bytes: u32,
     boxy_names: u32,
@@ -438,6 +537,7 @@ pub const BodyRelocation = struct {
     u64s: u32,
     u32s: u32,
     erased_call_arg_plans: u32,
+    stmt_rows: [stmt_row_column_count]u32,
     inline_scopes: u32,
     string_bytes: u32,
     join_point_id_base: u32,
@@ -526,6 +626,7 @@ pub fn captureBodyPrefix(self: *const Self) BodyPrefix {
         .u64s = @intCast(self.u64s.len()),
         .u32s = @intCast(self.u32s.len()),
         .erased_call_arg_plans = @intCast(self.erased_call_arg_plans.len()),
+        .stmt_rows = self.stmtRowLengths(),
         .inline_scopes = @intCast(self.inline_scopes.len()),
         .string_bytes = self.stringByteCount(),
         .boxy_names = self.boxyNameCount(),
@@ -580,6 +681,7 @@ pub fn captureBodyShard(self: *const Self, prefix: BodyPrefix) AppendBodyError!B
         prefix.u64s > self.u64s.len() or
         prefix.u32s > self.u32s.len() or
         prefix.erased_call_arg_plans > self.erased_call_arg_plans.len() or
+        !self.stmtRowPrefixFits(prefix) or
         prefix.inline_scopes > self.inline_scopes.len() or
         prefix.string_bytes > self.stringByteCount() or
         prefix.boxy_names > self.boxyNameCount() or
@@ -617,6 +719,16 @@ fn movedIndex(value: u32, prefix: u32, destination: u32) u32 {
 }
 
 fn relocateBodyValue(comptime T: type, value: T, prefix: BodyPrefix, bases: BodyRelocation) T {
+    if (comptime isStmtRowId(T)) {
+        if (value == .none) return value;
+        const column = comptime stmtRowColumn(T.Row);
+        return @fromBackingInt(movedIndex(@backingInt(value), prefix.stmt_rows[column], bases.stmt_rows[column]));
+    }
+    if (T == lir_defs.TailCallLink) {
+        if (!value.isSite()) return value;
+        const next = value.next() orelse return value;
+        return .site(relocateBodyValue(CFStmtId, next, prefix, bases));
+    }
     if (T == LocalId) return @fromBackingInt(@intCast(movedIndex(@backingInt(value), prefix.locals, bases.locals)));
     if (T == CFStmtId) return @fromBackingInt(@intCast(movedIndex(@backingInt(value), prefix.cf_stmts, bases.cf_stmts)));
     if (T == ErasedCallArgsPlanId) return @fromBackingInt(@intCast(movedIndex(@backingInt(value), prefix.erased_call_arg_plans, bases.erased_call_arg_plans)));
@@ -653,7 +765,7 @@ fn relocateBodyValue(comptime T: type, value: T, prefix: BodyPrefix, bases: Body
         inline for (type_info.@"struct".field_names, type_info.@"struct".field_types) |field_name, field_type| {
             @field(result, field_name) = relocateBodyValue(field_type, @field(value, field_name), prefix, bases);
         }
-        if (T == @FieldType(CFStmt, "assign_call_erased")) {
+        if (T == lir_defs.ErasedCallData) {
             if (result.arg_layouts.len != 0) result.arg_layouts.start += bases.erased_arg_layout_base;
         }
         return result;
@@ -727,6 +839,7 @@ pub fn appendBodyShardWithJoinRelocation(
         .u64s = @intCast(self.u64s.len()),
         .u32s = @intCast(self.u32s.len()),
         .erased_call_arg_plans = @intCast(self.erased_call_arg_plans.len()),
+        .stmt_rows = self.ownStmtRowLengths(),
         .inline_scopes = @intCast(self.inline_scopes.len()),
         .string_bytes = self.ownStringByteCount(),
         .join_point_id_base = if (relocation) |joins| joins.offset else 0,
@@ -735,6 +848,7 @@ pub fn appendBodyShardWithJoinRelocation(
         .erased_arg_layout_base = shard.erased_arg_layout_base,
     };
     const stmt_len = source.cf_stmts.len() - source_prefix.cf_stmts;
+    if (stmt_len > lir_defs.max_cf_stmt_count - bases.cf_stmts) return error.OutOfMemory;
     const local_len = source.locals.len() - source_prefix.locals;
     const source_string_bytes = source.strings.encodedBytesFrom(source_prefix.string_bytes);
     const source_string_entries = source.stringEntryCountFrom(source_prefix.string_bytes) orelse
@@ -768,6 +882,9 @@ pub fn appendBodyShardWithJoinRelocation(
     try self.u64s.ensureUnusedCapacity(self.allocator, source.u64s.len() - source_prefix.u64s);
     try self.u32s.ensureUnusedCapacity(self.allocator, source.u32s.len() - source_prefix.u32s);
     try self.erased_call_arg_plans.ensureUnusedCapacity(self.allocator, source.erased_call_arg_plans.len() - source_prefix.erased_call_arg_plans);
+    inline for (0..stmt_row_column_count) |column| {
+        try self.stmt_rows[column].ensureUnusedCapacity(self.allocator, source.stmt_rows[column].len() - source_prefix.stmt_rows[column]);
+    }
     try self.inline_scopes.ensureUnusedCapacity(self.allocator, source.inline_scopes.len() - source_prefix.inline_scopes);
 
     self.strings.appendEncodedAssumeCapacity(source_string_bytes);
@@ -789,6 +906,11 @@ pub fn appendBodyShardWithJoinRelocation(
     self.u64s.appendSliceAssumeCapacity(source.u64s.unsafeRawItemsForView()[source_prefix.u64s..]);
     self.u32s.appendSliceAssumeCapacity(source.u32s.unsafeRawItemsForView()[source_prefix.u32s..]);
     for (source.erased_call_arg_plans.unsafeRawItemsForView()[source_prefix.erased_call_arg_plans..]) |item| self.erased_call_arg_plans.appendAssumeCapacity(relocateBodyValue(ErasedCallArgsPlan, item, prefix, bases));
+    inline for (stmt_row_types, 0..) |Row, column| {
+        for (source.stmt_rows[column].unsafeRawItemsForView()[source_prefix.stmt_rows[column]..]) |item| {
+            self.stmt_rows[column].appendAssumeCapacity(relocateBodyValue(Row, item, prefix, bases));
+        }
+    }
     for (source.locals.unsafeRawItemsForView()[source_prefix.locals..]) |item| self.locals.appendAssumeCapacity(relocateBodyValue(Local, item, prefix, bases));
     for (source.local_names.unsafeRawItemsForView()[source_prefix.locals..]) |name| {
         self.local_names.appendAssumeCapacity(
@@ -848,6 +970,9 @@ local_ids: GuardedList.List(LocalId, "LirStore.local_ids"),
 u64s: GuardedList.List(u64, "LirStore.u64s"),
 u32s: GuardedList.List(u32, "LirStore.u32s"),
 erased_call_arg_plans: GuardedList.List(ErasedCallArgsPlan, "LirStore.erased_call_arg_plans"),
+/// Immutable out-of-line statement rows, one column per `stmt_row_types`
+/// entry, named by `LIR.StmtRowId`s held in statements.
+stmt_rows: StmtRowColumns,
 proc_specs: GuardedList.List(LirProcSpec, "LirStore.proc_specs"),
 strings: base.StringLiteral.Store,
 /// Boxy semantic names and their transient insertion index.
@@ -925,6 +1050,7 @@ pub fn init(allocator: Allocator) Self {
         .u64s = .empty,
         .u32s = .empty,
         .erased_call_arg_plans = .empty,
+        .stmt_rows = emptyStmtRows(),
         .proc_specs = .empty,
         .strings = base.StringLiteral.Store{},
         .string_builder = .{},
@@ -1004,6 +1130,10 @@ pub fn releaseCode(self: *Self) void {
         @field(self, field).deinit(self.allocator);
         @field(self, field) = .empty;
     }
+    inline for (0..stmt_row_column_count) |column| {
+        self.stmt_rows[column].deinit(self.allocator);
+        self.stmt_rows[column] = .empty;
+    }
 }
 
 /// Releases all storage owned by this LIR store.
@@ -1019,6 +1149,7 @@ pub fn deinit(self: *Self) void {
     self.u64s.deinit(self.allocator);
     self.u32s.deinit(self.allocator);
     self.erased_call_arg_plans.deinit(self.allocator);
+    inline for (0..stmt_row_column_count) |column| self.stmt_rows[column].deinit(self.allocator);
     self.proc_specs.deinit(self.allocator);
     self.string_builder.deinit(self.allocator);
     self.strings.deinit(self.allocator);
@@ -1162,14 +1293,13 @@ pub fn sourceFileQualifiedName(self: *const Self, file: u32) []const u8 {
 /// they own their diagnostic wherever they surface.
 pub fn failureMeaning(self: *const Self, stmt: CFStmtId) ?lir_defs.FailureMeaning {
     return switch (self.getCFStmt(stmt)) {
-        .crash => |crash| if (crash.checked_error)
-            .checked_error
-        else if (crash.failed_value) |value|
-            .{ .failed_value = .{ .module = self.loweringModuleKey(value.owner), .producer = value.producer } }
-        else if (crash.literal_rejection) |site|
-            .{ .literal_rejection = .{ .module = self.loweringModuleKey(site.owner), .checked_expr = site.checked_expr, .kind = site.kind } }
-        else
-            null,
+        .crash => |crash| crash: {
+            if (crash.checked_error) break :crash .checked_error;
+            const extra = self.stmtRowOrDefault(crash.extra);
+            if (extra.failed_value) |value| break :crash .{ .failed_value = .{ .module = self.loweringModuleKey(value.owner), .producer = value.producer } };
+            if (extra.literal_rejection) |site| break :crash .{ .literal_rejection = .{ .module = self.loweringModuleKey(site.owner), .checked_expr = site.checked_expr, .kind = site.kind } };
+            break :crash null;
+        },
         .comptime_exhaustiveness_failed => |failed| .{ .exhaustiveness = .{
             .module = self.loweringModuleKey(failed.owner),
             .checked_site = failed.checked_site,
@@ -1665,6 +1795,115 @@ pub fn getErasedCallArgOffsets(self: *const Self, plan: ErasedCallArgsPlan) Stor
     return self.getU32Span(plan.offsets);
 }
 
+fn emptyStmtRows() StmtRowColumns {
+    var columns: StmtRowColumns = undefined;
+    inline for (0..stmt_row_column_count) |column| columns[column] = .empty;
+    return columns;
+}
+
+fn stmtRowLengths(self: *const Self) [stmt_row_column_count]u32 {
+    var lengths: [stmt_row_column_count]u32 = undefined;
+    inline for (0..stmt_row_column_count) |column| lengths[column] = @intCast(self.stmtRowCount(column));
+    return lengths;
+}
+
+fn ownStmtRowLengths(self: *const Self) [stmt_row_column_count]u32 {
+    var lengths: [stmt_row_column_count]u32 = undefined;
+    inline for (0..stmt_row_column_count) |column| lengths[column] = @intCast(self.stmt_rows[column].len());
+    return lengths;
+}
+
+fn stmtRowPrefixFits(self: *const Self, prefix: BodyPrefix) bool {
+    inline for (0..stmt_row_column_count) |column| {
+        if (prefix.stmt_rows[column] > self.stmt_rows[column].len()) return false;
+    }
+    return true;
+}
+
+/// Number of rows in one out-of-line statement row column, including a body
+/// worker's coordinator prefix.
+pub fn stmtRowCount(self: *const Self, comptime column: usize) usize {
+    return self.stmt_rows[column].len() + if (self.body_coordinator != null) self.body_prefix.stmt_rows[column] else 0;
+}
+
+/// Adds an immutable out-of-line statement row and returns its id.
+pub fn addStmtRow(self: *Self, comptime T: type, row: T) Allocator.Error!lir_defs.StmtRowId(T) {
+    const column = comptime stmtRowColumn(T);
+    const index = self.stmtRowCount(column);
+    // The largest id names no row.
+    if (index >= std.math.maxInt(u32)) return error.OutOfMemory;
+    try self.stmt_rows[column].append(self.allocator, row);
+    return @fromBackingInt(@intCast(index));
+}
+
+/// The out-of-line statement row `id` names, which must not be `none`.
+pub fn stmtRow(self: *const Self, id: anytype) @TypeOf(id).Row {
+    const Id = @TypeOf(id);
+    comptime std.debug.assert(isStmtRowId(Id));
+    std.debug.assert(id != .none);
+    const column = comptime stmtRowColumn(Id.Row);
+    const index = @backingInt(id);
+    if (self.body_coordinator) |coordinator| {
+        if (index < self.body_prefix.stmt_rows[column]) return coordinator.stmtRow(id);
+        return self.stmt_rows[column].get(index - self.body_prefix.stmt_rows[column]);
+    }
+    return self.stmt_rows[column].get(index);
+}
+
+/// The optional out-of-line statement row `id` names, or null for `none`.
+pub fn optionalStmtRow(self: *const Self, id: anytype) ?@TypeOf(id).Row {
+    if (id == .none) return null;
+    return self.stmtRow(id);
+}
+
+/// The optional out-of-line statement row `id` names. `none` means every field
+/// of the row has its default.
+pub fn stmtRowOrDefault(self: *const Self, id: anytype) @TypeOf(id).Row {
+    if (id == .none) return .{};
+    return self.stmtRow(id);
+}
+
+/// Adds an optional out-of-line statement row, or names none when every field
+/// of `row` has its default.
+pub fn addOptionalStmtRow(self: *Self, comptime T: type, row: T) Allocator.Error!lir_defs.StmtRowId(T) {
+    if (std.meta.eql(row, T{})) return .none;
+    return self.addStmtRow(T, row);
+}
+
+/// Adds a row for a present optional value, or names none for null.
+pub fn addStmtRowIfPresent(self: *Self, comptime T: type, value: ?T) Allocator.Error!lir_defs.StmtRowId(T) {
+    return if (value) |row| self.addStmtRow(T, row) else .none;
+}
+
+/// The list-of-copies facts of a literal read: set only for a static data
+/// read of a compile-time list of copies.
+pub fn literalExtra(self: *const Self, value: lir_defs.LiteralValue) lir_defs.LiteralExtra {
+    if (value != .static_data) return .{};
+    return self.stmtRowOrDefault(value.static_data.copies);
+}
+
+/// Adds the compact form of a reference-count helper for an `incref`,
+/// `decref`, or `free`.
+pub fn addRcHelperRef(self: *Self, helper: lir_defs.RcHelper) Allocator.Error!lir_defs.RcHelperRef {
+    return switch (helper) {
+        .concrete => |concrete| .{ .concrete = concrete },
+        .boxy => |desc| .{ .boxy = try self.addStmtRow(lir_defs.BoxyDescRef, desc) },
+    };
+}
+
+/// The reference-count helper a compact helper names.
+pub fn rcHelper(self: *const Self, helper: lir_defs.RcHelperRef) lir_defs.RcHelper {
+    return switch (helper) {
+        .concrete => |concrete| .{ .concrete = concrete },
+        .boxy => |desc| .{ .boxy = self.stmtRow(desc) },
+    };
+}
+
+/// Adds the reference-count effect of a low-level operation.
+pub fn addRcEffect(self: *Self, effect: lir_defs.LowLevel.RcEffect) Allocator.Error!lir_defs.StmtRowId(lir_defs.LowLevel.RcEffect) {
+    return self.addStmtRow(lir_defs.LowLevel.RcEffect, effect);
+}
+
 // Statement provenance API (design.md "Statement Provenance").
 //
 // `addCFStmt` and `replaceCFStmt` are the only statement-creation and
@@ -1674,6 +1913,7 @@ pub fn getErasedCallArgOffsets(self: *const Self, plan: ErasedCallArgsPlan) Stor
 /// Appends a statement with its explicit provenance and returns its id.
 pub fn addCFStmt(self: *Self, stmt: CFStmt, origin: StmtOrigin) Allocator.Error!CFStmtId {
     const idx = self.cf_stmts.len() + if (self.body_coordinator != null) self.body_prefix.cf_stmts else 0;
+    if (idx >= lir_defs.max_cf_stmt_count) return error.OutOfMemory;
     try self.cf_stmts.ensureUnusedCapacity(self.allocator, 1);
     try self.cf_stmt_locs.ensureUnusedCapacity(self.allocator, 1);
     try self.cf_stmt_regions.ensureUnusedCapacity(self.allocator, 1);
@@ -1797,7 +2037,7 @@ pub fn addLowLevelStmt(
     return self.addCFStmt(.{ .assign_low_level = .{
         .target = target,
         .op = op,
-        .rc_effect = op.rcEffect(),
+        .rc_effect = try self.addRcEffect(op.rcEffect()),
         .args = try self.addLocalSpan(args),
         .next = next,
     } }, origin);
@@ -2066,7 +2306,7 @@ test "procedure rewrite shards preserve frozen prefixes and relocate ordered com
         .proc = first,
         .args = span_a,
         .next = appended_a,
-        .tail_call = .{ .next = appended_a },
+        .tail_call = .site(appended_a),
     } };
     GuardedList.atPtr(a.getCFSwitchBranchesMut(branches), 0).body = appended_a;
     GuardedList.atPtr(a.getJoinPointSpanMut(joins), 0).params = span_a;
@@ -2099,7 +2339,7 @@ test "procedure rewrite shards preserve frozen prefixes and relocate ordered com
     try std.testing.expectEqual(appended_a, committed_a.body.?);
     try std.testing.expectEqual(@backingInt(appended_b) + 1, @backingInt(committed_b.body.?));
     try std.testing.expectEqual(committed_a.body.?, coordinator.getCFStmt(ret).assign_call.next);
-    try std.testing.expectEqual(committed_a.body.?, coordinator.getCFStmt(ret).assign_call.tail_call.?.next.?);
+    try std.testing.expectEqual(committed_a.body.?, coordinator.getCFStmt(ret).assign_call.tail_call.next().?);
     try std.testing.expectEqual(committed_a.body.?, committed_a.tail_calls.?.head);
     try std.testing.expectEqual(@as(u32, 77), @backingInt(committed_a.tail_calls.?.loop));
     try std.testing.expectEqual(lir_defs.TailTransform.tce, committed_a.tail_transform);
@@ -2204,14 +2444,14 @@ test "procedure rewrite prepares tail chains and overlapping arm spans" {
         .proc = proc,
         .args = .empty(),
         .next = ret,
-        .tail_call = .{ .next = null },
+        .tail_call = .site(null),
     } }, .test_fixture);
     const head = try coordinator.addCFStmt(.{ .assign_call = .{
         .target = local,
         .proc = proc,
         .args = .empty(),
         .next = ret,
-        .tail_call = .{ .next = tail },
+        .tail_call = .site(tail),
     } }, .test_fixture);
     const text = try coordinator.insertString("prefix");
     const arm: StrMatchArm = .{
@@ -2242,13 +2482,13 @@ test "procedure rewrite prepares tail chains and overlapping arm spans" {
     try std.testing.expectEqual(@as(usize, 2), worker.proc_rewrite.?.str_match_arms.data.rows.len());
     const appended = try worker.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
     GuardedList.atPtr(worker.getStrMatchArmsMut(subset), 0).on_match = appended;
-    worker.getCFStmtPtr(tail).assign_call.tail_call.?.next = appended;
+    worker.getCFStmtPtr(tail).assign_call.tail_call = .site(appended);
     try std.testing.expectEqual(appended, GuardedList.at(worker.getStrMatchArms(arms), 1).on_match);
     try std.testing.expectEqual(ret, GuardedList.at(coordinator.getStrMatchArms(arms), 1).on_match);
-    try std.testing.expect(coordinator.getCFStmt(tail).assign_call.tail_call.?.next == null);
+    try std.testing.expect(coordinator.getCFStmt(tail).assign_call.tail_call.next() == null);
     try coordinator.commitProcRewriteWithJoinRelocation(&worker, null);
     try std.testing.expectEqual(appended, GuardedList.at(coordinator.getStrMatchArms(arms), 1).on_match);
-    try std.testing.expectEqual(appended, coordinator.getCFStmt(tail).assign_call.tail_call.?.next.?);
+    try std.testing.expectEqual(appended, coordinator.getCFStmt(tail).assign_call.tail_call.next().?);
 }
 
 test "procedure rewrite allocation failures leave coordinator unchanged" {
@@ -2675,8 +2915,11 @@ pub fn compactProcSpecs(self: *Self, reachable: []const bool) void {
     self.proc_locs.shrinkRetainingCapacity(write);
 }
 
-/// Compacts control-flow statements and their parallel debug metadata in place.
-pub fn compactCFStmts(self: *Self, reachable: []const bool) void {
+/// Compacts control-flow statements and their parallel debug metadata in place,
+/// drops every out-of-line row no remaining statement names, and releases the
+/// capacity the removed statements and rows occupied.
+pub fn compactCFStmts(self: *Self, reachable: []const bool) Allocator.Error!void {
+    std.debug.assert(self.body_coordinator == null and self.proc_rewrite == null);
     std.debug.assert(reachable.len == self.cf_stmts.len());
     std.debug.assert(self.cf_stmts.len() == self.cf_stmt_locs.len());
     std.debug.assert(self.cf_stmts.len() == self.cf_stmt_regions.len());
@@ -2698,11 +2941,80 @@ pub fn compactCFStmts(self: *Self, reachable: []const bool) void {
         cf_stmt_origin_kinds[write] = origin_kind;
         write += 1;
     }
-    self.cf_stmts.shrinkRetainingCapacity(write);
-    self.cf_stmt_locs.shrinkRetainingCapacity(write);
-    self.cf_stmt_regions.shrinkRetainingCapacity(write);
-    self.cf_stmt_inline_scopes.shrinkRetainingCapacity(write);
-    self.cf_stmt_origin_kinds.shrinkRetainingCapacity(write);
+    self.cf_stmts.shrinkAndFree(self.allocator, write);
+    self.cf_stmt_locs.shrinkAndFree(self.allocator, write);
+    self.cf_stmt_regions.shrinkAndFree(self.allocator, write);
+    self.cf_stmt_inline_scopes.shrinkAndFree(self.allocator, write);
+    self.cf_stmt_origin_kinds.shrinkAndFree(self.allocator, write);
+    try self.compactStmtRows();
+}
+
+/// Marks a remapped row that no statement names.
+const unnamed_stmt_row = std.math.maxInt(u32);
+
+/// Drops every out-of-line row no statement names, renumbering the rest in
+/// order. Every remap is allocated before any row moves, so allocation
+/// failure leaves the store unchanged.
+fn compactStmtRows(self: *Self) Allocator.Error!void {
+    var remaps: [stmt_row_column_count][]u32 = undefined;
+    var allocated: usize = 0;
+    defer for (remaps[0..allocated]) |remap| self.allocator.free(remap);
+    inline for (0..stmt_row_column_count) |column| {
+        remaps[column] = try self.allocator.alloc(u32, self.stmt_rows[column].len());
+        allocated += 1;
+        @memset(remaps[column], unnamed_stmt_row);
+    }
+    for (self.cf_stmts.unsafeRawItemsMutForStore()) |*stmt| visitStmtRowIds(CFStmt, stmt, &remaps, .mark);
+    inline for (0..stmt_row_column_count) |column| {
+        const rows = self.stmt_rows[column].unsafeRawItemsMutForStore();
+        var write: u32 = 0;
+        for (remaps[column], 0..) |*remap, index| {
+            if (remap.* == unnamed_stmt_row) continue;
+            remap.* = write;
+            rows[write] = rows[index];
+            write += 1;
+        }
+        self.stmt_rows[column].shrinkAndFree(self.allocator, write);
+    }
+    for (self.cf_stmts.unsafeRawItemsMutForStore()) |*stmt| visitStmtRowIds(CFStmt, stmt, &remaps, .rename);
+}
+
+/// Marks (`.mark`) or renames to their remapped ids (`.rename`) the
+/// out-of-line row ids a statement value holds.
+fn visitStmtRowIds(comptime T: type, value: *T, remaps: *[stmt_row_column_count][]u32, comptime action: enum { mark, rename }) void {
+    if (comptime isStmtRowId(T)) {
+        if (value.* == .none) return;
+        const remap = remaps[comptime stmtRowColumn(T.Row)];
+        switch (action) {
+            .mark => remap[@backingInt(value.*)] = 0,
+            .rename => value.* = @fromBackingInt(remap[@backingInt(value.*)]),
+        }
+        return;
+    }
+    const info = @typeInfo(T);
+    if (comptime info == .optional) {
+        if (value.*) |*payload| visitStmtRowIds(info.optional.child, payload, remaps, action);
+    } else if (comptime info == .@"struct") {
+        inline for (info.@"struct".field_names, info.@"struct".field_types) |field_name, field_type| {
+            if (comptime holdsStmtRowId(field_type)) visitStmtRowIds(field_type, &@field(value.*, field_name), remaps, action);
+        }
+    } else if (comptime info == .@"union") {
+        const Tag = info.@"union".tag_type.?;
+        inline for (info.@"union".field_names, info.@"union".field_types) |field_name, field_type| {
+            if (comptime holdsStmtRowId(field_type)) {
+                if (std.meta.activeTag(value.*) == @field(Tag, field_name)) {
+                    visitStmtRowIds(field_type, &@field(value.*, field_name), remaps, action);
+                }
+            }
+        }
+    }
+}
+
+/// Whether a value of type `T` can hold an out-of-line row id.
+fn holdsStmtRowId(comptime T: type) bool {
+    @setEvalBranchQuota(100_000);
+    if (isStmtRowId(T)) return true;
+    return anyFieldType(T, holdsStmtRowId);
 }
 
 /// Reports whether any local in a span has a layout that requires stack probing.
@@ -2784,10 +3096,12 @@ test "body shard relocates erased-call layouts into the program table" {
     const ret = try worker.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
     const call = try worker.addCFStmt(.{ .assign_call_erased = .{
         .target = result,
-        .closure = closure,
-        .args = try worker.addLocalSpan(&.{arg}),
-        .arg_layouts = .{ .start = 1, .len = 1 },
-        .arg_plan = try worker.internErasedCallArgsPlan(&layouts, &.{.u64}),
+        .data = try worker.addStmtRow(lir_defs.ErasedCallData, .{
+            .closure = closure,
+            .args = try worker.addLocalSpan(&.{arg}),
+            .arg_layouts = .{ .start = 1, .len = 1 },
+            .arg_plan = try worker.internErasedCallArgsPlan(&layouts, &.{.u64}),
+        }),
         .next = ret,
     } }, .test_fixture);
     var runtime_layouts: std.ArrayList(layout.Idx) = .empty;
@@ -2797,11 +3111,12 @@ test "body shard relocates erased-call layouts into the program table" {
     shard.erased_arg_layout_base = @intCast(runtime_layouts.items.len);
     try runtime_layouts.appendSlice(allocator, &.{ .u32, .u64 });
     const appended = try coordinator.appendBodyShard(shard, call, .empty(), null);
-    const relocated = coordinator.getCFStmt(appended.root.?).assign_call_erased;
+    const relocated_stmt = coordinator.getCFStmt(appended.root.?).assign_call_erased;
+    const relocated = coordinator.stmtRow(relocated_stmt.data);
     try std.testing.expectEqual(@as(u32, 3), relocated.arg_layouts.start);
     try std.testing.expectEqual(@as(u32, 1), relocated.arg_layouts.len);
     try std.testing.expectEqual(layout.Idx.u64, runtime_layouts.items[relocated.arg_layouts.start]);
-    try std.testing.expectEqual(appended.relocation.local(prefix, result), relocated.target);
+    try std.testing.expectEqual(appended.relocation.local(prefix, result), relocated_stmt.target);
     try std.testing.expectEqual(closure, relocated.closure);
 }
 
@@ -2872,8 +3187,8 @@ fn testTailCallRelocation(existing_join: ?u32) (AppendBodyError || error{ TestEx
         try std.testing.expectEqual(100 + id, @backingInt(coordinator.getCFStmt(appended.root.?).join.id));
     }
     try std.testing.expectEqual(appended.relocation.stmt(prefix, second), head);
-    const link = coordinator.getCFStmt(head).assign_call.tail_call.?.next.?;
+    const link = coordinator.getCFStmt(head).assign_call.tail_call.next().?;
     try std.testing.expectEqual(appended.relocation.stmt(prefix, first), link);
-    try std.testing.expect(coordinator.getCFStmt(link).assign_call.tail_call.?.next == null);
+    try std.testing.expect(coordinator.getCFStmt(link).assign_call.tail_call.next() == null);
     try std.testing.expect(coordinator.tail_call_builder == null);
 }

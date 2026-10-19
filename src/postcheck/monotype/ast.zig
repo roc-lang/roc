@@ -256,6 +256,10 @@ pub const FnTemplate = struct {
     /// so such a procedure never stands for, or is merged with, the procedure
     /// an evaluation lowers from the same template and types.
     discovery: bool = false,
+    /// The `spec_key` a procedure lowered only for discovery was reserved
+    /// under. Its discovery summary is recorded under this key (design.md
+    /// "Discovery Summaries"); the procedure itself has no object-cache key.
+    discovery_key: ?names.TypeDigest = null,
     /// Explicit dispatch selections captured when this specialization was
     /// created, retained for compile-time function values.
     const_evidence: Span(check.ConstStore.ConstFnEvidence) = Span(check.ConstStore.ConstFnEvidence).empty(),

@@ -618,10 +618,15 @@ pub const ComptimeValueGuard = struct {
     value_slot: LIR.StaticDataId,
 };
 
+/// The namespace of every symbol the compiler invents for generated code or
+/// data. Platforms and hosts share the `roc_` interface (one underscore) with
+/// Roc; nothing but the compiler defines a name in this one.
+pub const compiler_symbol_namespace = "roc__";
+
 /// Prefix of a datum named by content, the same in every program:
 /// `roc__h{hash}`, for a string literal's backing or a constant an
 /// object-cache pack carries.
-pub const content_data_symbol_prefix = "roc__h";
+pub const content_data_symbol_prefix = compiler_symbol_namespace ++ "h";
 
 /// Symbol of the value in static-data slot `id`: `roc__d{id}`. The naming
 /// scheme is in design.md, "Object Symbol Names".

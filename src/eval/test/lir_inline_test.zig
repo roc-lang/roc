@@ -10587,11 +10587,11 @@ fn recordFieldReadCounts(
     while (steps < 4096) : (steps += 1) {
         switch (store.getCFStmtImmediate(cursor).*) {
             .assign_ref => |stmt| {
-                switch (stmt.op) {
-                    .local => |src| if (aliases.contains(src)) try aliases.put(stmt.target, {}),
-                    .field => |ref| if (aliases.contains(ref.source)) {
-                        try total.put(ref.field_idx, {});
-                        if (!seen_call) try before.put(ref.field_idx, {});
+                switch (stmt.op.kind) {
+                    .local => if (aliases.contains(stmt.op.source)) try aliases.put(stmt.target, {}),
+                    .field => if (aliases.contains(stmt.op.source)) {
+                        try total.put(stmt.op.index, {});
+                        if (!seen_call) try before.put(stmt.op.index, {});
                     },
                     .discriminant,
                     .tag_payload,
@@ -10711,9 +10711,9 @@ fn fieldReadRetainCount(
             if (seen.found_existing) continue;
             switch (store.getCFStmtImmediate(cursor).*) {
                 .assign_ref => |stmt| {
-                    switch (stmt.op) {
+                    switch (stmt.op.kind) {
                         .field => try read_targets.put(stmt.target, {}),
-                        .local => |src| if (read_targets.contains(src)) {
+                        .local => if (read_targets.contains(stmt.op.source)) {
                             try read_targets.put(stmt.target, {});
                         },
                         .discriminant,
@@ -11231,7 +11231,7 @@ fn listSetCounts(store: *const lir.LirStore, proc_id: LIR.LirProcSpecId) ListSet
         switch (store.getCFStmtImmediate(cursor).*) {
             .assign_low_level => |stmt| {
                 if (stmt.op == .list_set) {
-                    if (stmt.unique_args == 0) counts.checked += 1 else counts.check_free += 1;
+                    if (store.stmtRowOrDefault(stmt.extra).unique_args == 0) counts.checked += 1 else counts.check_free += 1;
                 }
                 if (top < cursor_stack.len) {
                     cursor_stack[top] = stmt.next;

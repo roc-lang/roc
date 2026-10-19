@@ -1408,6 +1408,8 @@ pub const ComptimeDemand = postcheck.Monotype.Lower.ComptimeDemand;
 pub const ComptimeRootGraph = postcheck.ComptimeRootGraph;
 /// See `postcheck.Monotype.Lower.SpecComptimeReads`.
 pub const SpecComptimeReads = postcheck.Monotype.Lower.SpecComptimeReads;
+/// See `postcheck.DiscoverySummary`.
+pub const DiscoverySummary = postcheck.DiscoverySummary;
 /// See `postcheck.Common.ComptimeRootRead`.
 pub const ComptimeRootRead = postcheck.Common.ComptimeRootRead;
 /// A checked compile-time root named in a `ComptimeDemand`.

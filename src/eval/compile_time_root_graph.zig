@@ -147,17 +147,18 @@ pub fn build(
                     _ = try unionInto(allocator, &effects.packs, workers.items);
                 },
                 .assign_packed_erased_fn => |pack| {
-                    try insertSorted(allocator, &effects.packs, @backingInt(pack.proc));
-                    try pending.append(allocator, @backingInt(pack.proc));
+                    const packed_proc = store.stmtRow(pack.data).proc;
+                    try insertSorted(allocator, &effects.packs, @backingInt(packed_proc));
+                    try pending.append(allocator, @backingInt(packed_proc));
                 },
                 .assign_literal => |assign| {
-                    if (assign.fresh_alternative) |constructor| try addCallee(allocator, &callees[proc_index], &pending, constructor);
+                    if (store.literalExtra(assign.value).fresh_alternative) |constructor| try addCallee(allocator, &callees[proc_index], &pending, constructor);
                     switch (assign.value) {
                         .proc_ref => |referenced| {
                             try insertSorted(allocator, &effects.packs, @backingInt(referenced));
                             try pending.append(allocator, @backingInt(referenced));
                         },
-                        .static_data => |slot| if (slot_producers[@backingInt(slot)]) |producer| {
+                        .static_data => |read| if (slot_producers[@backingInt(read.id)]) |producer| {
                             try insertSorted(allocator, &effects.reads, @intCast(producer));
                         },
                         .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .bytes_literal => {},
@@ -338,7 +339,7 @@ test "a root depends on the producers of every slot the procedures it calls read
     const allocator = std.testing.allocator;
     var procs = try TestProcs.init(allocator);
     defer procs.store.deinit();
-    const read = try procs.store.addCFStmt(.{ .assign_literal = .{ .target = procs.unit, .value = .{ .static_data = testSlot(0) }, .next = try procs.ret() } }, .test_fixture);
+    const read = try procs.store.addCFStmt(.{ .assign_literal = .{ .target = procs.unit, .value = .{ .static_data = .{ .id = testSlot(0) } }, .next = try procs.ret() } }, .test_fixture);
     const reader = try procs.proc(read);
     const call = try procs.store.addCFStmt(.{ .assign_call = .{ .target = procs.unit, .proc = reader, .args = LIR.LocalSpan.empty(), .next = try procs.ret() } }, .test_fixture);
     const caller = try procs.proc(call);
@@ -353,9 +354,9 @@ test "a packed callable's reads join only an evaluation that makes an erased cal
     const allocator = std.testing.allocator;
     var procs = try TestProcs.init(allocator);
     defer procs.store.deinit();
-    const read = try procs.store.addCFStmt(.{ .assign_literal = .{ .target = procs.unit, .value = .{ .static_data = testSlot(0) }, .next = try procs.ret() } }, .test_fixture);
+    const read = try procs.store.addCFStmt(.{ .assign_literal = .{ .target = procs.unit, .value = .{ .static_data = .{ .id = testSlot(0) } }, .next = try procs.ret() } }, .test_fixture);
     const callable = try procs.proc(read);
-    const pack = try procs.store.addCFStmt(.{ .assign_packed_erased_fn = .{ .target = procs.unit, .proc = callable, .capture = null, .capture_layout = null, .on_drop = .none, .reuse = null, .next = try procs.ret() } }, .test_fixture);
+    const pack = try procs.store.addCFStmt(.{ .assign_packed_erased_fn = .{ .target = procs.unit, .data = try procs.store.addStmtRow(LIR.PackedErasedFnData, .{ .proc = callable, .capture = null, .capture_layout = null, .on_drop = .none }), .next = try procs.ret() } }, .test_fixture);
     const packer = try procs.proc(pack);
     var graph = try build(allocator, &procs.store, &.{packer}, &.{0}, &.{});
     defer graph.deinit(allocator);

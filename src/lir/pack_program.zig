@@ -505,8 +505,11 @@ pub fn procCallClosure(allocator: Allocator, store: *const LirStore, root: LIR.L
             seen[@backingInt(stmt_id)] = true;
             const callee: ?LIR.LirProcSpecId = switch (store.getCFStmtImmediate(stmt_id).*) {
                 .assign_call => |call| call.proc,
-                .assign_packed_erased_fn => |packed_fn| packed_fn.proc,
-                .assign_literal => |literal| literal.fresh_alternative,
+                .assign_packed_erased_fn => |packed_fn_stmt| blk_packed_fn: {
+                    const packed_fn = store.stmtRow(packed_fn_stmt.data);
+                    break :blk_packed_fn packed_fn.proc;
+                },
+                .assign_literal => |literal| store.literalExtra(literal.value).fresh_alternative,
                 .init_uninitialized,
                 .assign_ref,
                 .assign_call_erased,
@@ -592,7 +595,7 @@ pub fn literalConvertingProcs(allocator: Allocator, store: *const LirStore) Allo
             seen[@backingInt(stmt_id)] = true;
             try visited.append(allocator, stmt_id);
             const stmt = store.getCFStmtImmediate(stmt_id);
-            if (stmt.* == .crash and stmt.crash.literal_rejection != null) {
+            if (stmt.* == .crash and store.stmtRowOrDefault(stmt.crash.extra).literal_rejection != null) {
                 result.* = true;
                 break;
             }

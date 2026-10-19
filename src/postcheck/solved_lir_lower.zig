@@ -2540,7 +2540,7 @@ const Lowerer = struct {
         if (self.return_forwarding_repeatable_depth != 0) {
             Common.invariant("static initializer lowering left a repeatable return-forwarding region active");
         }
-        self.resolveErasedCallOwnerUses(erased_owner_use_start);
+        try self.resolveErasedCallOwnerUses(erased_owner_use_start);
         const frame_locals = try self.writeFrameLocals(&proc_locals);
         const proc = self.result.store.getProcSpecPtr(initializer.proc);
         proc.body = body;
@@ -2707,7 +2707,7 @@ const Lowerer = struct {
                         body,
                     );
                 }
-                self.resolveErasedCallOwnerUses(erased_owner_use_start);
+                try self.resolveErasedCallOwnerUses(erased_owner_use_start);
 
                 const frame_locals = try self.writeFrameLocals(&proc_locals);
                 const proc = self.result.store.getProcSpec(proc_id);
@@ -2787,7 +2787,9 @@ const Lowerer = struct {
             .target = ret_local,
             .proc = try self.markReachableFn(plain_fn),
             .args = try self.result.store.addLocalSpan(plain_args),
-            .is_cold = false,
+            .extra = try self.result.store.addOptionalStmtRow(LIR.CallExtra, .{
+                .is_cold = false,
+            }),
             .next = ret_stmt,
         } }, origin);
         const frame_locals = try self.writeFrameLocals(&proc_locals);
@@ -3092,7 +3094,9 @@ const Lowerer = struct {
                 try self.solved.lifted.appCalleesReachedBy(spec.source, &app_callees, self.allocator);
                 for (app_callees.items) |callee| try self.served_member_fns.append(self.allocator, try self.ensureOwnFnSpec(callee, .finite));
             }
-            for (0..arg_tys.len) |i| try self.queueCallableMembers(GuardedList.at(arg_tys, i));
+            // Specializing those callees can grow the type store, so the
+            // argument types are read from it afresh.
+            for (0..arg_tys.len) |i| try self.queueCallableMembers(GuardedList.at(self.types.span(entry.args), i));
             if (entry.capture_arg_ty) |capture_arg_ty| try self.queueCallableMembers(capture_arg_ty);
             try self.queueCallableMembers(entry.ret);
         }
@@ -3292,7 +3296,7 @@ const Lowerer = struct {
             capture.ty,
             capture.storage_ty,
             self.localFieldLayout(record_local, field_index),
-            .{ .field = .{ .source = record_local, .field_idx = field_index } },
+            LIR.RefOp.field(record_local, field_index),
             next,
         );
         return switch (capture.source) {
@@ -3700,7 +3704,7 @@ const Lowerer = struct {
         return try self.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = target,
             .op = .erased_capture_load,
-            .rc_effect = LIR.LowLevel.erased_capture_load.rcEffect(),
+            .rc_effect = try self.result.store.addRcEffect(LIR.LowLevel.erased_capture_load.rcEffect()),
             .args = try self.result.store.addLocalSpan(&[_]LIR.LocalId{ptr}),
             .next = next,
         } }, where.source());
@@ -3723,7 +3727,7 @@ const Lowerer = struct {
         return try self.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = target,
             .op = .erased_capture_load,
-            .rc_effect = LIR.LowLevel.RcEffect.retainsResult(),
+            .rc_effect = try self.result.store.addRcEffect(LIR.LowLevel.RcEffect.retainsResult()),
             .args = try self.result.store.addLocalSpan(&[_]LIR.LocalId{ ptr, owner }),
             .next = next,
         } }, where.source());
@@ -5791,9 +5795,13 @@ const Lowerer = struct {
         }
         return try self.result.store.addCFStmt(.{ .assign_literal = .{
             .target = target,
-            .value = .{ .static_data = id },
-            .fresh_alternative = fresh_alternative,
-            .list_len = list_len,
+            .value = .{ .static_data = .{
+                .id = id,
+                .copies = try self.result.store.addOptionalStmtRow(LIR.LiteralExtra, .{
+                    .fresh_alternative = fresh_alternative,
+                    .list_len = list_len,
+                }),
+            } },
             .next = next,
         } }, where.source());
     }
@@ -5958,7 +5966,7 @@ const Lowerer = struct {
         where: LowerSite,
         target: LIR.LocalId,
         ty: Type.TypeId,
-        variant_index: u32,
+        variant_index: layout.VariantIndex,
         payloads: Lifted.Span(Lifted.ExprId),
         next: LIR.CFStmtId,
         restore_return_target: ?(?LIR.LocalId) = null,
@@ -6080,7 +6088,7 @@ const Lowerer = struct {
     const CallableVariantTask = struct {
         where: LowerSite,
         callee: LIR.LocalId,
-        variant_index: u32,
+        variant_index: layout.VariantIndex,
         payload: LIR.LocalId,
         /// The variant target's call, until it is started.
         call: ?KnownCallTask,
@@ -6133,9 +6141,9 @@ const Lowerer = struct {
         sequence: Mono.TrySequence,
         next: LIR.CFStmtId,
         input_try_local: LIR.LocalId = undefined,
-        ok_variant: u32 = undefined,
-        err_variant: u32 = undefined,
-        out_err_variant: u32 = undefined,
+        ok_variant: layout.VariantIndex = undefined,
+        err_variant: layout.VariantIndex = undefined,
+        out_err_variant: layout.VariantIndex = undefined,
     };
 
     const TryRecordSequenceTask = struct {
@@ -6145,9 +6153,9 @@ const Lowerer = struct {
         sequence: Mono.TryRecordSequence,
         next: LIR.CFStmtId,
         input_try_local: LIR.LocalId = undefined,
-        ok_variant: u32 = undefined,
-        err_variant: u32 = undefined,
-        out_err_variant: u32 = undefined,
+        ok_variant: layout.VariantIndex = undefined,
+        err_variant: layout.VariantIndex = undefined,
+        out_err_variant: layout.VariantIndex = undefined,
         ok_payload_ty: Type.TypeId = undefined,
     };
 
@@ -6179,7 +6187,7 @@ const Lowerer = struct {
         param_span: LIR.LocalSpan = undefined,
         maybe_uninitialized_span: LIR.LocalSpan = undefined,
         maybe_uninitialized_conditions_span: LIR.LocalSpan = undefined,
-        maybe_uninitialized_condition_masks_span: @FieldType(@FieldType(LIR.CFStmt, "join"), "maybe_uninitialized_condition_masks") = undefined,
+        maybe_uninitialized_condition_masks_span: @FieldType(LIR.JoinExtra, "maybe_uninitialized_condition_masks") = undefined,
         join_id: LIR.JoinPointId = undefined,
         body_stmt: LIR.CFStmtId = undefined,
     };
@@ -6198,7 +6206,7 @@ const Lowerer = struct {
         retained_span: LIR.LocalSpan = undefined,
         maybe_uninitialized_span: LIR.LocalSpan = undefined,
         maybe_uninitialized_conditions_span: LIR.LocalSpan = undefined,
-        maybe_uninitialized_condition_masks_span: @FieldType(@FieldType(LIR.CFStmt, "join"), "maybe_uninitialized_condition_masks") = undefined,
+        maybe_uninitialized_condition_masks_span: @FieldType(LIR.JoinExtra, "maybe_uninitialized_condition_masks") = undefined,
         lir_join_id: LIR.JoinPointId = undefined,
         body_stmt: LIR.CFStmtId = undefined,
     };
@@ -6609,11 +6617,7 @@ const Lowerer = struct {
                 }
                 const call = input.?;
                 if (self.isZstLocal(task.payload)) return .{ .ret = call };
-                return .{ .ret = try self.addAssignRef(task.where.source(), task.payload, .{ .tag_payload_struct = .{
-                    .source = task.callee,
-                    .variant_index = task.variant_index,
-                    .tag_discriminant = task.variant_index,
-                } }, call) };
+                return .{ .ret = try self.addAssignRef(task.where.source(), task.payload, LIR.RefOp.tagPayloadStruct(task.callee, task.variant_index, task.variant_index), call) };
             },
             .match_ => |*task| self.stepMatch(frame, task, input),
             .if_ => |*task| self.stepIf(frame, task, input),
@@ -6852,10 +6856,10 @@ const Lowerer = struct {
             .unit => .{ .ret = try self.assignZst(where, target, next) },
             .int_lit => |value| .{ .ret = try self.result.store.addCFStmt(.{ .assign_literal = .{
                 .target = target,
-                .value = .{ .i128_literal = .{
+                .value = .{ .i128_literal = try self.result.store.addStmtRow(LIR.I128Literal, .{
                     .value = value.toI128(),
                     .layout_idx = self.result.store.getLocal(target).layout_idx,
-                } },
+                }) },
                 .next = next,
             } }, where.source()) },
             .frac_f32_lit => |value| .{ .ret = try self.result.store.addCFStmt(.{ .assign_literal = .{
@@ -6985,7 +6989,7 @@ const Lowerer = struct {
                 const message = try self.addTemp(try self.lowerExprTy(rejected.msg));
                 const crash_stmt = try self.result.store.addCFStmt(.{ .crash = .{
                     .msg = .{ .local = message },
-                    .literal_rejection = rejected.site,
+                    .extra = try self.result.store.addStmtRow(LIR.CrashExtra, .{ .literal_rejection = rejected.site }),
                 } }, where.source());
                 break :blk .{ .tail = exprTask(where, message, rejected.msg, null, crash_stmt) };
             },
@@ -7052,9 +7056,13 @@ const Lowerer = struct {
             }
             return .{ .ret = try self.result.store.addCFStmt(.{ .assign_literal = .{
                 .target = target,
-                .value = .{ .static_data = id },
-                .fresh_alternative = fresh_alternative,
-                .list_len = list_len,
+                .value = .{ .static_data = .{
+                    .id = id,
+                    .copies = try self.result.store.addOptionalStmtRow(LIR.LiteralExtra, .{
+                        .fresh_alternative = fresh_alternative,
+                        .list_len = list_len,
+                    }),
+                } },
                 .next = next,
             } }, where.source()) };
         }
@@ -7352,7 +7360,7 @@ const Lowerer = struct {
                 task.type_fields[index].ty,
                 source_field_ty,
                 self.localFieldLayout(task.base_local, source_index),
-                .{ .field = .{ .source = task.base_local, .field_idx = source_index } },
+                LIR.RefOp.field(task.base_local, source_index),
                 task.current,
             );
         }
@@ -7573,7 +7581,7 @@ const Lowerer = struct {
                 const seed = task.plan.seeds[index];
                 const forwarding = self.enterReturnForwarding(seed.target);
                 defer self.leaveReturnForwarding(forwarding);
-                task.current = try self.assignTypedRefRead(task.where, seed.target, seed.target_ty, seed.source_ty, self.localFieldLayout(record_base.local, seed.source_index), .{ .field = .{ .source = record_base.local, .field_idx = seed.source_index } }, task.current);
+                task.current = try self.assignTypedRefRead(task.where, seed.target, seed.target_ty, seed.source_ty, self.localFieldLayout(record_base.local, seed.source_index), LIR.RefOp.field(record_base.local, seed.source_index), task.current);
             }
             frame.cursor = 2;
             return .{ .call = exprTask(task.where, record_base.local, record_base.expr, record_base.ty, task.current) };
@@ -7614,7 +7622,7 @@ const Lowerer = struct {
                     current = try self.storeRecursiveLetSlot(where, task.slots[index], item_local, current);
                     if (!self.isZstLocal(item_local)) {
                         const field_index: u16 = @intCast(index);
-                        current = try self.assignTypedRefRead(where, item_local, item_ty, item_ty, self.localFieldLayout(value, field_index), .{ .field = .{ .source = value, .field_idx = field_index } }, current);
+                        current = try self.assignTypedRefRead(where, item_local, item_ty, item_ty, self.localFieldLayout(value, field_index), LIR.RefOp.field(value, field_index), current);
                     }
                 }
             },
@@ -7728,11 +7736,13 @@ const Lowerer = struct {
         const reuse = try self.erasedCallableReuseForPack(target, capture_layout);
         const assign = try self.result.store.addCFStmt(.{ .assign_packed_erased_fn = .{
             .target = target,
-            .proc = try self.markReachableFn(fn_id),
-            .capture = capture,
-            .capture_layout = capture_layout,
-            .on_drop = self.erasedCallableOnDrop(capture_layout),
-            .reuse = reuse,
+            .data = try self.result.store.addStmtRow(LIR.PackedErasedFnData, .{
+                .proc = try self.markReachableFn(fn_id),
+                .capture = capture,
+                .capture_layout = capture_layout,
+                .on_drop = self.erasedCallableOnDrop(capture_layout),
+                .reuse = reuse,
+            }),
             .next = next,
         } }, where.source());
         if (capture_ty) |ty| return .{ .tail = try self.captureRecordTask(where, capture.?, captures, capture_operands, ty, assign) };
@@ -8003,7 +8013,9 @@ const Lowerer = struct {
             .target = call_target,
             .proc = try self.markReachableFn(callee),
             .args = try self.result.store.addLocalSpan(call_args),
-            .is_cold = task.is_cold,
+            .extra = try self.result.store.addOptionalStmtRow(LIR.CallExtra, .{
+                .is_cold = task.is_cold,
+            }),
             .next = after_call,
         } }, where.source());
         return .{ .tail = try self.operandChain(where, lowered, task.arg_tys, null, current) };
@@ -8167,12 +8179,14 @@ const Lowerer = struct {
         const reuse_closure = try self.erasedResultDemand(abi_ret_ty) == .single_slot;
         const call_stmt = try self.result.store.addCFStmt(.{ .assign_call_erased = .{
             .target = call_target,
-            .closure = callee,
-            .args = try self.result.store.addLocalSpan(args.ids),
-            .arg_layouts = try self.appendErasedArgumentLayouts(args.ids),
-            .arg_plan = try self.erasedCallArgsPlan(args.ids),
-            .reuse_closure = reuse_closure,
-            .reuse_source = if (reuse_closure) callee else null,
+            .data = try self.result.store.addStmtRow(LIR.ErasedCallData, .{
+                .closure = callee,
+                .args = try self.result.store.addLocalSpan(args.ids),
+                .arg_layouts = try self.appendErasedArgumentLayouts(args.ids),
+                .arg_plan = try self.erasedCallArgsPlan(args.ids),
+                .reuse_closure = reuse_closure,
+                .reuse_source = if (reuse_closure) callee else null,
+            }),
             .next = after_call,
         } }, where.source());
         if (reuse_closure) {
@@ -8204,7 +8218,7 @@ const Lowerer = struct {
         if (frame.index > 0) {
             frame.index -= 1;
             const variant = task.variants[frame.index];
-            const variant_index: u32 = @intCast(frame.index);
+            const variant_index: layout.VariantIndex = @intCast(frame.index);
             const branch_done = try self.joinJump(task.where, task.done);
             return .{ .call = try self.callableVariantCallTask(task.where, task.target, task.result_ty, task.callee, variant, variant_index, task.args, branch_done) };
         }
@@ -8246,7 +8260,7 @@ const Lowerer = struct {
             .default_branch = try self.result.store.addCFStmt(.{ .runtime_error = {} }, where.glue()),
             .continuation = null,
         } }, where.glue());
-        return try self.addAssignRef(where.glue(), disc_local, .{ .discriminant = .{ .source = callee } }, switch_stmt);
+        return try self.addAssignRef(where.glue(), disc_local, LIR.RefOp.discriminant(callee), switch_stmt);
     }
 
     /// The call of one callable variant: a known call of its target, with
@@ -8258,7 +8272,7 @@ const Lowerer = struct {
         result_ty: Type.TypeId,
         callee: LIR.LocalId,
         variant: Type.FnVariant,
-        variant_index: u32,
+        variant_index: layout.VariantIndex,
         arg_exprs: []const Lifted.ExprId,
         next: LIR.CFStmtId,
     ) Common.LowerError!LowerTask {
@@ -8341,11 +8355,11 @@ const Lowerer = struct {
             if (args.len != 2) Common.invariant("list_prefetched reached LIR lowering with the wrong arity");
             const lowered = try self.lowerExprsToTemps(args);
             defer lowered.deinit(self.allocator);
-            const alias = try self.addAssignRef(where.source(), target, .{ .local = lowered.ids[0] }, next);
+            const alias = try self.addAssignRef(where.source(), target, .local(lowered.ids[0]), next);
             const hint = try self.result.store.addCFStmt(.{ .assign_low_level = .{
                 .target = try self.addLocalForLayout(.zst),
                 .op = .list_prefetch,
-                .rc_effect = LIR.LowLevel.list_prefetch.rcEffect(),
+                .rc_effect = try self.result.store.addRcEffect(LIR.LowLevel.list_prefetch.rcEffect()),
                 .args = try self.result.store.addLocalSpan(lowered.ids),
                 .next = alias,
             } }, where.source());
@@ -8376,10 +8390,12 @@ const Lowerer = struct {
             const current = try self.result.store.addCFStmt(.{ .assign_low_level = .{
                 .target = target,
                 .op = op,
-                .rc_effect = op.rcEffect(),
+                .rc_effect = try self.result.store.addRcEffect(op.rcEffect()),
                 .args = try self.result.store.addLocalSpan(lowered.ids),
-                .interchangeable = interchangeable,
-                .map_output_elem = map_output_elem,
+                .extra = try self.result.store.addOptionalStmtRow(LIR.LowLevelExtra, .{
+                    .interchangeable = interchangeable,
+                    .map_output_elem = map_output_elem,
+                }),
                 .next = next,
             } }, where.source());
             return .{ .tail = try self.operandChain(where, lowered, null, null, current) };
@@ -8393,7 +8409,7 @@ const Lowerer = struct {
         const current = try self.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = target,
             .op = lowered_op,
-            .rc_effect = lowered_op.rcEffect(),
+            .rc_effect = try self.result.store.addRcEffect(lowered_op.rcEffect()),
             .args = try self.result.store.addLocalSpan(lowered.ids),
             .next = next,
         } }, where.source());
@@ -8491,7 +8507,7 @@ const Lowerer = struct {
                     read.target_ty,
                     read.source_ty,
                     storage_layout,
-                    .{ .field = .{ .source = read.source, .field_idx = read.source_field_index } },
+                    LIR.RefOp.field(read.source, read.source_field_index),
                     current,
                 )
             else
@@ -8516,7 +8532,7 @@ const Lowerer = struct {
             GuardedList.at(target_item_tys, elem_index),
             GuardedList.at(source_item_tys, elem_index),
             self.localFieldLayout(tuple_local, field_index),
-            .{ .field = .{ .source = tuple_local, .field_idx = field_index } },
+            LIR.RefOp.field(tuple_local, field_index),
             next,
         );
         return .{ .tail = exprTask(where, tuple_local, tuple, tuple_ty, assign) };
@@ -8766,8 +8782,8 @@ const Lowerer = struct {
         target: LIR.LocalId,
         out_try_ty: Type.TypeId,
         input_try_local: LIR.LocalId,
-        err_variant: u32,
-        out_err_variant: u32,
+        err_variant: layout.VariantIndex,
+        out_err_variant: layout.VariantIndex,
         next: LIR.CFStmtId,
     ) Common.LowerError!LIR.CFStmtId {
         const out_backing_ty = self.runtimeBackingType(out_try_ty);
@@ -8790,11 +8806,7 @@ const Lowerer = struct {
         return if (self.isZstLocal(err_payload_local))
             err_tag
         else
-            try self.addAssignRef(where.source(), err_payload_local, .{ .tag_payload_struct = .{
-                .source = input_try_local,
-                .variant_index = err_variant,
-                .tag_discriminant = err_variant,
-            } }, err_tag);
+            try self.addAssignRef(where.source(), err_payload_local, LIR.RefOp.tagPayloadStruct(input_try_local, err_variant, err_variant), err_tag);
     }
 
     fn stepTrySequence(self: *Lowerer, task: *TrySequenceTask, input: ?LIR.CFStmtId) Common.LowerError!LowerStep {
@@ -8814,11 +8826,7 @@ const Lowerer = struct {
         const ok_start = if (self.isZstLocal(ok_payload_local))
             try self.assignZst(where, ok_payload_local, ok_body)
         else
-            try self.addAssignRef(where.source(), ok_payload_local, .{ .tag_payload_struct = .{
-                .source = task.input_try_local,
-                .variant_index = task.ok_variant,
-                .tag_discriminant = task.ok_variant,
-            } }, ok_body);
+            try self.addAssignRef(where.source(), ok_payload_local, LIR.RefOp.tagPayloadStruct(task.input_try_local, task.ok_variant, task.ok_variant), ok_body);
 
         const err_start = if (sequence.err_target) |err_target|
             try self.lowerTryErrJump(where, task.input_try_local, task.err_variant, err_target)
@@ -9047,11 +9055,13 @@ const Lowerer = struct {
                 const stmt = try self.result.store.addCFStmt(.{ .join = .{
                     .id = task.join_id,
                     .params = task.param_span,
-                    .maybe_uninitialized_params = task.maybe_uninitialized_span,
-                    .maybe_uninitialized_conditions = task.maybe_uninitialized_conditions_span,
-                    .maybe_uninitialized_condition_masks = task.maybe_uninitialized_condition_masks_span,
                     .body = task.body_stmt,
                     .remainder = input.?,
+                    .extra = try self.result.store.addOptionalStmtRow(LIR.JoinExtra, .{
+                        .maybe_uninitialized_params = task.maybe_uninitialized_span,
+                        .maybe_uninitialized_conditions = task.maybe_uninitialized_conditions_span,
+                        .maybe_uninitialized_condition_masks = task.maybe_uninitialized_condition_masks_span,
+                    }),
                 } }, task.where.glue());
                 self.leaveLoop(task);
                 return .{ .ret = stmt };
@@ -9169,12 +9179,14 @@ const Lowerer = struct {
                 const stmt = try self.result.store.addCFStmt(.{ .join = .{
                     .id = task.lir_join_id,
                     .params = task.param_span,
-                    .retained = task.retained_span,
-                    .maybe_uninitialized_params = task.maybe_uninitialized_span,
-                    .maybe_uninitialized_conditions = task.maybe_uninitialized_conditions_span,
-                    .maybe_uninitialized_condition_masks = task.maybe_uninitialized_condition_masks_span,
                     .body = task.body_stmt,
                     .remainder = input.?,
+                    .extra = try self.result.store.addOptionalStmtRow(LIR.JoinExtra, .{
+                        .maybe_uninitialized_params = task.maybe_uninitialized_span,
+                        .maybe_uninitialized_conditions = task.maybe_uninitialized_conditions_span,
+                        .maybe_uninitialized_condition_masks = task.maybe_uninitialized_condition_masks_span,
+                        .retained = task.retained_span,
+                    }),
                 } }, task.where.glue());
                 self.leaveJoinPoint(task);
                 return .{ .ret = stmt };
@@ -9546,7 +9558,7 @@ const Lowerer = struct {
         return try self.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = target,
             .op = op,
-            .rc_effect = op.rcEffect(),
+            .rc_effect = try self.result.store.addRcEffect(op.rcEffect()),
             .args = try self.result.store.addLocalSpan(&args),
             .next = next,
         } }, where.source());
@@ -9615,7 +9627,7 @@ const Lowerer = struct {
         return try self.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = slot.binding.slot,
             .op = .box_alloc_zeroed,
-            .rc_effect = LIR.LowLevel.box_alloc_zeroed.rcEffect(),
+            .rc_effect = try self.result.store.addRcEffect(LIR.LowLevel.box_alloc_zeroed.rcEffect()),
             .args = LIR.LocalSpan.empty(),
             .next = next,
         } }, where.source());
@@ -9648,7 +9660,7 @@ const Lowerer = struct {
         var current = try self.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = unit,
             .op = .ptr_store,
-            .rc_effect = LIR.LowLevel.ptr_store.rcEffect(),
+            .rc_effect = try self.result.store.addRcEffect(LIR.LowLevel.ptr_store.rcEffect()),
             .args = try self.result.store.addLocalSpan(&ptr_store_args),
             .next = after_store,
         } }, where.source());
@@ -9946,10 +9958,12 @@ const Lowerer = struct {
     /// not inspect completed control flow: every followed edge is an explicit
     /// representation-transparent producer edge, and ambiguity declines the
     /// outer-owner optimization in favor of consuming `closure` itself.
-    fn resolveErasedCallOwnerUses(self: *Lowerer, start: usize) void {
+    fn resolveErasedCallOwnerUses(self: *Lowerer, start: usize) Allocator.Error!void {
         for (self.erased_call_owner_uses.items[start..]) |use| {
             const call = &self.result.store.getCFStmtPtr(use.stmt).assign_call_erased;
-            call.reuse_source = self.resolveErasedOwner(use.closure) orelse use.closure;
+            var data = self.result.store.stmtRow(call.data);
+            data.reuse_source = self.resolveErasedOwner(use.closure) orelse use.closure;
+            call.data = try self.result.store.addStmtRow(LIR.ErasedCallData, data);
         }
         self.erased_call_owner_uses.shrinkRetainingCapacity(start);
     }
@@ -10139,7 +10153,7 @@ const Lowerer = struct {
         return try self.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = target,
             .op = op,
-            .rc_effect = op.rcEffect(),
+            .rc_effect = try self.result.store.addRcEffect(op.rcEffect()),
             .args = try self.result.store.addLocalSpan(&args),
             .next = next,
         } }, where.source());
@@ -10149,7 +10163,7 @@ const Lowerer = struct {
         self: *Lowerer,
         where: LowerSite,
         input_try_local: LIR.LocalId,
-        err_variant: u32,
+        err_variant: layout.VariantIndex,
         target: Lifted.JoinPointId,
     ) Common.LowerError!LIR.CFStmtId {
         const join_point = self.activeJoinPoint(target);
@@ -10177,11 +10191,7 @@ const Lowerer = struct {
         return if (self.isZstLocal(err_payload_local))
             jump
         else
-            try self.addAssignRef(where.source(), err_payload_local, .{ .tag_payload_struct = .{
-                .source = input_try_local,
-                .variant_index = err_variant,
-                .tag_discriminant = err_variant,
-            } }, jump);
+            try self.addAssignRef(where.source(), err_payload_local, LIR.RefOp.tagPayloadStruct(input_try_local, err_variant, err_variant), jump);
     }
 
     fn bindTryRecordPayloadField(
@@ -10189,7 +10199,7 @@ const Lowerer = struct {
         where: LowerSite,
         local: Mono.LocalId,
         input_try_local: LIR.LocalId,
-        ok_variant: u32,
+        ok_variant: layout.VariantIndex,
         ok_payload_ty: Type.TypeId,
         field_name: Type.names.RecordFieldNameId,
         next: LIR.CFStmtId,
@@ -10197,12 +10207,7 @@ const Lowerer = struct {
         const target = try self.localFor(local);
         if (self.isZstLocal(target)) return try self.assignZst(where, target, next);
         const field_index = self.recordFieldIndex(ok_payload_ty, field_name);
-        return try self.addAssignRef(where.source(), target, .{ .tag_payload = .{
-            .source = input_try_local,
-            .payload_idx = field_index,
-            .variant_index = ok_variant,
-            .tag_discriminant = ok_variant,
-        } }, next);
+        return try self.addAssignRef(where.source(), target, LIR.RefOp.tagPayload(input_try_local, field_index, ok_variant, ok_variant), next);
     }
 
     /// Initialize every local a pattern binds as uninitialized, in front of
@@ -10410,7 +10415,7 @@ const Lowerer = struct {
             return .{ .index = 0, .ty = try self.l.nominalPatternBackingType(ty, inner), .pat = inner };
         }
 
-        pub fn tagVariant(self: MatchTreeCtx, pat_id: Lifted.PatId, ty: Type.TypeId) u32 {
+        pub fn tagVariant(self: MatchTreeCtx, pat_id: Lifted.PatId, ty: Type.TypeId) layout.VariantIndex {
             return self.l.tagIndex(ty, self.l.pat(pat_id).data.tag.name);
         }
 
@@ -10619,7 +10624,7 @@ const Lowerer = struct {
         }
 
         pub fn readDiscriminant(self: MatchTreeCtx, disc: LIR.LocalId, source: LIR.LocalId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
-            return try self.l.addAssignRef(self.where.glue(), disc, .{ .discriminant = .{ .source = source } }, next);
+            return try self.l.addAssignRef(self.where.glue(), disc, LIR.RefOp.discriminant(source), next);
         }
 
         pub fn readField(self: MatchTreeCtx, dest: LIR.LocalId, ty: Type.TypeId, source: LIR.LocalId, index: u32, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
@@ -10629,12 +10634,12 @@ const Lowerer = struct {
                 ty,
                 ty,
                 self.l.localFieldLayout(source, index),
-                .{ .field = .{ .source = source, .field_idx = index } },
+                LIR.RefOp.field(source, index),
                 next,
             );
         }
 
-        pub fn readTagPayload(self: MatchTreeCtx, dest: LIR.LocalId, ty: Type.TypeId, source: LIR.LocalId, variant: u32, index: u32, single: bool, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        pub fn readTagPayload(self: MatchTreeCtx, dest: LIR.LocalId, ty: Type.TypeId, source: LIR.LocalId, variant: layout.VariantIndex, index: u32, single: bool, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
             if (single) {
                 return try self.l.assignTypedRefRead(
                     self.where,
@@ -10642,11 +10647,7 @@ const Lowerer = struct {
                     ty,
                     ty,
                     self.l.localTagPayloadLayout(source, variant, null),
-                    .{ .tag_payload_struct = .{
-                        .source = source,
-                        .variant_index = variant,
-                        .tag_discriminant = variant,
-                    } },
+                    LIR.RefOp.tagPayloadStruct(source, variant, variant),
                     next,
                 );
             }
@@ -10656,12 +10657,7 @@ const Lowerer = struct {
                 ty,
                 ty,
                 self.l.localTagPayloadLayout(source, variant, index),
-                .{ .tag_payload = .{
-                    .source = source,
-                    .payload_idx = index,
-                    .variant_index = variant,
-                    .tag_discriminant = variant,
-                } },
+                LIR.RefOp.tagPayload(source, index, variant, variant),
                 next,
             );
         }
@@ -10962,7 +10958,7 @@ const Lowerer = struct {
         index: usize = 0,
         current: LIR.CFStmtId = undefined,
         source_ty: Type.TypeId = undefined,
-        variant_index: u32 = undefined,
+        variant_index: layout.VariantIndex = undefined,
         /// The part being lowered: its local, type, and field index.
         part_local: LIR.LocalId = undefined,
         part_ty: Type.TypeId = undefined,
@@ -11080,7 +11076,7 @@ const Lowerer = struct {
                     task.part_ty,
                     task.part_ty,
                     self.localFieldLayout(task.source, task.part_field),
-                    .{ .field = .{ .source = task.source, .field_idx = task.part_field } },
+                    LIR.RefOp.field(task.source, task.part_field),
                     task.current,
                 );
             }
@@ -11298,7 +11294,7 @@ const Lowerer = struct {
         return switch (literal) {
             .int_lit => |value| try self.result.store.addCFStmt(.{ .assign_literal = .{
                 .target = target,
-                .value = .{ .i128_literal = .{ .value = value.toI128(), .layout_idx = self.result.store.getLocal(target).layout_idx } },
+                .value = .{ .i128_literal = try self.result.store.addStmtRow(LIR.I128Literal, .{ .value = value.toI128(), .layout_idx = self.result.store.getLocal(target).layout_idx }) },
                 .next = next,
             } }, where.source()),
             .dec_lit => |value| try self.result.store.addCFStmt(.{ .assign_literal = .{
@@ -11348,7 +11344,7 @@ const Lowerer = struct {
         return try self.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = target,
             .op = op,
-            .rc_effect = op.rcEffect(),
+            .rc_effect = try self.result.store.addRcEffect(op.rcEffect()),
             .args = try self.result.store.addLocalSpan(&args),
             .next = next,
         } }, where.source());
@@ -11418,11 +11414,13 @@ const Lowerer = struct {
         const arm = try self.lowerStrPatternArm(where, str, on_match);
         return try self.result.store.addCFStmt(.{ .str_match = .{
             .source = source,
-            .prefix = arm.prefix,
-            .steps = arm.steps,
-            .end = arm.end,
             .on_match = arm.on_match,
             .on_miss = try self.patternMissJump(where, miss),
+            .data = try self.result.store.addStmtRow(LIR.StrMatchData, .{
+                .prefix = arm.prefix,
+                .steps = arm.steps,
+                .end = arm.end,
+            }),
         } }, where.source());
     }
 
@@ -11702,14 +11700,14 @@ const Lowerer = struct {
             .fields => {
                 const field_index: u32 = @intCast(part.index);
                 if (!self.isZstLocal(part.rhs)) {
-                    current = try self.assignRefRead(where, part.rhs, self.localFieldLayout(rhs, field_index), .{ .field = .{ .source = rhs, .field_idx = field_index } }, current);
+                    current = try self.assignRefRead(where, part.rhs, self.localFieldLayout(rhs, field_index), LIR.RefOp.field(rhs, field_index), current);
                 }
                 if (!self.isZstLocal(part.lhs)) {
-                    current = try self.assignRefRead(where, part.lhs, self.localFieldLayout(lhs, field_index), .{ .field = .{ .source = lhs, .field_idx = field_index } }, current);
+                    current = try self.assignRefRead(where, part.lhs, self.localFieldLayout(lhs, field_index), LIR.RefOp.field(lhs, field_index), current);
                 }
             },
             .tag_union => |tag_union| {
-                const variant_index: u32 = @intCast(tag_union.variant);
+                const variant_index: layout.VariantIndex = @intCast(tag_union.variant);
                 const payload_count = self.types.span(tag_union.tags[tag_union.variant].payloads).len;
                 const payload_idx: ?u32 = if (payload_count == 1) null else @as(u32, @intCast(part.index));
                 if (!self.isZstLocal(part.rhs)) {
@@ -11723,17 +11721,8 @@ const Lowerer = struct {
         frame.current = current;
     }
 
-    fn tagPayloadRefOp(source: LIR.LocalId, variant_index: u32, payload_idx: ?u32) LIR.RefOp {
-        return if (payload_idx) |index| .{ .tag_payload = .{
-            .source = source,
-            .payload_idx = index,
-            .variant_index = variant_index,
-            .tag_discriminant = variant_index,
-        } } else .{ .tag_payload_struct = .{
-            .source = source,
-            .variant_index = variant_index,
-            .tag_discriminant = variant_index,
-        } };
+    fn tagPayloadRefOp(source: LIR.LocalId, variant_index: layout.VariantIndex, payload_idx: ?u32) LIR.RefOp {
+        return if (payload_idx) |index| LIR.RefOp.tagPayload(source, index, variant_index, variant_index) else LIR.RefOp.tagPayloadStruct(source, variant_index, variant_index);
     }
 
     fn finishEq(self: *Lowerer, where: LowerSite, frame: *EqFrame) Common.LowerError!LIR.CFStmtId {
@@ -11755,12 +11744,12 @@ const Lowerer = struct {
         const compare_disc = try self.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = tag_union.same_disc,
             .op = eq_op,
-            .rc_effect = eq_op.rcEffect(),
+            .rc_effect = try self.result.store.addRcEffect(eq_op.rcEffect()),
             .args = try self.result.store.addLocalSpan(&[_]LIR.LocalId{ tag_union.lhs_disc, tag_union.rhs_disc }),
             .next = disc_switch,
         } }, where.source());
-        const read_rhs = try self.addAssignRef(where.source(), tag_union.rhs_disc, .{ .discriminant = .{ .source = rhs } }, compare_disc);
-        return try self.addAssignRef(where.source(), tag_union.lhs_disc, .{ .discriminant = .{ .source = lhs } }, read_rhs);
+        const read_rhs = try self.addAssignRef(where.source(), tag_union.rhs_disc, LIR.RefOp.discriminant(rhs), compare_disc);
+        return try self.addAssignRef(where.source(), tag_union.lhs_disc, LIR.RefOp.discriminant(lhs), read_rhs);
     }
 
     fn lowerPrimitiveEqLocalsInto(
@@ -11790,14 +11779,14 @@ const Lowerer = struct {
             const lower_rhs = try self.result.store.addCFStmt(.{ .assign_low_level = .{
                 .target = rhs_bits,
                 .op = .simd_to_u128_bits,
-                .rc_effect = LIR.LowLevel.simd_to_u128_bits.rcEffect(),
+                .rc_effect = try self.result.store.addRcEffect(LIR.LowLevel.simd_to_u128_bits.rcEffect()),
                 .args = try self.result.store.addLocalSpan(&[_]LIR.LocalId{rhs}),
                 .next = compare,
             } }, where.source());
             return try self.result.store.addCFStmt(.{ .assign_low_level = .{
                 .target = lhs_bits,
                 .op = .simd_to_u128_bits,
-                .rc_effect = LIR.LowLevel.simd_to_u128_bits.rcEffect(),
+                .rc_effect = try self.result.store.addRcEffect(LIR.LowLevel.simd_to_u128_bits.rcEffect()),
                 .args = try self.result.store.addLocalSpan(&[_]LIR.LocalId{lhs}),
                 .next = lower_rhs,
             } }, where.source());
@@ -11813,7 +11802,7 @@ const Lowerer = struct {
             return try self.result.store.addCFStmt(.{ .assign_low_level = .{
                 .target = target,
                 .op = eq_op,
-                .rc_effect = eq_op.rcEffect(),
+                .rc_effect = try self.result.store.addRcEffect(eq_op.rcEffect()),
                 .args = try self.result.store.addLocalSpan(&args),
                 .next = next,
             } }, where.source());
@@ -11822,14 +11811,14 @@ const Lowerer = struct {
         const not_stmt = try self.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = target,
             .op = not_op,
-            .rc_effect = not_op.rcEffect(),
+            .rc_effect = try self.result.store.addRcEffect(not_op.rcEffect()),
             .args = try self.result.store.addLocalSpan(&[_]LIR.LocalId{raw}),
             .next = next,
         } }, where.source());
         return try self.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = raw,
             .op = eq_op,
-            .rc_effect = eq_op.rcEffect(),
+            .rc_effect = try self.result.store.addRcEffect(eq_op.rcEffect()),
             .args = try self.result.store.addLocalSpan(&args),
             .next = not_stmt,
         } }, where.source());
@@ -11839,8 +11828,8 @@ const Lowerer = struct {
         const lhs_disc = try self.addLocalForLayout(.u32);
         const rhs_disc = try self.addLocalForLayout(.u32);
         const compare = try self.lowerPrimitiveEqLocalsInto(where, target, lhs_disc, rhs_disc, .u32, negated, next);
-        const read_rhs = try self.addAssignRef(where.source(), rhs_disc, .{ .discriminant = .{ .source = rhs } }, compare);
-        return try self.addAssignRef(where.source(), lhs_disc, .{ .discriminant = .{ .source = lhs } }, read_rhs);
+        const read_rhs = try self.addAssignRef(where.source(), rhs_disc, LIR.RefOp.discriminant(rhs), compare);
+        return try self.addAssignRef(where.source(), lhs_disc, LIR.RefOp.discriminant(lhs), read_rhs);
     }
 
     fn assignBool(self: *Lowerer, where: LowerSite, target: LIR.LocalId, value: bool, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
@@ -11892,7 +11881,7 @@ const Lowerer = struct {
             .default_is_cold = default_is_cold,
             .continuation = null,
         } }, where.glue());
-        return try self.addAssignRef(where.glue(), disc_local, .{ .discriminant = .{ .source = source } }, switch_stmt);
+        return try self.addAssignRef(where.glue(), disc_local, LIR.RefOp.discriminant(source), switch_stmt);
     }
 
     const LoweredExprLocals = struct {
@@ -12295,7 +12284,7 @@ const Lowerer = struct {
         /// Two equivalent tag-union layouts variant by variant.
         tag_union_layout: struct { target: LIR.LocalId, target_content: layout.Layout, source: LIR.LocalId, source_content: layout.Layout, next: LIR.CFStmtId },
         /// One variant of two equivalent tag-union layouts.
-        tag_union_layout_variant: struct { target: LIR.LocalId, target_content: layout.Layout, target_index: u32, source: LIR.LocalId, source_content: layout.Layout, source_index: u32, next: LIR.CFStmtId },
+        tag_union_layout_variant: struct { target: LIR.LocalId, target_content: layout.Layout, target_index: layout.VariantIndex, source: LIR.LocalId, source_content: layout.Layout, source_index: layout.VariantIndex, next: LIR.CFStmtId },
         /// `assignNominalBoundary`
         nominal_layout: NominalLayoutConversion,
     };
@@ -12327,9 +12316,9 @@ const Lowerer = struct {
     const VariantConversion = struct {
         kind: enum { tag, callable, callable_to_erased },
         target: LIR.LocalId,
-        target_index: u32,
+        target_index: layout.VariantIndex,
         source: LIR.LocalId,
-        source_index: u32,
+        source_index: layout.VariantIndex,
         /// The variants' tags, for a tag variant.
         target_tag: Type.Tag = undefined,
         source_tag: Type.Tag = undefined,
@@ -12353,7 +12342,7 @@ const Lowerer = struct {
         second: LIR.LocalId = undefined,
         layout_idx: layout.Idx = undefined,
         /// The source field or payload the current part reads.
-        source_index: u32 = undefined,
+        source_index: layout.VariantIndex = undefined,
         /// A tag payload conversion's payload types. Owned.
         target_tys: []Type.TypeId = &.{},
         source_tys: []Type.TypeId = &.{},
@@ -12426,7 +12415,7 @@ const Lowerer = struct {
                 (target_is_box and backing_is_erased_ptr) or
                 (backing_is_box and target_is_erased_ptr);
             if ((target_is_box or backing_is_box or target_is_erased_ptr or backing_is_erased_ptr) and boxing_compatible and !target_is_list and !backing_is_list) {
-                return .{ .ret = try self.addAssignRef(where.source(), target, .{ .nominal = .{ .backing_ref = backing_local } }, next) };
+                return .{ .ret = try self.addAssignRef(where.source(), target, LIR.RefOp.nominal(backing_local), next) };
             }
 
             if (target_content.tag == .struct_ and backing_content.tag == .struct_) {
@@ -12745,7 +12734,7 @@ const Lowerer = struct {
                 return .{ .call = .{ .ref_read = .{
                     .target = frame.first,
                     .storage_layout = frame.layout_idx,
-                    .op = .{ .field = .{ .source = task.source, .field_idx = frame.source_index } },
+                    .op = .field(task.source, frame.source_index),
                     .next = input.?.?,
                 } } };
             },
@@ -12831,12 +12820,12 @@ const Lowerer = struct {
             .default_is_cold = true,
             .continuation = null,
         } }, where.glue());
-        return .{ .ret = try self.addAssignRef(where.glue(), disc, .{ .discriminant = .{ .source = task.source } }, switch_stmt) };
+        return .{ .ret = try self.addAssignRef(where.glue(), disc, LIR.RefOp.discriminant(task.source), switch_stmt) };
     }
 
     /// The conversion of source variant `source_index` into its target
     /// variant.
-    fn variantConversion(self: *Lowerer, task: SpanConversion, source_index: u32) VariantConversion {
+    fn variantConversion(self: *Lowerer, task: SpanConversion, source_index: layout.VariantIndex) VariantConversion {
         switch (task.kind) {
             .tag_union => {
                 const target_tags = self.types.tagSpan(task.target_span);
@@ -12893,11 +12882,7 @@ const Lowerer = struct {
             VariantCursor.payload => return .{ .tail = .{ .ref_read = .{
                 .target = frame.second,
                 .storage_layout = frame.layout_idx,
-                .op = .{ .tag_payload_struct = .{
-                    .source = task.source,
-                    .variant_index = task.source_index,
-                    .tag_discriminant = task.source_index,
-                } },
+                .op = .tagPayloadStruct(task.source, task.source_index, task.source_index),
                 .next = input.?.?,
             } } },
             VariantCursor.payload + 1...std.math.maxInt(u8) => unreachable,
@@ -12989,11 +12974,13 @@ const Lowerer = struct {
                 if (task.target_variant.capture_ty == null and task.source_variant.capture_ty == null) {
                     return .{ .ret = try self.result.store.addCFStmt(.{ .assign_packed_erased_fn = .{
                         .target = target,
-                        .proc = try self.markReachableFn(task.target_variant.target),
-                        .capture = null,
-                        .capture_layout = null,
-                        .on_drop = .none,
-                        .reuse = try self.erasedCallableReuseForPack(target, null),
+                        .data = try self.result.store.addStmtRow(LIR.PackedErasedFnData, .{
+                            .proc = try self.markReachableFn(task.target_variant.target),
+                            .capture = null,
+                            .capture_layout = null,
+                            .on_drop = .none,
+                            .reuse = try self.erasedCallableReuseForPack(target, null),
+                        }),
                         .next = next,
                     } }, where.glue()) };
                 }
@@ -13006,11 +12993,13 @@ const Lowerer = struct {
                 const capture_layout = self.result.store.getLocal(capture).layout_idx;
                 const pack = try self.result.store.addCFStmt(.{ .assign_packed_erased_fn = .{
                     .target = target,
-                    .proc = try self.markReachableFn(task.target_variant.target),
-                    .capture = capture,
-                    .capture_layout = capture_layout,
-                    .on_drop = self.erasedCallableOnDrop(capture_layout),
-                    .reuse = try self.erasedCallableReuseForPack(target, capture_layout),
+                    .data = try self.result.store.addStmtRow(LIR.PackedErasedFnData, .{
+                        .proc = try self.markReachableFn(task.target_variant.target),
+                        .capture = capture,
+                        .capture_layout = capture_layout,
+                        .on_drop = self.erasedCallableOnDrop(capture_layout),
+                        .reuse = try self.erasedCallableReuseForPack(target, capture_layout),
+                    }),
                     .next = next,
                 } }, where.glue());
                 if (self.isZstLocal(task.source)) return .{ .ret = try self.assignZst(where, capture, pack) };
@@ -13059,7 +13048,7 @@ const Lowerer = struct {
                 return .{ .call = .{ .ref_read = .{
                     .target = frame.first,
                     .storage_layout = frame.layout_idx,
-                    .op = .{ .field = .{ .source = task.source, .field_idx = @intCast(frame.index) } },
+                    .op = .field(task.source, @intCast(frame.index)),
                     .next = input.?.?,
                 } } };
             },
@@ -13122,7 +13111,7 @@ const Lowerer = struct {
         return .{ .call = .{ .ref_read = .{
             .target = frame.locals[target_field.index],
             .storage_layout = source_field.layout,
-            .op = .{ .field = .{ .source = task.source, .field_idx = target_field.index } },
+            .op = .field(task.source, target_field.index),
             .next = frame.current,
         } } };
     }
@@ -13151,7 +13140,7 @@ const Lowerer = struct {
             frame.branches = try self.allocator.alloc(LIR.CFSwitchBranch, variant_count);
         }
         if (frame.index < variant_count) {
-            const variant_index: u32 = @intCast(frame.index);
+            const variant_index: layout.VariantIndex = @intCast(frame.index);
             return .{ .call = .{ .tag_union_layout_variant = .{ .target = task.target, .target_content = task.target_content, .target_index = variant_index, .source = task.source, .source_content = task.source_content, .source_index = variant_index, .next = task.next } } };
         }
 
@@ -13164,7 +13153,7 @@ const Lowerer = struct {
             .default_is_cold = true,
             .continuation = null,
         } }, where.glue());
-        return .{ .ret = try self.addAssignRef(where.glue(), disc, .{ .discriminant = .{ .source = task.source } }, switch_stmt) };
+        return .{ .ret = try self.addAssignRef(where.glue(), disc, LIR.RefOp.discriminant(task.source), switch_stmt) };
     }
 
     fn stepTagUnionLayoutVariantBoundary(self: *Lowerer, where: LowerSite, frame: *BoundaryFrame, task: @FieldType(BoundaryTask, "tag_union_layout_variant"), input: ?(?LIR.CFStmtId)) Common.LowerError!BoundaryStep {
@@ -13172,11 +13161,7 @@ const Lowerer = struct {
             return .{ .tail = .{ .ref_read = .{
                 .target = frame.second,
                 .storage_layout = frame.layout_idx,
-                .op = .{ .tag_payload_struct = .{
-                    .source = task.source,
-                    .variant_index = task.source_index,
-                    .tag_discriminant = task.source_index,
-                } },
+                .op = .tagPayloadStruct(task.source, task.source_index, task.source_index),
                 .next = converted.?,
             } } };
         }
@@ -13406,7 +13391,7 @@ const Lowerer = struct {
                 Common.invariant("local assignment representations differed without an explicit boundary");
             }
         }
-        return try self.addAssignRef(where.source(), target, .{ .local = source }, next);
+        return try self.addAssignRef(where.source(), target, .local(source), next);
     }
 
     fn assignZst(self: *Lowerer, where: LowerSite, target: LIR.LocalId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
@@ -14582,7 +14567,7 @@ const Lowerer = struct {
         };
     }
 
-    fn tagIndex(self: *Lowerer, ty: Type.TypeId, name: Type.names.TagNameId) u32 {
+    fn tagIndex(self: *Lowerer, ty: Type.TypeId, name: Type.names.TagNameId) layout.VariantIndex {
         const tags = self.tagUnionTags(ty);
         for (0..tags.len) |index| {
             const tag = GuardedList.at(tags, index);
@@ -14591,7 +14576,7 @@ const Lowerer = struct {
         Common.invariant("tag operation referenced tag absent from Lambda Mono type");
     }
 
-    fn tagIndexByText(self: *Lowerer, ty: Type.TypeId, text: []const u8) u32 {
+    fn tagIndexByText(self: *Lowerer, ty: Type.TypeId, text: []const u8) layout.VariantIndex {
         const tags = self.tagUnionTags(ty);
         for (0..tags.len) |index| {
             const tag = GuardedList.at(tags, index);
