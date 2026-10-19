@@ -2151,6 +2151,14 @@ helper closure, final placement, branch veneers, and object/image linking remain
 explicit coordinator responsibilities. Null-executor execution uses the same
 native procedure code ownership boundary, not a separate monolithic implementation.
 
+Explicit ARC helpers run through the same pipeline after the procedures, in
+frontier waves. A wave takes only helpers already in the helper queue when it
+starts, and its fragments commit in queue order, each appending its own helper
+demands to the end of the queue. The queue, and so every helper's placement,
+is therefore exactly the one a one-helper-at-a-time drain produces, at every
+worker count; helper calls into a later wave resolve through the symbolic
+references that every producer's placement settles.
+
 The compilation session retains owned relocatable native procedure code after
 compile-time evaluation, never its JIT image. Reuse requires the same producer LIR
 domain, target/emission policy compatibility, and the procedure's recorded native
@@ -21916,6 +21924,50 @@ the highest `LocalId` any procedure reaches is the only store-proportional
 cost, and it is paid once for the module. The same rule forbids reintroducing
 that search at the producer: a whole-module finalization pass whose only
 consumer is wasm local binding trades one redundant traversal for another.
+
+## Wasm Body Generation
+
+`WasmCodeGen` generates procedure and RC helper bodies on the post-check
+executor and commits them on one owner, in an order that depends only on the
+program. Registration fixes every index a body may read before any body is
+generated: procedure function indices, symbols, and table slots, hosted,
+runtime, Boxy, and linked-entry imports, tail drivers and the tail area, and
+Boxy dictionary thunks. A body worker is a private `WasmCodeGen` that reads
+those through its owner (`tables()`), owns its function-local emission state,
+and borrows its lane's binding column (see "Wasm Local Binding").
+
+A worker never creates a module entity. Each entity that is created the first
+time some body names it—an RC helper function, an RC helper or Boxy
+capture-drop table slot, a string-backing or runtime-message data segment, a
+static-data symbol, a PIC base global—is recorded in the body's entity list
+in first-use order, keyed by its content identity (the helper cache key, the
+string backing id, the capture-drop key, the static-data id; every message
+is its own segment), and each operand naming it is a deferred operand or a
+relocation against a placeholder symbol. A padded operand keeps its width; an
+operand the module encodes as a minimal LEB128 is inserted when it is filled
+in, and every later relocation moves with the bytes it names. No import is
+ever created by a commit, so imports cannot shift a defined function index.
+
+The owner commits procedure bodies in spec-id order. Committing a body creates,
+in list order, each listed entity the module does not have yet, through the
+same functions that create it for a body emitted directly against the module,
+and then fills in the body's operands. An RC helper is created by reserving
+its whole child-helper closure in pre-order and then committing each newly
+reserved helper's body, which may create entities of its own; the order in
+which commits create entities is therefore the order on-demand creation during
+serial emission would produce, and every module index is a function of that
+order and the bodies' contents. Helper bodies are generated before the
+commits that reserve them: after each procedure wave, the helpers its commits
+can create (the named helpers, the child helpers their reservations reach, and
+the helpers those bodies name in turn, minus those the module already has) are
+generated in frontier waves and wait for the commit that reserves them; every
+one is committed before the next wave starts.
+
+Waves are bounded, admission stops on the first allocation failure, and every
+accepted callback drains before any owner state is touched, as for native
+procedure code. Without an executor every body is generated inline on a
+persistent sequential lane through the same callback, so `--jobs=1` and a
+multi-worker build emit the same bytes.
 
 ## Compile-Time Constants
 

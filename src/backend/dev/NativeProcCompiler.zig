@@ -13,6 +13,7 @@ const layout = @import("layout");
 const roc_target = @import("roc_target");
 const Emitter = @import("LirCodeGen.zig");
 const Artifact = @import("ProcArtifact.zig");
+const task_waves = @import("../task_waves.zig");
 const StackPlan = lir.StackPlan;
 const tasks = base.post_check_task_executor;
 const Allocator = std.mem.Allocator;
@@ -148,7 +149,11 @@ fn Job(comptime CG: type) type {
         oom: bool = false,
         reused: bool = false,
 
-        fn execute(context: *anyopaque, worker: tasks.Worker) ?*anyopaque {
+        pub fn skipped(self: *const @This()) bool {
+            return self.reused;
+        }
+
+        pub fn execute(context: *anyopaque, worker: tasks.Worker) ?*anyopaque {
             const self: *@This() = @ptrCast(@alignCast(context));
             self.compile(worker) catch |err| {
                 switch (invariant(err)) {
@@ -211,55 +216,14 @@ fn destroyStackPlanIndexes(opaque_indexes: *anyopaque) void {
 
 const wave_capacity = 32;
 
-/// Runs the same callback path with or without an executor. Admission stops on
-/// any observed OOM, but all accepted callbacks finish before owners are touched.
-/// Without an executor, every wave runs on `sequential_lane`, which outlives
-/// the waves so lane state carries from one to the next as on a worker.
+/// Runs one bounded wave; see `task_waves.execute`.
 fn executeWave(comptime CG: type, allocator: Allocator, jobs: []Job(CG), executor: ?tasks.Executor, sequential_lane: *tasks.LaneState, metrics: *Metrics) Allocator.Error!void {
-    var failed = false;
-    if (executor) |exec| {
-        var session = exec.begin();
-        var next: usize = 0;
-        var accepted: usize = 0;
-        while (next < jobs.len or session.outstanding != 0) {
-            while (!failed and next < jobs.len and session.canSubmit()) {
-                if (jobs[next].reused) {
-                    next += 1;
-                    continue;
-                }
-                session.submit(.{ .id = next, .context = &jobs[next], .run = Job(CG).execute }) catch {
-                    failed = true;
-                    break;
-                };
-                next += 1;
-                accepted += 1;
-                metrics.tasks_submitted +|= 1;
-                metrics.peak_inflight_fragments = @max(metrics.peak_inflight_fragments, accepted);
-            }
-            if (session.outstanding != 0) {
-                const completion = session.receive();
-                if (jobs[completion.id].oom) failed = true;
-            } else if (failed) break;
-        }
-        session.end();
-    } else {
-        var scratch = base.SingleThreadArena.init(allocator);
-        defer scratch.deinit();
-        var accepted: usize = 0;
-        for (jobs) |*job| {
-            if (job.reused) continue;
-            _ = scratch.reset(.retain_capacity);
-            metrics.tasks_submitted +|= 1;
-            accepted += 1;
-            metrics.peak_inflight_fragments = @max(metrics.peak_inflight_fragments, accepted);
-            _ = Job(CG).execute(job, .{ .id = 0, .allocator = allocator, .scratch = scratch.allocator(), .lane_state = sequential_lane });
-            if (job.oom) {
-                failed = true;
-                break;
-            }
-        }
+    var admission: task_waves.Admission = .{ .submitted = metrics.tasks_submitted, .peak = metrics.peak_inflight_fragments };
+    defer {
+        metrics.tasks_submitted = admission.submitted;
+        metrics.peak_inflight_fragments = admission.peak;
     }
-    if (failed) return error.OutOfMemory;
+    return task_waves.execute(Job(CG), allocator, jobs, executor, sequential_lane, &admission);
 }
 
 fn requireHelpers(allocator: Allocator, fragment: *const Artifact.Fragment, queue: *std.ArrayList(u64), seen: *std.AutoHashMap(u64, void)) Allocator.Error!void {
@@ -371,31 +335,45 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
             job.fragment = null;
         }
     }
+    // Each helper wave takes only keys already queued when it starts, and
+    // commits in queue order, so every helper's requirements land in the queue
+    // exactly where a one-helper-at-a-time drain would put them.
     cursor = 0;
-    while (cursor < helper_queue.items.len) : (cursor += 1) {
-        const key = helper_queue.items[cursor];
-        if (destination.compiledRcHelperOffset(key) != null) continue;
-        var job = Job(CG){ .source = destination, .data = &data, .helper = key };
-        defer if (job.fragment) |*fragment| fragment.deinit();
-        if (cached_helpers.get(key)) |cached| {
-            if (reusable(options.reuse_same_program.?.contract, contract, cached.fragment.context_dependencies, &metrics)) {
-                job.fragment = try cached.fragment.clone(allocator);
-                job.reused = true;
+    while (cursor < helper_queue.items.len) {
+        const frontier = helper_queue.items.len;
+        var storage: [wave_capacity]Job(CG) = undefined;
+        var count: usize = 0;
+        defer for (storage[0..count]) |*job| {
+            if (job.fragment) |*fragment| fragment.deinit();
+        };
+        while (cursor < frontier and count < wave_capacity) : (cursor += 1) {
+            const key = helper_queue.items[cursor];
+            if (destination.compiledRcHelperOffset(key) != null) continue;
+            storage[count] = .{ .source = destination, .data = &data, .helper = key };
+            const job = &storage[count];
+            count += 1;
+            if (cached_helpers.get(key)) |cached| {
+                if (reusable(options.reuse_same_program.?.contract, contract, cached.fragment.context_dependencies, &metrics)) {
+                    job.fragment = try cached.fragment.clone(allocator);
+                    job.reused = true;
+                }
             }
         }
-        try executeWave(CG, allocator, @as(*[1]Job(CG), @ptrCast(&job)), options.executor, &sequential_lane, &metrics);
-        const fragment = &job.fragment.?;
-        try requireHelpers(allocator, fragment, &helper_queue, &helper_seen);
-        const name = try Emitter.compiledRcHelperSymbolName(allocator, destination.layout_store, key);
-        helper_keys.putNoClobber(name, key) catch |err| {
-            allocator.free(name);
-            return err;
-        };
-        destination.boxy_runtime_used = destination.boxy_runtime_used or fragment.context_dependencies.boxy_runtime;
-        Artifact.appendPrepared(CG, allocator, destination, &fragment.set, &identities, &helper_keys) catch |err| return invariant(err);
-        try retained.helpers.append(allocator, .{ .key = key, .fragment = fragment.* });
-        account(&metrics, fragment, job.reused, true);
-        job.fragment = null;
+        try executeWave(CG, allocator, storage[0..count], options.executor, &sequential_lane, &metrics);
+        for (storage[0..count]) |*job| {
+            const fragment = &job.fragment.?;
+            try requireHelpers(allocator, fragment, &helper_queue, &helper_seen);
+            const name = try Emitter.compiledRcHelperSymbolName(allocator, destination.layout_store, job.helper);
+            helper_keys.putNoClobber(name, job.helper) catch |err| {
+                allocator.free(name);
+                return err;
+            };
+            destination.boxy_runtime_used = destination.boxy_runtime_used or fragment.context_dependencies.boxy_runtime;
+            Artifact.appendPrepared(CG, allocator, destination, &fragment.set, &identities, &helper_keys) catch |err| return invariant(err);
+            try retained.helpers.append(allocator, .{ .key = job.helper, .fragment = fragment.* });
+            account(&metrics, fragment, job.reused, true);
+            job.fragment = null;
+        }
     }
     destination.generateBoxyDictProcThunks() catch |err| return invariant(err);
     destination.resolveAssembledSymbolicRefs() catch |err| return invariant(err);
@@ -674,6 +652,60 @@ test "native driver owns and reuses complete static helper closure" {
         }
         if (cache) |*owner| owner.deinit();
         cache = retained;
+    }
+}
+
+test "native driver helper waves keep the serial queue order at every lane count" {
+    if (comptime !Emitter.host_lir_codegen_available) return error.SkipZigTest;
+    const a = std.testing.allocator;
+    var store = lir.LirStore.init(a);
+    defer store.deinit();
+    var layouts = try layout.Store.init(a, .u64);
+    defer layouts.deinit();
+    const strs = try layouts.insertList(.str);
+    const nested = try layouts.insertList(strs);
+    const boxed = try layouts.insertBox(nested);
+    const tuple = try layouts.putTuple(&.{ layouts.getLayout(strs), layouts.getLayout(boxed), layouts.getLayout(nested) });
+    const roots = [_]layout.RcHelperKey{
+        .{ .op = .decref, .layout_idx = tuple },
+        .{ .op = .decref, .layout_idx = try layouts.insertList(tuple) },
+        .{ .op = .free, .layout_idx = boxed },
+    };
+    const CG = Emitter.HostLirCodeGen;
+    var baseline_keys: std.ArrayList(u64) = .empty;
+    defer baseline_keys.deinit(a);
+    var baseline_code: ?[]u8 = null;
+    defer if (baseline_code) |code| a.free(code);
+    for ([_]usize{ 0, 1, 2, 4 }) |lanes| {
+        var executor = TestExecutor{ .allocator = a, .lane = tasks.LaneState.init(a), .lanes = lanes };
+        defer executor.lane.deinit();
+        var cg = try CG.init(a, &store, &layouts, .{}, &.{}, .default);
+        defer cg.deinit();
+        var metrics: Metrics = .{};
+        var retained = try run(CG, a, &cg, &.{}, .{
+            .target = cg.getFragmentContract().target,
+            .static_helpers = &roots,
+            .executor = if (lanes == 0) null else executor.executor(),
+            .metrics_out = &metrics,
+        });
+        defer retained.deinit();
+        try std.testing.expect(retained.helpers.items.len > roots.len);
+        try std.testing.expectEqual(retained.helpers.items.len, metrics.helpers_emitted);
+        try std.testing.expect(metrics.peak_inflight_fragments > 1);
+        // Commit order fixes each helper's region, so equal keys, code, and
+        // region bounds mean an identical code buffer.
+        var layout_record: std.ArrayList(u8) = .empty;
+        defer layout_record.deinit(a);
+        for (retained.helpers.items) |helper| try layout_record.appendSlice(a, helper.fragment.set.artifacts[0].code);
+        for (cg.codeRegions()) |region| try layout_record.appendSlice(a, std.mem.asBytes(&[2]usize{ region.start, region.end }));
+        if (baseline_code) |expected| {
+            try std.testing.expectEqual(baseline_keys.items.len, retained.helpers.items.len);
+            for (baseline_keys.items, retained.helpers.items) |key, helper| try std.testing.expectEqual(key, helper.key);
+            try std.testing.expectEqualSlices(u8, expected, layout_record.items);
+        } else {
+            for (retained.helpers.items) |helper| try baseline_keys.append(a, helper.key);
+            baseline_code = try layout_record.toOwnedSlice(a);
+        }
     }
 }
 

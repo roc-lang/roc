@@ -27,10 +27,16 @@ const InspectionError = EmissionError || backend.CompilationError ||
     @import("../coordinator.zig").CoordinatorError;
 
 /// Delegate every callback to the real persistent compiler workers. The first
-/// full batch rendezvous makes parallelism an assertion, not a timing guess.
+/// full batch from submission `rendezvous_from` on rendezvous, which makes
+/// parallelism an assertion, not a timing guess.
 const ObservedExecutor = struct {
     inner: tasks.Executor,
     reverse: bool,
+    rendezvous_from: usize = 0,
+    /// Submissions per executor session, in session order.
+    session_sizes: [256]usize = undefined,
+    session_count: usize = 0,
+    session_start: usize = 0,
     session: ?tasks.Session = null,
     slots: [4]?WrappedTask = @splat(null),
     completions: [4]tasks.Completion = undefined,
@@ -65,13 +71,15 @@ const ObservedExecutor = struct {
         const self: *ObservedExecutor = @ptrCast(@alignCast(context));
         std.debug.assert(self.session == null);
         self.session = self.inner.begin();
+        self.session_start = self.submitted;
     }
 
     fn submit(context: *anyopaque, task: tasks.Task) std.mem.Allocator.Error!void {
         const self: *ObservedExecutor = @ptrCast(@alignCast(context));
         for (&self.slots) |*slot| {
             if (slot.* != null) continue;
-            slot.* = .{ .owner = self, .task = task, .rendezvous = self.submitted < self.inner.worker_count };
+            const rendezvous = self.submitted >= self.rendezvous_from and self.submitted - self.rendezvous_from < self.inner.worker_count;
+            slot.* = .{ .owner = self, .task = task, .rendezvous = rendezvous };
             errdefer slot.* = null;
             try self.session.?.submit(.{ .id = task.id, .context = &slot.*.?, .run = WrappedTask.run });
             self.submitted += 1;
@@ -125,6 +133,8 @@ const ObservedExecutor = struct {
         std.debug.assert(self.outstanding == 0 and self.buffered == 0);
         self.session.?.end();
         self.session = null;
+        self.session_sizes[self.session_count] = self.submitted - self.session_start;
+        self.session_count += 1;
     }
 
     fn executor(self: *ObservedExecutor) tasks.Executor {
@@ -136,6 +146,19 @@ const ObservedExecutor = struct {
             .receiveFn = receive,
             .endFn = end,
         };
+    }
+
+    /// The submission index that starts the first session at or after `from`
+    /// with at least one task per worker. Sessions are waves, whose sizes do
+    /// not depend on the worker count, so a probe run's sizes choose a wave a
+    /// later run can rendezvous in without waiting for tasks that never come.
+    fn firstFullWave(self: *const ObservedExecutor, from: usize, workers: usize) AssertionError!usize {
+        var start: usize = 0;
+        for (self.session_sizes[0..self.session_count]) |size| {
+            if (start >= from and size >= workers) return start;
+            start += size;
+        }
+        return error.TestUnexpectedResult;
     }
 
     fn verify(self: *const ObservedExecutor) AssertionError!void {
@@ -242,13 +265,23 @@ fn expectUseful(metrics: Native.Metrics) AssertionError!void {
 }
 
 fn inspect(lowered: *const lir.CheckedPipeline.LoweredProgram) harness.LowerToLirHarnessError!void {
-    inspectFallible(lowered) catch |err| {
+    inspectFallible(lowered, .procedures) catch |err| {
         std.log.err("native artifact parallel integration failed: {s}", .{@errorName(err)});
         return error.TestUnexpectedResult;
     };
 }
 
-fn inspectFallible(lowered: *const lir.CheckedPipeline.LoweredProgram) InspectionError!void {
+fn inspectHelpers(lowered: *const lir.CheckedPipeline.LoweredProgram) harness.LowerToLirHarnessError!void {
+    inspectFallible(lowered, .helpers) catch |err| {
+        std.log.err("native helper parallel integration failed: {s}", .{@errorName(err)});
+        return error.TestUnexpectedResult;
+    };
+}
+
+/// Which phase's first full batch the observed workers must run together.
+const RendezvousPhase = enum { procedures, helpers };
+
+fn inspectFallible(lowered: *const lir.CheckedPipeline.LoweredProgram, phase: RendezvousPhase) InspectionError!void {
     const program = &lowered.lir_result;
     const demand = try allocator.alloc(lir.LIR.LirProcSpecId, program.store.getProcSpecs().len);
     defer allocator.free(demand);
@@ -264,11 +297,12 @@ fn inspectFallible(lowered: *const lir.CheckedPipeline.LoweredProgram) Inspectio
     defer baseline.deinit();
     try expectUseful(baseline.metrics);
     try std.testing.expect(baseline.metrics.helpers_emitted > 0);
-    try expectLiteral(&baseline.retained);
+    if (phase == .procedures) try expectLiteral(&baseline.retained);
     var object_metrics: Native.Metrics = .{};
     var baseline_object = try object(lowered, null, &object_metrics);
     defer baseline_object.deinit();
     try expectUseful(object_metrics);
+    const baseline_object_procedures = object_metrics.procedures_emitted;
     var builtins = try eval.BuiltinModules.init(allocator);
     defer builtins.deinit();
     var arena = base.SingleThreadArena.init(allocator);
@@ -278,15 +312,30 @@ fn inspectFallible(lowered: *const lir.CheckedPipeline.LoweredProgram) Inspectio
         defer coord.deinit();
         try coord.start();
         try coord.coordinatorLoop();
+        // Helper jobs are submitted after every procedure job; a probe run
+        // finds the first helper wave every worker can join.
+        var helper_wave: usize = 0;
+        var object_helper_wave: usize = 0;
+        if (phase == .helpers) {
+            var probe = ObservedExecutor{ .inner = coord.postCheckExecutor(), .reverse = false, .rendezvous_from = std.math.maxInt(usize) };
+            var probed = try emit(lowered, demand, root.?, probe.executor(), null);
+            probed.deinit();
+            helper_wave = try probe.firstFullWave(baseline.metrics.procedures_emitted, workers);
+            var object_probe = ObservedExecutor{ .inner = coord.postCheckExecutor(), .reverse = false, .rendezvous_from = std.math.maxInt(usize) };
+            var probed_object = try object(lowered, object_probe.executor(), &object_metrics);
+            probed_object.deinit();
+            object_helper_wave = try object_probe.firstFullWave(baseline_object_procedures, workers);
+        }
         for ([_]bool{ false, true }) |reverse| {
-            var observed = ObservedExecutor{ .inner = coord.postCheckExecutor(), .reverse = reverse };
+            var observed = ObservedExecutor{ .inner = coord.postCheckExecutor(), .reverse = reverse, .rendezvous_from = helper_wave };
             var emitted = try emit(lowered, demand, root.?, observed.executor(), null);
             defer emitted.deinit();
             try observed.verify();
             try expectUseful(emitted.metrics);
             try std.testing.expectEqualSlices(u8, baseline.code, emitted.code);
+            try std.testing.expectEqual(baseline.metrics.helpers_emitted, emitted.metrics.helpers_emitted);
             // emit returned only after its image, generator and literal table died.
-            try expectLiteral(&emitted.retained);
+            if (phase == .procedures) try expectLiteral(&emitted.retained);
             var reused = try emit(lowered, demand, root.?, observed.executor(), &emitted.retained);
             defer reused.deinit();
             try std.testing.expectEqual(@as(u64, demand.len), reused.metrics.procedures_reused);
@@ -295,8 +344,8 @@ fn inspectFallible(lowered: *const lir.CheckedPipeline.LoweredProgram) Inspectio
             try std.testing.expectEqual(emitted.metrics.helpers_emitted, reused.metrics.helpers_reused);
             try std.testing.expect(reused.metrics.helpers_reused > 0);
             try std.testing.expectEqualSlices(u8, baseline.code, reused.code);
-            try expectLiteral(&reused.retained);
-            var object_observed = ObservedExecutor{ .inner = coord.postCheckExecutor(), .reverse = reverse };
+            if (phase == .procedures) try expectLiteral(&reused.retained);
+            var object_observed = ObservedExecutor{ .inner = coord.postCheckExecutor(), .reverse = reverse, .rendezvous_from = object_helper_wave };
             var result = try object(lowered, object_observed.executor(), &object_metrics);
             defer result.deinit();
             try object_observed.verify();
@@ -342,4 +391,95 @@ test "native artifacts real parallel workers deterministic code objects and reta
     const path = try dir.dir.realPathFileAlloc(std.testing.io, "main.roc", allocator);
     defer allocator.free(path);
     try harness.runAppPathLoweredInspection(path, .{}, inspect);
+}
+
+test "native artifacts real parallel workers emit many nested helpers in serial queue order" {
+    if (comptime !backend.host_lir_codegen_available) return error.SkipZigTest;
+    var dir = std.testing.tmpDir(.{});
+    defer dir.cleanup();
+    // `work` builds a list of each distinct refcounted layout from its runtime
+    // argument and drops it, so the helper phase starts with several
+    // independent helpers whose children nest further.
+    try dir.dir.writeFile(std.testing.io, .{ .sub_path = "main.roc", .data =
+        \\app [main!, work] { pf: platform "./platform.roc" }
+        \\pairs : Str -> I64
+        \\pairs = |s| if List.is_empty([(s, [s])]) 0 else 1
+        \\nested : Str -> I64
+        \\nested = |s| if List.is_empty([[s], []]) 0 else 2
+        \\records : Str -> I64
+        \\records = |s| if List.is_empty([{ name: s, tags: [s] }]) 0 else 3
+        \\tags : Str -> I64
+        \\tags = |s| if List.is_empty([Leaf(s), Node([s])]) 0 else 4
+        \\work : I64 -> I64
+        \\work = |n| {
+        \\    s = Str.concat("a heap allocated runtime string ", n.to_str())
+        \\    pairs(s) + nested(s) + records(s) + tags(s)
+        \\}
+        \\main! : {} => I64
+        \\main! = |_unit| 42
+    });
+    try dir.dir.writeFile(std.testing.io, .{ .sub_path = "platform.roc", .data =
+        \\platform ""
+        \\    requires {} { main! : {} => I64, work : I64 -> I64 }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "roc_main": run!, "roc_work": work_entry }
+        \\    hosted {}
+        \\run! : () => I64
+        \\run! = || main!({})
+        \\work_entry : I64 -> I64
+        \\work_entry = |n| work(n)
+    });
+    const path = try dir.dir.realPathFileAlloc(std.testing.io, "main.roc", allocator);
+    defer allocator.free(path);
+    try harness.runAppPathLoweredInspection(path, .{}, inspectHelpers);
+}
+
+const wasm_source =
+    \\{
+    \\    words = List.concat([("alpha", ["a long element string that lives on the heap"]), ("beta", [])], [("gamma", ["x", "y"])])
+    \\    labels = List.map(words, |(s, tags)| { label: Str.concat(s, " with a suffix long enough to allocate"), tags: tags })
+    \\    nested = [[labels], []]
+    \\    (labels, nested, List.len(nested))
+    \\}
+;
+
+test "wasm modules are byte identical across worker counts, completion orders, and runs" {
+    var compiled = try eval.Inspected.compileInspectedProgram(allocator, std.testing.io, .expr, wasm_source, &.{});
+    defer compiled.deinit(allocator);
+    const lowered = &compiled.wasm_lowered.?;
+    const expected_output = try eval.Inspected.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(expected_output);
+    const output = try eval.Inspected.wasmEvaluatorInspectedStr(allocator, lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings(expected_output, output);
+    const baseline = try eval.Inspected.wasmModuleBytes(allocator, lowered, null);
+    defer allocator.free(baseline);
+
+    var builtins = try eval.BuiltinModules.init(allocator);
+    defer builtins.deinit();
+    var arena = base.SingleThreadArena.init(allocator);
+    defer arena.deinit();
+    for ([_]usize{ 2, 4 }) |workers| {
+        var coord = try Coordinator.init(allocator, .multi_threaded, workers, target.detectNative(), &builtins, @import("build_options").compiler_compatibility_id, null, CoreCtx.default(allocator, arena.allocator(), std.testing.io));
+        defer coord.deinit();
+        try coord.start();
+        try coord.coordinatorLoop();
+        var probe = ObservedExecutor{ .inner = coord.postCheckExecutor(), .reverse = false, .rendezvous_from = std.math.maxInt(usize) };
+        allocator.free(try eval.Inspected.wasmModuleBytes(allocator, lowered, probe.executor()));
+        const full_wave = try probe.firstFullWave(0, workers);
+        for ([_]bool{ false, true }) |reverse| {
+            var observed = ObservedExecutor{ .inner = coord.postCheckExecutor(), .reverse = reverse, .rendezvous_from = full_wave };
+            const bytes = try eval.Inspected.wasmModuleBytes(allocator, lowered, observed.executor());
+            defer allocator.free(bytes);
+            try observed.verify();
+            try std.testing.expectEqualSlices(u8, baseline, bytes);
+        }
+        // Repeated runs at the default worker count settle on the same bytes.
+        for (0..3) |_| {
+            const bytes = try eval.Inspected.wasmModuleBytes(allocator, lowered, coord.postCheckExecutor());
+            defer allocator.free(bytes);
+            try std.testing.expectEqualSlices(u8, baseline, bytes);
+        }
+    }
 }

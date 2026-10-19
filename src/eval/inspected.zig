@@ -3206,9 +3206,20 @@ pub fn wasmEvaluatorStrWithStats(allocator: Allocator, lowered: *const LoweredPr
     return legacyInspectedRun(allocator, .wasm, lowered);
 }
 
-/// Evaluate via the wasm backend at `cpu_level`.
-pub fn wasmRunAt(allocator: Allocator, lowered: *const LoweredProgram, cpu_level: roc_target.CpuLevel) Error!EvalRunResult {
-    const result = try InspectedRun.runWasmAt(allocator, .{
+/// The wasm module the wasm backend runs for `lowered`, with its bodies
+/// generated on `executor`. The caller owns the returned bytes.
+pub fn wasmModuleBytes(allocator: Allocator, lowered: *const LoweredProgram, executor: ?base.post_check_task_executor.Executor) Error![]u8 {
+    var program = wasmProgram(lowered);
+    program.post_check_executor = executor;
+    const result = InspectedRun.generateWasmModule(allocator, program, .default) catch |err| return switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        error.Internal, error.WasmExecFailed => error.Internal,
+    };
+    return result.wasm_bytes;
+}
+
+fn wasmProgram(lowered: *const LoweredProgram) InspectedRun.Program {
+    return .{
         .store = &lowered.view.store,
         .layouts = &lowered.view.layouts,
         .boxy_tables = boxy_runtime.BoxyTables.fromImageView(&lowered.view),
@@ -3217,7 +3228,12 @@ pub fn wasmRunAt(allocator: Allocator, lowered: *const LoweredProgram, cpu_level
         .main_proc = lowered.mainProc(),
         .static_data = lowered.view.static_data,
         .static_data_value_count = lowered.view.static_data_value_count,
-    }, cpu_level);
+    };
+}
+
+/// Evaluate via the wasm backend at `cpu_level`.
+pub fn wasmRunAt(allocator: Allocator, lowered: *const LoweredProgram, cpu_level: roc_target.CpuLevel) Error!EvalRunResult {
+    const result = try InspectedRun.runWasmAt(allocator, wasmProgram(lowered), cpu_level);
     result.deinitEvents(allocator);
     return switch (result.outcome) {
         .returned => |output| .{
