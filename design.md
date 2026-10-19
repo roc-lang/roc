@@ -2495,9 +2495,10 @@ covers:
   select is covered by name.
 - The root's own computation. For a top-level value or callable binding, its
   definition identity. For a hoisted root, the definition identity of the
-  definition that encloses it, its ordinal among that definition's hoisted
-  roots, its expression's source bytes, and the definition identities of the
-  definitions that expression names. For a literal conversion root, the
+  definition that encloses it, its expression's source bytes, the
+  definition identities of the definitions that expression names, and its
+  hoisted body kind. Two hoisted roots of one definition that agree in all of
+  these, and in type, compute the same value. For a literal conversion root, the
   literal's source bytes alone: the literal is closed, and the conversion it
   runs is selected by its checked type. For a top-level `expect`, its
   statement's source bytes and the definition identities of the definitions
@@ -2524,22 +2525,25 @@ identity; that is a missed reuse, never a wrong one.
 
 **Site.** Each root also carries a site (`CompileTimeRootIdentity.site`), the
 position-stable name of the root within its module: a top-level root's
-definition name, or the enclosing definition's name and the root's ordinal
-among that definition's hoisted or literal roots. A reused root's reads of its
-own module's roots are translated by site: a reader's value identity covers
-every definition its evaluation reaches, so the root it read exists in the new
-version at the same site with the same value identity. A failure to find it is
-a compiler invariant.
+definition name, or, for a hoisted or literal root, its enclosing
+definition's name, its class (everything its value identity covers beyond the
+module context and type world) and its ordinal among the roots of that class.
+Roots of one class have equal value identities, so the order checking
+publishes them in never decides which value a site names. A reused root's
+reads of its own module's roots are translated by site: a reader's value
+identity covers every definition its evaluation reaches, so the root it read
+exists in the new version at the same site with the same value identity. A
+failure to find it is a compiler invariant.
 
 **Portability.** A stored value can move into a new version of its module
 only when nothing in it points back into the version that stored it. After
 finalization, each completed root's stored data is classified
 (`CompileTimeRootPortability`). A root is portable when its payload is a
-completed constant, a passed `expect` or a discarded validation and its value
-graph and stored type contain no function value, no function, erased or
-generated named type, no named type or field default declared in the module
-itself, and nothing else carrying a module-version id. A `runtime` payload (a
-guarded root whose evaluation failed) is never reused. A named type's
+completed constant or a discarded validation and its value graph and stored
+type contain no function value, no function, erased or generated named type,
+no named type or field default declared in the module itself, and nothing
+else carrying a module-version id. A `runtime` payload (a guarded root whose
+evaluation failed) and an `expect` root are never reused. A named type's
 `named_type.ty` is checked provenance, not value identity: which checked
 occurrence a Monotype type carries already depends on how it was produced
 ("SpecConstr compares types ... by the representation digest"), restore takes
