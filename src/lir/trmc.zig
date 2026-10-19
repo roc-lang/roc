@@ -99,10 +99,20 @@ pub fn prepareLayouts(store: *const LirStore, layouts: *layout_mod.Store) Resour
 
 /// Rewrite one proc without mutating layouts or emitting unordered diagnostics.
 pub fn runProc(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, scratch_allocator: Allocator) ResourceError!?Report {
-    std.debug.assert(store.tail_call_builder == null);
     var scratch = Scratch.init(scratch_allocator);
     defer scratch.deinit();
-    return transformProc(store, layouts, proc_id, &scratch);
+    return runProcWithScratch(store, layouts, proc_id, &scratch);
+}
+
+/// Detection and rewrite storage one executor lane retains across
+/// procedures; only empty storage survives a procedure.
+pub const LaneScratch = Scratch;
+
+/// `runProc` with lane-retained storage.
+pub fn runProcWithScratch(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, scratch: *Scratch) ResourceError!?Report {
+    std.debug.assert(store.tail_call_builder == null);
+    defer scratch.release();
+    return transformProc(store, layouts, proc_id, scratch);
 }
 
 /// Apply TRMC/TCE to every eligible proc in the store.
@@ -110,11 +120,13 @@ pub fn run(store: *LirStore, layouts: *layout_mod.Store) ResourceError!void {
     std.debug.assert(store.tail_call_builder == null);
     try prepareLayouts(store, layouts);
 
+    var scratch = Scratch.init(store.allocator);
+    defer scratch.deinit();
     const proc_count = store.procSpecCount();
     var proc_index: usize = 0;
     while (proc_index < proc_count) : (proc_index += 1) {
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(proc_index));
-        if (try runProc(store, layouts, proc_id, store.allocator)) |report| {
+        if (try runProcWithScratch(store, layouts, proc_id, &scratch)) |report| {
             reportProc(store, layouts, proc_id, report);
         }
     }
@@ -375,13 +387,19 @@ const Scratch = struct {
     new_locals: std.ArrayList(LocalId) = .empty,
     moves: std.ArrayList(LoopMove) = .empty,
     ready_moves: std.ArrayList(usize) = .empty,
+    /// The current procedure's join declarations, for `Detection`.
+    joins: collections.DenseMap(JoinPointId, JoinInfo),
+    /// The current rewrite's moved parameters, for `Transform`.
+    move_targets: collections.DenseMap(LocalId, usize),
 
-    fn init(gpa: Allocator) Scratch {
-        return .{ .gpa = gpa, .stamps = .init(gpa) };
+    pub fn init(gpa: Allocator) Scratch {
+        return .{ .gpa = gpa, .stamps = .init(gpa), .joins = .init(gpa), .move_targets = .init(gpa) };
     }
 
-    fn deinit(self: *Scratch) void {
+    pub fn deinit(self: *Scratch) void {
         self.stamps.deinit();
+        self.joins.deinit();
+        self.move_targets.deinit();
         self.work.deinit(self.gpa);
         self.shared_work.deinit(self.gpa);
         self.candidates.deinit(self.gpa);
@@ -393,7 +411,18 @@ const Scratch = struct {
         self.ready_moves.deinit(self.gpa);
     }
 
+    /// Empty every table after a procedure, keeping capacity, so no stamp,
+    /// candidate or join reaches the next one.
+    fn release(self: *Scratch) void {
+        self.beginProc();
+        self.stamps.clearRetainingCapacity();
+        self.generation = 0;
+        self.shared_work.clearRetainingCapacity();
+    }
+
     fn beginProc(self: *Scratch) void {
+        self.joins.clearRetainingCapacity();
+        self.move_targets.clearRetainingCapacity();
         self.work.clearRetainingCapacity();
         self.candidates.clearRetainingCapacity();
         self.shared_heads.clearRetainingCapacity();
@@ -421,7 +450,7 @@ const Detection = struct {
     eligible_trmc: bool = false,
     /// Set when the proc exceeds a pass limit; the proc is left untouched.
     bail: bool = false,
-    joins: collections.DenseMap(JoinPointId, JoinInfo),
+    joins: *collections.DenseMap(JoinPointId, JoinInfo),
     max_join_id: u32 = 0,
 
     fn init(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, scratch: *Scratch) Detection {
@@ -431,12 +460,12 @@ const Detection = struct {
             .layouts = layouts,
             .proc_id = proc_id,
             .scratch = scratch,
-            .joins = collections.DenseMap(JoinPointId, JoinInfo).init(scratch.gpa),
+            .joins = &scratch.joins,
         };
     }
 
     fn deinit(self: *Detection) void {
-        self.joins.deinit();
+        self.joins.clearRetainingCapacity();
     }
 
     fn detect(self: *Detection) ResourceError!void {
@@ -960,7 +989,7 @@ const Transform = struct {
     old_args: []const LocalId,
     join_id: JoinPointId,
     /// Movement state is indexed only for parameters of this procedure.
-    move_targets: collections.DenseMap(LocalId, usize),
+    move_targets: *collections.DenseMap(LocalId, usize),
     moves: *std.ArrayList(LoopMove),
     ready_moves: *std.ArrayList(usize),
     hole: LocalId = undefined,
@@ -977,7 +1006,7 @@ const Transform = struct {
             .moves = &detection.scratch.moves,
             .ready_moves = &detection.scratch.ready_moves,
             .old_args = &.{},
-            .move_targets = .init(gpa),
+            .move_targets = &detection.scratch.move_targets,
             .join_id = if (store.getProcSpecImmediate(proc_id).tail_calls) |sites|
                 sites.loop
             else
@@ -986,7 +1015,7 @@ const Transform = struct {
     }
 
     fn deinit(self: *Transform) void {
-        self.move_targets.deinit();
+        self.move_targets.clearRetainingCapacity();
     }
 
     fn copyArgs(self: *Transform, span: LIR.LocalSpan) ResourceError!void {

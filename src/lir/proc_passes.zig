@@ -64,25 +64,33 @@ pub const ParallelMetrics = struct {
     }
 };
 
-/// Address identity for this stage's retained, exclusively owned lane storage.
-const AnalysisLane = struct {
-    var key: u8 = undefined;
+/// One pass's storage retained by an exclusive executor lane, at a stable
+/// address; `key`'s address is the lane-state identity of `T`.
+fn LaneBox(comptime T: type) type {
+    return struct {
+        allocator: Allocator,
+        value: T,
 
-    fn destroy(opaque_state: *anyopaque) void {
-        const analysis: *BodyClone.AnalysisScratch = @ptrCast(@alignCast(opaque_state));
-        const allocator = analysis.counts.allocator;
-        analysis.deinit();
-        allocator.destroy(analysis);
-    }
-};
+        var key: u8 = undefined;
 
-fn analysisForLane(lane: *TaskExecutor.LaneState) Allocator.Error!*BodyClone.AnalysisScratch {
-    if (lane.get(&AnalysisLane.key)) |state| return @ptrCast(@alignCast(state));
-    const analysis = try lane.allocator.create(BodyClone.AnalysisScratch);
-    analysis.* = BodyClone.AnalysisScratch.init(lane.allocator);
-    errdefer AnalysisLane.destroy(analysis);
-    try lane.put(&AnalysisLane.key, analysis, AnalysisLane.destroy);
-    return analysis;
+        fn destroy(opaque_state: *anyopaque) void {
+            const box: *@This() = @ptrCast(@alignCast(opaque_state));
+            box.value.deinit();
+            box.allocator.destroy(box);
+        }
+    };
+}
+
+/// The lane's retained `T`, created empty on the lane's first use. `T`
+/// returns to empty after every procedure, so only capacity crosses tasks.
+fn laneScratch(comptime T: type, lane: *TaskExecutor.LaneState) Allocator.Error!*T {
+    const Box = LaneBox(T);
+    if (lane.get(&Box.key)) |state| return &@as(*Box, @ptrCast(@alignCast(state))).value;
+    const box = try lane.allocator.create(Box);
+    box.* = .{ .allocator = lane.allocator, .value = T.init(lane.allocator) };
+    errdefer Box.destroy(box);
+    try lane.put(&Box.key, box, Box.destroy);
+    return &box.value;
 }
 
 const TaskContext = struct {
@@ -110,19 +118,19 @@ const TaskContext = struct {
     }
 
     fn executeOnLane(self: *TaskContext, worker: TaskExecutor.Worker) Allocator.Error!void {
-        const analysis = switch (self.phase) {
-            .tag_fusion, .loop_append, .range, .box_reuse => try analysisForLane(worker.lane_state),
-            .branch_expectation, .trmc, .forwarding_join, .prune_join_params, .scalarize => null,
-        };
-        try self.execute(worker.allocator, worker.scratch, analysis);
+        try self.execute(worker.allocator, worker.scratch, worker.lane_state);
     }
 
-    fn execute(self: *TaskContext, output_allocator: Allocator, scratch_allocator: Allocator, analysis: ?*BodyClone.AnalysisScratch) Allocator.Error!void {
+    fn execute(self: *TaskContext, output_allocator: Allocator, scratch_allocator: Allocator, lane: *TaskExecutor.LaneState) Allocator.Error!void {
+        const analysis = switch (self.phase) {
+            .tag_fusion, .loop_append, .range, .box_reuse => try laneScratch(BodyClone.AnalysisScratch, lane),
+            .branch_expectation, .trmc, .forwarding_join, .prune_join_params, .scalarize => null,
+        };
         var shard = try self.source.cloneForProcRewrite(output_allocator, self.proc);
         errdefer shard.deinit();
         switch (self.phase) {
             .branch_expectation => try BranchExpectation.runProc(&shard, self.proc, scratch_allocator),
-            .trmc => self.trmc_report = try Trmc.runProc(&shard, self.layouts, self.proc, scratch_allocator),
+            .trmc => self.trmc_report = try Trmc.runProcWithScratch(&shard, self.layouts, self.proc, try laneScratch(Trmc.LaneScratch, lane)),
             .forwarding_join, .tag_fusion => {
                 var joins = BodyClone.JoinParamIndex.init(scratch_allocator);
                 defer joins.deinit();
@@ -136,13 +144,13 @@ const TaskContext = struct {
                 self.fresh_join_count = joins.next_join_point - self.first_fresh_join;
             },
             .prune_join_params => try PruneJoinParams.runProc(&shard, self.proc, scratch_allocator),
-            .scalarize => try ScalarizeJoins.runProc(&shard, self.layouts, self.proc, scratch_allocator),
+            .scalarize => try ScalarizeJoins.runProcWithScratch(&shard, self.layouts, self.proc, try laneScratch(ScalarizeJoins.LaneScratch, lane)),
             .loop_append => try LoopAppendPromote.runProcWithScratch(&shard, self.layouts, self.proc, scratch_allocator, analysis.?),
             .range => {
                 var joins = BodyClone.JoinParamIndex.init(scratch_allocator);
                 defer joins.deinit();
                 joins.next_join_point = self.first_fresh_join;
-                try RangeProve.runProcWithScratch(&shard, self.layouts, self.proc, scratch_allocator, analysis.?, &joins);
+                try RangeProve.runProcWithScratch(&shard, self.layouts, self.proc, try laneScratch(RangeProve.LaneScratch, lane), analysis.?, &joins);
                 self.fresh_join_count = joins.next_join_point - self.first_fresh_join;
             },
             .box_reuse => try BoxReuse.runProcWithScratch(&shard, self.layouts, self.proc, scratch_allocator, analysis.?),
@@ -229,10 +237,10 @@ pub fn run(
     } else {
         var scratch = base.SingleThreadArena.init(allocator);
         defer scratch.deinit();
-        var analysis = BodyClone.AnalysisScratch.init(allocator);
-        defer analysis.deinit();
+        var lane = TaskExecutor.LaneState.init(allocator);
+        defer lane.deinit();
         for (contexts.items) |*context| {
-            try context.execute(allocator, scratch.allocator(), &analysis);
+            try context.execute(allocator, scratch.allocator(), &lane);
             context.completed = true;
             _ = scratch.reset(.retain_capacity);
         }

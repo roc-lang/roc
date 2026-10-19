@@ -76,9 +76,11 @@ pub fn runProc(store: *LirStore, proc: LIR.LirProcSpecId, allocator: Allocator, 
     const body = body_clone.rewritableProcBody(store, proc) orelse return;
     // Each rewrite deletes at least one join-parameter write, so the loop
     // runs at most once per such write.
+    // One arena serves every rewrite; each analysis starts from its reset.
+    var arena = collections.SingleThreadArena.init(allocator);
+    defer arena.deinit();
     while (true) {
-        var arena = collections.SingleThreadArena.init(allocator);
-        defer arena.deinit();
+        _ = arena.reset(.retain_capacity);
         var analysis = try Analysis.init(store, body, arena.allocator());
         const candidate = try analysis.findCandidate() orelse return;
         try analysis.apply(candidate, joins);
