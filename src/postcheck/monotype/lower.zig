@@ -18744,6 +18744,7 @@ const SealedNestedSpec = struct {
 fn assertCoordinatorIntentGraphFree(comptime T: type) void {
     inline for (@typeInfo(T).@"struct".field_names) |field_name| {
         if (@FieldType(T, field_name) == NodeId or
+            @FieldType(T, field_name) == solve.MaybeNodeId or
             @FieldType(T, field_name) == InstGraph or
             @FieldType(T, field_name) == GraphTypeFinals or
             @FieldType(T, field_name) == Type.Store.TypeRelocation or
@@ -18754,6 +18755,7 @@ fn assertCoordinatorIntentGraphFree(comptime T: type) void {
         if (@typeInfo(@FieldType(T, field_name)) == .pointer) {
             const child = @typeInfo(@FieldType(T, field_name)).pointer.child;
             if (child == NodeId or
+                child == solve.MaybeNodeId or
                 child == InstGraph or
                 child == GraphTypeFinals or
                 child == Type.Store.TypeRelocation or

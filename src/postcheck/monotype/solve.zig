@@ -1502,6 +1502,7 @@ pub const InterfaceConstraints = struct {
                 out.appendAssumeCapacity(if (T == NodeId) .{ .node = value } else .{ .kind = value });
                 return;
             }
+            if (T == MaybeNodeId) return collectCaptureRefs(allocator, ?NodeId, value.get(), out);
             switch (@typeInfo(T)) {
                 .@"struct" => |info| inline for (info.field_names, info.field_types) |field_name, field_type| try collectCaptureRefs(allocator, field_type, @field(value, field_name), out),
                 .@"union" => |info| inline for (info.field_names, info.field_types) |field_name, field_type| {
@@ -1635,6 +1636,7 @@ pub const InterfaceConstraints = struct {
             },
         ) Allocator.Error!void {
             if (T == NodeId) return try items.add(.{ .node = value });
+            if (T == MaybeNodeId) return addScanLeaves(items, ?NodeId, value.get(), kinds);
             if (T == InstFieldKind) return switch (kinds) {
                 .neutral => {},
                 // Even a resolved field-kind cell still carries relation
@@ -10875,6 +10877,7 @@ test "cyclic row extension is not a resolved graph type" {
 
 fn assertNoNodeId(comptime T: type, comptime path: []const u8) void {
     if (T == NodeId) @compileError(path ++ " exposes instantiation graph NodeId");
+    if (T == MaybeNodeId) @compileError(path ++ " exposes instantiation graph MaybeNodeId");
 
     const info = @typeInfo(T);
     if (info == .array) {
