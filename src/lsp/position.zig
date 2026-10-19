@@ -10,9 +10,9 @@ const Allocator = std.mem.Allocator;
 /// The line-start table of a source buffer that has no `ModuleEnv`, for
 /// converting between byte offsets and LSP positions.
 ///
-/// The offsets come from `base.RegionInfo.findLineStarts`, the scan that fills
-/// `ModuleEnv`'s own table, so a document being edited and a checked module
-/// agree about where every line begins.
+/// The offsets follow the rule of `base.RegionInfo.findLineStarts`, the scan
+/// that fills `ModuleEnv`'s own table, so a document being edited and a checked
+/// module agree about where every line begins.
 pub const LineOffsets = struct {
     /// Byte offset at which each line starts. Empty for an empty source.
     offsets: []u32,
@@ -22,13 +22,19 @@ pub const LineOffsets = struct {
 
     /// Build the table for `source`, which must outlive it.
     pub fn init(allocator: Allocator, source: []const u8) Allocator.Error!LineOffsets {
-        var line_starts = try base.RegionInfo.findLineStarts(allocator, source);
-        errdefer line_starts.deinit(allocator);
-        return .{
-            .offsets = try line_starts.items.toOwnedSlice(allocator),
-            .allocator = allocator,
-            .source = source,
-        };
+        if (source.len == 0) return .{ .offsets = &.{}, .allocator = allocator, .source = source };
+
+        const offsets = try allocator.alloc(u32, std.mem.countScalar(u8, source, '\n') + 1);
+        offsets[0] = 0;
+        var line: usize = 1;
+        var index: usize = 0;
+        while (std.mem.findScalarPos(u8, source, index, '\n')) |newline| {
+            offsets[line] = @intCast(newline + 1);
+            line += 1;
+            index = newline + 1;
+        }
+        std.debug.assert(line == offsets.len);
+        return .{ .offsets = offsets, .allocator = allocator, .source = source };
     }
 
     pub fn deinit(self: *const LineOffsets) void {
