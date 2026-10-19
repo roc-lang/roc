@@ -4579,13 +4579,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     defer self.codegen.freeGeneral(box_reg);
 
                     const elem_incref_reg = if (box_abi.contains_refcounted)
-                        if (box_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, idx) else null
+                        try self.emitBuiltinInternalRcHelperAddress(.incref, box_abi.elem_layout_idx.?)
                     else
                         null;
                     defer if (elem_incref_reg) |reg| self.codegen.freeGeneral(reg);
 
                     const elem_decref_reg = if (box_abi.contains_refcounted)
-                        if (box_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null
+                        try self.emitBuiltinInternalRcHelperAddress(.decref, box_abi.elem_layout_idx.?)
                     else
                         null;
                     defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
@@ -4595,7 +4595,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try builder.addRegArg(box_reg);
                     try builder.addImmArg(@intCast(elem_size));
                     try builder.addImmArg(@intCast(box_abi.elem_alignment));
-                    try builder.addImmArg(if (elem_incref_reg != null) 1 else 0);
+                    try builder.addImmArg(if (box_abi.contains_refcounted) 1 else 0);
                     if (elem_incref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
                     if (elem_decref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
                     try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
@@ -12355,17 +12355,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             decref: ?GeneralReg = null,
         };
 
-        /// Load the element callback addresses of `kind` for a list builtin.
+        /// Load the element callback addresses of `kind` for a list builtin:
+        /// present exactly when the list's elements are refcounted.
         fn listElemCallbacks(self: *Self, list_abi: BuiltinListAbi, kind: @FieldType(ListElemCallbacks, "kind")) Allocator.Error!ListElemCallbacks {
             var callbacks: ListElemCallbacks = .{ .kind = kind };
-            const elem_layout = list_abi.elem_layout_idx orelse return callbacks;
+            if (!list_abi.elements_refcounted) return callbacks;
+            const elem_layout = list_abi.elem_layout_idx.?;
             switch (kind) {
                 .incref_and_decref => {
-                    callbacks.incref = try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, elem_layout);
-                    callbacks.decref = try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, elem_layout);
+                    callbacks.incref = try self.emitBuiltinInternalRcHelperAddress(.incref, elem_layout);
+                    callbacks.decref = try self.emitBuiltinInternalRcHelperAddress(.decref, elem_layout);
                 },
-                .incref => callbacks.incref = try self.emitBuiltinInternalOptionalRcHelperAddress(.incref, elem_layout),
-                .decref => callbacks.decref = try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, elem_layout),
+                .incref => callbacks.incref = try self.emitBuiltinInternalRcHelperAddress(.incref, elem_layout),
+                .decref => callbacks.decref = try self.emitBuiltinInternalRcHelperAddress(.decref, elem_layout),
             }
             return callbacks;
         }
@@ -12459,16 +12461,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .list_stack = .{ .struct_offset = offset, .data_offset = 0, .num_elements = 0 } };
         }
 
-        fn emitBuiltinInternalOptionalRcHelperAddress(
+        /// Load the address of the atomic RC helper for a layout that contains
+        /// refcounted data.
+        fn emitBuiltinInternalRcHelperAddress(
             self: *Self,
             op: RcOp,
             layout_idx: layout.Idx,
-        ) Allocator.Error!?GeneralReg {
+        ) Allocator.Error!GeneralReg {
             const helper = RcHelperVariant{
                 .key = .{ .op = op, .layout_idx = layout_idx },
                 .atomicity = .atomic,
             };
-            if (self.layout_store.rcHelperPlan(helper.key) == .noop) return null;
+            std.debug.assert(self.layout_store.rcHelperPlan(helper.key) != .noop);
 
             const callback_reg = try self.allocTempGeneral();
             try self.emitPendingRcAddr(helper, callback_reg);

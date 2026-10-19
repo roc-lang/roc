@@ -18294,7 +18294,11 @@ rule the interpreter reads. The call passes the exact descriptor attached to
 the input or result list plus the committed item layout; the runtime projects
 the item descriptor and performs the operation's internal ownership work. A
 list without a descriptor, or whose items are scalars, continues to use the
-ordinary builtin ABI with concrete RC helpers. A backend must never set an
+ordinary builtin ABI with concrete RC helpers. The "items are refcounted" flag
+is `layoutContainsRefcounted` of the item's runtime layout, and the RC helper
+plan of a layout is `.noop` exactly when that predicate is false, so a backend
+supplies the item callbacks exactly when it sets the flag and never consults
+the helper plan to decide whether to pass one. A backend must never set an
 "items are refcounted" flag while supplying a missing callback, derive a
 callback from erased storage, or inspect a descriptor to choose RC behavior.
 An erased-box list that reaches such an operation without its explicit list
