@@ -941,15 +941,47 @@ pub const ConstStore = struct {
     blob_backing: std.ArrayList(u8),
     /// `ConstBlobDataId` -> range into `blob_backing`.
     blob_views: std.ArrayList(ConstRange),
-    /// Build-only content index. Keys own separate bytes because `blob_backing`
-    /// may move while the store is being built.
-    blob_index: std.StringHashMap(ConstBlobDataId),
-    blob_index_keys: std.ArrayList([]u8) = .empty,
+    /// Build-only content index over blob ids. Hashing and equality read each
+    /// id's bytes through `blob_views`, so the index stays valid when
+    /// `blob_backing` moves.
+    blob_index: std.HashMapUnmanaged(ConstBlobDataId, void, BlobIdContext, std.hash_map.default_max_load_percentage) = .empty,
     /// True for a store reconstructed from a serialized buffer (pools point into
     /// buffer-owned memory and must not be freed).
     serialized: bool = false,
 
-    pub const serde_transient_fields = .{ "blob_index", "blob_index_keys" };
+    pub const serde_transient_fields = .{"blob_index"};
+
+    const BlobIdContext = struct {
+        store: *const ConstStore,
+
+        pub fn hash(ctx: BlobIdContext, id: ConstBlobDataId) u64 {
+            return std.hash.Wyhash.hash(0, ctx.store.blobData(id));
+        }
+
+        pub fn eql(ctx: BlobIdContext, a: ConstBlobDataId, b: ConstBlobDataId) bool {
+            return bytesEqual(ctx.store.blobData(a), ctx.store.blobData(b));
+        }
+    };
+
+    const BlobBytesContext = struct {
+        store: *const ConstStore,
+
+        pub fn hash(_: BlobBytesContext, bytes: []const u8) u64 {
+            return std.hash.Wyhash.hash(0, bytes);
+        }
+
+        pub fn eql(ctx: BlobBytesContext, bytes: []const u8, id: ConstBlobDataId) bool {
+            return bytesEqual(bytes, ctx.store.blobData(id));
+        }
+    };
+
+    fn bytesEqual(a: []const u8, b: []const u8) bool {
+        if (a.len != b.len) return false;
+        for (a, b) |x, y| {
+            if (x != y) return false;
+        }
+        return true;
+    }
 
     pub fn init(allocator: Allocator) ConstStore {
         return .{
@@ -964,7 +996,6 @@ pub const ConstStore = struct {
             .evidence_frame_pool = .empty,
             .blob_backing = .empty,
             .blob_views = .empty,
-            .blob_index = std.StringHashMap(ConstBlobDataId).init(allocator),
         };
     }
 
@@ -1154,17 +1185,21 @@ pub const ConstStore = struct {
 
     pub fn addBlobData(self: *ConstStore, bytes: []const u8) Allocator.Error!ConstBlobDataId {
         if (self.serialized) constStoreInvariant("cannot add blob data to a serialized const store");
-        if (self.blob_index.get(bytes)) |existing| return existing;
+        const entry = try self.blob_index.getOrPutContextAdapted(
+            self.allocator,
+            bytes,
+            BlobBytesContext{ .store = self },
+            BlobIdContext{ .store = self },
+        );
+        if (entry.found_existing) return entry.key_ptr.*;
+        errdefer self.blob_index.removeByPtr(entry.key_ptr);
 
         const id: ConstBlobDataId = @fromBackingInt(@intCast(@as(u32, @intCast(self.blob_views.items.len))));
+        const backing_len = self.blob_backing.items.len;
         const view = try artifact_serialize.appendSpan(ConstRange, u8, &self.blob_backing, self.allocator, bytes);
+        errdefer self.blob_backing.shrinkRetainingCapacity(backing_len);
         try self.blob_views.append(self.allocator, view);
-
-        const key = try self.allocator.dupe(u8, bytes);
-        errdefer self.allocator.free(key);
-        try self.blob_index_keys.append(self.allocator, key);
-        errdefer _ = self.blob_index_keys.pop();
-        try self.blob_index.put(key, id);
+        entry.key_ptr.* = id;
         return id;
     }
 
@@ -1298,9 +1333,7 @@ pub const ConstStore = struct {
 
     pub fn deinit(self: *ConstStore) void {
         self.type_store.deinit();
-        for (self.blob_index_keys.items) |key| self.allocator.free(key);
-        self.blob_index_keys.deinit(self.allocator);
-        self.blob_index.deinit();
+        self.blob_index.deinit(self.allocator);
         if (!self.serialized) {
             self.values.deinit(self.allocator);
             self.fns.deinit(self.allocator);
