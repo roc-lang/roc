@@ -3865,6 +3865,22 @@ const TaskStorage = struct {
     }
 };
 
+/// A type span read element by element, each read borrowing afresh: the
+/// store may grow between reads, and a durable span's elements never change.
+const TypeSpanReader = struct {
+    store: *const Type.Store,
+    span: Type.Span,
+    len: usize,
+
+    fn of(store: *const Type.Store, span: Type.Span) TypeSpanReader {
+        return .{ .store = store, .span = span, .len = span.len };
+    }
+
+    fn get(self: TypeSpanReader, index: usize) Type.TypeId {
+        return GuardedList.at(self.store.span(self.span), index);
+    }
+};
+
 /// A context's binder relations, shared by the nested contexts it creates
 /// (`BodyContext.nestedRelationBase`): a context relating each binder's type
 /// to its local, and which local each binder was related to.
@@ -15695,8 +15711,7 @@ const Builder = struct {
         const callable_node = try fn_ctx.instantiateCallableDispatchPlanCallNodeFromCaller(callable_plan, &fn_ctx, expr.ty, ty);
         const callable_mono_ty = try fn_ctx.resolvedTypeViewForNode(callable_node);
         const fn_data = self.functionShape(callable_mono_ty, "stored " ++ codec_name ++ " constructor had a non-function type");
-        const arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.activeTypeStore().span(fn_data.args));
-        defer self.allocator.free(arg_tys);
+        const arg_tys = TypeSpanReader.of(self.activeTypeStore(), fn_data.args);
         if (arg_tys.len != 1) Common.invariant("stored " ++ codec_name ++ " constructor had an unexpected arity");
         fn_ctx.assertSameType(fn_data.ret, ty, "stored " ++ codec_name ++ " constructor result type differed from restored function type");
 
@@ -15731,17 +15746,17 @@ const Builder = struct {
             value: DraftExprId,
         } = null;
         const encoding_expr = if (constGeneratedCaptureNode(fn_value, encoding_capture_id)) |node| blk: {
-            const local = try fn_ctx.addLocal(self.symbols.fresh(), arg_tys[0]);
+            const local = try fn_ctx.addLocal(self.symbols.fresh(), arg_tys.get(0));
             fn_ctx.setLocalCaptureId(local, encoding_capture_id);
             encoding_let = .{
                 .local = local,
                 .value = if (static_data_const_locator) |const_locator|
-                    try fn_ctx.restoreConstNodeAtTypeWithStaticRoot(store_view, fn_view, node, arg_tys[0], const_locator)
+                    try fn_ctx.restoreConstNodeAtTypeWithStaticRoot(store_view, fn_view, node, arg_tys.get(0), const_locator)
                 else
-                    try fn_ctx.restoreConstNodeAtType(store_view, fn_view, node, arg_tys[0]),
+                    try fn_ctx.restoreConstNodeAtType(store_view, fn_view, node, arg_tys.get(0)),
             };
-            break :blk try fn_ctx.localExpr(local, arg_tys[0]);
-        } else try fn_ctx.lowerDispatchOperandAtType(plan_args[0], arg_tys[0]);
+            break :blk try fn_ctx.localExpr(local, arg_tys.get(0));
+        } else try fn_ctx.lowerDispatchOperandAtType(plan_args[0], arg_tys.get(0));
 
         const str_ty = try self.primitiveType(.str);
         var precomputed_plan = BodyContext.ParserPrecomputedPlan.init(self.allocator);
@@ -15772,7 +15787,7 @@ const Builder = struct {
         const body = blk: {
             var capture_tys = std.ArrayList(Type.TypeId).empty;
             defer capture_tys.deinit(self.allocator);
-            if (encoding_let != null) try capture_tys.append(self.allocator, arg_tys[0]);
+            if (encoding_let != null) try capture_tys.append(self.allocator, arg_tys.get(0));
             for (precomputed_plan.captures.items) |_| try capture_tys.append(self.allocator, str_ty);
             const demand_scope = try fn_ctx.enterCallableBodyDemandScope(runtime_arg_tys, capture_tys.items);
             defer demand_scope.leave();
@@ -15780,7 +15795,7 @@ const Builder = struct {
                 .parser => try fn_ctx.lowerParseResultFromState(
                     shape_ty,
                     encoding_expr,
-                    arg_tys[0],
+                    arg_tys.get(0),
                     state_expr,
                     state_ty,
                     runtime_fn.ret,
@@ -15790,7 +15805,7 @@ const Builder = struct {
                     shape_ty,
                     value.?.expr,
                     encoding_expr,
-                    arg_tys[0],
+                    arg_tys.get(0),
                     state_expr,
                     state_ty,
                     runtime_fn.ret,
@@ -15835,7 +15850,7 @@ const Builder = struct {
             codec_expr = try fn_ctx.wrapLet(capture.local, str_ty, capture.value, codec_expr, ty);
         }
         if (encoding_let) |let_| {
-            codec_expr = try fn_ctx.wrapLet(let_.local, arg_tys[0], let_.value, codec_expr, ty);
+            codec_expr = try fn_ctx.wrapLet(let_.local, arg_tys.get(0), let_.value, codec_expr, ty);
         }
         codec_expr = try self.wrapConstSourceCaptureLets(&fn_ctx, source_captures.items, codec_expr, ty);
 
@@ -22466,6 +22481,24 @@ const BodyContext = struct {
         return self.graph.types;
     }
 
+    /// Element `index` of a type span, borrowed afresh: the store may grow
+    /// between reads, and a durable span's elements never change.
+    fn spanTypeAt(self: *const BodyContext, span: Type.Span, index: usize) Type.TypeId {
+        return GuardedList.at(self.typeStore().span(span), index);
+    }
+
+    /// Field `index` of a field span, borrowed afresh like `spanTypeAt`.
+    fn spanFieldAt(self: *const BodyContext, span: Type.Span, index: usize) Type.Field {
+        return GuardedList.at(self.typeStore().fieldSpan(span), index);
+    }
+
+    /// Append a type span's elements, reserving before the span is borrowed.
+    fn appendSpanTypes(self: *const BodyContext, out: anytype, span: Type.Span) Allocator.Error!void {
+        try out.ensureUnusedCapacity(self.allocator, span.len);
+        const items = self.typeStore().span(span);
+        for (0..span.len) |index| out.appendAssumeCapacity(GuardedList.at(items, index));
+    }
+
     /// Every name id read while lowering belongs to the graph's paired
     /// name store, independently of the coordinator program's name domain.
     fn nameStore(self: *const BodyContext) *const names.NameStore {
@@ -22596,20 +22629,28 @@ const BodyContext = struct {
     }
 
     fn tupleItemTypes(self: *const BodyContext, ty: Type.TypeId) Type.StoreSpanBorrow(Type.TypeId, "spans") {
-        return self.typeStore().span(switch (self.shapeContent(ty)) {
+        return self.typeStore().span(self.tupleItemSpan(ty));
+    }
+
+    fn tupleItemSpan(self: *const BodyContext, ty: Type.TypeId) Type.Span {
+        return switch (self.shapeContent(ty)) {
             .tuple => |items| items,
             .primitive, .named, .record, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("tuple pattern had a non-tuple checked type"),
-        });
+        };
     }
 
     fn tagPayloadTypes(self: *const BodyContext, ty: Type.TypeId, name: names.TagNameId) Type.StoreSpanBorrow(Type.TypeId, "spans") {
+        return self.typeStore().span(self.tagPayloadSpan(ty, name));
+    }
+
+    fn tagPayloadSpan(self: *const BodyContext, ty: Type.TypeId, name: names.TagNameId) Type.Span {
         const tags = switch (self.shapeContent(ty)) {
             .tag_union => |tags| self.typeStore().tagSpan(tags),
             .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => Common.invariant("tag pattern had a non-tag-union checked type"),
         };
         for (0..GuardedList.borrowLen(tags)) |index| {
             const tag = GuardedList.at(tags, index);
-            if (self.nameStore().tagLabelTextEql(tag.name, name)) return self.typeStore().span(tag.payloads);
+            if (self.nameStore().tagLabelTextEql(tag.name, name)) return tag.payloads;
         }
         Common.invariant("tag pattern was absent from checked tag-union type");
     }
@@ -22901,13 +22942,7 @@ const BodyContext = struct {
         switch (self.shapeContent(shape_ty)) {
             .list => |elem_ty| try pending.append(self.allocator, elem_ty),
             .box => |payload_ty| try pending.append(self.allocator, payload_ty),
-            .tuple => |span| {
-                const item_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.typeStore().span(span));
-                defer self.allocator.free(item_tys);
-                for (item_tys) |item_ty| {
-                    try pending.append(self.allocator, item_ty);
-                }
-            },
+            .tuple => |span| try self.appendSpanTypes(pending, span),
             .record, .zst => {
                 const key = self.parserPlanKey(shape_ty);
                 const record = plan.records.get(key) orelse
@@ -22919,9 +22954,10 @@ const BodyContext = struct {
                     try inputs.locals.append(self.allocator, local);
                 }
 
-                const fields = try self.dupeRecordFieldsForShape(shape_ty);
-                defer self.allocator.free(fields);
-                for (fields) |field| {
+                // Each field is borrowed afresh: an encoder's payload type
+                // may be interned between reads.
+                for (0..GuardedList.borrowLen(self.recordFieldsForShape(shape_ty))) |index| {
+                    const field = GuardedList.at(self.recordFieldsForShape(shape_ty), index);
                     const child_ty = switch (kind) {
                         .parser => field.ty,
                         .encoder => try self.encodeRecordFieldPayloadType(field.ty),
@@ -22930,14 +22966,9 @@ const BodyContext = struct {
                 }
             },
             .tag_union => |span| {
-                const tags = try GuardedList.dupe(self.allocator, Type.Tag, self.typeStore().tagSpan(span));
-                defer self.allocator.free(tags);
-                for (tags) |tag| {
-                    const payload_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.typeStore().span(tag.payloads));
-                    defer self.allocator.free(payload_tys);
-                    for (payload_tys) |payload_ty| {
-                        try pending.append(self.allocator, payload_ty);
-                    }
+                for (0..span.len) |index| {
+                    const tag = GuardedList.at(self.typeStore().tagSpan(span), index);
+                    try self.appendSpanTypes(pending, tag.payloads);
                 }
             },
             .primitive, .named, .func, .erased => {},
@@ -24315,22 +24346,24 @@ const BodyContext = struct {
         body: struct { value: DraftExprId, value_ty: Type.TypeId, shape_ty: Type.TypeId },
         box: struct { value: DraftExprId, elem_ty: Type.TypeId, out: DraftExprId = undefined },
         field_slot: struct { value: DraftExprId, slot_ty: Type.TypeId, present_pat: DraftPatId = undefined, slot: Builder.OptionalSlotInfo = undefined },
-        record: struct { value: DraftExprId, fields: []Type.Field, index: usize = 0, out: DraftExprId = undefined },
-        tuple: struct { value: DraftExprId, items: []Type.TypeId, index: usize = 0, out: DraftExprId = undefined },
+        /// Field, item, tag, and payload spans belong to the graph's type
+        /// store and are read afresh as each component is reached.
+        record: struct { value: DraftExprId, fields: Type.Span, index: usize = 0, out: DraftExprId = undefined },
+        tuple: struct { value: DraftExprId, items: Type.Span, index: usize = 0, out: DraftExprId = undefined },
         tag_union: struct {
             value: DraftExprId,
             value_ty: Type.TypeId,
-            tags: []Type.Tag,
+            tags: Type.Span,
             index: usize = 0,
             branches: std.ArrayList(DraftBranch) = .empty,
             pending_pat: DraftPatId = undefined,
-            payload_tys: []Type.TypeId = &.{},
+            payload_tys: Type.Span = .empty(),
             payload_exprs: []DraftExprId = &.{},
         },
         tag_body: struct {
             name: names.TagNameId,
             payload_exprs: []const DraftExprId,
-            payload_tys: []const Type.TypeId,
+            payload_tys: Type.Span,
             index: usize = 0,
             out: DraftExprId = undefined,
         },
@@ -24377,15 +24410,11 @@ const BodyContext = struct {
 
     fn releaseInspectFrame(self: *BodyContext, frame: *InspectFrame) void {
         switch (frame.task) {
-            .record => |*record| self.allocator.free(record.fields),
-            .tuple => |*tuple| self.allocator.free(tuple.items),
             .tag_union => |*tag_union| {
-                self.allocator.free(tag_union.tags);
                 tag_union.branches.deinit(self.allocator);
-                self.allocator.free(tag_union.payload_tys);
                 self.allocator.free(tag_union.payload_exprs);
             },
-            .call, .def, .body, .box, .field_slot, .tag_body, .list, .list_step => {},
+            .call, .def, .body, .box, .field_slot, .record, .tuple, .tag_body, .list, .list_step => {},
         }
     }
 
@@ -24528,7 +24557,7 @@ const BodyContext = struct {
                 if (record.index == record.fields.len) {
                     return .{ .done = .{ .expr = try self.concatExpr(record.out, try self.stringExpr(" }", str_ty), str_ty) } };
                 }
-                const field = record.fields[record.index];
+                const field = self.spanFieldAt(record.fields, record.index);
                 if (record.index != 0) record.out = try self.concatExpr(record.out, try self.stringExpr(", ", str_ty), str_ty);
                 record.index += 1;
                 record.out = try self.concatExpr(record.out, try self.stringExpr(self.nameStore().recordFieldLabelText(field.name), str_ty), str_ty);
@@ -24547,7 +24576,7 @@ const BodyContext = struct {
                 }
                 const i = tuple.index;
                 tuple.index += 1;
-                const item_ty = tuple.items[i];
+                const item_ty = self.spanTypeAt(tuple.items, i);
                 if (i != 0) tuple.out = try self.concatExpr(tuple.out, try self.stringExpr(", ", str_ty), str_ty);
                 const item = try self.addExpr(.{
                     .ty = item_ty,
@@ -24558,35 +24587,29 @@ const BodyContext = struct {
             .tag_union => |*tag_union| {
                 if (started) {
                     try tag_union.branches.append(self.allocator, .{ .pat = tag_union.pending_pat, .body = input.?.expr });
-                    self.allocator.free(tag_union.payload_tys);
-                    tag_union.payload_tys = &.{};
+                    tag_union.payload_tys = .empty();
                     self.allocator.free(tag_union.payload_exprs);
                     tag_union.payload_exprs = &.{};
                 }
                 while (tag_union.index < tag_union.tags.len) {
-                    const tag = tag_union.tags[tag_union.index];
+                    const tag = GuardedList.at(self.typeStore().tagSpan(tag_union.tags), tag_union.index);
                     tag_union.index += 1;
-                    const payload_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.typeStore().span(tag.payloads));
+                    const payload_tys = tag.payloads;
                     var tag_is_uninhabited = false;
-                    for (payload_tys) |payload_ty| {
-                        if (self.typeIsProvenUninhabited(payload_ty) catch |err| {
-                            self.allocator.free(payload_tys);
-                            return err;
-                        }) {
+                    for (0..payload_tys.len) |payload_i| {
+                        if (try self.typeIsProvenUninhabited(self.spanTypeAt(payload_tys, payload_i))) {
                             tag_is_uninhabited = true;
                             break;
                         }
                     }
-                    if (tag_is_uninhabited) {
-                        self.allocator.free(payload_tys);
-                        continue;
-                    }
+                    if (tag_is_uninhabited) continue;
                     tag_union.payload_tys = payload_tys;
                     const payload_pats = try self.allocator.alloc(DraftPatId, payload_tys.len);
                     defer self.allocator.free(payload_pats);
                     tag_union.payload_exprs = try self.allocator.alloc(DraftExprId, payload_tys.len);
 
-                    for (payload_tys, 0..) |payload_ty, payload_i| {
+                    for (0..payload_tys.len) |payload_i| {
+                        const payload_ty = self.spanTypeAt(payload_tys, payload_i);
                         const local = try self.addLocal(self.builder.symbols.fresh(), payload_ty);
                         payload_pats[payload_i] = try self.addPat(.{ .ty = payload_ty, .data = .{ .bind = local } });
                         tag_union.payload_exprs[payload_i] = try self.localExpr(local, payload_ty);
@@ -24629,7 +24652,7 @@ const BodyContext = struct {
                 const i = tag_body.index;
                 tag_body.index += 1;
                 if (i != 0) tag_body.out = try self.concatExpr(tag_body.out, try self.stringExpr(", ", str_ty), str_ty);
-                return .{ .child = .{ .call = .{ .value = tag_body.payload_exprs[i], .value_ty = tag_body.payload_tys[i] } } };
+                return .{ .child = .{ .call = .{ .value = tag_body.payload_exprs[i], .value_ty = self.spanTypeAt(tag_body.payload_tys, i) } } };
             },
             .list => |*list| {
                 if (!started) {
@@ -24743,19 +24766,16 @@ const BodyContext = struct {
                 break :blk .{ .tail = .{ .body = .{ .value = value, .value_ty = value_ty, .shape_ty = backing.ty } } };
             },
             .record => |fields| blk: {
-                const field_span = self.typeStore().fieldSpan(fields);
-                if (field_span.len == 0) break :blk .{ .done = .{ .expr = try self.stringExpr("{}", str_ty) } };
-                break :blk .{ .tail = .{ .record = .{ .value = value, .fields = try GuardedList.dupe(self.allocator, Type.Field, field_span) } } };
+                if (fields.len == 0) break :blk .{ .done = .{ .expr = try self.stringExpr("{}", str_ty) } };
+                break :blk .{ .tail = .{ .record = .{ .value = value, .fields = fields } } };
             },
             .tuple => |items| blk: {
-                const item_span = self.typeStore().span(items);
-                if (item_span.len == 0) break :blk .{ .done = .{ .expr = try self.stringExpr("()", str_ty) } };
-                break :blk .{ .tail = .{ .tuple = .{ .value = value, .items = try GuardedList.dupe(self.allocator, Type.TypeId, item_span) } } };
+                if (items.len == 0) break :blk .{ .done = .{ .expr = try self.stringExpr("()", str_ty) } };
+                break :blk .{ .tail = .{ .tuple = .{ .value = value, .items = items } } };
             },
             .tag_union => |tags| blk: {
-                const tag_span = self.typeStore().tagSpan(tags);
-                if (tag_span.len == 0) break :blk .{ .done = .{ .expr = try self.uninhabitedInspect(value, str_ty) } };
-                break :blk .{ .tail = .{ .tag_union = .{ .value = value, .value_ty = value_ty, .tags = try GuardedList.dupe(self.allocator, Type.Tag, tag_span) } } };
+                if (tags.len == 0) break :blk .{ .done = .{ .expr = try self.uninhabitedInspect(value, str_ty) } };
+                break :blk .{ .tail = .{ .tag_union = .{ .value = value, .value_ty = value_ty, .tags = tags } } };
             },
             .list => |elem_ty| .{ .tail = .{ .list = .{ .value = value, .elem_ty = elem_ty } } },
             .func, .erased => .{ .done = .{ .expr = try self.stringExpr("<function>", str_ty) } },
@@ -33982,8 +34002,8 @@ const BodyContext = struct {
 
     const ClosedOperandsAtTypesTask = struct {
         operands: []const static_dispatch.StaticDispatchOperand,
-        /// Owned copy of the sealed argument types.
-        stable_types: []const Type.TypeId,
+        /// The sealed argument types, as a span of the graph's type store.
+        arg_types: Type.Span,
         ret_cell: DraftTypeCell,
         uninhabited_index: ?usize = null,
         prior: []DraftExprId = &.{},
@@ -34017,8 +34037,8 @@ const BodyContext = struct {
     const SpanTask = struct {
         exprs: []const checked.CheckedExprId,
         nodes: []const NodeId = &.{},
-        types: []const Type.TypeId = &.{},
-        owns_types: bool = false,
+        /// Each child's sealed type, as a span of the graph's type store.
+        types: Type.Span = .empty(),
         list_ty: Type.TypeId = undefined,
         elem_ty: Type.TypeId = undefined,
         reserved: BodyDraftStore.ReservedExprSpan = undefined,
@@ -34458,8 +34478,6 @@ const BodyContext = struct {
             .closed_operands_at_types => |*task| {
                 if (task.reserving) self.draft.expr_ids.shrinkRetainingCapacity(task.reserved.span.start);
                 task.reserving = false;
-                self.allocator.free(task.stable_types);
-                task.stable_types = &.{};
                 self.allocator.free(task.prior);
                 task.prior = &.{};
             },
@@ -35296,12 +35314,12 @@ const BodyContext = struct {
                 .call => |step| .{ .call = step },
             },
             .list => |items| return requestLowerTask(self, .{ .list_span = .{ .exprs = items, .list_ty = ty } }),
-            .tuple => |items| return requestLowerTask(self, try self.spanAtTypesTask(items, self.tupleItemTypes(ty))),
+            .tuple => |items| return requestLowerTask(self, spanAtTypesTask(items, self.tupleItemSpan(ty))),
             .record => |record| return try self.beginRecordAtType(record, ty),
             .tag => |tag| {
                 const name = try self.tagName(self.view, tag.name);
                 task.tag_name = name;
-                return requestLowerTask(self, try self.spanAtTypesTask(tag.args, self.tagPayloadTypes(ty, name)));
+                return requestLowerTask(self, spanAtTypesTask(tag.args, self.tagPayloadSpan(ty, name)));
             },
             .zero_argument_tag => |tag| return self.withTypeDone(task, try self.addConstructorExpr(ty, .{ .tag = .{ .name = try self.tagName(self.view, tag.name), .payloads = .empty() } })),
             .nominal => |nominal| {
@@ -35777,14 +35795,13 @@ const BodyContext = struct {
             ),
         }
 
-        const arg_types = self.typeStore().span(function.args);
-        if (operands.len != GuardedList.borrowLen(arg_types)) {
+        if (operands.len != function.args.len) {
             Common.invariant("closed dispatch argument arity differed from its sealed callable type");
         }
         frame.cursor = 1;
         return requestLowerTask(self, .{ .closed_operands_at_types = .{
             .operands = operands,
-            .stable_types = try GuardedList.dupe(self.allocator, Type.TypeId, arg_types),
+            .arg_types = function.args,
             .ret_cell = expected_ret_cell,
         } });
     }
@@ -35794,11 +35811,10 @@ const BodyContext = struct {
     /// operands before it and then the uninhabited operand as a scrutinee.
     fn stepClosedOperandsAtTypes(self: *BodyContext, frame: *LowerFrame, task: *ClosedOperandsAtTypesTask, input: ?LowerResult) Allocator.Error!LowerStep {
         const operands = task.operands;
-        const stable_types = task.stable_types;
         switch (frame.cursor) {
             0 => {
-                for (stable_types, 0..) |arg_ty, uninhabited_index| {
-                    if (!try self.typeIsProvenUninhabited(arg_ty)) continue;
+                for (0..task.arg_types.len) |uninhabited_index| {
+                    if (!try self.typeIsProvenUninhabited(self.spanTypeAt(task.arg_types, uninhabited_index))) continue;
                     switch (operands[uninhabited_index]) {
                         .checked_expr => {},
                         .generated_interpolation_segments,
@@ -35830,7 +35846,7 @@ const BodyContext = struct {
 
         const limit = task.uninhabited_index orelse operands.len;
         if (task.index < limit) {
-            return requestLowerTask(self, .{ .operand_at_type = .{ .operand = operands[task.index], .ty = stable_types[task.index] } });
+            return requestLowerTask(self, .{ .operand_at_type = .{ .operand = operands[task.index], .ty = self.spanTypeAt(task.arg_types, task.index) } });
         }
 
         task.reserving = false;
@@ -35839,12 +35855,10 @@ const BodyContext = struct {
             return .{ .ret = .{ .closed_operands = .{ .args = task.reserved.span } } };
         };
         frame.cursor = 2;
-        return uninhabitedScrutineeStep(self, operands[uninhabited_index].checked_expr, .{ .sealed = stable_types[uninhabited_index] });
+        return uninhabitedScrutineeStep(self, operands[uninhabited_index].checked_expr, .{ .sealed = self.spanTypeAt(task.arg_types, uninhabited_index) });
     }
 
     fn releaseClosedOperandsAtTypes(self: *BodyContext, task: *ClosedOperandsAtTypesTask) void {
-        self.allocator.free(task.stable_types);
-        task.stable_types = &.{};
         self.allocator.free(task.prior);
         task.prior = &.{};
     }
@@ -35853,7 +35867,6 @@ const BodyContext = struct {
     /// lowered scrutinee with no branches.
     fn finishClosedOperandsAtUninhabited(self: *BodyContext, task: *ClosedOperandsAtTypesTask, scrutinee: DraftExprId) Allocator.Error!LowerStep {
         defer self.releaseClosedOperandsAtTypes(task);
-        const stable_types = task.stable_types;
         const uninhabited_index = task.uninhabited_index.?;
         const ret_cell = task.ret_cell;
         var result = try self.zeroBranchMatchAtTypeCell(scrutinee, ret_cell);
@@ -35861,7 +35874,7 @@ const BodyContext = struct {
         while (index > 0) {
             index -= 1;
             result = try self.addExprWithTypeCell(ret_cell, .{ .let_ = .{
-                .bind = try self.addPatWithTypeCell(.{ .sealed = stable_types[index] }, .wildcard),
+                .bind = try self.addPatWithTypeCell(.{ .sealed = self.spanTypeAt(task.arg_types, index) }, .wildcard),
                 .value = task.prior[index],
                 .rest = result,
             } });
@@ -36231,15 +36244,10 @@ const BodyContext = struct {
         list_elements,
     };
 
-    /// A span task lowering each child at its sealed type, owning a stable
-    /// copy of those types.
-    fn spanAtTypesTask(self: *BodyContext, exprs: []const checked.CheckedExprId, tys: anytype) Allocator.Error!LowerTask {
-        if (exprs.len != GuardedList.borrowLen(tys)) Common.invariant("call argument arity differs from concrete function type");
-        return .{ .span_at_types = .{
-            .exprs = exprs,
-            .types = try GuardedList.dupe(self.allocator, Type.TypeId, tys),
-            .owns_types = true,
-        } };
+    /// A span task lowering each child at its sealed type.
+    fn spanAtTypesTask(exprs: []const checked.CheckedExprId, tys: Type.Span) LowerTask {
+        if (exprs.len != tys.len) Common.invariant("call argument arity differs from concrete function type");
+        return .{ .span_at_types = .{ .exprs = exprs, .types = tys } };
     }
 
     fn stepSpan(self: *BodyContext, frame: *LowerFrame, task: *SpanTask, input: ?LowerResult, mode: SpanMode) Allocator.Error!LowerStep {
@@ -36270,7 +36278,7 @@ const BodyContext = struct {
             const ty = switch (mode) {
                 .typed_by_expr => return requestLowerChild(self, child, DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(child))),
                 .at_nodes => return requestLowerChild(self, child, DraftTypeCell.fromGraphNode(task.nodes[task.index])),
-                .at_types => task.types[task.index],
+                .at_types => self.spanTypeAt(task.types, task.index),
                 .list_elements => task.elem_ty,
             };
             if (!try self.typeIsProvenUninhabited(ty)) return requestLowerChild(self, child, .{ .sealed = ty });
@@ -36286,11 +36294,6 @@ const BodyContext = struct {
         if (task.reserving) {
             self.draft.expr_ids.shrinkRetainingCapacity(task.reserved.span.start);
             task.reserving = false;
-        }
-        if (task.owns_types) {
-            self.allocator.free(task.types);
-            task.types = &.{};
-            task.owns_types = false;
         }
     }
 
@@ -36472,7 +36475,7 @@ const BodyContext = struct {
                 task.callee_expr = input.?.exprValue();
                 const fn_data = self.functionShape(task.fn_ty, "checked call function type was not a function");
                 frame.cursor = 5;
-                return requestLowerTask(self, try self.spanAtTypesTask(call.args, self.typeStore().span(fn_data.args)));
+                return requestLowerTask(self, spanAtTypesTask(call.args, fn_data.args));
             },
             5 => {
                 const fn_data = self.functionShape(task.fn_ty, "checked call function type was not a function");
@@ -40012,22 +40015,20 @@ const BodyContext = struct {
             .list => |elem_ty| try pending.append(self.allocator, .{ .ty = elem_ty }),
             .box => |payload_ty| try pending.append(self.allocator, .{ .ty = payload_ty }),
             .tuple => |span| {
-                const item_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.typeStore().span(span));
-                defer self.allocator.free(item_tys);
-                for (item_tys) |elem_ty| try pending.append(self.allocator, .{ .ty = elem_ty });
+                try pending.ensureUnusedCapacity(self.allocator, span.len);
+                for (0..span.len) |index| pending.appendAssumeCapacity(.{ .ty = self.spanTypeAt(span, index) });
             },
             .record, .zst => {
-                const fields = try self.dupeRecordFieldsForShape(shape_ty);
-                defer self.allocator.free(fields);
-                for (fields) |field| try pending.append(self.allocator, @unionInit(CodecShapeStep, @tagName(record_field), field.ty));
+                const field_count = GuardedList.borrowLen(self.recordFieldsForShape(shape_ty));
+                try pending.ensureUnusedCapacity(self.allocator, field_count);
+                const fields = self.recordFieldsForShape(shape_ty);
+                for (0..field_count) |index| pending.appendAssumeCapacity(@unionInit(CodecShapeStep, @tagName(record_field), GuardedList.at(fields, index).ty));
             },
             .tag_union => |span| {
-                const tags = try GuardedList.dupe(self.allocator, Type.Tag, self.typeStore().tagSpan(span));
-                defer self.allocator.free(tags);
-                for (tags) |tag| {
-                    const payload_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.typeStore().span(tag.payloads));
-                    defer self.allocator.free(payload_tys);
-                    for (payload_tys) |payload_ty| try pending.append(self.allocator, .{ .ty = payload_ty });
+                for (0..span.len) |tag_index| {
+                    const tag = GuardedList.at(self.typeStore().tagSpan(span), tag_index);
+                    try pending.ensureUnusedCapacity(self.allocator, tag.payloads.len);
+                    for (0..tag.payloads.len) |index| pending.appendAssumeCapacity(.{ .ty = self.spanTypeAt(tag.payloads, index) });
                 }
             },
             .primitive, .named, .func, .erased => {},
@@ -49510,11 +49511,10 @@ const BodyContext = struct {
                 .record => |fields| fields,
                 .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("record expression had a non-record monotype"),
             };
-            const target_field_list = try GuardedList.dupe(self.allocator, Type.Field, self.typeStore().fieldSpan(target_fields));
-            defer self.allocator.free(target_field_list);
             var labels = try self.recordExprLabels(record);
             defer labels.deinit(self.allocator);
-            for (target_field_list) |field| {
+            for (0..target_fields.len) |field_index| {
+                const field = self.spanFieldAt(target_fields, field_index);
                 const field_value = labels.values.get(field.name) orelse continue;
                 if (self.monotypeFieldKindTag(field) == .optional) {
                     try requests.append(self.allocator, .{ .expr = field_value, .target = .{ .at_type = (try self.optionalSlotInfo(field.ty)).payload_ty } });
@@ -49649,8 +49649,6 @@ const BodyContext = struct {
         const base_ty = if (base_record) |base_expr| try self.exprType(base_expr) else ty;
         const base_local = if (base_record) |_| try self.addLocal(self.builder.symbols.fresh(), base_ty) else null;
         const base_expr = if (base_local) |local| try self.localExpr(local, base_ty) else null;
-        const target_field_list = try GuardedList.dupe(self.allocator, Type.Field, self.typeStore().fieldSpan(target_fields));
-        defer self.allocator.free(target_field_list);
 
         // See lowerRecordExprAtNode: spread-carried reads bind before the
         // update's own field expressions run, so the base's last use precedes
@@ -49661,7 +49659,7 @@ const BodyContext = struct {
         @memset(spread_reads, null);
 
         for (0..target_field_count) |i| {
-            const field = target_field_list[i];
+            const field = self.spanFieldAt(target_fields, i);
             const field_kind: checked.CheckedFieldKind.Tag =
                 self.monotypeFieldKindTag(field);
             const value = if (labels.values.get(field.name)) |field_value| supplied: {
@@ -49718,7 +49716,7 @@ const BodyContext = struct {
             spread_index -= 1;
             const read = spread_reads[spread_index] orelse continue;
             record_expr = try self.addExpr(.{ .ty = ty, .data = .{ .let_ = .{
-                .bind = try self.bindPat(read.local, target_field_list[spread_index].ty),
+                .bind = try self.bindPat(read.local, self.spanFieldAt(target_fields, spread_index).ty),
                 .value = read.value,
                 .rest = record_expr,
             } } });
@@ -51007,13 +51005,10 @@ const BodyContext = struct {
         const field_count: usize = @intCast(field_span.len);
         const lowered = try self.allocator.alloc(DraftFieldExpr, field_count);
         defer self.allocator.free(lowered);
-        const fields = try GuardedList.dupe(self.allocator, Type.Field, self.typeStore().fieldSpan(field_span));
-        defer self.allocator.free(fields);
-
         const before = self.view.module_env.numeralDigitsBefore(literal);
         const after = self.view.module_env.numeralDigitsAfter(literal);
         for (0..field_count) |i| {
-            const field = fields[i];
+            const field = self.spanFieldAt(field_span, i);
             const label = self.nameStore().recordFieldLabelText(field.name);
             const value = if (Ident.textEql(label, "is_negative"))
                 try self.boolLiteral(literal.isNegative(), field.ty)
@@ -54903,16 +54898,15 @@ const BodyContext = struct {
         const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
         if (plan_args.len != 2) Common.invariant("structural " ++ noun ++ " dispatch plan must have two operands");
         const fn_data = self.functionShape(callable_mono_ty, "checked structural " ++ noun ++ " target had a non-function type");
-        // Copy because the recursive operand lowering below may reallocate
-        // types.span, dangling the slice; only the scalar derived type escapes.
-        const arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.typeStore().span(fn_data.args));
-        defer self.allocator.free(arg_tys);
+        // The recursive operand lowering below may grow the type store, so
+        // each argument type is read afresh.
+        const arg_tys = TypeSpanReader.of(self.typeStore(), fn_data.args);
         if (arg_tys.len != 2) Common.invariant("structural " ++ noun ++ " callable type must have two operands");
         const first = self.preLoweredOperandAt(pre_lowered, 0) orelse
-            try arg_ctx.lowerDispatchOperandAtType(plan_args[0], arg_tys[0]);
+            try arg_ctx.lowerDispatchOperandAtType(plan_args[0], arg_tys.get(0));
         const second = self.preLoweredOperandAt(pre_lowered, 1) orelse
-            try arg_ctx.lowerDispatchOperandAtType(plan_args[1], arg_tys[1]);
-        return .{ .first = first, .second = second, .derived_ty = arg_tys[0] };
+            try arg_ctx.lowerDispatchOperandAtType(plan_args[1], arg_tys.get(1));
+        return .{ .first = first, .second = second, .derived_ty = arg_tys.get(0) };
     }
 
     /// Lower derived `map`/`map!` into the exhaustive tag match selected by
@@ -54938,8 +54932,7 @@ const BodyContext = struct {
         const input_ty = operands.derived_ty;
         const transform_ty = try self.exprType(operands.second);
         const transform_fn = self.functionShape(transform_ty, "checked derived map transform had a non-function type");
-        const transform_arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.typeStore().span(transform_fn.args));
-        defer self.allocator.free(transform_arg_tys);
+        const transform_arg_tys = TypeSpanReader.of(self.typeStore(), transform_fn.args);
         if (transform_arg_tys.len != 1) Common.invariant("checked derived map transform did not have one argument");
 
         const selected_name = try self.tagName(self.view, map_plan.tag);
@@ -54951,7 +54944,7 @@ const BodyContext = struct {
             Common.invariant("checked derived map payload plan was outside the selected tag's payloads");
         }
         const selected_index: usize = @intCast(map_plan.payload_index);
-        self.assertSameType(transform_arg_tys[0], GuardedList.at(input_selected_payloads, selected_index), "checked derived map transform argument differed from the selected input payload");
+        self.assertSameType(transform_arg_tys.get(0), GuardedList.at(input_selected_payloads, selected_index), "checked derived map transform argument differed from the selected input payload");
         self.assertSameType(transform_fn.ret, GuardedList.at(output_selected_payloads, selected_index), "checked derived map transform result differed from the selected output payload");
 
         const input_tags = try GuardedList.dupe(self.allocator, Type.Tag, self.tagUnionTags(input_ty));
@@ -55029,15 +55022,13 @@ const BodyContext = struct {
         if (!parser.structural_allowed) Common.invariant("structural parser dispatch plan did not permit structural parser lowering");
 
         const fn_data = self.functionShape(callable_mono_ty, "checked structural parser target had a non-function type");
-        const arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.typeStore().span(fn_data.args));
-        defer self.allocator.free(arg_tys);
+        const arg_tys = TypeSpanReader.of(self.typeStore(), fn_data.args);
         const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
         if (arg_tys.len != 1 or plan_args.len != 1) Common.invariant("structural parser callable type must have one encoding argument");
         self.assertSameType(fn_data.ret, ret_ty, "structural parser return type differed from dispatch expression type");
 
         const runtime_fn = self.functionShape(ret_ty, "checked structural parser return had a non-function type");
-        const runtime_arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.typeStore().span(runtime_fn.args));
-        defer self.allocator.free(runtime_arg_tys);
+        const runtime_arg_tys = TypeSpanReader.of(self.typeStore(), runtime_fn.args);
         if (runtime_arg_tys.len != 1) Common.invariant("structural parser runtime function must have one state argument");
 
         const top_level_null_try = self.tryNullInfo(shape_ty);
@@ -55093,10 +55084,10 @@ const BodyContext = struct {
         }
 
         const encoding_value = self.preLoweredOperandAt(pre_lowered, 0) orelse
-            try arg_ctx.lowerDispatchOperandAtType(plan_args[0], arg_tys[0]);
-        const encoding_local = try self.addLocal(self.builder.symbols.fresh(), arg_tys[0]);
+            try arg_ctx.lowerDispatchOperandAtType(plan_args[0], arg_tys.get(0));
+        const encoding_local = try self.addLocal(self.builder.symbols.fresh(), arg_tys.get(0));
         self.setLocalCaptureId(encoding_local, parserEncodingCaptureId());
-        const state_local = try self.addLocal(self.builder.symbols.fresh(), runtime_arg_tys[0]);
+        const state_local = try self.addLocal(self.builder.symbols.fresh(), runtime_arg_tys.get(0));
 
         const str_ty = try self.primitiveType(.str);
         var precomputed_plan = ParserPrecomputedPlan.init(self.allocator);
@@ -55104,7 +55095,7 @@ const BodyContext = struct {
         try self.buildCodecPrecomputedPlan(
             .parser,
             &precomputed_plan,
-            .{ .construction = .{ .encoding_expr = try self.localExpr(encoding_local, arg_tys[0]), .encoding_ty = arg_tys[0] } },
+            .{ .construction = .{ .encoding_expr = try self.localExpr(encoding_local, arg_tys.get(0)), .encoding_ty = arg_tys.get(0) } },
             shape_ty,
             str_ty,
         );
@@ -55112,16 +55103,16 @@ const BodyContext = struct {
         const parsed = blk: {
             var capture_tys = std.ArrayList(Type.TypeId).empty;
             defer capture_tys.deinit(self.allocator);
-            try capture_tys.append(self.allocator, arg_tys[0]);
+            try capture_tys.append(self.allocator, arg_tys.get(0));
             for (precomputed_plan.captures.items) |_| try capture_tys.append(self.allocator, str_ty);
-            const demand_scope = try self.enterCallableBodyDemandScope(&.{runtime_arg_tys[0]}, capture_tys.items);
+            const demand_scope = try self.enterCallableBodyDemandScope(&.{runtime_arg_tys.get(0)}, capture_tys.items);
             defer demand_scope.leave();
             break :blk try self.lowerParseShapeHelperCall(
                 shape_ty,
-                try self.localExpr(encoding_local, arg_tys[0]),
-                arg_tys[0],
-                try self.localExpr(state_local, runtime_arg_tys[0]),
-                runtime_arg_tys[0],
+                try self.localExpr(encoding_local, arg_tys.get(0)),
+                arg_tys.get(0),
+                try self.localExpr(state_local, runtime_arg_tys.get(0)),
+                runtime_arg_tys.get(0),
                 runtime_fn.ret,
                 &precomputed_plan,
             );
@@ -55139,7 +55130,7 @@ const BodyContext = struct {
         var parser_expr = try self.addExpr(.{ .ty = ret_ty, .data = .{ .lambda = .{
             .fn_id = .{ .draft = fn_id },
             .args = try self.addTypedLocalSpan(&.{
-                .{ .local = state_local, .ty = runtime_arg_tys[0] },
+                .{ .local = state_local, .ty = runtime_arg_tys.get(0) },
             }),
             .body = parsed,
         } } });
@@ -55149,7 +55140,7 @@ const BodyContext = struct {
             const capture = precomputed_plan.captures.items[capture_index];
             parser_expr = try self.wrapLet(capture.local, str_ty, capture.value, parser_expr, ret_ty);
         }
-        return try self.wrapLet(encoding_local, arg_tys[0], encoding_value, parser_expr, ret_ty);
+        return try self.wrapLet(encoding_local, arg_tys.get(0), encoding_value, parser_expr, ret_ty);
     }
 
     fn lowerStructuralEncoderFor(
@@ -55168,8 +55159,7 @@ const BodyContext = struct {
         if (!encoder_for.structural_allowed) Common.invariant("structural encoder_for dispatch plan did not permit structural encoder_for lowering");
 
         const fn_data = self.functionShape(callable_mono_ty, "checked structural encoder_for target had a non-function type");
-        const arg_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.typeStore().span(fn_data.args));
-        defer self.allocator.free(arg_tys);
+        const arg_tys = TypeSpanReader.of(self.typeStore(), fn_data.args);
         const plan_args = plan.argsSlice(self.view.static_dispatch_plans);
         if (arg_tys.len != 1 or plan_args.len != 1) Common.invariant("structural encoder_for callable type must have one encoding argument");
         self.assertSameType(fn_data.ret, ret_ty, "structural encoder_for return type differed from dispatch expression type");
@@ -55182,9 +55172,9 @@ const BodyContext = struct {
         if (!try self.codecFieldTypeIsSupported(.encoder, shape_ty, false)) Common.invariant("structural encoder_for dispatcher was not a supported structural type");
 
         const encoding_value = self.preLoweredOperandAt(pre_lowered, 0) orelse
-            try arg_ctx.lowerDispatchOperandAtType(plan_args[0], arg_tys[0]);
+            try arg_ctx.lowerDispatchOperandAtType(plan_args[0], arg_tys.get(0));
 
-        const encoding_local = try self.addLocal(self.builder.symbols.fresh(), arg_tys[0]);
+        const encoding_local = try self.addLocal(self.builder.symbols.fresh(), arg_tys.get(0));
         const value_local = try self.addLocal(self.builder.symbols.fresh(), runtime_arg_tys[0]);
         const state_local = try self.addLocal(self.builder.symbols.fresh(), runtime_arg_tys[1]);
         self.setLocalCaptureId(encoding_local, encoderForEncodingCaptureId());
@@ -55196,7 +55186,7 @@ const BodyContext = struct {
         try self.buildCodecPrecomputedPlan(
             .encoder,
             &precomputed_plan,
-            .{ .construction = .{ .encoding_expr = try self.localExpr(encoding_local, arg_tys[0]), .encoding_ty = arg_tys[0] } },
+            .{ .construction = .{ .encoding_expr = try self.localExpr(encoding_local, arg_tys.get(0)), .encoding_ty = arg_tys.get(0) } },
             shape_ty,
             str_ty,
         );
@@ -55220,15 +55210,15 @@ const BodyContext = struct {
         const encoded = blk: {
             var capture_tys = std.ArrayList(Type.TypeId).empty;
             defer capture_tys.deinit(self.allocator);
-            try capture_tys.append(self.allocator, arg_tys[0]);
+            try capture_tys.append(self.allocator, arg_tys.get(0));
             for (precomputed_plan.captures.items) |_| try capture_tys.append(self.allocator, str_ty);
             const demand_scope = try self.enterCallableBodyDemandScope(runtime_arg_tys, capture_tys.items);
             defer demand_scope.leave();
             break :blk try self.lowerEncodeShapeToState(
                 shape_ty,
                 try self.localExpr(value_local, runtime_arg_tys[0]),
-                try self.localExpr(encoding_local, arg_tys[0]),
-                arg_tys[0],
+                try self.localExpr(encoding_local, arg_tys.get(0)),
+                arg_tys.get(0),
                 try self.localExpr(state_local, runtime_arg_tys[1]),
                 runtime_arg_tys[1],
                 runtime_fn.ret,
@@ -55259,7 +55249,7 @@ const BodyContext = struct {
             const capture = precomputed_plan.captures.items[capture_index];
             encoder_expr = try self.wrapLet(capture.local, str_ty, capture.value, encoder_expr, ret_ty);
         }
-        return try self.wrapLet(encoding_local, arg_tys[0], encoding_value, encoder_expr, ret_ty);
+        return try self.wrapLet(encoding_local, arg_tys.get(0), encoding_value, encoder_expr, ret_ty);
     }
 
     /// The inputs every position of one generated encoder shares.
@@ -60879,10 +60869,12 @@ const BodyContext = struct {
             },
             /// Record fields or tuple items folded into one result, in
             /// `D.forward` order.
+            /// `fields` and `items` are spans of the graph's type store, read
+            /// afresh as each component is reached.
             aggregate: struct {
                 operand: D.Operand,
-                fields: []Type.Field = &.{},
-                items: []Type.TypeId = &.{},
+                fields: Type.Span = .empty(),
+                items: Type.Span = .empty(),
                 state: DraftExprId = undefined,
                 next: usize = 0,
             },
@@ -60895,11 +60887,12 @@ const BodyContext = struct {
                 tags_span: Type.Span,
                 operand: D.Operand,
                 locals: D.TagUnionLocals = undefined,
-                tags: []Type.Tag = &.{},
                 branches: []DraftBranch = &.{},
                 index: usize = 0,
                 branch_active: bool = false,
-                payloads: []Type.TypeId = &.{},
+                /// The active variant's payloads, a span of the graph's type
+                /// store like `tags_span`.
+                payloads: Type.Span = .empty(),
                 branch: D.TagBranchPayloads = .{},
                 state: DraftExprId = undefined,
                 next: usize = 0,
@@ -61006,22 +60999,12 @@ const BodyContext = struct {
                 if (def.unmarked) D.expansionStack(self).putAssumeCapacity(def.value_ty, {});
                 def.unmarked = false;
             },
-            .aggregate => |*aggregate| {
-                self.allocator.free(aggregate.fields);
-                aggregate.fields = &.{};
-                self.allocator.free(aggregate.items);
-                aggregate.items = &.{};
-            },
             .tag_union => |*tag_union| {
-                self.allocator.free(tag_union.tags);
-                tag_union.tags = &.{};
                 self.allocator.free(tag_union.branches);
                 tag_union.branches = &.{};
-                self.allocator.free(tag_union.payloads);
-                tag_union.payloads = &.{};
                 tag_union.branch.deinit(self.allocator);
             },
-            .derive, .call, .named => {},
+            .derive, .call, .named, .aggregate => {},
         }
     }
 
@@ -61035,30 +61018,14 @@ const BodyContext = struct {
     /// representation.
     fn derivationNamedTask(self: *BodyContext, comptime D: type, named_ty: Type.TypeId, backing_ty: Type.TypeId, operand: D.Operand) Allocator.Error!DerivationTask(D) {
         return switch (self.typeStore().get(backing_ty)) {
-            .record => |fields| try self.derivationRecordTask(D, fields, operand),
-            .tuple => |items| try self.derivationTupleTask(D, items, operand),
+            .record => |fields| .{ .aggregate = .{ .operand = operand, .fields = fields } },
+            .tuple => |items| .{ .aggregate = .{ .operand = operand, .items = items } },
             .primitive, .named, .tag_union, .list, .box, .func, .erased, .zst => .{ .named = .{
                 .named_ty = named_ty,
                 .backing_ty = backing_ty,
                 .operand = operand,
             } },
         };
-    }
-
-    fn derivationRecordTask(self: *BodyContext, comptime D: type, fields: Type.Span, operand: D.Operand) Allocator.Error!DerivationTask(D) {
-        // Copied because deriving a component may reallocate the type store's fields.
-        return .{ .aggregate = .{
-            .operand = operand,
-            .fields = try GuardedList.dupe(self.allocator, Type.Field, self.typeStore().fieldSpan(fields)),
-        } };
-    }
-
-    fn derivationTupleTask(self: *BodyContext, comptime D: type, items: Type.Span, operand: D.Operand) Allocator.Error!DerivationTask(D) {
-        // Copied because deriving a component may reallocate the type store's spans.
-        return .{ .aggregate = .{
-            .operand = operand,
-            .items = try GuardedList.dupe(self.allocator, Type.TypeId, self.typeStore().span(items)),
-        } };
     }
 
     fn stepDerivation(
@@ -61125,8 +61092,8 @@ const BodyContext = struct {
                 }
                 const body: ?DerivationTask(D) = switch (shape) {
                     .list => Common.invariant("structural derivation expansion reached a List; List derivations dispatch to a method target"),
-                    .record => |fields| try self.derivationRecordTask(D, fields, operand),
-                    .tuple => |items| try self.derivationTupleTask(D, items, operand),
+                    .record => |fields| .{ .aggregate = .{ .operand = operand, .fields = fields } },
+                    .tuple => |items| .{ .aggregate = .{ .operand = operand, .items = items } },
                     .tag_union => |tags| .{ .tag_union = .{ .ty = ty, .tags_span = tags, .operand = operand } },
                     .named => |named| if (named.backing) |backing| try self.derivationNamedTask(D, ty, backing.ty, operand) else null,
                     .primitive, .zst, .func, .erased, .box => null,
@@ -61208,11 +61175,11 @@ const BodyContext = struct {
                 if (aggregate.next == len) return derivationExpr(aggregate.state, D);
                 const index = if (D.forward) aggregate.next else len - 1 - aggregate.next;
                 if (aggregate.fields.len != 0) {
-                    const field = aggregate.fields[index];
+                    const field = self.spanFieldAt(aggregate.fields, index);
                     const component = try D.componentForField(self, aggregate.operand, aggregate.state, field);
                     return .{ .child = .{ .derive = .{ .ty = field.ty, .operand = component } } };
                 }
-                const item_ty = aggregate.items[index];
+                const item_ty = self.spanTypeAt(aggregate.items, index);
                 const component = try D.componentForTuple(self, aggregate.operand, aggregate.state, item_ty, index);
                 return .{ .child = .{ .derive = .{ .ty = item_ty, .operand = component } } };
             },
@@ -61227,9 +61194,7 @@ const BodyContext = struct {
             .tag_union => |*tag_union| {
                 if (stage == 0) {
                     tag_union.locals = try D.tagUnionEnter(self, tag_union.ty);
-                    // Copied because deriving a payload may reallocate the type store's spans.
-                    tag_union.tags = try GuardedList.dupe(self.allocator, Type.Tag, self.typeStore().tagSpan(tag_union.tags_span));
-                    tag_union.branches = try self.allocator.alloc(DraftBranch, tag_union.tags.len);
+                    tag_union.branches = try self.allocator.alloc(DraftBranch, tag_union.tags_span.len);
                 } else {
                     tag_union.state = try D.combine(self, tag_union.state, input.?.expr, ctx);
                     tag_union.next += 1;
@@ -61240,7 +61205,7 @@ const BodyContext = struct {
                         if (tag_union.next < payload_count) {
                             const index = if (D.forward) tag_union.next else payload_count - 1 - tag_union.next;
                             return .{ .child = .{ .derive = .{
-                                .ty = tag_union.payloads[index],
+                                .ty = self.spanTypeAt(tag_union.payloads, index),
                                 .operand = D.tagPayloadOperand(tag_union.branch, index, tag_union.state),
                             } } };
                         }
@@ -61248,23 +61213,21 @@ const BodyContext = struct {
                             self,
                             tag_union.ty,
                             tag_union.locals,
-                            tag_union.tags[tag_union.index],
+                            GuardedList.at(self.typeStore().tagSpan(tag_union.tags_span), tag_union.index),
                             tag_union.branch,
                             tag_union.state,
-                            tag_union.tags.len == 1,
+                            tag_union.tags_span.len == 1,
                             ctx,
                         );
                         tag_union.branch.deinit(self.allocator);
-                        self.allocator.free(tag_union.payloads);
-                        tag_union.payloads = &.{};
+                        tag_union.payloads = .empty();
                         tag_union.branch_active = false;
                         tag_union.index += 1;
                     }
-                    if (tag_union.index == tag_union.tags.len) {
+                    if (tag_union.index == tag_union.tags_span.len) {
                         return derivationExpr(try D.tagUnionExit(self, tag_union.ty, tag_union.locals, tag_union.operand, tag_union.branches, ctx), D);
                     }
-                    const tag = tag_union.tags[tag_union.index];
-                    tag_union.payloads = try GuardedList.dupe(self.allocator, Type.TypeId, self.typeStore().span(tag.payloads));
+                    tag_union.payloads = GuardedList.at(self.typeStore().tagSpan(tag_union.tags_span), tag_union.index).payloads;
                     tag_union.branch_active = true;
                     tag_union.next = 0;
                     tag_union.state = try D.tagBranchEnter(self, tag_union.ty, tag_union.payloads, @intCast(tag_union.index), tag_union.operand, &tag_union.branch, ctx);
@@ -65064,10 +65027,11 @@ const BodyContext = struct {
         tys: anytype,
     ) Allocator.Error!void {
         if (checked_patterns.len != GuardedList.borrowLen(tys)) Common.invariant("pattern arity differs from concrete checked type");
-        const stable_tys = try GuardedList.dupe(self.allocator, Type.TypeId, tys);
-        defer self.allocator.free(stable_tys);
-        for (checked_patterns, stable_tys) |child, child_ty| {
-            try pat_run.ops.append(self.allocator, .{ .pattern = child, .ty = child_ty });
+        // Reserved before `tys` is read: appending to the run never touches
+        // the type store, so the borrow stays valid throughout.
+        try pat_run.ops.ensureUnusedCapacity(self.allocator, checked_patterns.len);
+        for (checked_patterns, 0..) |child, index| {
+            pat_run.ops.appendAssumeCapacity(.{ .pattern = child, .ty = GuardedList.at(tys, index) });
         }
     }
 
@@ -67708,12 +67672,13 @@ const EqDeriver = struct {
     /// Bind one variant's payloads on both sides. The branch's conjunction of
     /// pairwise payload comparisons starts at true: a variant with no payloads
     /// is equal once both discriminants match.
-    fn tagBranchEnter(self: *BodyContext, _: Type.TypeId, payloads: []const Type.TypeId, _: u64, _: Operand, branch: *TagBranchPayloads, ctx: BodyContext.DerivationCtx) Allocator.Error!DraftExprId {
+    fn tagBranchEnter(self: *BodyContext, _: Type.TypeId, payloads: Type.Span, _: u64, _: Operand, branch: *TagBranchPayloads, ctx: BodyContext.DerivationCtx) Allocator.Error!DraftExprId {
         branch.lhs_pats = try self.allocator.alloc(DraftPatId, payloads.len);
         branch.rhs_pats = try self.allocator.alloc(DraftPatId, payloads.len);
         branch.lhs_exprs = try self.allocator.alloc(DraftExprId, payloads.len);
         branch.rhs_exprs = try self.allocator.alloc(DraftExprId, payloads.len);
-        for (payloads, 0..) |payload_ty, i| {
+        for (0..payloads.len) |i| {
+            const payload_ty = self.spanTypeAt(payloads, i);
             const lhs_payload_local = try self.addLocal(self.builder.symbols.fresh(), payload_ty);
             const rhs_payload_local = try self.addLocal(self.builder.symbols.fresh(), payload_ty);
             branch.lhs_pats[i] = try self.bindPat(lhs_payload_local, payload_ty);
@@ -67906,10 +67871,11 @@ const HashDeriver = struct {
 
     /// Bind one variant's payloads; the branch's hasher starts with the
     /// discriminant index written.
-    fn tagBranchEnter(self: *BodyContext, _: Type.TypeId, payloads: []const Type.TypeId, variant_index: u64, operand: Operand, branch: *TagBranchPayloads, ctx: BodyContext.DerivationCtx) Allocator.Error!DraftExprId {
+    fn tagBranchEnter(self: *BodyContext, _: Type.TypeId, payloads: Type.Span, variant_index: u64, operand: Operand, branch: *TagBranchPayloads, ctx: BodyContext.DerivationCtx) Allocator.Error!DraftExprId {
         branch.pats = try self.allocator.alloc(DraftPatId, payloads.len);
         branch.exprs = try self.allocator.alloc(DraftExprId, payloads.len);
-        for (payloads, 0..) |payload_ty, i| {
+        for (0..payloads.len) |i| {
+            const payload_ty = self.spanTypeAt(payloads, i);
             const payload_local = try self.addLocal(self.builder.symbols.fresh(), payload_ty);
             branch.pats[i] = try self.bindPat(payload_local, payload_ty);
             branch.exprs[i] = try self.localExpr(payload_local, payload_ty);
