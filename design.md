@@ -614,9 +614,10 @@ a module version the program does not have, and they are not emitted rather
 than misattributed.
 
 A URL-package module also gets an optimized object pack, filed in the same
-layout under `<target>-speed/pkg/`: its closed exports lowered under the
-optimized LIR policy and compiled by LLVM into one object, with the same spec
-table naming each entry's procedure. The object defines everything its code
+layout under `<target>-speed/pkg/` for a native target and
+`<target>-size/pkg/` for wasm32: its closed exports lowered under the LIR
+policy of that optimization level and compiled by LLVM at it into one object,
+with the same spec table naming each entry's procedure. The object defines everything its code
 needs: procedures, refcount helpers, and builtins as internal symbols, and
 each constant as weak readonly data under its `roc__h` content name, so two
 objects carrying one constant share a single copy in the link. It exports,
@@ -635,7 +636,7 @@ program's own layout indices, and a module whose object needs the runtime at
 all gets no object pack.
 
 Only a consumer whose code is linked takes an object pack's entry
-(`CodeProvision.permitsLinkedObjects`): a `roc build --opt=dev` program or
+(`CodeProvision.specCacheTakes`): a `roc build --opt=dev` program or
 a `roc run --opt=dev` image, never compile-time evaluation, and never a
 producer shared with compile-time evaluation, which instead takes the dev
 entry of the same procedure and lets the linked consumer switch to the
@@ -647,6 +648,22 @@ offers an entry whose code reaches a linked entry, so a program that splices
 dev code never needs an object it did not ask for. A build whose store lacks
 a URL-package module's object pack builds it once the module is checked and
 before the program lowers, so that build already links it.
+
+The wasm32 dev backend cannot splice dev code, so a wasm32 dev build
+reads and writes no dev packs and takes only object packs' entries
+(`CodeProvision.target_linked_objects`, whose lookups never return dev
+code). It composes each object pack that served it into its own
+relocatable object before sealing (`WasmModule.mergeLinkedObject`): every
+definition of the object other than the entries it offers, and any entry an
+earlier object already defines, becomes local under a name in a namespace
+of that object's own, so no name the program's code or its static data
+resolves can bind to an object's internal copy of a procedure, constant, or
+builtin. A `c_abi_entry` procedure's body forwards to its entry through the
+wasm C ABI exactly as a hosted procedure's forwards to the host (both
+backends classify a target without simd128 as `layout.abi.Target.wasm32v1`,
+which passes vectors by lane), and the
+object's imports, the runtime and hosted functions its code calls, are
+allowed undefined in the sealed object beside the program's own.
 
 `roc run --opt=dev` links every object pack of its URL packages into the
 cached host program, beside a table of their C-ABI entries that the
@@ -1203,6 +1220,12 @@ checker recovery. The recovery rules:
   belongs to the pattern alone, and a use of the name, such as a method call
   on it, adds no report of its own. A `var` name a destructure reassigns
   belongs to its own declaration and is left alone.
+- A `match` owns each branch pattern's relation to the scrutinee, but it
+  only consults the scrutinee, whose class is shared with whatever produced
+  it. A rejected relation reports, poisons neither side, and retires the
+  `match`; the branch patterns after it are checked for their own errors but
+  not related to the scrutinee. A branch pattern never binds a `var`
+  (canonicalization rejects one), so the pattern's class is its own.
 - A pattern can also be rejected by a judgment made after its check: a
   literal pattern whose conversion fails, or a record-destructure binder that
   the kind-directed judgment cannot relate to its field (a closed nested
@@ -2576,6 +2599,18 @@ fixed activation lifetime without repeatedly moving the accumulated entry
 instruction list. Slot values are available to body construction immediately;
 final instruction numbering follows the completed block order.
 
+An entry-block slot is allocated for the whole activation, so LLVM can overlap
+two slots only through `llvm.lifetime.start` and `llvm.lifetime.end`. The LLVM
+backend brackets the slot of every local whose address it passes to an
+out-of-line Roc procedure call (a result returned through memory, or an
+argument passed by pointer) with markers at that local's exact lifetime
+boundaries, which the shared LIR stack planner solves over the procedure's
+explicit control-flow graph. Other slots carry no markers: SROA removes slots
+whose addresses never escape, and markers on them would only add optimizer
+work. Procedure arguments, which the prologue writes, and locals in deferred
+string-match captures, which the backend materializes outside the statements
+that access them, keep their activation lifetime.
+
 LLVM call sites do not acquire `alwaysinline` from loop nesting. Nesting depth
 does not establish execution frequency or bound the combined body of a caller
 with many sites. Larger helpers remain ordinary calls so LLVM can simplify each
@@ -3425,8 +3460,9 @@ Reassigning such a var directly inside an `expect` body is a compile error. (Onl
 inline `expect`s can see one, since `var` is not allowed at the top level.) This
 covers both `$x = ...` and structural reassignments such as `($x, y) = ...`.
 Reassigning a var declared inside the `expect` body is allowed at any depth,
-including inside loops written within it. A `for` or `match` binder that reuses
-an outer var's name is not a reassignment and is allowed.
+including inside loops written within it. A `for` or `match` pattern never binds
+a var anywhere (canonicalization reports `var_in_binder_pattern`), so it cannot
+reassign one either.
 
 Inside a lambda nested within an `expect`, `return`, `break`, and `?` have their
 ordinary meaning, since leaving the lambda does not leave the `expect`.
@@ -3627,9 +3663,9 @@ variable. When the scrutinee is already erroneous, the patterns unify against a
 shared fresh variable instead, so a disagreement between two patterns is still
 reported at the pattern that disagrees rather than surfacing later as an
 unexplained branch-body mismatch. The scrutinee's own error is not re-reported,
-the patterns are never related back to it, and the first disagreement poisons
-the shared variable so later patterns short-circuit exactly as they do when the
-scrutinee carries the relation.
+the patterns are never related back to it, and after the first disagreement
+later patterns are not related, exactly as when the scrutinee carries the
+relation.
 
 A scrutinee that always crashes (`...`, `crash`, or a block or `if` whose
 every result crashes) relates no branch pattern at all: no value ever reaches
@@ -6898,8 +6934,9 @@ method relates that method's signature. A call on a type name such as
 parser's `value` or the encoder's value argument is what determines them.
 Derivation needs every part of the receiver: a receiver that is still
 undetermined after numeric defaulting waits for the final codec boundary, and
-one that is undetermined there is reported as an undetermined codec type and
-its call becomes a checked runtime error.
+one that is undetermined there is reported as a missing method on a part of
+the type that never resolved to a concrete type, and its call becomes a
+checked runtime error.
 
 `StaticDispatchPlanTable.generated_codec_derivations` stores each parser/encoder
 derivation as an explicit generated-codec contract. It records every generated
@@ -12523,6 +12560,15 @@ Other solved-graph mutations:
   the original type. Only successful ordinary unification with the aggregate
   skeleton commits the expected-shape relation; the owning relation still checks the actual
   value against the complete expected type.
+- `relateSameMethodRequirementsAtBoundary` (`relateSameMethodRequirements`
+  committed probe)—policy: one requirement per method on a type about to be
+  generalized, as declared in Static Dispatch At The Checked Boundary
+  ("Evidence params"). Each same-name callable pair on a receiver still flex
+  at the boundary's rank is related through an ordinary committed probe; a
+  probe that cannot establish the pair rolls back, reports the method
+  conflict, and poisons the receiver. A relation that defers obligations is
+  redone after recording the two method types, so an obligation that later
+  fails reports the method conflict and poisons the definition.
 - `deduplicateGeneralizedDispatchRequirements` (`setVarContent` of a retained
   constraint list, `unifyEquivalentGeneralizedCallables` committed probe)—
   policy: evidence-param collapse of same-shape requirements as declared in
@@ -14550,7 +14596,11 @@ below the root is joined with each of that class's origins' memo cells for
 the type. A missing import memo cell is created for the join; a missing
 leaf-scope cell is joined when its scope creates it. That is the join an
 eager relation would have made, and it reads nothing, so class identity
-never depends on whether a class was read. The joins wait until no
+never depends on whether a class was read. A read joins only cells it creates
+into classes that existed before it, and each such join keeps the older
+class's root, so a root held across a read is still a root afterwards;
+interface capture, which keys every captured class by its root, relies on
+this. The joins wait until no
 unification is in progress, so they never change a root a unification is
 relating. Whether a type holds another is answered from per-type heights,
 since a type holds only types no taller than itself, and from each type's
@@ -15717,11 +15767,29 @@ occurrence, then constraint fn types walked the same way). Index `k` in this
 list is the shared identity between a plan's `constraint(k)` resolution and
 the k-th evidence entry a call edge supplies. The definition's module and any
 importing module enumerate identical lists from their structural copies of the
-scheme. Repeated declarative constraints share one callable type, while
-independently inferred dot-method calls retain separate callable relations so a
-rank-1 method scheme can be instantiated independently at each use. Operators
-and literal conversions retain one numeric/defaulting relation per method
-identity. A relation folded into a retained one selects no target of its own,
+scheme. A where clause's own repeated requirements of one method share one
+callable type. While a definition is checked, dot-method calls, operators,
+interpolations, and requirements instantiated from a callee's where clause are
+pending uses of the receiver's method: they retain separate callable
+relations, and when the receiver becomes concrete each is discharged against
+that type's one method, whose rank-1 scheme each use may instantiate
+differently (one `U64.parser_for` serves a use at `Json` and another at a
+second format, and one `plus` generic in its other argument serves `+ 1.U8`
+and `+ "s"`). Whether a program checks therefore does not depend on whether
+the receiver became concrete before or after its uses. A number or string
+literal's conversion has one callable type for every literal of its kind, so
+those share one relation per literal kind from the start; relating them can
+neither fail nor bind anything else. A type has one method of each name, so
+when a receiver is still a type variable at its definition's generalization
+boundary, its requirements of one method become one requirement: the boundary
+relates their callables before it defaults literals and generalizes, and an
+inferred scheme never holds two requirements of one method on one type.
+Requirements that cannot be one are a type mismatch. The report says the use
+requires the type to have two different methods of that name and shows both
+method types, at the use that introduced the second requirement, or at the
+definition when another definition introduced it; the receiver is poisoned so
+it reports nothing further. An annotation that declares two such requirements
+is the same mismatch, reported at the second requirement. A relation folded into a retained one selects no target of its own,
 yet its dispatch site still outputs a plan. The unifier journals each fold as
 an exact (dropped, retained) pair of raw constraint function vars, and checking
 outputs `ModuleEnv.dispatch_relation_merges`, mapping every folded relation
@@ -15733,8 +15801,7 @@ Same-name relations must agree on fixed outer function properties:
 rank-1 instantiation can vary types but cannot vary a declaration's argument
 count or known effect mode. Once a scheme's public type is fixed, equivalent
 requirements whose only differences are private generalized variables collapse;
-public type variables remain identity anchors, so requirements a caller can
-specialize differently stay separate. Collapsing unifies the duplicate's
+public type variables remain identity anchors. Collapsing unifies the duplicate's
 callable with the retained one before dropping it, so the union-find records
 which retained private variable each dropped variable stands for: scheme-use
 pairs, nested evidence keys, and body expressions typed by the dropped callable
@@ -15914,10 +15981,11 @@ A default is a type the checker chose, not one the program wrote, so no
 diagnostic ever names it. When a requirement fails on a class that a
 defaulting decision chose—literal defaulting, including the shared-literal
 head default, or a specialization default materialization—the checker
-reports one `undetermined_type` problem ("type not determined") for that
-class instead of a missing-method or mismatch report against the default
-owner. The report states what the type must support and that nothing in the
-program determines it. The hint depends on whether a built-in type could
+reports one `undetermined_type` problem for that class instead of a
+missing-method or mismatch report against the default owner. It is titled
+"missing method": the report says the type never resolved to a concrete type,
+so it has no method the requirement can use, and states what the type must
+support. The hint depends on whether a built-in type could
 satisfy the failed requirement. When the class holds a literal, the checker
 looks up the failed method on every built-in type that literal's kind can
 default to—the defaulting oracle's numeral candidates
@@ -15928,7 +15996,8 @@ number (or string) type supports the operator or has the method, naming the
 operator for a desugared operator and the method otherwise. The claim is
 scoped to built-in types because a user nominal that converts literals of
 that kind may still have the method. Otherwise, and for a defaulted type that
-holds no literal, the hint asks for a suffix (numbers only) or an annotation.
+holds no literal, the report says that a suffix (numbers only), a use that
+requires a specific type, or an annotation gives the type one.
 The lookup checks the method's existence only, not its signature.
 
 Each defaulting decision records, immediately before it commits, every
@@ -15995,12 +16064,13 @@ defaults to `Str`, but the `T0` payload is a separate type variable that
 nothing relates to any value, and `unwrap`'s body requires `concat` on it. The
 call is a direct call edge, so that requirement must resolve during checking,
 and it cannot. Such a receiver is reported as an `unresolved_dispatcher`
-problem with the title "type not determined", like a defaulted type a
-requirement rejects (Diagnostics About Defaulted Types). The report says
-which method or operator needs the type, and when the dispatch is inside the
-called function it also shows the argument whose type leaves the receiver
-undetermined; it never describes the receiver as a type that is missing a
-method. The call becomes a runtime error.
+problem titled "missing method", like a defaulted type a requirement rejects
+(Diagnostics About Defaulted Types): methods belong to concrete types, so a
+type variable that never resolved to one has no method for the dispatch to
+call. The report names the variable when the program wrote one, says which
+method or operator needs it, and when the dispatch is inside the called
+function also shows the argument the receiver's type comes from. The call
+becomes a runtime error.
 
 A generalized constrained function instantiation is also an explicit pinning
 frontier for receivers reachable from that function's argument positions. This
@@ -18903,11 +18973,24 @@ normalization removes each join parameter that no reachable statement reads
 and whose only writes are explicit `set_local` statements. The parameter
 leaves its join, and each of its writes is deleted by routing the write's
 incoming edges to its successor; copying a successor over a deleted statement
-would duplicate any join it copied. Deleting a write can leave its value
-unread, so the pass repeats to a fixed point. Reads outside operand positions
-keep a parameter: a join's retained or maybe-uninitialized lists and another
-local's descriptor. A join parameter that is also a procedure argument is
-defined by the call as well, and is never removed.
+would duplicate any join it copied. Reads outside operand positions keep a
+parameter: a join's retained or maybe-uninitialized lists and another local's
+descriptor. A join parameter that is also a procedure argument is defined by
+the call as well, and is never removed.
+
+Deleting a write can leave its value unread. A written value is often a fresh
+read of the variable's current value, such as a re-projection of the field a
+destructure bound it to, placed after the consuming call; left in place, that
+read is a later use of the call's argument and keeps it shared exactly as the
+write did. So when a deleted statement held the last read of a local that has
+exactly one definition, and that definition is pure (`assign_ref`,
+`assign_literal`, `assign_list`, or a descriptor-free `assign_struct` or
+`assign_tag`), the definition is deleted the same way, and its own operands
+are followed in turn. A call, a low-level, or any other statement that can
+have an effect, fail, or diverge ends the chain and stays. The same
+non-operand reads that keep a parameter keep a definition. A written value
+that is itself a join parameter becomes a candidate for the next round, so the
+pass repeats to a fixed point. Only procedures with join parameters change.
 
 Where lowering carries the variables and the construct's result together in
 one struct-typed join parameter, the unread variable is a struct field rather
@@ -20548,7 +20631,11 @@ Admission of those mandatory owned variants uses the same definition-sensitive
 ownership-place query as complete payload transfers: scalar shell reads and
 uses after an explicit rebind do not retain the argument's old stored units.
 A terminal crash or failed expectation observes only its explicit message
-operand; it does not implicitly use every live ownership place.
+operand; it does not implicitly use every live ownership place. A string or
+Boxy tag match likewise uses only its source (and the tag match's descriptor):
+a borrowed capture view reaches the source's place through its borrow link,
+and an owned capture retains through the source at the match. Only releases
+use every place.
 
 The ownership-place query asks whether a path from a statement reaches a use
 of a root's place before a statement that rebinds the root. Its cost is linear
@@ -21798,10 +21885,11 @@ change an earlier snapshot. Floating-point values that require per-binding NaN
 normalization and vector values retain independent locations. The proof never
 uses emission order, last-use guesses, or an adjacent-instruction peephole.
 
-Native stack planning consumes the shared LIR read/definition inventories plus
-explicit native descriptor accesses and fused-result writes. Runtime successor
-edges distinguish join declarations from jumps, and pattern captures write only
-on their successful edges. Immutable aliases share a storage identity; their
+Native stack planning uses the shared LIR stack planner, which builds a
+procedure's control-flow graph from the shared LIR read/definition
+inventories, plus explicit native descriptor accesses and fused-result writes.
+Runtime successor edges distinguish join declarations from jumps, and pattern
+captures write only on their successful edges. Immutable aliases share a storage identity; their
 combined reads keep that identity live. Each instruction-selection region holds
 all its inputs and outputs simultaneously, so multiword copies cannot overwrite
 unread operands. This analysis follows explicit ARC statements as ordinary reads
@@ -22729,7 +22817,10 @@ and never grants host effects to imported modules.
 CLI `run` and `build` consume this classification during their existing root
 preparation parse, before platform discovery or host linking. Parse failures
 produce source diagnostics directly; a non-app root produces the execution
-requires-app-or-default-app diagnostic. Neither case is staged as a synthetic
+requires-app-or-default-app diagnostic. That diagnostic points at a non-app
+root's header, which is what makes the root something other than an app; a
+headerless root has no text that is the problem, so its diagnostic is about the
+file as a whole and has no source region. Neither case is staged as a synthetic
 app to obtain an error. Checking still accepts valid type modules, and explicit
 root requests such as `test` do not require an application entrypoint.
 
@@ -24225,6 +24316,17 @@ instructions over its committed lane width and signedness. This is ordinary
 instruction legalization: there is no runtime operation descriptor, evaluator
 call, or alternate source decoder. The default Wasm target continues to use
 native `v128` values and SIMD instructions.
+
+Every input of a wasm32v1 module is WebAssembly 1.0, not only Roc's own code.
+Emitting a vector instruction, a `v128` local, or a `v128` function type at
+the v1 level is a compiler invariant violation. The builtins, Boxy runtime,
+and compiler-rt objects a wasm32v1 build links are built for the
+WebAssembly 1.0 CPU (Zig's wasm baseline includes later proposals, so
+wasm32v1 does not share wasm32's objects the way other v1 targets share
+their default twins'), and Binaryen optimizes a wasm32v1 module with every
+proposal disabled. The evaluator's wasm backend runs each eval program at
+both CPU levels and requires the same result, which puts the full SIMD
+differential corpus through the v1 lowering.
 
 ### Doc comments name the instructions
 

@@ -225,25 +225,32 @@ fn decodeWord(comptime V: type, word: anytype) V {
 /// the node's bytes (null when the diagnostic carries nothing but its region),
 /// and the variant's fields in the order of the payload's data words, where a
 /// Region fills a `<x>_start`/`<x>_end` pair. The variant's one field not
-/// listed is the Region stored as the node's region.
+/// listed is the Region stored as the node's region, except in a diagnostic
+/// about its file as a whole (`file_level`), which has no region; its node's
+/// region is empty.
 const DiagnosticShape = struct {
     cir: []const u8,
     tag: Node.Tag,
     payload: ?[]const u8,
     names: []const []const u8,
+    file_level: bool = false,
 
-    /// The field stored as the node's region.
-    fn regionField(comptime shape: DiagnosticShape) []const u8 {
+    /// The field stored as the node's region, or null for a file-level
+    /// diagnostic.
+    fn regionField(comptime shape: DiagnosticShape) ?[]const u8 {
         const info = @typeInfo(@FieldType(CIR.Diagnostic, shape.cir)).@"struct";
         var region_field: ?[]const u8 = null;
         for (info.field_names, info.field_types) |name, T| {
             if (nameIndex(shape.names, name) != null) continue;
-            if (T != Region or region_field != null) {
+            if (T != Region or region_field != null or shape.file_level) {
                 @compileError("the node shape of ." ++ shape.cir ++ " does not store its field " ++ name);
             }
             region_field = name;
         }
-        return region_field orelse @compileError("." ++ shape.cir ++ " has no region to store as its node's region");
+        if (region_field == null and !shape.file_level) {
+            @compileError("." ++ shape.cir ++ " has no region to store as its node's region");
+        }
+        return region_field;
     }
 };
 
@@ -289,7 +296,7 @@ fn copiedDiagnosticNode(comptime cir_tag: anytype, value: anytype, node: *Node) 
     } else if (shape.names.len != 0) {
         @compileError("." ++ shape.cir ++ " names fields its node has no payload for");
     }
-    return @field(value, shape.regionField());
+    return if (comptime shape.regionField()) |region_field| @field(value, region_field) else Region.zero();
 }
 
 fn encodeDiagnosticPayload(comptime P: type, comptime names: []const []const u8, value: anytype) P {
@@ -323,7 +330,7 @@ fn copiedDiagnostic(store: *const NodeStore, node_idx: Node.Idx, comptime narrow
         if (comptime nameIndex(shape.names, name)) |index| {
             @field(value, name) = decodeDiagnosticWord(T, @field(payload, shape.payload.?), index);
         } else {
-            comptime std.debug.assert(std.mem.eql(u8, name, shape.regionField()));
+            comptime std.debug.assert(std.mem.eql(u8, name, shape.regionField().?));
             @field(value, name) = store.getRegionAt(node_idx);
         }
     }
@@ -441,7 +448,6 @@ const copied_diagnostic_shapes = [_]DiagnosticShape{
     .{ .cir = "unnamed_field_cannot_have_default", .tag = .diag_unnamed_field_cannot_have_default, .payload = null, .names = &.{} },
     .{ .cir = "default_not_allowed_in_structural_record", .tag = .diag_default_not_allowed_in_structural_record, .payload = null, .names = &.{} },
     .{ .cir = "default_not_allowed_on_local_type_decl", .tag = .diag_default_not_allowed_on_local_type_decl, .payload = null, .names = &.{} },
-    .{ .cir = "execution_requires_app_or_default_app", .tag = .diag_execution_requires_app_or_default_app, .payload = null, .names = &.{} },
     .{ .cir = "module_header_deprecated", .tag = .diag_module_header_deprecated, .payload = null, .names = &.{} },
     .{ .cir = "var_across_function_boundary", .tag = .diag_var_across_function_boundary, .payload = null, .names = &.{} },
     .{ .cir = "crash_expects_string", .tag = .diag_crash_expects_string, .payload = null, .names = &.{} },
@@ -469,9 +475,9 @@ const copied_diagnostic_shapes = [_]DiagnosticShape{
     .{ .cir = "invalid_associated_statement", .tag = .diag_invalid_associated_statement, .payload = "diag_single_value", .names = &.{"stmt"} },
     .{ .cir = "where_alias_constraint_not_on_receiver", .tag = .diag_where_alias_constraint_not_on_receiver, .payload = "diag_single_ident", .names = &.{"receiver_name"} },
     .{ .cir = "record_default_reference_cycle", .tag = .diag_record_default_reference_cycle, .payload = "diag_single_ident", .names = &.{"field_name"} },
-    .{ .cir = "type_module_missing_matching_type", .tag = .diag_type_module_missing_matching_type, .payload = "diag_single_ident", .names = &.{"module_name"} },
+    .{ .cir = "type_module_missing_matching_type", .tag = .diag_type_module_missing_matching_type, .payload = "diag_single_ident", .names = &.{"module_name"}, .file_level = true },
     .{ .cir = "type_module_has_alias_not_nominal", .tag = .diag_type_module_has_alias_not_nominal, .payload = "diag_single_ident", .names = &.{"module_name"} },
-    .{ .cir = "default_app_missing_main", .tag = .diag_default_app_missing_main, .payload = "diag_single_ident", .names = &.{"module_name"} },
+    .{ .cir = "default_app_missing_main", .tag = .diag_default_app_missing_main, .payload = "diag_single_ident", .names = &.{"module_name"}, .file_level = true },
     .{ .cir = "default_app_wrong_arity", .tag = .diag_default_app_wrong_arity, .payload = "diag_single_value", .names = &.{"arity"} },
     .{ .cir = "cannot_import_default_app", .tag = .diag_cannot_import_default_app, .payload = "diag_single_ident", .names = &.{"module_name"} },
     .{ .cir = "type_name_case_mismatch", .tag = .diag_type_name_case_mismatch, .payload = "diag_two_idents", .names = &.{ "module_name", "type_name" } },
@@ -480,6 +486,7 @@ const copied_diagnostic_shapes = [_]DiagnosticShape{
     .{ .cir = "invalid_main_type_rename_in_exposing", .tag = .diag_invalid_main_type_rename_in_exposing, .payload = "diag_two_idents", .names = &.{ "type_name", "alias" } },
     .{ .cir = "shadowing_warning", .tag = .diag_shadowing_warning, .payload = "diag_ident_with_region", .names = &.{ "ident", "original_region" } },
     .{ .cir = "binding_name_does_not_match_mutability", .tag = .diag_binding_name_does_not_match_mutability, .payload = "diag_two_idents", .names = &.{ "ident", "mutability" } },
+    .{ .cir = "var_in_binder_pattern", .tag = .diag_var_in_binder_pattern, .payload = "diag_two_idents", .names = &.{ "ident", "position" } },
     .{ .cir = "type_redeclared", .tag = .diag_type_redeclared, .payload = "diag_ident_with_region", .names = &.{ "name", "original_region" } },
     .{ .cir = "undeclared_type", .tag = .diag_undeclared_type, .payload = "diag_single_ident", .names = &.{"name"} },
     .{ .cir = "type_alias_but_needed_nominal", .tag = .diag_type_alias_but_needed_nominal, .payload = "diag_single_ident", .names = &.{"name"} },
@@ -693,6 +700,7 @@ const DiagnosticNodeTag = enum {
     diag_var_across_function_boundary,
     diag_shadowing_warning,
     diag_binding_name_does_not_match_mutability,
+    diag_var_in_binder_pattern,
     diag_type_redeclared,
     diag_undeclared_type,
     diag_type_alias_but_needed_nominal,
@@ -727,7 +735,6 @@ const DiagnosticNodeTag = enum {
     diag_default_app_missing_main,
     diag_default_app_wrong_arity,
     diag_cannot_import_default_app,
-    diag_execution_requires_app_or_default_app,
     diag_type_name_case_mismatch,
     diag_module_header_deprecated,
     diag_roc_version_mismatch,
@@ -5264,6 +5271,7 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
         .var_across_function_boundary,
         .shadowing_warning,
         .binding_name_does_not_match_mutability,
+        .var_in_binder_pattern,
         .type_redeclared,
         .file_import_not_found,
         .file_import_io_error,
@@ -5291,7 +5299,6 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
         .default_app_missing_main,
         .default_app_wrong_arity,
         .cannot_import_default_app,
-        .execution_requires_app_or_default_app,
         .type_name_case_mismatch,
         .module_header_deprecated,
         .roc_version_mismatch,
@@ -5429,6 +5436,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_var_across_function_boundary,
         .diag_shadowing_warning,
         .diag_binding_name_does_not_match_mutability,
+        .diag_var_in_binder_pattern,
         .diag_type_redeclared,
         .diag_undeclared_type,
         .diag_type_alias_but_needed_nominal,
@@ -5463,7 +5471,6 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_default_app_missing_main,
         .diag_default_app_wrong_arity,
         .diag_cannot_import_default_app,
-        .diag_execution_requires_app_or_default_app,
         .diag_type_name_case_mismatch,
         .diag_module_header_deprecated,
         .diag_roc_version_mismatch,

@@ -8,8 +8,8 @@ type=repl
 » 35.foo()
 ~~~
 # OUTPUT
-**Type Not Determined**
-Nothing in this program determines the type of this number.
+**Missing Method**
+This number's type never resolved to a concrete type, so it has no `foo` method.
 ```roc
 35.foo()
 ```
@@ -18,8 +18,6 @@ Nothing in this program determines the type of this number.
 Its type needs all of these:
 
     a where [a.foo : a -> _ret]
-
-Without knowing which type it is, there's no way to tell which `foo` method to use.
 
 **Hint:** None of the built-in number types have a method named `foo`.
 # PROBLEMS

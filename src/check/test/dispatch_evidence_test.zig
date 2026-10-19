@@ -124,11 +124,21 @@ test "evidence params enumerate in signature order" {
     try std.testing.expect(params.items[0].dispatcher_var != params.items[1].dispatcher_var);
 }
 
-test "independent same-name method uses share one evidence target" {
+test "same-name method uses at incompatible types on a generalized type are a method conflict" {
     const source =
         \\f1 = |list| list.map(|item| U32.to_u64(item))
         \\f2 = |list| list.map(|item| U32.to_u128(item))
         \\g = |list| (f1(list), f2(list))
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Type Mismatch");
+}
+
+test "same-name method uses on a generalized type share one evidence target" {
+    const source =
+        \\f1 = |list| list.map(|item| U32.to_u64(item))
+        \\g = |list| (f1(list), f1(list))
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
