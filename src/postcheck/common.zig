@@ -82,7 +82,7 @@ pub const LoweringModuleId = LIR.LoweringModuleId;
 /// or nominal the table lacks is named by its module's key instead, which
 /// only costs reuse.
 pub const DeclarationNames = struct {
-    pub const TemplateKey = struct { artifact: [32]u8, template: u32 };
+    pub const TemplateKey = struct { module: [32]u8, template: u32 };
     pub const NominalKey = struct { module_identity: [32]u8, source_decl: u32 };
 
     templates: std.AutoHashMapUnmanaged(TemplateKey, [32]u8) = .empty,
@@ -98,7 +98,7 @@ pub const DeclarationNames = struct {
 
     /// The declaration identity of a checked procedure template.
     pub fn template(self: *const DeclarationNames, ref: names.ProcTemplate) ?[32]u8 {
-        return self.templates.get(.{ .artifact = ref.artifact.bytes, .template = @backingInt(ref.template) });
+        return self.templates.get(.{ .module = ref.artifact.bytes, .template = @backingInt(ref.template) });
     }
 
     /// The declaration identity of the nominal `source_decl` declares in the
@@ -121,7 +121,7 @@ pub const DeclarationNames = struct {
 
 /// How the program's app fills its platform's requirements: the app module
 /// whose values fill them, and the filling key naming which app declarations
-/// fill them (`CheckedArtifact.PlatformAppFillingKey`). Which app procedure a
+/// fill them (the checked module's platform/app filling key). Which app procedure a
 /// platform requirement resolves to is not determined by the platform's
 /// source or types, so a procedure whose code reaches one digests the
 /// filling key into its identity (`Lifted.Program.fnSourceDigest`), and an
@@ -161,7 +161,7 @@ pub const RootRequests = struct {
     /// Which specializations can register a literal root; present exactly
     /// when `discovery_start` is.
     literal_demand: ?*const LiteralDemand.LiteralDemand = null,
-    /// Type-only declaration projection for cache admission, never source bodies.
+    /// Type-only declarations of checked roots for cache admission, never source bodies.
     cached_root_declarations: []const CheckedRootUse = &.{},
     /// Literal recipes whose noncallable storage is projected without bodies.
     cached_literal_declarations: []const lir_core.Program.CachedLiteralRecipe = &.{},

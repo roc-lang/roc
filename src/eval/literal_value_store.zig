@@ -143,8 +143,8 @@ pub const LiteralValueStore = struct {
         if (raw.len < @sizeOf(Header)) return null;
         var header: Header = undefined;
         @memcpy(std.mem.asBytes(&header), raw[0..@sizeOf(Header)]);
-        if (!std.mem.eql(u8, &header.magic, &magic)) return null;
-        if (!std.mem.eql(u8, &header.version_hash, &self.version_hash)) return null;
+        if (!std.meta.eql(header.magic, magic)) return null;
+        if (!std.meta.eql(header.version_hash, self.version_hash)) return null;
         const reads_start = @sizeOf(Header);
         const reads_len = @as(usize, header.read_count) * 32;
         if (raw.len < reads_start + reads_len) return null;

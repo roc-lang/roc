@@ -1,7 +1,7 @@
 //! Producer-exported CTFE context and semantic failure registries.
 //!
 //! Cached hooks bind immutable checked provenance to consumer-local IDs before
-//! execution; neither emission nor diagnostics reconstruct erased bodies.
+//! execution; neither emission nor diagnostics derive erased bodies again.
 
 const std = @import("std");
 const base = @import("base");

@@ -1,4 +1,4 @@
-//! Producer-owned expression demand facts retained independently of executable bodies.
+//! Producer-owned expression demand data retained independently of lowered bodies.
 //!
 //! Evaluation follows applications, not function addresses or representation
 //! witnesses. Keeping those relations distinct permits recursive callables
@@ -82,7 +82,7 @@ const ScratchSet = struct {
     }
 };
 
-/// Read-only view of a graph's facts. Edges and reads are grouped by source
+/// Read-only view of a graph's demand data. Edges and reads are grouped by source
 /// node; `edge_starts` and `read_starts` index each node's group.
 pub const View = struct {
     node_count: u32,
@@ -94,8 +94,8 @@ pub const View = struct {
     read_starts: []const u32,
 };
 
-/// The solving traversal publishes facts as it processes expressions and
-/// statements. Consumers never need to inspect a retired executable body.
+/// The solving traversal records demand data as it processes expressions and
+/// statements. Consumers never need to inspect a retired lowered body.
 pub const Graph = struct {
     allocator: std.mem.Allocator,
     node_count: u32,
@@ -113,7 +113,7 @@ pub const Graph = struct {
     component_dependencies: std.ArrayList(u32) = .empty,
     component_dependency_starts: []u32 = &.{},
     /// Nodes at or past this index may be summarized; the rest (a program's
-    /// expressions and statements) only carry facts for them.
+    /// expressions and statements) only carry demand data for them.
     summary_start: u32 = 0,
     closure_scratch_work: u64 = 0,
 
@@ -199,7 +199,7 @@ pub const Graph = struct {
         try self.late_applications.append(self.allocator, application);
     }
 
-    /// A retired cached body must supply its published summary. Missing facts
+    /// A retired cached body must supply its recorded summary. Missing data
     /// are explicit incompleteness, never an empty dependency proof.
     pub fn addUnavailable(self: *Graph, node: NodeId) std.mem.Allocator.Error!void {
         self.requireOpen();
@@ -261,7 +261,7 @@ pub const Graph = struct {
         }
     };
 
-    /// Copy the already-computed component facts for a callable/root owner.
+    /// Copy the already-computed component demand data for a callable/root owner.
     /// No consumer performs a separate graph traversal per owner.
     pub fn summarize(self: *const Graph, allocator: std.mem.Allocator, owner: NodeId) std.mem.Allocator.Error!Summary {
         self.validate(owner);
@@ -277,8 +277,8 @@ pub const Graph = struct {
 
     /// Iterative Tarjan visits each execution edge once. Component closures
     /// are then shared by all recursive members and merged dependency-first.
-    /// Work beyond SCC discovery is proportional to propagated facts, not
-    /// repeated walks of fact-free chains.
+    /// Work beyond SCC discovery is proportional to propagated demand data, not
+    /// repeated walks of chains with no demand data.
     fn buildSharedSummaries(self: *Graph) std.mem.Allocator.Error!void {
         const unseen = std.math.maxInt(u32);
         const State = struct { index: u32 = unseen, low: u32 = unseen, on_stack: bool = false, unavailable: bool = false };
@@ -382,7 +382,7 @@ pub const Graph = struct {
                 if (summarizable) {
                     // The closure over the dependency components: a
                     // materialized one stands for everything it reaches, an
-                    // unmaterialized one contributes its own facts and is
+                    // unmaterialized one contributes its own demand data and is
                     // followed through its dependencies.
                     visited_set.reset(component);
                     pending.clearRetainingCapacity();
@@ -418,11 +418,11 @@ pub const Graph = struct {
     }
 
     fn validate(self: *const Graph, node: NodeId) void {
-        if (@backingInt(node) >= self.node_count) Common.invariant("CTFE demand referenced an unpublished producer node");
+        if (@backingInt(node) >= self.node_count) Common.invariant("CTFE demand referenced an unrecorded producer node");
     }
 };
 
-/// The dense node ids of a test graph, in publication order.
+/// The dense node ids of a test graph, in recording order.
 fn testNodes(comptime count: usize) [count]NodeId {
     var nodes: [count]NodeId = undefined;
     for (&nodes, 0..) |*node, index| node.* = @fromBackingInt(@intCast(index));

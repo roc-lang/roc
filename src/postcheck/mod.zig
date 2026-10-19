@@ -4,7 +4,7 @@ const std = @import("std");
 
 /// Shared ids, inputs, and invariants for post-check stages.
 pub const Common = @import("common.zig");
-/// Independent semantic, compile-time execution, and runtime demand closure.
+/// Independent checked, compile-time execution, and runtime demand closure.
 pub const EvaluationDemand = @import("evaluation_demand.zig");
 /// Exact execution, callable-address and representation relations from producers.
 pub const CtfeDemand = @import("ctfe_demand.zig");

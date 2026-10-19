@@ -649,7 +649,7 @@ const Solver = struct {
             };
             for (0..members.count()) |index| {
                 const member = self.program.types.memberItem(members, index);
-                const fn_id = functions.get(member.lambda) orelse Common.invariant("CTFE application named an unpublished callable");
+                const fn_id = functions.get(member.lambda) orelse Common.invariant("CTFE application named an unrecorded callable");
                 try self.program.ctfe_demand.addEdge(application.node, self.demandFn(fn_id), .application);
             }
         }
@@ -1086,7 +1086,7 @@ const Solver = struct {
                     return null;
                 }
                 self.expr_done[index] = true;
-                try self.publishExprDemand(expr.id);
+                try self.recordExprDemand(expr.id);
                 return .{ .node = .{ .expr = expr.id }, .ty = ty, .finish_slot = slot, .generated_backing = expr.generated_backing };
             },
         }
@@ -1142,10 +1142,10 @@ const Solver = struct {
         return @fromBackingInt(@intCast(@as(u32, @intCast(self.lifted.exprs.len + self.lifted.stmts.len)) + @backingInt(id)));
     }
 
-    /// Publish the expression's own relations while solving visits it.
+    /// Record the expression's own relations while solving visits it.
     /// Child relations are emitted by the same continuation that solves them;
-    /// no later consumer walks the executable expression to recover demand.
-    fn publishExprDemand(self: *Solver, id: Lifted.ExprId) Allocator.Error!void {
+    /// no later consumer walks the lowered expression to find its demand again.
+    fn recordExprDemand(self: *Solver, id: Lifted.ExprId) Allocator.Error!void {
         const node = self.demandExpr(id);
         switch (self.lifted.exprs[@backingInt(id)].data) {
             .comptime_value => |value| try self.program.ctfe_demand.addRead(.{

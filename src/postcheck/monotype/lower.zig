@@ -880,11 +880,11 @@ pub const SpecComptimeReads = struct {
 
     allocator: Allocator,
     rows: std.AutoHashMapUnmanaged([32]u8, Row) = .empty,
-    /// The same facts for every function, by the function's index in the
+    /// The same read summary for every function, by the function's index in the
     /// Monotype program, which identity offers are recorded under; a
     /// function with no row reads nothing.
     fn_rows: std.AutoHashMapUnmanaged(u32, Row) = .empty,
-    /// The same facts for every top-level definition, by its index, for the
+    /// The same read summary for every top-level definition, by its index, for the
     /// definitions that have no function (generated helpers).
     def_rows: std.AutoHashMapUnmanaged(u32, Row) = .empty,
     reads: std.ArrayList(Common.ComptimeRootRead) = .empty,
@@ -1410,7 +1410,7 @@ pub fn run(
         builder.requirePendingSpecJobsDrained();
     }
 
-    // A callable literal result has no type-only projection: its storage is
+    // A callable literal result has no type-only declaration: its storage is
     // the replayed conversion's own result, so the producer is declared and
     // its body lowered like any other specialization.
     for (builder.callable_literal_declarations.items) |recipe| {
@@ -4988,7 +4988,7 @@ const TemplateDeclarations = struct {
 
     /// The declaration identity of a module's top-level definition. A
     /// definition outside every declaration unit is named by its module's
-    /// key, as the checked artifact names such an item.
+    /// key, as the checked module names such an item.
     pub fn definition(self: TemplateDeclarations, module: names.CheckedModuleDigest, def: @FieldType(static_dispatch.MethodTarget, "def_idx")) [32]u8 {
         const view = self.builder.moduleForDigest(module);
         return view.declaration_identities.definition(def) orelse view.key.bytes;
@@ -5601,7 +5601,7 @@ const Builder = struct {
         try table.templates.ensureUnusedCapacity(self.allocator, @intCast(identities.templates.len));
         for (0..identities.templates.len) |index| {
             const template: names.CheckedProcedureTemplateId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
-            table.templates.putAssumeCapacity(.{ .artifact = view.key.bytes, .template = @intCast(index) }, view.templateDeclaration(template));
+            table.templates.putAssumeCapacity(.{ .module = view.key.bytes, .template = @intCast(index) }, view.templateDeclaration(template));
         }
         try table.nominals.ensureUnusedCapacity(self.allocator, @intCast(identities.nominals.len));
         for (identities.nominals) |entry| {

@@ -52,7 +52,7 @@ pub const EntryRoot = struct {
         }
     };
 
-    /// Artifact decomposition is provenance, not part of checked-root identity.
+    /// The checked module key's components are provenance, not part of checked-root identity.
     pub fn Map(comptime Value: type) type {
         return std.HashMap(EntryRoot, Value, Context, std.hash_map.default_max_load_percentage);
     }

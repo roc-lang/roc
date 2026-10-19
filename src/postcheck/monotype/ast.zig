@@ -226,7 +226,7 @@ pub const FnTemplate = struct {
     /// specializations.
     spec_key: ?names.TypeDigest = null,
     /// The `spec_key` a procedure lowered only for discovery was reserved
-    /// under. Its discovery summary is published under this key; the
+    /// under. Its discovery summary is recorded under this key; the
     /// procedure itself offers no object-cache entry.
     discovery_key: ?names.TypeDigest = null,
     /// Set when the object cache served this specialization: the body is

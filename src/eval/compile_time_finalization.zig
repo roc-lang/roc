@@ -3560,7 +3560,7 @@ fn recordLiteralValue(
     for (plan.demand.reads) |read| {
         var seen = false;
         for (read_modules.items) |existing| {
-            if (std.mem.eql(u8, &existing, &read.module.bytes)) seen = true;
+            if (std.meta.eql(existing, read.module.bytes)) seen = true;
         }
         if (!seen) try read_modules.append(allocator, read.module.bytes);
     }

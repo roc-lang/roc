@@ -91,7 +91,7 @@ pub const CallRegion = struct {
 };
 
 /// Earlier binding admits total mappings before executing a native root.
-/// Callbacks bind consumer IDs, never reconstruct missing producer semantics.
+/// Callbacks bind consumer IDs; producer meaning is never derived here.
 pub const SourceEventResolver = struct {
     context: *const anyopaque,
     source_file: *const fn (*const anyopaque, *const SourceEvents.Source) u32,

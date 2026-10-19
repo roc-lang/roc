@@ -56,7 +56,7 @@ pub fn rebuildPublishedSlot(allocator: Allocator, result: *Program.Result, slot:
     const accessor = entry.accessor orelse return;
     if (result.store.getProcSpec(accessor).root_materialization == null)
         base.invariant("published root accessor has no materialization producer declaration", .{});
-    var decoded = try scalar_values.constructionForPublishedValue(allocator, result, slot, exports);
+    var decoded = try scalar_values.constructionForCompletedValue(allocator, result, slot, exports);
     defer decoded.deinit();
     const construction = decoded.construction orelse return;
     if (!scalar_values.requiresOwnedCapacity(construction)) return;

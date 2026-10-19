@@ -28309,7 +28309,7 @@ pub const CompileTimeRoot = struct {
     /// records the `runtime` payload instead.
     guarded: bool = false,
     /// Producer-owned failure payload for a completed guarded root. Runtime
-    /// fallback policy must not discard CTFE storage or diagnostic provenance.
+    /// failure policy must not discard CTFE storage or diagnostic provenance.
     failure: ?CompileTimeRootFailure = null,
 
     pub fn literalConversionKind(self: CompileTimeRoot) ?CompileTimeLiteralConversionKind {
@@ -37161,7 +37161,7 @@ fn templateIdentityUnit(
     const store = &inputs.module.moduleEnvConst().store;
     const proc_base = inputs.canonical_names.procBase(template_entry.proc_base);
     if (proc_base.nested_proc_site) |site| {
-        if (!std.mem.eql(u8, &site.owner_template.artifact.bytes, &inputs.artifact_key.bytes)) return null;
+        if (!std.meta.eql(site.owner_template.artifact.bytes, inputs.artifact_key.bytes)) return null;
         return templateIdentityUnit(inputs, unit_by_def, locator, site.owner_template.template);
     }
     if (proc_base.source_def_idx) |raw_def| {
@@ -37298,7 +37298,7 @@ fn identityTemplateRefEdge(
     local_artifact: canonical.ArtifactRef,
     template_units: []const ?u32,
 ) Allocator.Error!void {
-    if (std.mem.eql(u8, &target.artifact.bytes, &local_artifact.bytes)) {
+    if (std.meta.eql(target.artifact.bytes, local_artifact.bytes)) {
         const target_unit = template_units[@backingInt(target.template)] orelse {
             unit.unresolved = true;
             return;
@@ -37316,10 +37316,10 @@ fn identityTemplateRefEdge(
 fn identityImportView(inputs: DeclarationIdentityInputs, key: anytype) ?*const ImportedModuleView {
     const bytes: [32]u8 = key.bytes;
     for (inputs.closure_context.imports) |*import| {
-        if (std.mem.eql(u8, &import.key.bytes, &bytes)) return &import.view;
+        if (std.meta.eql(import.key.bytes, bytes)) return &import.view;
     }
     for (inputs.closure_context.available_artifacts) |*view| {
-        if (std.mem.eql(u8, &view.key.bytes, &bytes)) return view;
+        if (std.meta.eql(view.key.bytes, bytes)) return view;
     }
     return null;
 }
@@ -37415,7 +37415,10 @@ fn assignUnitIdentities(allocator: Allocator, units: []IdentityUnit, artifact_ke
                 defer inside.deinit(allocator);
                 for (unit.local_edges.items) |target| {
                     if (component_of[target] == next_component) {
-                        try inside.append(allocator, @intCast(std.mem.findScalar(u32, members.items, target).?));
+                        const position = for (members.items, 0..) |candidate, index| {
+                            if (candidate == target) break index;
+                        } else unreachable;
+                        try inside.append(allocator, @intCast(position));
                     } else {
                         try outside.append(allocator, units[target].identity);
                     }
@@ -37426,7 +37429,7 @@ fn assignUnitIdentities(allocator: Allocator, units: []IdentityUnit, artifact_ke
                 identityHashU32(&hasher, @intCast(outside.items.len));
                 var previous: ?[32]u8 = null;
                 for (outside.items) |identity| {
-                    if (previous) |seen| if (std.mem.eql(u8, &seen, &identity)) continue;
+                    if (previous) |seen| if (std.meta.eql(seen, identity)) continue;
                     hasher.update(&identity);
                     previous = identity;
                 }

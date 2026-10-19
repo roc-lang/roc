@@ -115,24 +115,24 @@ pub const UniformList = struct {
 };
 
 /// A decoded construction owned only while its consumer emits the requested
-/// materialization wrapper. Publication names one slot explicitly.
-pub const PublishedConstruction = struct {
+/// materialization wrapper. The caller names one slot explicitly.
+pub const DecodedConstruction = struct {
     arena: std.heap.ArenaAllocator,
     construction: ?Construction,
 
-    pub fn deinit(self: *PublishedConstruction) void {
+    pub fn deinit(self: *DecodedConstruction) void {
         self.arena.deinit();
     }
 };
 
 /// Decode the construction of the completed value root stored in `slot` from its
 /// export, which must be the first of `exports`.
-pub fn constructionForPublishedValue(
+pub fn constructionForCompletedValue(
     allocator: Allocator,
     program: *const Program.Result,
     slot: LIR.StaticDataId,
     exports: []Program.StaticDataExport,
-) Allocator.Error!PublishedConstruction {
+) Allocator.Error!DecodedConstruction {
     const entry = program.static_data_values.items[@backingInt(slot)];
     std.debug.assert(entry.compile_time_root != null);
     const root = entry.compile_time_root.?;
@@ -142,12 +142,12 @@ pub fn constructionForPublishedValue(
 }
 
 /// Decode the construction of the completed value root stored in `slot` from its export.
-pub fn constructionForExportedValue(allocator: Allocator, program: *const Program.Result, slot: LIR.StaticDataId, exported: Program.StaticDataExport, frozen: *const Program.FrozenStaticData) Allocator.Error!PublishedConstruction {
+pub fn constructionForExportedValue(allocator: Allocator, program: *const Program.Result, slot: LIR.StaticDataId, exported: Program.StaticDataExport, frozen: *const Program.FrozenStaticData) Allocator.Error!DecodedConstruction {
     const entry = program.static_data_values.items[@backingInt(slot)];
     std.debug.assert(entry.compile_time_root != null);
     const root = entry.compile_time_root.?;
     std.debug.assert(root.role == .value and exported.value_id == slot);
-    var result = PublishedConstruction{ .arena = std.heap.ArenaAllocator.init(allocator), .construction = null };
+    var result = DecodedConstruction{ .arena = std.heap.ArenaAllocator.init(allocator), .construction = null };
     errdefer result.deinit();
     var decoder = Decoder{ .program = program, .frozen = frozen, .arena = result.arena.allocator() };
     result.construction = try decoder.decode(&exported, exported.bytes[exported.symbol_offset..], exported.symbol_offset, root.role.value.plan, entry.layout_idx);

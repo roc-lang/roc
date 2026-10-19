@@ -410,13 +410,23 @@ test "object cache loading owns decoded packs and commits both indexes atomicall
             defer packs.deinit();
             packs.loadDirInto(std.testing.io, dir_path, .cache_offers) catch |err|
                 return rejected(&packs, expected_key, expected_identity, err);
-            try std.testing.expectEqual(@as(usize, 1), packs.packs.items.len);
+            // Loading registers the current pack; the incompatible one is
+            // skipped.
+            try std.testing.expectEqual(@as(usize, 1), packs.store_packs.items.len);
             packs.indexPacks() catch |err|
                 return rejected(&packs, expected_key, expected_identity, err);
-            const hit = packs.specCacheLookup().lookup(expected_key, null, false) orelse return error.TestUnexpectedResult;
+            // A lookup admits the offer's closure, and a failure while doing
+            // so makes the whole cache unavailable.
+            const hit = packs.specCacheLookup().lookup(expected_key, null, false) orelse {
+                const err = packs.failure orelse return error.TestUnexpectedResult;
+                return rejected(&packs, expected_key, expected_identity, err);
+            };
             try std.testing.expectEqualSlices(u8, &expected_identity.bytes, &hit.identity);
             try std.testing.expectEqual(@as(u64, 1), hit.rc_borrowed_params);
-            const located = packs.spliceSource().find(packs.spliceSource().context, expected_identity) orelse return error.TestUnexpectedResult;
+            const located = packs.spliceSource().find(packs.spliceSource().context, expected_identity) orelse {
+                const err = packs.failure orelse return error.TestUnexpectedResult;
+                return rejected(&packs, expected_key, expected_identity, err);
+            };
             try std.testing.expectEqual(expected_identity, located.set.artifacts[located.index].kind.proc);
         }
 
