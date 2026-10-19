@@ -303,6 +303,34 @@ pub const StoredNode = union(enum(u8)) {
     zst,
 };
 
+/// Cached answers of a finished type's two containment walks: whether it
+/// contains an Iter or Stream interface, and whether it contains a named type
+/// whose backing is generated-private representation evidence, each at any
+/// structural depth.
+pub const Containment = packed struct(u8) {
+    iterator_interface: Answer = .unknown,
+    generated_private: Answer = .unknown,
+    _padding: u4 = 0,
+
+    pub const Answer = enum(u2) { unknown, no, yes };
+
+    pub const unknown: Containment = .{};
+
+    pub fn get(self: Containment, comptime query: Store.ContainmentQuery) ?bool {
+        return switch (@field(self, @tagName(query))) {
+            .unknown => null,
+            .no => false,
+            .yes => true,
+        };
+    }
+
+    pub fn with(self: Containment, comptime query: Store.ContainmentQuery, answer: bool) Containment {
+        var result = self;
+        @field(result, @tagName(query)) = if (answer) .yes else .no;
+        return result;
+    }
+};
+
 /// Store for monomorphic types and their shared spans.
 pub const Store = struct {
     /// Scoped diagnostic sink; never copied into store epochs or serialized.
@@ -327,13 +355,8 @@ pub const Store = struct {
     /// without allowing a stale handle to abort a later owner.
     active_transaction: ?u64,
     transaction_epoch: u64,
-    /// Cached immutable answer for whether a finished type contains an Iter or
-    /// Stream interface at any structural depth.
-    iterator_interface_cache: StoreList(?bool, "iterator_interface_cache"),
-    /// Cached immutable answer for whether a finished type contains a named
-    /// type whose backing is generated-private representation evidence at
-    /// any structural depth.
-    generated_private_cache: StoreList(?bool, "generated_private_cache"),
+    /// Cached immutable containment answers per finished type.
+    containment_cache: StoreList(Containment, "containment_cache"),
     /// Reusable exact walk state, shared by both containment caches. Type ids are dense, so epochs provide cycle
     /// detection without allocating a dense map sized to the largest type id
     /// on every closed direct call.
@@ -422,8 +445,7 @@ pub const Store = struct {
             .unfinished_type_count = 0,
             .active_transaction = null,
             .transaction_epoch = 0,
-            .iterator_interface_cache = .empty,
-            .generated_private_cache = .empty,
+            .containment_cache = .empty,
             .iterator_interface_pending = .empty,
             .iterator_interface_visited = .empty,
             .iterator_interface_visit_epochs = .empty,
@@ -448,7 +470,7 @@ pub const Store = struct {
         if (!self.frozen) Common.invariant("Monotype type cloning requires a frozen graph");
         var result = Store.init(allocator);
         errdefer result.deinit();
-        inline for (.{ "types", "named_nodes", "erased_digests", "type_digests", "specialization_digests", "equality_digests", "representation_digests", "constructing", "iterator_interface_cache", "generated_private_cache", "spans", "fields", "tags", "declared_fields" }) |field| {
+        inline for (.{ "types", "named_nodes", "erased_digests", "type_digests", "specialization_digests", "equality_digests", "representation_digests", "constructing", "containment_cache", "spans", "fields", "tags", "declared_fields" }) |field| {
             try @field(result, field).appendSlice(allocator, @field(self, field).unsafeRawItemsForView());
         }
         // Traversal history is local, but every cloned type still needs a slot
@@ -550,8 +572,7 @@ pub const Store = struct {
         self.iterator_interface_visit_epochs.deinit(self.allocator);
         self.iterator_interface_visited.deinit(self.allocator);
         self.iterator_interface_pending.deinit(self.allocator);
-        self.generated_private_cache.deinit(self.allocator);
-        self.iterator_interface_cache.deinit(self.allocator);
+        self.containment_cache.deinit(self.allocator);
         self.constructing.deinit(self.allocator);
         self.equality_digests.deinit(self.allocator);
         self.representation_digests.deinit(self.allocator);
@@ -698,10 +719,8 @@ pub const Store = struct {
         try self.reservePrefixList(&self.constructing, 1);
         self.constructing.appendAssumeCapacity(false);
         errdefer _ = self.constructing.pop();
-        try self.iterator_interface_cache.append(self.allocator, null);
-        errdefer _ = self.iterator_interface_cache.pop();
-        try self.generated_private_cache.append(self.allocator, null);
-        errdefer _ = self.generated_private_cache.pop();
+        try self.containment_cache.append(self.allocator, .unknown);
+        errdefer _ = self.containment_cache.pop();
         try self.iterator_interface_visit_epochs.append(self.allocator, 0);
         return @fromBackingInt(@intCast(@as(u32, @intCast(index))));
     }
@@ -811,8 +830,7 @@ pub const Store = struct {
             Common.compilerBug("filled a Monotype slot without an unfinished construction");
         }
         self.unfinished_type_count -= 1;
-        self.iterator_interface_cache.set(index, null);
-        self.generated_private_cache.set(index, null);
+        self.containment_cache.set(index, .unknown);
     }
 
     pub fn get(self: *const Store, ty: TypeId) Content {
@@ -856,23 +874,20 @@ pub const Store = struct {
         return try self.containsAt(root, .generated_private);
     }
 
-    const ContainmentQuery = enum { iterator_interface, generated_private };
+    pub const ContainmentQuery = enum { iterator_interface, generated_private };
 
-    fn containmentCache(self: *Store, comptime query: ContainmentQuery) *StoreList(?bool, switch (query) {
-        .iterator_interface => "iterator_interface_cache",
-        .generated_private => "generated_private_cache",
-    }) {
-        return switch (query) {
-            .iterator_interface => &self.iterator_interface_cache,
-            .generated_private => &self.generated_private_cache,
-        };
+    fn cachedContainment(self: *const Store, index: usize, comptime query: ContainmentQuery) ?bool {
+        return self.containment_cache.unsafeRawItemsForView()[index].get(query);
+    }
+
+    fn setCachedContainment(self: *Store, index: usize, comptime query: ContainmentQuery, answer: bool) void {
+        self.containment_cache.set(index, self.containment_cache.get(index).with(query, answer));
     }
 
     fn containsAt(self: *Store, root: TypeId, comptime query: ContainmentQuery) std.mem.Allocator.Error!bool {
-        const cache = self.containmentCache(query);
         self.requireConstructed(root);
         const root_index = @backingInt(root);
-        if (cache.unsafeRawItemsForView()[root_index]) |cached| return cached;
+        if (self.cachedContainment(root_index, query)) |cached| return cached;
         if (self.borrowed_read_only) Common.invariant("borrowed Monotype containment cache miss");
 
         self.iterator_interface_pending.clearRetainingCapacity();
@@ -894,9 +909,9 @@ pub const Store = struct {
             try self.iterator_interface_visited.append(self.allocator, ty);
             self.requireConstructed(ty);
             if (ty != root) {
-                if (cache.unsafeRawItemsForView()[ty_index]) |cached| {
+                if (self.cachedContainment(ty_index, query)) |cached| {
                     if (cached) {
-                        cache.set(root_index, true);
+                        self.setCachedContainment(root_index, query, true);
                         return true;
                     }
                     continue;
@@ -944,8 +959,8 @@ pub const Store = struct {
                         .generated_private => if (named.backing) |backing| backing.authority == .generated_private else false,
                     };
                     if (found) {
-                        cache.set(ty_index, true);
-                        cache.set(root_index, true);
+                        self.setCachedContainment(ty_index, query, true);
+                        self.setCachedContainment(root_index, query, true);
                         return true;
                     }
                     const args = self.span(named.args);
@@ -964,7 +979,7 @@ pub const Store = struct {
             }
         }
         for (self.iterator_interface_visited.items) |visited| {
-            cache.set(@backingInt(visited), false);
+            self.setCachedContainment(@backingInt(visited), query, false);
         }
         return false;
     }
@@ -1169,8 +1184,7 @@ pub const Store = struct {
         representation_digests_len: usize,
         constructing_len: usize,
         unfinished_type_count: usize,
-        iterator_interface_cache_len: usize,
-        generated_private_cache_len: usize,
+        containment_cache_len: usize,
         iterator_interface_visit_epochs_len: usize,
         spans_len: usize,
         fields_len: usize,
@@ -1189,8 +1203,7 @@ pub const Store = struct {
             .representation_digests_len = self.representation_digests.len(),
             .constructing_len = self.constructing.len(),
             .unfinished_type_count = self.unfinished_type_count,
-            .iterator_interface_cache_len = self.iterator_interface_cache.len(),
-            .generated_private_cache_len = self.generated_private_cache.len(),
+            .containment_cache_len = self.containment_cache.len(),
             .iterator_interface_visit_epochs_len = self.iterator_interface_visit_epochs.len(),
             .spans_len = self.spans.len(),
             .fields_len = self.fields.len(),
@@ -1219,8 +1232,7 @@ pub const Store = struct {
         self.representation_digests.restoreLen(mark_.representation_digests_len);
         self.constructing.restoreLen(mark_.constructing_len);
         self.unfinished_type_count = mark_.unfinished_type_count;
-        self.iterator_interface_cache.restoreLen(mark_.iterator_interface_cache_len);
-        self.generated_private_cache.restoreLen(mark_.generated_private_cache_len);
+        self.containment_cache.restoreLen(mark_.containment_cache_len);
         // A reserved slot that survives this restore may have been filled
         // after the mark with children that are now truncated and whose ids
         // can be reused, so clear every retained containment answer to force
@@ -1236,8 +1248,7 @@ pub const Store = struct {
         // *surviving* slot's mid-transaction fill before the rollback decision
         // would defeat that, and no caller does.
         if (mark_.unfinished_type_count != 0) {
-            @memset(self.iterator_interface_cache.unsafeRawItemsMutForStore(), null);
-            @memset(self.generated_private_cache.unsafeRawItemsMutForStore(), null);
+            @memset(self.containment_cache.unsafeRawItemsMutForStore(), .unknown);
         }
         self.iterator_interface_visit_epochs.restoreLen(mark_.iterator_interface_visit_epochs_len);
         self.spans.restoreLen(mark_.spans_len);
@@ -4942,8 +4953,7 @@ test "monotype cross-store import is atomic under allocation failure" {
             equality_digests: usize,
             representation_digests: usize,
             constructing: usize,
-            iterator_interface_cache: usize,
-            generated_private_cache: usize,
+            containment_cache: usize,
             iterator_interface_visit_epochs: usize,
             spans: usize,
             fields: usize,
@@ -4958,8 +4968,7 @@ test "monotype cross-store import is atomic under allocation failure" {
                     .equality_digests = store.equality_digests.len(),
                     .representation_digests = store.representation_digests.len(),
                     .constructing = store.constructing.len(),
-                    .iterator_interface_cache = store.iterator_interface_cache.len(),
-                    .generated_private_cache = store.generated_private_cache.len(),
+                    .containment_cache = store.containment_cache.len(),
                     .iterator_interface_visit_epochs = store.iterator_interface_visit_epochs.len(),
                     .spans = store.spans.len(),
                     .fields = store.fields.len(),
@@ -5436,23 +5445,23 @@ test "monotype type store restores keep durable iterator containment answers" {
     const unit = try store.internZst(&name_store);
     const unit_index = @backingInt(unit);
     try std.testing.expect(!(try store.containsIteratorInterface(unit)));
-    try std.testing.expectEqual(@as(?bool, false), store.iterator_interface_cache.unsafeRawItemsForView()[unit_index]);
+    try std.testing.expectEqual(@as(?bool, false), store.cachedContainment(unit_index, .iterator_interface));
 
     // An interning hit restores the store to its pre-candidate mark.
     _ = try store.internZst(&name_store);
-    try std.testing.expectEqual(@as(?bool, false), store.iterator_interface_cache.unsafeRawItemsForView()[unit_index]);
+    try std.testing.expectEqual(@as(?bool, false), store.cachedContainment(unit_index, .iterator_interface));
 
     const transaction = store.beginTransaction();
     const recursive = try transaction.reserve(&store);
     transaction.fill(&store, recursive, .{ .list = recursive });
     var result = try store.commitTransaction(&name_store, transaction, recursive);
     defer result.deinit();
-    try std.testing.expectEqual(@as(?bool, false), store.iterator_interface_cache.unsafeRawItemsForView()[unit_index]);
+    try std.testing.expectEqual(@as(?bool, false), store.cachedContainment(unit_index, .iterator_interface));
 
     const aborted = store.beginTransaction();
     _ = try aborted.reserve(&store);
     aborted.abort(&store);
-    try std.testing.expectEqual(@as(?bool, false), store.iterator_interface_cache.unsafeRawItemsForView()[unit_index]);
+    try std.testing.expectEqual(@as(?bool, false), store.cachedContainment(unit_index, .iterator_interface));
 }
 
 test "monotype type store acyclic interning normalizes record and tag rows" {
@@ -6804,7 +6813,7 @@ test "frozen monotype clone owns fresh iterator traversal slots for uncached que
     };
     try Attempt.run(allocator, &source, recursive);
     try std.testing.checkAllAllocationFailures(allocator, Attempt.run, .{ &source, recursive });
-    try std.testing.expectEqual(@as(?bool, null), source.iterator_interface_cache.get(@backingInt(recursive)));
+    try std.testing.expectEqual(@as(?bool, null), source.cachedContainment(@backingInt(recursive), .iterator_interface));
 }
 
 test "monotype read sharing borrows prepared recursive and alias queries without allocation" {
@@ -6836,8 +6845,8 @@ test "monotype read sharing borrows prepared recursive and alias queries without
     defer std.testing.allocator.free(equality_before);
     const identity_before = try std.testing.allocator.dupe(?names.TypeDigest, store.specialization_digests.unsafeRawItemsForView());
     defer std.testing.allocator.free(identity_before);
-    const iterator_before = try std.testing.allocator.dupe(?bool, store.iterator_interface_cache.unsafeRawItemsForView());
-    defer std.testing.allocator.free(iterator_before);
+    const containment_before = try std.testing.allocator.dupe(Containment, store.containment_cache.unsafeRawItemsForView());
+    defer std.testing.allocator.free(containment_before);
     var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
     {
         var borrowed = store.borrowReadOnly(failing.allocator());
@@ -6859,7 +6868,7 @@ test "monotype read sharing borrows prepared recursive and alias queries without
     try std.testing.expectEqualDeep(full_before, store.type_digests.unsafeRawItemsForView());
     try std.testing.expectEqualDeep(equality_before, store.equality_digests.unsafeRawItemsForView());
     try std.testing.expectEqualDeep(identity_before, store.specialization_digests.unsafeRawItemsForView());
-    try std.testing.expectEqualDeep(iterator_before, store.iterator_interface_cache.unsafeRawItemsForView());
+    try std.testing.expectEqualDeep(containment_before, store.containment_cache.unsafeRawItemsForView());
     // Mutation after the borrow's lifetime invalidates preparation, and a
     // separately owned frozen clone must never inherit borrowed ownership.
     _ = try store.add(.{ .primitive = .str });
@@ -6893,7 +6902,7 @@ test "monotype read sharing explicit queries leave omitted caches cold and inval
     try store.prepareForReadSharingQueries(&name_store, .spec_constr);
     try std.testing.expectEqualDeep(Store.ReadSharingQueries.spec_constr, store.read_sharing_coverage);
     for (store.specialization_digests.unsafeRawItemsForView()) |digest| try std.testing.expect(digest == null);
-    for (store.iterator_interface_cache.unsafeRawItemsForView()) |answer| try std.testing.expect(answer == null);
+    for (store.containment_cache.unsafeRawItemsForView()) |answer| try std.testing.expect(answer.get(.iterator_interface) == null);
     try std.testing.expectEqual(@as(u32, 0), store.iterator_interface_visit_epoch);
     var stats: Store.DigestStats = .{};
     store.digest_stats = &stats;
@@ -6952,7 +6961,7 @@ test "monotype read sharing selected queries retry after every allocation failur
         };
         try std.testing.expectEqualDeep(Store.ReadSharingQueries.spec_constr, store.read_sharing_coverage);
         for (store.specialization_digests.unsafeRawItemsForView()) |digest| try std.testing.expect(digest == null);
-        for (store.iterator_interface_cache.unsafeRawItemsForView()) |answer| try std.testing.expect(answer == null);
+        for (store.containment_cache.unsafeRawItemsForView()) |answer| try std.testing.expect(answer.get(.iterator_interface) == null);
         failing.fail_index = failing.alloc_index;
         var borrowed = store.borrowReadOnly(failing.allocator());
         defer borrowed.deinit();
@@ -7041,7 +7050,7 @@ test "monotype read sharing preparation retries recursive digest publication aft
         try std.testing.expectEqualDeep(expected.type_digests.unsafeRawItemsForView(), store.type_digests.unsafeRawItemsForView());
         try std.testing.expectEqualDeep(expected.equality_digests.unsafeRawItemsForView(), store.equality_digests.unsafeRawItemsForView());
         try std.testing.expectEqualDeep(expected.specialization_digests.unsafeRawItemsForView(), store.specialization_digests.unsafeRawItemsForView());
-        try std.testing.expectEqualDeep(expected.iterator_interface_cache.unsafeRawItemsForView(), store.iterator_interface_cache.unsafeRawItemsForView());
+        try std.testing.expectEqualDeep(expected.containment_cache.unsafeRawItemsForView(), store.containment_cache.unsafeRawItemsForView());
         try std.testing.expectEqual(expected.recursive_digest_unfoldings.count(), store.recursive_digest_unfoldings.count());
         var unfoldings = expected.recursive_digest_unfoldings.iterator();
         while (unfoldings.next()) |entry| {
