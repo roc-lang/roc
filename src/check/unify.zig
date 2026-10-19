@@ -2875,19 +2875,12 @@ const Unifier = struct {
         }
     }
 
-    /// A function made pure whose own dependencies are still being demanded.
-    const PureDemand = struct {
-        var_: Var,
-        func: Func,
-        next: u32 = 0,
-    };
-
     fn demandPureFunction(self: *Self, dep_var: Var) Error!void {
-        const allocator = self.scratch.gpa;
-        var pending = std.ArrayList(PureDemand).empty;
-        defer pending.deinit(allocator);
-        self.demandPureStep(&pending, dep_var) catch |err| return self.undoPureDemands(&pending, err);
-        while (pending.items.len > 0) {
+        const pending = &self.scratch.pure_demands;
+        const pending_base = pending.items.len;
+        defer pending.shrinkRetainingCapacity(pending_base);
+        self.demandPureStep(dep_var) catch |err| return self.undoPureDemands(pending_base, err);
+        while (pending.items.len > pending_base) {
             const top = &pending.items[pending.items.len - 1];
             const deps = top.func.effect_deps;
             if (top.next == deps.len()) {
@@ -2896,15 +2889,17 @@ const Unifier = struct {
             }
             const next = self.types_store.getVarAt(deps, top.next);
             top.next += 1;
-            self.demandPureStep(&pending, next) catch |err| return self.undoPureDemands(&pending, err);
+            self.demandPureStep(next) catch |err| return self.undoPureDemands(pending_base, err);
         }
     }
 
     /// A dependency that fails the demand fails every function waiting on
     /// it, and each of those functions' effects then still depends on it, so
     /// their pure writes are undone.
-    fn undoPureDemands(self: *Self, pending: *std.ArrayList(PureDemand), err: Error) Error {
-        while (pending.pop()) |demand| {
+    fn undoPureDemands(self: *Self, pending_base: usize, err: Error) Error {
+        const pending = &self.scratch.pure_demands;
+        while (pending.items.len > pending_base) {
+            const demand = pending.pop().?;
             try self.types_store.setVarContent(demand.var_, .{ .structure = .{ .fn_unbound = demand.func } });
         }
         return err;
@@ -2912,7 +2907,8 @@ const Unifier = struct {
 
     /// Demands one function be pure. An effect-polymorphic function becomes
     /// pure in place and is queued so its own dependencies are demanded.
-    fn demandPureStep(self: *Self, pending: *std.ArrayList(PureDemand), dep_var: Var) Error!void {
+    fn demandPureStep(self: *Self, dep_var: Var) Error!void {
+        const pending = &self.scratch.pure_demands;
         var current = dep_var;
         while (true) {
             const resolved = self.types_store.resolveVar(current);
@@ -4095,6 +4091,13 @@ pub const BoundedRowViolation = struct {
 /// An unordered pair of resolved type descriptors.
 const VisitedPairKey = struct { low: u32, high: u32 };
 
+/// A function made pure whose own dependencies are still being demanded.
+const PureDemand = struct {
+    var_: Var,
+    func: Func,
+    next: u32 = 0,
+};
+
 /// The contents of a reported mismatch's root operands before poisoning.
 pub const RejectedRoots = struct {
     expected: Content,
@@ -4148,6 +4151,9 @@ pub const Scratch = struct {
     /// Linear, merge-local union of directed effect formulas.
     effect_dependency_seen: collections.DenseMap(Var, void),
     effect_dependencies: std.ArrayListUnmanaged(Var) = .empty,
+    /// Functions made pure whose own dependencies a pure demand is still
+    /// visiting.
+    pure_demands: std.ArrayListUnmanaged(PureDemand) = .empty,
 
     // explicit unification work stack
     unify_work_stack: WorkFrame.SafeList,
@@ -4382,6 +4388,7 @@ pub const Scratch = struct {
         self.fresh_vars.deinit(self.gpa);
         self.effect_dependency_seen.deinit();
         self.effect_dependencies.deinit(self.gpa);
+        self.pure_demands.deinit(self.gpa);
         self.unify_work_stack.deinit(self.gpa);
         self.mismatch_flags.deinit(self.gpa);
         self.gathered_fields.deinit(self.gpa);
