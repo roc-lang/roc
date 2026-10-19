@@ -7125,6 +7125,14 @@ code does not construct or pattern match on them. The compiler specializes every
 use with the concrete tag-union type, so opaque spec operations lower to direct
 tag code.
 
+A tag-union spec's generated backing holds one `Str` per distinct field label
+of the record shapes its payload parsers reach: that label's renamed field
+name. A renamed name depends only on its label, so every payload record reads
+each of its fields' names from the spec by label. The spec therefore carries
+no record identity or record order, and the payload records reaching one
+record type through different paths (directly and through an imported nominal's
+backing, say) share its entries.
+
 Userspace format code operates through safe Roc values, opaque specs, opaque
 field values, iterators, and slice-returning string/list APIs. The compiler does
 not expose raw field-slot indices, unsafe byte indexing, or unchecked memory
