@@ -11,6 +11,7 @@
 
 const std = @import("std");
 const invariant = @import("base").invariant;
+const collections = @import("collections");
 const core = @import("lir_core");
 const layout_mod = @import("layout");
 const body_clone = @import("body_clone.zig");
@@ -173,6 +174,8 @@ fn ownershipNeutralFrame(store: *const LirStore, layouts: *const layout_mod.Stor
 
 /// Inline every eligible, reachable, single-use procedure without code growth.
 pub fn run(result: *LirProgram.Result) ResourceError!void {
+    var scratch = InlineScratch.init(result.store.allocator);
+    defer scratch.deinit();
     while (true) {
         var inventory = try Inventory.init(result);
         defer inventory.deinit();
@@ -181,9 +184,47 @@ pub fn run(result: *LirProgram.Result) ResourceError!void {
         defer sites.deinit(result.store.allocator);
         try inventory.collectFrontier(&result.layouts, &sites);
         if (sites.items.len == 0) return;
-        for (sites.items) |site| try inlineAt(&result.store, &result.layouts, site);
+        scratch.next_joins.clearRetainingCapacity();
+        for (sites.items) |site| try inlineAt(&result.store, &result.layouts, site, &scratch);
     }
 }
+
+/// Storage every inline site of a run reuses.
+const InlineScratch = struct {
+    allocator: Allocator,
+    clone: body_clone.CloneScratch,
+    /// The callee's arguments, the call's operands and the callee's frame
+    /// locals of the site being inlined, in that order.
+    locals: std.ArrayList(LIR.LocalId) = .empty,
+    /// The caller's merged frame locals.
+    merged: std.ArrayList(LIR.LocalId) = .empty,
+    /// Per caller inlined into this round, the first join identity above
+    /// every join its body reaches. A round never inlines into a callee, so
+    /// a caller's body changes only by its own inlines, whose fresh joins
+    /// the clone allocates from this boundary.
+    next_joins: collections.DenseMap(LIR.LirProcSpecId, u32),
+
+    fn init(allocator: Allocator) InlineScratch {
+        return .{
+            .allocator = allocator,
+            .clone = body_clone.CloneScratch.init(allocator),
+            .next_joins = collections.DenseMap(LIR.LirProcSpecId, u32).init(allocator),
+        };
+    }
+
+    fn deinit(self: *InlineScratch) void {
+        self.clone.deinit();
+        self.locals.deinit(self.allocator);
+        self.merged.deinit(self.allocator);
+        self.next_joins.deinit();
+    }
+
+    fn appendSpan(self: *InlineScratch, store: *const LirStore, span: LIR.LocalSpan) ResourceError!void {
+        const locals = store.getLocalSpan(span);
+        try self.locals.ensureUnusedCapacity(self.allocator, locals.len);
+        for (0..locals.len) |index| self.locals.appendAssumeCapacity(GuardedList.at(locals, index));
+    }
+};
 
 const ReturnRewriter = struct {
     target: LIR.LocalId,
@@ -212,19 +253,29 @@ const ReturnRewriter = struct {
     }
 };
 
-fn inlineAt(store: *LirStore, layouts: *layout_mod.Store, site: CallSite) ResourceError!void {
-    const call_node = store.getCFStmt(site.stmt);
-    std.debug.assert(call_node == .assign_call);
+fn inlineAt(store: *LirStore, layouts: *layout_mod.Store, site: CallSite, scratch: *InlineScratch) ResourceError!void {
+    const call_node = store.getCFStmtImmediate(site.stmt);
+    std.debug.assert(call_node.* == .assign_call);
     const call = call_node.assign_call;
-    const callee = store.getProcSpec(call.proc);
+    const callee = store.getProcSpecImmediate(call.proc).*;
     const source_body = callee.body.?;
-    const source_args = try GuardedList.dupe(store.allocator, LIR.LocalId, store.getLocalSpan(callee.args));
-    defer store.allocator.free(source_args);
-    const call_args = try GuardedList.dupe(store.allocator, LIR.LocalId, store.getLocalSpan(call.args));
-    defer store.allocator.free(call_args);
-    const source_frame = try GuardedList.dupe(store.allocator, LIR.LocalId, store.getLocalSpan(callee.frame_locals));
-    defer store.allocator.free(source_frame);
+    // The clone appends locals, so the spans are copied out first.
+    scratch.locals.clearRetainingCapacity();
+    try scratch.appendSpan(store, callee.args);
+    try scratch.appendSpan(store, call.args);
+    try scratch.appendSpan(store, callee.frame_locals);
+    const arg_count = store.getLocalSpan(callee.args).len;
+    const source_args = scratch.locals.items[0..arg_count];
+    const call_args = scratch.locals.items[arg_count..][0..store.getLocalSpan(call.args).len];
+    const source_frame = scratch.locals.items[arg_count + call_args.len ..];
     if (source_args.len != call_args.len) invariant("{s}", .{"single-use inline call arity differed from callee"});
+    const next_join = try scratch.next_joins.getOrPut(site.caller);
+    if (!next_join.found_existing) {
+        var index = body_clone.JoinParamIndex.init(scratch.allocator);
+        defer index.deinit();
+        try index.indexReachable(store, store.getProcSpecImmediate(site.caller).body.?);
+        next_join.value_ptr.* = index.next_join_point;
+    }
 
     const inline_scope = try store.addInlineScope(.{
         .source_identity = callee.identity,
@@ -239,11 +290,12 @@ fn inlineAt(store: *LirStore, layouts: *layout_mod.Store, site: CallSite) Resour
     const outer_shapes = store.shapes;
     store.shapes = .{};
     defer store.shapes = outer_shapes.merged(store.shapes);
-    var cloner = try body_clone.BodyCloner(ReturnRewriter).initWithInlineScopeOuter(
+    var cloner = try body_clone.BodyCloner(ReturnRewriter).initWithInlineScopeOuterInScratch(
         store,
         .{ .target = call.target, .next = call.next, .call_origin = store.stmtOrigin(site.stmt) },
         inline_scope,
-        store.getProcSpecImmediate(site.caller).body.?,
+        next_join.value_ptr.*,
+        &scratch.clone,
     );
     defer cloner.deinit();
 
@@ -259,6 +311,7 @@ fn inlineAt(store: *LirStore, layouts: *layout_mod.Store, site: CallSite) Resour
         _ = try cloner.mapLocal(source_frame[index]);
     }
     var cloned_body = try cloner.cloneStmt(source_body);
+    scratch.next_joins.getPtr(site.caller).?.* = cloner.next_join_point;
     // The call-boundary argument aliases belong to the call statement, inside
     // the new inline frame.
     var boundary_origin = store.stmtOrigin(site.stmt);
@@ -279,8 +332,9 @@ fn inlineAt(store: *LirStore, layouts: *layout_mod.Store, site: CallSite) Resour
     // by any one statement, so it arrives with the callee's own record.
     caller.shapes = caller.shapes.merged(callee.shapes).merged(store.shapes);
     const caller_frame = store.getLocalSpan(caller.frame_locals);
-    var merged = try std.ArrayList(LIR.LocalId).initCapacity(store.allocator, caller_frame.len + cloner.new_locals.items.len);
-    defer merged.deinit(store.allocator);
+    const merged = &scratch.merged;
+    merged.clearRetainingCapacity();
+    try merged.ensureTotalCapacity(scratch.allocator, caller_frame.len + cloner.new_locals.items.len);
     for (0..caller_frame.len) |index| merged.appendAssumeCapacity(GuardedList.at(caller_frame, index));
     merged.appendSliceAssumeCapacity(cloner.new_locals.items);
     std.mem.sort(LIR.LocalId, merged.items, {}, body_clone.localIdLessThan);

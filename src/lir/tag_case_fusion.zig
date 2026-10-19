@@ -1183,6 +1183,9 @@ fn applyCandidate(
         while (owned.next()) |plan| plan.deinit();
         plans.deinit();
     }
+    // Every arm copy borrows the same clone tables.
+    var clone_scratch = body_clone.CloneScratch.init(allocator);
+    defer clone_scratch.deinit();
     const rewrite: ArmRewrite = .{ .matched_value = candidate.matched_value, .union_locals = candidate.union_locals.items };
     for (candidate.variants.targets.items) |branch| {
         if (plans.contains(branch)) continue;
@@ -1206,7 +1209,7 @@ fn applyCandidate(
         try join_params.record(store.getCFStmtImmediate(join_stmt).join);
 
         const plan = plans.getPtr(branch).?;
-        var cloner = try body_clone.BodyCloner(BranchRewriter).initWithFreshDeclaredJoinsAndAllocator(store, .{
+        var cloner = try body_clone.BodyCloner(BranchRewriter).initWithFreshDeclaredJoinsInScratch(store, .{
             .param = candidate.matched_value,
             .variant_index = build.variant_index,
             .payload = payload_param orelse candidate.param,
@@ -1214,7 +1217,7 @@ fn applyCandidate(
             .layouts = layouts,
             .union_locals = candidate.union_locals.items,
             .has_payload = payload_param != null,
-        }, branch, join_params, allocator);
+        }, branch, join_params, &clone_scratch);
         defer cloner.deinit();
         // Statements the rewrite leaves unchanged are shared with the
         // original arm, and copied statements define fresh locals.

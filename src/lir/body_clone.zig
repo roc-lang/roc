@@ -1556,6 +1556,45 @@ pub fn CallResultFusion(comptime Spec: type) type {
 ///
 /// Both hooks receive the cloner and use its `mapLocal`, `mapLocalSpan`,
 /// `addTemp`, `directReturnOf`, and `store` surface to build their statements.
+/// Mapping and branch storage that a sequence of clones reuses. One clone at
+/// a time borrows it and returns it empty, so each later clone starts with
+/// the capacity an earlier one grew instead of growing its tables again.
+pub const CloneScratch = struct {
+    allocator: Allocator,
+    local_map: collections.DenseMap(LocalId, LocalId),
+    stmt_map: collections.DenseMap(CFStmtId, CFStmtId),
+    new_locals: std.ArrayList(LocalId) = .empty,
+    inline_scope_map: collections.DenseMap(LIR.InlineScopeId, LIR.InlineScopeId),
+    declared_joins: collections.DenseMap(LIR.JoinPointId, void),
+    join_map: collections.DenseMap(LIR.JoinPointId, LIR.JoinPointId),
+    branches: std.ArrayList(LIR.CFSwitchBranch) = .empty,
+    arms: std.ArrayList(LIR.StrMatchArm) = .empty,
+    borrowed: bool = false,
+
+    pub fn init(allocator: Allocator) CloneScratch {
+        return .{
+            .allocator = allocator,
+            .local_map = collections.DenseMap(LocalId, LocalId).init(allocator),
+            .stmt_map = collections.DenseMap(CFStmtId, CFStmtId).init(allocator),
+            .inline_scope_map = collections.DenseMap(LIR.InlineScopeId, LIR.InlineScopeId).init(allocator),
+            .declared_joins = collections.DenseMap(LIR.JoinPointId, void).init(allocator),
+            .join_map = collections.DenseMap(LIR.JoinPointId, LIR.JoinPointId).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *CloneScratch) void {
+        std.debug.assert(!self.borrowed);
+        self.local_map.deinit();
+        self.stmt_map.deinit();
+        self.new_locals.deinit(self.allocator);
+        self.inline_scope_map.deinit();
+        self.declared_joins.deinit();
+        self.join_map.deinit();
+        self.branches.deinit(self.allocator);
+        self.arms.deinit(self.allocator);
+    }
+};
+
 pub fn BodyCloner(comptime Rewriter: type) type {
     return struct {
         const Self = @This();
@@ -1583,6 +1622,15 @@ pub fn BodyCloner(comptime Rewriter: type) type {
         join_params: ?*JoinParamIndex,
         join_map: collections.DenseMap(LIR.JoinPointId, LIR.JoinPointId),
         next_join_point: u32,
+        /// The source and cloned branches and arms of every open
+        /// switch and string-match frame, each frame's runs above its
+        /// enclosing frame's.
+        branches: std.ArrayList(LIR.CFSwitchBranch),
+        arms: std.ArrayList(LIR.StrMatchArm),
+        /// Open clone frames, retained across `cloneStmt` calls.
+        frames: std.ArrayList(CloneFrame) = .empty,
+        /// The storage this clone borrowed, returned empty on `deinit`.
+        scratch: ?*CloneScratch,
 
         /// Initialize clone state without allocating for unrelated procedures.
         /// Join identities are retained; use a destination-aware constructor
@@ -1593,7 +1641,26 @@ pub fn BodyCloner(comptime Rewriter: type) type {
 
         /// Use task-owned scratch while emitting clone output into `store`.
         pub fn initWithAllocator(store: *LirStore, rewriter: Rewriter, allocator: Allocator) Allocator.Error!Self {
-            return initInternal(store, rewriter, LIR.InlineScopeId.none, .none, null, allocator);
+            return initInternal(store, rewriter, LIR.InlineScopeId.none, .none, null, allocator, null);
+        }
+
+        /// `initWithAllocator` borrowing `scratch`'s storage.
+        pub fn initInScratch(store: *LirStore, rewriter: Rewriter, scratch: *CloneScratch) Allocator.Error!Self {
+            return initInternal(store, rewriter, LIR.InlineScopeId.none, .none, null, scratch.allocator, scratch);
+        }
+
+        /// Inline under `outer` into a destination procedure whose join
+        /// identities are all below `next_join_point`, borrowing `scratch`.
+        pub fn initWithInlineScopeOuterInScratch(
+            store: *LirStore,
+            rewriter: Rewriter,
+            outer: LIR.InlineScopeId,
+            next_join_point: u32,
+            scratch: *CloneScratch,
+        ) Allocator.Error!Self {
+            var self = try initInternal(store, rewriter, outer, .all, null, scratch.allocator, scratch);
+            self.next_join_point = next_join_point;
+            return self;
         }
 
         /// Allocate clone state and rebase every cloned source location below
@@ -1617,7 +1684,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
             destination_body: CFStmtId,
             allocator: Allocator,
         ) Allocator.Error!Self {
-            var self = try initInternal(store, rewriter, outer, .all, null, allocator);
+            var self = try initInternal(store, rewriter, outer, .all, null, allocator, null);
             errdefer self.deinit();
             var index = JoinParamIndex.init(self.allocator);
             defer index.deinit();
@@ -1637,7 +1704,29 @@ pub fn BodyCloner(comptime Rewriter: type) type {
             join_params: *JoinParamIndex,
             allocator: Allocator,
         ) Allocator.Error!Self {
-            var self = try initInternal(store, rewriter, LIR.InlineScopeId.none, .declared, join_params, allocator);
+            return initWithFreshDeclaredJoinsImpl(store, rewriter, body, join_params, allocator, null);
+        }
+
+        /// `initWithFreshDeclaredJoinsAndAllocator` borrowing `scratch`.
+        pub fn initWithFreshDeclaredJoinsInScratch(
+            store: *LirStore,
+            rewriter: Rewriter,
+            body: CFStmtId,
+            join_params: *JoinParamIndex,
+            scratch: *CloneScratch,
+        ) Allocator.Error!Self {
+            return initWithFreshDeclaredJoinsImpl(store, rewriter, body, join_params, scratch.allocator, scratch);
+        }
+
+        fn initWithFreshDeclaredJoinsImpl(
+            store: *LirStore,
+            rewriter: Rewriter,
+            body: CFStmtId,
+            join_params: *JoinParamIndex,
+            allocator: Allocator,
+            scratch: ?*CloneScratch,
+        ) Allocator.Error!Self {
+            var self = try initInternal(store, rewriter, LIR.InlineScopeId.none, .declared, join_params, allocator, scratch);
             errdefer self.deinit();
             var walk = try ReachableStmts.initWithAllocator(store, body, allocator);
             defer walk.deinit();
@@ -1655,7 +1744,30 @@ pub fn BodyCloner(comptime Rewriter: type) type {
             join_remap: @FieldType(Self, "join_remap"),
             join_params: ?*JoinParamIndex,
             allocator: Allocator,
+            scratch: ?*CloneScratch,
         ) Allocator.Error!Self {
+            if (scratch) |borrowed| {
+                std.debug.assert(!borrowed.borrowed);
+                borrowed.borrowed = true;
+                return .{
+                    .store = store,
+                    .allocator = allocator,
+                    .rewriter = rewriter,
+                    .local_map = borrowed.local_map,
+                    .stmt_map = borrowed.stmt_map,
+                    .new_locals = borrowed.new_locals,
+                    .inline_scope_outer = outer,
+                    .inline_scope_map = borrowed.inline_scope_map,
+                    .join_remap = join_remap,
+                    .declared_joins = borrowed.declared_joins,
+                    .join_params = join_params,
+                    .join_map = borrowed.join_map,
+                    .next_join_point = 0,
+                    .branches = borrowed.branches,
+                    .arms = borrowed.arms,
+                    .scratch = borrowed,
+                };
+            }
             return .{
                 .store = store,
                 .allocator = allocator,
@@ -1670,17 +1782,44 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 .join_params = join_params,
                 .join_map = collections.DenseMap(LIR.JoinPointId, LIR.JoinPointId).init(allocator),
                 .next_join_point = 0,
+                .branches = .empty,
+                .arms = .empty,
+                .scratch = null,
             };
         }
 
-        /// Release the clone's scratch storage.
+        /// Release the clone's scratch storage, or return it empty to the
+        /// `CloneScratch` it was borrowed from.
         pub fn deinit(self: *Self) void {
+            self.frames.deinit(self.allocator);
+            if (self.scratch) |borrowed| {
+                self.local_map.clearRetainingCapacity();
+                self.stmt_map.clearRetainingCapacity();
+                self.new_locals.clearRetainingCapacity();
+                self.inline_scope_map.clearRetainingCapacity();
+                self.declared_joins.clearRetainingCapacity();
+                self.join_map.clearRetainingCapacity();
+                self.branches.clearRetainingCapacity();
+                self.arms.clearRetainingCapacity();
+                borrowed.local_map = self.local_map;
+                borrowed.stmt_map = self.stmt_map;
+                borrowed.new_locals = self.new_locals;
+                borrowed.inline_scope_map = self.inline_scope_map;
+                borrowed.declared_joins = self.declared_joins;
+                borrowed.join_map = self.join_map;
+                borrowed.branches = self.branches;
+                borrowed.arms = self.arms;
+                borrowed.borrowed = false;
+                return;
+            }
             self.new_locals.deinit(self.allocator);
             self.stmt_map.deinit();
             self.join_map.deinit();
             self.declared_joins.deinit();
             self.inline_scope_map.deinit();
             self.local_map.deinit();
+            self.branches.deinit(self.allocator);
+            self.arms.deinit(self.allocator);
         }
 
         const CloneFrame = struct {
@@ -1691,17 +1830,13 @@ pub fn BodyCloner(comptime Rewriter: type) type {
             intercepted: ?InterceptChildren,
             results: [2]CFStmtId = undefined,
             step: u32 = 0,
-            old_branches: []LIR.CFSwitchBranch = &.{},
-            branches: []LIR.CFSwitchBranch = &.{},
-            old_arms: []LIR.StrMatchArm = &.{},
-            arms: []LIR.StrMatchArm = &.{},
-
-            fn deinit(frame: *CloneFrame, allocator: Allocator) void {
-                allocator.free(frame.old_branches);
-                allocator.free(frame.branches);
-                allocator.free(frame.old_arms);
-                allocator.free(frame.arms);
-            }
+            /// Where this frame's source and cloned branches (or arms)
+            /// start in the cloner's `branches` (or `arms`): `count` source
+            /// entries, then `count` cloned ones.
+            run_start: usize = 0,
+            count: usize = 0,
+            /// Whether this frame placed a run, which its finish releases.
+            owns_run: bool = false,
         };
 
         const CloneStep = union(enum) {
@@ -1714,17 +1849,21 @@ pub fn BodyCloner(comptime Rewriter: type) type {
         /// Statement chains and nesting live on an explicit frame stack, so
         /// body length and branch depth never become thread call depth.
         pub fn cloneStmt(self: *Self, root: CFStmtId) Allocator.Error!CFStmtId {
-            var frames: std.ArrayList(CloneFrame) = .empty;
+            const frames = &self.frames;
+            std.debug.assert(frames.items.len == 0);
+            const branches_base = self.branches.items.len;
+            const arms_base = self.arms.items.len;
             defer {
-                for (frames.items) |*frame| frame.deinit(self.allocator);
-                frames.deinit(self.allocator);
+                frames.clearRetainingCapacity();
+                self.branches.shrinkRetainingCapacity(branches_base);
+                self.arms.shrinkRetainingCapacity(arms_base);
             }
             var pending: ?CFStmtId = root;
             var returned: ?CFStmtId = null;
             while (true) {
                 if (pending) |old_id| {
                     pending = null;
-                    returned = try self.openClone(&frames, old_id);
+                    returned = try self.openClone(frames, old_id);
                 }
                 if (frames.items.len == 0) return returned.?;
                 const frame = &frames.items[frames.items.len - 1];
@@ -1735,7 +1874,11 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     },
                     .finished => |cloned| {
                         try self.stmt_map.put(frame.old_id, cloned);
-                        frame.deinit(self.allocator);
+                        if (frame.owns_run) switch (frame.source) {
+                            .switch_stmt => self.branches.shrinkRetainingCapacity(frame.run_start),
+                            .str_match_set => self.arms.shrinkRetainingCapacity(frame.run_start),
+                            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_initialized_payload, .str_match, .join, .jump, .ret, .crash => {},
+                        };
                         frames.items.len -= 1;
                         returned = cloned;
                     },
@@ -2202,24 +2345,27 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 // Cloning a branch body appends switch branches and can
                 // therefore invalidate a guarded borrow of this same backing
                 // list. Own the source descriptors before cloning any body.
-                frame.old_branches = try GuardedList.dupe(
-                    self.allocator,
-                    LIR.CFSwitchBranch,
-                    self.store.getCFSwitchBranches(s.branches),
-                );
-                frame.branches = try self.allocator.alloc(LIR.CFSwitchBranch, frame.old_branches.len);
-            } else if (step <= frame.old_branches.len) {
-                frame.branches[step - 1] = .{
-                    .value = frame.old_branches[step - 1].value,
+                const source = self.store.getCFSwitchBranches(s.branches);
+                const count = GuardedList.borrowLen(source);
+                frame.run_start = self.branches.items.len;
+                frame.count = count;
+                frame.owns_run = true;
+                try self.branches.ensureUnusedCapacity(self.allocator, 2 * count);
+                for (0..count) |index| self.branches.appendAssumeCapacity(GuardedList.at(source, index));
+                self.branches.appendNTimesAssumeCapacity(undefined, count);
+            } else if (step <= frame.count) {
+                const runs = self.branches.items[frame.run_start..][0 .. 2 * frame.count];
+                runs[frame.count + step - 1] = .{
+                    .value = runs[step - 1].value,
                     .body = returned.?,
                 };
             }
-            const branch_count = frame.old_branches.len;
-            if (step < branch_count) return .{ .clone = frame.old_branches[step].body };
+            const branch_count = frame.count;
+            if (step < branch_count) return .{ .clone = self.branches.items[frame.run_start + step].body };
             if (step == branch_count) {
                 frame.built = .{ .switch_stmt = .{
                     .cond = try self.mapLocal(s.cond),
-                    .branches = try self.store.addCFSwitchBranches(frame.branches),
+                    .branches = try self.store.addCFSwitchBranches(self.branches.items[frame.run_start + branch_count ..][0..branch_count]),
                     .default_branch = undefined,
                     .default_is_cold = s.default_is_cold,
                     .continuation = null,
@@ -2246,19 +2392,21 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 // Cloning an arm can append nested string-match arms.
                 // Snapshot the source descriptors so those appends cannot
                 // invalidate the input.
-                frame.old_arms = try GuardedList.dupe(
-                    self.allocator,
-                    LIR.StrMatchArm,
-                    self.store.getStrMatchArms(s.arms),
-                );
-                frame.arms = try self.allocator.alloc(LIR.StrMatchArm, frame.old_arms.len);
-            } else if (step <= frame.old_arms.len) {
-                frame.arms[step - 1].on_match = returned.?;
+                const source = self.store.getStrMatchArms(s.arms);
+                const count = GuardedList.borrowLen(source);
+                frame.run_start = self.arms.items.len;
+                frame.count = count;
+                frame.owns_run = true;
+                try self.arms.ensureUnusedCapacity(self.allocator, 2 * count);
+                for (0..count) |index| self.arms.appendAssumeCapacity(GuardedList.at(source, index));
+                self.arms.appendNTimesAssumeCapacity(undefined, count);
+            } else if (step <= frame.count) {
+                self.arms.items[frame.run_start + frame.count + step - 1].on_match = returned.?;
             }
-            const arm_count = frame.old_arms.len;
+            const arm_count = frame.count;
             if (step < arm_count) {
-                const old = frame.old_arms[step];
-                frame.arms[step] = .{
+                const old = self.arms.items[frame.run_start + step];
+                self.arms.items[frame.run_start + arm_count + step] = .{
                     .prefix = old.prefix,
                     .steps = try self.mapStrMatchSteps(old.steps),
                     .end = old.end,
@@ -2269,7 +2417,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
             if (step == arm_count) {
                 frame.built = .{ .str_match_set = .{
                     .source = try self.mapLocal(s.source),
-                    .arms = try self.store.addStrMatchArms(frame.arms),
+                    .arms = try self.store.addStrMatchArms(self.arms.items[frame.run_start + arm_count ..][0..arm_count]),
                     .on_miss = undefined,
                 } };
                 return .{ .clone = s.on_miss };
