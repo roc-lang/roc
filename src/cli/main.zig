@@ -995,7 +995,7 @@ test "normal native capture serves both consumers the same exact objects before 
     try std.testing.expect(checking.select_policy.?.context == alternative.view().select_policy.?.context);
     try std.testing.expect(checking.spec_cache.context == runtime.context);
     try std.testing.expect(checking.spec_cache.find == runtime.find);
-    try std.testing.expectEqualDeep(checking.spec_cache.lookup(key, null, false).?, runtime.lookup(key, null, false).?);
+    try std.testing.expectEqualDeep(checking.spec_cache.lookup(key, null, .dev_code).?, runtime.lookup(key, null, .dev_code).?);
     const located = checking.splice_source.find(checking.splice_source.context, identity).?;
     const runtime_source = cache.packs.spliceSource();
     const runtime_object = runtime_source.find(runtime_source.context, identity).?;
@@ -1006,7 +1006,7 @@ test "normal native capture serves both consumers the same exact objects before 
     try std.testing.expectEqual(@as(usize, 1), cache.publications.items.len);
     CompileTimeObjectCache.finish(&cache, false);
     try std.testing.expectEqual(@as(usize, 0), cache.publications.items.len);
-    try std.testing.expect(runtime.lookup(key, null, false) == null);
+    try std.testing.expect(runtime.lookup(key, null, .dev_code) == null);
     try std.testing.expect(runtime_source.find(runtime_source.context, identity) == null);
     try std.testing.expectEqualStrings("\xc3", located.set.artifacts[located.index].code);
 }

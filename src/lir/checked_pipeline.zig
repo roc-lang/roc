@@ -1017,6 +1017,8 @@ pub const Observers = struct {
 
 /// Serves closed specializations from the object cache.
 pub const SpecCacheLookup = postcheck.Common.SpecCacheLookup;
+/// Which object cache entries can serve a consumer.
+pub const SpecCacheTakes = postcheck.Common.SpecCacheTakes;
 
 /// Native provision is an explicit backend/target/splice contract, not an
 /// optimization policy. Only host dev objects share CTFE's artifact domain.

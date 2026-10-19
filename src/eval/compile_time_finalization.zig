@@ -713,7 +713,7 @@ test "ordinary native consumers select the same complete provider without role v
     const Lookup = lir.CheckedPipeline.SpecCacheLookup;
     const Result = @typeInfo(@typeInfo(@FieldType(Lookup, "find")).pointer.child).@"fn".return_type.?;
     const Callbacks = struct {
-        fn find(_: *anyopaque, _: [32]u8, _: ?[32]u8, _: bool) Result {
+        fn find(_: *anyopaque, _: [32]u8, _: ?[32]u8, _: lir.CheckedPipeline.SpecCacheTakes) Result {
             return null;
         }
     };
@@ -1131,10 +1131,10 @@ test "runtime handoff validates the original declaration and continues the selec
     const Lookup = lir.CheckedPipeline.SpecCacheLookup;
     const LookupResult = @typeInfo(@typeInfo(@FieldType(Lookup, "find")).pointer.child).@"fn".return_type.?;
     const ColdCache = struct {
-        fn find(_: *anyopaque, _: [32]u8, _: ?[32]u8, _: bool) LookupResult {
+        fn find(_: *anyopaque, _: [32]u8, _: ?[32]u8, _: lir.CheckedPipeline.SpecCacheTakes) LookupResult {
             return null;
         }
-        fn otherFind(context: *anyopaque, _: [32]u8, _: ?[32]u8, _: bool) LookupResult {
+        fn otherFind(context: *anyopaque, _: [32]u8, _: ?[32]u8, _: lir.CheckedPipeline.SpecCacheTakes) LookupResult {
             const calls: *u8 = @ptrCast(context);
             calls.* += 1;
             return null;

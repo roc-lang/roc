@@ -2257,7 +2257,8 @@ pub const LoadedPacks = struct {
         for (names.items) |name| {
             const path = try std.fs.path.join(allocator, &.{ dir_path, name });
             defer allocator.free(path);
-            const store = (self.pending orelse unreachable).store;
+            // Only a pending store's own loads read a store directory.
+            const store = (self.pending orelse unreachable).store orelse unreachable;
             // The image is mapped where the host allows; otherwise read whole.
             if (store.roc_ctx.mapFilePrivate(path)) |mapped| {
                 var mapped_owned = true;
@@ -3692,20 +3693,20 @@ test "pack literal offers require the full transitive exact producer closure" {
     try packs.specs.put(.{ .key = @splat(4), .platform_requirement_relation = null }, Fixture.hit(@splat(14), &.{}));
     packs.state = .ready;
     try packs.certifyLiteralOffers();
-    try std.testing.expect(LoadedPacks.findSpec(&packs, @splat(1), null, false) == null);
-    try std.testing.expect(LoadedPacks.findSpec(&packs, @splat(2), null, false) == null);
-    try std.testing.expect(LoadedPacks.findSpec(&packs, @splat(4), null, false) != null);
+    try std.testing.expect(LoadedPacks.findSpec(&packs, @splat(1), null, .dev_code) == null);
+    try std.testing.expect(LoadedPacks.findSpec(&packs, @splat(2), null, .dev_code) == null);
+    try std.testing.expect(LoadedPacks.findSpec(&packs, @splat(4), null, .dev_code) != null);
     // A logical key with the wrong physical object identity is not the producer.
     try packs.specs.put(.{ .key = @splat(3), .platform_requirement_relation = null }, Fixture.hit(@splat(99), &.{}));
     try packs.certifyLiteralOffers();
-    try std.testing.expect(LoadedPacks.findSpec(&packs, @splat(1), null, false) == null);
+    try std.testing.expect(LoadedPacks.findSpec(&packs, @splat(1), null, .dev_code) == null);
     try packs.specs.put(.{ .key = @splat(3), .platform_requirement_relation = null }, Fixture.hit(@splat(13), &.{}));
     try packs.certifyLiteralOffers();
-    try std.testing.expect(LoadedPacks.findSpec(&packs, @splat(1), null, false) != null);
+    try std.testing.expect(LoadedPacks.findSpec(&packs, @splat(1), null, .dev_code) != null);
     const recursive = [_]lir.Program.CachedLiteralRead{Fixture.read(@splat(1), @splat(11))};
     try packs.specs.put(.{ .key = @splat(3), .platform_requirement_relation = null }, Fixture.hit(@splat(13), &recursive));
     try packs.certifyLiteralOffers();
-    try std.testing.expect(LoadedPacks.findSpec(&packs, @splat(1), null, false) != null);
+    try std.testing.expect(LoadedPacks.findSpec(&packs, @splat(1), null, .dev_code) != null);
 }
 
 /// The literal representations of a `{} -> U64` producer and its `U64` result.
