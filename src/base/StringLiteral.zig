@@ -246,34 +246,26 @@ pub const Store = struct {
     }
 
     fn appendFresh(self: *Store, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!Idx {
-        const str_len = checkedU32(string.len, "string literal length");
+        // Lengths and content offsets are u32, so a store past that range has
+        // exhausted the representable memory.
+        const str_len = std.math.cast(u32, string.len) orelse return error.OutOfMemory;
+        const entry_len = std.math.add(usize, entry_header_size, string.len) catch return error.OutOfMemory;
+        const entry_end = std.math.add(usize, self.buffer.len(), entry_len) catch return error.OutOfMemory;
+        if (entry_end > std.math.maxInt(u32)) return error.OutOfMemory;
 
-        var str_len_bytes: [len_size]u8 = undefined;
-        std.mem.writeInt(u32, &str_len_bytes, str_len, .little);
-        {
-            const expected_start = self.buffer.items.items.len;
-            const start = try self.buffer.appendSlice(gpa, &str_len_bytes);
-            assertAppendRange(expected_start, str_len_bytes.len, start, str_len_bytes.len);
-        }
+        // One reservation covers the header and the text, so the entry is
+        // appended whole or not at all.
+        try self.buffer.items.ensureUnusedCapacity(gpa, entry_len);
 
-        var alignment_bytes: [alignment_size]u8 = undefined;
-        std.mem.writeInt(u32, &alignment_bytes, 1, .little);
-        {
-            const expected_start = self.buffer.items.items.len;
-            const start = try self.buffer.appendSlice(gpa, &alignment_bytes);
-            assertAppendRange(expected_start, alignment_bytes.len, start, alignment_bytes.len);
-        }
+        var header: [entry_header_size]u8 = undefined;
+        std.mem.writeInt(u32, header[0..len_size], str_len, .little);
+        std.mem.writeInt(u32, header[len_size..][0..alignment_size], 1, .little);
+        self.buffer.items.appendSliceAssumeCapacity(&header);
 
-        const string_content_start = self.buffer.len();
-        const idx = checkedU32(string_content_start, "string literal content offset");
+        const idx: u32 = @intCast(self.buffer.len());
+        self.buffer.items.appendSliceAssumeCapacity(string);
 
-        {
-            const expected_start = self.buffer.items.items.len;
-            const start = try self.buffer.appendSlice(gpa, string);
-            assertAppendRange(expected_start, string.len, start, string.len);
-        }
-
-        return @fromBackingInt(@intCast(idx));
+        return @fromBackingInt(idx);
     }
 
     /// Get a string literal's text from this `Store`.
@@ -423,11 +415,6 @@ fn checkedU32(value: usize, comptime invariant_name: []const u8) u32 {
         unreachable;
     }
     return @intCast(value);
-}
-
-fn assertAppendRange(expected_start: usize, expected_len: usize, actual_start: usize, actual_len: usize) void {
-    std.debug.assert(actual_start == expected_start);
-    std.debug.assert(actual_len == expected_len);
 }
 
 fn expectedNextStringContentStart(previous_end: *usize, string_len: usize) u32 {
