@@ -465,6 +465,9 @@ interp_tmp_counter: u32 = 0,
 /// Whether the current declaration-pattern canonicalization should reuse
 /// existing mutable binders when it encounters `$name` patterns.
 allow_pattern_var_reuse: bool = false,
+/// The position of the pattern being canonicalized when it is one whose
+/// binders can never be `var`s: a `match` branch pattern or a `for` pattern.
+var_binder_position: ?Diagnostic.VarBinderPosition = null,
 /// Names bound by the open pattern binder groups, innermost group last. A
 /// group is one pattern, every argument pattern of one lambda, or every part of
 /// one split destructuring declaration; a name may be bound at most once per
@@ -564,6 +567,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .current_local_def_index = .lexical,
     .interp_tmp_counter = .keyed,
     .allow_pattern_var_reuse = .lexical,
+    .var_binder_position = .lexical,
     .pattern_binders = .frame_partitioned,
     .pattern_binder_group_start = .lexical,
     .pattern_reused_existing_var = .lexical,
@@ -5412,7 +5416,11 @@ pub fn validateForChecking(self: *Self) std.mem.Allocator.Error!void {
                 // Type modules require nominal types (:= or ::), not aliases (:)
                 .nominal, .@"opaque" => result.ident,
                 .alias, .where_alias => blk: {
-                    try self.pushModuleFileDiagnostic(.type_module_has_alias_not_nominal);
+                    // The alias named after the module is the problem.
+                    try self.env.pushDiagnostic(.{ .type_module_has_alias_not_nominal = .{
+                        .module_name = try self.env.insertIdent(base.Ident.for_text(self.env.module_name)),
+                        .region = result.region,
+                    } });
                     break :blk null;
                 },
             } else blk: {
@@ -12918,7 +12926,7 @@ fn runExprKernel(
             try self.scopeEnter(self.env.gpa, false);
             errdefer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
-            const ptrn = try self.canonicalizePatternOrMalformed(state.ast_patt);
+            const ptrn = try self.canonicalizeBinderPatternOrMalformed(state.ast_patt, .for_loop);
             try self.collectBoundVarsToScratch(ptrn);
 
             self.loop_depth += 1;
@@ -14079,7 +14087,7 @@ fn runExprKernel(
             try self.scopeEnter(self.env.gpa, false);
             errdefer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
-            const ptrn = try self.canonicalizePatternOrMalformed(state.ast_patt);
+            const ptrn = try self.canonicalizeBinderPatternOrMalformed(state.ast_patt, .for_loop);
             try self.collectBoundVarsToScratch(ptrn);
 
             self.loop_depth += 1;
@@ -14186,6 +14194,9 @@ fn runExprKernel(
 
             const branch_pat_scratch_top = self.env.store.scratchMatchBranchPatternTop();
             {
+                const saved_var_binder_position = self.var_binder_position;
+                self.var_binder_position = .match_branch;
+                defer self.var_binder_position = saved_var_binder_position;
                 const pattern = self.parse_ir.store.getPattern(ast_branch.pattern);
                 if (pattern == .alternatives) {
                     const alt = pattern.alternatives;
@@ -15743,6 +15754,10 @@ fn introduceStringPatternCapture(
         } });
     };
 
+    if (self.var_binder_position != null and self.bindsVar(ident_idx)) {
+        return try self.rejectVarBinder(ident_idx, self.parse_ir.tokens.resolve(token));
+    }
+
     const pattern_idx = try self.env.addPattern(Pattern{ .assign = .{
         .ident = ident_idx,
     } }, region);
@@ -16005,6 +16020,18 @@ fn canonicalizePatternOrMalformed(
 ) std.mem.Allocator.Error!Pattern.Idx {
     return try self.canonicalizePattern(ast_pattern_idx) orelse
         try self.pushPatternNotCanonicalized(ast_pattern_idx);
+}
+
+/// Canonicalize a pattern in a position whose binders can never be `var`s.
+fn canonicalizeBinderPatternOrMalformed(
+    self: *Self,
+    ast_pattern_idx: AST.Pattern.Idx,
+    position: Diagnostic.VarBinderPosition,
+) std.mem.Allocator.Error!Pattern.Idx {
+    const saved_var_binder_position = self.var_binder_position;
+    self.var_binder_position = position;
+    defer self.var_binder_position = saved_var_binder_position;
+    return try self.canonicalizePatternOrMalformed(ast_pattern_idx);
 }
 
 fn pushPatternNotCanonicalized(self: *Self, ast_pattern_idx: AST.Pattern.Idx) std.mem.Allocator.Error!Pattern.Idx {
@@ -17295,8 +17322,8 @@ fn canonicalizePatternInGroup(
                                 // declaration's pattern (where `allow_pattern_var_reuse` is set):
                                 // that is the only window where `beginDefiningBoundVars` reads and
                                 // clears these targets to exclude them from the self-reference set.
-                                // Recording elsewhere (a `var` shadowed by a match/for/lambda
-                                // binder) would never be consumed or cleared, leaking onto the buffer.
+                                // Recording elsewhere would never be consumed or cleared, leaking
+                                // onto the buffer.
                                 if (self.allow_pattern_var_reuse) {
                                     try self.scratch_reassign_targets.append(existing_pattern_idx);
                                 }
@@ -17331,6 +17358,10 @@ fn canonicalizePatternInGroup(
                     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
                     const name_region = self.parse_ir.tokens.resolve(e.ident_tok);
                     if (self.parse_ir.tokens.resolveIdentifier(e.ident_tok)) |ident_idx| {
+                        if (self.var_binder_position != null) {
+                            last_pattern = try self.rejectVarBinder(ident_idx, name_region);
+                            continue :patternkernel_loop .dispatch;
+                        }
                         if (try self.claimPatternBinder(ident_idx, name_region)) |duplicate| {
                             last_pattern = duplicate;
                             continue :patternkernel_loop .dispatch;
@@ -18005,9 +18036,13 @@ fn endPatternBinderGroup(self: *Self, enclosing_start: usize) void {
 }
 
 /// Claims `ident` for the open pattern binder group. Returns null when the
-/// name is not yet bound in the group; otherwise reports the repetition and
-/// returns the malformed pattern that replaces the repeated binder.
+/// name may be bound here; otherwise reports why not and returns the
+/// malformed pattern that replaces the binder: the name is a `var` name in a
+/// position that cannot bind one, or it is already bound in the group.
 fn claimPatternBinder(self: *Self, ident: Ident.Idx, region: Region) std.mem.Allocator.Error!?Pattern.Idx {
+    if (self.var_binder_position != null and self.bindsVar(ident)) {
+        return try self.rejectVarBinder(ident, region);
+    }
     for (self.pattern_binders.items[self.pattern_binder_group_start..]) |binder| {
         if (binder.ident.eql(ident)) {
             return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .duplicate_pattern_binder = .{
@@ -18019,6 +18054,25 @@ fn claimPatternBinder(self: *Self, ident: Ident.Idx, region: Region) std.mem.All
     }
     try self.pattern_binders.append(self.env.gpa, .{ .ident = ident, .region = region });
     return null;
+}
+
+/// Whether a pattern binder named `ident` would bind a `var`: the name is
+/// spelled as one, with the `$` prefix, or it names a `var` in scope.
+fn bindsVar(self: *Self, ident: Ident.Idx) bool {
+    const name = self.env.getIdent(ident);
+    if (name.len > 0 and name[0] == '$') return true;
+    const existing = self.scopeFindBinding(.ident, ident) orelse return false;
+    return self.isVarPattern(existing.pattern_idx);
+}
+
+/// Report a binder that names a `var` in a position that cannot bind one,
+/// and return the malformed pattern that replaces it.
+fn rejectVarBinder(self: *Self, ident: Ident.Idx, region: Region) std.mem.Allocator.Error!Pattern.Idx {
+    return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .var_in_binder_pattern = .{
+        .ident = ident,
+        .position = self.var_binder_position.?,
+        .region = region,
+    } });
 }
 
 /// Check if a pattern is a var
@@ -20226,8 +20280,8 @@ pub fn scopeIntroduceInternal(
             if (existing_binding.crosses_function_boundary) {
                 return Scope.IntroduceResult{ .var_across_function_boundary = existing };
             }
-            // Only a block declaration's pattern writes the var it reuses; a
-            // `for` or `match` binder that reuses one leaves its value alone.
+            // Only a block declaration's pattern writes the var it reuses, so
+            // only it can write one from inside an `expect`.
             if (self.allow_pattern_var_reuse and existing_binding.scope_idx < self.expect_scope_floor) {
                 return Scope.IntroduceResult{ .var_reassigned_in_expect = existing };
             }
@@ -21376,6 +21430,7 @@ fn checkMainFunction(self: *Self, report_errors: bool) std.mem.Allocator.Error!M
 const MatchingTypeResult = struct {
     ident: Ident.Idx,
     kind: AST.TypeDeclKind,
+    region: Region,
 };
 
 /// Check if there's a type declaration matching the module name
@@ -21397,6 +21452,7 @@ fn findMatchingTypeIdent(self: *Self) ?MatchingTypeResult {
             return .{
                 .ident = type_ident,
                 .kind = kind,
+                .region = self.parserDeclRegion(decl),
             };
         }
     }
@@ -21450,14 +21506,12 @@ fn reportTypeModuleOrDefaultAppError(self: *Self) std.mem.Allocator.Error!void {
     }
 }
 
-/// Report a problem with the module as a whole, at the file's region.
+/// Report a problem with the module as a whole, which names the file rather
+/// than a region of it.
 fn pushModuleFileDiagnostic(self: *Self, comptime tag: std.meta.Tag(Diagnostic)) std.mem.Allocator.Error!void {
-    const file = self.parse_ir.store.getFile();
     const module_name_ident = try self.env.insertIdent(base.Ident.for_text(self.env.module_name));
-    const file_region = self.parse_ir.tokenizedRegionToRegion(file.region);
     try self.env.pushDiagnostic(@unionInit(Diagnostic, @tagName(tag), .{
         .module_name = module_name_ident,
-        .region = file_region,
     }));
 }
 

@@ -275,7 +275,7 @@ pub fn literalTopModules(allocator: Allocator, lowering_modules: lir.CheckedPipe
     var imported = std.AutoHashMapUnmanaged([32]u8, void).empty;
     defer imported.deinit(allocator);
     for ([_][]const checked.ImportedModuleView{ &.{root}, lowering_modules.imports, lowering_modules.root.relation_modules }) |views| {
-        for (views) |view| for (view.direct_import_artifact_keys) |key| try imported.put(allocator, key.bytes, {});
+        for (views) |view| for (view.direct_import_module_keys) |key| try imported.put(allocator, key.bytes, {});
     }
     var top = std.AutoArrayHashMapUnmanaged([32]u8, [32]u8).empty;
     errdefer top.deinit(allocator);
@@ -1074,12 +1074,14 @@ fn sharedProducerProvision(
 
 test "shared producer requires the exact non-null provider capability" {
     const Lookup = lir.CheckedPipeline.SpecCacheLookup;
-    const LookupResult = @typeInfo(@typeInfo(@FieldType(Lookup, "find")).pointer.child).@"fn".return_type.?;
+    const LookupFn = @typeInfo(@typeInfo(@FieldType(Lookup, "find")).pointer.child).@"fn";
+    const LookupResult = LookupFn.return_type.?;
+    const Takes = LookupFn.param_types[2].?;
     const Callbacks = struct {
-        fn first(_: *anyopaque, _: [32]u8, _: bool) LookupResult {
+        fn first(_: *anyopaque, _: [32]u8, _: Takes) LookupResult {
             return null;
         }
-        fn second(context: *anyopaque, _: [32]u8, _: bool) LookupResult {
+        fn second(context: *anyopaque, _: [32]u8, _: Takes) LookupResult {
             // Distinct behavior keeps optimized builds from merging callbacks.
             const count: *u8 = @ptrCast(context);
             count.* += 1;

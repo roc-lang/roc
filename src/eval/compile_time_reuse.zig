@@ -170,14 +170,14 @@ pub fn plan(allocator: Allocator, module: *const checked.CheckedModuleArtifact, 
         const source = by_identity_and_site.get(identityKey(identity)) orelse by_identity.get(identity.value) orelse continue;
         const reads_start = transplant.reads.items.len;
         for (previous.reads.readsOf(source)) |read| {
-            if (!std.mem.eql(u8, &read.module, &previous.key.bytes)) {
+            if (!std.meta.eql(read.module, previous.key.bytes)) {
                 try transplant.reads.append(allocator, read);
                 continue;
             }
             const read_identity = previous_identities[@backingInt(read.root)];
             const target = by_site.get(read_identity.site) orelse
                 base.invariant("a reused compile-time root read a root whose site the new module version lacks", .{});
-            if (!std.mem.eql(u8, &identities[@backingInt(target)].value, &read_identity.value)) {
+            if (!std.meta.eql(identities[@backingInt(target)].value, read_identity.value)) {
                 base.invariant("a reused compile-time root read a root whose value identity changed", .{});
             }
             try transplant.reads.append(allocator, .{ .module = module.key.bytes, .root = target });
@@ -403,7 +403,7 @@ fn verifyNamedTypeOccurrence(
     named_type: check.ConstStore.NamedType,
     kind: ?check.ConstStore.TypeNamedKind,
 ) void {
-    if (std.mem.eql(u8, &named_type.ty_module.bytes, &previous.key.bytes) or std.mem.eql(u8, &named_type.ty_module.bytes, &module.key.bytes)) {
+    if (std.meta.eql(named_type.ty_module.bytes, previous.key.bytes) or std.meta.eql(named_type.ty_module.bytes, module.key.bytes)) {
         base.invariant("a transplanted named type's checked occurrence was in the version of its module that stored it", .{});
     }
     const owner = modules.find(modules.context, named_type.ty_module.bytes) orelse
@@ -413,7 +413,7 @@ fn verifyNamedTypeOccurrence(
         base.invariant("a transplanted named type's checked occurrence was out of range", .{});
     }
     switch (types.payload(named_type.ty)) {
-        .nominal => |nominal| if (!std.mem.eql(u8, &nominal.owner_module.bytes, &named_type.module.bytes)) {
+        .nominal => |nominal| if (!std.meta.eql(nominal.owner_module.bytes, named_type.module.bytes)) {
             base.invariant("a transplanted named type's checked occurrence named another module's nominal type", .{});
         },
         .alias => if (kind != .alias) base.invariant("a transplanted nominal type's checked occurrence was an alias", .{}),
@@ -448,7 +448,7 @@ fn sameEvaluation(
     var index: usize = 0;
     for (previous.debug.entries) |entry| {
         if (entry.root != match.previous) continue;
-        if (index >= fresh_messages.items.len or !std.mem.eql(u8, fresh_messages.items[index], previous.debug.message(entry))) return false;
+        if (index >= fresh_messages.items.len or !sameBytes(fresh_messages.items[index], previous.debug.message(entry))) return false;
         index += 1;
     }
     return index == fresh_messages.items.len;
@@ -473,7 +473,7 @@ fn sameReadSets(allocator: Allocator, left: []const checked.CompileTimeRootReadT
     const unique_right = uniqueRefs(sorted_right);
     if (unique_left.len != unique_right.len) return false;
     for (unique_left, unique_right) |a, b| {
-        if (!std.mem.eql(u8, &a.module, &b.module) or a.root != b.root) return false;
+        if (!std.meta.eql(a.module, b.module) or a.root != b.root) return false;
     }
     return true;
 }
@@ -481,7 +481,7 @@ fn sameReadSets(allocator: Allocator, left: []const checked.CompileTimeRootReadT
 fn uniqueRefs(refs: []checked.CompileTimeRootReadTable.Ref) []checked.CompileTimeRootReadTable.Ref {
     var len: usize = 0;
     for (refs) |ref| {
-        if (len != 0 and std.mem.eql(u8, &refs[len - 1].module, &ref.module) and refs[len - 1].root == ref.root) continue;
+        if (len != 0 and std.meta.eql(refs[len - 1].module, ref.module) and refs[len - 1].root == ref.root) continue;
         refs[len] = ref;
         len += 1;
     }
@@ -546,4 +546,13 @@ pub fn publishPortability(module: *checked.CheckedModuleArtifact) Allocator.Erro
     }
     if (module.freesReplacedEvaluationColumns()) module.compile_time_root_portability.deinit(artifact_allocator);
     module.compile_time_root_portability = .{ .portable = flags };
+}
+
+/// Whether two byte strings stored in different stores hold the same bytes.
+fn sameBytes(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |left, right| {
+        if (left != right) return false;
+    }
+    return true;
 }

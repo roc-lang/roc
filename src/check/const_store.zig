@@ -924,7 +924,7 @@ pub const ConstTypeStore = struct {
                 .tuple => |span| try pending.appendSlice(self.allocator, self.typeSpan(span)),
                 .record => |span| for (self.fieldSpan(span)) |field| {
                     if (field.default) |default| {
-                        if (std.mem.eql(u8, type_names.moduleIdentityBytes(default.module), own_identity)) return false;
+                        if (std.meta.eql(type_names.moduleIdentityBytes(default.module).*, own_identity.*)) return false;
                     }
                     try pending.append(self.allocator, field.ty);
                     if (field.value_ty) |value_ty| try pending.append(self.allocator, value_ty);
@@ -932,9 +932,9 @@ pub const ConstTypeStore = struct {
                 .tag_union => |span| for (self.tagSpan(span)) |tag| try pending.appendSlice(self.allocator, self.typeSpan(tag.payloads)),
                 .named => |named| {
                     if (named.def.generated != null) return false;
-                    if (std.mem.eql(u8, &named.named_type.module.bytes, &own.bytes)) return false;
-                    if (std.mem.eql(u8, &named.named_type.ty_module.bytes, &own.bytes)) return false;
-                    if (std.mem.eql(u8, type_names.moduleIdentityBytes(named.def.module), own_identity)) return false;
+                    if (std.meta.eql(named.named_type.module.bytes, own.bytes)) return false;
+                    if (std.meta.eql(named.named_type.ty_module.bytes, own.bytes)) return false;
+                    if (std.meta.eql(type_names.moduleIdentityBytes(named.def.module).*, own_identity.*)) return false;
                     try pending.appendSlice(self.allocator, self.typeSpan(named.args));
                     for (self.declaredFieldSpan(named.declared_order)) |declared| switch (declared) {
                         .named => {},
@@ -985,11 +985,11 @@ pub const ConstTypeStore = struct {
                     const right_fields = other.fieldSpan(right.record);
                     if (fields.len != right_fields.len) return false;
                     for (fields, right_fields) |l, r| {
-                        if (!std.mem.eql(u8, self_names.recordFieldLabelText(l.name), other_names.recordFieldLabelText(r.name))) return false;
+                        if (!base.Ident.textEql(self_names.recordFieldLabelText(l.name), other_names.recordFieldLabelText(r.name))) return false;
                         if ((l.default == null) != (r.default == null)) return false;
                         if (l.default) |default| {
                             if (default.expr_node != r.default.?.expr_node) return false;
-                            if (!std.mem.eql(u8, self_names.moduleIdentityBytes(default.module), other_names.moduleIdentityBytes(r.default.?.module))) return false;
+                            if (!std.meta.eql(self_names.moduleIdentityBytes(default.module).*, other_names.moduleIdentityBytes(r.default.?.module).*)) return false;
                         }
                         if ((l.value_ty == null) != (r.value_ty == null)) return false;
                         try pending.append(self.allocator, .{ .left = l.ty, .right = r.ty });
@@ -1001,14 +1001,14 @@ pub const ConstTypeStore = struct {
                     const right_tags = other.tagSpan(right.tag_union);
                     if (tags.len != right_tags.len) return false;
                     for (tags, right_tags) |l, r| {
-                        if (!std.mem.eql(u8, self_names.tagLabelText(l.name), other_names.tagLabelText(r.name))) return false;
-                        if (!std.mem.eql(u8, self_names.tagLabelText(l.checked_name), other_names.tagLabelText(r.checked_name))) return false;
+                        if (!base.Ident.textEql(self_names.tagLabelText(l.name), other_names.tagLabelText(r.name))) return false;
+                        if (!base.Ident.textEql(self_names.tagLabelText(l.checked_name), other_names.tagLabelText(r.checked_name))) return false;
                         if (!try appendTypePairs(&pending, self.allocator, self.typeSpan(l.payloads), other.typeSpan(r.payloads))) return false;
                     }
                 },
                 .named => |named| {
                     const r = right.named;
-                    if (!std.mem.eql(u8, &named.named_type.module.bytes, &r.named_type.module.bytes)) return false;
+                    if (!std.meta.eql(named.named_type.module.bytes, r.named_type.module.bytes)) return false;
                     if (named.kind != r.kind or named.builtin_owner != r.builtin_owner) return false;
                     if (!typeDefEql(self_names, named.def, other_names, r.def)) return false;
                     if (!try appendTypePairs(&pending, self.allocator, self.typeSpan(named.args), other.typeSpan(r.args))) return false;
@@ -1018,7 +1018,7 @@ pub const ConstTypeStore = struct {
                     for (declared, right_declared) |l, rd| {
                         if (std.meta.activeTag(l) != std.meta.activeTag(rd)) return false;
                         switch (l) {
-                            .named => |label| if (!std.mem.eql(u8, self_names.recordFieldLabelText(label), other_names.recordFieldLabelText(rd.named))) return false,
+                            .named => |label| if (!base.Ident.textEql(self_names.recordFieldLabelText(label), other_names.recordFieldLabelText(rd.named))) return false,
                             .padding => |padding| try pending.append(self.allocator, .{ .left = padding, .right = rd.padding }),
                         }
                     }
@@ -1040,18 +1040,18 @@ pub const ConstTypeStore = struct {
     }
 
     fn typeDefEql(left_names: *const names.NameStore, left: TypeDef, right_names: *const names.NameStore, right: TypeDef) bool {
-        if (!std.mem.eql(u8, left_names.moduleIdentityBytes(left.module), right_names.moduleIdentityBytes(right.module))) return false;
-        if (!std.mem.eql(u8, left_names.typeNameText(left.type_name), right_names.typeNameText(right.type_name))) return false;
+        if (!std.meta.eql(left_names.moduleIdentityBytes(left.module).*, right_names.moduleIdentityBytes(right.module).*)) return false;
+        if (!base.Ident.textEql(left_names.typeNameText(left.type_name), right_names.typeNameText(right.type_name))) return false;
         if (left.source_decl != right.source_decl or !std.meta.eql(left.generated, right.generated)) return false;
         if (left.iterator_representation != right.iterator_representation or left.iterator_kind != right.iterator_kind or left.iterator_depth != right.iterator_depth) return false;
         if ((left.iterator_topology == null) != (right.iterator_topology == null)) return false;
         if (left.iterator_topology) |topology| {
             const other = right.iterator_topology.?;
             inline for (.{ "len_field", "step_field", "item_field", "rest_field" }) |field| {
-                if (!std.mem.eql(u8, left_names.recordFieldLabelText(@field(topology, field)), right_names.recordFieldLabelText(@field(other, field)))) return false;
+                if (!base.Ident.textEql(left_names.recordFieldLabelText(@field(topology, field)), right_names.recordFieldLabelText(@field(other, field)))) return false;
             }
             inline for (.{ "known_tag", "unknown_tag", "done_tag", "one_tag", "skip_tag" }) |field| {
-                if (!std.mem.eql(u8, left_names.tagLabelText(@field(topology, field)), right_names.tagLabelText(@field(other, field)))) return false;
+                if (!base.Ident.textEql(left_names.tagLabelText(@field(topology, field)), right_names.tagLabelText(@field(other, field)))) return false;
             }
         }
         return true;
@@ -1529,8 +1529,8 @@ pub const ConstStore = struct {
                 .pending => constStoreInvariant("a pending node reached a portability walk"),
                 .fn_value => return false,
                 .nominal => |nominal| {
-                    if (std.mem.eql(u8, &nominal.named_type.module.bytes, &own.bytes)) return false;
-                    if (std.mem.eql(u8, &nominal.named_type.ty_module.bytes, &own.bytes)) return false;
+                    if (std.meta.eql(nominal.named_type.module.bytes, own.bytes)) return false;
+                    if (std.meta.eql(nominal.named_type.ty_module.bytes, own.bytes)) return false;
                 },
                 .zst, .scalar, .str, .crash, .checked_error, .box, .list, .tuple, .record, .tag => {},
             }
@@ -1612,12 +1612,12 @@ pub const ConstStore = struct {
                 .pending, .fn_value => return false,
                 .zst => {},
                 .scalar => |scalar| if (!std.meta.eql(scalar, right.scalar)) return false,
-                .str => |str| if (!std.mem.eql(u8, self.blobBytes(str), other.blobBytes(right.str))) return false,
-                .crash => |str| if (!std.mem.eql(u8, self.blobBytes(str), other.blobBytes(right.crash))) return false,
-                .checked_error => |str| if (!std.mem.eql(u8, self.blobBytes(str), other.blobBytes(right.checked_error))) return false,
+                .str => |str| if (!sameBytes(self.blobBytes(str), other.blobBytes(right.str))) return false,
+                .crash => |str| if (!sameBytes(self.blobBytes(str), other.blobBytes(right.crash))) return false,
+                .checked_error => |str| if (!sameBytes(self.blobBytes(str), other.blobBytes(right.checked_error))) return false,
                 .box => |payload| try pending.append(self.allocator, .{ .left = payload, .right = right.box }),
                 .nominal => |nominal| {
-                    if (!std.mem.eql(u8, &nominal.named_type.module.bytes, &right.nominal.named_type.module.bytes)) return false;
+                    if (!std.meta.eql(nominal.named_type.module.bytes, right.nominal.named_type.module.bytes)) return false;
                     try pending.append(self.allocator, .{ .left = nominal.backing, .right = right.nominal.backing });
                 },
                 .list => |list| {
@@ -1631,7 +1631,7 @@ pub const ConstStore = struct {
                         .packed_bytes => |packed_list| {
                             const r = right_list.packed_bytes;
                             if (packed_list.len != r.len or packed_list.element != r.element or packed_list.product_width != r.product_width) return false;
-                            if (!std.mem.eql(u8, self.blobBytes(packed_list.bytes), other.blobBytes(r.bytes))) return false;
+                            if (!sameBytes(self.blobBytes(packed_list.bytes), other.blobBytes(r.bytes))) return false;
                         },
                         .empty => |capacity| if (capacity != right_list.empty) return false,
                     }
@@ -1642,7 +1642,7 @@ pub const ConstStore = struct {
                     for (items, right_items) |l, r| try pending.append(self.allocator, .{ .left = l, .right = r });
                 },
                 .tag => |tag| {
-                    if (!std.mem.eql(u8, tag.tag_name, right.tag.tag_name) or tag.payloads.len != right.tag.payloads.len) return false;
+                    if (!base.Ident.textEql(tag.tag_name, right.tag.tag_name) or tag.payloads.len != right.tag.payloads.len) return false;
                     for (tag.payloads, right.tag.payloads) |l, r| try pending.append(self.allocator, .{ .left = l, .right = r });
                 },
             }
@@ -2123,4 +2123,13 @@ test "ConstStore.appendFn: no leak or double-free under allocation failure" {
         }
     };
     try std.testing.checkAllAllocationFailures(std.testing.allocator, Helper.run, .{});
+}
+
+/// Whether two byte strings stored in different stores hold the same bytes.
+fn sameBytes(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |left, right| {
+        if (left != right) return false;
+    }
+    return true;
 }

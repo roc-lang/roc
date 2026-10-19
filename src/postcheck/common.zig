@@ -484,14 +484,35 @@ pub const DiscoverySettlement = struct {
     modules: []const [32]u8,
 };
 
+/// Which object-cache entries can serve a consumer, decided by how its code
+/// is emitted.
+pub const SpecCacheTakes = enum {
+    /// Dev code only: the consumer splices code and links nothing.
+    dev_code,
+    /// A linked object's entry (`SpecCacheHit.c_abi_entry`) ahead of the dev
+    /// code of the same specialization: the consumer splices code and
+    /// its output is linked.
+    dev_code_and_linked_objects,
+    /// Linked objects' entries only: the consumer's output is linked, and
+    /// its emitter cannot splice dev code.
+    linked_objects,
+
+    pub fn takesLinkedObjects(self: SpecCacheTakes) bool {
+        return self != .dev_code;
+    }
+
+    pub fn takesDevCode(self: SpecCacheTakes) bool {
+        return self != .linked_objects;
+    }
+};
+
 /// The object cache's answer for a specialization key, asked when Monotype
 /// reserves the specialization and before its body exists. The consumer that
 /// owns the cache supplies the context and the lookup.
 pub const SpecCacheLookup = struct {
     context: *anyopaque,
-    /// `accept_linked`: whether the asking consumer's code is linked, so a
-    /// linked-object entry (`SpecCacheHit.c_abi_entry`) can serve it.
-    find: *const fn (context: *anyopaque, key: [32]u8, accept_linked: bool) ?SpecCacheHit,
+    /// `takes`: which entries can serve the asking consumer.
+    find: *const fn (context: *anyopaque, key: [32]u8, takes: SpecCacheTakes) ?SpecCacheHit,
     /// The discovery outcomes recorded for a specialization key.
     find_discovery: ?*const fn (context: *anyopaque, key: [32]u8) []const DiscoverySettlement = null,
 
@@ -506,7 +527,7 @@ pub const SpecCacheLookup = struct {
         return self.context == other.context and self.find == other.find;
     }
 
-    pub fn lookup(self: SpecCacheLookup, key: [32]u8, accept_linked: bool) ?SpecCacheHit {
-        return self.find(self.context, key, accept_linked);
+    pub fn lookup(self: SpecCacheLookup, key: [32]u8, takes: SpecCacheTakes) ?SpecCacheHit {
+        return self.find(self.context, key, takes);
     }
 };

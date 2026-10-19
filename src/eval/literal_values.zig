@@ -131,8 +131,8 @@ pub const LiteralValues = struct {
     pub fn load(self: *LiteralValues, raw: []const u8) Allocator.Error!void {
         std.debug.assert(self.previous == null);
         if (raw.len < header_len) return;
-        if (!std.mem.eql(u8, raw[0..magic.len], &magic)) return;
-        if (!std.mem.eql(u8, raw[magic.len..][0..32], &self.version_hash)) return;
+        if (!std.meta.eql(raw[0..magic.len].*, magic)) return;
+        if (!std.meta.eql(raw[magic.len..][0..32].*, self.version_hash)) return;
         var cursor: usize = magic.len + 32;
         const entry_count = readU32(raw, &cursor);
         const read_count = readU32(raw, &cursor);

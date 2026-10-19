@@ -26,6 +26,9 @@ const names = check.CheckedNames;
 const static_dispatch = check.StaticDispatchRegistry;
 const Ident = base.Ident;
 
+/// Whether the graph checks that reads keep every existing class's root.
+const debug_reads = @import("builtin").mode == .debug;
+
 /// A compile-time entry root qualified by the checked module that owns it.
 /// `ComptimeRootId`s are module-local, so a root that travels across template
 /// requests must carry its owning module to stay comparable: the same integer
@@ -1508,6 +1511,13 @@ pub const InterfaceConstraints = struct {
                 if (graph.private_backing_roots.items[@backingInt(root)]) return .{ .value = false };
                 if (graph.requestSourceInterface(raw) != null or graph.requestPropagatesConstructorEvidence(raw)) return .{ .value = false };
                 if (graph.representation_membership.items[@backingInt(root)].forced_dynamic) return .{ .value = false };
+                // As for sharing, an unread leaf without iterator machinery or
+                // generated-private backing holds nothing below it that could
+                // stop neutrality, so it stays unread.
+                if (graph.leafType(root)) |ty| {
+                    if (!try graph.types.containsIteratorInterface(ty) and
+                        !try graph.types.containsGeneratedPrivateBacking(ty)) return .{ .value = true };
+                }
                 const content = (try graph.content(root));
                 switch (content) {
                     .named => |named| {
@@ -2305,6 +2315,11 @@ pub const InstGraph = struct {
     /// Unifications in progress, so leaf-scope cell joins wait for the
     /// outermost to finish instead of changing roots it is relating.
     unify_depth: u32 = 0,
+    /// In debug builds, the node count when the outermost read of an unread
+    /// leaf began, or null outside one. A read joins only cells it created
+    /// into the classes that existed before it, so `union_` asserts that no
+    /// class older than this floor loses its root.
+    read_floor: if (debug_reads) ?u32 else void = if (debug_reads) null else {},
     /// Further origins of an unread leaf class, gained when unread leaves of
     /// its type joined it. Reading the class reads each of them too and
     /// relates their components to its own, exactly as relating the eager
@@ -4090,11 +4105,17 @@ pub const InstGraph = struct {
         return try self.rootContent(self.find(id));
     }
 
-    /// `content` of a class root.
+    /// `content` of a class root. Reading never changes the root of a class
+    /// that existed before the read, so callers may hold roots across it.
     fn rootContent(self: *InstGraph, root: NodeId) Allocator.Error!InstNode {
         const root_content = self.nodes.items[@backingInt(root)];
         return switch (root_content) {
             .leaf => |leaf| blk: {
+                const outermost_read = if (debug_reads) self.read_floor == null else false;
+                if (debug_reads and outermost_read) self.read_floor = @intCast(self.nodes.items.len);
+                defer if (debug_reads and outermost_read) {
+                    self.read_floor = null;
+                };
                 const expanded = try self.expandLeaf(root, leaf);
                 try self.drainLeafScopeCellJoins();
                 break :blk expanded;
@@ -6604,6 +6625,9 @@ pub const InstGraph = struct {
         const winner = self.find(raw_winner);
         const loser = self.find(raw_loser);
         if (winner == loser) return;
+        if (debug_reads) if (self.read_floor) |floor| if (@backingInt(loser) < floor) {
+            Common.invariant("reading a leaf moved the root of a class that existed before the read");
+        };
         // Only `unionLeaves` joins an unread leaf class that has aliases, and
         // it hands them to the winner first.
         std.debug.assert(!self.leaf_alias_origins.contains(loser));
@@ -6818,10 +6842,17 @@ pub const InstGraph = struct {
     /// Join two classes that already denote one type: components of one
     /// leaf type reached through different origins. Joining them changes
     /// which cells are one class, never what any class denotes, so reading a
-    /// leaf may do this after relations freeze.
+    /// leaf may do this after relations freeze. Each join keeps the older
+    /// class's root: node ids grow, so a cell a read creates joins the class
+    /// that existed before the read, and roots held across a read stay roots.
     fn unifyKnownEqual(self: *InstGraph, a: NodeId, b: NodeId) Allocator.Error!void {
-        try self.unifyRootsTransitivelyUnchecked(a, b, false, .exact);
+        try self.unifyRootsTransitivelyUnchecked(a, b, false, .exact, .known_equal);
     }
+
+    /// Whether a unification relates two types, choosing each joined class's
+    /// root by content, or joins classes already known to denote one type,
+    /// keeping the older class's root.
+    const UnifyJoin = enum { relate, known_equal };
 
     fn unifyRootsTransitively(
         self: *InstGraph,
@@ -6831,7 +6862,7 @@ pub const InstGraph = struct {
         row_width: RowWidthRelation,
     ) Allocator.Error!void {
         self.requireRelationProduction();
-        try self.unifyRootsTransitivelyUnchecked(a, b, allow_private_selection, row_width);
+        try self.unifyRootsTransitivelyUnchecked(a, b, allow_private_selection, row_width, .relate);
     }
 
     fn unifyRootsTransitivelyUnchecked(
@@ -6840,6 +6871,7 @@ pub const InstGraph = struct {
         b: NodeId,
         allow_private_selection: bool,
         row_width: RowWidthRelation,
+        comptime join: UnifyJoin,
     ) Allocator.Error!void {
         self.countDiagnostic("unify_requests");
         var scratch = self.unify_scratch_pool.pop() orelse UnifyScratch{ .related = NodePairSet.init(self.allocator) };
@@ -6863,7 +6895,7 @@ pub const InstGraph = struct {
             self.unify_depth += 1;
             defer self.unify_depth -= 1;
             while (scratch.pending.pop()) |pair| {
-                try self.unifyRoots(pair.left, pair.right, pair.row_width, &scratch.pending, &scratch.related, allow_private_selection);
+                try self.unifyRoots(pair.left, pair.right, pair.row_width, &scratch.pending, &scratch.related, allow_private_selection, join);
             }
         }
         try self.drainLeafScopeCellJoins();
@@ -6877,10 +6909,16 @@ pub const InstGraph = struct {
         pending: *std.ArrayList(NodePair),
         related: *NodePairSet,
         allow_private_selection: bool,
+        comptime join: UnifyJoin,
     ) Allocator.Error!void {
-        const left = self.find(raw_left);
-        const right = self.find(raw_right);
-        if (left == right) return;
+        const found_left = self.find(raw_left);
+        const found_right = self.find(raw_right);
+        if (found_left == found_right) return;
+        // Equal content joins keep the left class's root, so a known-equal
+        // join puts the older class on the left.
+        const swap = join == .known_equal and @backingInt(found_right) < @backingInt(found_left);
+        const left = if (swap) found_right else found_left;
+        const right = if (swap) found_left else found_right;
         const pair = NodePair{ .left = left, .right = right, .row_width = row_width };
         if ((try related.getOrPut(pair)).found_existing) return;
 
@@ -12142,6 +12180,37 @@ test "finished Monotype detection reads an unread checked leaf as containing non
     const imported = try graph.importMono(list_ty);
     const mixed = try graph.newNode(.{ .tuple = try graph.arena().dupe(NodeId, &.{ checked_leaf, imported }) });
     try std.testing.expect(try graph.containsFinishedMono(mixed));
+}
+
+test "reading a joined leaf keeps the root of each component class that existed before the read" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const item_ty = try type_store.add(.{ .primitive = .u64 });
+    const list_ty = try type_store.add(.{ .list = item_ty });
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    // The joined class reads as the first scope's leaf, and only that scope
+    // has a cell for the item type, so the read creates the second scope's
+    // cell and joins it to the existing one.
+    const first = try graph.newLeafScope();
+    const second = try graph.newLeafScope();
+    const existing_item = try graph.checkedLeaf(first, item_ty);
+    _ = try graph.content(existing_item);
+    const item_root = graph.find(existing_item);
+
+    const first_list = try graph.checkedLeaf(first, list_ty);
+    try graph.unify(first_list, try graph.checkedLeaf(second, list_ty));
+
+    const read = try graph.content(first_list);
+    try std.testing.expectEqual(item_root, graph.find(existing_item));
+    try std.testing.expectEqual(item_root, graph.find(read.list));
 }
 
 test "opaque interface relation preserves distinct public and generated-private backing authority" {

@@ -287,9 +287,10 @@ pub const Options = struct {
     proc_debug_names: bool = false,
     /// The object cache to ask for closed specializations at reservation.
     spec_cache: ?Common.SpecCacheLookup = null,
-    /// Whether this program's code is linked, so the cache may serve it a
-    /// linked-object entry (`Common.SpecCacheHit.c_abi_entry`).
-    spec_cache_accepts_linked: bool = false,
+    /// Which cache entries can serve this program: whether its code is
+    /// linked, so a linked-object entry (`Common.SpecCacheHit.c_abi_entry`)
+    /// can, and whether its emitter splices dev code.
+    spec_cache_takes: Common.SpecCacheTakes = .dev_code,
     /// Optional deterministic counters for specialization-shape tests.
     specialization_counters: ?*SpecializationCounters = null,
     /// Optional deterministic workload diagnostics. The checked pipeline
@@ -5090,7 +5091,7 @@ const Builder = struct {
     field_kind_scope_pool: std.ArrayList(*collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind)) = .empty,
     /// The object cache consulted for closed specializations, if any.
     spec_cache: ?Common.SpecCacheLookup,
-    spec_cache_accepts_linked: bool,
+    spec_cache_takes: Common.SpecCacheTakes,
     counters: ?*SpecializationCounters,
     diagnostics: ?*Diagnostics,
     /// Result-owned sink while one ordinary specialization shard is lowering or
@@ -5407,7 +5408,7 @@ const Builder = struct {
             .current_region = program.current_region,
             .proc_debug_names = options.proc_debug_names,
             .spec_cache = options.spec_cache,
-            .spec_cache_accepts_linked = options.spec_cache_accepts_linked,
+            .spec_cache_takes = options.spec_cache_takes,
             .counters = counters,
             .diagnostics = options.diagnostics,
             .active_spec_job_diagnostics = null,
@@ -6530,9 +6531,9 @@ const Builder = struct {
         if (self.literal_top_modules) |*known| return if (known.*) |*map| map else null;
         var imported = std.AutoHashMapUnmanaged([32]u8, void).empty;
         defer imported.deinit(self.allocator);
-        for (self.root_view.direct_import_artifact_keys) |key| try imported.put(self.allocator, key.bytes, {});
-        for (self.modules.imports) |view| for (view.direct_import_artifact_keys) |key| try imported.put(self.allocator, key.bytes, {});
-        for (self.modules.root.relation_modules) |view| for (view.direct_import_artifact_keys) |key| try imported.put(self.allocator, key.bytes, {});
+        for (self.root_view.direct_import_module_keys) |key| try imported.put(self.allocator, key.bytes, {});
+        for (self.modules.imports) |view| for (view.direct_import_module_keys) |key| try imported.put(self.allocator, key.bytes, {});
+        for (self.modules.root.relation_modules) |view| for (view.direct_import_module_keys) |key| try imported.put(self.allocator, key.bytes, {});
         var top = std.AutoHashMapUnmanaged([32]u8, [32]u8).empty;
         errdefer top.deinit(self.allocator);
         for (self.moduleViews()) |*view| {
@@ -8540,7 +8541,7 @@ const Builder = struct {
                 std.debug.print("CENSUS_KEY\t{s}\t{x}\tev={x}\tcodec={x}\treq={x}\tcallable={s}\n", .{ name, key.bytes[0..8], spec_identity.evidence_digest.bytes[0..6], spec_identity.codec_contract_digest.bytes[0..6], spec_identity.request_fn_ty_digest.bytes[0..6], @tagName(spec_identity.callable) });
             }
             if (self.spec_cache) |cache| {
-                if (cache.lookup(key.bytes, self.spec_cache_accepts_linked)) |hit| {
+                if (cache.lookup(key.bytes, self.spec_cache_takes)) |hit| {
                     fn_template.cached = hit;
                     self.count("spec_cache_hits");
                     if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup monotype key={x} hit\n", .{key.bytes[0..8]});

@@ -2051,7 +2051,7 @@ pub const Coordinator = struct {
 
             try views.append(allocator, view);
 
-            for (view.direct_import_artifact_keys) |dependency_key| {
+            for (view.direct_import_module_keys) |dependency_key| {
                 const artifact = self.checkedArtifactByKey(dependency_key) orelse {
                     if (builtin.mode == .debug) {
                         base.invariant("compile.coordinator missing direct dependency checked artifact", .{});
@@ -2791,7 +2791,7 @@ pub const Coordinator = struct {
                 const entry = try dependencies.getOrPut(key.bytes);
                 if (entry.found_existing) continue;
                 const artifact = self.checkedArtifactByKey(key).?;
-                try pending.appendSlice(self.gpa, artifact.direct_import_artifact_keys);
+                try pending.appendSlice(self.gpa, artifact.direct_import_module_keys);
             }
         }
         // A finalized artifact whose requested roots earlier compilations
@@ -2860,7 +2860,7 @@ pub const Coordinator = struct {
                 states[index] = .visiting;
                 const entry = ordered[index];
                 const artifact = entry.mod.checkedArtifact().?;
-                for (artifact.direct_import_artifact_keys) |key| {
+                for (artifact.direct_import_module_keys) |key| {
                     if (by_key.get(key.bytes)) |dependency_index| {
                         try visit(coord, ordered, by_key, states, output, dependency_index);
                     }
@@ -3990,7 +3990,7 @@ pub const Coordinator = struct {
         // `.cached_buffer` storage owns the env + env buffer + source. Cross-artifact
         // references are content-addressed `CheckedModuleArtifactKey`s already baked
         // into the blob; a cache hit implies matching imports (the key incorporates
-        // `direct_import_artifact_keys`), so they resolve against the current build's
+        // `direct_import_module_keys`), so they resolve against the current build's
         // `available_artifacts` DAG exactly as a freshly published artifact would.
         const artifact_buffer = module_alloc.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bodies.artifact_body.len) catch {
             manager.stats.recordInvalidation();
@@ -8156,7 +8156,7 @@ test "a literal root's value identity changes exactly with what decides its valu
     }
 }
 
-fn expectLiteralOutcome(run: *const ReuseRun, text: []const u8, outcome: eval.LiteralValues.Record.Outcome) !void {
+fn expectLiteralOutcome(run: *const ReuseRun, text: []const u8, outcome: eval.LiteralValues.Record.Outcome) error{TestExpectedEqual}!void {
     try std.testing.expectEqual(outcome, run.literalRoot(text).outcome);
 }
 

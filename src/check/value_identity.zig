@@ -341,7 +341,7 @@ const State = struct {
         hashTag(&hasher, "context");
         hasher.update(&key.compiler_artifact_hash);
         hasher.update(&key.checking_context_identity_hash);
-        hasher.update(&key.direct_import_artifact_keys_hash);
+        hasher.update(&key.direct_import_module_keys_hash);
         // A type module's main type is named after the module, so the name
         // covers it; a type module whose declaration is missing names no
         // main type at all.
@@ -651,7 +651,7 @@ const TypeDigest = struct {
     }
 
     fn isOwn(self: *const TypeDigest, origin: canonical.ModuleIdentityId) bool {
-        return std.mem.eql(u8, self.inputs.names.moduleIdentityBytes(origin), &self.inputs.own_identity);
+        return std.meta.eql(self.inputs.names.moduleIdentityBytes(origin).*, self.inputs.own_identity);
     }
 
     /// Names a declaration of the module: a top-level one by its name and
@@ -1007,7 +1007,7 @@ fn hashValue(hasher: *Sha256, value: anytype) void {
         .@"union" => |info| {
             hashBytes(hasher, @tagName(value));
             inline for (info.field_names) |name| {
-                if (std.mem.eql(u8, @tagName(value), name)) hashValue(hasher, @field(value, name));
+                if (std.meta.activeTag(value) == @field(std.meta.Tag(@TypeOf(value)), name)) hashValue(hasher, @field(value, name));
             }
         },
         .void => {},
