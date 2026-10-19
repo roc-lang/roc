@@ -270,7 +270,7 @@ pub const ProgramView = struct {
     inline_scopes: []const InlineScope,
     expr_inline_scopes: []const InlineScopeId,
     stmt_inline_scopes: []const InlineScopeId,
-    local_names: []const []const u8,
+    local_names: []const Mono.StringLiteral,
 
     pub fn getComptimeValueRoot(self: ProgramView, id: Common.ComptimeValueRootId) Common.ComptimeValueRoot {
         return self.comptime_value_roots[@backingInt(id)];
@@ -301,7 +301,7 @@ pub const ProgramView = struct {
     }
 
     pub fn localName(self: ProgramView, id: LocalId) []const u8 {
-        return self.local_names[@backingInt(id)];
+        return self.local_names[@backingInt(id)].text();
     }
 
     /// The CaptureId of a local. Every local that participates in a capture set
@@ -488,7 +488,7 @@ pub const Program = struct {
     stmt_inline_scopes: ProgramList(InlineScopeId, "stmt_inline_scopes"),
     /// Source-level name per local, parallel to `locals` (empty for
     /// compiler-generated temporaries; moved from Monotype).
-    local_names: ProgramList([]const u8, "local_names"),
+    local_names: ProgramList(Mono.StringLiteral, "local_names"),
     /// Ambient location recorded by `addExpr`/`addStmt`. Passes that add
     /// nodes set this so synthetic nodes inherit a source location.
     current_loc: base.SourceLoc,
@@ -638,7 +638,7 @@ pub const Program = struct {
         inline_scopes: std.ArrayList(InlineScope),
         expr_inline_scopes: std.ArrayList(InlineScopeId),
         stmt_inline_scopes: std.ArrayList(InlineScopeId),
-        local_names: std.ArrayList([]const u8),
+        local_names: std.ArrayList(Mono.StringLiteral),
         static_data_values: std.ArrayList(StaticDataValue),
         comptime_sites: std.ArrayList(ComptimeSite),
         next_symbol: u32,
@@ -688,7 +688,7 @@ pub const Program = struct {
             .inline_scopes = ProgramList(InlineScope, "inline_scopes").fromArrayList(inline_scopes),
             .expr_inline_scopes = ProgramList(InlineScopeId, "expr_inline_scopes").fromArrayList(expr_inline_scopes),
             .stmt_inline_scopes = ProgramList(InlineScopeId, "stmt_inline_scopes").fromArrayList(stmt_inline_scopes),
-            .local_names = ProgramList([]const u8, "local_names").fromArrayList(local_names),
+            .local_names = ProgramList(Mono.StringLiteral, "local_names").fromArrayList(local_names),
             .current_loc = base.SourceLoc.none,
             .current_region = base.Region.zero(),
             .current_inline_scope = InlineScopeId.none,
@@ -696,9 +696,7 @@ pub const Program = struct {
     }
 
     pub fn deinit(self: *Program) void {
-        for (self.local_names.unsafeRawItemsForView()) |name| {
-            if (name.len > 0) self.allocator.free(name);
-        }
+        for (self.local_names.unsafeRawItemsForView()) |name| name.deinit(self.allocator);
         self.local_names.deinit(self.allocator);
         self.stmt_inline_scopes.deinit(self.allocator);
         self.expr_inline_scopes.deinit(self.allocator);
@@ -937,9 +935,7 @@ pub const Program = struct {
     }
 
     fn freeAnalysisLocalNames(self: *Program, start: usize) void {
-        for (self.local_names.unsafeRawItemsForView()[start..]) |name| {
-            if (name.len > 0) self.allocator.free(name);
-        }
+        for (self.local_names.unsafeRawItemsForView()[start..]) |name| name.deinit(self.allocator);
     }
 
     pub fn addFn(self: *Program, fn_: Fn) std.mem.Allocator.Error!FnId {
@@ -1140,15 +1136,15 @@ pub const Program = struct {
 
     /// Source-level name of a local; empty for compiler-generated temporaries.
     pub fn localName(self: *const Program, id: LocalId) []const u8 {
-        return self.row("local_names", @backingInt(id));
+        return self.row("local_names", @backingInt(id)).text();
     }
 
     /// Replace a suffix local's diagnostic name with independently owned bytes.
     pub fn setLocalName(self: *Program, id: LocalId, text: []const u8) std.mem.Allocator.Error!void {
         const index = self.ownedIndex("local_names", @backingInt(id));
-        const owned = if (text.len == 0) "" else try self.allocator.dupe(u8, text);
+        const owned = try Mono.StringLiteral.initOwned(self.allocator, text);
         const old = self.local_names.get(index);
-        if (old.len > 0) self.allocator.free(old);
+        old.deinit(self.allocator);
         self.local_names.set(index, owned);
     }
 
@@ -1615,7 +1611,7 @@ pub const Program = struct {
             .capture_id = checked_capture_id,
             .checked_capture_id = checked_capture_id,
         });
-        try self.local_names.append(self.allocator, "");
+        try self.local_names.append(self.allocator, .empty);
         return id;
     }
 
@@ -1657,7 +1653,7 @@ pub const Program = struct {
             .checked_capture_id = checked_capture_id,
             .capture_kind = capture_kind,
         });
-        try self.local_names.append(self.allocator, "");
+        try self.local_names.append(self.allocator, .empty);
         return id;
     }
 

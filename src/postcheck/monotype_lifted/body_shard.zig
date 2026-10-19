@@ -204,14 +204,12 @@ pub fn append(destination: *ast.Program, worker: *const ast.Program, symbol_star
     for (worker.string_literals.unsafeRawItemsForView()) |literal| {
         literals.appendAssumeCapacity(try literal.clone(allocator));
     }
-    var local_names: std.ArrayList([]const u8) = .empty;
+    var local_names: std.ArrayList(Mono.StringLiteral) = .empty;
     defer local_names.deinit(allocator);
-    errdefer for (local_names.items) |name| {
-        if (name.len > 0) allocator.free(name);
-    };
+    errdefer for (local_names.items) |name| name.deinit(allocator);
     try local_names.ensureTotalCapacity(allocator, worker.local_names.len());
     for (worker.local_names.unsafeRawItemsForView()) |name| {
-        local_names.appendAssumeCapacity(if (name.len == 0) "" else try allocator.dupe(u8, name));
+        local_names.appendAssumeCapacity(try name.clone(allocator));
     }
     inline for (body_fields) |field| {
         try @field(destination, field).ensureUnusedCapacity(allocator, @field(worker, field).len());

@@ -20386,12 +20386,31 @@ const BodyDraftStore = struct {
         var comptime_roots = collections.DenseMap(DraftComptimeValueRootId, Common.ComptimeValueRootId).init(program.allocator);
         defer comptime_roots.deinit();
 
+        // Every retained draft literal's text goes into one shared backing.
+        // Views stay at distinct offsets, an empty one included, so no two
+        // literals alias each other's position.
+        var literal_bytes_len: usize = 0;
+        for (self.string_literals.items, 0..) |literal, index| {
+            if (!ids.retained(.string_literals, index) or literal.const_blob != null) continue;
+            literal_bytes_len += @max(literal.len, 1);
+        }
+        const literal_backing = if (literal_bytes_len == 0) null else try Ast.SharedLiteralBacking.initUnfilled(program.allocator, literal_bytes_len);
+        defer if (literal_backing) |backing| backing.owner.release();
+        if (literal_bytes_len > std.math.maxInt(u32)) return error.OutOfMemory;
+        var literal_cursor: u32 = 0;
         for (self.string_literals.items, 0..) |literal, index| {
             if (!ids.retained(.string_literals, index)) continue;
             const id = if (literal.const_blob) |blob|
                 try program.addConstBlobView(blob.module_bytes, blob.data, blob.bytes, literal.offset, literal.len)
-            else
-                try program.addStringView(self.stringBytes(literal.backing), literal.offset, literal.len);
+            else blk: {
+                const text = self.stringBytes(literal.backing)[literal.offset..][0..literal.len];
+                const backing = literal_backing.?;
+                @memcpy(backing.bytes[literal_cursor..][0..text.len], text);
+                if (text.len == 0) backing.bytes[literal_cursor] = 0;
+                const view = try program.addSharedStringView(backing.owner, literal_cursor, literal.len);
+                literal_cursor += @max(literal.len, 1);
+                break :blk view;
+            };
             if (@backingInt(id) != ids.core(.string_literals, @intCast(index), ids.string_literal_start)) {
                 Common.invariant("Monotype body draft string literal id did not append contiguously");
             }
@@ -20475,6 +20494,15 @@ const BodyDraftStore = struct {
         // separate durable ids even when they instantiate the same binder.
         var durable_capture_ids = collections.DenseMap(checked.CaptureId, checked.CaptureId).init(program.allocator);
         defer durable_capture_ids.deinit();
+        // Every retained local's name goes into one shared backing.
+        var name_bytes_len: usize = 0;
+        for (self.local_names.items, 0..) |name, index| {
+            if (ids.retained(.locals, index)) name_bytes_len += name.len;
+        }
+        if (name_bytes_len > std.math.maxInt(u32)) return error.OutOfMemory;
+        const name_backing = if (name_bytes_len == 0) null else try Ast.SharedLiteralBacking.initUnfilled(program.allocator, name_bytes_len);
+        defer if (name_backing) |backing| backing.owner.release();
+        var name_cursor: u32 = 0;
         for (self.locals.items, 0..) |local, index| {
             if (!ids.retained(.locals, index)) continue;
             const expected = ids.local(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
@@ -20498,7 +20526,15 @@ const BodyDraftStore = struct {
                 .capture_kind = local.capture_kind,
             });
             const local_name = self.sourceText(self.local_names.items[index]);
-            program.local_names.appendAssumeCapacity(if (local_name.len == 0) "" else try program.allocator.dupe(u8, local_name));
+            if (local_name.len == 0) {
+                program.local_names.appendAssumeCapacity(.empty);
+            } else {
+                const backing = name_backing.?;
+                @memcpy(backing.bytes[name_cursor..][0..local_name.len], local_name);
+                program.local_names.appendAssumeCapacity(.{ .backing = backing.bytes, .shared = backing.owner, .offset = name_cursor, .len = @intCast(local_name.len) });
+                backing.owner.retain();
+                name_cursor += @intCast(local_name.len);
+            }
         }
 
         try program.fn_def_captures.ensureUnusedCapacity(program.allocator, self.fn_def_captures.items.len);

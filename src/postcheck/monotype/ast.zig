@@ -78,6 +78,15 @@ pub const SharedLiteralBacking = struct {
         self.* = .{ .allocator = allocator, .bytes = owned };
         return self;
     }
+
+    /// A backing of `len` bytes for the caller to fill before adding views.
+    pub fn initUnfilled(allocator: std.mem.Allocator, len: usize) std.mem.Allocator.Error!struct { owner: *SharedLiteralBacking, bytes: []u8 } {
+        const bytes = try allocator.alloc(u8, len);
+        errdefer allocator.free(bytes);
+        const self = try allocator.create(SharedLiteralBacking);
+        self.* = .{ .allocator = allocator, .bytes = bytes };
+        return .{ .owner = self, .bytes = bytes };
+    }
     /// Retain the immutable backing when another IR takes ownership.
     pub fn retain(self: *SharedLiteralBacking) void {
         _ = self.refs.fetchAdd(1, .monotonic);
@@ -115,6 +124,15 @@ pub const StringLiteral = struct {
 
     pub fn text(self: StringLiteral) []const u8 {
         return self.backing[self.offset..][0..self.len];
+    }
+
+    /// No bytes and no backing to free; a local's name when it has none.
+    pub const empty: StringLiteral = .{ .backing = "", .offset = 0, .len = 0 };
+
+    /// An owned copy of `bytes`.
+    pub fn initOwned(allocator: std.mem.Allocator, bytes: []const u8) std.mem.Allocator.Error!StringLiteral {
+        if (bytes.len == 0) return .empty;
+        return .{ .backing = try allocator.dupe(u8, bytes), .offset = 0, .len = @intCast(bytes.len) };
     }
 };
 
@@ -1658,7 +1676,7 @@ pub const ProgramView = struct {
     expr_regions: []const base.Region,
     stmt_locs: []const base.SourceLoc,
     stmt_regions: []const base.Region,
-    local_names: []const []const u8,
+    local_names: []const StringLiteral,
     next_symbol: u32,
 
     pub fn getComptimeValueRoot(self: ProgramView, id: Common.ComptimeValueRootId) Common.ComptimeValueRoot {
@@ -1852,8 +1870,9 @@ pub const ProgramBuilder = struct {
     /// Checked source region per statement, parallel to `stmts`.
     stmt_regions: ProgramList(base.Region, "stmt_regions"),
     /// Source-level name per local, parallel to `locals` (empty for
-    /// compiler-generated temporaries; owned by this program).
-    local_names: ProgramList([]const u8, "local_names"),
+    /// compiler-generated temporaries). A sealed body's names share one
+    /// backing, like its string literals.
+    local_names: ProgramList(StringLiteral, "local_names"),
     /// Ambient location recorded by `addExpr`/`addStmt`. Lowering sets this on
     /// entry to each source node, so synthetic glue nodes inherit the location
     /// of the source node they were derived from.
@@ -1953,9 +1972,9 @@ pub const ProgramBuilder = struct {
             };
         }
         for (self.local_names.unsafeRawItemsForView()) |name| {
-            const copied = try allocator.dupe(u8, name);
+            const copied = try name.clone(allocator);
             result.local_names.append(allocator, copied) catch |err| {
-                allocator.free(copied);
+                copied.deinit(allocator);
                 return err;
             };
         }
@@ -1966,9 +1985,7 @@ pub const ProgramBuilder = struct {
     }
 
     pub fn deinit(self: *ProgramBuilder) void {
-        for (self.local_names.unsafeRawItemsForView()) |name| {
-            if (name.len > 0) self.allocator.free(name);
-        }
+        for (self.local_names.unsafeRawItemsForView()) |name| name.deinit(self.allocator);
         self.local_names.deinit(self.allocator);
         self.stmt_regions.deinit(self.allocator);
         self.stmt_locs.deinit(self.allocator);
@@ -2313,6 +2330,16 @@ pub const ProgramBuilder = struct {
         return id;
     }
 
+    /// A view of `owner`'s bytes, retaining it for as long as the literal
+    /// lives. Many literals sharing one backing cost one allocation.
+    pub fn addSharedStringView(self: *ProgramBuilder, owner: *SharedLiteralBacking, offset: u32, len: u32) std.mem.Allocator.Error!StringLiteralId {
+        if (@as(u64, offset) + len > owner.bytes.len) Common.invariant("string literal view exceeded its shared backing");
+        const id: StringLiteralId = @fromBackingInt(@intCast(@as(u32, @intCast(self.string_literals.len()))));
+        try self.string_literals.append(self.allocator, .{ .backing = owner.bytes, .shared = owner, .offset = offset, .len = len });
+        owner.retain();
+        return id;
+    }
+
     pub fn addStringView(self: *ProgramBuilder, backing: []const u8, offset: u32, len: u32) std.mem.Allocator.Error!StringLiteralId {
         const offset_usize: usize = offset;
         const len_usize: usize = len;
@@ -2361,7 +2388,7 @@ pub const ProgramBuilder = struct {
             .capture_id = checked_capture_id,
             .checked_capture_id = checked_capture_id,
         });
-        try self.local_names.append(self.allocator, "");
+        try self.local_names.append(self.allocator, .empty);
         return id;
     }
 
@@ -2378,14 +2405,15 @@ pub const ProgramBuilder = struct {
     /// Record the source-level name of a local (dupes; empty means none).
     pub fn setLocalName(self: *ProgramBuilder, id: LocalId, name: []const u8) std.mem.Allocator.Error!void {
         if (name.len == 0) return;
+        const owned = try StringLiteral.initOwned(self.allocator, name);
         const slot = self.local_names.getPtrImmediate(@backingInt(id));
-        if (slot.len > 0) self.allocator.free(slot.*);
-        slot.* = try self.allocator.dupe(u8, name);
+        slot.deinit(self.allocator);
+        slot.* = owned;
     }
 
     /// Source-level name of a local; empty for compiler-generated temporaries.
     pub fn localName(self: *const ProgramBuilder, id: LocalId) []const u8 {
-        return self.local_names.unsafeRawItemsForView()[@backingInt(id)];
+        return self.local_names.unsafeRawItemsForView()[@backingInt(id)].text();
     }
 
     pub fn localCount(self: *const ProgramBuilder) usize {
