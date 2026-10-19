@@ -1622,8 +1622,17 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) MergeE
             source.linking.segment_info.items[i].flags
         else
             src_ds.flags;
+        // The source may own its segment names (`owned_segment_names`) and
+        // free them before this module is encoded, so the merged segment
+        // owns a copy.
+        const merged_name: ?[]const u8 = if (segment_name) |name| blk: {
+            const owned = try self.allocator.dupe(u8, name);
+            errdefer self.allocator.free(owned);
+            try self.owned_segment_names.append(self.allocator, owned);
+            break :blk owned;
+        } else null;
         data_segment_remap[i] = @intCast(self.data_segments.items.len);
-        _ = try self.addDataSegmentWithInfo(src_ds.data, alignment, segment_name, segment_flags);
+        _ = try self.addDataSegmentWithInfo(src_ds.data, alignment, merged_name, segment_flags);
     }
 
     // --- 5b. Merge element section (remap function indices) ---
@@ -6812,6 +6821,27 @@ test "all-zero static exports without relocations become zero-fill segments" {
     // The zero-fill segment still owns its address range: the following
     // segments are placed after it.
     try std.testing.expect(module.data_segments.items[1].offset >= module.data_segments.items[0].offset + 64);
+}
+
+test "a merged zero-fill segment keeps its name after its source module is gone" {
+    const allocator = std.testing.allocator;
+    var module = Self.init(allocator);
+    defer module.deinit();
+    const exports = [_]StaticDataExport{.{ .symbol_name = "table", .bytes = &(@as([16]u8, @splat(0))), .alignment = 8, .is_exported = false }};
+    {
+        var static_module = try Self.staticDataModule(allocator, &exports);
+        defer static_module.deinit();
+        var merged = try module.mergeModuleForObject(&static_module);
+        merged.deinit();
+    }
+    // The source module freed the names it owned, so the merged segment's
+    // name is one this module owns.
+    const name = module.data_segments.items[module.data_segments.items.len - 1].name.?;
+    try std.testing.expectEqualStrings(".bss.table", name);
+    const owned = for (module.owned_segment_names.items) |candidate| {
+        if (candidate.ptr == name.ptr) break true;
+    } else false;
+    try std.testing.expect(owned);
 }
 
 test "addStaticDataExports defines forward data symbols used by code relocations" {

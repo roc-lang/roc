@@ -2610,6 +2610,18 @@ fixed activation lifetime without repeatedly moving the accumulated entry
 instruction list. Slot values are available to body construction immediately;
 final instruction numbering follows the completed block order.
 
+An entry-block slot is allocated for the whole activation, so LLVM can overlap
+two slots only through `llvm.lifetime.start` and `llvm.lifetime.end`. The LLVM
+backend brackets the slot of every local whose address it passes to an
+out-of-line Roc procedure call (a result returned through memory, or an
+argument passed by pointer) with markers at that local's exact lifetime
+boundaries, which the shared LIR stack planner solves over the procedure's
+explicit control-flow graph. Other slots carry no markers: SROA removes slots
+whose addresses never escape, and markers on them would only add optimizer
+work. Procedure arguments, which the prologue writes, and locals in deferred
+string-match captures, which the backend materializes outside the statements
+that access them, keep their activation lifetime.
+
 LLVM call sites do not acquire `alwaysinline` from loop nesting. Nesting depth
 does not establish execution frequency or bound the combined body of a caller
 with many sites. Larger helpers remain ordinary calls so LLVM can simplify each
@@ -21827,10 +21839,11 @@ change an earlier snapshot. Floating-point values that require per-binding NaN
 normalization and vector values retain independent locations. The proof never
 uses emission order, last-use guesses, or an adjacent-instruction peephole.
 
-Native stack planning consumes the shared LIR read/definition inventories plus
-explicit native descriptor accesses and fused-result writes. Runtime successor
-edges distinguish join declarations from jumps, and pattern captures write only
-on their successful edges. Immutable aliases share a storage identity; their
+Native stack planning uses the shared LIR stack planner, which builds a
+procedure's control-flow graph from the shared LIR read/definition
+inventories, plus explicit native descriptor accesses and fused-result writes.
+Runtime successor edges distinguish join declarations from jumps, and pattern
+captures write only on their successful edges. Immutable aliases share a storage identity; their
 combined reads keep that identity live. Each instruction-selection region holds
 all its inputs and outputs simultaneously, so multiword copies cannot overwrite
 unread operands. This analysis follows explicit ARC statements as ordinary reads
