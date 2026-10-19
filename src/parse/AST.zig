@@ -239,7 +239,7 @@ fn tokenizeReport(
     const body = switch (diagnostic.tag) {
         .BidiControlInSource => blk: {
             const control = base.bidi.at(source_env.source[region.start.offset..]).?;
-            break :blk std.fmt.bufPrint(&bidi_body, "Literal U+{X:0>4} ({s}) can make source appear different from what Roc executes. Use \\u({X:0>4}) in a literal, or remove the control from source text.", .{ control.codepoint, control.name, control.codepoint }) catch unreachable;
+            break :blk std.fmt.bufPrint(&bidi_body, "Literal U+{X:0>4} ({s}) can make source appear different from what Roc executes. Use \\u({X:0>4}) in a literal, or remove the control from source text.", .{ control.codepoint, control.name, control.codepoint }) catch unreachable; // bidi_body fits the fixed text plus the longest bidi control name (under 30 bytes)
         },
         .TooManyTokenizationErrors => "Additional tokenization errors were omitted because the diagnostic limit was reached.",
         .MisplacedCarriageReturn => "Carriage return characters (\\r) are not allowed in Roc source code.",
@@ -899,11 +899,13 @@ fn pushQualifiedName(
     final_token: Token.Idx,
 ) std.mem.Allocator.Error!void {
     const qualifier_tokens = self.store.tokenSlice(qualifiers);
-    const final_ident = self.tokens.resolveIdentifier(final_token) orelse unreachable;
+    const final_ident = self.tokens.resolveIdentifier(final_token) orelse
+        base.invariant("AST invariant violated: qualified name token {d} is not an identifier", .{final_token});
 
     var byte_count = env.getIdent(final_ident).len;
     for (qualifier_tokens) |raw_token| {
-        const segment = self.tokens.resolveIdentifier(@intCast(raw_token)) orelse unreachable;
+        const segment = self.tokens.resolveIdentifier(@intCast(raw_token)) orelse
+            base.invariant("AST invariant violated: qualifier token {d} is not an identifier", .{raw_token});
         byte_count += env.getIdent(segment).len + 1;
     }
 
@@ -911,7 +913,8 @@ fn pushQualifiedName(
     const buffer = tree.reservedStringBuffer(begin);
     var offset: usize = 0;
     for (qualifier_tokens) |raw_token| {
-        const segment = self.tokens.resolveIdentifier(@intCast(raw_token)) orelse unreachable;
+        const segment = self.tokens.resolveIdentifier(@intCast(raw_token)) orelse
+            base.invariant("AST invariant violated: qualifier token {d} is not an identifier", .{raw_token});
         const text = env.getIdent(segment);
         std.mem.copyForwards(u8, buffer[offset..][0..text.len], text);
         offset += text.len;
@@ -3164,7 +3167,8 @@ pub const Expr = union(enum) {
                 for (ast.store.fieldAccessSegmentSlice(a.segments)) |segment| {
                     const segment_node = try tree.beginNamedNode("segment");
                     try tree.pushStringPair("mode", @tagName(segment.mode));
-                    const field_ident = ast.tokens.resolveIdentifier(segment.field_token) orelse unreachable;
+                    const field_ident = ast.tokens.resolveIdentifier(segment.field_token) orelse
+                        base.invariant("AST invariant violated: field access token {d} is not an identifier", .{segment.field_token});
                     try tree.pushStringPair("field", env.getIdent(field_ident));
                     try tree.endNodeWithoutChildren(segment_node);
                 }

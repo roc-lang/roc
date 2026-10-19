@@ -1,6 +1,7 @@
 //! Canonical fixed-product bytes and their explicit committed-layout copy plans.
 
 const std = @import("std");
+const base = @import("base");
 const layout = @import("layout");
 
 /// One contiguous region in canonical field order. Scalar leaves are retained
@@ -48,12 +49,12 @@ pub const Plan = struct {
                 .scalar => {
                     switch (value.getScalar().tag) {
                         .int, .frac, .vector => {},
-                        .str, .opaque_ptr => unreachable,
+                        .str, .opaque_ptr => base.invariant("packed data invariant violated: fixed product holds a {s} scalar", .{@tagName(value.getScalar().tag)}),
                     }
                     const width = layouts.layoutSize(value);
                     const leaf = Leaf{ .packed_offset = self.packed_width, .memory_offset = offset, .width = width };
                     try self.leaves.append(self.allocator, leaf);
-                    self.packed_width = std.math.add(u32, self.packed_width, width) catch unreachable;
+                    self.packed_width = std.math.add(u32, self.packed_width, width) catch unreachable; // leaves are disjoint bytes of one layout, whose size fits in u32
                     if (self.regions.items.len != 0) {
                         const last = &self.regions.items[self.regions.items.len - 1];
                         if (last.memory_offset + last.width == offset) {
@@ -80,7 +81,7 @@ pub const Plan = struct {
                     try pending.ensureUnusedCapacity(self.allocator, fields.items.len);
                     for (fields.items) |field| pending.appendAssumeCapacity(.{ .layout_idx = field.layout_idx, .offset = offset + field.offset });
                 },
-                .box, .box_of_zst, .list, .list_of_zst, .closure, .tag_union, .ptr, .erased_box, .erased_callable => unreachable,
+                .box, .box_of_zst, .list, .list_of_zst, .closure, .tag_union, .ptr, .erased_box, .erased_callable => base.invariant("packed data invariant violated: fixed product holds a {s} layout", .{@tagName(value.tag)}),
             }
         }
     }

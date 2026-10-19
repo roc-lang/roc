@@ -146,7 +146,7 @@ fn radixIntPrefixLen(bytes: []const u8) usize {
         'b', 'B' => 2,
         'o', 'O' => 8,
         'x', 'X' => 16,
-        else => unreachable,
+        else => unreachable, // hasExplicitRadix accepted this byte as one of b, B, o, O, x, X
     };
 
     var end = digits_start;
@@ -246,7 +246,7 @@ fn parseMagnitude(comptime limit: u128, bytes: []const u8, start: usize, radix: 
         8 => parseMagnitudeRadix(8, limit, bytes, start),
         10 => parseMagnitudeRadix(10, limit, bytes, start),
         16 => parseMagnitudeRadix(16, limit, bytes, start),
-        else => unreachable,
+        else => unreachable, // every caller passes a radix from detectRadix, which returns only 2, 8, 10, or 16
     };
 }
 

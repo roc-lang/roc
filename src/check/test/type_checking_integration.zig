@@ -21,11 +21,11 @@ const MethodRegistryTestCheckedTypes = struct {
 
     const Store = struct {
         pub fn payloadCount(_: Store) usize {
-            unreachable;
+            @panic("the method registry test source declares no methods, so the registry never queries checked types");
         }
 
         pub fn payload(_: Store, _: checked_ids.CheckedTypeId) checked_artifact.CheckedTypePayload {
-            unreachable;
+            @panic("the method registry test source declares no methods, so the registry never queries checked types");
         }
     };
 
@@ -36,7 +36,7 @@ const MethodRegistryTestCheckedTypes = struct {
         _: *canonical.CanonicalNameStore,
         _: types.Var,
     ) std.mem.Allocator.Error!checked_ids.CheckedTypeId {
-        unreachable;
+        @panic("the method registry test source declares no methods, so the registry never queries checked types");
     }
 };
 
@@ -45,28 +45,28 @@ const MethodRegistryTestCheckedBodies = struct {
         _: *const @This(),
         _: can.CIR.Pattern.Idx,
     ) ?checked_ids.PatternBinderId {
-        unreachable;
+        @panic("the method registry test source declares no methods, so the registry never queries checked bodies");
     }
 
     pub fn exprIdForSource(
         _: *const @This(),
         _: can.CIR.Expr.Idx,
     ) ?checked_ids.CheckedExprId {
-        unreachable;
+        @panic("the method registry test source declares no methods, so the registry never queries checked bodies");
     }
 
     pub fn patternIdForSource(
         _: *const @This(),
         _: can.CIR.Pattern.Idx,
     ) ?checked_ids.CheckedPatternId {
-        unreachable;
+        @panic("the method registry test source declares no methods, so the registry never queries checked bodies");
     }
 
     pub fn statementIdForSource(
         _: *const @This(),
         _: can.CIR.Statement.Idx,
     ) ?checked_ids.CheckedStatementId {
-        unreachable;
+        @panic("the method registry test source declares no methods, so the registry never queries checked bodies");
     }
 };
 

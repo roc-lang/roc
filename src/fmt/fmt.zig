@@ -382,20 +382,16 @@ fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST, 
     {
         const expected_idx = line_offsets.items.items.len;
         const idx = try line_offsets.append(gpa, 0);
-        if (comptime builtin.mode == .debug) {
-            std.debug.assert(@backingInt(idx) == expected_idx);
-        } else if (@backingInt(idx) != expected_idx) {
-            unreachable;
+        if (@backingInt(idx) != expected_idx) {
+            base.invariant("fmt invariant violated: line offset appended at index {d}, expected {d}", .{ @backingInt(idx), expected_idx });
         }
     }
     for (source, 0..) |c, i| {
         if (c == '\n') {
             const expected_idx = line_offsets.items.items.len;
             const idx = try line_offsets.append(gpa, @intCast(i));
-            if (comptime builtin.mode == .debug) {
-                std.debug.assert(@backingInt(idx) == expected_idx);
-            } else if (@backingInt(idx) != expected_idx) {
-                unreachable;
+            if (@backingInt(idx) != expected_idx) {
+                base.invariant("fmt invariant violated: line offset appended at index {d}, expected {d}", .{ @backingInt(idx), expected_idx });
             }
         }
     }
@@ -408,7 +404,7 @@ fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: AST, 
     try stderr.print("Errors:\n", .{});
     for (parse_ast.parse_diagnostics.items) |err| {
         const region = parse_ast.tokens.resolve(@intCast(err.region.start));
-        const line = binarySearch(line_offsets.items.items, region.start.offset) orelse unreachable;
+        const line = binarySearch(line_offsets.items.items, region.start.offset) orelse unreachable; // line_offsets starts with offset 0, which is at most every needle
         const column = region.start.offset - line_offsets.items.items[line];
         const token = parse_ast.tokens.tokens.items(.tag)[err.region.start];
         // TODO: pretty print the parse failures.
@@ -1851,10 +1847,8 @@ const Formatter = struct {
     }
 
     fn discardRegion(region: AST.TokenizedRegion) void {
-        if (comptime builtin.mode == .debug) {
-            std.debug.assert(region.start <= region.end);
-        } else if (region.start > region.end) {
-            unreachable;
+        if (region.start > region.end) {
+            base.invariant("fmt invariant violated: discarded region starts at token {d} after it ends at token {d}", .{ region.start, region.end });
         }
     }
 
@@ -2658,7 +2652,7 @@ const Formatter = struct {
                         state.next += 1;
                         continue :sw 3;
                     },
-                    else => unreachable,
+                    else => unreachable, // this frame sets its phase only to the values handled above
                 }
             },
             .lambda => |l| {
@@ -2928,7 +2922,7 @@ const Formatter = struct {
                         f.locals.match.next += 1;
                         continue :sw 2;
                     },
-                    else => unreachable,
+                    else => unreachable, // this frame sets its phase only to the values handled above
                 }
             },
             .dbg => |d| switch (f.phase) {
@@ -3015,7 +3009,7 @@ const Formatter = struct {
                         state.next += 1;
                         continue :sw 1;
                     },
-                    else => unreachable,
+                    else => unreachable, // this frame sets its phase only to the values handled above
                 }
             },
             .for_expr => |fe| switch (f.phase) {
@@ -3289,7 +3283,8 @@ const Formatter = struct {
                 try fmt.pushTokenText(name_tok);
             }
         } else {
-            const name_tok = field.name orelse unreachable;
+            const name_tok = field.name orelse
+                base.invariant("fmt invariant violated: a non-rest record pattern field has no name", .{});
             try fmt.pushTokenText(name_tok);
             if (field.value) |v| {
                 if (multiline and try fmt.flushCommentsAfter(name_tok)) {
@@ -4269,7 +4264,7 @@ const Formatter = struct {
                                 try fmt.pushAll("..");
                                 continue :sw 3;
                             },
-                            .closed => unreachable,
+                            .closed => unreachable, // phase 0 sends closed records straight to phase 4
                         }
                     },
                     2 => {
@@ -4362,7 +4357,7 @@ const Formatter = struct {
                                     return call(typeAnnoFrame(named.anno));
                                 },
                                 .open => {},
-                                .closed => unreachable,
+                                .closed => unreachable, // the enclosing if excludes closed extensions
                             }
                             continue :sw 3;
                         }
@@ -4406,7 +4401,7 @@ const Formatter = struct {
                         fmt.curr_indent = f.indent;
                         return done;
                     },
-                    else => unreachable,
+                    else => unreachable, // this frame sets its phase only to the values handled above
                 }
             },
             .@"fn" => |fn_anno| {
@@ -4906,9 +4901,9 @@ const Formatter = struct {
         switch (suffix) {
             .path => |path| {
                 for (fmt.ast.store.tokenSlice(path.qualifiers)) |qualifier| {
-                    try fmt.pushLiteralTypeSuffixSegment(fmt.ast.tokens.resolveIdentifier(@intCast(qualifier)) orelse unreachable);
+                    try fmt.pushLiteralTypeSuffixSegment(fmt.ast.tokens.resolveIdentifier(@intCast(qualifier)) orelse unreachable); // parseLiteralTypeSuffix collects only interned DotUpperIdent and NoSpaceDotUpperIdent tokens
                 }
-                try fmt.pushLiteralTypeSuffixSegment(fmt.ast.tokens.resolveIdentifier(path.final_token) orelse unreachable);
+                try fmt.pushLiteralTypeSuffixSegment(fmt.ast.tokens.resolveIdentifier(path.final_token) orelse unreachable); // parseLiteralTypeSuffix collects only interned DotUpperIdent and NoSpaceDotUpperIdent tokens
             },
             .deprecated_builtin => |type_name| try fmt.pushLiteralTypeSuffixSegment(type_name),
         }

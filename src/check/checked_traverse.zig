@@ -238,7 +238,7 @@ const PredicateTestContext = struct {
         for (self.edges) |entry| {
             if (entry.key == key) return entry;
         }
-        unreachable;
+        std.debug.panic("test fixture has no edge for key {d}", .{key});
     }
 };
 
@@ -349,7 +349,7 @@ const CompositePredicateContext = struct {
         for (self.edges) |entry| {
             if (std.meta.eql(entry.key, key)) return entry;
         }
-        unreachable;
+        std.debug.panic("test fixture has no edge for key {any}", .{key});
     }
 };
 

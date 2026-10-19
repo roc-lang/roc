@@ -323,7 +323,7 @@ const CpuContract = struct {
         const allowed = self.constrainedCodegenFeatures(arch) orelse return;
         const codegen_model = switch (self.codegen_model) {
             .explicit => |model| model,
-            .native, .baseline, .determined_by_arch_os => unreachable,
+            .native, .baseline, .determined_by_arch_os => unreachable, // cpuContract sets architecture_baseline_features only alongside an explicit codegen_model
         };
 
         const model_features = codegen_model.toCpu(arch).features;
@@ -816,7 +816,7 @@ pub const RocTarget = enum {
                 // application profile Roc targets at Armv8.0-A.
                 .aarch64, .aarch64_be => baseline.addFeature(@backingInt(std.Target.aarch64.Feature.neon)),
                 .wasm32 => {},
-                .arm, .other => unreachable,
+                .arm, .other => unreachable, // cpuContract gives arm and other architectures no baseline features
             }
             baseline.populateDependencies(arch.allFeaturesList());
             contract.architecture_baseline_features = baseline;
@@ -984,9 +984,7 @@ pub const RocTarget = enum {
         var cpu = switch (query.cpu_model) {
             .explicit => |model| model.toCpu(arch),
             .baseline, .determined_by_arch_os => std.Target.Cpu.baseline(arch, os),
-            // Roc target queries are static contracts and never inherit the
-            // compiler process's CPU model.
-            .native => unreachable,
+            .native => unreachable, // Roc target queries are static contracts and never inherit the compiler process's CPU model
         };
 
         cpu.features.removeFeatureSet(query.cpu_features_sub);

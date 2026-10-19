@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const base = @import("base");
 const builtins = @import("builtins");
 const bytebox = @import("bytebox");
 const collections = @import("collections");
@@ -231,10 +232,7 @@ pub fn runWasmOutcomeWithStats(
             debugPrint("wasm invoke failed: {s}\n", .{@errorName(err)});
         }
         switch (err) {
-            error.TrapUnreachable => {
-                std.debug.assert(false);
-                unreachable;
-            },
+            error.TrapUnreachable => base.invariant("wasm runner invariant violated: generated code executed an unreachable instruction", .{}),
             error.TrapDebug,
             error.TrapIndirectCallTypeMismatch,
             error.TrapIntegerDivisionByZero,

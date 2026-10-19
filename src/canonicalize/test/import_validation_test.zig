@@ -29,7 +29,7 @@ fn expectNoZeroTargetExternalLookup(env: *const ModuleEnv) error{TestUnexpectedR
 
         const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(raw_node_idx));
         const expr = env.store.getExpr(expr_idx);
-        if (expr != .e_lookup_external) unreachable;
+        if (expr != .e_lookup_external) return error.TestUnexpectedResult;
         try testing.expect(expr.e_lookup_external.target_node_idx != 0);
     }
 }

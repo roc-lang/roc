@@ -266,17 +266,15 @@ fn initCliBuildEnv(ctx: *CliCtx, opts: CliBuildEnvOptions) InitCliBuildEnvError!
         build_env.setRootSourceDirOverride(source_dir);
     }
     if (opts.root_source_url) |url| {
-        // The URL was validated before any pipeline could receive it, so the
-        // only reachable failure here is allocation.
         build_env.setRootUrl(url) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            error.InvalidUrl => unreachable,
+            error.InvalidUrl => base.invariant("build env setup invariant violated: root source URL '{s}' reached the pipeline without validation", .{url}),
         };
     }
     if (opts.main_source_url) |url| {
         build_env.setMainUrl(url) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            error.InvalidUrl => unreachable,
+            error.InvalidUrl => base.invariant("build env setup invariant violated: --main source URL '{s}' reached the pipeline without validation", .{url}),
         };
     }
     if (!opts.no_cache) {
@@ -1146,12 +1144,9 @@ pub fn main(init: std.process.Init) Allocator.Error!void {
     // Install stack overflow handler early, before any significant work.
     // This gives us a helpful error message instead of a generic segfault
     // if the compiler blows the stack (e.g., due to infinite recursion in type translation).
-    const stack_overflow_installed = base.stack_overflow.installForCurrentThread();
-    if (comptime builtin.mode == .debug) {
-        std.debug.assert(stack_overflow_installed);
-    } else if (!stack_overflow_installed) {
-        unreachable;
-    }
+    // Installation depends on the OS granting an alternate signal stack; when it
+    // does not, the process keeps the default crash behavior, as worker threads do.
+    _ = base.stack_overflow.installForCurrentThread();
 
     var gpa_tracy: tracy.TracyAllocator(null) = undefined;
     var gpa, const is_safe = gpa: {
@@ -1894,10 +1889,7 @@ fn applyHostedBindings(
             .module_key = binding.target_checked_module.bytes,
             .def_idx = @backingInt(binding.target_def),
         }) orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("default roc command invariant violated: the hosted section names a function with no hosted declaration in scope", .{});
-            }
-            unreachable;
+            base.invariant("default roc command invariant violated: the hosted section names a function with no hosted declaration in scope", .{});
         };
         var entry = entries.items[entry_index];
         entry.dispatch_index = @intCast(dispatch_index);
@@ -2478,7 +2470,7 @@ test "interpreter executable cache digest changes for platform host shim entrypo
     try std.testing.expect(!std.mem.eql(u8, &shim_a, &shim_b));
 }
 
-fn rejectRunTargetNotExecutable(ctx: *CliCtx, target: RocTarget) error{ WriteFailed, UnsupportedTarget }!void {
+fn rejectRunTargetNotExecutable(ctx: *CliCtx, target: RocTarget) error{ WriteFailed, UnsupportedTarget } {
     // Name the host by the CPU level it executes, so a target rejected only
     // because this machine's CPU is older than it requires says so.
     const native_target = roc_target.host_cpu.nativeTarget();
@@ -2494,7 +2486,7 @@ fn rejectTargetCpuIncompatible(
     target: RocTarget,
     targets_config: roc_target.TargetsConfig,
     platform_source: ?[]const u8,
-) error{ WriteFailed, UnsupportedTarget }!void {
+) error{ WriteFailed, UnsupportedTarget } {
     try ctx.io.stderr().print(
         "Error: the {s} target requires CPU features this host does not support.\n\n",
         .{@tagName(target)},
@@ -2889,7 +2881,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                     &reporter,
                     run_object_cache,
                 );
-                const result = if (lowered_result) |*value| value else unreachable;
+                const result = if (lowered_result) |*value| value else unreachable; // lowerDiscoveredLir assigned it on the line above
                 if (run_object_cache) |cache| {
                     run_package_objects = try RunPackageObjects.collect(ctx.arena, cache);
                     // Cache statistics are diagnostic output, printed only on request.
@@ -2928,7 +2920,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                 checked_host_identity = shm_result.checked_host_identity;
                 diagnostics = shm_result.diagnostics;
             },
-            .size, .speed => unreachable,
+            .size, .speed => unreachable, // rocRun sends .size and .speed to rocRunBuildAndExec
         }
 
         break :blk try RunPlatformLink.init(ctx.arena, platform, selected.link_spec, build_env.getPlatformBundleHash());
@@ -2937,10 +2929,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
     reporter.finish();
 
     if (entrypoint_names.len == 0) {
-        if (builtin.mode == .debug) {
-            base.invariant("default roc command invariant violated: no platform entrypoints in checked LIR root metadata", .{});
-        }
-        unreachable;
+        base.invariant("default roc command invariant violated: no platform entrypoints in checked LIR root metadata", .{});
     }
 
     const selected_target = platform_link.target;
@@ -2948,7 +2937,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
     const shim_kind: ShimLibraryKind = switch (args.opt) {
         .dev => .machine_code,
         .interpreter => .lir,
-        .size, .speed => unreachable,
+        .size, .speed => unreachable, // rocRun sends .size and .speed to rocRunBuildAndExec
     };
 
     const platform_dir = platform_link.platform_dir;
@@ -3030,7 +3019,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
         // Auto-enable debug when roc is built in debug mode (no explicit --debug flag for the default `roc` command)
         const platform_shim_path = switch (args.opt) {
             .dev => blk: {
-                const result = if (lowered_result) |*value| value else unreachable;
+                const result = if (lowered_result) |*value| value else unreachable; // the .dev lowering in platform_link assigned it
                 const lowered = &result.lowered;
                 const platform_entrypoints = try lowered.platformEntrypoints(ctx.gpa);
                 defer ctx.gpa.free(platform_entrypoints);
@@ -3052,10 +3041,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
             },
             .interpreter => blk: {
                 const shm_handle = shm_handle_opt orelse {
-                    if (builtin.mode == .debug) {
-                        base.invariant("interpreter run invariant violated: missing LIR shared-memory handle", .{});
-                    }
-                    unreachable;
+                    base.invariant("interpreter run invariant violated: missing LIR shared-memory handle", .{});
                 };
                 const shm_image_bytes = @as([*]const u8, @ptrCast(shm_handle.ptr))[0..shm_handle.size];
                 break :blk try generatePlatformHostShim(
@@ -3070,7 +3056,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                     enable_debug,
                 );
             },
-            .size, .speed => unreachable,
+            .size, .speed => unreachable, // rocRun sends .size and .speed to rocRunBuildAndExec
         };
 
         // Link the host.a with our shim to create the interpreter executable using our linker
@@ -3161,22 +3147,19 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
         {
             const referenced_hosted_symbols = switch (args.opt) {
                 .dev => blk: {
-                    const result = if (lowered_result) |*value| value else unreachable;
+                    const result = if (lowered_result) |*value| value else unreachable; // the .dev lowering in platform_link assigned it
                     const lowered = &result.lowered;
                     break :blk try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store);
                 },
                 .interpreter => blk: {
                     const shm_handle = shm_handle_opt orelse {
-                        if (builtin.mode == .debug) {
-                            base.invariant("interpreter run invariant violated: missing LIR shared-memory handle", .{});
-                        }
-                        unreachable;
+                        base.invariant("interpreter run invariant violated: missing LIR shared-memory handle", .{});
                     };
                     var view = try viewLirImageFromHandle(shm_handle, base.target.TargetUsize.native, ctx.arena);
                     defer view.deinit();
                     break :blk try hostedSymbolsFromLir(ctx.arena, &view.store);
                 },
-                .size, .speed => unreachable,
+                .size, .speed => unreachable, // rocRun sends .size and .speed to rocRunBuildAndExec
             };
             try verifyHostInputSymbols(
                 ctx,
@@ -3222,26 +3205,20 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
     }
 
     if (args.opt == .dev) {
-        const result = if (lowered_result) |*value| value else unreachable;
+        const result = if (lowered_result) |*value| value else unreachable; // the .dev lowering in platform_link assigned it
         const lowered = &result.lowered;
         const internal_static_data = successfulInternalStaticData(result, "default roc command");
         shm_handle_opt = try publishDevRunImage(ctx, selected_target, entrypoint_names, lowered, internal_static_data, if (run_object_cache) |cache| cache.packs.spliceSource() else null, args.watch);
     }
 
     const shm_handle = shm_handle_opt orelse {
-        if (builtin.mode == .debug) {
-            base.invariant("default roc command invariant violated: missing shared-memory handle before launching shim", .{});
-        }
-        unreachable;
+        base.invariant("default roc command invariant violated: missing shared-memory handle before launching shim", .{});
     };
 
     std.log.debug("Launching shim executable: {s}", .{exe_path});
     if (args.watch) {
         const result = if (lowered_result) |*value| value else {
-            if (builtin.mode == .debug) {
-                base.invariant("hot reload invariant violated: missing lowered result for dev shim watch run", .{});
-            }
-            unreachable;
+            base.invariant("hot reload invariant violated: missing lowered result for dev shim watch run", .{});
         };
         try runHotReloadDevShim(
             ctx,
@@ -3660,8 +3637,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
             return error.InvalidTarget;
         };
         if (!devShimTargetCompatible(requested, native_target)) {
-            try rejectRunTargetNotExecutable(ctx, requested);
-            unreachable;
+            return rejectRunTargetNotExecutable(ctx, requested);
         }
         break :blk requested;
     } else default_target;
@@ -3735,10 +3711,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
 
     const entrypoint_names = lowered_result.entrypoint_names;
     if (entrypoint_names.len == 0) {
-        if (builtin.mode == .debug) {
-            base.invariant("default app run invariant violated: no platform entrypoints", .{});
-        }
-        unreachable;
+        base.invariant("default app run invariant violated: no platform entrypoints", .{});
     }
 
     const lowered = &lowered_result.lowered;
@@ -5291,10 +5264,10 @@ fn testingSharedMemoryHandle(shm: *SharedMemoryAllocator) SharedMemoryHandle {
     };
 }
 
-fn testingHotReloadDescriptor(shm: *SharedMemoryAllocator, offset: usize) *ipc.hot_reload.ImageDescriptor {
+fn testingHotReloadDescriptor(shm: *SharedMemoryAllocator, offset: usize) CliMainError!*ipc.hot_reload.ImageDescriptor {
     // Route through the production helper so tests commit the descriptor's page on
     // Windows (SEC_RESERVE leaves it reserved-but-uncommitted) exactly as a real run does.
-    return hotReloadDescriptorForWrite(shm, offset) catch unreachable;
+    return hotReloadDescriptorForWrite(shm, offset);
 }
 
 fn testingPrepareHotReloadDescriptor(
@@ -5305,8 +5278,8 @@ fn testingPrepareHotReloadDescriptor(
     image_bound: usize,
     allocation_start: usize,
     allocation_end: usize,
-) *ipc.hot_reload.ImageDescriptor {
-    const descriptor = testingHotReloadDescriptor(shm, descriptor_offset);
+) CliMainError!*ipc.hot_reload.ImageDescriptor {
+    const descriptor = try testingHotReloadDescriptor(shm, descriptor_offset);
     ipc.hot_reload.prepareDescriptor(
         descriptor,
         generation,
@@ -5339,7 +5312,7 @@ test "hot reload parent publishes only current prepared candidate" {
     const desc1_offset = hotReloadPreviousDescriptorOffset(desc0_offset).?;
 
     const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
-    const desc0 = testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 2048, 512, 2048);
+    const desc0 = try testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 2048, 512, 2048);
     ipc.hot_reload.init(control, desc0_offset, desc0);
 
     const allocation = HotReloadImageAllocation{
@@ -5350,7 +5323,7 @@ test "hot reload parent publishes only current prepared candidate" {
         .region_end = 1536,
         .append_offset = 2048,
     };
-    const desc1 = testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
+    const desc1 = try testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
 
     try std.testing.expect(!try publishPreparedHotReloadCandidate(control, handle, allocation, true));
     try std.testing.expectEqual(@as(u64, 1), ipc.hot_reload.publishedGeneration(control));
@@ -5371,7 +5344,7 @@ test "hot reload stale prepared candidate reclaims append allocation" {
     const desc1_offset = hotReloadPreviousDescriptorOffset(desc0_offset).?;
 
     const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
-    const desc0 = testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 2048, 512, 2048);
+    const desc0 = try testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 2048, 512, 2048);
     ipc.hot_reload.init(control, desc0_offset, desc0);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 2048);
 
@@ -5383,7 +5356,7 @@ test "hot reload stale prepared candidate reclaims append allocation" {
         .region_end = 1536,
         .append_offset = 2048,
     };
-    const desc1 = testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
+    const desc1 = try testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 4096);
 
     var tracker = HotReloadDescriptorTracker{};
@@ -5412,15 +5385,15 @@ test "hot reload allocation coalesces adjacent reclaimed image regions" {
     const desc2_offset = hotReloadPreviousDescriptorOffset(desc1_offset).?;
 
     const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
-    const desc0 = testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 2048, 512, 2048);
+    const desc0 = try testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 2048, 512, 2048);
     ipc.hot_reload.init(control, desc0_offset, desc0);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 2048);
 
-    const desc1 = testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
+    const desc1 = try testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
     ipc.hot_reload.publishDescriptor(control, 2, desc1_offset, desc1);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 4096);
 
-    const desc2 = testingPrepareHotReloadDescriptor(&shm, 3, desc2_offset, 4096, 8192, 4096, 8192);
+    const desc2 = try testingPrepareHotReloadDescriptor(&shm, 3, desc2_offset, 4096, 8192, 4096, 8192);
     ipc.hot_reload.publishDescriptor(control, 3, desc2_offset, desc2);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 8192);
 
@@ -5455,11 +5428,11 @@ test "hot reload sweep keeps acknowledged current descriptor live" {
     const desc1_offset = hotReloadPreviousDescriptorOffset(desc0_offset).?;
 
     const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
-    const desc0 = testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 2048, 512, 2048);
+    const desc0 = try testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 2048, 512, 2048);
     ipc.hot_reload.init(control, desc0_offset, desc0);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 2048);
 
-    const desc1 = testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
+    const desc1 = try testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
     ipc.hot_reload.publishDescriptor(control, 2, desc1_offset, desc1);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 4096);
     ipc.hot_reload.acknowledge(control, 2, .accepted);
@@ -5492,11 +5465,11 @@ test "hot reload sweep keeps top reclaimed descriptor region addressable" {
     const desc1_offset = hotReloadPreviousDescriptorOffset(desc0_offset).?;
 
     const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
-    const desc0 = testingPrepareHotReloadDescriptor(&shm, 3, desc0_offset, 512, 2048, 512, 2048);
+    const desc0 = try testingPrepareHotReloadDescriptor(&shm, 3, desc0_offset, 512, 2048, 512, 2048);
     ipc.hot_reload.init(control, desc0_offset, desc0);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 2048);
 
-    const desc1 = testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
+    const desc1 = try testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 4096);
     ipc.hot_reload.publishDescriptor(control, 3, desc0_offset, desc0);
 
@@ -5530,17 +5503,17 @@ test "hot reload allocation skips retired retained descriptors" {
     const desc2_offset = hotReloadPreviousDescriptorOffset(desc1_offset).?;
 
     const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
-    const desc0 = testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 2048, 512, 2048);
+    const desc0 = try testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 2048, 512, 2048);
     ipc.hot_reload.init(control, desc0_offset, desc0);
     ipc.hot_reload.retainDescriptor(desc0);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 2048);
 
-    const desc1 = testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
+    const desc1 = try testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
     ipc.hot_reload.publishDescriptor(control, 2, desc1_offset, desc1);
     ipc.hot_reload.retainDescriptor(desc1);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 4096);
 
-    const desc2 = testingPrepareHotReloadDescriptor(&shm, 3, desc2_offset, 4096, 8192, 4096, 8192);
+    const desc2 = try testingPrepareHotReloadDescriptor(&shm, 3, desc2_offset, 4096, 8192, 4096, 8192);
     ipc.hot_reload.publishDescriptor(control, 3, desc2_offset, desc2);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 8192);
 
@@ -5576,7 +5549,7 @@ test "hot reload allocation rolls back fresh descriptor when append has no room"
     const desc1_offset = hotReloadPreviousDescriptorOffset(desc0_offset).?;
 
     const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
-    const desc0 = testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, desc1_offset, 512, desc1_offset);
+    const desc0 = try testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, desc1_offset, 512, desc1_offset);
     ipc.hot_reload.init(control, desc0_offset, desc0);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, desc1_offset);
 
@@ -5604,7 +5577,7 @@ test "hot reload allocation can use reclaimed region when append has no room" {
     const desc1_offset = hotReloadPreviousDescriptorOffset(desc0_offset).?;
 
     const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
-    const desc0 = testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 4096, desc1_offset, 4096, desc1_offset);
+    const desc0 = try testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 4096, desc1_offset, 4096, desc1_offset);
     ipc.hot_reload.init(control, desc0_offset, desc0);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, desc1_offset);
 
@@ -5765,7 +5738,7 @@ test "diagnostic summary header has exact colors and bounded width" {
         output.clearRetainingCapacity();
         plain_config.max_line_width = case[0];
         try renderSummaryHeaderLine(std.testing.allocator, &output.writer, 1, 1, "example.roc", plain_config);
-        const first_newline = std.mem.findScalar(u8, output.written(), '\n') orelse unreachable;
+        const first_newline = std.mem.findScalar(u8, output.written(), '\n') orelse return error.TestUnexpectedResult;
         try std.testing.expectEqual(@as(usize, case[1]), reporting.source_region.displayWidth(output.written()[0..first_newline]));
     }
 }
@@ -5796,10 +5769,7 @@ const LoweredCoordinatorResult = struct {
 
 fn successfulInternalStaticData(result: *const LoweredCoordinatorResult, label: []const u8) []const backend.StaticDataExport {
     return result.internal_static_data orelse {
-        if (builtin.mode == .debug) {
-            base.invariant("{s} invariant violated: dev RunImage lowering produced no internal static data bundle", .{label});
-        }
-        unreachable;
+        base.invariant("{s} invariant violated: dev RunImage lowering produced no internal static data bundle", .{label});
     };
 }
 
@@ -6217,8 +6187,7 @@ fn writeDevRunImageToSharedMemory(
     } else {
         const native_target = backend.HostLirCodeGen.roc_target;
         if (!devShimTargetCompatible(selected_target, native_target)) {
-            try rejectRunTargetNotExecutable(ctx, selected_target);
-            unreachable;
+            return rejectRunTargetNotExecutable(ctx, selected_target);
         }
 
         const store = &lowered.lir_result.store;
@@ -6321,10 +6290,7 @@ fn writeDevRunImageToSharedMemory(
             if (proc.is_static_initializer) continue;
             const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
             const compiled = codegen.compiledProcSymbol(proc_id) orelse {
-                if (builtin.mode == .debug) {
-                    base.invariant("dev run invariant violated: LIR proc {d} was not compiled before image symbol publication", .{i});
-                }
-                unreachable;
+                base.invariant("dev run invariant violated: LIR proc {d} was not compiled before image symbol publication", .{i});
             };
             code_symbols[initialized_code_symbols] = .{
                 .name = try backend.procSymbolName(ctx.gpa, proc.identity),
@@ -6334,13 +6300,10 @@ fn writeDevRunImageToSharedMemory(
         }
         for (static_rc_helpers) |helper_key| {
             const code_offset = codegen.compiledStaticDataRcHelperOffset(helper_key) orelse {
-                if (builtin.mode == .debug) {
-                    base.invariant(
-                        "dev run invariant violated: static RC helper {x} was not compiled before image symbol publication",
-                        .{helper_key.encode()},
-                    );
-                }
-                unreachable;
+                base.invariant(
+                    "dev run invariant violated: static RC helper {x} was not compiled before image symbol publication",
+                    .{helper_key.encode()},
+                );
             };
             code_symbols[initialized_code_symbols] = .{
                 .name = try backend.atomicRcHelperSymbolName(ctx.gpa, layouts, helper_key),
@@ -6372,10 +6335,7 @@ fn writeDevRunImageToSharedMemory(
         for (platform_entrypoints, 0..) |platform_entrypoint, i| {
             const ordinal: usize = @intCast(platform_entrypoint.ordinal);
             if (ordinal >= entrypoint_names.len) {
-                if (builtin.mode == .debug) {
-                    base.invariant("dev run invariant violated: platform entrypoint ordinal {d} exceeds name table length {d}", .{ ordinal, entrypoint_names.len });
-                }
-                unreachable;
+                base.invariant("dev run invariant violated: platform entrypoint ordinal {d} exceeds name table length {d}", .{ ordinal, entrypoint_names.len });
             }
 
             const proc = store.getProcSpec(platform_entrypoint.root_proc);
@@ -6566,10 +6526,8 @@ fn reportCliInterpreterError(ops: *echo_platform.host_abi.RocOps, interpreter: *
         error.DivisionByZero => interpreter.getRuntimeErrorMessage() orelse "Division by zero",
         error.ComptimeExhaustiveness => "compile-time exhaustiveness failure reached runtime code",
         error.Crash => interpreter.getCrashMessage(),
-        // expect_err statements only occur in top-level expect test roots,
-        // never in program entrypoints.
-        error.ExpectErr => unreachable,
-        error.UnsupportedHostedFunction, error.InvalidHostedFunctionSignature => unreachable,
+        error.ExpectErr => unreachable, // expect_err statements occur only in top-level expect test roots, never in program entrypoints
+        error.UnsupportedHostedFunction, error.InvalidHostedFunctionSignature => unreachable, // only inspected_run's hosted dependency lookup returns these; the LIR interpreter never does
     };
     ops.crash(message);
 }
@@ -6601,10 +6559,7 @@ fn evaluateLirImageEntrypoint(
 
     _ = interpreter.runEntrypoint(view, ordinal, arg_ptr, ret_ptr) catch |err| switch (err) {
         error.EntrypointNotFound => {
-            if (builtin.mode == .debug) {
-                base.invariant("CLI LIR image invariant violated: missing platform entrypoint ordinal {d}", .{ordinal});
-            }
-            unreachable;
+            base.invariant("CLI LIR image invariant violated: missing platform entrypoint ordinal {d}", .{ordinal});
         },
         error.OutOfMemory,
         error.RuntimeError,
@@ -7100,9 +7055,9 @@ fn resolutionConfigFromLimits(limits: cli_args.ResolveLimitArgs) compile.package
         config.max_transitive_expanded_bytes = max_bytes;
         config.max_platform_transitive_expanded_bytes = max_bytes;
     }
+    comptime std.debug.assert(cli_args.ReplaceDepArgs.max <= compile.package_resolution.ReplaceDeps.max);
     for (limits.replace_deps.slice()) |arg| {
-        // The parser caps occurrences at the same bound, so this cannot overflow.
-        config.replace_deps.append(.{ .old = arg.old, .new = arg.new }) catch unreachable;
+        config.replace_deps.append(.{ .old = arg.old, .new = arg.new }) catch unreachable; // the parser caps occurrences at ReplaceDepArgs.max, asserted above to fit ReplaceDeps
     }
     return config;
 }
@@ -7229,8 +7184,7 @@ fn resolveUrlBundle(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMemor
             // The CLI's CoreCtx renames through `std.Io.Dir`, whose errors it
             // passes through unchanged.
             error.IoError => {
-                if (builtin.mode == .debug) base.invariant("CLI CoreCtx rename reported a non-std error", .{});
-                unreachable;
+                base.invariant("CLI CoreCtx rename reported a non-std error", .{});
             },
             else => |rename_err| return ctx.fail(.{ .download_failed = .{
                 .url = url,
@@ -7872,7 +7826,7 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
         var random: [16]u8 = undefined;
         ctx.io.std_io.random(&random);
         const hex = std.fmt.bytesToHex(random, .lower);
-        temp_filename = std.fmt.bufPrint(&temp_name_buffer, ".roc-bundle-{s}.tmp", .{hex}) catch unreachable;
+        temp_filename = std.fmt.bufPrint(&temp_name_buffer, ".roc-bundle-{s}.tmp", .{hex}) catch unreachable; // 12 prefix bytes, 32 hex digits, and 4 suffix bytes fit the 64-byte buffer
         break output_dir.createFile(ctx.io.std_io, temp_filename, .{
             // Allow querying metadata (stat) on the handle, necessary for Windows.
             .read = true,
@@ -9115,8 +9069,7 @@ fn packFileBytes(
     var closure = try SpliceClosure.init(allocator, set);
     defer closure.deinit();
     const comptime_reads = if (lowered.spec_comptime_reads) |*reads| reads else {
-        if (builtin.mode == .debug) std.debug.panic("a program written to the object cache recorded no compile-time reads", .{});
-        unreachable;
+        base.invariant("object cache invariant violated: a program written to the object cache recorded no compile-time reads", .{});
     };
     // Every keyed specialization, then every procedure by its identity
     // (`Common.procIdentityCacheKey`), which serves specializations no
@@ -9455,13 +9408,10 @@ fn nativeBuildEntrypoints(
     const root_procs = lowered.lir_result.root_procs.items;
     const root_metadata = lowered.lir_result.root_metadata.items;
     if (root_procs.len != root_metadata.len) {
-        if (builtin.mode == .debug) {
-            base.invariant(
-                "native build invariant violated: root metadata mismatch roots={d} metadata={d}",
-                .{ root_procs.len, root_metadata.len },
-            );
-        }
-        unreachable;
+        base.invariant(
+            "native build invariant violated: root metadata mismatch roots={d} metadata={d}",
+            .{ root_procs.len, root_metadata.len },
+        );
     }
 
     const entrypoints = try ctx.gpa.alloc(backend.Entrypoint, root_procs.len);
@@ -9471,10 +9421,7 @@ fn nativeBuildEntrypoints(
         std.debug.assert(metadata.kind == .provided_export);
         std.debug.assert(metadata.abi == .platform and metadata.exposure == .exported);
         const root = root_artifact.lookupRootRequestByOrder(metadata.order) orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("native build invariant violated: missing root request order {d}", .{metadata.order});
-            }
-            unreachable;
+            base.invariant("native build invariant violated: missing root request order {d}", .{metadata.order});
         };
         std.debug.assert(root.kind == .provided_export);
 
@@ -9502,13 +9449,10 @@ fn nativeEntrypointSymbolName(
     root: check.CheckedArtifact.RootRequest,
 ) []const u8 {
     const entrypoint_name = root_artifact.providedEntrypointName(root) orelse {
-        if (builtin.mode == .debug) {
-            base.invariant(
-                "platform entrypoint invariant violated: exported platform root has no published FFI symbol",
-                .{},
-            );
-        }
-        unreachable;
+        base.invariant(
+            "platform entrypoint invariant violated: exported platform root has no published FFI symbol",
+            .{},
+        );
     };
     return entrypoint_name;
 }
@@ -9546,10 +9490,9 @@ fn selectBuildPlatformTarget(
             return error.UnsupportedTarget;
         },
         .incompatible_cpu => |target| {
-            try rejectTargetCpuIncompatible(ctx, target, targets_config, platform_source);
-            unreachable;
+            return rejectTargetCpuIncompatible(ctx, target, targets_config, platform_source);
         },
-        .requires_executable => unreachable,
+        .requires_executable => unreachable, // only selectRunTarget produces this outcome
         .no_default => {
             if (targets_config.targets.len == 0) {
                 renderValidationError(ctx, .{
@@ -9571,7 +9514,7 @@ fn selectBuildPlatformTarget(
             }
             return error.UnsupportedTarget;
         },
-        .not_runnable_on_host => unreachable,
+        .not_runnable_on_host => unreachable, // only selectRunTarget produces this outcome
     };
 }
 
@@ -9635,12 +9578,10 @@ fn selectRunPlatformTarget(
             return error.UnsupportedTarget;
         },
         .incompatible_cpu => |target| {
-            try rejectTargetCpuIncompatible(ctx, target, targets_config, platform_source);
-            unreachable;
+            return rejectTargetCpuIncompatible(ctx, target, targets_config, platform_source);
         },
         .requires_executable => |selected| {
-            try rejectRequiredExecutableOutput(ctx, selected);
-            unreachable;
+            return rejectRequiredExecutableOutput(ctx, selected);
         },
         .no_default => {
             if (targets_config.targets.len == 0) {
@@ -9659,8 +9600,7 @@ fn selectRunPlatformTarget(
             return error.UnsupportedTarget;
         },
         .not_runnable_on_host => |target| {
-            try rejectRunTargetNotExecutable(ctx, target);
-            unreachable;
+            return rejectRunTargetNotExecutable(ctx, target);
         },
     };
 }
@@ -9942,7 +9882,7 @@ fn linkerOutputKind(output: roc_target.OutputKind) linker.OutputKind {
     return switch (output) {
         .shared => .shared_lib,
         .exe => .exe,
-        .archive => unreachable,
+        .archive => unreachable, // every caller sends archive outputs to writeArchiveOutput instead
     };
 }
 
@@ -9982,7 +9922,7 @@ fn writeArchiveOutput(
     };
 }
 
-fn rejectRequiredExecutableOutput(ctx: *CliCtx, selected: target_selection.SelectedTarget) error{ UnsupportedTarget, WriteFailed }!void {
+fn rejectRequiredExecutableOutput(ctx: *CliCtx, selected: target_selection.SelectedTarget) error{ UnsupportedTarget, WriteFailed } {
     const stderr = ctx.io.stderr();
     switch (selected.output) {
         .archive => {
@@ -10003,7 +9943,7 @@ fn rejectRequiredExecutableOutput(ctx: *CliCtx, selected: target_selection.Selec
                 try stderr.print("the library artifact.\n", .{});
             }
         },
-        .exe => unreachable,
+        .exe => unreachable, // callers reject only a selection whose output is not .exe
     }
     return error.UnsupportedTarget;
 }
@@ -10134,16 +10074,10 @@ fn wasmOptimizeMode(opt: cli_args.OptLevel) linker.WasmOptimizeMode {
 
 fn requiredWasmPlatformExports(link_inputs: PlatformLinkInputs) []const []const u8 {
     const wasm = link_inputs.wasm orelse {
-        if (builtin.mode == .debug) {
-            base.invariant("linked wasm target reached the linker without an exports declaration", .{});
-        }
-        unreachable;
+        base.invariant("linked wasm target reached the linker without an exports declaration", .{});
     };
     return wasm.exports orelse {
-        if (builtin.mode == .debug) {
-            base.invariant("linked wasm target reached the linker without an exports declaration", .{});
-        }
-        unreachable;
+        base.invariant("linked wasm target reached the linker without an exports declaration", .{});
     };
 }
 
@@ -10175,10 +10109,7 @@ fn writeDevWasmObject(
     target: RocTarget,
 ) CliMainError![]const u8 {
     if (entrypoints.len == 0) {
-        if (builtin.mode == .debug) {
-            base.invariant("wasm object invariant violated: no exported platform entrypoints", .{});
-        }
-        unreachable;
+        base.invariant("wasm object invariant violated: no exported platform entrypoints", .{});
     }
 
     var wasm_module = backend.wasm.WasmModule.init(ctx.gpa);
@@ -10343,10 +10274,7 @@ fn rocBuildWasm(
     linked_packs: []const *const backend.dev.PackFile.ObjectPack,
 ) CliMainError!void {
     if (entrypoints.len == 0) {
-        if (builtin.mode == .debug) {
-            base.invariant("wasm build invariant violated: no exported platform entrypoints", .{});
-        }
-        unreachable;
+        base.invariant("wasm build invariant violated: no exported platform entrypoints", .{});
     }
 
     const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, targets_config, target, link_type);
@@ -10478,10 +10406,7 @@ fn llvmOptimizationLevel(opt: cli_args.OptLevel) builder.OptimizationLevel {
         .size => .size,
         .speed => .speed,
         .dev, .interpreter => {
-            if (builtin.mode == .debug) {
-                base.invariant("LLVM build invariant violated: non-LLVM opt level {s}", .{@tagName(opt)});
-            }
-            unreachable;
+            base.invariant("LLVM build invariant violated: non-LLVM opt level {s}", .{@tagName(opt)});
         },
     };
 }
@@ -10490,13 +10415,10 @@ fn devBackendPhaseName(target_arch: std.Target.Cpu.Arch) []const u8 {
     if (target_arch == .x86_64) return "x64 Backend";
     if (target_arch == .aarch64) return "arm64 Backend";
     if (target_arch == .wasm32) return "wasm32 Bytecode Generation";
-    if (builtin.mode == .debug) {
-        std.debug.panic(
-            "dev code-generation timing requested for unsupported architecture {s}",
-            .{@tagName(target_arch)},
-        );
-    }
-    unreachable;
+    base.invariant(
+        "dev code-generation timing invariant violated: unsupported architecture {s}",
+        .{@tagName(target_arch)},
+    );
 }
 
 fn devInstructionGenerationPhaseName(target_arch: std.Target.Cpu.Arch) []const u8 {
@@ -10834,10 +10756,7 @@ fn rocBuildWasmLlvm(
     reporter: *progress.Reporter,
 ) CliMainError!void {
     if (entrypoints.len == 0) {
-        if (builtin.mode == .debug) {
-            base.invariant("LLVM wasm build invariant violated: no exported platform entrypoints", .{});
-        }
-        unreachable;
+        base.invariant("LLVM wasm build invariant violated: no exported platform entrypoints", .{});
     }
 
     const app_object = try compileLlvmAppObject(
@@ -11125,8 +11044,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
     }
 
     if (args.require_executable_output and link_type != .exe) {
-        try rejectRequiredExecutableOutput(ctx, selected);
-        unreachable;
+        return rejectRequiredExecutableOutput(ctx, selected);
     }
 
     const final_output_path = try buildFinalOutputPath(ctx, args, output_path, link_type, target);
@@ -11159,10 +11077,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
     defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data_exports);
 
     if (entrypoints.len == 0 and static_data_exports.len == 0) {
-        if (builtin.mode == .debug) {
-            base.invariant("LLVM build invariant violated: no exported platform entrypoints or data symbols", .{});
-        }
-        unreachable;
+        base.invariant("LLVM build invariant violated: no exported platform entrypoints or data symbols", .{});
     }
 
     if (target.toCpuArch() == .wasm32) {
@@ -11334,8 +11249,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     const link_type = selected.output;
 
     if (args.require_executable_output and link_type != .exe) {
-        try rejectRequiredExecutableOutput(ctx, selected);
-        unreachable;
+        return rejectRequiredExecutableOutput(ctx, selected);
     }
 
     const target_arch = target.toCpuArch();
@@ -11501,10 +11415,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
 
     reporter.begin(code_generation_phase_name);
     if (entrypoints.len == 0 and static_data_exports.len == 0) {
-        if (builtin.mode == .debug) {
-            base.invariant("native build invariant violated: no exported platform entrypoints or data symbols", .{});
-        }
-        unreachable;
+        base.invariant("native build invariant violated: no exported platform entrypoints or data symbols", .{});
     }
 
     var object_compiler = backend.ObjectFileCompiler.init(ctx.gpa);
@@ -11688,8 +11599,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     }
 
     if (args.require_executable_output and link_type != .exe) {
-        try rejectRequiredExecutableOutput(ctx, selected);
-        unreachable;
+        return rejectRequiredExecutableOutput(ctx, selected);
     }
 
     const target_arch = target.toCpuArch();
@@ -11755,10 +11665,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     const lir_image = try shm.dupeDetachedImage(ctx.arena);
     const entrypoint_names = try lowered.platformEntrypointNames(ctx.arena, root_artifact);
     if (entrypoint_names.len == 0) {
-        if (builtin.mode == .debug) {
-            base.invariant("embedded build invariant violated: no platform entrypoints", .{});
-        }
-        unreachable;
+        base.invariant("embedded build invariant violated: no platform entrypoints", .{});
     }
 
     const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, resolved_targets_config, target, link_type);
@@ -12041,10 +11948,7 @@ const CliTestPlanModule = struct {
 
     fn releaseCachedResults(self: *CliTestPlanModule) []CliTestResultItem {
         const results = self.cached_results orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("CLI test invariant violated: cached results were released from an uncached plan module", .{});
-            }
-            unreachable;
+            base.invariant("CLI test invariant violated: cached results were released from an uncached plan module", .{});
         };
         self.cached_results = null;
         return results;
@@ -12636,10 +12540,7 @@ fn testRootRegion(
     return switch (source) {
         .statement => |statement| env.store.getStatementRegion(statement),
         .def, .expr, .required_binding, .hoisted => {
-            if (builtin.mode == .debug) {
-                base.invariant("CLI test invariant violated: test root was not published from an expect statement", .{});
-            }
-            unreachable;
+            base.invariant("CLI test invariant violated: test root was not published from an expect statement", .{});
         },
     };
 }
@@ -13222,30 +13123,21 @@ fn collectCliTestRootRuns(
     const root_procs = lowered.lir_result.root_procs.items;
     const root_metadata = lowered.lir_result.root_metadata.items;
     if (root_procs.len != root_metadata.len) {
-        if (builtin.mode == .debug) {
-            base.invariant("CLI test invariant violated: root proc count differs from root metadata count", .{});
-        }
-        unreachable;
+        base.invariant("CLI test invariant violated: root proc count differs from root metadata count", .{});
     }
 
     for (root_procs, root_metadata) |root_proc, metadata| {
         if (metadata.kind != .test_expect) continue;
         const test_plan = metadata.test_plan orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("CLI test invariant violated: lowered test root metadata is missing its explicit test-plan slot", .{});
-            }
-            unreachable;
+            base.invariant("CLI test invariant violated: lowered test root metadata is missing its explicit test-plan slot", .{});
         };
         if (test_plan.result_index < planned.first_entry_index or
             test_plan.result_index >= planned.first_entry_index + planned.entry_count) continue;
         if (test_plan.root_index >= planned.test_roots.len or test_plan.result_index >= plan_entries.len) {
-            if (builtin.mode == .debug) {
-                base.invariant(
-                    "CLI test invariant violated: lowered test-plan slot root/result ({d}/{d}) is outside module roots/results ({d}/{d})",
-                    .{ test_plan.root_index, test_plan.result_index, planned.test_roots.len, plan_entries.len },
-                );
-            }
-            unreachable;
+            base.invariant(
+                "CLI test invariant violated: lowered test-plan slot root/result ({d}/{d}) is outside module roots/results ({d}/{d})",
+                .{ test_plan.root_index, test_plan.result_index, planned.test_roots.len, plan_entries.len },
+            );
         }
         const root_index: usize = @intCast(test_plan.root_index);
         const root = planned.test_roots[root_index];
@@ -13288,13 +13180,10 @@ fn collectCliTestRootRuns(
     }
 
     if (runs.items.len != planned.test_roots.len) {
-        if (builtin.mode == .debug) {
-            base.invariant(
-                "CLI test invariant violated: lowered {d} test roots for {d} checked test roots",
-                .{ runs.items.len, planned.test_roots.len },
-            );
-        }
-        unreachable;
+        base.invariant(
+            "CLI test invariant violated: lowered {d} test roots for {d} checked test roots",
+            .{ runs.items.len, planned.test_roots.len },
+        );
     }
 
     return try runs.toOwnedSlice(ctx.gpa);
@@ -13313,7 +13202,7 @@ fn interpreterTestFailureMessage(
         error.Crash => interpreter.getCrashMessage(),
         error.ExpectErr => interpreter.getExpectErrMessage() orelse
             "The `?` operator evaluated an `Err` inside an `expect`",
-        error.UnsupportedHostedFunction, error.InvalidHostedFunctionSignature => unreachable,
+        error.UnsupportedHostedFunction, error.InvalidHostedFunctionSignature => unreachable, // only inspected_run's hosted dependency lookup returns these; the LIR interpreter never does
     };
     return try allocator.dupe(u8, message);
 }
@@ -13902,7 +13791,7 @@ fn runCompiledTestRoots(
             lowered.lir_result.expect_sites.items.len,
             .speed,
         ),
-        .interpreter => unreachable,
+        .interpreter => unreachable, // runCheckedArtifactTests calls this only in dev mode
     } catch |err| switch (ReplSession.programFailureKind(err)) {
         .out_of_memory => return error.OutOfMemory,
         .type_check, .parse, .operational => {
@@ -13961,7 +13850,7 @@ fn runCheckedArtifactTests(
     switch (mode) {
         .interpreter => try runInterpreterTestRoots(ctx, lowered_module.lowered, lowered_module.root_runs, &results, &summary, source_modules),
         .dev => try runCompiledTestRoots(ctx, mode, lowered_module.lowered, lowered_module.root_runs, &results, &summary, dev_timing, max_workers, source_modules),
-        .llvm_size, .llvm_speed => unreachable,
+        .llvm_size, .llvm_speed => unreachable, // rocTest sends LLVM modes to runCompiledTestPlan
     }
     summary.modules_with_tests = 1;
 
@@ -14064,7 +13953,7 @@ fn runCompiledLoweredTestModulesOnce(
             completion_callback,
             event_callback,
         ),
-        .interpreter => unreachable,
+        .interpreter => unreachable, // runCompiledTestPlan is the only caller, and rocTest gives it only compiled modes
     }) catch |err| switch (ReplSession.programFailureKind(err)) {
         .out_of_memory => return error.OutOfMemory,
         .type_check, .parse, .operational => {
@@ -14226,7 +14115,7 @@ fn runCompiledTestPlan(
     const mode = cliTestExecutionMode(opt);
     switch (mode) {
         .llvm_size, .llvm_speed, .dev => {},
-        .interpreter => unreachable,
+        .interpreter => unreachable, // rocTest sends interpreter mode to runCheckedArtifactTests
     }
 
     const summaries = try ctx.gpa.alloc(CliTestRunSummary, test_plan.modules.len);
@@ -16278,7 +16167,7 @@ const CliOptimizedLiveTestOutput = struct {
             .dbg => |payload| .{ .stream = .stderr, .kind = .dbg, .payload = payload },
             .expect_failed => |payload| .{ .stream = .stderr, .kind = .expect_failed, .payload = payload },
             .crashed => |payload| .{ .stream = .stderr, .kind = .crashed, .payload = payload },
-            .effect => unreachable,
+            .effect => base.invariant("CLI optimized live output invariant violated: a bool root reported a hosted effect event", .{}),
         };
 
         self.lock();
@@ -16885,7 +16774,7 @@ fn rocGlue(ctx: *CliCtx, args: cli_args.GlueArgs) RocGlueError!void {
             .dev => .dev,
             .size => .size,
             .speed => .speed,
-            .interpreter => unreachable,
+            .interpreter => unreachable, // the glue command's --opt accepts only dev, size, and speed
         },
     }, ctx.coreCtx(), ctx.io.std_io) catch |err| {
         switch (err) {
@@ -19681,7 +19570,8 @@ fn generateDocs(
         defer ctx.gpa.free(routing_modules);
         for (routing_modules) |module_info| {
             const source_decl = module_info.public_type_decl orelse continue;
-            const artifact = module_info.semantic.checked_artifact orelse unreachable;
+            const artifact = module_info.semantic.checked_artifact orelse
+                base.invariant("docs invariant violated: public module {s} was documented before it was checked", .{module_info.name});
             try public_type_projections.append(ctx.gpa, .{
                 .public_name = module_info.name,
                 .package_name = build_env.displayNameForPackage(module_info.package_name),
@@ -19706,7 +19596,8 @@ fn generateDocs(
                 .public_name = module_info.name,
                 .package_name = sched_pkg_name,
                 .source_env = module_info.semantic.env,
-                .source_identity = &(module_info.semantic.checked_artifact orelse unreachable).key.module_identity_hash,
+                .source_identity = &(module_info.semantic.checked_artifact orelse
+                    base.invariant("docs invariant violated: public module {s} was documented before it was checked", .{module_info.name})).key.module_identity_hash,
                 .source_decl = source_decl,
                 .public_order = module_info.public_order,
             } else null,
@@ -20106,7 +19997,7 @@ test "appendWindowsQuotedArg" {
     // Helper to test the quoting function
     const testQuote = struct {
         fn run(input: []const u8, expected: []const u8) CliMainError!void {
-            var cmd = std.array_list.Managed(u8).initCapacity(testing.allocator, 64) catch unreachable;
+            var cmd = try std.array_list.Managed(u8).initCapacity(testing.allocator, 64);
             defer cmd.deinit();
             try appendWindowsQuotedArg(&cmd, input);
             try testing.expectEqualStrings(expected, cmd.items);

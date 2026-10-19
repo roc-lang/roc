@@ -262,7 +262,7 @@ test "extractDocCommentBefore: handles type annotation between doc and definitio
         \\add = |a, b| a + b
     ;
     // Find offset of the definition line (not the type annotation)
-    const offset: u32 = @intCast(std.mem.find(u8, source, "add = |a, b|") orelse unreachable);
+    const offset: u32 = @intCast(std.mem.find(u8, source, "add = |a, b|") orelse return error.TestUnexpectedResult);
     const result = try extractDocCommentBefore(allocator, source, offset);
     defer if (result) |r| allocator.free(r);
 
@@ -282,7 +282,7 @@ test "extractDocCommentBefore: complex multi-line with formatting" {
         \\len : Str -> U64
     ;
     // Find offset of "len"
-    const offset: u32 = @intCast(std.mem.find(u8, source, "len : Str") orelse unreachable);
+    const offset: u32 = @intCast(std.mem.find(u8, source, "len : Str") orelse return error.TestUnexpectedResult);
     const result = try extractDocCommentBefore(allocator, source, offset);
     defer if (result) |r| allocator.free(r);
 

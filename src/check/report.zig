@@ -1257,7 +1257,7 @@ pub const ReportBuilder = struct {
         }
         try report.document.addLineBreaks(2);
         switch (conversion) {
-            .none => unreachable,
+            .none => unreachable, // the switch above returns for .none
             .to_str => if (numeral) try D.renderSlice(&.{
                 D.bytes("Hint:").withAnnotation(.emphasized),
                 D.bytes("Write the number in quotes to make it a"),
@@ -3426,7 +3426,7 @@ pub const ReportBuilder = struct {
             .number_literal => "This number's type never resolved to a concrete type, so it has no",
             .string_literal => "This string's type never resolved to a concrete type, so it has no",
             .value => "A type this needs never resolved to a concrete type, so it has no",
-            .string_literal_shared_with_number, .number_literal_shared_with_string => unreachable,
+            .string_literal_shared_with_number, .number_literal_shared_with_string => unreachable, // the switch at the top returns for shared-literal subjects
         };
         const operator: ?[]const u8 = if (data.is_binop) self.getOperatorForMethod(data.method_name) else null;
         if (operator) |operator_text| {
@@ -3467,7 +3467,7 @@ pub const ReportBuilder = struct {
             const builtin_types: []const u8 = switch (data.subject) {
                 .number_literal => "None of the built-in number types",
                 .string_literal => "None of the built-in string types",
-                .value, .string_literal_shared_with_number, .number_literal_shared_with_string => unreachable,
+                .value, .string_literal_shared_with_number, .number_literal_shared_with_string => unreachable, // the checker sets builtin_candidates_lack_method only with a literal subject; shared subjects returned above
             };
             if (operator) |operator_text| {
                 try D.renderSlice(&.{
@@ -3493,7 +3493,7 @@ pub const ReportBuilder = struct {
             .number_literal => "Giving the number a suffix, using it somewhere that requires a specific type, or annotating it will give it one.",
             .string_literal => "Using the string somewhere that requires a specific type, or annotating it, will give it one.",
             .value => "Using the value somewhere that requires a specific type, or annotating it, will give it one.",
-            .string_literal_shared_with_number, .number_literal_shared_with_string => unreachable,
+            .string_literal_shared_with_number, .number_literal_shared_with_string => unreachable, // the switch at the top returns for shared-literal subjects
         };
         try D.renderSlice(&.{D.bytes(remedy)}, self, &report);
 
@@ -3511,7 +3511,7 @@ pub const ReportBuilder = struct {
         const headline: []const u8 = switch (data.subject) {
             .string_literal_shared_with_number => "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both.",
             .number_literal_shared_with_string => "This number literal must have the same type as a string literal, and nothing in this program determines a type that can be both.",
-            .number_literal, .string_literal, .value => unreachable,
+            .number_literal, .string_literal, .value => unreachable, // buildUndeterminedType delegates only shared-literal subjects here
         };
         try D.renderSliceInto(&.{D.bytes(headline)}, self, &report, &report.headline);
 
@@ -6001,7 +6001,7 @@ pub const ReportBuilder = struct {
     fn getNumOwned(self: *Self, report: *Report, n: u32) Allocator.Error![]const u8 {
         self.bytes_buf.clearRetainingCapacity();
         var tmp: [20]u8 = undefined;
-        const formatted = std.fmt.bufPrint(&tmp, "{d}", .{n}) catch unreachable;
+        const formatted = std.fmt.bufPrint(&tmp, "{d}", .{n}) catch unreachable; // a u32 has at most 10 decimal digits
         try self.bytes_buf.appendSlice(formatted);
         return try report.addOwnedString(self.bytes_buf.items);
     }
@@ -6018,7 +6018,7 @@ pub const ReportBuilder = struct {
         self.bytes_buf.clearRetainingCapacity();
         const len = std.fmt.count(fmt, args);
         try self.bytes_buf.resize(len);
-        _ = std.fmt.bufPrint(self.bytes_buf.items, fmt, args) catch unreachable;
+        _ = std.fmt.bufPrint(self.bytes_buf.items, fmt, args) catch unreachable; // bytes_buf was resized to std.fmt.count of this format and args
         try report.document.addAnnotated(self.bytes_buf.items, annotation);
     }
 
@@ -6026,7 +6026,7 @@ pub const ReportBuilder = struct {
         self.bytes_buf.clearRetainingCapacity();
         const len = std.fmt.count(fmt, args);
         try self.bytes_buf.resize(len);
-        _ = std.fmt.bufPrint(self.bytes_buf.items, fmt, args) catch unreachable;
+        _ = std.fmt.bufPrint(self.bytes_buf.items, fmt, args) catch unreachable; // bytes_buf was resized to std.fmt.count of this format and args
         try report.document.addReflowingText(self.bytes_buf.items);
     }
 
@@ -6060,7 +6060,7 @@ pub const ReportBuilder = struct {
                     else => &[_]u8{ 't', 'h' },
                 };
                 var tmp: [32]u8 = undefined;
-                const formatted = std.fmt.bufPrint(&tmp, "{d}{s}", .{ n, suffix }) catch unreachable;
+                const formatted = std.fmt.bufPrint(&tmp, "{d}{s}", .{ n, suffix }) catch unreachable; // a u32 has at most 10 decimal digits and the suffix is 2 bytes
                 try buf.appendSlice(formatted);
             },
         }

@@ -873,7 +873,7 @@ pub const Instantiator = struct {
                     const first = switch (self.polarity_var_behavior) {
                         .preserve_one_sided => item.polarity == .pos,
                         .resolve_by_polarity, .defer_open => item.polarity == .pos and (self.polarity_var_behavior != .defer_open or item.reach != .nested),
-                        .close, .preserve => unreachable,
+                        .close, .preserve => unreachable, // instantiateVarHelp calls collectMarkerChoices only for the per-occurrence behaviors
                     };
                     if (first) entry.value_ptr.first = true else entry.value_ptr.second = true;
                 } else {
@@ -950,7 +950,7 @@ pub const Instantiator = struct {
             try choices.put(allocator, entry.key_ptr.*, switch (self.polarity_var_behavior) {
                 .preserve_one_sided => !(seen.first and seen.second),
                 .resolve_by_polarity, .defer_open => seen.first and !seen.second,
-                .close, .preserve => unreachable,
+                .close, .preserve => unreachable, // instantiateVarHelp calls collectMarkerChoices only for the per-occurrence behaviors
             });
         }
         // Checked only in safe builds: in an unchecked build the assertion

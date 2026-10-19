@@ -274,7 +274,7 @@ pub const HostSplice = struct {
             writeStub(image[stubs_start + index * stub_size ..][0..stub_size], target);
         }
         for (self.data.items) |item| {
-            const offset = self.data_offsets.get(item.name) orelse unreachable;
+            const offset = self.data_offsets.get(item.name) orelse unreachable; // the layout loop above put every data item's name
             @memcpy(image[offset..][0..item.bytes.len], item.bytes);
         }
 
@@ -287,7 +287,7 @@ pub const HostSplice = struct {
             };
         }
         for (self.data.items) |item| {
-            const offset = self.data_offsets.get(item.name) orelse unreachable;
+            const offset = self.data_offsets.get(item.name) orelse unreachable; // the layout loop above put every data item's name
             for (item.relocations) |relocation| {
                 const target = (if (relocation.function) binder.address(relocation.name) else binder.dataAddress(relocation.name)) orelse return error.UnresolvedSymbol;
                 const field: usize = relocation.offset;
@@ -375,7 +375,7 @@ const Binder = struct {
         if (self.splice.hosted_stubs.get(name)) |offset| return self.image_base + offset;
         if (self.code_symbols.get(name)) |offset| return self.image_base + offset;
         if (self.splice.data_offsets.get(name)) |offset| {
-            const index = self.splice.data_names.get(name) orelse unreachable;
+            const index = self.splice.data_names.get(name) orelse unreachable; // link keys data_offsets by data items, and addDataItems names every data item in data_names
             return self.image_base + offset + self.splice.data.items[index].symbol_offset;
         }
         return null;
@@ -455,7 +455,7 @@ fn writeStub(stub: *[stub_size]u8, target: usize) void {
         std.mem.writeInt(u32, stub[0..4], 0x58000050, .little);
         std.mem.writeInt(u32, stub[4..8], 0xD61F0200, .little);
         std.mem.writeInt(u64, stub[8..16], target, .little);
-    } else unreachable;
+    } else @import("base").invariant("HostSplice invariant violated: in-process stubs are written only on x86_64 and aarch64 hosts, not {t}", .{builtin.cpu.arch});
 }
 
 test "compiler functions resolve and the dict seed is the evaluator's zero" {

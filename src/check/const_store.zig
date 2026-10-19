@@ -773,7 +773,7 @@ pub const ConstTypeStore = struct {
     fn finishClone(self: *ConstTypeStore, source: *const ConstTypeStore, frame: *const CloneFrame) Allocator.Error!void {
         const types = frame.types.items;
         const cloned: ConstType = switch (source.get(frame.source_ty)) {
-            .primitive, .zst, .erased => unreachable,
+            .primitive, .zst, .erased => unreachable, // startClone fills leaf types directly and pushes no frame for them
             .list => .{ .list = types[0] },
             .box => .{ .box = types[0] },
             .tuple => .{ .tuple = try self.appendTypeSpan(types) },
@@ -1423,10 +1423,7 @@ pub const ConstStore = struct {
 };
 
 fn constStoreInvariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .debug) {
-        base.invariant("const store invariant violated: {s}", .{message});
-    }
-    unreachable;
+    base.invariant("const store invariant violated: {s}", .{message});
 }
 
 test "const store declarations are referenced" {

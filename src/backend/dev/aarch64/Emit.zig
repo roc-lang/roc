@@ -1509,7 +1509,7 @@ pub fn Emit(comptime target: RocTarget) type {
                 16 => (@as(u5, index) << 2) | 2,
                 32 => (@as(u5, index) << 3) | 4,
                 64 => (@as(u5, index) << 4) | 8,
-                else => unreachable,
+                else => invariant("AArch64 emit invariant violated: SIMD lane width {d} is not 8, 16, 32, or 64", .{lane_bits}),
             };
         }
 
@@ -1524,7 +1524,7 @@ pub fn Emit(comptime target: RocTarget) type {
                 16 => 0x4E020C00,
                 32 => 0x4E040C00,
                 64 => 0x4E080C00,
-                else => unreachable,
+                else => invariant("AArch64 emit invariant violated: SIMD lane width {d} is not 8, 16, 32, or 64", .{lane_bits}),
             };
             try self.emit32(opcode | (@as(u32, src.enc()) << 5) | dst.enc());
         }

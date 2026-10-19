@@ -442,5 +442,5 @@ test "SortedArrayBuilder no duplicates case" {
 /// panic with this message, and optimized builds treat it as unreachable.
 inline fn collectionsInvariant(comptime fmt: []const u8, args: anytype) noreturn {
     if (std.debug.runtime_safety) std.debug.panic(fmt, args);
-    unreachable;
+    unreachable; // design.md: optimized builds carry no runtime check for a violated compiler invariant
 }

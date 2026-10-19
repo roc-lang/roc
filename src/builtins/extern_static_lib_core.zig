@@ -18,5 +18,5 @@ comptime {
     // Force semantic analysis of the wrapped root so its comptime export
     // blocks run; merely aliasing its decls above is lazy and would leave
     // the prebuilt object empty.
-    if (static_lib_core != static_lib_core) unreachable;
+    if (static_lib_core != static_lib_core) unreachable; // a type always equals itself; the comparison only forces analysis
 }

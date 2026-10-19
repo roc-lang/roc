@@ -154,10 +154,7 @@ pub const Store = struct {
             pending.site = site;
             return;
         }
-        if (@import("builtin").mode == .debug) {
-            base.invariant("checked artifact invariant violated: exhaustiveness site source had no pending diagnostic", .{});
-        }
-        unreachable;
+        base.invariant("checked artifact invariant violated: exhaustiveness site source had no pending diagnostic", .{});
     }
 
     /// Record that a checker-selected compile-time root will execute this site.
@@ -172,10 +169,7 @@ pub const Store = struct {
             pending.mode = .empirical;
             return;
         }
-        if (@import("builtin").mode == .debug) {
-            base.invariant("checked artifact invariant violated: empirical exhaustiveness source had no pending diagnostic", .{});
-        }
-        unreachable;
+        base.invariant("checked artifact invariant violated: empirical exhaustiveness source had no pending diagnostic", .{});
     }
 
     /// Record that the compile-time root selected to execute this site failed
@@ -293,7 +287,7 @@ pub const Store = struct {
                     .derived_codec_open_record,
                     .associated_item_not_found,
                     .redundant_open_tag_union,
-                    => unreachable,
+                    => unreachable, // the checker queues only non-exhaustive match and destructure problems as pending exhaustiveness diagnostics
                 }
             }
             if (!pending.reported) _ = try self.appendProblem(problem);

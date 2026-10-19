@@ -64,8 +64,8 @@ pub fn monotonicNs() u64 {
         };
         var counter: i64 = undefined;
         var freq: i64 = undefined;
-        if (k32.QueryPerformanceCounter(&counter) == .FALSE) unreachable;
-        if (k32.QueryPerformanceFrequency(&freq) == .FALSE) unreachable;
+        if (k32.QueryPerformanceCounter(&counter) == .FALSE) unreachable; // QueryPerformanceCounter always succeeds on Windows XP and later
+        if (k32.QueryPerformanceFrequency(&freq) == .FALSE) unreachable; // QueryPerformanceFrequency always succeeds on Windows XP and later
         return @intCast(@divTrunc(@as(i128, counter) * std.time.ns_per_s, @as(i128, freq)));
     } else {
         @compileError("unsupported monotonic clock for test harness");
@@ -1266,7 +1266,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
 
             var next_test: usize = 0;
             var completed: usize = 0;
-            var progress_timer = Timer.start() catch unreachable;
+            var progress_timer = Timer.start() catch unreachable; // Timer.start always succeeds; monotonicNs rejects unsupported clocks at compile time
             var last_progress_ns: u64 = 0;
 
             // Fill initial slots

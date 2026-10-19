@@ -431,7 +431,7 @@ fn resize(ctx: *anyopaque, buf: []u8, _: std.mem.Alignment, new_len: usize, _: u
             const shrink_amount = buf.len - new_len;
             const previous_offset = self.offset.fetchSub(shrink_amount, .monotonic);
             if (previous_offset < shrink_amount) {
-                unreachable;
+                unreachable; // buf ends at the current offset, so the offset is at least buf.len >= shrink_amount
             }
             return true;
         } else {

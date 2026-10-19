@@ -324,10 +324,7 @@ fn verifyNothingToElide(gpa: Allocator, store: *LirStore) Allocator.Error!void {
 }
 
 fn immortalInvariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .debug) {
-        invariant("{s}", .{"immortal locals invariant violated: " ++ message});
-    }
-    unreachable;
+    invariant("{s}", .{"immortal locals invariant violated: " ++ message});
 }
 
 test {

@@ -2221,7 +2221,7 @@ export fn processAndRespond(message_ptr: [*]const u8, message_len: usize) ?[*:0]
             .invalid_state_for_message => "Invalid state for message",
             .response_buffer_too_small => "Response buffer too small",
             .internal_error => "Internal WASM error during processing",
-            .success => unreachable,
+            .success => unreachable, // success is code 0, which the enclosing check excludes
         };
         return createSimpleErrorJson(error_message);
     }

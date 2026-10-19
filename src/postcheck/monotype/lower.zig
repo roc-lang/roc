@@ -2737,7 +2737,7 @@ fn deferredTemplateTypeArgumentsStep(
             .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return,
         },
         .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
-        .redirect, .leaf => unreachable,
+        .redirect, .leaf => unreachable, // graph.content reads a class root and expands its leaf, so it never returns redirect or leaf content
     }
 }
 
@@ -7817,7 +7817,7 @@ const Builder = struct {
             .target => |*target| target.callable_contracts = @intCast(contract_count),
             .structural => |*structural| structural.callable_contracts = @intCast(contract_count),
             .from_callable => |*use| use.callable_contracts = @intCast(contract_count),
-            .from_scheme, .unreachable_value, .checked_error => unreachable,
+            .from_scheme, .unreachable_value, .checked_error => unreachable, // the contracts stage starts only for evidence with callable contracts, which these kinds never carry
         }
     }
 
@@ -9044,7 +9044,7 @@ const Builder = struct {
             self.traceDemand("stub", job.reservation.fn_id);
             const message = if (LiteralDemand.traceEnabled()) message: {
                 var buffer: [96]u8 = undefined;
-                const text = std.fmt.bufPrint(&buffer, "discovery-only specialization fn#{d} reached at compile time", .{@backingInt(job.reservation.fn_id)}) catch unreachable;
+                const text = std.fmt.bufPrint(&buffer, "discovery-only specialization fn#{d} reached at compile time", .{@backingInt(job.reservation.fn_id)}) catch unreachable; // the message is at most 67 bytes, which fits the 96-byte buffer
                 break :message try self.program.addStringLiteral(text);
             } else shared_message;
             self.spec_store.markLowering(job.spec);
@@ -10103,7 +10103,7 @@ const Builder = struct {
                     if (!draftCodecContractSpecializationEql(spec.codec_contract, codec_contract)) continue;
                     const spec_fn_ty = (try source_ctx.specializationLookupTypeForNode(draftTemplateSpecLookupRequestNode(spec))) orelse continue;
                     if (!try source_ctx.typeStore().typeEql(source_ctx.nameStore(), spec_fn_ty, resolved_request_ty.?)) continue;
-                    if (!selection.add(raw_spec, true)) unreachable;
+                    selection.addExact(raw_spec);
                 }
             }
         }
@@ -10176,7 +10176,7 @@ const Builder = struct {
                     if (!draftCodecContractSpecializationEql(spec.codec_contract, codec_contract)) continue;
                     const spec_fn_ty = (try source_ctx.specializationLookupTypeForNode(draftTemplateSpecLookupRequestNode(spec))) orelse continue;
                     if (!try source_ctx.typeStore().typeEql(source_ctx.nameStore(), spec_fn_ty, request_fn_ty)) continue;
-                    if (!selection.add(raw_spec, true)) unreachable;
+                    selection.addExact(raw_spec);
                 }
             }
         }
@@ -12524,7 +12524,7 @@ const Builder = struct {
         fn_value: check.ConstStore.ConstFn,
     ) Allocator.Error!Ast.FnId {
         switch (fn_template.fn_def) {
-            .nested => {
+            .nested => |nested| {
                 const fn_view = self.moduleForConstFnDef(fn_template.fn_def);
                 const graph = try self.createGraph();
                 defer graph.destroy();
@@ -12546,10 +12546,6 @@ const Builder = struct {
                 try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
                 const draft = FinalBodyOutputGuard.begin(self);
                 const request_fn_node = try graph.importMonoIndependent(fn_template.mono_fn_ty);
-                const nested = switch (fn_template.fn_def) {
-                    .nested => |value| value,
-                    .local_template, .imported_template, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => unreachable,
-                };
                 fn_ctx.current_fn_key = nested.context_fn_key;
                 const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(nested, nested.context_fn_key);
                 defer if (restored_local_proc_entries) |entries| fn_ctx.allocator.free(entries);
@@ -12845,7 +12841,7 @@ const Builder = struct {
                     if (!try source_ctx.graph.typeIsResolved(spec_request)) continue;
                     const spec_fn_ty = try source_ctx.activeTypeFromNode(spec_request);
                     if (!try source_ctx.typeStore().typeEql(source_ctx.nameStore(), spec_fn_ty, resolved_request_ty.?)) continue;
-                    if (!selection.add(raw_spec, true)) unreachable;
+                    selection.addExact(raw_spec);
                 }
             }
         }
@@ -12870,7 +12866,7 @@ const Builder = struct {
                         }
                         const spec_shape = spec.open_request_shape orelse continue;
                         if (!std.mem.eql(u8, spec_shape, open_request_shape.?.bytes)) continue;
-                        if (!selection.add(raw_spec, true)) unreachable;
+                        selection.addExact(raw_spec);
                     }
                 }
             }
@@ -17270,9 +17266,13 @@ const DraftOpenCandidateSelection = struct {
     exact: ?u32 = null,
     partial: ?u32 = null,
 
+    fn addExact(self: *DraftOpenCandidateSelection, raw_spec: u32) void {
+        if (self.exact == null or raw_spec < self.exact.?) self.exact = raw_spec;
+    }
+
     fn add(self: *DraftOpenCandidateSelection, raw_spec: u32, exact_interface: bool) bool {
         if (exact_interface) {
-            if (self.exact == null or raw_spec < self.exact.?) self.exact = raw_spec;
+            self.addExact(raw_spec);
             return true;
         }
         if (self.partial) |existing| {
@@ -21366,7 +21366,7 @@ fn anyRuntimeImpossibilityProof(
             var index: usize = 0;
             for (candidates) |candidate| if (candidate) |id| switch (draft.impossibility_proofs.items[@backingInt(id)]) {
                 .never => {},
-                .always => unreachable,
+                .always => unreachable, // the first pass returned early on any always proof
                 .node, .pending, .forward, .any, .all => {
                     ids[index] = id;
                     index += 1;
@@ -21407,9 +21407,9 @@ fn allRuntimeImpossibilityProof(
             const ids = try draft.impossibility_proof_ids.addManyAsSlice(allocator, active_count);
             var index: usize = 0;
             for (candidates) |candidate| {
-                const id = candidate orelse unreachable;
+                const id = candidate orelse unreachable; // the first pass returned null on any null candidate
                 switch (draft.impossibility_proofs.items[@backingInt(id)]) {
-                    .never => unreachable,
+                    .never => unreachable, // the first pass returned null on any never proof
                     .always => {},
                     .node, .pending, .forward, .any, .all => {
                         ids[index] = id;
@@ -23322,7 +23322,7 @@ const BodyContext = struct {
                 var index: usize = 0;
                 for (stmts) |stmt| if (self.stmtImpossibilityProof(stmt)) |id| switch (self.draft.impossibility_proofs.items[@backingInt(id)]) {
                     .never => {},
-                    .always => unreachable,
+                    .always => unreachable, // the first pass returned early on any always proof
                     .node, .pending, .forward, .any, .all => {
                         ids[index] = id;
                         index += 1;
@@ -24731,7 +24731,7 @@ const BodyContext = struct {
                 .tuple => |items| try pending.appendSlice(self.allocator, items),
                 .record => |record| for (record.fields) |field| try pending.append(self.allocator, self.graph.fieldValueNode(field)),
                 .tag_union => |tag_union| for (tag_union.tags) |tag| try pending.appendSlice(self.allocator, tag.payloads),
-                .redirect, .leaf => unreachable,
+                .redirect, .leaf => unreachable, // graph.content reads a class root and expands its leaf, so it never returns redirect or leaf content
                 .unresolved,
                 .func,
                 .empty_tag_union,
@@ -26861,7 +26861,7 @@ const BodyContext = struct {
                 .backing = task.backing,
                 .declared_order = input.?.get(.declared_order),
             })) } },
-            InstNominalCursor.declared_order + 1...std.math.maxInt(u8) => unreachable,
+            InstNominalCursor.declared_order + 1...std.math.maxInt(u8) => unreachable, // stepInstNominal only sets the cursor to InstNominalCursor constants
         }
     }
 
@@ -28847,7 +28847,7 @@ const BodyContext = struct {
                     .ext = self.graph.rootNode(produced_row.ext),
                 } });
             },
-            .redirect, .leaf, .unresolved, .primitive, .func, .empty_tag_union, .empty_record, .erased, .zst => unreachable,
+            .redirect, .leaf, .unresolved, .primitive, .func, .empty_tag_union, .empty_record, .erased, .zst => unreachable, // frames are pushed only for matched named, list, box, tuple, record, and tag union pairs
         }
     }
 
@@ -29882,14 +29882,14 @@ const BodyContext = struct {
         fn nodeValue(self: EvidenceResult) NodeId {
             return switch (self) {
                 .node => |node| node,
-                .none, .maybe_node => unreachable,
+                .none, .maybe_node => Common.invariant("evidence frame expected a node result"),
             };
         }
 
         fn maybeNodeValue(self: EvidenceResult) ?NodeId {
             return switch (self) {
                 .maybe_node, .node => |node| node,
-                .none => unreachable,
+                .none => Common.invariant("evidence frame expected a node or optional node result"),
             };
         }
     };
@@ -30520,7 +30520,7 @@ const BodyContext = struct {
                         const witness = try self.graph.namedValueNodeWithBacking(representation_node, backing_witness.slot);
                         return .{ .ret = .{ .maybe_node = try self.relateCheckedNodeToProducedValue(representation_node, witness) } };
                     },
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .zero_argument_tag, .call, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => unreachable,
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .zero_argument_tag, .call, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => unreachable, // cursor 1 returns for every expression that is not a tuple, tag, record, list, or nominal constructor
                 }
                 task.index += 1;
                 return try self.nextProducedValueChild(task, expr);
@@ -30593,7 +30593,7 @@ const BodyContext = struct {
                 const witness = try self.constructorWitnessWithStructuralNode(request_node, structural_node);
                 return .{ .ret = .{ .maybe_node = try self.relateCheckedNodeToProducedValue(request_node, witness) } };
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .zero_argument_tag, .call, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level, .nominal => unreachable,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .zero_argument_tag, .call, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level, .nominal => unreachable, // only tuple, tag, record, and list constructors request their next child; nominal finishes in stepProducedValue
         }
     }
 
@@ -31289,7 +31289,7 @@ const BodyContext = struct {
                 return try self.nextRelateChild(task, expr);
             },
             .nominal => return self.finishRelate(task),
-            .lookup_local, .lookup_external, .lookup_required, .zero_argument_tag, .empty_list, .empty_record, .block, .match_, .if_, .runtime_error, .lambda, .closure => unreachable,
+            .lookup_local, .lookup_external, .lookup_required, .zero_argument_tag, .empty_list, .empty_record, .block, .match_, .if_, .runtime_error, .lambda, .closure => unreachable, // these kinds finish at cursor 0 without requesting a child computation
         }
     }
 
@@ -31330,7 +31330,7 @@ const BodyContext = struct {
                     } });
                 }
             },
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .zero_argument_tag, .call, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level, .nominal => unreachable,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .zero_argument_tag, .call, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level, .nominal => unreachable, // nextRelateChild is called only for tag, tuple, list, and record expressions
         }
         return self.finishRelate(task);
     }
@@ -31512,56 +31512,56 @@ const BodyContext = struct {
         fn exprValue(self: LowerResult) DraftExprId {
             return switch (self) {
                 .expr => |expr| expr,
-                .maybe_expr, .call, .maybe_call, .span, .closed_operands, .statement, .data, .evidence => unreachable,
+                .maybe_expr, .call, .maybe_call, .span, .closed_operands, .statement, .data, .evidence => Common.invariant("lowering frame expected an expression result"),
             };
         }
 
         fn maybeExprValue(self: LowerResult) ?DraftExprId {
             return switch (self) {
                 .maybe_expr => |expr| expr,
-                .expr, .call, .maybe_call, .span, .closed_operands, .statement, .data, .evidence => unreachable,
+                .expr, .call, .maybe_call, .span, .closed_operands, .statement, .data, .evidence => Common.invariant("lowering frame expected an optional expression result"),
             };
         }
 
         fn callValue(self: LowerResult) LoweredCall {
             return switch (self) {
                 .call => |call| call,
-                .expr, .maybe_expr, .maybe_call, .span, .closed_operands, .statement, .data, .evidence => unreachable,
+                .expr, .maybe_expr, .maybe_call, .span, .closed_operands, .statement, .data, .evidence => Common.invariant("lowering frame expected a call result"),
             };
         }
 
         fn maybeCallValue(self: LowerResult) ?LoweredCall {
             return switch (self) {
                 .maybe_call => |call| call,
-                .expr, .maybe_expr, .call, .span, .closed_operands, .statement, .data, .evidence => unreachable,
+                .expr, .maybe_expr, .call, .span, .closed_operands, .statement, .data, .evidence => Common.invariant("lowering frame expected an optional call result"),
             };
         }
 
         fn spanValue(self: LowerResult) DraftSpan(DraftExprId) {
             return switch (self) {
                 .span => |span| span,
-                .expr, .maybe_expr, .call, .maybe_call, .closed_operands, .statement, .data, .evidence => unreachable,
+                .expr, .maybe_expr, .call, .maybe_call, .closed_operands, .statement, .data, .evidence => Common.invariant("lowering frame expected a span result"),
             };
         }
 
         fn closedOperandsValue(self: LowerResult) ClosedDispatchOperands {
             return switch (self) {
                 .closed_operands => |operands| operands,
-                .expr, .maybe_expr, .call, .maybe_call, .span, .statement, .data, .evidence => unreachable,
+                .expr, .maybe_expr, .call, .maybe_call, .span, .statement, .data, .evidence => Common.invariant("lowering frame expected closed dispatch operands"),
             };
         }
 
         fn statementValue(self: LowerResult) LoweredStatement {
             return switch (self) {
                 .statement => |statement| statement,
-                .expr, .maybe_expr, .call, .maybe_call, .span, .closed_operands, .data, .evidence => unreachable,
+                .expr, .maybe_expr, .call, .maybe_call, .span, .closed_operands, .data, .evidence => Common.invariant("lowering frame expected a statement result"),
             };
         }
 
         fn dataValue(self: LowerResult) BodyExprData {
             return switch (self) {
                 .data => |data| data,
-                .expr, .maybe_expr, .call, .maybe_call, .span, .closed_operands, .statement, .evidence => unreachable,
+                .expr, .maybe_expr, .call, .maybe_call, .span, .closed_operands, .statement, .evidence => Common.invariant("lowering frame expected expression data"),
             };
         }
     };
@@ -31814,7 +31814,7 @@ const BodyContext = struct {
         /// Produce a typed block's expression data rather than its expression.
         as_data: bool = false,
         result_node: NodeId = undefined,
-        stage: enum { start, statements, statement, uninhabited_statement, expanded, recursive_direct, final_expr, discarded_final, finished } = .start,
+        stage: enum { start, statements, statement, uninhabited_statement, expanded, recursive_direct, final_expr, discarded_final } = .start,
         saved_guard_frames: RuntimeDemandGuardFrameStack = undefined,
         lowered: LoweredStatements = .{ .items = &.{}, .len = 0, .termination = .none },
         index: usize = 0,
@@ -32503,7 +32503,7 @@ const BodyContext = struct {
                 .output = output,
                 .select = false,
             } }),
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => unreachable,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => unreachable, // every caller passes an if or match expression
         };
     }
 
@@ -32617,7 +32617,7 @@ const BodyContext = struct {
             .pattern_value => {
                 const pattern = switch (statement.data) {
                     inline .decl, .var_, .reassign => |decl| decl.pattern,
-                    .pending, .promoted_proc, .var_uninitialized, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => unreachable,
+                    .pending, .promoted_proc, .var_uninitialized, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .import_, .alias_decl, .where_alias_decl, .nominal_decl, .type_anno, .type_var_alias, .runtime_error => unreachable, // only beginPatternStatementStep sets this stage, for decl, var, and reassign statements
                 };
                 const lowered = try self.finishPatternStatement(pattern, statement.source_region, task.requested_cell, input.?.exprValue());
                 const stmt = lowered.stmt orelse {
@@ -33752,7 +33752,7 @@ const BodyContext = struct {
                     try self.lowerGeneratedIteratorNextData(iterator, dispatcher_node),
                 );
             },
-            .custom, .single, .list_iter, .list_iter_rev, .str_iter_utf8, .map, .keep_if, .drop_if, .take_first, .drop_first, .concat, .append, .with_index, .step_by, .from_iter, .range_iter, .numeric_range_iter, .numeric_to, .numeric_until, .from_step, .range_done => unreachable,
+            .custom, .single, .list_iter, .list_iter_rev, .str_iter_utf8, .map, .keep_if, .drop_if, .take_first, .drop_first, .concat, .append, .with_index, .step_by, .from_iter, .range_iter, .numeric_range_iter, .numeric_to, .numeric_until, .from_step, .range_done => unreachable, // callers dispatch here only for the generated identity and next procedures
         };
         self.releaseIteratorDispatchTask(task);
         return loweredExprStep(lowered);
@@ -35078,7 +35078,7 @@ const BodyContext = struct {
                 } }),
                 .run_low_level => |low_level| try self.withTypeData(task, .{ .low_level = .{ .op = low_level.op, .args = child.spanValue() } }),
                 .match_, .if_, .block, .closure, .lambda, .record, .lookup_local, .lookup_external, .lookup_required, .runtime_error => self.withTypeDone(task, child.exprValue()),
-                .pending, .numeral, .str_from_quote, .str_segment, .bytes_literal, .empty_list, .call, .empty_record, .zero_argument_tag, .binop, .unary_minus, .unary_not, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .crash, .ellipsis, .anno_only, .break_, .hosted_lambda => unreachable,
+                .pending, .numeral, .str_from_quote, .str_segment, .bytes_literal, .empty_list, .call, .empty_record, .zero_argument_tag, .binop, .unary_minus, .unary_not, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .crash, .ellipsis, .anno_only, .break_, .hosted_lambda => unreachable, // these kinds finish at cursor 0 without requesting a child lowering
             };
         }
         task.saved = try self.saveSourceLocation(expr);
@@ -37079,7 +37079,7 @@ const BodyContext = struct {
             .field_names_iter => try self.lowerFieldNamesIter(task.checked_expr_id, task.source_fn_ty, args, arg_tys, ret_ty, .all, lowered_args),
             .field_names_for_size => try self.lowerFieldNamesIter(task.checked_expr_id, task.source_fn_ty, args, arg_tys, ret_ty, .for_size, lowered_args),
             .field_name => try self.lowerFieldName(args, arg_tys, ret_ty, lowered_args),
-            .str_inspect, .structural_eq => unreachable,
+            .str_inspect, .structural_eq => unreachable, // call-site intrinsic tasks carry only intrinsics with a callsiteArity, which excludes these
         };
         if (task.deferred_body == null) {
             const callable = try self.graph.functionNodes(task.callable_node);
@@ -45581,7 +45581,7 @@ const BodyContext = struct {
             .top_level_const,
             .imported_const,
             .platform_required_const,
-            => unreachable,
+            => unreachable, // constant references returned through restoreConstUseAtType above
             .platform_required_declaration => Common.invariant("platform required declaration reached Monotype without a binding"),
             .platform_required_checked_error => return try self.addExpr(.{ .ty = ty, .data = .{ .checked_error = try self.addStringLiteral("platform requirement failed checking") } }),
         };
@@ -51256,7 +51256,7 @@ const BodyContext = struct {
                 null
             else
                 function.ret,
-            .intrinsic, .graph_participating => unreachable,
+            .intrinsic, .graph_participating => unreachable, // intrinsic and graph-participating targets returned null above
         };
     }
 
@@ -51583,7 +51583,7 @@ const BodyContext = struct {
             .target => target.?.callable_contracts = contracts,
             .structural => |*structural| structural.callable_contracts = contracts,
             .from_callable => |*use| use.callable_contracts = contracts,
-            .from_scheme, .unreachable_value, .checked_error => unreachable,
+            .from_scheme, .unreachable_value, .checked_error => unreachable, // the contracts stage starts only for evidence with a nonzero callable contract count, which these kinds never have
         }
     }
 
@@ -52324,7 +52324,7 @@ const BodyContext = struct {
             if (delivered) |value| {
                 delivered = null;
                 switch (frame.awaiting) {
-                    .none => unreachable,
+                    .none => unreachable, // a child frame is pushed only after its parent sets awaiting to primary or contracts
                     .primary => {
                         frame.awaiting = .none;
                         if (try self.beginCheckedEvidenceContracts(site_view, &frames, value)) continue;
@@ -52435,7 +52435,7 @@ const BodyContext = struct {
                 break :blk templateSchemaIn(lookup.view, &template);
             },
             .local_proc => |local| self.scopeSchema(lookup.view, local.dispatch_scope),
-            .structural => unreachable,
+            .structural => unreachable, // methodLookupForEvidencePurpose keeps the target, whose structural kind was rejected above
         };
         const target = try self.builder.evidence_arena.allocator().create(SpecEvidenceTarget);
         var frame: EvidenceTargetFrame = .{
@@ -52858,7 +52858,7 @@ const BodyContext = struct {
                 .target = target.target,
                 .local_proc_context = target.local_proc_context,
             }, local),
-            .structural => unreachable,
+            .structural => Common.invariant("structural method target reached target-to-constraint relation"),
         };
         var scratch = self.graph.acquireArena();
         defer self.graph.releaseArena(scratch);
@@ -53058,7 +53058,7 @@ const BodyContext = struct {
     ) Allocator.Error!SpecEvidence {
         if (self.forwardedRequirement(node, view.names, param.method)) |forwarded| return forwarded;
         const default_phase: ?checked.NumericDefaultPhase = switch ((try self.graph.content(node))) {
-            .redirect, .leaf => unreachable,
+            .redirect, .leaf => unreachable, // graph.content reads a class root and expands its leaf, so it never returns redirect or leaf content
             .unresolved => |variable| variable.numeric_default_phase,
             .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => null,
         };
@@ -53965,7 +53965,7 @@ const BodyContext = struct {
     ) Allocator.Error!?static_dispatch.MethodOwner {
         var current = node;
         while (true) switch ((try self.graph.content(current))) {
-            .redirect, .leaf => unreachable,
+            .redirect, .leaf => unreachable, // graph.content reads a class root and expands its leaf, so it never returns redirect or leaf content
             .primitive => |primitive| return .{ .builtin = checked.builtinOwnerForPrimitive(primitive) },
             .list => return .{ .builtin = .list },
             .box => return .{ .builtin = .box },
@@ -57220,7 +57220,7 @@ const BodyContext = struct {
             const check_step: @FieldType(CodecSupportStep, "check") = switch (step) {
                 .check => |check_step| check_step,
                 .field => |field_ty| switch (kind) {
-                    .parser => unreachable,
+                    .parser => unreachable, // only the encoder pushes field steps
                     .encoder => .{ .ty = try self.encodeRecordFieldPayloadType(field_ty) },
                 },
                 .leave => |ty| {
@@ -57942,7 +57942,7 @@ const BodyContext = struct {
                 !self.graph.sameClass(root, body_shape_node) and
                 try self.isNestedCodecBoundary(root, nested_boundaries.items)) continue;
             switch (try self.graph.content(root)) {
-                .redirect, .leaf => unreachable,
+                .redirect, .leaf => unreachable, // graph.content reads a class root and expands its leaf, so it never returns redirect or leaf content
                 .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
                 .list, .box => |child| try pending.append(self.allocator, child),
                 .tuple => |items| try pending.appendSlice(self.allocator, items),
@@ -58681,7 +58681,7 @@ const BodyContext = struct {
                         try pending.append(self.allocator, .{ .node = backing.node });
                     }
                 },
-                .redirect, .leaf => unreachable,
+                .redirect, .leaf => unreachable, // graph.content reads a class root and expands its leaf, so it never returns redirect or leaf content
                 .unresolved, .primitive, .empty_tag_union, .empty_record, .func, .erased, .zst => {},
             }
             std.mem.reverse(GraphParserShapeStep, pending.items[children_start..]);
@@ -59655,7 +59655,7 @@ const BodyContext = struct {
                         try pending.append(self.allocator, .{ .node = backing.node });
                     }
                 },
-                .redirect, .leaf => unreachable,
+                .redirect, .leaf => unreachable, // graph.content reads a class root and expands its leaf, so it never returns redirect or leaf content
                 .unresolved,
                 .primitive,
                 .empty_tag_union,
@@ -59990,7 +59990,7 @@ const BodyContext = struct {
                 }
             },
             .named => {},
-            .redirect, .leaf => unreachable,
+            .redirect, .leaf => unreachable, // graph.content reads a class root and expands its leaf, so it never returns redirect or leaf content
             .unresolved, .primitive, .empty_tag_union, .func, .erased => {},
         }
         return added;
@@ -60549,7 +60549,7 @@ const BodyContext = struct {
                     }
                     if (named.backing) |backing| try pending.append(self.allocator, backing.node);
                 },
-                .redirect, .leaf => unreachable,
+                .redirect, .leaf => unreachable, // graph.content reads a class root and expands its leaf, so it never returns redirect or leaf content
                 .unresolved,
                 .primitive,
                 .empty_tag_union,
@@ -61307,7 +61307,7 @@ const BodyContext = struct {
                 .str_interpolation,
                 .underscore,
                 .runtime_error,
-                => unreachable,
+                => unreachable, // pattern_refutability calls child only for patterns classified as child (as and nominal)
             };
         }
 
@@ -61861,7 +61861,7 @@ const BodyContext = struct {
 
         try self.pushMaterializeFrame(materialize_run, request, saved_reuse);
         switch (variant) {
-            .value => unreachable,
+            .value => unreachable, // the value variant returned above
             .list => try self.prepareListPatternBinding(materialize_run, request, value_node),
             .record_rest => try self.prepareRecordRestPatternBinding(materialize_run, request, value_node),
             .wrapped => {
@@ -63069,7 +63069,7 @@ const BodyContext = struct {
                 task.saved_guard_frames = self.runtime_demand_guard_frames;
                 task.stage = .statements;
             },
-            .statements, .finished => unreachable,
+            .statements => unreachable, // the statements stage is set only just before the statement loop below, which leaves through another stage
             .uninhabited_statement => {
                 task.lowered.termination = .{ .uninhabited = input.?.exprValue() };
                 return self.beginBlockTail(task);
@@ -63238,7 +63238,7 @@ const BodyContext = struct {
         return switch (task.tail) {
             .value => self.finishBlockValue(task, final_expr),
             .state_result => self.finishStatementsBlock(task, final_expr),
-            .loop_continue, .state_only => unreachable,
+            .loop_continue, .state_only => unreachable, // beginBlockTail moves loop_continue and state_only tails to the discarded_final stage
         };
     }
 
@@ -63256,7 +63256,7 @@ const BodyContext = struct {
                 else
                     try self.continueWithCurrentState(cell, loop.carries),
                 .state_only => |state| try self.stateOnlyTupleExprAtTypeCell(cell, state.merge_binders),
-                .value, .state_result => unreachable,
+                .value, .state_result => unreachable, // finishDiscardingBlock runs only for loop_continue and state_only tails
             },
         };
         return loweredExprStep(try self.addExprWithTypeCell(cell, .{ .block = .{
@@ -65013,7 +65013,7 @@ const BodyContext = struct {
                     try pat_run.ops.append(self.allocator, .{ .pattern = child, .ty = self.recordFieldType(ty, name) });
                 }
             },
-            .pending, .assign, .as, .nominal, .list, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => unreachable,
+            .pending, .assign, .as, .nominal, .list, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => unreachable, // both callers pass only applied_tag, record_destructure, and tuple patterns
         }
     }
 
@@ -65394,7 +65394,7 @@ const BodyContext = struct {
             .str_interpolation,
             .underscore,
             => return .{ .shell = try self.lowerPatternAtNode(pattern_id, node) },
-            .list => unreachable,
+            .list => unreachable, // patternRequiresOwnMaterialization returned above for list patterns
             .pending,
             .runtime_error,
             => Common.invariant("non-runtime checked pattern reached materialization shell lowering"),
@@ -65564,7 +65564,7 @@ const BodyContext = struct {
     /// lowers a composite one.
     fn enterPatNode(self: *BodyContext, pat_run: *PatNodeRun, op: PatNodeOp) Allocator.Error!?DraftPatId {
         switch (op) {
-            .record_rest => unreachable,
+            .record_rest => unreachable, // runPatNode's root is an at_node op and it binds record_rest ops itself
             .at_node => |at| return try self.enterPatNodeAtNode(pat_run, at.pattern, at.node, at.in_match),
             .optional_slot => |slot| return try self.enterPatNodeOptionalSlot(pat_run, slot.pattern, slot.slot_node, slot.result_node),
         }
@@ -65723,7 +65723,7 @@ const BodyContext = struct {
             }
         };
         const data: BodyPatData = switch (pattern.data) {
-            .nominal => unreachable,
+            .nominal => unreachable, // the loop above advances past every nominal pattern
             .underscore => .wildcard,
             .assign => |binder| blk: {
                 const slot_local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), slot_cell, null);
@@ -68451,7 +68451,7 @@ const NodeUninhabitedScan = struct {
                 try items.add(target);
                 break :blk .{ .group = .any };
             },
-            .leaf => unreachable,
+            .leaf => unreachable, // graph.content reads a class root and expands its leaf, so it never returns a leaf
             .empty_tag_union => .{ .value = true },
             .named => |named| blk: {
                 self.unsettled_hits += 1;
@@ -71804,5 +71804,5 @@ fn writeActiveVariant(comptime U: type, dest: *U, src: U) void {
             return;
         }
     }
-    unreachable;
+    unreachable; // the inline loop covers every variant of U
 }

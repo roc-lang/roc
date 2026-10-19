@@ -4,6 +4,7 @@
 //! resolves only those calls' forwarding continuations, memoizing shared
 //! suffixes. No control-flow walk, path enumeration, or proof budget is needed.
 const std = @import("std");
+const base = @import("base");
 const collections = @import("collections");
 const LIR = @import("LIR.zig");
 
@@ -171,7 +172,8 @@ pub fn finish(self: *Self, store: anytype) std.mem.Allocator.Error!?LIR.TailCall
 
 fn successor(self: *const Self, store: anytype, stmt: LIR.CFStmt) ?LIR.CFStmtId {
     return switch (stmt) {
-        .jump => |jump| self.joins.get(jump.target) orelse unreachable,
+        .jump => |jump| self.joins.get(jump.target) orelse
+            base.invariant("tail call builder invariant violated: jump to join {d}, which the producer never recorded", .{@backingInt(jump.target)}),
         .join => |join| join.remainder,
         .assign_ref => |assign| switch (assign.op.kind) {
             .local, .nominal, .list_reinterpret => assign.next,
@@ -258,7 +260,7 @@ fn returnedLocal(self: *Self, store: anytype, start: LIR.CFStmtId) std.mem.Alloc
                         .field,
                         .tag_payload,
                         .tag_payload_struct,
-                        => unreachable,
+                        => unreachable, // successor forwards only through local, nominal, and list_reinterpret refs
                     };
                 },
                 .set_local => |assign| result = if (assign.target == local) assign.value else null,
@@ -303,7 +305,7 @@ fn returnedLocal(self: *Self, store: anytype, start: LIR.CFStmtId) std.mem.Alloc
                 .str_match_set,
                 .ret,
                 .crash,
-                => unreachable,
+                => unreachable, // the path holds only statements successor forwards through
             }
         }
         self.proofs.getPtr(id).?.* = .{ .done = result };

@@ -7,7 +7,6 @@
 
 const std = @import("std");
 const invariant = @import("base").invariant;
-const builtin = @import("builtin");
 const builtins = @import("builtins");
 const eval = @import("eval");
 const ipc = @import("ipc");
@@ -201,10 +200,8 @@ fn reportEvalError(ops: *RocOps, interpreter: *const eval.LirInterpreter, err: e
         error.DivisionByZero => interpreter.getRuntimeErrorMessage() orelse "Division by zero",
         error.ComptimeExhaustiveness => "compile-time exhaustiveness failure reached runtime code",
         error.Crash => interpreter.getCrashMessage(),
-        // expect_err statements only occur in top-level expect test roots,
-        // never in platform entrypoints.
-        error.ExpectErr => unreachable,
-        error.UnsupportedHostedFunction, error.InvalidHostedFunctionSignature => unreachable,
+        error.ExpectErr => unreachable, // expect_err statements only occur in top-level expect test roots, never in platform entrypoints
+        error.UnsupportedHostedFunction, error.InvalidHostedFunctionSignature => unreachable, // only inspected_run's hosted dependency lookup returns these; the LIR interpreter never does
     };
     ops.crash(message);
 }
@@ -226,12 +223,8 @@ fn evaluateEntrypointInState(
     arg_ptr: ?*anyopaque,
 ) void {
     const view = &state.view;
-    const entrypoint = state.entrypoints.forOrdinal(entry_idx) orelse {
-        if (builtin.mode == .debug) {
-            invariant("LIR shim invariant violated: missing platform entrypoint ordinal {d}", .{entry_idx});
-        }
-        unreachable;
-    };
+    const entrypoint = state.entrypoints.forOrdinal(entry_idx) orelse
+        invariant("LIR shim invariant violated: missing platform entrypoint ordinal {d}", .{entry_idx});
 
     const retained = eval.LirInterpreter.Retained.createWithBoxyTables(
         allocator(),

@@ -39,7 +39,7 @@ const Adapter = struct {
                 const import_name = owner.common.getString(owner.imports.imports.items.items[@backingInt(external.module_idx)]);
                 if (CIR.Import.isCompilerBuiltinImportName(import_name)) {
                     break :blk declarationReference(.{
-                        .owner = self.resolver.builtin_owner orelse unreachable,
+                        .owner = self.resolver.builtin_owner orelse base.invariant("check invariant violated: a compiler-builtin import is resolved only by modules checked with the Builtin module available", .{}),
                         .statement = @fromBackingInt(@intCast(external.target_node_idx)),
                     });
                 }
@@ -83,7 +83,7 @@ const Adapter = struct {
             .s_import,
             .s_type_anno,
             .s_type_var_alias,
-            => unreachable,
+            => unreachable, // canonicalization resolves type references only to alias, nominal, and where-alias declarations
             .s_where_alias_decl, .s_runtime_error => return null,
         };
         if (body == .placeholder) return null;
@@ -118,7 +118,7 @@ const Adapter = struct {
             .s_type_var_alias,
             .s_where_alias_decl,
             .s_runtime_error,
-            => unreachable,
+            => unreachable, // the solver walks only declarations that `declaration` admitted, which are alias or nominal
         };
         for (owner.store.sliceTypeAnnos(owner.store.getTypeHeader(header).args), 0..) |formal, index| {
             if (formal == annotation) return .{ .formal = index };

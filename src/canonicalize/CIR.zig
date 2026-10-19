@@ -782,7 +782,7 @@ pub const IntValue = struct {
     pub fn pushStringPair(self: IntValue, tree: *SExprTree, key: []const u8) std.mem.Allocator.Error!void {
         const begin = try tree.reserveStringBuffer(40);
         errdefer tree.discardReservedStringBuffer(begin);
-        const value_str = self.bufPrint(tree.reservedStringBuffer(begin)[0..40]) catch unreachable;
+        const value_str = self.bufPrint(tree.reservedStringBuffer(begin)[0..40]) catch unreachable; // IntValue.bufPrint only writes into the given buffer, and 40 bytes fit any i128 or u128 in decimal
         try tree.pushReservedStringPair(key, begin, value_str);
     }
 };

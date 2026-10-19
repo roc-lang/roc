@@ -159,7 +159,7 @@ const Relocation = struct {
                     return @unionInit(T, field_name, self.member(T, field_name, @field(item, field_name)));
                 }
             }
-            unreachable;
+            unreachable; // the loop visits every union field, so one of them is the active tag
         }
         if (comptime std.meta.activeTag(info) == .optional) {
             return if (item) |payload| self.value(payload) else null;

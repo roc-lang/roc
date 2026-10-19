@@ -51,10 +51,10 @@ fn materializedAmong(
     program: *const lir.CheckedPipeline.LoweredProgram,
     module: CheckedArtifact.ModuleId,
     requests: []const CheckedArtifact.RootRequest,
-) usize {
+) error{TestUnexpectedResult}!usize {
     var count: usize = 0;
     for (requests) |request| {
-        if (materializesRoot(program, module, rootIdentity(request))) count += 1;
+        if (materializesRoot(program, module, try rootIdentity(request))) count += 1;
     }
     return count;
 }
@@ -135,8 +135,8 @@ fn countProcsNaming(store: *const lir.LirStore, fragment: []const u8) usize {
     return count;
 }
 
-fn rootIdentity(request: CheckedArtifact.RootRequest) CheckedArtifact.ComptimeRootId {
-    return request.compile_time_root orelse unreachable;
+fn rootIdentity(request: CheckedArtifact.RootRequest) error{TestUnexpectedResult}!CheckedArtifact.ComptimeRootId {
+    return request.compile_time_root orelse error.TestUnexpectedResult;
 }
 
 /// The request for the root declared at `order` in its module.
@@ -239,7 +239,7 @@ test "a build evaluates and materializes only the compile-time values its progra
     // stays explicitly unevaluated. Transcoding rejects a read whose value
     // the host did not materialize, so the runtime continuation below also
     // fails if the wrong root were the evaluated one.
-    try std.testing.expectEqual(@as(usize, 1), materializedAmong(host, helper.key, helper_roots));
+    try std.testing.expectEqual(@as(usize, 1), try materializedAmong(host, helper.key, helper_roots));
     var unevaluated: usize = 0;
     for (helper_roots) |request| {
         if (helper.compile_time_roots.root(request.compile_time_root.?).payload == .unevaluated) unevaluated += 1;
@@ -320,27 +320,27 @@ test "one evaluated root has one completed-value slot however many places read i
     // read by `doubled`, at compile time, from this very program. Those two
     // demands name one concrete value, so they are one slot.
     for (helper_roots) |request| {
-        const root = rootIdentity(request);
+        const root = try rootIdentity(request);
         try std.testing.expect(materializesRoot(host, helper.key, root));
         try std.testing.expectEqual(@as(usize, 1), valueSlotsForRoot(host, helper.key, root));
     }
-    try std.testing.expectEqual(@as(usize, 3), materializedAmong(host, helper.key, helper_roots));
+    try std.testing.expectEqual(@as(usize, 3), try materializedAmong(host, helper.key, helper_roots));
 
     // `base_value` really is read inside this program: a read before the
     // roots are evaluated goes through the slot's accessor, and only a read
     // creates one. A root this program never reads has none, so the shared
     // slot above is a reader's slot and the materialization request took it.
-    const base_slot = valueSlotForRoot(host, helper.key, rootIdentity(try rootWithOrder(helper_roots, 0))).?;
+    const base_slot = valueSlotForRoot(host, helper.key, try rootIdentity(try rootWithOrder(helper_roots, 0))).?;
     try std.testing.expect(host.lir_result.static_data_values.items[@backingInt(base_slot)].accessor != null);
-    const offset_slot = valueSlotForRoot(host, helper.key, rootIdentity(try rootWithOrder(helper_roots, 2))).?;
+    const offset_slot = valueSlotForRoot(host, helper.key, try rootIdentity(try rootWithOrder(helper_roots, 2))).?;
     try std.testing.expect(host.lir_result.static_data_values.items[@backingInt(offset_slot)].accessor == null);
 
     // `base_value` and `offset` commit the same eight-byte layout and are
     // distinct values, so layout agreement alone never merges two demands.
-    const first = valueSlotForRoot(host, helper.key, rootIdentity(helper_roots[0])).?;
+    const first = valueSlotForRoot(host, helper.key, try rootIdentity(helper_roots[0])).?;
     try std.testing.expect(helper_roots.len > 1);
     for (helper_roots[1..]) |request| {
-        const other = valueSlotForRoot(host, helper.key, rootIdentity(request)).?;
+        const other = valueSlotForRoot(host, helper.key, try rootIdentity(request)).?;
         try std.testing.expect(first != other);
         const first_layout = host.lir_result.static_data_values.items[@backingInt(first)].layout_idx;
         const other_layout = host.lir_result.static_data_values.items[@backingInt(other)].layout_idx;

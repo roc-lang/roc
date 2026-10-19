@@ -37,7 +37,7 @@ test "transport decodes and encodes LSP frames" {
     try transport.sendJson(response_body);
 
     const written = output_buffer[0..transport.writer.end];
-    const separator_index = std.mem.find(u8, written, "\r\n\r\n") orelse unreachable;
+    const separator_index = std.mem.find(u8, written, "\r\n\r\n") orelse return error.TestUnexpectedResult;
     const body = written[(separator_index + 4)..];
 
     var parsed = try std.json.parseFromSlice(std.json.Value, allocator, body, .{});

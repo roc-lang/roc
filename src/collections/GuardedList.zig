@@ -396,9 +396,10 @@ pub fn at(borrow: anytype, index: usize) BorrowElement(@TypeOf(borrow)) {
         const ptr = borrow_info.pointer;
         return switch (ptr.size) {
             .slice => borrow[index],
-            .one => if (@typeInfo(ptr.child) == .array)
-                if (@typeInfo(ptr.child).array.len == 0) unreachable else borrow[index]
-            else blk: {
+            .one => if (@typeInfo(ptr.child) == .array) blk: {
+                if (@typeInfo(ptr.child).array.len == 0) unreachable; // callers index within bounds, and a zero-length array has no in-bounds index
+                break :blk borrow[index];
+            } else blk: {
                 std.debug.assert(index == 0);
                 break :blk borrow.*;
             },

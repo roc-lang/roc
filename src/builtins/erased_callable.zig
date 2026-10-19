@@ -194,7 +194,7 @@ pub fn repack(
     };
 
     if (capture_size > 0) {
-        const src = capture_src orelse unreachable;
+        const src = capture_src orelse utils.builtinInvariant(roc_ops, "erased callable repack with a nonzero capture size has no capture source");
         @memcpy(capturePtr(data_ptr)[0..capture_size], src[0..capture_size]);
     }
 

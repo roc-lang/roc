@@ -6,7 +6,6 @@
 const std = @import("std");
 const base = @import("base");
 const Allocator = std.mem.Allocator;
-const builtin = @import("builtin");
 const c = @import("zstd");
 
 const WriterError = std.Io.Writer.Error;
@@ -42,10 +41,7 @@ pub const CompressingHashWriter = struct {
 
         const rc = c.ZSTD_CCtx_setParameter(ctx, c.ZSTD_c_compressionLevel, compression_level);
         if (c.ZSTD_isError(rc) != 0) {
-            if (builtin.mode == .debug) {
-                base.invariant("ZSTD_CCtx_setParameter failed: {s}", .{c.ZSTD_getErrorName(rc)});
-            }
-            unreachable;
+            base.invariant("bundle invariant violated: ZSTD_CCtx_setParameter rejected the compression level: {s}", .{c.ZSTD_getErrorName(rc)});
         }
 
         const out_buffer_size = c.ZSTD_CStreamOutSize();

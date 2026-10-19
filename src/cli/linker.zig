@@ -1007,7 +1007,7 @@ fn binaryenConfig(config: LinkConfig) RocBinaryenOptimizeConfig {
         shrink: c_int,
     };
     const levels: Levels = switch (config.wasm_optimize) {
-        .none => unreachable,
+        .none => unreachable, // link calls optimizeWasmOutput only when wasm_optimize is not .none
         .size => .{ .optimize = 2, .shrink = 2 },
         .speed => .{ .optimize = 3, .shrink = 0 },
     };

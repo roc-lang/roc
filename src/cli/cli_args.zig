@@ -2747,7 +2747,7 @@ fn flagSample(comptime cmd: Command, comptime flag: Flag, comptime written: []co
         .toggle => &.{written},
         .attached => &.{written ++ (if (mem.eql(u8, written, flag.name)) "=" else "") ++ sample},
         .separate => &.{ written, sample },
-        .terminator, .version, .rejected, .documented => unreachable,
+        .terminator, .version, .rejected, .documented => @compileError(flag.name ++ " takes no value, so it has no sample command line"),
     };
 }
 

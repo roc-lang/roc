@@ -32,10 +32,7 @@ pub const TargetUsize = enum(u1) {
     pub const native: TargetUsize = switch (@alignOf(usize)) {
         4 => .u32,
         8 => .u64,
-        else => {
-            // The Roc compiler can only be built for 32-bit and 64-bit targets.
-            unreachable;
-        },
+        else => @compileError("The Roc compiler can only be built for 32-bit and 64-bit targets."),
     };
 
     /// Returns an array of all TargetUsize variants that Roc supports
@@ -50,7 +47,7 @@ pub const TargetUsize = enum(u1) {
         return switch (bits) {
             32 => .u32,
             64 => .u64,
-            else => unreachable,
+            else => unreachable, // every caller passes RocTarget.ptrBitWidth, which returns only 32 or 64
         };
     }
 

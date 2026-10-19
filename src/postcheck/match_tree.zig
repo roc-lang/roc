@@ -550,7 +550,7 @@ pub fn Compiler(comptime Ctx: type) type {
                             try self.normalize(child, sub.ty, sub.pat, &cols, &binds);
                         }
                     },
-                    .int_switch, .eq_chain, .str_set, .list_len => unreachable,
+                    .int_switch, .eq_chain, .str_set, .list_len => unreachable, // groupFrame, the only caller, passes only .tag and .callable
                 }
 
                 for (row.cols) |c| {
@@ -1595,15 +1595,18 @@ pub fn Compiler(comptime Ctx: type) type {
             }
 
             fn valueLocal(_: *const Emitter, env: *Env, occ: OccId) CtxLocal {
-                return (env.locals.get(occ) orelse unreachable).value orelse unreachable;
+                const locals = env.locals.get(occ) orelse base.invariant("match_tree invariant violated: occurrence {d} was read before materialize registered its locals", .{occ.idx()});
+                return locals.value orelse base.invariant("match_tree invariant violated: occurrence {d} value local was read without a marked value use", .{occ.idx()});
             }
 
             fn lenLocal(_: *const Emitter, env: *Env, occ: OccId) CtxLocal {
-                return (env.locals.get(occ) orelse unreachable).len orelse unreachable;
+                const locals = env.locals.get(occ) orelse base.invariant("match_tree invariant violated: occurrence {d} was read before materialize registered its locals", .{occ.idx()});
+                return locals.len orelse base.invariant("match_tree invariant violated: occurrence {d} len local was read without a marked len use", .{occ.idx()});
             }
 
             fn discLocal(_: *const Emitter, env: *Env, occ: OccId) CtxLocal {
-                return (env.locals.get(occ) orelse unreachable).disc orelse unreachable;
+                const locals = env.locals.get(occ) orelse base.invariant("match_tree invariant violated: occurrence {d} was read before materialize registered its locals", .{occ.idx()});
+                return locals.disc orelse base.invariant("match_tree invariant violated: occurrence {d} disc local was read without a marked disc use", .{occ.idx()});
             }
 
             fn emitBinds(self: *Emitter, binds: []const Bind, env: *Env, next: CtxStmt) Ctx.LowerError!CtxStmt {
@@ -1957,11 +1960,11 @@ const MockCtx = struct {
     }
 
     pub fn callableVariant(_: MockCtx, _: u32, _: u32) u32 {
-        unreachable;
+        unreachable; // patKind maps no MockPat to .callable, so no column has a callable test
     }
 
     pub fn callablePayload(_: MockCtx, _: u32, _: u32) LowerError!?MockSub {
-        unreachable;
+        unreachable; // patKind maps no MockPat to .callable, so no column has a callable test
     }
 
     pub fn callableVariantCount(_: MockCtx, _: u32) ?u32 {
@@ -1994,7 +1997,7 @@ const MockCtx = struct {
             .str_lit => |s| s,
             .str_pattern => |s| s.shape,
             .list => |l| l.elems.len,
-            .bind, .wildcard, .as_pattern, .record, .tuple, .nominal => unreachable,
+            .bind, .wildcard, .as_pattern, .record, .tuple, .nominal => unreachable, // normalize expands these into sub-columns, so tested columns hold constructors
         };
     }
 

@@ -8,7 +8,6 @@
 
 const std = @import("std");
 const invariant = @import("base").invariant;
-const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const DataRelocationKind = @import("../Relocation.zig").DataRelocationKind;
 const object = @import("mod.zig");
@@ -383,14 +382,14 @@ pub const CoffWriter = struct {
             .abs64 => self.arch.absolutePointerRelocType(),
             .rel32 => switch (self.arch) {
                 .x86_64 => COFF.IMAGE_REL_AMD64_REL32,
-                .aarch64 => unreachable,
+                .aarch64 => invariant("COFF invariant violated: rel32 data relocation in aarch64 code, which emits page21 and pageoff12", .{}),
             },
             .page21 => switch (self.arch) {
-                .x86_64 => unreachable,
+                .x86_64 => invariant("COFF invariant violated: page21 data relocation in x86_64 code, which emits rel32", .{}),
                 .aarch64 => COFF.IMAGE_REL_ARM64_PAGEBASE_REL21,
             },
             .pageoff12 => switch (self.arch) {
-                .x86_64 => unreachable,
+                .x86_64 => invariant("COFF invariant violated: pageoff12 data relocation in x86_64 code, which emits rel32", .{}),
                 .aarch64 => COFF.IMAGE_REL_ARM64_PAGEOFFSET_12A,
             },
         };
@@ -403,7 +402,7 @@ pub const CoffWriter = struct {
 
     /// Add an absolute pointer relocation to the read-only data section.
     pub fn addRdataRelocation(self: *Self, offset: u32, symbol_idx: u32, addend: i64) Allocator.Error!void {
-        if (offset + 8 > self.rdata.len) unreachable;
+        if (offset + 8 > self.rdata.len) invariant("COFF invariant violated: rdata relocation at offset {d} exceeds rdata length {d}", .{ offset, self.rdata.len });
         try self.rdata_relocs.append(self.allocator, .{
             .offset = offset,
             .symbol_idx = symbol_idx,
@@ -476,10 +475,9 @@ pub const CoffWriter = struct {
     }
 
     fn appendArm64AllocCode(self: *Self, codes: *std.ArrayList(u8), size: u32) Allocator.Error!void {
-        if (builtin.mode == .debug and (size == 0 or size % 16 != 0)) {
+        if (size == 0 or size % 16 != 0) {
             invariant("COFF invariant violated: ARM64 stack allocation must be non-zero and 16-byte aligned, got {d}", .{size});
         }
-        if (size == 0 or size % 16 != 0) unreachable;
 
         const scaled = size / 16;
         if (scaled < 32) {
@@ -488,10 +486,9 @@ pub const CoffWriter = struct {
             try codes.append(self.allocator, @as(u8, 0xC0) | @as(u8, @intCast(scaled >> 8)));
             try codes.append(self.allocator, @truncate(scaled));
         } else {
-            if (builtin.mode == .debug and scaled >= (1 << 24)) {
+            if (scaled >= (1 << 24)) {
                 invariant("COFF invariant violated: ARM64 stack allocation too large for one unwind code, got {d}", .{size});
             }
-            if (scaled >= (1 << 24)) unreachable;
             try codes.append(self.allocator, 0xE0);
             try codes.append(self.allocator, @truncate(scaled >> 16));
             try codes.append(self.allocator, @truncate(scaled >> 8));
@@ -501,10 +498,9 @@ pub const CoffWriter = struct {
 
     fn appendArm64SaveFplr(self: *Self, codes: *std.ArrayList(u8), frame_size: u32) Allocator.Error!void {
         if (frame_size <= 504) {
-            if (builtin.mode == .debug and (frame_size == 0 or frame_size % 8 != 0)) {
+            if (frame_size == 0 or frame_size % 8 != 0) {
                 invariant("COFF invariant violated: ARM64 small frame must be a non-zero multiple of 8, got {d}", .{frame_size});
             }
-            if (frame_size == 0 or frame_size % 8 != 0) unreachable;
             try codes.append(self.allocator, @as(u8, 0x80) | @as(u8, @intCast(frame_size / 8 - 1)));
         } else {
             try codes.append(self.allocator, 0x40);
@@ -538,10 +534,9 @@ pub const CoffWriter = struct {
     }
 
     fn appendArm64RegPair(self: *Self, codes: *std.ArrayList(u8), reg: u8, offset: u32) Allocator.Error!void {
-        if (builtin.mode == .debug and (reg < 19 or reg > 28 or offset % 8 != 0 or offset / 8 > 63)) {
+        if (reg < 19 or reg > 28 or offset % 8 != 0 or offset / 8 > 63) {
             invariant("COFF invariant violated: ARM64 saved register pair x{d} at offset {d} is not encodable", .{ reg, offset });
         }
-        if (reg < 19 or reg > 28 or offset % 8 != 0 or offset / 8 > 63) unreachable;
 
         const reg_delta = reg - 19;
         try codes.append(self.allocator, @as(u8, 0xC8) | @as(u8, @intCast(reg_delta >> 2)));
@@ -619,10 +614,9 @@ pub const CoffWriter = struct {
     };
 
     fn buildArm64UnwindData(self: *Self, func: FunctionInfo) Allocator.Error!Arm64UnwindData {
-        if (builtin.mode == .debug and func.frame_size == 0) {
+        if (func.frame_size == 0) {
             invariant("COFF invariant violated: ARM64 function {d}-{d} has no frame size", .{ func.start_offset, func.end_offset });
         }
-        if (func.frame_size == 0) unreachable;
 
         var codes: std.ArrayList(u8) = .empty;
         errdefer codes.deinit(self.allocator);
@@ -633,10 +627,9 @@ pub const CoffWriter = struct {
         if (func.has_epilogue) try self.appendArm64EpilogueSequence(&codes, func);
 
         const code_words = @as(u32, @intCast((codes.items.len + 3) / 4));
-        if (builtin.mode == .debug and code_words > 255) {
+        if (code_words > 255) {
             invariant("COFF invariant violated: ARM64 unwind code words exceed xdata limit: {d}", .{code_words});
         }
-        if (code_words > 255) unreachable;
 
         return .{
             .codes = codes,
@@ -664,10 +657,9 @@ pub const CoffWriter = struct {
                 var unwind_codes: std.ArrayList(u8) = .empty;
                 defer unwind_codes.deinit(self.allocator);
 
-                if (builtin.mode == .debug and func.prologue_size > std.math.maxInt(u8)) {
+                if (func.prologue_size > std.math.maxInt(u8)) {
                     invariant("COFF invariant violated: x64 prologue too large for UNWIND_INFO: {d}", .{func.prologue_size});
                 }
-                if (func.prologue_size > std.math.maxInt(u8)) unreachable;
                 const prolog_offset: u8 = @intCast(func.prologue_size);
 
                 if (func.stack_alloc > 0) {
@@ -719,10 +711,9 @@ pub const CoffWriter = struct {
                 defer data.codes.deinit(self.allocator);
 
                 const function_bytes = func.end_offset - func.start_offset;
-                if (builtin.mode == .debug and (function_bytes % 4 != 0 or function_bytes / 4 > 0x3ffff)) {
+                if (function_bytes % 4 != 0 or function_bytes / 4 > 0x3ffff) {
                     invariant("COFF invariant violated: ARM64 function length is not encodable: {d}", .{function_bytes});
                 }
-                if (function_bytes % 4 != 0 or function_bytes / 4 > 0x3ffff) unreachable;
 
                 const code_words = data.codeWords();
                 const extended = code_words > 31;
@@ -745,10 +736,9 @@ pub const CoffWriter = struct {
                     try output.appendSlice(self.allocator, &extension_bytes);
                 }
 
-                if (builtin.mode == .debug and (func.epilogue_offset % 4 != 0 or func.epilogue_offset / 4 > 0x3ffff or data.epilogue_index > 1023)) {
+                if (func.epilogue_offset % 4 != 0 or func.epilogue_offset / 4 > 0x3ffff or data.epilogue_index > 1023) {
                     invariant("COFF invariant violated: ARM64 epilogue scope is not encodable: offset={d} index={d}", .{ func.epilogue_offset, data.epilogue_index });
                 }
-                if (func.epilogue_offset % 4 != 0 or func.epilogue_offset / 4 > 0x3ffff or data.epilogue_index > 1023) unreachable;
 
                 const epilog_scope = (data.epilogue_index << 22) | (func.epilogue_offset / 4);
                 var epilog_bytes: [4]u8 = undefined;
@@ -787,7 +777,8 @@ pub const CoffWriter = struct {
             return bytes;
         }
         const offset = try self.addString(name);
-        _ = std.fmt.bufPrint(&bytes, "/{d}", .{offset}) catch unreachable;
+        _ = std.fmt.bufPrint(&bytes, "/{d}", .{offset}) catch
+            invariant("COFF invariant violated: section name string table offset {d} does not fit a /offset section name", .{offset});
         return bytes;
     }
 

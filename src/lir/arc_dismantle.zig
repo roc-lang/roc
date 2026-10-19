@@ -399,8 +399,7 @@ pub const Dismantles = struct {
 };
 
 fn dismantleInvariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .debug) base.invariant(message, .{});
-    unreachable;
+    base.invariant(message, .{});
 }
 
 const State = enum(u8) {
@@ -2298,7 +2297,7 @@ fn projectionEdgeOf(
             const projection = encodeProjection(assign.op).?;
             const local = switch (assign.op.kind) {
                 inline .field, .tag_payload, .tag_payload_struct => assign.op.source,
-                .local, .discriminant, .list_reinterpret, .nominal => unreachable,
+                .local, .discriminant, .list_reinterpret, .nominal => unreachable, // the enclosing prong matched only field and tag-payload kinds
             };
             if (!projectionOwnsAllRc(store, layouts, local, assign.target, projection)) return null;
             break :blk .{ local, true };
@@ -2338,7 +2337,7 @@ fn placeLinkOf(
             const projection = encodeProjection(assign.op).?;
             const projection_source = switch (assign.op.kind) {
                 inline .field, .tag_payload, .tag_payload_struct => assign.op.source,
-                .local, .discriminant, .list_reinterpret, .nominal => unreachable,
+                .local, .discriminant, .list_reinterpret, .nominal => unreachable, // the enclosing prong matched only field and tag-payload kinds
             };
             if (!projectionOwnsAllRc(store, layouts, projection_source, assign.target, projection)) return null;
             break :blk .{ projection_source, .{ .projection = stmt_index } };
@@ -2659,7 +2658,7 @@ pub fn compute(
 
     // Every per-statement fact the whole-store passes below consume, gathered
     // in disjoint statement ranges off the coordinator.
-    const range_count = @max(1, std.math.divCeil(usize, store.cfStmtCount(), statement_facts_range_size) catch unreachable);
+    const range_count = @max(1, std.math.divCeil(usize, store.cfStmtCount(), statement_facts_range_size) catch unreachable); // the divisor is a nonzero constant and usize division cannot overflow
     const fact_ranges = try gpa.alloc(StatementFacts, range_count);
     defer gpa.free(fact_ranges);
     for (fact_ranges, 0..) |*range, index| {

@@ -2055,7 +2055,7 @@ const TarjanState = struct {
 
             const finished = top.node;
             try self.finishNode(graph, finished);
-            _ = dfs_stack.pop() orelse unreachable;
+            _ = dfs_stack.pop() orelse unreachable; // the loop condition guarantees `top` is still on the stack
 
             if (dfs_stack.items.len > 0) {
                 const parent = dfs_stack.items[dfs_stack.items.len - 1].node;

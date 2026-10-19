@@ -56,7 +56,7 @@ test "canonical where ownership follows rigid declarations through signatures" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const root = try test_env.canonicalizeExpr() orelse unreachable;
+    const root = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const statement = try firstStatement(&test_env, root.get_idx());
     try testing.expectEqual(.s_decl, std.meta.activeTag(statement));
     const annotation = test_env.module_env.store.getAnnotation(statement.s_decl.anno.?);
@@ -97,7 +97,7 @@ test "inner where lookup does not take ownership of enclosing rigid" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const root = try test_env.canonicalizeExpr() orelse unreachable;
+    const root = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const outer = try firstStatement(&test_env, root.get_idx());
     try testing.expectEqual(.s_decl, std.meta.activeTag(outer));
     const inner = try firstStatement(&test_env, try lambdaBody(&test_env, outer.s_decl.expr));
@@ -125,7 +125,7 @@ test "detached where receiver does not introduce itself" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const root = try test_env.canonicalizeExpr() orelse unreachable;
+    const root = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const annotation = try annotatedDecl(&test_env, root.get_idx());
     const owners = test_env.module_env.store.sliceWhereClauseOwners(annotation.where.?);
     try testing.expectEqual(@as(usize, 1), owners.len);
@@ -143,7 +143,7 @@ test "detached where receiver cycle does not introduce itself" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const root = try test_env.canonicalizeExpr() orelse unreachable;
+    const root = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const annotation = try annotatedDecl(&test_env, root.get_idx());
     const owners = test_env.module_env.store.sliceWhereClauseOwners(annotation.where.?);
     try testing.expectEqual(@as(usize, 2), owners.len);
@@ -175,7 +175,7 @@ test "type dispatch aliases do not become lambda captures" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const root = try test_env.canonicalizeExpr() orelse unreachable;
+    const root = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const statement = try firstStatement(&test_env, root.get_idx());
     try testing.expectEqual(.s_decl, std.meta.activeTag(statement));
     try testing.expectEqual(.e_lambda, std.meta.activeTag(test_env.getCanonicalExpr(statement.s_decl.expr)));
@@ -193,7 +193,7 @@ test "canonical where ownership reaches a rigid a where alias reference introduc
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const root = try test_env.canonicalizeExpr() orelse unreachable;
+    const root = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const annotation = try annotatedDecl(&test_env, root.get_idx());
     const owners = test_env.module_env.store.sliceWhereClauseOwners(annotation.where.?);
 

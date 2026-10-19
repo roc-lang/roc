@@ -8,7 +8,6 @@
 
 const std = @import("std");
 const invariant = @import("invariant.zig").invariant;
-const builtin = @import("builtin");
 const collections = @import("collections");
 
 const CompactWriter = collections.CompactWriter;
@@ -141,11 +140,7 @@ const Policy = struct {
 
 fn assertSupportsInserts(supports_inserts: bool) void {
     if (supports_inserts) return;
-
-    if (comptime builtin.mode == .debug) {
-        invariant("SmallStringInterner invariant violated: attempted to insert into frozen interner", .{});
-    }
-    unreachable;
+    invariant("SmallStringInterner invariant violated: attempted to insert into frozen interner", .{});
 }
 
 /// Enable inserts on a deserialized interner for runtime use.

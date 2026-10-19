@@ -276,9 +276,9 @@ const BranchRewriter = struct {
                         .next = next,
                     } }, fusionOrigin(origin));
                 },
-                .local, .discriminant, .field, .list_reinterpret, .nominal => unreachable,
+                .local, .discriminant, .field, .list_reinterpret, .nominal => unreachable, // interceptStmt claims an assign_ref only for tag_payload and tag_payload_struct reads
             },
-            .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => unreachable,
+            .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => unreachable, // interceptStmt claims only decref, decref_if_initialized, and assign_ref
         }
     }
 };
@@ -1190,7 +1190,7 @@ fn applyCandidate(
         try plans.put(branch, plan);
     }
     for (candidate.variants.builds.items, candidate.variants.targets.items) |build, branch| {
-        const payload_layout = variantPayloadLayout(store, layouts, candidate.param, build.variant_index) orelse unreachable;
+        const payload_layout = variantPayloadLayout(store, layouts, candidate.param, build.variant_index) orelse unreachable; // branchesUseOnlyPayloads accepted this candidate only after resolving every variant's payload layout
         const payload_param = if (build.payload != null) try store.addLocal(.{ .layout_idx = payload_layout }) else null;
         const join_id = join_params.freshJoinPoint();
         const params = if (payload_param) |payload| try store.addLocalSpan(&.{payload}) else LIR.LocalSpan.empty();
@@ -1239,7 +1239,7 @@ fn applyCandidate(
         const dest = dests.items[dest_index];
         const edge = try redirectProducerEdge(store, store.getCFStmtImmediate(build.stmt).assign_tag.next, build.edge_jump, dest.join_id);
         if (dest.payload_param) |payload_param| {
-            const payload = build.payload orelse unreachable;
+            const payload = build.payload orelse unreachable; // Variants.add rejects candidates whose builds of one variant disagree on having a payload
             try store.replaceCFStmt(build.stmt, .{ .set_local = .{
                 .target = payload_param,
                 .value = payload,
@@ -1336,7 +1336,7 @@ fn edgeStmt(store: *const LirStore, stmt_id: LIR.CFStmtId) struct { stmt: LIR.CF
         .jump,
         .ret,
         .crash,
-        => unreachable,
+        => unreachable, // producerEdgeJump admits only incref, decref, and decref_if_initialized between a constructor and its jump
     };
 }
 

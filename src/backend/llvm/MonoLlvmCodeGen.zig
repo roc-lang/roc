@@ -230,13 +230,10 @@ fn getLlvmDataLayout(target: std.Target) []const u8 {
 }
 
 fn unsupportedLlvmDataLayout(target: std.Target) noreturn {
-    if (builtin.mode == .debug) {
-        invariant("LLVM codegen invariant violated: unsupported target for data layout: {s}-{s}", .{
-            @tagName(target.cpu.arch),
-            @tagName(target.os.tag),
-        });
-    }
-    unreachable;
+    invariant("LLVM codegen invariant violated: unsupported target for data layout: {s}-{s}", .{
+        @tagName(target.cpu.arch),
+        @tagName(target.os.tag),
+    });
 }
 
 fn llvmInvariantFmt(comptime fmt: []const u8, args: anytype) noreturn {
@@ -1516,7 +1513,7 @@ pub const MonoLlvmCodeGen = struct {
                 ) catch return error.OutOfMemory;
                 return try self.debugSequenceType(builder, RocList, "List", elem_ptr, size_bits, align_bits);
             },
-            .struct_ => unreachable,
+            .struct_ => unreachable, // stepDebugType builds struct debug types itself and never calls buildDebugType for one
             .tag_union => {
                 const data = self.layouts().getTagUnionData(lay.getTagUnion().idx);
                 var members: std.ArrayList(LlvmBuilder.Metadata) = .empty;
@@ -1553,7 +1550,7 @@ pub const MonoLlvmCodeGen = struct {
                     .closure => "Closure",
                     .erased_callable => "ErasedCallable",
                     .zst => "Unit",
-                    .scalar, .box, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .tag_union, .ptr => unreachable,
+                    .scalar, .box, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .tag_union, .ptr => unreachable, // the enclosing prong matched only closure, erased_callable, and zst
                 };
                 return builder.debugStructType(
                     builder.metadataString(name) catch return error.OutOfMemory,
@@ -5310,9 +5307,8 @@ pub const MonoLlvmCodeGen = struct {
             try self.materializeLocalSpanIfDeferred(arg_locals);
         }
         switch (op) {
-            .num_plus, .num_minus, .num_times => unreachable,
-            // LIR lowering splits this into an alias and `list_prefetch`.
-            .list_prefetched => unreachable,
+            .num_plus, .num_minus, .num_times => unreachable, // LIR lowering commits these to typed operations through CheckedArithmetic.lowerOp
+            .list_prefetched => unreachable, // LIR lowering splits this into an alias and `list_prefetch`
             .bool_not => {
                 const value = try self.loadBool(self.slot(GuardedList.at(arg_locals, 0)).ptr);
                 const not_value = (self.wip orelse return error.CompilationFailed).not(value, "") catch return error.OutOfMemory;
@@ -5579,9 +5575,7 @@ pub const MonoLlvmCodeGen = struct {
             .dec_from_attos, .dec_to_attos => try self.emitDecAttosMove(target, GuardedList.at(arg_locals, 0)),
             .dec_to_str => try self.emitDecToStr(target, GuardedList.at(arg_locals, 0)),
             .box_box => try self.emitBoxBox(target, GuardedList.at(arg_locals, 0)),
-            // Consuming Box.unbox is normalized by ARC into the borrowed load
-            // followed by explicit payload incref and box decref statements.
-            .box_unbox => unreachable,
+            .box_unbox => unreachable, // ARC normalizes consuming Box.unbox into box_unbox_borrowed plus explicit payload incref and box decref
             .box_unbox_borrowed => try self.emitBoxUnbox(target, GuardedList.at(arg_locals, 0)),
             .box_prepare_update => try self.emitBoxPrepareUpdate(target, GuardedList.at(arg_locals, 0), unique_args),
             .erased_capture_load => try self.emitErasedCaptureLoad(target, GuardedList.at(arg_locals, 0)),
@@ -6079,7 +6073,7 @@ pub const MonoLlvmCodeGen = struct {
             else if (op == .num_is_lte)
                 .ole
             else
-                unreachable;
+                unreachable; // emitLowLevel calls emitNumericCompare only for num_is_eq, num_is_gt, num_is_gte, num_is_lt, and num_is_lte
             break :blk wip.fcmp(.normal, cmp_cond, lhs, rhs, "") catch return error.OutOfMemory;
         } else blk: {
             const signed = layout_idx.isSigned();
@@ -6094,7 +6088,7 @@ pub const MonoLlvmCodeGen = struct {
             else if (op == .num_is_lte)
                 if (signed) .sle else .ule
             else
-                unreachable;
+                unreachable; // emitLowLevel calls emitNumericCompare only for num_is_eq, num_is_gt, num_is_gte, num_is_lt, and num_is_lte
             break :blk wip.icmp(cmp_cond, lhs, rhs, "") catch return error.OutOfMemory;
         };
         try self.storeBool(self.slot(target).ptr, cond);
@@ -6290,7 +6284,7 @@ pub const MonoLlvmCodeGen = struct {
                 .sub => .@"sub nuw",
                 .mul => .@"mul nuw",
             },
-            .crash_on_overflow, .overflows => unreachable,
+            .crash_on_overflow, .overflows => unreachable, // emitIntegerFamilyBinary calls this only for wrap and proven_cannot_overflow
         };
     }
 
@@ -6342,7 +6336,9 @@ pub const MonoLlvmCodeGen = struct {
         var safe_rhs = wip.select(.normal, rhs_is_zero, one, rhs, "") catch return error.OutOfMemory;
 
         if (target_layout.isSigned()) {
-            const lowest = builder.intValue(result_ty, CheckedArithmetic.signedLowestValue(target_layout) orelse unreachable) catch return error.OutOfMemory;
+            const lowest_value = CheckedArithmetic.signedLowestValue(target_layout) orelse
+                llvmInvariantFmt("checked integer denominator on signed layout {d} with no lowest value", .{@backingInt(target_layout)});
+            const lowest = builder.intValue(result_ty, lowest_value) catch return error.OutOfMemory;
             const neg_one = builder.intValue(result_ty, -1) catch return error.OutOfMemory;
             const lhs_is_lowest = wip.icmp(.eq, lhs, lowest, "") catch return error.OutOfMemory;
             const rhs_is_neg_one = wip.icmp(.eq, rhs, neg_one, "") catch return error.OutOfMemory;
@@ -6350,7 +6346,7 @@ pub const MonoLlvmCodeGen = struct {
             if (plain_op == .num_div_by or plain_op == .num_div_trunc_by) {
                 try self.emitCrashIf(min_div_neg_one, checkedOverflowMessage(checked_op));
             } else if (plain_op != .num_rem_by and plain_op != .num_mod_by) {
-                unreachable;
+                unreachable; // emitNumericBinary calls this only for div_by, div_trunc_by, rem_by, and mod_by
             }
             safe_rhs = wip.select(.normal, min_div_neg_one, one, safe_rhs, "") catch return error.OutOfMemory;
         }
@@ -6427,7 +6423,7 @@ pub const MonoLlvmCodeGen = struct {
         else if (op == .num_shift_right_zf_by)
             .lshr
         else
-            unreachable;
+            unreachable; // emitNumericBinary calls this only for the three shift ops
         return wip.bin(tag, lhs, masked_amount, "") catch return error.OutOfMemory;
     }
 
@@ -6591,7 +6587,7 @@ pub const MonoLlvmCodeGen = struct {
                 "",
             ) catch return error.OutOfMemory
         else
-            unreachable;
+            unreachable; // emitLowLevel calls this only for the three bit-counting ops
         try self.storeScalar(self.slot(target).ptr, target_layout, result);
     }
 
@@ -6819,7 +6815,7 @@ pub const MonoLlvmCodeGen = struct {
                 else if (op == .simd_xor)
                     .xor
                 else
-                    unreachable;
+                    unreachable; // the enclosing prong matched only these six ops
                 try self.storeSimdLocal(target, wip.bin(tag, lhs, rhs, "") catch return error.OutOfMemory);
             },
             .simd_add_sat, .simd_sub_sat => {
@@ -6902,7 +6898,7 @@ pub const MonoLlvmCodeGen = struct {
                 else if (op == .simd_gte_lanes)
                     if (vector.isSigned()) .sge else .uge
                 else
-                    unreachable;
+                    unreachable; // the enclosing prong matched only these three ops
                 const compared = wip.icmp(condition, lhs, rhs, "") catch return error.OutOfMemory;
                 try self.storeSimdLocal(target, wip.cast(.sext, compared, vector_ty, "") catch return error.OutOfMemory);
             },
@@ -7076,7 +7072,7 @@ pub const MonoLlvmCodeGen = struct {
                 else if (op == .simd_shr_zf_wrap)
                     .lshr
                 else
-                    unreachable;
+                    unreachable; // the enclosing prong matched only these three ops
                 try self.storeSimdLocal(target, wip.bin(tag, value, counts, "") catch return error.OutOfMemory);
             },
             .simd_shr_rounded => try self.emitSimdRoundedShift(target, args, vector),
@@ -7105,7 +7101,7 @@ pub const MonoLlvmCodeGen = struct {
                         indices[i] = @intCast(count - 1 - i);
                     }
                 } else {
-                    unreachable;
+                    unreachable; // the enclosing prong matched only these five ops
                 }
                 try self.storeSimdLocal(target, wip.shuffleVector(lhs, rhs, try self.simdShuffleMask(indices[0..count]), "") catch return error.OutOfMemory);
             },
@@ -7368,9 +7364,11 @@ pub const MonoLlvmCodeGen = struct {
         }
         if (checked_op) |checked| {
             if (isFloatLayout(target_layout)) return error.UnsupportedLowLevel;
-            const lowest = builder.intValue(value.typeOfWip(wip), CheckedArithmetic.signedLowestValue(target_layout) orelse unreachable) catch return error.OutOfMemory;
+            const lowest_value = CheckedArithmetic.signedLowestValue(target_layout) orelse
+                llvmInvariantFmt("checked abs on signed layout {d} with no lowest value", .{@backingInt(target_layout)});
+            const lowest = builder.intValue(value.typeOfWip(wip), lowest_value) catch return error.OutOfMemory;
             const is_lowest = wip.icmp(.eq, value, lowest, "") catch return error.OutOfMemory;
-            try self.emitCrashIf(is_lowest, CheckedArithmetic.overflowMessageForLayout(checked, target_layout) orelse unreachable);
+            try self.emitCrashIf(is_lowest, CheckedArithmetic.overflowMessageForLayout(checked, target_layout) orelse unreachable); // checked is num_abs_checked, which overflowMessageForLayout always names
         }
         if (isFloatLayout(target_layout)) {
             try self.storeScalar(self.slot(target).ptr, target_layout, try self.emitFloatAbs(value));
@@ -8602,7 +8600,7 @@ pub const MonoLlvmCodeGen = struct {
         return switch (self.target.ptrBitWidth()) {
             64 => 8,
             32 => 4,
-            else => unreachable,
+            else => llvmInvariantFmt("string match scan on unsupported pointer width {d}", .{self.target.ptrBitWidth()}),
         };
     }
 
@@ -9453,7 +9451,7 @@ pub const MonoLlvmCodeGen = struct {
             2 => std.mem.writeInt(i16, storage[rc_offset..][0..2], builtins.utils.REFCOUNT_STATIC_DATA, endian),
             4 => std.mem.writeInt(i32, storage[rc_offset..][0..4], builtins.utils.REFCOUNT_STATIC_DATA, endian),
             8 => std.mem.writeInt(i64, storage[rc_offset..][0..8], builtins.utils.REFCOUNT_STATIC_DATA, endian),
-            else => unreachable,
+            else => unreachable, // targetWordSize returns 2, 4, or 8
         }
         @memcpy(storage[data_offset..][0..bytes.len], bytes);
 
@@ -10361,7 +10359,7 @@ pub const MonoLlvmCodeGen = struct {
 
     fn emitNumFromStrPrefix(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, arg: LocalId) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
-        const spec = numeric_conversion.getNumericPrefixParseSpec(op) orelse unreachable;
+        const spec = numeric_conversion.getNumericPrefixParseSpec(op) orelse unreachable; // emitLowLevel calls this only for *_from_str_prefix and *_from_utf8_prefix ops, which all have prefix parse specs
         const target_slot = self.slot(target);
         const info = try self.resolveNumPrefixParseLayout(target_slot.layout_idx);
         if (target_slot.size > 0) try self.zeroBytes(target_slot.ptr, target_slot.size);
@@ -10448,7 +10446,7 @@ pub const MonoLlvmCodeGen = struct {
         else if (op == .f64_from_bits)
             .double
         else
-            unreachable;
+            unreachable; // emitLowLevel calls this only for the four float bit-cast ops
         const raw_bits = wip.cast(.bitcast, value, target_ty, "") catch return error.OutOfMemory;
         const normalized = if (op == .f32_to_bits) blk: {
             const magnitude = wip.bin(
@@ -10493,7 +10491,7 @@ pub const MonoLlvmCodeGen = struct {
         } else if (op == .f32_from_bits or op == .f64_from_bits)
             raw_bits
         else
-            unreachable;
+            unreachable; // emitLowLevel calls this only for the four float bit-cast ops
         try self.storeScalar(self.slot(target).ptr, self.localLayout(target), normalized);
     }
 
@@ -12238,12 +12236,7 @@ pub const MonoLlvmCodeGen = struct {
             16 => .i16,
             32 => .i32,
             64 => .i64,
-            else => {
-                if (builtin.mode == .debug) {
-                    invariant("LLVM codegen invariant violated: unsupported target pointer width {d}", .{self.target.ptrBitWidth()});
-                }
-                unreachable;
-            },
+            else => invariant("LLVM codegen invariant violated: unsupported target pointer width {d}", .{self.target.ptrBitWidth()}),
         };
     }
 
@@ -12252,12 +12245,7 @@ pub const MonoLlvmCodeGen = struct {
             16 => 2,
             32 => 4,
             64 => 8,
-            else => {
-                if (builtin.mode == .debug) {
-                    invariant("LLVM codegen invariant violated: unsupported target pointer width {d}", .{self.target.ptrBitWidth()});
-                }
-                unreachable;
-            },
+            else => invariant("LLVM codegen invariant violated: unsupported target pointer width {d}", .{self.target.ptrBitWidth()}),
         };
     }
 
@@ -12326,10 +12314,7 @@ pub const MonoLlvmCodeGen = struct {
     fn slot(self: *MonoLlvmCodeGen, local: LocalId) LocalSlot {
         const local_slot = self.local_slots[@backingInt(local)];
         if (!local_slot.allocated) {
-            if (builtin.mode == .debug) {
-                invariant("LLVM codegen invariant violated: local {d} was not in the current proc frame", .{@backingInt(local)});
-            }
-            unreachable;
+            invariant("LLVM codegen invariant violated: local {d} was not in the current proc frame", .{@backingInt(local)});
         }
         return local_slot;
     }
@@ -13730,11 +13715,12 @@ fn isIntegerLayout(layout_idx: layout.Idx) bool {
 }
 
 fn checkedOverflowMessage(op: lir.LowLevel) []const u8 {
-    return CheckedArithmetic.overflowMessage(op) orelse unreachable;
+    return CheckedArithmetic.overflowMessage(op) orelse llvmInvariantFmt("checked op {t} has no overflow message", .{op});
 }
 
 fn checkedZeroDenominatorMessage(op: lir.LowLevel, layout_idx: layout.Idx) []const u8 {
-    return CheckedArithmetic.zeroDenominatorMessage(op, layout_idx) orelse unreachable;
+    return CheckedArithmetic.zeroDenominatorMessage(op, layout_idx) orelse
+        llvmInvariantFmt("checked op {t} has no zero-denominator message for layout {d}", .{ op, @backingInt(layout_idx) });
 }
 
 fn intTypeForBytes(size: u8) LlvmBuilder.Type {
@@ -13744,7 +13730,7 @@ fn intTypeForBytes(size: u8) LlvmBuilder.Type {
         4 => .i32,
         8 => .i64,
         16 => .i128,
-        else => unreachable,
+        else => llvmInvariantFmt("no integer type for {d} bytes", .{size}),
     };
 }
 
@@ -13782,7 +13768,7 @@ fn smallStrLiteralWords(bytes: []const u8, word_size: u32, endian: std.builtin.E
             2 => std.mem.readInt(u16, encoded[offset..][0..2], endian),
             4 => std.mem.readInt(u32, encoded[offset..][0..4], endian),
             8 => std.mem.readInt(u64, encoded[offset..][0..8], endian),
-            else => unreachable,
+            else => unreachable, // word_size is 2, 4, or 8, asserted on entry
         };
     }
     return words;

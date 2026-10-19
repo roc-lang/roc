@@ -304,10 +304,7 @@ fn clearHostState(self: *CompileTimeHost) void {
 fn appendEvent(self: *CompileTimeHost, comptime tag: std.meta.Tag(HostEvent), bytes: []const u8) void {
     const owned = self.dupeEventBytes(bytes);
     const host_allocator = self.host_arena.allocator();
-    self.events.append(host_allocator, @unionInit(HostEvent, @tagName(tag), owned)) catch {
-        self.jump(.host_oom);
-        unreachable;
-    };
+    self.events.append(host_allocator, @unionInit(HostEvent, @tagName(tag), owned)) catch self.jump(.host_oom);
 }
 
 fn appendExpectFailedEvent(self: *CompileTimeHost, bytes: []const u8, region: ?base.Region, loc: ?base.SourceLoc) void {
@@ -317,18 +314,12 @@ fn appendExpectFailedEvent(self: *CompileTimeHost, bytes: []const u8, region: ?b
         .message = owned,
         .region = region,
         .loc = loc,
-    } }) catch {
-        self.jump(.host_oom);
-        unreachable;
-    };
+    } }) catch self.jump(.host_oom);
 }
 
 fn dupeEventBytes(self: *CompileTimeHost, bytes: []const u8) []u8 {
     const host_allocator = self.host_arena.allocator();
-    return host_allocator.dupe(u8, bytes) catch {
-        self.jump(.host_oom);
-        unreachable;
-    };
+    return host_allocator.dupe(u8, bytes) catch self.jump(.host_oom);
 }
 
 fn jump(self: *CompileTimeHost, termination: Termination) noreturn {

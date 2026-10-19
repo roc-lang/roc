@@ -69,10 +69,7 @@ fn exportBlockers(store: *TypeStore, blockers: *std.ArrayList(Var)) void {
 }
 
 fn exhaustiveInvariant(comptime message: []const u8, args: anytype) noreturn {
-    if (builtin.mode == .debug) {
-        base.invariant(message, args);
-    }
-    unreachable;
+    base.invariant(message, args);
 }
 
 /// Frozen analysis state scoped to one exhaustiveness entry point.
@@ -298,10 +295,8 @@ pub const Pattern = union(enum) {
         while (pending.pop()) |pattern| {
             const children: []const Pattern = switch (pattern) {
                 .anything => |maybe_type| {
-                    // Wildcards without type info should only occur in intermediate patterns
-                    // during matrix specialization, which should never be checked for inhabitedness.
-                    // Missing patterns should always have type info from ColumnTypes.
-                    const type_var = maybe_type orelse unreachable;
+                    const type_var = maybe_type orelse
+                        exhaustiveInvariant("a wildcard checked for inhabitedness has no column type", .{});
                     if (!try isTypeInhabitedWithKnownEmpty(type_store, builtin_idents, type_var, known_empty_vars)) return false;
                     continue;
                 },
@@ -1644,7 +1639,7 @@ fn collectCtorPayloadBlockersHelp(
     if (gop.found_existing) return;
 
     switch (content) {
-        .flex, .rigid, .err, .field_presence => unreachable,
+        .flex, .rigid, .err, .field_presence => unreachable, // the switch above returns for these contents
         .alias => |alias| {
             if (builtin_idents.isBuiltinNumericIdent(alias.ident.ident_idx)) return;
             try collectCtorPayloadBlockersHelp(
@@ -1715,7 +1710,7 @@ fn collectRecordPayloadBlockers(
                 switch (mode) {
                     .payload => try collectCtorPayloadBlockersHelp(type_store, builtin_idents, field_var, out, seen),
                     .known_absent => try collectKnownAbsentCtorPayloadBlockersHelp(allocator, type_store, builtin_idents, field_var, out, seen),
-                    .general => unreachable,
+                    .general => @compileError("general mode collects no record payload blockers"),
                 }
             }
         }
@@ -1849,7 +1844,7 @@ fn collectKnownAbsentCtorPayloadBlockersHelp(
     if (gop.found_existing) return;
 
     switch (content) {
-        .flex, .rigid, .err, .field_presence => unreachable,
+        .flex, .rigid, .err, .field_presence => unreachable, // the switch above returns for these contents
         .alias => |alias| {
             if (builtin_idents.isBuiltinNumericIdent(alias.ident.ident_idx)) return;
             try collectKnownAbsentCtorPayloadBlockersHelp(
@@ -2171,7 +2166,7 @@ const CtorArgTypes = union(enum) {
         return switch (self) {
             .vars => |range| type_store.getVarAt(range, @intCast(offset)),
             .record_fields => |range| type_store.getRecordFieldAt(range, @intCast(offset)).presence.typeVar(),
-            .none => unreachable,
+            .none => unreachable, // .none has len 0, so no caller indexes an argument of it
         };
     }
 };
@@ -4938,7 +4933,7 @@ fn recordTailBlockersCase(analysis_allocator: Allocator, depth: usize) (Allocato
             switch (mode) {
                 .payload => try collectCtorPayloadBlockers(reader, test_idents, payload, &blockers),
                 .known_absent => try collectKnownAbsentCtorPayloadBlockers(query_arena.allocator(), reader, test_idents, payload, &blockers),
-                .general => unreachable,
+                .general => return error.TestUnexpectedResult,
             }
             try std.testing.expectEqualSlices(Var, &.{blocker}, blockers.items);
             try std.testing.expect(!try isTypeInhabitedWithKnownEmpty(reader, test_idents, payload, blockers.items));
@@ -4952,7 +4947,7 @@ fn recordTailBlockersCase(analysis_allocator: Allocator, depth: usize) (Allocato
             switch (mode) {
                 .payload => try collectCtorPayloadBlockers(reader, test_idents, payload, &blockers),
                 .known_absent => try collectKnownAbsentCtorPayloadBlockers(query_arena.allocator(), reader, test_idents, payload, &blockers),
-                .general => unreachable,
+                .general => return error.TestUnexpectedResult,
             }
             // Neither optional fields nor an unresolved record tail is a blocker.
             try std.testing.expectEqual(@as(usize, 0), blockers.items.len);

@@ -155,7 +155,7 @@ pub fn stage(
             .header_lines = countNewlines(headerless_wiring),
         },
         .app => |app| try stagePlatformlessApp(gpa, source_dir, owned_source, ast, app),
-        .module, .package, .platform, .hosted, .malformed => unreachable,
+        .module, .package, .platform, .hosted, .malformed => unreachable, // rootAppKind classifies these headers as non_app, handled above
     };
     source_transferred = true;
     return .{ .staged = staged };
@@ -175,7 +175,7 @@ fn notAnAppReport(
     const headline, const alternative = switch (purpose) {
         .running => .{ "This file cannot be run because it is not an app or a default app.", "run the file that imports it instead." },
         .building => .{ "This file cannot be built because it is not an app or a default app.", "build the file that imports it instead." },
-        .checking => unreachable,
+        .checking => unreachable, // stage returns .unmodified for a checked non-app before reporting
     };
 
     var report = try Report.init(gpa, "Execution Requires App Or Default App", headline, .runtime_error);
@@ -188,7 +188,7 @@ fn notAnAppReport(
         .package => "package",
         .platform => "platform",
         .hosted => "hosted",
-        .app, .default_app, .malformed => unreachable,
+        .app, .default_app, .malformed => unreachable, // stage reports only non_app roots without parse errors, and a malformed header is a parse error
     };
 
     if (keyword) |kw| {
@@ -332,9 +332,7 @@ fn platformAlias(
         const candidate = if (suffix == 1)
             preferred_platform_alias
         else
-            // The buffer holds the alias plus more digits than a record with
-            // one entry per distinct alias could ever need.
-            std.fmt.bufPrint(buf, "{s}{d}", .{ preferred_platform_alias, suffix }) catch unreachable;
+            std.fmt.bufPrint(buf, "{s}{d}", .{ preferred_platform_alias, suffix }) catch unreachable; // the caller's buffer holds the alias plus 20 digits, the most a usize prints
 
         var taken = false;
         for (ast.store.recordFieldSlice(.{ .span = packages.span })) |field_idx| {

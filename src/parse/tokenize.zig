@@ -1124,8 +1124,7 @@ pub const Cursor = struct {
                     },
                     else => {
                         self.pos -= 1;
-                        if (self.chompUTF8CodepointWithValidation()) |_| {} else {}
-                        state = .Enough;
+                        state = if (self.chompUTF8CodepointWithValidation() == null) .Invalid else .Enough;
                     },
                 },
                 .Enough => switch (c) {
@@ -1656,7 +1655,7 @@ pub const Tokenizer = struct {
                             continue;
                         }
 
-                        const last = self.string_interpolation_stack.pop() orelse unreachable;
+                        const last = self.string_interpolation_stack.pop() orelse unreachable; // the enclosing branch checked the stack is non-empty
                         try self.pushTokenNormalHere(gpa, .CloseStringInterpolation, start);
                         // For string interpolations, we don't have the original opening quote position
                         // so we use the current position as a fallback
@@ -1780,11 +1779,7 @@ pub const Tokenizer = struct {
                 // first byte of a UTF-8 sequence
                 0x80...0xff => {
                     const valid = self.cursor.chompIdentGeneral();
-                    if (comptime @import("builtin").mode == .debug) {
-                        std.debug.assert(!valid);
-                    } else if (valid) {
-                        unreachable;
-                    }
+                    if (valid) base.invariant("tokenizer invariant violated: an identifier starting with a non-ASCII byte chomped as valid", .{});
                     try self.pushTokenInternedHere(gpa, .MalformedUnicodeIdent, start, start);
                 },
 
@@ -2059,7 +2054,7 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
         last_end = region.end.offset;
         const length = region.end.offset - region.start.offset;
         switch (token.tag) {
-            .EndOfFile => unreachable,
+            .EndOfFile => unreachable, // the loop breaks on EndOfFile above
 
             .Float => {
                 if (buf[region.start.offset] == '-') {
@@ -2845,6 +2840,12 @@ test "tokenizer with invalid UTF-8" {
         try std.testing.expect(messages.len > 0);
         try std.testing.expectEqual(Diagnostic.Tag.InvalidUtf8InSource, messages[0].tag);
     }
+}
+
+test "single quote around invalid UTF-8 is malformed" {
+    const gpa = std.testing.allocator;
+    try testTokenization(gpa, &.{ '\'', 0xFF, '\'' }, &[_]Token.Tag{.MalformedSingleQuote});
+    try testTokenization(gpa, &.{ '\'', 0xC3, '\'' }, &[_]Token.Tag{.MalformedSingleQuote});
 }
 
 test "non-printable characters in string literal" {

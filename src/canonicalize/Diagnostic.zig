@@ -1,7 +1,6 @@
 //! Diagnostics related to canonicalization
 
 const std = @import("std");
-const builtin = @import("builtin");
 const base = @import("base");
 const reporting = @import("reporting");
 
@@ -620,12 +619,7 @@ pub const Diagnostic = union(enum) {
             .range_op_chained => |d| d.region,
             // A diagnostic about its file as a whole never stands in for a
             // malformed node, the only consumer of a diagnostic's region.
-            .type_module_missing_matching_type, .default_app_missing_main => {
-                if (builtin.mode == .debug) {
-                    base.invariant("file-level diagnostic {s} has no region", .{@tagName(self)});
-                }
-                unreachable;
-            },
+            .type_module_missing_matching_type, .default_app_missing_main => base.invariant("file-level diagnostic {s} has no region", .{@tagName(self)}),
         };
     }
 

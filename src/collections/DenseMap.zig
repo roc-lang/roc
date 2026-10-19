@@ -608,14 +608,14 @@ fn keyIndex(key: anytype) usize {
     if (comptime @typeInfo(K) == .@"enum" and @hasDecl(K, "denseIndex")) return key.denseIndex();
     if (comptime @typeInfo(K) == .int) return @intCast(key);
     if (comptime @typeInfo(K) == .@"enum") return @intCast(@backingInt(key));
-    unreachable;
+    @compileError("DenseMap keys must be integer or enum IDs, not " ++ @typeName(K));
 }
 
 fn keyFromIndex(comptime K: type, index: usize) K {
     if (comptime @typeInfo(K) == .@"enum" and @hasDecl(K, "fromDenseIndex")) return K.fromDenseIndex(index);
     if (comptime @typeInfo(K) == .int) return @intCast(index);
     if (comptime @typeInfo(K) == .@"enum") return @fromBackingInt(@intCast(index));
-    unreachable;
+    @compileError("DenseMap keys must be integer or enum IDs, not " ++ @typeName(K));
 }
 
 test "DenseMap directly indexes integer and enum IDs" {
@@ -753,7 +753,7 @@ test "DenseMapPool reuses released map storage and supports nested acquires" {
 /// panic with this message, and optimized builds treat it as unreachable.
 inline fn collectionsInvariant(comptime fmt: []const u8, args: anytype) noreturn {
     if (std.debug.runtime_safety) std.debug.panic(fmt, args);
-    unreachable;
+    unreachable; // design.md: optimized builds carry no runtime check for a violated compiler invariant
 }
 
 test "DenseMapUnmanaged starts empty and takes its allocator per call" {

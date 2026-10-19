@@ -12,7 +12,6 @@
 //! the single cross-env identity resolution mechanism—no name matching.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const base = @import("base");
 const can = @import("can");
 const types_mod = @import("types");
@@ -981,13 +980,10 @@ fn ensureNominalDeclCopied(
         // Invariant: every nominal application in a store can resolve its
         // declaration in that store, so a keyed application without a source
         // table entry is a compiler bug.
-        if (builtin.mode == .debug) {
-            base.invariant(
-                "copy_import invariant violated: nominal '{s}' has a source declaration but no declaration table entry in its source store",
-                .{ctx.sourceIdents().getText(source_nominal.ident.ident_idx)},
-            );
-        }
-        unreachable;
+        base.invariant(
+            "copy_import invariant violated: nominal '{s}' has a source declaration but no declaration table entry in its source store",
+            .{ctx.sourceIdents().getText(source_nominal.ident.ident_idx)},
+        );
     };
 
     try pushNominalDeclEntry(ctx, ctx.source_store.getNominalDecl(source_decl_idx), translated_origin);

@@ -543,7 +543,8 @@ pub fn extractModuleDocsWithOptions(
 
 fn projectionRootName(module_env: *const ModuleEnv, projection: PublicTypeProjection) []const u8 {
     std.debug.assert(module_env == projection.source_env);
-    return typeDeclName(projection.source_env, projection.source_decl) orelse unreachable;
+    return typeDeclName(projection.source_env, projection.source_decl) orelse
+        base.invariant("docs invariant violated: public type projection `{s}` does not name a type declaration", .{projection.public_name});
 }
 
 fn typeDeclName(module_env: *const ModuleEnv, statement_idx: CIR.Statement.Idx) ?[]const u8 {
@@ -584,7 +585,11 @@ fn nameIsAtOrUnder(root: []const u8, name: []const u8) bool {
 fn documentedRootDecl(module_env: *const ModuleEnv, public_type: ?PublicTypeProjection) ?CIR.Statement.Idx {
     if (public_type) |projection| return projection.source_decl;
     return switch (module_env.module_kind) {
-        .type_module => |main_type_ident| @fromBackingInt(@intCast(module_env.getExposedTypeNodeIndexById(main_type_ident) orelse unreachable)),
+        .type_module => |main_type_ident| blk: {
+            const node_idx = module_env.getExposedTypeNodeIndexById(main_type_ident) orelse
+                base.invariant("docs invariant violated: type module `{s}` does not expose its main type", .{module_env.module_name});
+            break :blk @as(CIR.Statement.Idx, @fromBackingInt(@intCast(node_idx)));
+        },
         .default_app, .app, .package, .platform, .hosted, .module, .malformed => null,
     };
 }
@@ -653,15 +658,20 @@ fn projectedTypeReference(
     if (current_projection == null and public_types.len == 0) return null;
 
     const identity, const target_statement = switch (base_ref) {
-        .local => |local| .{
-            (module_env.contentIdentityHash() orelse unreachable).*,
-            local.decl_idx,
+        .local => |local| local_blk: {
+            const content_identity = module_env.contentIdentityHash() orelse
+                base.invariant("docs invariant violated: module `{s}` has no content identity for a local type reference", .{module_env.module_name});
+            break :local_blk .{ content_identity.*, local.decl_idx };
         },
         .external => |external| external_blk: {
-            const artifact = checked_artifact orelse unreachable;
+            const artifact = checked_artifact orelse
+                base.invariant("docs invariant violated: an external type reference in `{s}` has no checked artifact", .{module_env.module_name});
             const import_index = @backingInt(external.module_idx);
-            if (import_index >= artifact.checking_context_identity.imports.len) unreachable;
-            const import_key = artifact.checking_context_identity.imports[import_index].artifact_key orelse unreachable;
+            if (import_index >= artifact.checking_context_identity.imports.len) {
+                base.invariant("docs invariant violated: external type reference import {d} is outside the {d} checked imports", .{ import_index, artifact.checking_context_identity.imports.len });
+            }
+            const import_key = artifact.checking_context_identity.imports[import_index].artifact_key orelse
+                base.invariant("docs invariant violated: checked import {d} has no artifact key", .{import_index});
             break :external_blk .{ import_key.module_identity_hash, @as(CIR.Statement.Idx, @fromBackingInt(@intCast(external.target_node_idx))) };
         },
         .external_identity => |external| .{
@@ -669,7 +679,7 @@ fn projectedTypeReference(
             @as(CIR.Statement.Idx, @fromBackingInt(@intCast(external.target_node_idx))),
         },
         .builtin => return null,
-        .pending => unreachable,
+        .pending => base.invariant("docs invariant violated: a pending type reference reached docs extraction, which runs after checking", .{}),
     };
 
     return selectPublicProjection(current_projection, public_types, &identity, target_statement);
@@ -735,8 +745,9 @@ fn annotatedTypeReferenceDisplay(
         routing.checked_artifact,
         base_ref,
     )) |projection| {
-        const statement = typeReferenceStatement(base_ref) orelse unreachable;
-        const target_name = typeDeclName(projection.source_env, statement) orelse unreachable;
+        const statement = typeReferenceStatement(base_ref) orelse unreachable; // projectedTypeReference returns null for builtin references, so base_ref names a statement
+        const target_name = typeDeclName(projection.source_env, statement) orelse
+            base.invariant("docs invariant violated: projected type reference does not target a type declaration in `{s}`", .{projection.public_name});
         const module_path = try std.fmt.allocPrint(gpa, "{s}.{s}", .{ projection.package_name, projection.public_name });
         errdefer gpa.free(module_path);
         return .{
@@ -1949,7 +1960,7 @@ fn extractTypeAnnoAsDocType(
                         .where_clause,
                         .wildcard,
                         .@"error",
-                        => unreachable,
+                        => unreachable, // each tag's finish_tag frame pushed exactly one single-tag tag_union
                     }
                     gpa.destroy(single_tag);
                 }
@@ -2295,7 +2306,8 @@ fn inferredTypeReferenceDisplay(
             origin_identity,
             statement,
         )) |projection| {
-            const source_name = typeDeclName(projection.source_env, statement) orelse unreachable;
+            const source_name = typeDeclName(projection.source_env, statement) orelse
+                base.invariant("docs invariant violated: projected alias source does not name a type declaration in `{s}`", .{projection.public_name});
             const module_path = try std.fmt.allocPrint(
                 ctx.gpa,
                 "{s}.{s}",

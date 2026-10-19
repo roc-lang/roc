@@ -1,6 +1,7 @@
 //! Host-side checks invoked as ordinary cached build Run steps.
 const std = @import("std");
 const builtin = @import("builtin");
+const unreachable_rationale = @import("unreachable_rationale.zig");
 const vendored_zig_marker = "Adapted from the Zig compiler";
 
 const Context = struct {
@@ -117,6 +118,7 @@ pub fn main(init: std.process.Init) !void {
     if (std.mem.eql(u8, args[1], "check-postcheck-architecture")) return CheckPostcheckArchitectureStep.run(ctx);
     if (std.mem.eql(u8, args[1], "check-snapshot-diff")) return CheckSnapshotDiffStep.run(ctx);
     if (std.mem.eql(u8, args[1], "check-panic-usage")) return CheckPanicStep.run(ctx);
+    if (std.mem.eql(u8, args[1], "check-unreachable-rationale")) return CheckUnreachableRationaleStep.run(ctx);
     if (std.mem.eql(u8, args[1], "check-cli-global-stdio")) return CheckCliGlobalStdioStep.run(ctx);
     if (std.mem.eql(u8, args[1], "coverage-summary")) return CoverageSummaryStep.run(ctx);
     if (std.mem.eql(u8, args[1], "check-test-asset-coverage-inner")) return CheckTestAssetCoverageStep.run(ctx);
@@ -617,6 +619,92 @@ const CheckPanicStep = struct {
                 .{violations.items.len},
             );
         }
+    }
+};
+
+const CheckUnreachableRationaleStep = struct {
+    pub fn run(ctx: Context) !void {
+        const allocator = ctx.allocator;
+        const io = ctx.io;
+
+        var violations = std.ArrayList(Violation).empty;
+        var file_violations = std.ArrayList(unreachable_rationale.Violation).empty;
+
+        var dir = std.Io.Dir.cwd().openDir(io, "src", .{ .iterate = true }) catch |err| {
+            return fail("Failed to open src directory: {}", .{err});
+        };
+        defer dir.close(io);
+        var walker = try dir.walk(allocator);
+        defer walker.deinit();
+
+        while (try walker.next(io)) |entry| {
+            if (entry.kind != .file) continue;
+            if (!std.mem.endsWith(u8, entry.path, ".zig")) continue;
+            const full_path = try std.fmt.allocPrint(allocator, "src/{s}", .{entry.path});
+            const content = dir.readFileAllocOptions(io, entry.path, allocator, .limited(50 * 1024 * 1024), .of(u8), 0) catch |err| {
+                return fail("Failed to read {s}: {}", .{ full_path, err });
+            };
+
+            file_violations.clearRetainingCapacity();
+            try unreachable_rationale.findViolations(allocator, content, &file_violations);
+            for (file_violations.items) |violation| {
+                var lines = std.mem.splitScalar(u8, content, '\n');
+                for (1..violation.line) |_| _ = lines.next();
+                const line = std.mem.trim(u8, lines.next().?, " \t\r");
+                try violations.append(allocator, .{
+                    .file_path = full_path,
+                    .line_number = violation.line,
+                    .line_content = try std.fmt.allocPrint(allocator, "{s}\n      ({s})", .{ line, problemText(violation.problem) }),
+                });
+            }
+        }
+
+        if (violations.items.len > 0) {
+            printViolationReport(
+                "UNREACHABLE WITHOUT A RATIONALE",
+                \\Every `unreachable` must state, in a `//` comment at the end of its own line,
+                \\which upstream invariant makes the case impossible:
+                \\
+                \\    .alias, .err => unreachable, // canonicalization resolves aliases before checking
+                \\    const entry = map.get(key) orelse unreachable; // every key was inserted above
+                \\    unreachable; // each prong above returns
+                \\
+                \\WHY THIS RULE EXISTS:
+                \\  In optimized builds, reaching `unreachable` is undefined behavior: no message,
+                \\  just miscompiled code. The claim is only as good as the invariant behind it, so
+                \\  that invariant must be visible to anyone reading or refactoring the code.
+                \\
+                \\WHAT TO DO:
+                \\  - If you can name the guarantee (a validation that rejected the case, a pass that
+                \\    normalized it away, a loop condition, a capacity reserved earlier), write it as
+                \\    a same-line comment. Put nothing but closing delimiters, `;`, or `,` between
+                \\    the `unreachable` and the comment; split the line if more code follows.
+                \\  - If an API can encode it (an exhaustive switch, `appendAssumeCapacity` after a
+                \\    reservation), restructure so the claim disappears.
+                \\  - If you cannot name it, do NOT invent a comment. Use
+                \\    `base.invariant("<stage> invariant violated: ...", .{{...}})` (or the stage's
+                \\    wrapper) so debug builds report the broken claim; release builds stay
+                \\    `unreachable`.
+                \\  - If the case is a user-facing failure (bad source, I/O, allocation failure, a
+                \\    corrupt cache), it is not an invariant: report or propagate it.
+                \\
+                \\  See https://github.com/roc-lang/roc/issues/12164 and design.md.
+                \\
+                \\VIOLATIONS FOUND:
+                \\
+            ,
+                violations.items,
+            );
+            return fail("Found {d} `unreachable` sites without a same-line rationale. See above.", .{violations.items.len});
+        }
+    }
+
+    fn problemText(problem: unreachable_rationale.Problem) []const u8 {
+        return switch (problem) {
+            .missing_rationale => "no same-line `//` rationale",
+            .restatement => "the comment restates that the case is impossible instead of naming why",
+            .code_after => "code follows the `unreachable` on its line; split it onto its own line",
+        };
     }
 };
 

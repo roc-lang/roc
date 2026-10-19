@@ -404,7 +404,7 @@ test "versioned maps match independent copies across branching mutations" {
                     _ = versions[target].remove(key);
                     expected[target][key] = null;
                 },
-                else => unreachable,
+                else => return error.TestUnexpectedResult,
             }
             for (&versions, expected) |*version, entries| {
                 var count: usize = 0;

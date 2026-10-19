@@ -1660,7 +1660,7 @@ fn generateContextualName(self: *TypeWriter, writer: *ByteWrite, context: TypeCo
             self.name_tmp.clearRetainingCapacity();
             const len = std.fmt.count("{s}{}", .{ base_name, counter + 1 });
             try self.name_tmp.resize(len);
-            _ = std.fmt.bufPrint(self.name_tmp.items, "{s}{}", .{ base_name, counter + 1 }) catch unreachable;
+            _ = std.fmt.bufPrint(self.name_tmp.items, "{s}{}", .{ base_name, counter + 1 }) catch unreachable; // name_tmp was resized to exactly the formatted length
             break :blk self.name_tmp.items;
         };
 

@@ -60,7 +60,7 @@ fn bumpEventCount(comptime Global: type) void {
     if (comptime builtin.mode == .debug) {
         std.debug.assert(previous != std.math.maxInt(u32));
     } else if (previous == std.math.maxInt(u32)) {
-        unreachable;
+        unreachable; // a test observes a handful of watch events, far below maxInt(u32)
     }
 }
 
@@ -248,7 +248,7 @@ fn getKCFRunLoopDefaultMode() CFStringRef {
     } else if (builtin.os.tag == .macos) {
         return macos_externs.kCFRunLoopDefaultMode;
     } else {
-        unreachable;
+        unreachable; // use_stubs is false only when targeting macOS
     }
 }
 
@@ -879,7 +879,7 @@ pub const Watcher = struct {
             if (comptime builtin.mode == .debug) {
                 std.debug.assert(run_result >= 0);
             } else if (run_result < 0) {
-                unreachable;
+                unreachable; // CFRunLoopRunInMode returns a CFRunLoopRunResult code, all of which are positive
             }
         }
 

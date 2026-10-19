@@ -868,6 +868,14 @@ const CheckPanicStep = struct {
     }
 };
 
+/// Build step that requires every `unreachable` under src/ to carry a
+/// same-line comment naming the invariant that makes the case impossible.
+const CheckUnreachableRationaleStep = struct {
+    fn create(b: *std.Build) *Step.Run {
+        return buildChecksRun(b, "check-unreachable-rationale");
+    }
+};
+
 /// Build step that checks for global stdio usage in CLI code.
 ///
 /// The CLI code uses a context-based I/O pattern where stdout/stderr are accessed
@@ -1717,6 +1725,7 @@ pub fn build(b: *std.Build) void {
     const run_check_semantic_audit_step = b.step("run-check-semantic-audit", "Run the checked-data audit gate");
     const run_check_postcheck_architecture_step = b.step("run-check-postcheck-architecture", "Check that deleted post-check output/remapping APIs stay gone");
     const run_check_panic_step = b.step("run-check-panic", "Check forbidden panic usage in interpreter and builtins");
+    const run_check_unreachable_rationale_step = b.step("run-check-unreachable-rationale", "Check that every unreachable states its invariant");
     const run_check_cli_global_stdio_step = b.step("run-check-cli-global-stdio", "Check forbidden global stdio usage in CLI code");
     const run_check_test_wiring_step = b.step("run-check-test-wiring", "Check test files are wired");
     const run_check_builtin_format_step = b.step("run-check-builtin-format", "Check Builtin.roc formatting");
@@ -4355,6 +4364,10 @@ pub fn build(b: *std.Build) void {
     // Check for @panic and std.debug.panic in interpreter and builtins
     const check_panic = CheckPanicStep.create(b);
     run_check_panic_step.dependOn(&check_panic.step);
+
+    // Check that every `unreachable` under src/ states its invariant
+    const check_unreachable_rationale = CheckUnreachableRationaleStep.create(b);
+    run_check_unreachable_rationale_step.dependOn(&check_unreachable_rationale.step);
 
     // Add check for global stdio usage in CLI code
     const check_cli_stdio = CheckCliGlobalStdioStep.create(b);

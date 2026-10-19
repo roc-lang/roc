@@ -524,5 +524,5 @@ test "hot reload image retain rejects descriptors that stopped being current" {
 /// The `ipc` module does not depend on `base`.
 inline fn invariant(comptime fmt: []const u8, args: anytype) noreturn {
     if (std.debug.runtime_safety) std.debug.panic(fmt, args);
-    unreachable;
+    unreachable; // callers pass only compiler invariants, which a correct compiler never violates
 }

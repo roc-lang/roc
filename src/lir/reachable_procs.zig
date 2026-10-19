@@ -984,10 +984,7 @@ fn stmtRefs(store: *const LirStore, stmt: LIR.CFStmt) StmtRefs {
 }
 
 fn reachableProcInvariant(msg: []const u8) noreturn {
-    if (@import("builtin").mode == .debug) {
-        base.invariant("reachable procs invariant violated: {s}", .{msg});
-    }
-    unreachable;
+    base.invariant("reachable procs invariant violated: {s}", .{msg});
 }
 
 test "reachable proc pass compacts proc specs and remaps root ids" {

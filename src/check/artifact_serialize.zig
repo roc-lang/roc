@@ -794,7 +794,7 @@ fn fieldDefaultValue(comptime Store: type, comptime name: []const u8) ?@FieldTyp
     for (@typeInfo(Store).@"struct".field_names, @typeInfo(Store).@"struct".field_types, @typeInfo(Store).@"struct".field_attrs) |f_name, f_type, f_attrs| {
         if (comptimeStrEq(f_name, name)) return f_attrs.defaultValue(f_type);
     }
-    unreachable;
+    unreachable; // the @FieldType return type already requires Store to declare a field named `name`
 }
 
 fn initTakesOnlyAllocator(comptime FT: type) bool {

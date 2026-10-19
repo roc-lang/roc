@@ -2630,18 +2630,15 @@ fn noteDef(solver: *Solver, local: LIR.LocalId, kind: DefKind) void {
 fn noteBorrowDef(solver: *Solver, target: LIR.LocalId, source: LIR.LocalId) void {
     const source_index = solver.domain.indexOf(source) orelse {
         if (solver.domain.indexOf(target) != null) {
-            if (@import("builtin").mode == .debug) {
-                invariant(
-                    "ARC borrow source was outside the ARC-local domain: target={d} source={d} target_rc={} source_rc={}",
-                    .{
-                        @backingInt(target),
-                        @backingInt(source),
-                        solver.rc_local[@backingInt(target)],
-                        solver.rc_local[@backingInt(source)],
-                    },
-                );
-            }
-            unreachable;
+            invariant(
+                "ARC borrow source was outside the ARC-local domain: target={d} source={d} target_rc={} source_rc={}",
+                .{
+                    @backingInt(target),
+                    @backingInt(source),
+                    solver.rc_local[@backingInt(target)],
+                    solver.rc_local[@backingInt(source)],
+                },
+            );
         }
         return;
     };
@@ -4975,7 +4972,8 @@ const UniquenessComponentTask = struct {
                 if (callee_seeds == 0) continue;
                 const args = self.store.getLocalSpan(assign.args);
                 for (0..@min(GuardedList.borrowLen(args), arc_sig.tracked_param_count)) |position| {
-                    if ((callee_seeds & (arc_sig.paramBit(position) orelse unreachable)) == 0) continue;
+                    const param_bit = arc_sig.paramBit(position) orelse unreachable; // the loop bound keeps position below tracked_param_count
+                    if ((callee_seeds & param_bit) == 0) continue;
                     const dense = self.domain.indexOf(GuardedList.at(args, position)) orelse continue;
                     if (!uniqueness.born_unique.isSet(dense) or uniqueness.destroyed.isSet(dense)) continue;
                     seeds |= uniqueness.conds[dense];
@@ -5376,7 +5374,8 @@ fn settleUniquenessOracle(
                     if (callee_seeds == 0) continue;
                     const args = store.getLocalSpan(assign.args);
                     for (0..@min(GuardedList.borrowLen(args), arc_sig.tracked_param_count)) |position| {
-                        if ((callee_seeds & (arc_sig.paramBit(position) orelse unreachable)) == 0) continue;
+                        const param_bit = arc_sig.paramBit(position) orelse unreachable; // the loop bound keeps position below tracked_param_count
+                        if ((callee_seeds & param_bit) == 0) continue;
                         const raw = @backingInt(GuardedList.at(args, position));
                         if (raw >= rc_local.len or !rc_local[raw]) continue;
                         if (!uniqueness.born_unique.isSet(raw) or uniqueness.destroyed.isSet(raw)) continue;
@@ -5816,7 +5815,8 @@ fn computeUniquenessDetailed(
                     const args_start: u32 = @intCast(call_args.items.len);
                     var complete = true;
                     for (0..arc_sig.tracked_param_count) |position| {
-                        if ((row.params & (arc_sig.paramBit(position) orelse unreachable)) == 0) continue;
+                        const param_bit = arc_sig.paramBit(position) orelse unreachable; // the loop bound keeps position below tracked_param_count
+                        if ((row.params & param_bit) == 0) continue;
                         const arg_index = if (position < GuardedList.borrowLen(args)) marks.indexOf(GuardedList.at(args, position)) else null;
                         const index = arg_index orelse {
                             complete = false;
@@ -6614,7 +6614,8 @@ fn computeUniquenessDetailed(
                     if (callee_seeds == 0) continue;
                     const args = store.getLocalSpan(assign.args);
                     for (0..@min(GuardedList.borrowLen(args), arc_sig.tracked_param_count)) |position| {
-                        if ((callee_seeds & (arc_sig.paramBit(position) orelse unreachable)) == 0) continue;
+                        const param_bit = arc_sig.paramBit(position) orelse unreachable; // the loop bound keeps position below tracked_param_count
+                        if ((callee_seeds & param_bit) == 0) continue;
                         result.noteNeededIfBorn(marks.indexOf(GuardedList.at(args, position)));
                     }
                 },
@@ -6712,8 +6713,7 @@ fn computeSccs(solver: *Solver) SolveError!void {
 }
 
 fn solveInvariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .debug) invariant(message, .{});
-    unreachable;
+    invariant(message, .{});
 }
 
 test "solve declarations are referenced" {

@@ -126,7 +126,7 @@ pub const LayoutHelper = struct {
             1 => at_disc.read(u8),
             2 => at_disc.read(u16),
             4 => at_disc.read(u32),
-            else => unreachable,
+            else => unreachable, // discriminantSize is 0, 1, 2, or 4 for every variant count up to 2^32
         };
     }
 
@@ -141,7 +141,7 @@ pub const LayoutHelper = struct {
             1 => at_disc.write(u8, @intCast(disc)),
             2 => at_disc.write(u16, @intCast(disc)),
             4 => at_disc.write(u32, disc),
-            else => unreachable,
+            else => unreachable, // discriminantSize is 0, 1, 2, or 4 for every variant count up to 2^32
         }
     }
 };

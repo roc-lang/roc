@@ -1285,7 +1285,7 @@ fn spanWithExt(store: *const NodeStore, data: Node.Data) struct { span: base.Dat
                     .end = store.extra_data.items[pos + 4],
                 },
             } },
-            3 => unreachable,
+            3 => unreachable, // addSpanWithExt encodes only kinds 0 (closed), 1 (open), and 2 (named)
         },
     };
 }

@@ -436,7 +436,7 @@ pub const ContentNames = struct {
         if (!item.program_local_name or self.names.contains(item.name)) return;
         var hasher = Sha256.init(.{});
         _ = try self.write(&hasher, item);
-        const digest = self.digests.get(item.name) orelse unreachable;
+        const digest = self.digests.get(item.name) orelse unreachable; // a top-level write has no enclosing active item, so it records the item's digest
         const content_name = try std.fmt.allocPrint(self.arena.allocator(), content_data_prefix ++ "{s}", .{&std.fmt.bytesToHex(digest[0..16].*, .lower)});
         try self.names.put(self.allocator, item.name, content_name);
     }
@@ -696,7 +696,7 @@ pub fn extractPrepared(
             .boxy_thunk => |proc_id| .{ .boxy_thunk = proc_specs[@backingInt(proc_id)].identity },
             .entrypoint => .entrypoint,
             .message_pool_run => .message_pool_run,
-            .branch_island, .hosted_stub => unreachable,
+            .branch_island, .hosted_stub => unreachable, // regionHasArtifact is false for these, so artifact_of_region skipped them above
             .spliced_proc => |identity| .{ .proc = identity },
             .spliced_boxy_thunk => |identity| .{ .boxy_thunk = identity },
             .spliced_helper => .{ .rc_helper = try arena_allocator.dupe(u8, codegen.splicedHelperName(region.start + region.entry) orelse return error.DanglingReference) },
@@ -814,7 +814,7 @@ pub fn extractPrepared(
                     .scope = codegen.symbolScope(data.symbol),
                     .kind = .{ .data = data.kind },
                 },
-                .retired, .local_data, .jmp_to_return => unreachable,
+                .retired, .local_data, .jmp_to_return => unreachable, // the switch above skipped or rejected these kinds
             });
         }
 
@@ -1324,9 +1324,9 @@ pub fn splice(
 
     for (order.items) |index| {
         const artifact = set.artifacts[index];
-        const start = placed.get(index) orelse unreachable;
+        const start = placed.get(index) orelse unreachable; // the placement loop above put every index in order
         for (artifact.refs) |ref| {
-            const target_start = placed.get(ref.target) orelse unreachable;
+            const target_start = placed.get(ref.target) orelse unreachable; // the traversal pushed every ref target, so each was placed as existing or appended to order
             const target_artifact = set.artifacts[ref.target];
             const target: CG.CodeRefTarget = switch (target_artifact.kind) {
                 .proc => |identity| if (procs_by_identity.get(identity)) |proc_id| .{ .proc = proc_id } else .{ .offset = target_start + ref.delta },

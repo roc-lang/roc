@@ -225,21 +225,18 @@ const StaticInitializerMachine = struct {
         if (result.bytes.len != source.bytes.len) {
             const target_layout = self.layoutValue(layout_idx);
             if (target_layout.tag == .box_of_zst) return result;
-            if (@import("builtin").mode == .debug) {
-                const source_layout = self.layoutValue(source.layout_idx);
-                invariant(
-                    "static data invariant violated: static initializer explicit reinterpret changed target byte size from layout {d} ({s}, {d} bytes) to layout {d} ({s}, {d} bytes)",
-                    .{
-                        @backingInt(source.layout_idx),
-                        @tagName(source_layout.tag),
-                        source.bytes.len,
-                        @backingInt(layout_idx),
-                        @tagName(target_layout.tag),
-                        result.bytes.len,
-                    },
-                );
-            }
-            unreachable;
+            const source_layout = self.layoutValue(source.layout_idx);
+            invariant(
+                "static data invariant violated: static initializer explicit reinterpret changed target byte size from layout {d} ({s}, {d} bytes) to layout {d} ({s}, {d} bytes)",
+                .{
+                    @backingInt(source.layout_idx),
+                    @tagName(source_layout.tag),
+                    source.bytes.len,
+                    @backingInt(layout_idx),
+                    @tagName(target_layout.tag),
+                    result.bytes.len,
+                },
+            );
         }
         @memcpy(result.bytes, source.bytes);
         try result.relocations.appendSlice(self.allocator(), source.relocations.items);
@@ -581,7 +578,7 @@ const StaticInitializerMachine = struct {
         switch (self.word_size) {
             4 => std.mem.writeInt(u32, bytes[offset..][0..4], @intCast(word), .little),
             8 => std.mem.writeInt(u64, bytes[offset..][0..8], word, .little),
-            else => unreachable,
+            else => unreachable, // word_size comes from TargetUsize.size(), which is 4 or 8
         }
     }
 
@@ -1804,7 +1801,7 @@ const StaticDataBuilder = struct {
         switch (self.word_size) {
             4 => std.mem.writeInt(u32, bytes[offset..][0..4], @intCast(value), .little),
             8 => std.mem.writeInt(u64, bytes[offset..][0..8], value, .little),
-            else => unreachable,
+            else => unreachable, // word_size comes from TargetUsize.size(), which is 4 or 8
         }
     }
 
@@ -1812,7 +1809,7 @@ const StaticDataBuilder = struct {
         switch (self.word_size) {
             4 => std.mem.writeInt(i32, bytes[offset..][0..4], @intCast(value), .little),
             8 => std.mem.writeInt(i64, bytes[offset..][0..8], value, .little),
-            else => unreachable,
+            else => unreachable, // word_size comes from TargetUsize.size(), which is 4 or 8
         }
     }
 
@@ -1850,10 +1847,7 @@ fn alignForwardU32(value: u32, alignment: u32) u32 {
 }
 
 fn staticDataInvariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .debug) {
-        invariant("static data invariant violated: {s}", .{message});
-    }
-    unreachable;
+    invariant("static data invariant violated: {s}", .{message});
 }
 
 test "static data declarations are referenced" {

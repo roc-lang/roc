@@ -1980,7 +1980,7 @@ fn registerTypeDecl(self: *Self, decl_idx: CIR.Statement.Idx) std.mem.Allocator.
         .s_type_anno,
         .s_type_var_alias,
         .s_runtime_error,
-        => unreachable,
+        => base.invariant("check invariant violated: only alias and nominal declarations register as type declarations", .{}),
     }
 
     try self.type_decl_statements.ensureUnusedCapacity(self.gpa, 1);
@@ -2877,7 +2877,7 @@ fn shrinkSchemeRequirementCandidatesTo(self: *Self, new_len: usize) void {
     while (self.scheme_requirement_candidates.items.len > new_len) {
         const candidate_idx: u32 = @intCast(self.scheme_requirement_candidates.items.len - 1);
         const candidate = self.scheme_requirement_candidates.pop().?;
-        const owner_indices = self.scheme_requirement_candidate_indices_by_owner.getPtr(candidate.owner_root) orelse unreachable;
+        const owner_indices = self.scheme_requirement_candidate_indices_by_owner.getPtr(candidate.owner_root) orelse unreachable; // recordSchemeRequirementCandidate indexes every candidate under its owner, and scheme capture (which drops owner indices) never runs inside the probe being rolled back
         const removed_idx = owner_indices.pop().?;
         std.debug.assert(removed_idx == candidate_idx);
         if (owner_indices.items.len == 0) {
@@ -3233,7 +3233,7 @@ const HoistSelectionTransaction = struct {
                     std.debug.assert(root.pattern != null);
                     std.debug.assert(root.pattern.? == pattern);
                 },
-                .pattern_validation, .valueless_binding => unreachable,
+                .pattern_validation, .valueless_binding => hoistSelectionInvariant("a binding association targets a pattern-validation or valueless root"),
             }
         } else {
             const root = &self.checker.selected_hoisted_roots.items[root_index];
@@ -6102,7 +6102,7 @@ fn debugAssertHoistSelectionConsistent(self: *const Self) void {
         const selected = self.selected_hoisted_roots.items[root_index];
         const validation = switch (selected.body) {
             .pattern_validation => |value| value,
-            .expr, .pattern_extraction, .pattern_error, .valueless_binding => unreachable,
+            .expr, .pattern_extraction, .pattern_error, .valueless_binding => unreachable, // hoist_selected_pattern_validations is filled only from pattern_validation roots
         };
         std.debug.assert(validation.scrutinee_pattern == entry.key_ptr.*);
     }
@@ -7370,7 +7370,7 @@ fn checkForInfiniteType(self: *Self, comptime Idx: anytype, idx: Idx) std.mem.Al
 fn settledRowThroughAliases(self: *Self, start: Var) ?Var {
     const resolved = self.types.resolveThroughAliases(start);
     return switch (resolved.desc.content) {
-        .alias => unreachable,
+        .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
         .structure => |flat_type| switch (flat_type) {
             .tag_union, .record => resolved.var_,
             .empty_record, .empty_tag_union, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => null,
@@ -7522,7 +7522,7 @@ test "a default-decided class merged into a frozen class renders its pre-default
 
     const ground = try store.freshFromContent(.{ .structure = .empty_record });
     const frozen = (try checker.freezeTypeGraph(ground)).?;
-    defer store.thawFrozenClasses() catch unreachable;
+    defer store.thawFrozenClasses() catch unreachable; // no savepoint is active at scope exit, so thawing records no trail entries and allocates nothing
     try store.union_(defaulted, frozen, store.resolveVar(frozen).desc);
 
     _ = try checker.snapshotPreDefaultType(defaulted);
@@ -7556,7 +7556,7 @@ test "a frozen copy carries exactly the flags an instantiated copy carries" {
     try store.dangerousSetVarDesc(original, desc);
 
     const copy = (try checker.freezeTypeGraph(original)).?;
-    defer store.thawFrozenClasses() catch unreachable;
+    defer store.thawFrozenClasses() catch unreachable; // no savepoint is active at scope exit, so thawing records no trail entries and allocates nothing
     var expected = original_flags.copied();
     expected.frozen = true;
     try std.testing.expectEqual(expected, store.resolveVar(copy).desc.flags);
@@ -8016,7 +8016,7 @@ fn omitRowLabels(self: *Self, part_var: Var, part: u32, omitted: []const RowLabe
             const range = try self.types.appendRecordFields(kept.items);
             try self.types.setVarContent(resolved.var_, .{ .structure = .{ .record = .{ .fields = range, .ext = record.ext } } });
         },
-        .empty_record, .empty_tag_union, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => unreachable,
+        .empty_record, .empty_tag_union, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => unreachable, // the row scan collects only tag-union and record parts and rescans if any part's content changed
     }
 }
 
@@ -8260,7 +8260,7 @@ fn poisonInvalidTypeDeclarations(self: *Self, poisoned: []bool) std.mem.Allocato
                 const nominal_idx = self.types.lookupNominalDeclByKey(
                     self_origin,
                     @backingInt(decl_idx),
-                ) orelse unreachable;
+                ) orelse base.invariant("check invariant violated: a local nominal declaration has no declaration table entry", .{});
                 const nominal = self.types.getNominalDecl(nominal_idx);
                 self.types.markNominalDeclInvalid(nominal_idx);
                 break :blk nominal.backing;
@@ -8284,7 +8284,7 @@ fn poisonInvalidTypeDeclarations(self: *Self, poisoned: []bool) std.mem.Allocato
             .s_type_anno,
             .s_type_var_alias,
             .s_runtime_error,
-            => unreachable,
+            => unreachable, // registerTypeDecl admits only alias and nominal declarations into type_decl_statements
         };
 
         try self.types.setVarContent(ModuleEnv.varFrom(decl_idx), .err);
@@ -8929,7 +8929,7 @@ fn resolvePendingTupleAccess(
                 return .rejected;
             },
         },
-        .alias => unreachable,
+        .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
         .err, .field_presence => return .rejected,
         .flex, .rigid => {
             if (!final) return .pending;
@@ -9853,7 +9853,7 @@ fn groundTypesIdentical(self: *Self, left: Var, right: Var) std.mem.Allocator.Er
                     .fn_pure, .fn_effectful, .fn_unbound => |lf| {
                         const rf = switch (rflat) {
                             .fn_pure, .fn_effectful, .fn_unbound => |func| func,
-                            .record, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => unreachable,
+                            .record, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => unreachable, // activeTag(lflat) == activeTag(rflat) was checked above
                         };
                         try pending.append(self.gpa, .{ .left = lf.ret, .right = rf.ret });
                         const la = self.types.sliceVars(lf.args);
@@ -10197,7 +10197,7 @@ fn instantiateVarHelpFromScheme(
         // substitution needs to query whether shared requirements need one.
         if (self.scratch_evidence_pairs.items.len > 0 or try self.schemeHasEvidenceParams(scheme_source)) {
             const slot: ModuleEnv.SchemeUseRecord.Slot, const node_idx: u32, const slot_data: u32 = switch (evidence) {
-                .none => unreachable,
+                .none => unreachable, // recordsSchemeUse is false for .none
                 .value_use => |expr| .{ .value_use, @backingInt(expr), 0 },
                 .nested_function_use => |expr| .{ .nested_function_use, @backingInt(expr), @backingInt(instantiated_var) },
                 .dispatch_target => |site| .{ .dispatch_target, site.node_idx, @backingInt(site.constraint_fn_var) },
@@ -10666,7 +10666,7 @@ fn builtinNumStmtFromIndices(indices: CIR.BuiltinIndices, num_kind: CIR.NumKind)
     inline for (CIR.builtin_type_specs) |spec| {
         if (spec.num_kind == num_kind) return @field(indices, spec.type_field);
     }
-    unreachable;
+    base.invariant("check invariant violated: no builtin type declaration exists for numeric kind {s}", .{@tagName(num_kind)});
 }
 
 fn builtinNominalIdent(self: *const Self, decl: BuiltinNominalDecl) Ident.Idx {
@@ -10752,17 +10752,11 @@ fn sourceDeclForBuiltinNominal(self: *const Self, decl: BuiltinNominalDecl) u32 
     }
 
     if (!self.isCheckingBuiltinModuleDirectly() and self.builtin_ctx.builtin_module != null) {
-        if (builtin.mode == .debug) {
-            base.invariant("type checker invariant violated: builtin module env present without builtin indices", .{});
-        }
-        unreachable;
+        base.invariant("type checker invariant violated: builtin module env present without builtin indices", .{});
     }
 
     const stmt_idx = self.findLocalTypeDeclByName(self.builtinNominalIdent(decl)) orelse {
-        if (builtin.mode == .debug) {
-            base.invariant("type checker invariant violated: Builtin.{s} declaration not found while checking Builtin", .{builtinNominalLabel(decl)});
-        }
-        unreachable;
+        base.invariant("type checker invariant violated: Builtin.{s} declaration not found while checking Builtin", .{builtinNominalLabel(decl)});
     };
     self.debugAssertSourceDeclKind(@backingInt(stmt_idx), .nominal);
     return @backingInt(stmt_idx);
@@ -10774,10 +10768,7 @@ fn sourceDeclForBuiltinParseSpec(self: *const Self, decl: BuiltinParseSpecDecl) 
         const stmt_idx = switch (decl) {
             .tag_union => indices.parse_tag_union_spec_type,
             .bool, .str, .null, .list_start, .list_next, .list_after_item, .tuple_start, .tuple_next, .tuple_end, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .record_start, .record_field, .record_after_field => {
-                if (builtin.mode == .debug) {
-                    base.invariant("type checker invariant violated: this parse method does not have a builtin parse spec declaration", .{});
-                }
-                unreachable;
+                base.invariant("type checker invariant violated: this parse method does not have a builtin parse spec declaration", .{});
             },
         };
         const owner_env = self.builtin_ctx.builtin_module orelse self.cir;
@@ -10786,26 +10777,17 @@ fn sourceDeclForBuiltinParseSpec(self: *const Self, decl: BuiltinParseSpecDecl) 
     }
 
     if (!self.isCheckingBuiltinModuleDirectly() and self.builtin_ctx.builtin_module != null) {
-        if (builtin.mode == .debug) {
-            base.invariant("type checker invariant violated: builtin module env present without builtin indices", .{});
-        }
-        unreachable;
+        base.invariant("type checker invariant violated: builtin module env present without builtin indices", .{});
     }
 
     const ident = switch (decl) {
         .tag_union => self.cir.idents.builtin_encoding_parse_tag_union_spec,
         .bool, .str, .null, .list_start, .list_next, .list_after_item, .tuple_start, .tuple_next, .tuple_end, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .record_start, .record_field, .record_after_field => {
-            if (builtin.mode == .debug) {
-                base.invariant("type checker invariant violated: this parse method does not have a builtin parse spec declaration", .{});
-            }
-            unreachable;
+            base.invariant("type checker invariant violated: this parse method does not have a builtin parse spec declaration", .{});
         },
     };
     const stmt_idx = self.findLocalTypeDeclByName(ident) orelse {
-        if (builtin.mode == .debug) {
-            base.invariant("type checker invariant violated: Builtin parse spec declaration not found while checking Builtin", .{});
-        }
-        unreachable;
+        base.invariant("type checker invariant violated: Builtin parse spec declaration not found while checking Builtin", .{});
     };
     self.debugAssertSourceDeclKind(@backingInt(stmt_idx), .nominal);
     return @backingInt(stmt_idx);
@@ -10846,10 +10828,7 @@ fn mkForLoopSequenceVar(self: *Self, kind: CIR.ForKind, item_var: Var, env: *Env
     };
     const decl_var = if (self.builtin_ctx.builtin_module) |builtin_env| blk: {
         const indices = self.builtin_ctx.builtin_indices orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("type checker invariant violated: builtin module env present without builtin indices", .{});
-            }
-            unreachable;
+            base.invariant("type checker invariant violated: builtin module env present without builtin indices", .{});
         };
         const type_stmt = switch (kind) {
             .iter => indices.iter_type,
@@ -10862,10 +10841,7 @@ fn mkForLoopSequenceVar(self: *Self, kind: CIR.ForKind, item_var: Var, env: *Env
             .stream => self.cir.idents.builtin_stream,
         };
         const stmt_idx = self.findLocalTypeDeclByName(type_ident) orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("type checker invariant violated: {s} declaration not found while checking Builtin", .{type_name});
-            }
-            unreachable;
+            base.invariant("type checker invariant violated: {s} declaration not found while checking Builtin", .{type_name});
         };
         break :blk ModuleEnv.varFrom(stmt_idx);
     };
@@ -10873,17 +10849,11 @@ fn mkForLoopSequenceVar(self: *Self, kind: CIR.ForKind, item_var: Var, env: *Env
     const sequence_var = try self.instantiateVar(decl_var, env, .{ .explicit = region }, .none);
     const sequence_content = self.types.resolveVar(sequence_var).desc.content;
     const nominal = sequence_content.unwrapNominalType() orelse {
-        if (builtin.mode == .debug) {
-            base.invariant("type checker invariant violated: {s} declaration did not instantiate to a nominal type", .{type_name});
-        }
-        unreachable;
+        base.invariant("type checker invariant violated: {s} declaration did not instantiate to a nominal type", .{type_name});
     };
     const args = self.types.sliceNominalArgs(nominal);
     if (args.len != 1) {
-        if (builtin.mode == .debug) {
-            base.invariant("type checker invariant violated: {s} expected one type argument, found {d}", .{ type_name, args.len });
-        }
-        unreachable;
+        base.invariant("type checker invariant violated: {s} expected one type argument, found {d}", .{ type_name, args.len });
     }
 
     _ = try self.unify(args[0], item_var, env);
@@ -10897,18 +10867,12 @@ fn mkRangeVar(self: *Self, num_var: Var, env: *Env, region: Region) Allocator.Er
 
     const range_decl_var = if (self.builtin_ctx.builtin_module) |builtin_env| blk: {
         const indices = self.builtin_ctx.builtin_indices orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("type checker invariant violated: builtin module env present without builtin indices", .{});
-            }
-            unreachable;
+            base.invariant("type checker invariant violated: builtin module env present without builtin indices", .{});
         };
         break :blk try self.copyVar(ModuleEnv.varFrom(indices.range_type), builtin_env, region);
     } else blk: {
         const range_stmt_idx = self.findLocalTypeDeclByName(self.cir.idents.builtin_range) orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("type checker invariant violated: Builtin.Num.Range declaration not found while checking Builtin", .{});
-            }
-            unreachable;
+            base.invariant("type checker invariant violated: Builtin.Num.Range declaration not found while checking Builtin", .{});
         };
         break :blk ModuleEnv.varFrom(range_stmt_idx);
     };
@@ -10916,17 +10880,11 @@ fn mkRangeVar(self: *Self, num_var: Var, env: *Env, region: Region) Allocator.Er
     const range_var = try self.instantiateVar(range_decl_var, env, .{ .explicit = region }, .none);
     const range_content = self.types.resolveVar(range_var).desc.content;
     const nominal = range_content.unwrapNominalType() orelse {
-        if (builtin.mode == .debug) {
-            base.invariant("type checker invariant violated: Builtin.Num.Range did not instantiate to a nominal type", .{});
-        }
-        unreachable;
+        base.invariant("type checker invariant violated: Builtin.Num.Range did not instantiate to a nominal type", .{});
     };
     const args = self.types.sliceNominalArgs(nominal);
     if (args.len != 1) {
-        if (builtin.mode == .debug) {
-            base.invariant("type checker invariant violated: Builtin.Num.Range expected one type argument, found {d}", .{args.len});
-        }
-        unreachable;
+        base.invariant("type checker invariant violated: Builtin.Num.Range expected one type argument, found {d}", .{args.len});
     }
 
     _ = try self.unify(args[0], num_var, env);
@@ -11121,7 +11079,7 @@ fn mkBuiltinNumberTypeContentFromKind(
     num_kind: CIR.NumKind,
 ) Allocator.Error!Content {
     return switch (num_kind) {
-        .num_unbound, .int_unbound => unreachable,
+        .num_unbound, .int_unbound => base.invariant("check invariant violated: a builtin number type was requested for an unbound numeric kind", .{}),
         .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => try self.mkNumberTypeContent(num_kind),
     };
 }
@@ -11206,9 +11164,9 @@ fn unifyLiteralWithSuffixTarget(
                 try self.markErroneous(flex_var);
             }
         },
-        .pending => unreachable,
+        .pending => unreachable, // the import-resolution drain re-records every pending suffix target before checking
         .external_identity => |external| {
-            const ext_ref = (try self.resolveVarFromExternalIdentity(external.module_identity, external.target_node_idx)) orelse unreachable;
+            const ext_ref = (try self.resolveVarFromExternalIdentity(external.module_identity, external.target_node_idx)) orelse unreachable; // resolveVarFromExternalIdentity always returns the copied scheme
             const instantiated_var = try self.instantiateVar(ext_ref.local_var, env, .{ .explicit = region }, .none);
             _ = try self.unify(flex_var, instantiated_var, env);
         },
@@ -11469,10 +11427,7 @@ fn mkFlexWithFromQuoteConstraint(
 
 fn recordedNumeralLiteralForNode(self: *const Self, node_idx: CIR.Node.Idx) ModuleEnv.NumeralLiteral {
     return self.cir.numeralLiteralForNode(node_idx) orelse {
-        if (builtin.mode == .debug) {
-            base.invariant("missing recorded exact numeral for source node {}", .{@backingInt(node_idx)});
-        }
-        unreachable;
+        base.invariant("missing recorded exact numeral for source node {}", .{@backingInt(node_idx)});
     };
 }
 
@@ -11506,7 +11461,7 @@ fn checkConcreteBuiltinNumeral(
     const kind: CIR.NumKind = if (suffix) |target| switch (target.target()) {
         .builtin => |kind| kind,
         .local, .external, .external_identity, .invalid => return false,
-        .pending => unreachable,
+        .pending => unreachable, // the import-resolution drain re-records every pending suffix target before checking
     } else context: {
         const context = expected.aggregateType() orelse return false;
         if (context.record_field != null) return false;
@@ -11583,7 +11538,7 @@ fn checkNumeralLiteral(
         const targets_dec = switch (target.target()) {
             .builtin => |kind| kind == .dec,
             .local, .external, .external_identity, .invalid => false,
-            .pending => unreachable,
+            .pending => unreachable, // the import-resolution drain re-records every pending suffix target before checking
         };
         if (targets_dec) {
             _ = try self.reportInvalidBuiltinFromNumeralInfo(flex_var, .dec, num_literal_info, env);
@@ -11668,10 +11623,7 @@ fn mkParseSpecVar(
     const ident_idx = switch (decl) {
         .tag_union => self.cir.idents.builtin_encoding_parse_tag_union_spec,
         .bool, .str, .null, .list_start, .list_next, .list_after_item, .tuple_start, .tuple_next, .tuple_end, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .record_start, .record_field, .record_after_field => {
-            if (builtin.mode == .debug) {
-                base.invariant("type checker invariant violated: this parse method does not have a builtin parse spec declaration", .{});
-            }
-            unreachable;
+            base.invariant("type checker invariant violated: this parse method does not have a builtin parse spec declaration", .{});
         },
     };
     return try self.freshFromContent(try self.types.mkNominalWithSourceDeclAndBuiltinOrigin(
@@ -11864,35 +11816,23 @@ fn copyBuiltinTypes(self: *Self) Allocator.Error!void {
     const checking_builtin_directly = self.isCheckingBuiltinModuleDirectly();
     const bool_stmt_idx = if (checking_builtin_directly)
         self.findLocalTypeDeclByName(self.cir.idents.bool_type) orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("type checker invariant violated: local Builtin.Bool declaration not found while checking Builtin", .{});
-            }
-            unreachable;
+            base.invariant("type checker invariant violated: local Builtin.Bool declaration not found while checking Builtin", .{});
         }
     else
         self.builtin_ctx.bool_stmt;
     const str_stmt_idx = if (checking_builtin_directly)
         self.findLocalTypeDeclByName(self.cir.idents.builtin_str) orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("type checker invariant violated: local Builtin.Str declaration not found while checking Builtin", .{});
-            }
-            unreachable;
+            base.invariant("type checker invariant violated: local Builtin.Str declaration not found while checking Builtin", .{});
         }
     else
         self.builtin_ctx.str_stmt;
     const u64_stmt_idx = if (checking_builtin_directly)
         self.findLocalTypeDeclByName(self.cir.idents.u64_type) orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("type checker invariant violated: local Builtin.U64 declaration not found while checking Builtin", .{});
-            }
-            unreachable;
+            base.invariant("type checker invariant violated: local Builtin.U64 declaration not found while checking Builtin", .{});
         }
     else blk: {
         const indices = self.builtin_ctx.builtin_indices orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("type checker invariant violated: builtin indices missing while copying Builtin.U64", .{});
-            }
-            unreachable;
+            base.invariant("type checker invariant violated: builtin indices missing while copying Builtin.U64", .{});
         };
         break :blk indices.u64_type;
     };
@@ -11941,10 +11881,7 @@ fn ensureBuiltinNominalDeclEntries(self: *Self) Allocator.Error!void {
     if (self.isCheckingBuiltinModuleDirectly()) return;
     const builtin_env = self.builtin_ctx.builtin_module orelse return;
     const indices = self.builtin_ctx.builtin_indices orelse {
-        if (builtin.mode == .debug) {
-            base.invariant("type checker invariant violated: builtin module env present without builtin indices", .{});
-        }
-        unreachable;
+        base.invariant("type checker invariant violated: builtin module env present without builtin indices", .{});
     };
 
     self.var_map.clearRetainingCapacity();
@@ -12805,13 +12742,10 @@ fn varHasConcreteType(self: *Self, var_: Var) Allocator.Error!bool {
 fn nominalDeclBackingTemplate(self: *const Self, nominal: types_mod.NominalType) ?Var {
     const decl_idx = self.types.lookupNominalDecl(nominal) orelse {
         if (nominal.sourceDecl().present) {
-            if (builtin.mode == .debug) {
-                base.invariant(
-                    "type checker invariant violated: nominal application '{s}' has a source declaration but no declaration table entry",
-                    .{self.cir.getIdentStoreConst().getText(nominal.ident.ident_idx)},
-                );
-            }
-            unreachable;
+            base.invariant(
+                "type checker invariant violated: nominal application '{s}' has a source declaration but no declaration table entry",
+                .{self.cir.getIdentStoreConst().getText(nominal.ident.ident_idx)},
+            );
         }
         return null;
     };
@@ -13021,10 +12955,7 @@ const HoistedDependencyContext = struct {
 };
 
 fn hoistSelectionInvariant(comptime message: []const u8) noreturn {
-    if (builtin.mode == .debug) {
-        base.invariant("check invariant violated: " ++ message, .{});
-    }
-    unreachable;
+    base.invariant("check invariant violated: " ++ message, .{});
 }
 
 const HoistedRootKeepOracle = struct {
@@ -13764,7 +13695,7 @@ fn exprHasDedicatedLiteralConversionRoot(self: *Self, expr: CIR.Expr.Idx) bool {
                 .external,
                 .external_identity,
                 => true,
-                .pending => unreachable,
+                .pending => unreachable, // the import-resolution drain re-records every pending suffix target before checking
                 .invalid => false,
             };
         }
@@ -14287,7 +14218,7 @@ fn rejectPatternFailureOwner(self: *Self, owner: CIR.Node.Idx) Allocator.Error!v
         .s_decl => |decl| decl.pattern,
         inline .s_var, .s_var_uninitialized, .s_reassign => |var_| var_.pattern_idx,
         .s_for => |for_| for_.patt,
-        .s_crash, .s_dbg, .s_expr, .s_expect, .s_while, .s_infinite_loop, .s_breakable_loop, .s_break, .s_return, .s_import, .s_alias_decl, .s_nominal_decl, .s_where_alias_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => unreachable,
+        .s_crash, .s_dbg, .s_expr, .s_expect, .s_while, .s_infinite_loop, .s_breakable_loop, .s_break, .s_return, .s_import, .s_alias_decl, .s_nominal_decl, .s_where_alias_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => unreachable, // pattern-failure owners that are not expressions or defs are binding or loop statements
     };
     try self.poisonPatternBindings(pattern);
     const recorded = try self.erroneous_statements.getOrPut(self.gpa, stmt_idx);
@@ -15895,7 +15826,7 @@ fn collectReachableVarsExcluding(
             // because instantiating the parameter instantiates the whole constraint
             // chain. (This is the spec's "recurse fully into arg structure".)
             .flex, .rigid => {
-                const constraints_range = contentConstraintRange(resolved.desc.content) orelse unreachable;
+                const constraints_range = contentConstraintRange(resolved.desc.content) orelse unreachable; // contentConstraintRange returns a range for flex and rigid content
                 for (self.types.sliceStaticDispatchConstraints(constraints_range)) |constraint| {
                     try pending.append(self.gpa, constraint.fn_var);
                 }
@@ -16311,7 +16242,7 @@ fn defInOnStackGroup(self: *const Self, def_idx: CIR.Def.Idx) bool {
 /// diagnostic; it is not a callable, so it contributes no effect.
 fn inFlightRecursiveCallEffectState(self: *const Self, func_var: Var) FunctionEffectState {
     return switch (self.types.resolveThroughAliases(func_var).desc.content) {
-        .alias => unreachable,
+        .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
         .structure => |flat| switch (flat) {
             .fn_unbound => .unresolved,
             .fn_pure,
@@ -17001,10 +16932,7 @@ fn instantiatePlatformRequiredType(
     const declared_aliases = input.env.for_clause_aliases.sliceRange(required_type.type_aliases);
     for (declared_aliases) |alias| {
         const binding = forClauseAliasBinding(bindings, alias.alias_stmt_idx) orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("platform requirement for-clause alias was not collected for the requires clause", .{});
-            }
-            unreachable;
+            base.invariant("platform requirement for-clause alias was not collected for the requires clause", .{});
         };
         // The alias's app declaration was not found; the diagnostic was
         // emitted when the clause's bindings were collected.
@@ -17046,10 +16974,7 @@ fn instantiatePlatformRequiredType(
     errdefer self.gpa.free(identity_vars);
     for (platform_identity_vars, identity_vars) |platform_var, *slot_var| {
         slot_var.* = self.var_map.get(platform_var) orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("platform requirement identity var was not copied into the app store", .{});
-            }
-            unreachable;
+            base.invariant("platform requirement identity var was not copied into the app store", .{});
         };
     }
 
@@ -17071,10 +16996,7 @@ fn instantiatePlatformRequiredType(
 
         const resolved = self.types.resolveVar(slot_var.*);
         slot_var.* = self.var_map.get(resolved.var_) orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("platform requirement identity var was not instantiated with its requirement root", .{});
-            }
-            unreachable;
+            base.invariant("platform requirement identity var was not instantiated with its requirement root", .{});
         };
     }
 
@@ -17127,28 +17049,19 @@ fn collectForClauseAliasBindings(
             if (forClauseAliasBinding(bindings.items, alias.alias_stmt_idx) != null) continue;
             const alias_statement = input.env.store.getStatement(alias.alias_stmt_idx);
             if (alias_statement != .s_alias_decl) {
-                if (builtin.mode == .debug) {
-                    base.invariant("platform requirement for-clause alias referenced a non-alias statement", .{});
-                }
-                unreachable;
+                base.invariant("platform requirement for-clause alias referenced a non-alias statement", .{});
             }
             const alias_anno = alias_statement.s_alias_decl.anno;
             const platform_alias_resolved = input.env.types.resolveVar(ModuleEnv.varFrom(alias.alias_stmt_idx));
             const platform_alias_content = platform_alias_resolved.desc.content;
             if (platform_alias_content != .alias) {
-                if (builtin.mode == .debug) {
-                    base.invariant("platform requirement for-clause alias statement had no alias type", .{});
-                }
-                unreachable;
+                base.invariant("platform requirement for-clause alias statement had no alias type", .{});
             }
             const platform_alias = platform_alias_content.alias;
             const platform_alias_source = copy_import.AliasSource{
                 .origin_module = platform_alias.origin_module,
                 .source_decl = platform_alias.source_decl.toOptional() orelse {
-                    if (builtin.mode == .debug) {
-                        base.invariant("platform requirement for-clause alias had no source declaration", .{});
-                    }
-                    unreachable;
+                    base.invariant("platform requirement for-clause alias had no source declaration", .{});
                 },
             };
             const platform_identity_var = input.env.types.resolveVar(ModuleEnv.varFrom(alias_anno)).var_;
@@ -18745,14 +18658,14 @@ const CheckActivityResult = union(enum) {
     fn doesFx(result: CheckActivityResult) bool {
         return switch (result) {
             .does_fx => |does_fx| does_fx,
-            .none, .replayed => unreachable,
+            .none, .replayed => unreachable, // callers read doesFx only from a finished expression activity, which completes with .does_fx
         };
     }
 
     fn replayedAny(result: CheckActivityResult) bool {
         return switch (result) {
             .replayed => |replayed| replayed,
-            .none, .does_fx => unreachable,
+            .none, .does_fx => unreachable, // callers read replayedAny only from a finished predeclared-uses activity, which completes with .replayed
         };
     }
 };
@@ -20989,7 +20902,7 @@ fn widenedFunctionResultUseVar(self: *Self, fn_var: Var, use_expr: CIR.Expr.Idx,
         .fn_pure => .{ .fn_pure = widened },
         .fn_effectful => .{ .fn_effectful = widened },
         .fn_unbound => .{ .fn_unbound = widened },
-        .tag_union, .record, .tuple, .nominal_type, .empty_record, .empty_tag_union => unreachable,
+        .tag_union, .record, .tuple, .nominal_type, .empty_record, .empty_tag_union => unreachable, // flat is a function structure, as the switch above established
     };
     return try self.freshFromContent(.{ .structure = widened_flat }, env, region);
 }
@@ -21029,9 +20942,9 @@ fn widenRecordedCalleeResult(self: *Self, expr_idx: CIR.Expr.Idx, fn_var: Var, e
     const ret = switch (self.types.resolveVar(fn_var).desc.content) {
         .structure => |flat| switch (flat) {
             .fn_pure, .fn_effectful, .fn_unbound => |func| func.ret,
-            .tag_union, .record, .tuple, .nominal_type, .empty_record, .empty_tag_union => unreachable,
+            .tag_union, .record, .tuple, .nominal_type, .empty_record, .empty_tag_union => unreachable, // widenedFunctionResultUseVar returned non-null, so fn_var is a function structure
         },
-        .alias, .flex, .rigid, .err, .field_presence => unreachable,
+        .alias, .flex, .rigid, .err, .field_presence => unreachable, // widenedFunctionResultUseVar returned non-null, so fn_var is a function structure
     };
     try self.cir.recordRowCoercedCallee(ModuleEnv.nodeIdxFrom(expr_idx), fn_var, ret);
     return widened;
@@ -21321,7 +21234,7 @@ fn recordCodecRowDemand(self: *Self, row: Var, tags: []const Ident.Idx) Allocato
 /// Record a demand whose tag names were just appended to
 /// `codec_row_demand_tags` from `names_start` on.
 fn recordCodecRowDemandRange(self: *Self, row: Var, names_start: usize) Allocator.Error!void {
-    const owner = self.active_codec_owner_region orelse unreachable;
+    const owner = self.active_codec_owner_region orelse unreachable; // every caller returns early when no codec owner is active
     const tags_len = self.codec_row_demand_tags.items.len - names_start;
     if (tags_len == 0) return;
     try self.codec_row_demands.append(self.gpa, .{
@@ -21622,10 +21535,10 @@ fn applicationArgumentReaches(self: *Self, apply: CIR.TypeAnno.Apply, env: *Env,
         .alias => |alias| self.types.sliceAliasArgs(alias),
         .structure => |flat| switch (flat) {
             .nominal_type => |nominal| self.types.sliceNominalArgs(nominal),
-            .fn_pure, .fn_effectful, .fn_unbound, .tuple, .record, .tag_union, .empty_record, .empty_tag_union => unreachable,
+            .fn_pure, .fn_effectful, .fn_unbound, .tuple, .record, .tag_union, .empty_record, .empty_tag_union => base.invariant("check invariant violated: a type declaration's variable holds non-nominal structure", .{}),
         },
         .err => return result,
-        .flex, .rigid, .field_presence => unreachable,
+        .flex, .rigid, .field_presence => base.invariant("check invariant violated: a type declaration's variable holds flex, rigid, or field-presence content", .{}),
     };
     if (formals.len != args.len) return result; // Existing arity diagnostic follows.
     const seen_formals = try self.gpa.alloc(bool, formals.len);
@@ -22714,7 +22627,7 @@ fn stepDeclGen(self: *Self, frame: *DeclGenFrame, input: ?TypeGenResult, env: *E
             }
             return .{ .done = .{ .decl = true } };
         },
-        .start, .alias_body, .nominal_body, .finish => unreachable,
+        .start, .alias_body, .nominal_body, .finish => unreachable, // the switch above returns for these stages
     }
 }
 
@@ -23301,8 +23214,7 @@ fn stepRigidAnnoGen(self: *Self, frame: *AnnoGenFrame, rigid: std.meta.fieldInfo
         }
         const method = switch (self.cir.store.getWhereClause(scratch_constraint.where_clause)) {
             .w_method => |method| method,
-            // Only method clauses are left declared.
-            .w_alias, .w_malformed => unreachable,
+            .w_alias, .w_malformed => unreachable, // only method clauses are left declared
         };
         switch (state.method_stage) {
             0 => {
@@ -24365,7 +24277,7 @@ fn stepTagRow(self: *Self, frame: *TagRowFrame, env: *Env, region: Region) Alloc
                 frame.stage = switch (frame.stage) {
                     .head_args => .head_tags,
                     .ext_args => .ext_tags,
-                    .head_tags, .ext_chain, .ext_tags => unreachable,
+                    .head_tags, .ext_chain, .ext_tags => unreachable, // this prong handles only .head_args and .ext_args
                 };
             },
             .ext_chain => {
@@ -24938,7 +24850,7 @@ fn stepPatternCheck(
                         if (result.isEstablished()) state.last_elem = elems[checked_index] else state.phase = .remaining;
                     },
                     .remaining => {},
-                    .rest => unreachable,
+                    .rest => unreachable, // state.phase != .rest was checked above
                 }
                 if (frame.index < elems.len) {
                     frame.index += 1;
@@ -25245,7 +25157,7 @@ const CirPatternRefutabilityAdapter = struct {
             .str_interpolation,
             .underscore,
             .runtime_error,
-            => unreachable,
+            => unreachable, // canMiss calls child only after patternClass reports .child
             .deferred_import_ref => base.invariant("check invariant violated: deferred import reference pattern reached checking", .{}),
         };
     }
@@ -25272,7 +25184,7 @@ const CirPatternRefutabilityAdapter = struct {
             .str_interpolation,
             .underscore,
             .runtime_error,
-            => unreachable,
+            => unreachable, // canMiss calls sequenceLen only after patternClass reports .sequence
             .deferred_import_ref => base.invariant("check invariant violated: deferred import reference pattern reached checking", .{}),
         };
     }
@@ -25299,7 +25211,7 @@ const CirPatternRefutabilityAdapter = struct {
             .str_interpolation,
             .underscore,
             .runtime_error,
-            => unreachable,
+            => unreachable, // canMiss calls sequenceChild only after patternClass reports .sequence
             .deferred_import_ref => base.invariant("check invariant violated: deferred import reference pattern reached checking", .{}),
         };
     }
@@ -25326,7 +25238,7 @@ const CirPatternRefutabilityAdapter = struct {
             .str_interpolation,
             .underscore,
             .runtime_error,
-            => unreachable,
+            => unreachable, // canMiss calls recordLen only after patternClass reports .record
             .deferred_import_ref => base.invariant("check invariant violated: deferred import reference pattern reached checking", .{}),
         };
     }
@@ -25357,7 +25269,7 @@ const CirPatternRefutabilityAdapter = struct {
             .str_interpolation,
             .underscore,
             .runtime_error,
-            => unreachable,
+            => unreachable, // canMiss calls recordChild only after patternClass reports .record
             .deferred_import_ref => base.invariant("check invariant violated: deferred import reference pattern reached checking", .{}),
         };
     }
@@ -25384,7 +25296,7 @@ const CirPatternRefutabilityAdapter = struct {
             .str_interpolation,
             .underscore,
             .runtime_error,
-            => unreachable,
+            => unreachable, // canMiss calls listFixedLen only after patternClass reports .list
             .deferred_import_ref => base.invariant("check invariant violated: deferred import reference pattern reached checking", .{}),
         };
     }
@@ -25411,7 +25323,7 @@ const CirPatternRefutabilityAdapter = struct {
             .str_interpolation,
             .underscore,
             .runtime_error,
-            => unreachable,
+            => unreachable, // canMiss calls listHasRest only after patternClass reports .list
             .deferred_import_ref => base.invariant("check invariant violated: deferred import reference pattern reached checking", .{}),
         };
     }
@@ -25438,7 +25350,7 @@ const CirPatternRefutabilityAdapter = struct {
             .str_interpolation,
             .underscore,
             .runtime_error,
-            => unreachable,
+            => unreachable, // canMiss calls listRestPattern only after patternClass reports .list
             .deferred_import_ref => base.invariant("check invariant violated: deferred import reference pattern reached checking", .{}),
         };
     }
@@ -27456,7 +27368,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
         .e_for,
         .e_return,
         .e_run_low_level,
-        => unreachable,
+        => unreachable, // exprTaskState gives these expressions task states, so they never reach checkLeafExpr
     }
 
     // A leaf expression performs no effects of its own.
@@ -29049,7 +28961,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
         .s_type_var_alias,
         .s_runtime_error,
         .s_break,
-        => unreachable,
+        => unreachable, // startStatement requests no child for these statements, so they never resume
     }
 }
 
@@ -29139,7 +29051,7 @@ fn startForLoop(self: *Self, state: *ForLoopCheck, env: *Env) std.mem.Allocator.
 /// null once the loop is fully checked.
 fn resumeForLoop(self: *Self, state: *ForLoopCheck, env: *Env) std.mem.Allocator.Error!?ExprChildRequest {
     switch (state.phase) {
-        .start => unreachable,
+        .start => unreachable, // startForLoop advances the phase past .start before any child is checked
         .body => return null,
         .iterable => {},
     }
@@ -31260,11 +31172,13 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
                 .count = self.problems.missing_patterns_backing.items.len - missing_patterns_start,
             };
 
-            try self.problems.appendPendingStaticExhaustiveness(.match, self.pendingExhaustivenessMode(), .{ .match_expr = expr_idx }, match_region, .{ .non_exhaustive_match = .{
-                .match_expr = expr_idx,
-                .condition_type = try self.problems.putExtraString(self.snapshots.getFormattedString(condition_snapshot) orelse unreachable),
-                .missing_patterns = missing_patterns_range,
-            } });
+            try self.problems.appendPendingStaticExhaustiveness(.match, self.pendingExhaustivenessMode(), .{ .match_expr = expr_idx }, match_region, .{
+                .non_exhaustive_match = .{
+                    .match_expr = expr_idx,
+                    .condition_type = try self.problems.putExtraString(self.snapshots.getFormattedString(condition_snapshot) orelse unreachable), // snapshotVarForError formats its root content in finishFrame
+                    .missing_patterns = missing_patterns_range,
+                },
+            });
         }
 
         try self.reportUselessMatchRows(expr_idx, match, result.redundant_rows, .redundant);
@@ -31883,13 +31797,10 @@ fn ownerEnvForOriginModule(
         }
     }
 
-    if (builtin.mode == .debug) {
-        base.invariant(
-            "type checker invariant violated: unable to find module environment for {s} owner from module {s}, source_decl={d}, origin_is_builtin={}",
-            .{ context, self.cir.moduleIdentityDisplayText(origin_module), owner_source_decl, origin_is_builtin },
-        );
-    }
-    unreachable;
+    base.invariant(
+        "type checker invariant violated: unable to find module environment for {s} owner from module {s}, source_decl={d}, origin_is_builtin={}",
+        .{ context, self.cir.moduleIdentityDisplayText(origin_module), owner_source_decl, origin_is_builtin },
+    );
 }
 
 fn debugAssertOwnerEnvSourceDecl(candidate: *const ModuleEnv, source_decl: u32, context: []const u8) void {
@@ -31903,13 +31814,10 @@ fn debugAssertOwnerEnvSourceDecl(candidate: *const ModuleEnv, source_decl: u32, 
 
 fn nonBuiltinOwnerSourceDecl(source_decl: ?u32, context: []const u8, origin_text: []const u8) u32 {
     if (source_decl) |raw_decl| return raw_decl;
-    if (builtin.mode == .debug) {
-        base.invariant(
-            "type checker invariant violated: {s} owner {s} has no source declaration",
-            .{ context, origin_text },
-        );
-    }
-    unreachable;
+    base.invariant(
+        "type checker invariant violated: {s} owner {s} has no source declaration",
+        .{ context, origin_text },
+    );
 }
 
 fn builtinOwnerEnvForSourceDecl(
@@ -31918,24 +31826,18 @@ fn builtinOwnerEnvForSourceDecl(
     context: []const u8,
 ) struct { *const ModuleEnv, bool } {
     if (source_decl == null) {
-        if (builtin.mode == .debug) {
-            base.invariant(
-                "type checker invariant violated: {s} compiler-builtin owner has no source declaration",
-                .{context},
-            );
-        }
-        unreachable;
+        base.invariant(
+            "type checker invariant violated: {s} compiler-builtin owner has no source declaration",
+            .{context},
+        );
     }
 
     if (self.maybeBuiltinOwnerEnvForSourceDecl(source_decl.?)) |owner| return .{ owner.env, owner.is_this_module };
 
-    if (builtin.mode == .debug) {
-        base.invariant(
-            "type checker invariant violated: unable to find compiler-builtin module environment for {s} owner",
-            .{context},
-        );
-    }
-    unreachable;
+    base.invariant(
+        "type checker invariant violated: unable to find compiler-builtin module environment for {s} owner",
+        .{context},
+    );
 }
 
 fn maybeBuiltinOwnerEnvForSourceDecl(
@@ -32059,7 +31961,7 @@ fn hostedDeclarationIsNotEffectful(module_env: *const ModuleEnv, def_idx: CIR.De
 /// counts as effectful here rather than adding a second report.
 fn hostedAnnotationIsEffectful(module_env: *const ModuleEnv, annotation_idx: CIR.Annotation.Idx) bool {
     return switch (module_env.types.resolveThroughAliases(ModuleEnv.varFrom(annotation_idx)).desc.content) {
-        .alias => unreachable,
+        .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
         .err => true,
         .structure => |flat| flat == .fn_effectful,
         .flex, .rigid, .field_presence => false,
@@ -32635,11 +32537,13 @@ fn checkPatternExhaustiveness(
         };
 
         const empirical_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(pattern_idx));
-        try self.problems.appendPendingStaticExhaustiveness(.destructure, self.pendingExhaustivenessMode(), .{ .destructure_pattern = pattern_idx }, empirical_region, .{ .non_exhaustive_destructure = .{
-            .pattern = pattern_idx,
-            .value_type = try self.problems.putExtraString(self.snapshots.getFormattedString(value_snapshot) orelse unreachable),
-            .missing_patterns = missing_patterns_range,
-        } });
+        try self.problems.appendPendingStaticExhaustiveness(.destructure, self.pendingExhaustivenessMode(), .{ .destructure_pattern = pattern_idx }, empirical_region, .{
+            .non_exhaustive_destructure = .{
+                .pattern = pattern_idx,
+                .value_type = try self.problems.putExtraString(self.snapshots.getFormattedString(value_snapshot) orelse unreachable), // snapshotVarForError formats its root content in finishFrame
+                .missing_patterns = missing_patterns_range,
+            },
+        });
         return true;
     }
     return false;
@@ -32961,7 +32865,7 @@ fn finishBinopExpr(
                     .@"or",
                     .range_exclusive,
                     .range_inclusive,
-                    => unreachable,
+                    => unreachable, // the enclosing prong matches only arithmetic operators
                 };
 
             const lhs_is_numeric = self.isBuiltinNumericNominal(lhs_var);
@@ -33054,7 +32958,7 @@ fn finishBinopExpr(
                     .@"or",
                     .range_exclusive,
                     .range_inclusive,
-                    => unreachable,
+                    => unreachable, // the enclosing prong matches only ordering operators
                 };
 
             if (try self.reportMissingNominalMethodForBinop(lhs_var, rhs_var, expr_var, method_name, env, expr_region)) {
@@ -33104,7 +33008,7 @@ fn finishBinopExpr(
                 .div_trunc,
                 .@"and",
                 .@"or",
-                => unreachable,
+                => unreachable, // the enclosing prong matches only range operators
             };
 
             if (try self.reportMissingNominalMethodForBinop(lhs_var, rhs_var, expr_var, method_name, env, expr_region)) {
@@ -33235,7 +33139,7 @@ fn finishBinopExpr(
                 .div_trunc,
                 .range_exclusive,
                 .range_inclusive,
-                => unreachable,
+                => unreachable, // the enclosing prong matches only .and and .or
             };
             try self.checkShortCircuitOperand(expr_idx, binop.lhs, expr_region, .{ .binop_lhs = .{
                 .operator = binop_ctx,
@@ -34493,13 +34397,10 @@ fn moduleEnvForIdentity(
 ) OwnerEnvCandidate {
     const target_hash = source_module.moduleIdentityHash(module_identity);
     return self.owner_envs_by_identity.get(target_hash.*) orelse {
-        if (builtin.mode == .debug) {
-            base.invariant(
-                "type checker invariant violated: resolved associated lookup target is unavailable in module '{s}', identity={d}",
-                .{ source_module.module_name, @backingInt(module_identity) },
-            );
-        }
-        unreachable;
+        base.invariant(
+            "type checker invariant violated: resolved associated lookup target is unavailable in module '{s}', identity={d}",
+            .{ source_module.module_name, @backingInt(module_identity) },
+        );
     };
 }
 
@@ -34661,13 +34562,10 @@ fn openNominalBackingFromTemplate(
 ) std.mem.Allocator.Error!?Var {
     const decl_idx = self.types.lookupNominalDecl(nominal_type) orelse {
         if (nominal_type.sourceDecl().present) {
-            if (builtin.mode == .debug) {
-                base.invariant(
-                    "type checker invariant violated: nominal application '{s}' has a source declaration but no declaration table entry",
-                    .{self.cir.getIdentStoreConst().getText(nominal_type.ident.ident_idx)},
-                );
-            }
-            unreachable;
+            base.invariant(
+                "type checker invariant violated: nominal application '{s}' has a source declaration but no declaration table entry",
+                .{self.cir.getIdentStoreConst().getText(nominal_type.ident.ident_idx)},
+            );
         }
         return null;
     };
@@ -35479,7 +35377,7 @@ fn recordRelationOperands(self: *Self, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) A
         .e_derived_method,
         .e_break,
         .e_hosted_lambda,
-        => unreachable,
+        => unreachable, // the first switch returns for these expressions
     }
     try self.relation_operands.put(self.gpa, expr_idx, .{
         .start = start,
@@ -35848,10 +35746,7 @@ fn poisonErroneousValueExprs(self: *Self) Allocator.Error!void {
         const diagnostic = if (entry.value_ptr.*) |value_expr| blk: {
             const poisoned_expr = self.cir.store.getExpr(value_expr);
             if (poisoned_expr != .e_runtime_error) {
-                if (@import("builtin").mode == .debug) {
-                    base.invariant("check invariant violated: rejected statement value was not poisoned", .{});
-                }
-                unreachable;
+                base.invariant("check invariant violated: rejected statement value was not poisoned", .{});
             }
             // A value that evaluates operands before it crashes is still
             // evaluated where the statement runs.
@@ -38266,11 +38161,11 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
                 // footprint is just itself, so only a driver can merge it).
                 std.debug.assert(member_count == 1);
                 const passive_root = self.literal_defaulting_open_roots.items[leader];
-                const kind = self.varLiteralKind(passive_root) orelse unreachable;
+                const kind = self.varLiteralKind(passive_root) orelse unreachable; // gather left this root flex with literal-conversion provenance
                 try self.commitGatheredLiteral(passive_root, kind, component_fits, universe, env);
             } else if (self.literal_defaulting_group_drivers.items.len == 1) {
                 const driver_root = self.literal_defaulting_group_drivers.items[0];
-                const kind = self.varLiteralKind(driver_root) orelse unreachable;
+                const kind = self.varLiteralKind(driver_root) orelse unreachable; // gather left this root flex with literal-conversion provenance
                 try self.commitGatheredLiteral(driver_root, kind, component_fits, universe, env);
             } else {
                 try self.commitGatheredGroup(self.literal_defaulting_group_drivers.items, component_fits, &self.literal_defaulting_group_warnings, universe, env);
@@ -38616,10 +38511,7 @@ fn boundaryWarningBeforeCommit(self: *Self, literal_root: Var) std.mem.Allocator
     return .{
         .leaks_into_signature = if (is_int_unbound) false else try self.boundaryDefaultLeaksIntoSignature(literal_root),
         .region = self.literalSourceRegion(literal_root) orelse self.getRegionAt(literal_root),
-        // Every commit path only reaches here for a var with literal-conversion
-        // provenance, and the var is still flex pre-commit, so the kind is
-        // always derivable.
-        .kind = self.varLiteralKind(literal_root) orelse unreachable,
+        .kind = self.varLiteralKind(literal_root) orelse unreachable, // every commit path reaches here for a still-flex var with literal-conversion provenance
     };
 }
 
@@ -38700,7 +38592,7 @@ fn removeTypeSchemeAt(self: *Self, scheme_idx: usize) void {
 
     if (scheme_idx != last_idx) {
         for (self.type_schemes.items[scheme_idx].indexed_vars.items) |indexed_var| {
-            const moved_index = self.type_scheme_by_var.getPtr(indexed_var) orelse unreachable;
+            const moved_index = self.type_scheme_by_var.getPtr(indexed_var) orelse unreachable; // every var in a scheme's indexed_vars is keyed in type_scheme_by_var when it is appended
             std.debug.assert(moved_index.* == @as(u32, @intCast(last_idx)));
             moved_index.* = @intCast(scheme_idx);
         }
@@ -39009,7 +38901,7 @@ fn deduplicateGeneralizedDispatchRequirements(
         const retained_content: Content = switch (resolved.desc.content) {
             .flex => |flex| .{ .flex = flex.withConstraints(retained_range) },
             .rigid => |rigid| .{ .rigid = rigid.withConstraints(retained_range) },
-            .alias, .structure, .field_presence, .err => unreachable,
+            .alias, .structure, .field_presence, .err => unreachable, // contentConstraintRange returned a range above, so the content is flex or rigid
         };
         try self.types.setVarContent(resolved.var_, retained_content);
         self.canonical_key_writer.invalidateAnchoredKeys();
@@ -39766,7 +39658,7 @@ fn schemeCandidateUsesGeneratedCodec(
 
 fn schemeCodecReceiverHasOpenOuterRow(self: *Self, root: Var) bool {
     return switch (self.types.resolveThroughAliases(root).desc.content) {
-        .alias => unreachable,
+        .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
         .structure => |structure| switch (structure) {
             .record => |record| self.types.resolveVar(record.ext).desc.content == .flex,
             .tag_union => |tag_union| self.types.resolveVar(tag_union.ext).desc.content == .flex,
@@ -40891,10 +40783,7 @@ fn recordDefaultDecidedVar(self: *Self, var_: Var, decision: DefaultDecision) Al
     const flex = switch (resolved.desc.content) {
         .flex => |flex| flex,
         .rigid, .alias, .structure, .field_presence, .err => {
-            if (builtin.mode == .debug) {
-                std.debug.panic("type checker invariant violated: a default-decided record must start from an undetermined variable", .{});
-            }
-            unreachable;
+            base.invariant("type checker invariant violated: a default-decided record must start from an undetermined variable", .{});
         },
     };
     try self.default_decided_records.append(self.gpa, .{
@@ -40936,10 +40825,7 @@ fn defaultDecidedRecordFor(self: *const Self, var_: Var) ?usize {
         idx -= 1;
         if (self.types.resolveVar(self.default_decided_records.items[idx].var_).var_ == root) return idx;
     }
-    if (builtin.mode == .debug) {
-        std.debug.panic("type checker invariant violated: default-decided class has no default-decided record", .{});
-    }
-    unreachable;
+    base.invariant("type checker invariant violated: default-decided class has no default-decided record", .{});
 }
 
 /// Snapshot `var_` as the program wrote it: every class a defaulting decision
@@ -41092,10 +40978,7 @@ fn builtinLiteralCandidatesLackMethod(
             if (str_content == .structure and str_content.structure == .nominal_type) {
                 return !self.nominalHasMethod(str_content.structure.nominal_type, method_name);
             }
-            if (builtin.mode == .debug) {
-                std.debug.panic("type checker invariant violated: the builtin Str type is not a nominal type", .{});
-            }
-            unreachable;
+            base.invariant("type checker invariant violated: the builtin Str type is not a nominal type", .{});
         },
     }
 }
@@ -42171,7 +42054,7 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx, an
         const composed_err = try self.fresh(env, region);
         break :composed try self.freshFromContent(try self.mkTryContent(body.ok, composed_err), env, region);
     };
-    const composed = self.tryArgsFromVar(composed_var) orelse unreachable;
+    const composed = self.tryArgsFromVar(composed_var) orelse unreachable; // each branch above yields a Try: an annotated Try, the body result whose Try args are `body`, or a fresh Try
     const body_ctx: problem.Context = if (frame.expected_result != null)
         anno_context
     else
@@ -43694,7 +43577,7 @@ fn dispatchFieldKind(self: *Self, presence: types_mod.RecordField.Presence) Disp
                 },
                 .flex, .rigid => .{ .variable = resolved.var_ },
                 .err => .poisoned,
-                .alias, .structure => unreachable,
+                .alias, .structure => base.invariant("check invariant violated: a field presence variable holds alias or structure content", .{}),
             };
         },
     };
@@ -44288,7 +44171,7 @@ fn appendReplayShapeWalk(self: *Self) Allocator.Error!?void {
                         .fn_pure => 9,
                         .fn_effectful => 10,
                         .fn_unbound => 11,
-                        .empty_record, .empty_tag_union, .tuple, .record, .tag_union, .nominal_type => unreachable,
+                        .empty_record, .empty_tag_union, .tuple, .record, .tag_union, .nominal_type => unreachable, // the enclosing prong matches only function structures
                     });
                     const args = self.types.sliceVars(func.args);
                     try appendReplayWord(out, self.gpa, @intCast(args.len));
@@ -44648,7 +44531,7 @@ fn varIsStructure(self: *const Self, var_: Var, comptime tag: std.meta.Tag(types
 /// `content` with each child replaced by its frozen copy.
 fn frozenContent(self: *Self, copies: *const collections.DenseMapUnmanaged(Var, Var), content: types_mod.Content) Allocator.Error!types_mod.Content {
     return switch (content) {
-        .flex, .rigid, .err => unreachable,
+        .flex, .rigid, .err => unreachable, // freezeTypeGraphRoots rejects graphs with flex, rigid, or err content, and the replay caller passes only presence, alias, or structure content
         .field_presence => content,
         .alias => |alias| blk: {
             const backing = self.frozenCopy(copies, self.types.getAliasBackingVar(alias));
@@ -44772,7 +44655,7 @@ fn appendReplayTree(self: *Self, root: Var, out: *std.ArrayListUnmanaged(u8)) Al
                         .fn_pure => 7,
                         .fn_effectful => 8,
                         .fn_unbound => 9,
-                        .empty_record, .empty_tag_union, .tuple, .nominal_type, .record, .tag_union => unreachable,
+                        .empty_record, .empty_tag_union, .tuple, .nominal_type, .record, .tag_union => unreachable, // the enclosing prong matches only function structures
                     });
                     const args = self.types.sliceVars(func.args);
                     try appendReplayWord(out, self.gpa, @intCast(args.len));
@@ -45971,7 +45854,7 @@ fn pairDispatchReplayFunctionKind(self: *Self, source: types_mod.ResolvedVarDesc
 
 fn pairDispatchReplayChildren(self: *Self, source: types_mod.Content, target: types_mod.Content) Allocator.Error!bool {
     switch (target) {
-        .flex, .rigid, .err => unreachable,
+        .flex, .rigid, .err => unreachable, // the caller continues or returns for flex, rigid, and err targets before pairing children
         .field_presence => |target_presence| {
             if (source != .field_presence) return false;
             return std.meta.eql(source.field_presence, target_presence);
@@ -47025,10 +46908,7 @@ inline fn processDeferredDispatchEntry(
                 };
                 if (staticDispatchBindingIsDerivedMarker(method_lookup)) {
                     const kind = self.derivedMethodKind(constraint.fn_name) orelse {
-                        if (builtin.mode == .debug) {
-                            base.invariant("derived-method marker registered for unsupported method", .{});
-                        }
-                        unreachable;
+                        base.invariant("derived-method marker registered for unsupported method", .{});
                     };
                     switch (try self.satisfyDerivedForShape(
                         kind,
@@ -47607,10 +47487,7 @@ fn satisfyBuiltinStrInterpolation(
 ) Allocator.Error!bool {
     const metadata = constraint.interpolation;
     const expr_region = metadata.expr_region.get() orelse {
-        if (builtin.mode == .debug) {
-            base.invariant("type checker invariant violated: builtin Str interpolation constraint had no metadata", .{});
-        }
-        unreachable;
+        base.invariant("type checker invariant violated: builtin Str interpolation constraint had no metadata", .{});
     };
     const expected_str_var = try self.freshStr(env, switch (metadata.regions) {
         .this_module => expr_region,
@@ -47681,10 +47558,7 @@ fn relateInterpolationPartsToItem(
 ) Allocator.Error!void {
     const metadata = constraint.interpolation;
     if (!metadata.isPresent()) {
-        if (builtin.mode == .debug) {
-            base.invariant("type checker invariant violated: checked interpolation constraint had no generated item type", .{});
-        }
-        unreachable;
+        base.invariant("type checker invariant violated: checked interpolation constraint had no generated item type", .{});
     }
 
     // Empty interpolations have no part constraints to validate and their
@@ -47947,7 +47821,7 @@ fn varHasUnboxedTypeVariableInHostedSignature(self: *Self, var_: Var) std.mem.Al
             const walk_index = switch (item) {
                 .var_ => |visit| visit.walk,
                 .nominal_arg => |arg| arg.walk,
-                .nominal_args => unreachable,
+                .nominal_args => unreachable, // the .nominal_args prong above yields reached = false
             };
             if (walk_index == 0) return true;
             // A declaration walk stops at its first answer; the walk that
@@ -48147,7 +48021,7 @@ const HostBoundaryScan = struct {
                         try addVars(items, self.types.sliceAliasArgs(alias));
                         try items.add(.{ .var_ = self.types.getAliasBackingVar(alias) });
                     },
-                    .flex, .rigid, .err, .field_presence => unreachable,
+                    .flex, .rigid, .err, .field_presence => unreachable, // the switch above returns for these contents
                 }
                 return .{ .group = .any };
             },
@@ -48543,7 +48417,7 @@ fn varSupportsStructuralDerive(self: *Self, derivation: EqHashDerivation, var_: 
 fn varSupportsStringRenderedDictKey(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
     return switch (self.types.resolveThroughAliases(var_).desc.content) {
         .structure => |structure| try self.typeSupportsStringRenderedDictKey(structure),
-        .alias => unreachable,
+        .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
         .err => true,
         .flex, .rigid, .field_presence => false,
     };
@@ -48573,7 +48447,7 @@ fn typeSupportsStringRenderedDictKey(self: *Self, flat_type: types_mod.FlatType)
 fn varSupportsStringRenderedKeyForDerivedEncode(self: *Self, var_: Var) std.mem.Allocator.Error!DerivedSupport {
     return switch (self.types.resolveThroughAliases(var_).desc.content) {
         .structure => |structure| derivedSupportFromBool(try self.typeSupportsStringRenderedDictKey(structure)),
-        .alias => unreachable,
+        .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
         .err => .supported,
         .flex => .unresolved,
         .rigid, .field_presence => .unsupported,
@@ -48594,7 +48468,7 @@ fn varIsClosedUnitTagUnion(self: *Self, var_: Var) std.mem.Allocator.Error!bool 
             .empty_tag_union,
             => false,
         },
-        .alias => unreachable,
+        .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
         .flex, .rigid, .field_presence, .err => false,
     };
 }
@@ -48630,7 +48504,7 @@ fn closeDerivedCodecUnitTagDictKeyRow(
             .empty_tag_union,
             => false,
         },
-        .alias => unreachable,
+        .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
         .flex, .rigid, .field_presence, .err => false,
     };
 }
@@ -48966,7 +48840,7 @@ fn expandDerivedParseQuery(
     switch (query) {
         .shape => |var_| return switch (self.types.resolveThroughAliases(var_).desc.content) {
             .structure => |structure| try self.expandDerivedParseQuery(.{ .flat = structure }, pending),
-            .alias => unreachable,
+            .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
             .err => .supported,
             .flex => .unresolved,
             .rigid, .field_presence => .unsupported,
@@ -48979,7 +48853,7 @@ fn expandDerivedParseQuery(
                 .empty_tag_union => .unsupported,
                 .fn_pure, .fn_effectful, .fn_unbound => .unsupported,
             },
-            .alias => unreachable,
+            .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
             .err => .supported,
             .flex => .unresolved,
             .rigid, .field_presence => .unsupported,
@@ -49001,7 +48875,7 @@ fn expandDerivedParseQuery(
                 .fn_unbound,
                 => .unsupported,
             },
-            .alias => unreachable,
+            .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
             .flex => .unresolved,
             .err => .supported,
             .rigid, .field_presence => .unsupported,
@@ -49019,7 +48893,7 @@ fn expandDerivedParseQuery(
                 .empty_record,
                 => .unsupported,
             },
-            .alias => unreachable,
+            .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
             .err => .supported,
             // An unbound flex ext can be implicit output-position openness
             // (polarity); closeTagRowsForDerivation grounds reachable rows
@@ -49135,7 +49009,7 @@ fn derivedParseTagUnionHasAnyTag(self: *Self, tag_union: types_mod.TagUnion) All
                 .empty_record,
                 => return .unsupported,
             },
-            .alias => unreachable,
+            .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
             .err => return .supported,
             .flex => return .unresolved,
             .rigid, .field_presence => return .unsupported,
@@ -49459,7 +49333,7 @@ fn expandDerivedEncodeQuery(
                 .empty_tag_union => .unsupported,
                 .fn_pure, .fn_effectful, .fn_unbound => .unsupported,
             },
-            .alias => unreachable,
+            .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
             .err => .supported,
             .flex => .unresolved,
             .rigid, .field_presence => .unsupported,
@@ -49485,7 +49359,7 @@ fn expandDerivedEncodeQuery(
                 .fn_unbound,
                 => .unsupported,
             },
-            .alias => unreachable,
+            .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
             .flex => .unresolved,
             .err => .supported,
             .rigid, .field_presence => .unsupported,
@@ -49503,7 +49377,7 @@ fn expandDerivedEncodeQuery(
                 .empty_record,
                 => .unsupported,
             },
-            .alias => unreachable,
+            .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
             .err => .supported,
             .flex => .unresolved,
             .rigid, .field_presence => .unsupported,
@@ -49636,7 +49510,7 @@ fn unboundTryInfoFromNominal(
 fn varIsOpenOptionalParseError(self: *Self, var_: Var) Allocator.Error!bool {
     return switch (self.types.resolveThroughAliases(var_).desc.content) {
         .flex => true,
-        .alias => unreachable,
+        .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
         .structure => |structure| switch (structure) {
             .tag_union => |tag_union| blk: {
                 const tags = self.types.getTagsSlice(tag_union.tags);
@@ -49677,7 +49551,7 @@ fn varIsExactUnitTagUnion(
     tag_text: []const u8,
 ) Allocator.Error!bool {
     return switch (self.types.resolveThroughAliases(var_).desc.content) {
-        .alias => unreachable,
+        .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
         .structure => |structure| switch (structure) {
             .tag_union => |tag_union| blk: {
                 const tags = self.types.getTagsSlice(tag_union.tags);
@@ -49705,7 +49579,7 @@ fn varIsExactUnitTagUnion(
 
 fn tagExtIsClosedEmpty(self: *Self, var_: Var) Allocator.Error!bool {
     return switch (self.types.resolveThroughAliases(var_).desc.content) {
-        .alias => unreachable,
+        .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
         .structure => |structure| structure == .empty_tag_union,
         .err, .flex, .rigid, .field_presence => false,
     };
@@ -51584,7 +51458,7 @@ fn collectDerivedMapTypeVars(
                 },
                 .empty_record, .empty_tag_union => {},
             },
-            .flex, .rigid, .err, .field_presence => unreachable,
+            .flex, .rigid, .err, .field_presence => unreachable, // the switch above continues for these contents
         }
         std.mem.reverse(Var, pending.items[start..]);
     }
@@ -52294,9 +52168,9 @@ fn recordGeneratedCodecDerivationSnapshot(
     }
 
     const copied_fn = self.types.resolveVar(copied_root).desc.content.unwrapFunc() orelse
-        unreachable;
+        unreachable; // instantiating the function type snapshot_root yields a function type
     const copied_vars = self.types.sliceVars(copied_fn.args);
-    if (copied_vars.len != roots.items.len) unreachable;
+    if (copied_vars.len != roots.items.len) unreachable; // instantiation copies the function's arguments one to one
 
     var copied_calls = std.ArrayList(ModuleEnv.GeneratedCodecCall).empty;
     defer copied_calls.deinit(self.gpa);
@@ -52322,7 +52196,7 @@ fn recordGeneratedCodecDerivationSnapshot(
             .subject_var = copied_subject,
         });
     }
-    if (cursor != copied_vars.len) unreachable;
+    if (cursor != copied_vars.len) unreachable; // the loop consumes exactly the vars appended to roots for each call
 
     try self.cir.recordGeneratedCodecDerivation(
         kind,
@@ -53080,7 +52954,7 @@ fn specDeclForNumKind(comptime SpecDecl: type, num_kind: CIR.NumKind) SpecDecl {
         .dec => .dec,
         .f32 => .f32,
         .f64 => .f64,
-        .num_unbound, .int_unbound => unreachable,
+        .num_unbound, .int_unbound => unreachable, // callers pass kinds from builtinNumKindFromNominalType, which maps only concrete builtin number declarations
     };
 }
 
@@ -53113,7 +52987,7 @@ fn dictKeyMethodText(self: *Self, key_var: Var, comptime direction: []const u8) 
                         .dec => direction ++ "_key_dec",
                         .f32 => direction ++ "_key_f32",
                         .f64 => direction ++ "_key_f64",
-                        .num_unbound, .int_unbound => unreachable,
+                        .num_unbound, .int_unbound => unreachable, // builtinNumKindFromNominalType maps only concrete builtin number declarations
                     };
                 }
                 return null;
@@ -53128,7 +53002,7 @@ fn dictKeyMethodText(self: *Self, key_var: Var, comptime direction: []const u8) 
             .empty_tag_union,
             => null,
         },
-        .alias => unreachable,
+        .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
         .err => null,
         .flex, .rigid, .field_presence => null,
     };
@@ -53751,7 +53625,7 @@ fn constrainDerivedParserFormatError(
     region: Region,
 ) Allocator.Error!DerivedParseValidation {
     switch (self.types.resolveThroughAliases(child).desc.content) {
-        .alias => unreachable,
+        .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
         .structure => |structure| switch (structure) {
             .tag_union, .empty_tag_union => return try self.constrainDerivedParserErrorRowIncludes(parent, child, constraint, failure_expr, env, region),
             .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => {},
@@ -54540,7 +54414,7 @@ fn validateDerivedParseVar(self: *Self, run: *ImplicitParseRun, env: *Env) Alloc
                 .dict_key_start,
                 .dict_key,
                 .backing,
-                => unreachable,
+                => unreachable, // an implicit-parse frame moves only between .start and .finish
             },
             .var_, .record, .tuple, .tag_union, .tag_ext, .nominal, .method, .settle => try self.stepDerivedParse(inputs, frame, input),
         };
@@ -54685,7 +54559,7 @@ fn stepDerivedParse(
                 .dict_key,
                 .backing,
                 .finish,
-                => unreachable,
+                => unreachable, // record frames advance only through .start, .fields, and .components
             }
             if (derivedCodecFailed(input)) |failed| return .{ .done = failed };
             if (frame.index == frame.presences.items.len) return .{ .done = .ok };
@@ -54722,7 +54596,7 @@ fn stepDerivedParse(
                 .dict_key,
                 .backing,
                 .finish,
-                => unreachable,
+                => unreachable, // tuple frames advance only through .start, .fields, and .components
             }
             if (derivedCodecFailed(input)) |failed| return .{ .done = failed };
             if (frame.index == frame.vars.items.len) return .{ .done = .ok };
@@ -54785,8 +54659,7 @@ fn stepDerivedParse(
             .settle => |settle| .{ .tail = .{ .settle = settle } },
         },
         .settle => |*settle| return try self.stepParseSettle(inputs, settle),
-        // The walk loop runs implicit relations itself.
-        .implicit => unreachable,
+        .implicit => unreachable, // the walk loop runs implicit relations itself
     }
 }
 
@@ -54955,7 +54828,7 @@ fn stepDerivedParseNominal(
             frame.stage = .finish;
             return try self.finishDerivedParseNominal(&frame.nominal, nominal_var);
         },
-        .fields, .components, .finish => unreachable,
+        .fields, .components, .finish => base.invariant("check invariant violated: a derived parse nominal frame resumed at a non-nominal or finished stage", .{}),
     }
 
     const list_methods = struct {
@@ -55182,7 +55055,7 @@ fn varIsOptionalParseField(
             .empty_tag_union,
             => false,
         },
-        .alias => unreachable,
+        .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
         .err => true,
         .flex, .rigid, .field_presence => false,
     };
@@ -55554,7 +55427,7 @@ fn stepDerivedEncodeNominal(
             frame.stage = .finish;
             return .{ .done = try self.finishDerivedEncodeNominal(&frame.nominal, nominal_var) };
         },
-        .fields, .components, .checked_payload, .set_from_list, .dict_keys, .dict_unit_keys, .dict_construction, .dict_key_start, .finish => unreachable,
+        .fields, .components, .checked_payload, .set_from_list, .dict_keys, .dict_unit_keys, .dict_construction, .dict_key_start, .finish => base.invariant("check invariant violated: a derived encode nominal frame resumed at a non-nominal or finished stage", .{}),
     }
 
     if (self.nominalIsBuiltinBoolType(nominal)) {

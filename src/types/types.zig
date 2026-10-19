@@ -1072,10 +1072,9 @@ pub const NumeralInfo = struct {
             .is_negative = is_negative,
             .is_fractional = false,
         };
-        // Integer fit computation never allocates.
         var no_heap: [0]u8 = .{};
         var fba = std.heap.FixedBufferAllocator.init(&no_heap);
-        const fit_set = numeral_mod.computeFitSet(fba.allocator(), exact) catch unreachable;
+        const fit_set = numeral_mod.computeFitSet(fba.allocator(), exact) catch unreachable; // integer fit computation never allocates
         return fromExact(exact, fit_set, true, region);
     }
 };

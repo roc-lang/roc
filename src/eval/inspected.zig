@@ -369,10 +369,7 @@ pub const LirImageProgram = struct {
     /// rediscover roots from compiler data.
     pub fn mainProc(self: *const LirImageProgram) LirProcSpecId {
         if (self.view.root_procs.len == 0) {
-            if (builtin.mode == .debug) {
-                base.invariant("eval LIR image invariant violated: no root procedures", .{});
-            }
-            unreachable;
+            base.invariant("eval LIR image invariant violated: no root procedures", .{});
         }
         return self.view.root_procs[0];
     }
@@ -1182,10 +1179,7 @@ pub fn devEvalTopLevelExpects(
         regions[index] = switch (request.source) {
             .statement => |statement| resources.module_env.store.getStatementRegion(statement),
             .def, .expr, .required_binding, .hoisted => {
-                if (builtin.mode == .debug) {
-                    base.invariant("eval helper invariant violated: test root was not published from an expect statement", .{});
-                }
-                unreachable;
+                base.invariant("eval helper invariant violated: test root was not published from an expect statement", .{});
             },
         };
         const arg_layouts = try InspectedRun.mainProcArgLayouts(allocator, &lowered.lir_result.store, root_proc);
@@ -1339,12 +1333,7 @@ pub fn parseProgram(
     switch (options.roots) {
         .eval, .inspected => {
             const root_name = evalRootName(source_kind, options.roots.inspectWrap());
-            const root_def_idx = main_checked.can.explicitRootDefByName(root_name) orelse {
-                if (@import("builtin").mode == .debug) {
-                    base.invariant("eval helper invariant violated: explicit eval root `{s}` was not found", .{root_name});
-                }
-                unreachable;
-            };
+            const root_def_idx = main_checked.can.explicitRootDefByName(root_name) orelse base.invariant("eval helper invariant violated: explicit eval root `{s}` was not found", .{root_name});
             explicit_root_storage[0] = .{
                 .kind = .dev_expr,
                 .source = .{ .def = root_def_idx },
@@ -1355,20 +1344,10 @@ pub fn parseProgram(
         },
         .comptime_repl => {
             const root_name = evalRootName(source_kind, false);
-            const root_def_idx = main_checked.can.explicitRootDefByName(root_name) orelse {
-                if (@import("builtin").mode == .debug) {
-                    base.invariant("eval helper invariant violated: compile-time REPL root `{s}` was not found", .{root_name});
-                }
-                unreachable;
-            };
+            const root_def_idx = main_checked.can.explicitRootDefByName(root_name) orelse base.invariant("eval helper invariant violated: compile-time REPL root `{s}` was not found", .{root_name});
             const root_def = main_checked.module_env.store.getDef(root_def_idx);
             if (main_checked.module_env.store.getExpr(root_def.expr) != .e_runtime_error) {
-                const body_expr = main_checked.checker.compileTimeExecutableRootBody(root_def_idx) orelse {
-                    if (@import("builtin").mode == .debug) {
-                        base.invariant("eval helper invariant violated: compile-time REPL root body was not recorded", .{});
-                    }
-                    unreachable;
-                };
+                const body_expr = main_checked.checker.compileTimeExecutableRootBody(root_def_idx) orelse base.invariant("eval helper invariant violated: compile-time REPL root body was not recorded", .{});
                 explicit_root_storage[0] = .{
                     .kind = .repl_expr,
                     .source = .{ .expr = body_expr },
@@ -1564,12 +1543,7 @@ pub fn parseCheckModule(
     );
     checker.fixupTypeWriter();
     for (executable_roots) |root| {
-        const root_def_idx = czer.explicitRootDefByName(root.name) orelse {
-            if (@import("builtin").mode == .debug) {
-                base.invariant("eval helper invariant violated: explicit executable root `{s}` was not found", .{root.name});
-            }
-            unreachable;
-        };
+        const root_def_idx = czer.explicitRootDefByName(root.name) orelse base.invariant("eval helper invariant violated: explicit executable root `{s}` was not found", .{root.name});
         switch (root.evaluation) {
             .runtime => try checker.addExecutableRootDef(root_def_idx),
             .compile_time => {
@@ -1732,10 +1706,7 @@ const ZeroArgRootBody = struct {
 };
 
 fn zeroArgRootInvariant(message: []const u8) noreturn {
-    if (builtin.mode == .debug) {
-        base.invariant("eval helper invariant violated: {s}", .{message});
-    }
-    unreachable;
+    base.invariant("eval helper invariant violated: {s}", .{message});
 }
 
 fn zeroArgRootBody(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) ZeroArgRootBody {
@@ -1865,10 +1836,7 @@ fn zeroArgRootBody(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) ZeroArgRo
         .e_deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
     };
     if (lambda.args.span.len != 0) {
-        if (@import("builtin").mode == .debug) {
-            base.invariant("eval helper invariant violated: compile-time REPL root had parameters", .{});
-        }
-        unreachable;
+        base.invariant("eval helper invariant violated: compile-time REPL root had parameters", .{});
     }
     return .{ .lambda = lambda_idx, .body = lambda.body };
 }
@@ -1980,10 +1948,7 @@ fn publishImportArtifacts(
         }
 
         if (!made_progress) {
-            if (@import("builtin").mode == .debug) {
-                base.invariant("eval helper invariant violated: import artifact publication graph is cyclic or incomplete", .{});
-            }
-            unreachable;
+            base.invariant("eval helper invariant violated: import artifact publication graph is cyclic or incomplete", .{});
         }
     }
 
@@ -2312,7 +2277,7 @@ fn copyRuntimeHostEvents(allocator: Allocator, runtime_env: *const RuntimeHostEn
             .dbg => |message| .{ .dbg = try allocator.dupe(u8, message) },
             .expect_failed => |message| .{ .expect_failed = try allocator.dupe(u8, message) },
             .crashed => |message| .{ .crashed = try allocator.dupe(u8, message) },
-            .effect => unreachable,
+            .effect => base.invariant("eval helper invariant violated: a bool root recorded a hosted effect event", .{}),
         };
         events_len += 1;
     }
@@ -3144,7 +3109,7 @@ pub fn lirInterpreterTranscript(allocator: Allocator, lowered: *const LoweredPro
                 null;
             outcome = .{ .aborted = .{ .kind = .expect_err, .message = message } };
         },
-        error.UnsupportedHostedFunction, error.InvalidHostedFunctionSignature => unreachable,
+        error.UnsupportedHostedFunction, error.InvalidHostedFunctionSignature => base.invariant("eval helper invariant violated: interpreter transcript evaluation reported {s}", .{@errorName(err)}),
     }
 
     var dbg_list = std.ArrayList([]u8).empty;
@@ -3161,7 +3126,7 @@ pub fn lirInterpreterTranscript(allocator: Allocator, lowered: *const LoweredPro
         .dbg => |bytes| try dbg_list.append(allocator, try allocator.dupe(u8, bytes)),
         .expect_failed => |bytes| try expect_list.append(allocator, try allocator.dupe(u8, bytes)),
         .crashed => {},
-        .effect => unreachable,
+        .effect => base.invariant("eval helper invariant violated: interpreter transcript recorded a hosted effect event", .{}),
     };
 
     const dbg_events = try dbg_list.toOwnedSlice(allocator);

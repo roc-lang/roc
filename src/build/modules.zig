@@ -708,7 +708,7 @@ pub const RocModules = struct {
         inline for (comptime std.enums.values(ModuleType)) |candidate| {
             if (module_type == candidate) return @field(self, @tagName(candidate));
         }
-        unreachable;
+        unreachable; // the loop covers every ModuleType value
     }
 
     /// Add dependencies for a specific module type to a compile step

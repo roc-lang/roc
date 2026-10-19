@@ -311,7 +311,7 @@ pub fn invariant(comptime message: []const u8) noreturn {
     if (@import("builtin").mode == .debug) {
         base.invariant("postcheck invariant violated: {s}", .{message});
     }
-    unreachable;
+    unreachable; // callers only report compiler invariants, which design.md makes unreachable outside debug builds
 }
 
 /// `invariant` with runtime context formatted into the panic message.
@@ -319,7 +319,7 @@ pub fn invariantFmt(comptime fmt: []const u8, args: anytype) noreturn {
     if (@import("builtin").mode == .debug) {
         base.invariant("postcheck invariant violated: " ++ fmt, args);
     }
-    unreachable;
+    unreachable; // callers only report compiler invariants, which design.md makes unreachable outside debug builds
 }
 
 /// Stop the build with a compiler-bug message in every build mode.

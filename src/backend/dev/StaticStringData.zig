@@ -208,7 +208,7 @@ fn writeSignedWord(word_size: u32, bytes: []u8, offset: u32, value: isize) void 
     switch (word_size) {
         4 => std.mem.writeInt(i32, bytes[offset..][0..4], @intCast(value), .little),
         8 => std.mem.writeInt(i64, bytes[offset..][0..8], @intCast(value), .little),
-        else => unreachable,
+        else => unreachable, // build derives word_size from RocTarget.ptrBitWidth, which is 32 or 64
     }
 }
 

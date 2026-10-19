@@ -143,8 +143,7 @@ pub fn checkedTypeIsClosed(
                 // `padding_field_types`; the backing below covers the named ones.
                 try push(allocator, &stack, nominal.padding_field_types, boxed);
                 if (types.nominalBackingTemplateForPayload(nominal)) |backing| {
-                    // A backing template exists only for a declared nominal.
-                    const declaration = types.nominalDeclarationForPayload(nominal) orelse unreachable;
+                    const declaration = types.nominalDeclarationForPayload(nominal) orelse unreachable; // nominalBackingTemplateForPayload returns a template only from the nominal's declaration
                     for (declaration.formalArgs(types)) |formal| try bound_formals.put(formal, {});
                     try stack.append(allocator, .{ .ty = backing, .boxed = boxed });
                 }

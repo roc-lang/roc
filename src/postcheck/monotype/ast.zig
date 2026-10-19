@@ -678,7 +678,7 @@ pub fn valueEql(left: anytype, right: @TypeOf(left)) bool {
                     return valueEql(@field(left, field_name), @field(right, field_name));
                 }
             }
-            unreachable;
+            unreachable; // the loop visits every union field, so one of them is the active tag
         },
         .array => |info| {
             if (info.child == u8) return std.mem.eql(u8, &left, &right);

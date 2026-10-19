@@ -26,7 +26,7 @@ test "canonicalize simple positive integer" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const value = try getIntValue(test_env.module_env, canonical_expr.get_idx());
     try testing.expectEqual(@as(i128, 42), value);
 }
@@ -36,7 +36,7 @@ test "canonicalize simple negative integer" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const value = try getIntValue(test_env.module_env, canonical_expr.get_idx());
     try testing.expectEqual(@as(i128, -42), value);
 }
@@ -46,7 +46,7 @@ test "canonicalize very large integer" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const value = try getIntValue(test_env.module_env, canonical_expr.get_idx());
     try testing.expectEqual(@as(i128, 170141183460469231731687303715884105727), value);
 }
@@ -56,7 +56,7 @@ test "canonicalize very large negative integer" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const value = try getIntValue(test_env.module_env, canonical_expr.get_idx());
     try testing.expectEqual(@as(i128, -170141183460469231731687303715884105728), value);
 }
@@ -65,7 +65,7 @@ test "canonicalize builtin typed integer suffix without caller setup" {
     var test_env = try TestEnv.init("0.I64");
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
     if (std.meta.activeTag(expr) != .e_typed_int) return error.NotATypedInteger;
@@ -77,7 +77,7 @@ test "canonicalize builtin typed fractional suffix without caller setup" {
     var test_env = try TestEnv.init("3.14.Dec");
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
     if (std.meta.activeTag(expr) != .e_typed_frac) return error.NotATypedFraction;
@@ -116,7 +116,7 @@ test "typed numeric suffix uses local shadow of builtin numeric type" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
     try testing.expectEqual(.e_block, std.meta.activeTag(expr));
 
@@ -149,7 +149,7 @@ test "canonicalize integer literals with underscores" {
         var test_env = try TestEnv.init(tc.source);
         defer test_env.deinit();
 
-        const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+        const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
         const value = try getIntValue(test_env.module_env, canonical_expr.get_idx());
         try testing.expectEqual(tc.expected, value);
     }
@@ -171,7 +171,7 @@ test "canonicalize integer literals outside supported range" {
         var test_env = try TestEnv.init(source);
         defer test_env.deinit();
 
-        const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+        const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
         const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
         try testing.expect(expr == .e_num_from_numeral);
         const literal = test_env.module_env.numeralLiteralForNode(ModuleEnv.nodeIdxFrom(canonical_expr.get_idx())) orelse return error.MissingNumeralLiteral;
@@ -191,7 +191,7 @@ test "integer literal one above u128 max records exact digits without canon diag
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
     try testing.expect(expr == .e_num_from_numeral);
 
@@ -216,7 +216,7 @@ test "integer literal one below i128 min records exact digits without canon diag
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
     try testing.expect(expr == .e_num_from_numeral);
 

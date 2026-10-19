@@ -61,7 +61,7 @@ pub fn WorkStacks(comptime Label: type, comptime payloadOf: fn (comptime Label) 
         /// Take the payload of a label returned by `popLabel`.
         pub fn take(self: *Self, comptime label: Label) payloadOf(label) {
             if (payloadOf(label) == void) return;
-            return self.stack(label).pop() orelse unreachable;
+            return self.stack(label).pop() orelse unreachable; // push appends a label and its payload together, and the caller popped this label
         }
 
         /// Drop the payload of a label returned by `popLabel`.
@@ -72,7 +72,7 @@ pub fn WorkStacks(comptime Label: type, comptime payloadOf: fn (comptime Label) 
                     return;
                 }
             }
-            unreachable;
+            unreachable; // the loop covers every Label value
         }
 
         pub fn deinit(self: *Self, allocator: Allocator) void {

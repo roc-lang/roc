@@ -453,12 +453,8 @@ fn compileGlueSpec(
     };
     errdefer lowered.deinit();
 
-    const glue_proc = selectGlueSpecRootProc(root_artifact, &lowered, builtins.shim_symbols.roc_make_glue) orelse {
-        if (builtin.mode == .debug) {
-            base.invariant("glue invariant violated: glue spec produced no published make_glue platform root", .{});
-        }
-        unreachable;
-    };
+    const glue_proc = selectGlueSpecRootProc(root_artifact, &lowered, builtins.shim_symbols.roc_make_glue) orelse
+        glueInvariant("glue spec produced no published make_glue platform root", .{});
 
     const arg_layouts = argLayoutsForProc(gpa, &lowered.lir_result.store, glue_proc) catch {
         return error.OutOfMemory;
@@ -987,7 +983,7 @@ fn writeHostEvents(stderr: *std.Io.Writer, runtime_env: *const eval_mod.RuntimeH
             .dbg => |msg| try stderr.print("[dbg] {s}\n", .{msg}),
             .expect_failed => |msg| try stderr.print("Expect failed: {s}\n", .{msg}),
             .crashed => {},
-            .effect => unreachable,
+            .effect => unreachable, // glue never calls RuntimeHostEnv.recordEffect, the only producer of effect events
         }
     }
 }
@@ -1019,10 +1015,7 @@ fn reportUnresolvedTypeVariable(stderr: *std.Io.Writer, type_table: *const TypeT
 }
 
 fn glueInvariant(comptime message: []const u8, args: anytype) noreturn {
-    if (builtin.mode == .debug) {
-        base.invariant("glue invariant violated: " ++ message, args);
-    }
-    unreachable;
+    base.invariant("glue invariant violated: " ++ message, args);
 }
 
 fn hostedProcSortKey(
@@ -1718,7 +1711,8 @@ const TypeTable = struct {
             if (!is_bound) continue;
             const fkey = TypeTableKey{ .artifact_key = lookup.artifact.key, .checked_type = formal };
             if (slot) |prev| {
-                self.template_bindings.put(fkey, prev) catch unreachable;
+                const binding = self.template_bindings.getPtr(fkey) orelse unreachable; // bindNominalFormals put fkey, and nested bindings of it only overwrite it
+                binding.* = prev;
             } else {
                 _ = self.template_bindings.remove(fkey);
             }
@@ -2505,15 +2499,15 @@ const TypeTable = struct {
         }
 
         for (self.roots.keys(), self.roots.values()) |entry_idx, root| {
-            const lowering = findLowering(lowerings.items, root.artifact) orelse unreachable;
+            const lowering = findLowering(lowerings.items, root.artifact) orelse unreachable; // the loop above lowered every root's artifact
             const layout_idx = lowering.root_layouts.get(root.checked_type) orelse
                 glueInvariant("compiler emitted no layout for requested glue root checked type {d}", .{@backingInt(root.checked_type)});
             try self.boxRootInPlace(&lowering.abi_layouts.layouts, entry_idx, layout_idx);
         }
 
         for (self.roots.keys(), self.roots.values()) |entry_idx, root| {
-            const lowering = findLowering(lowerings.items, root.artifact) orelse unreachable;
-            const layout_idx = lowering.root_layouts.get(root.checked_type) orelse unreachable;
+            const lowering = findLowering(lowerings.items, root.artifact) orelse unreachable; // the first loop lowered every root's artifact
+            const layout_idx = lowering.root_layouts.get(root.checked_type) orelse unreachable; // the previous loop checked every root's layout exists
             try self.attachEntryLayout(&lowering.abi_layouts.layouts, entry_idx, layout_idx);
         }
 
@@ -3279,7 +3273,8 @@ const TypeTable = struct {
                     if (!is_bound) continue;
                     const fkey = TypeTableKey{ .artifact_key = lookup.artifact.key, .checked_type = formal };
                     if (slot) |prev| {
-                        self.template_bindings.put(fkey, prev) catch unreachable;
+                        const binding = self.template_bindings.getPtr(fkey) orelse unreachable; // the loop above put fkey, and nested bindings of it only overwrite it
+                        binding.* = prev;
                     } else {
                         _ = self.template_bindings.remove(fkey);
                     }

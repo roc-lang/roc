@@ -1722,15 +1722,17 @@ const ComptimeCoverage = struct {
         for (self.entries.items) |entry| {
             for (entry.hits, 0..) |hit, index| {
                 if (hit) continue;
-                _ = try store.appendProblem(.{ .comptime_unused_branch = .{
-                    .kind = switch (entry.kind) {
-                        .match => .match,
-                        .if_ => .if_,
-                        .destructure => unreachable,
+                _ = try store.appendProblem(.{
+                    .comptime_unused_branch = .{
+                        .kind = switch (entry.kind) {
+                            .match => .match,
+                            .if_ => .if_,
+                            .destructure => unreachable, // ComptimeCoverage.record creates entries only for match and if sites
+                        },
+                        .site_region = entry.region,
+                        .branch_region = entry.branch_regions[index],
                     },
-                    .site_region = entry.region,
-                    .branch_region = entry.branch_regions[index],
-                } });
+                });
             }
         }
     }
@@ -2252,9 +2254,7 @@ fn evalInterpreterProgramRoots(
                         },
                         error.UnsupportedHostedFunction => finalizationInvariant("compile-time constant reached an unsupported hosted function"),
                         error.InvalidHostedFunctionSignature => finalizationInvariant("compile-time constant reached an invalid hosted function signature"),
-                        // expect_err statements only occur in top-level expect
-                        // test roots, never in compile-time constant roots.
-                        error.ExpectErr => unreachable,
+                        error.ExpectErr => unreachable, // expect_err statements occur only in top-level expect test roots, not compile-time constant roots
                     };
                 };
                 defer interpreter.dropValue(eval_result.value, root.ret_layout);
@@ -2636,8 +2636,7 @@ fn evalInterpreterLiteralRoot(
                 error.Crash => interpreter.getCrashMessage(),
                 error.UnsupportedHostedFunction => finalizationInvariant("literal root reached an unsupported hosted function"),
                 error.InvalidHostedFunctionSignature => finalizationInvariant("literal root reached an invalid hosted function signature"),
-                // expect_err statements only occur in top-level expect test roots.
-                error.ExpectErr => unreachable,
+                error.ExpectErr => unreachable, // expect_err statements occur only in top-level expect test roots, not literal roots
             };
             break :evaluated .{
                 .message = message,
@@ -3707,14 +3706,14 @@ const DevProgram = struct {
         for (lowered.lir_result.const_roots.items, 0..) |root, index| {
             if (entry_offsets.get(root.proc) != null) continue;
             var name_buf: [64]u8 = undefined;
-            const symbol_name = std.fmt.bufPrint(&name_buf, "roc_ctfe_root_{d}", .{index}) catch unreachable;
+            const symbol_name = std.fmt.bufPrint(&name_buf, "roc_ctfe_root_{d}", .{index}) catch unreachable; // a 14-byte prefix plus at most 20 usize digits fits in 64 bytes
             const entrypoint = try codegen.generateEntrypointWrapper(symbol_name, root.proc, &.{}, root.ret_layout);
             try entry_offsets.put(root.proc, entrypoint.offset);
         }
         for (lowered.lir_result.literal_roots.items, 0..) |root, index| {
             if (entry_offsets.get(root.proc) != null) continue;
             var name_buf: [64]u8 = undefined;
-            const symbol_name = std.fmt.bufPrint(&name_buf, "roc_ctfe_literal_root_{d}", .{index}) catch unreachable;
+            const symbol_name = std.fmt.bufPrint(&name_buf, "roc_ctfe_literal_root_{d}", .{index}) catch unreachable; // a 22-byte prefix plus at most 20 usize digits fits in 64 bytes
             const entrypoint = try codegen.generateEntrypointWrapper(symbol_name, root.proc, &.{}, root.ret_layout);
             try entry_offsets.put(root.proc, entrypoint.offset);
         }
@@ -4076,7 +4075,7 @@ fn evalDevProgramRoots(
             .success => null,
             .crashed => job.host.crashMessage() orelse "Roc crashed",
             .comptime_exhaustiveness => "compile-time exhaustiveness failure",
-            .pending, .host_oom, .host_error => unreachable,
+            .pending, .host_oom, .host_error => unreachable, // the payload switch above rejected or returned for these results
         };
         const failure_origin: lir.LIR.ComptimeFailureOrigin = .{ .loc = job.host.failed_loc, .region = job.host.failed_region };
         if (options.publish_shared_slots and failure_message == null) try native.publishRoot(lowered, job.root.owner, .{ .checked = job.root_id }, job.root.shape(), .{ .ptr = job.ret_buf.ptr });
@@ -5106,7 +5105,7 @@ fn finishConstRoot(
         .numeral_conversion,
         .quote_conversion,
         .repl_expr,
-        => unreachable,
+        => unreachable, // finishConstRoot returned above for every kind other than constant and hoisted_constant
     };
     const stored = checked.StoredConstTemplate{
         .node = node,
@@ -5163,10 +5162,7 @@ fn spliceInvariant(splice: *const backend.dev.HostSplice, comptime message: []co
 }
 
 fn finalizationInvariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .debug) {
-        base.invariant("compile-time finalization invariant violated: {s}", .{message});
-    }
-    unreachable;
+    base.invariant("compile-time finalization invariant violated: {s}", .{message});
 }
 
 test "module owners resolve a lowered program's module ids to their finalized modules" {
@@ -5543,7 +5539,7 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
                 } else {
                     const value = child.interpreter.eval(.{ .proc_id = self.proc, .ret_layout = .str }) catch |err| switch (err) {
                         error.OutOfMemory => return error.OutOfMemory,
-                        else => unreachable,
+                        else => std.debug.panic("test producer evaluation failed: {s}", .{@errorName(err)}),
                     };
                     defer child.interpreter.dropValue(value.value, .str);
                     try child.publishRoot(self.lowered, self.module_id, .{ .checked = self.root_id }, .{

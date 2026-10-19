@@ -1269,14 +1269,11 @@ pub const Store = struct {
         // Joining a class to itself is always an invalid invocation of a
         // solver-mutating rewrite, even if the two source vars differ.
         if (target_storage.storage_var == redirect_storage.storage_var) {
-            if (std.debug.runtime_safety) {
-                base.invariant("self-redirect of equivalent vars {d} and {d} under rule {s}", .{
-                    @backingInt(target_var),
-                    @backingInt(redirect_to),
-                    @tagName(rule),
-                });
-            }
-            unreachable;
+            base.invariant("self-redirect of equivalent vars {d} and {d} under rule {s}", .{
+                @backingInt(target_var),
+                @backingInt(redirect_to),
+                @tagName(rule),
+            });
         }
         if (std.debug.runtime_safety) {
             // Redirecting a root var into a transparent alias whose backing resolves
@@ -1991,7 +1988,7 @@ pub const Store = struct {
         const parent = if (parent_is_a) a else b;
         const child = if (parent_is_a) b else a;
         const combined_rank = if (ranks_tied)
-            std.math.add(u8, self.getUnionRank(parent.storage_var), 1) catch unreachable
+            std.math.add(u8, self.getUnionRank(parent.storage_var), 1) catch unreachable // union-by-rank needs 2^r members for rank r, so a u32 var count keeps ranks at most 32
         else
             self.getUnionRank(parent.storage_var);
 

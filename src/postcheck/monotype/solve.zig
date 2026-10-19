@@ -1116,7 +1116,7 @@ pub const InterfaceConstraints = struct {
                             return;
                         }
                     }
-                    unreachable;
+                    unreachable; // activeTag(value) names one of the union fields, so the loop above returned
                 },
                 .optional => |info| {
                     try self.write(bool, value != null);
@@ -1770,7 +1770,7 @@ pub const InterfaceConstraints = struct {
                         break :blk @unionInit(T, field_name, try mapValue(context, field_type, @field(value, field_name)));
                     }
                 }
-                unreachable;
+                unreachable; // activeTag(value) names one of the union fields, so the loop above broke out
             },
             .optional => |info| if (value) |actual| try mapValue(context, info.child, actual) else null,
             .pointer => |info| blk: {
@@ -3054,7 +3054,7 @@ pub const InstGraph = struct {
                     _ = occurrences.swapRemove(index);
                     break;
                 }
-            } else unreachable;
+            } else unreachable; // updateGeneratedIterator and migrateGeneratedIteratorRoot register one occurrence per key argument
         }
         _ = self.generated_iterator_entries.remove(node);
     }
@@ -3508,7 +3508,7 @@ pub const InstGraph = struct {
                 depth,
             );
         }
-        unreachable;
+        unreachable; // the root push leaves the stack nonempty, and the pop that empties it returns
     }
 
     fn pushGeneratedIteratorDepthFrame(
@@ -3552,7 +3552,7 @@ pub const InstGraph = struct {
 
     fn generatedIteratorDepthRule(self: *InstGraph, node: NodeId) Allocator.Error!GeneratedIteratorDepthRule {
         return switch (try self.rootContent(node)) {
-            .redirect, .leaf => unreachable,
+            .redirect, .leaf => unreachable, // callers pass a find root, and rootContent of a find root expands a leaf, so it returns structure
             .unresolved => |variable| switch (variable.origin) {
                 .checked_variable, .row_extension => .{ .fixed = 0 },
                 .placeholder => Common.invariant("placeholder reached generated iterator representation finalization"),
@@ -3708,7 +3708,7 @@ pub const InstGraph = struct {
         var remaining = self.nodes.items.len;
         while (remaining > 0) : (remaining -= 1) {
             switch (self.nodes.items[@backingInt(node)]) {
-                .redirect => unreachable,
+                .redirect => unreachable, // find returns a class root, which is never a redirect
                 .leaf => |leaf| return self.typeIsClosedEmptyTagUnion(leaf.ty),
                 .empty_tag_union => return true,
                 .unresolved => |variable| {
@@ -4091,7 +4091,7 @@ pub const InstGraph = struct {
         var walk = id;
         while (walk != current) {
             const redirect = self.nodes.items[@backingInt(walk)];
-            if (redirect != .redirect) unreachable;
+            if (redirect != .redirect) unreachable; // every node on the chain before the root was read as a redirect above
             const next = redirect.redirect;
             self.nodes.items[@backingInt(walk)] = .{ .redirect = current };
             walk = next;
@@ -4996,7 +4996,7 @@ pub const InstGraph = struct {
             const entry = try seen.getOrPut(node);
             if (entry.found_existing) continue;
             switch (self.nodes.items[@backingInt(node)]) {
-                .redirect => unreachable,
+                .redirect => unreachable, // find returns a class root, which is never a redirect
                 // A finished Monotype is resolved throughout.
                 .leaf => {},
                 .unresolved => return false,
@@ -5093,7 +5093,7 @@ pub const InstGraph = struct {
             const entry = try seen.getOrPut(node);
             if (entry.found_existing) continue;
             switch (self.nodes.items[@backingInt(node)]) {
-                .redirect => unreachable,
+                .redirect => unreachable, // find returns a class root, which is never a redirect
                 .leaf => {},
                 .unresolved => |variable| {
                     const numeric_default = if (variable.numeric_default_phase) |phase|
@@ -5213,7 +5213,7 @@ pub const InstGraph = struct {
         const reserved = try self.newNode(.{ .unresolved = InstVariable.placeholder() });
         try copies.put(node, reserved);
         const copied: InstNode = switch (original) {
-            .redirect, .leaf => unreachable,
+            .redirect, .leaf => unreachable, // content reads the class root and expands a leaf, so it returns structure
             .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("a leaf class reported generated-private containment"),
             .list => |elem| .{ .list = try self.copyPrivateWitness(elem, copies) },
             .box => |elem| .{ .box = try self.copyPrivateWitness(elem, copies) },
@@ -5337,7 +5337,7 @@ pub const InstGraph = struct {
             self.countDiagnostic(nodes_visited_field);
 
             switch (self.nodes.items[node_index]) {
-                .redirect => unreachable,
+                .redirect => unreachable, // find returns a class root, which is never a redirect
                 // An unread finished type answers from the type store.
                 .leaf => |leaf| if (switch (query) {
                     .iterator_interface => try self.types.containsIteratorInterface(leaf.ty),
@@ -5433,7 +5433,7 @@ pub const InstGraph = struct {
             self.countDiagnostic("finished_mono_nodes_visited");
             if (self.classFinishedMono(node) != null) return true;
             switch (self.nodes.items[@backingInt(node)]) {
-                .redirect => unreachable,
+                .redirect => unreachable, // find returns a class root, which is never a redirect
                 // An imported leaf is a finished Monotype witness, answered
                 // above. A checked leaf is a closed checked type whose
                 // components expand into the same leaf scope, so it reaches
@@ -5599,7 +5599,7 @@ pub const InstGraph = struct {
         }
 
         switch (public_content) {
-            .redirect, .leaf => unreachable,
+            .redirect, .leaf => unreachable, // public_content is rootContent of a find root, which expands a leaf
             .unresolved => |public_var| {
                 if (private_contains_generated) {
                     if (private_content == .named) {
@@ -6082,7 +6082,7 @@ pub const InstGraph = struct {
                 }
                 try self.relateOpaqueChild(ext, private_row.ext, row_width, pending);
             },
-            .redirect, .leaf, .unresolved, .primitive, .named, .func, .empty_tag_union, .empty_record, .erased, .zst => unreachable,
+            .redirect, .leaf, .unresolved, .primitive, .named, .func, .empty_tag_union, .empty_record, .erased, .zst => unreachable, // the switch above returned false for every other variant
         }
         return true;
     }
@@ -6524,7 +6524,7 @@ pub const InstGraph = struct {
             else
                 .required,
             .undetermined => Common.invariant("omitted record constructor field kind remained undetermined"),
-            .required, .optional, .defaulted => unreachable,
+            .required, .optional, .defaulted => unreachable, // resolvedFieldKind returned these kinds above
         };
     }
 
@@ -6947,7 +6947,7 @@ pub const InstGraph = struct {
             Common.invariant("generated-private representation reached ordinary public/private graph unification");
         }
 
-        if (left_content == .redirect) unreachable;
+        if (left_content == .redirect) unreachable; // left is a find root
         if (left_content == .unresolved) {
             if (right_content == .unresolved) {
                 try self.setContent(right, .{ .unresolved = mergeVariables(left_content.unresolved, right_content.unresolved) });
@@ -7015,7 +7015,7 @@ pub const InstGraph = struct {
         pending: *std.ArrayList(NodePair),
     ) Allocator.Error!void {
         switch (left_content) {
-            .redirect, .leaf, .unresolved => unreachable,
+            .redirect, .leaf, .unresolved => unreachable, // unifyRoots passes only find roots with a leaf expanded and neither side unresolved
             .primitive => |left_prim| {
                 if (right_content == .primitive) {
                     if (left_prim != right_content.primitive) Common.invariant("instantiation unified two different primitive types");
@@ -7218,7 +7218,7 @@ pub const InstGraph = struct {
                                 // backing pair is drained. Otherwise each
                                 // nominal unwrap creates another fresh
                                 // structural node.
-                                if (!static_dispatch.isIteratorOwner(left_owner)) unreachable;
+                                if (!static_dispatch.isIteratorOwner(left_owner)) unreachable; // iteratorRelation returns .minted_join only for an iterator-owner pair
                                 try self.union_(left, right);
                             } else {
                                 try self.union_(right, left);
@@ -7349,7 +7349,7 @@ pub const InstGraph = struct {
         row_width: RowWidthRelation,
         pending: *std.ArrayList(NodePair),
     ) Allocator.Error!void {
-        if (named_content != .named) unreachable;
+        if (named_content != .named) unreachable; // every caller passes content it matched as .named
         const named = named_content.named;
         const declared_backing = named.backing orelse
             Common.invariant("instantiation unified an opaque type without backing against a structural type");
@@ -8577,7 +8577,7 @@ const GraphUninhabitedScan = struct {
             .finalizes => .inspectable_only,
         }) };
         const expansion: Eval.Expansion = switch (try graph.rootContent(node)) {
-            .redirect, .leaf => unreachable,
+            .redirect, .leaf => unreachable, // rootContent of a find root expands a leaf, so it returns structure
             .empty_tag_union => .{ .value = true },
             .unresolved => |variable| switch (scan.mode) {
                 .may => .{ .value = variable.numeric_default_phase == null },
@@ -8861,7 +8861,7 @@ pub const GraphTypeFinals = struct {
     pub fn sealNode(self: *GraphTypeFinals, raw_node: NodeId) Allocator.Error!Type.TypeId {
         return switch (try self.nodeEntry(raw_node)) {
             .done => |sealed| sealed,
-            .node => unreachable,
+            .node => Common.invariant("a class seal entry resolved to a snapshot view node"),
             .build => |source| try self.runSeal(.{ .build = source }),
             .transaction => |source| try self.sealInTransaction(source),
         };
@@ -9213,7 +9213,7 @@ pub const GraphTypeFinals = struct {
         // The index of the next sealed component.
         var start: usize = 0;
         switch (node_content) {
-            .redirect, .leaf => unreachable,
+            .redirect, .leaf => unreachable, // nodeEntry builds a node only for a find root whose leafType is null
             .unresolved => if (self.mode == .settled_interface) Common.invariant("open cell reached settled interface interning"),
             .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
             .list, .box => |elem| try self.addSealPart(build, .{ .node = elem }),
@@ -9328,7 +9328,7 @@ pub const GraphTypeFinals = struct {
     fn finishNodeContent(self: *GraphTypeFinals, build: *SealBuild, reader: *SealReader) Allocator.Error!Type.Content {
         const allocator = self.graph.allocator;
         return switch (build.content.node) {
-            .redirect, .leaf => unreachable,
+            .redirect, .leaf => unreachable, // planNodeContent stored the content of a find root whose leafType is null
             .unresolved => |variable| materializeUnresolved(variable),
             .primitive => |primitive| .{ .primitive = primitive },
             .list => .{ .list = reader.next() },
@@ -9399,7 +9399,7 @@ pub const GraphTypeFinals = struct {
             if (field.kind == .undetermined and self.graph.resolvedFieldKind(field.kind) == null) {
                 const source_ty = reader.next();
                 sealed.* = switch (self.mode) {
-                    .retained_type_view => unreachable,
+                    .retained_type_view => unreachable, // nodeEntry asserts retained_type_view never builds a node, so no record row is sealed from one
                     .provisional_snapshot => .{
                         .name = field.name,
                         // No runtime slot exists yet. The explicit kind state
@@ -9673,7 +9673,7 @@ const OpenFunctionInterfaceShapeWriter = struct {
         const content = try self.graph.rootContent(node);
         try self.writeU8(if (self.hasRecursiveValueSlot(node)) 1 else 0);
         try self.writeU8(if (self.hasForcedDynamicIteratorRoot(node)) 1 else 0);
-        if (content == .redirect) unreachable;
+        if (content == .redirect) unreachable; // find returns a class root, which is never a redirect
         if (content == .unresolved) {
             self.context_tokens += 1;
             const entry = try self.unresolved_ids.getOrPut(node);
@@ -9706,7 +9706,7 @@ const OpenFunctionInterfaceShapeWriter = struct {
         const name_store = self.graph.name_store;
 
         switch (content) {
-            .redirect, .leaf, .unresolved => unreachable,
+            .redirect, .leaf, .unresolved => unreachable, // rootContent of a find root is never a redirect or leaf, and the unresolved branch above returned
             .primitive => |primitive| try actions.appendSlice(allocator, &.{ .{ .bytes = "primitive" }, .{ .bytes = @tagName(primitive) } }),
             .list => |elem| try actions.appendSlice(allocator, &.{ .{ .bytes = "list" }, .{ .node = elem } }),
             .box => |elem| try actions.appendSlice(allocator, &.{ .{ .bytes = "box" }, .{ .node = elem } }),
@@ -10186,7 +10186,7 @@ fn assertGeneratedIteratorIndexConsistent(graph: *InstGraph) void {
         while (next) |candidate| {
             if (candidate == node) break;
             next = graph.generated_iterator_entries.get(candidate).?.next;
-        } else unreachable;
+        } else Common.invariant("generated iterator entry missing from its key's index chain");
     }
     var roots = graph.generated_iterators_by_root.iterator();
     while (roots.next()) |entry| {
@@ -11815,7 +11815,7 @@ test "iterator-interface containment agrees between Monotype and graph" {
         field_name: names.RecordFieldNameId,
         tag_name: names.TagNameId,
 
-        fn wrap(self: @This(), leaf: NodeId, position: usize) Allocator.Error!NodeId {
+        fn wrap(self: @This(), leaf: NodeId, position: usize) (Allocator.Error || error{TestUnexpectedResult})!NodeId {
             const u64_node = try self.graph.newNode(.{ .primitive = .u64 });
             return switch (position) {
                 0 => leaf,
@@ -11878,7 +11878,7 @@ test "iterator-interface containment agrees between Monotype and graph" {
                         .ext = try self.graph.newNode(.empty_record),
                     } });
                 },
-                else => unreachable,
+                else => error.TestUnexpectedResult,
             };
         }
     };
@@ -14214,7 +14214,7 @@ test "generated iterator index follows content replacement and argument unions" 
                         while (next) |node| {
                             if (@backingInt(node) == i) break;
                             next = graph.generated_iterator_entries.get(node).?.next;
-                        } else unreachable;
+                        } else @panic("generated iterator entry missing from its key's index chain");
                     }
                 }
             }

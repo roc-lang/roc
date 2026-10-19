@@ -385,7 +385,7 @@ fn printChar(state: *LineState) CommandError!void {
 
 fn printCodepoint(state: *LineState, codepoint: u21) CommandError!void {
     var encoded: [4]u8 = undefined;
-    const len = std.unicode.utf8Encode(codepoint, &encoded) catch unreachable;
+    const len = std.unicode.utf8Encode(codepoint, &encoded) catch unreachable; // InputParser emits only codepoints that utf8Decode validated
     try insertText(state, encoded[0..len]);
 }
 
@@ -1485,7 +1485,7 @@ fn testLineState(out: *std.Io.Writer, kill_ring: *?[]const u8, replay_index: *?u
 }
 
 /// Feeds bytes through the same parser and command dispatch used by `helper`.
-fn typeBytes(state: *LineState, bytes: []const u8) CommandError!void {
+fn typeBytes(state: *LineState, bytes: []const u8) (CommandError || error{TestUnexpectedResult})!void {
     var parser = InputParser{};
     var events = std.ArrayList(InputEvent).empty;
     defer events.deinit(testing.allocator);
@@ -1500,7 +1500,7 @@ fn typeBytes(state: *LineState, bytes: []const u8) CommandError!void {
                 try findCommandFn(state)(state);
             },
             .codepoint => |codepoint| try printCodepoint(state, codepoint),
-            .esc2, .csi3, .paste_start, .paste_byte, .paste_end => unreachable,
+            .esc2, .csi3, .paste_start, .paste_byte, .paste_end => return error.TestUnexpectedResult,
         };
     }
     std.debug.assert(parser.carry_len == 0);

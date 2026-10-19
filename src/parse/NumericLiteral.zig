@@ -669,7 +669,7 @@ fn sourceDigitsMayFitBase256(digits: []const u8, radix: u8) bool {
         8 => (@as(u64, max_numeral_digit_bytes) * 8 + 2) / 3,
         10 => max_decimal_digits_for_numeral_bytes,
         16 => @as(u64, max_numeral_digit_bytes) * 2,
-        else => unreachable,
+        else => unreachable, // radixAndPrefixLen yields only 2, 8, 10, or 16
     };
     return digit_count <= max_source_digits;
 }

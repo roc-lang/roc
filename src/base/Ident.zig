@@ -421,17 +421,17 @@ pub const Store = struct {
 
     /// Return the already-interned Builtin module identifier.
     pub fn builtinModuleIdent(self: *const Store) Idx {
-        return self.findByString("Builtin") orelse unreachable;
+        return self.findByString("Builtin") orelse unreachable; // ModuleEnv.init interns "Builtin" through CommonIdents.insert
     }
 
     /// Return the already-interned Builtin.Num.Dec type identifier.
     pub fn builtinDecTypeIdent(self: *const Store) Idx {
-        return self.findByString("Builtin.Num.Dec") orelse unreachable;
+        return self.findByString("Builtin.Num.Dec") orelse unreachable; // ModuleEnv.init interns the Dec qualified name through CommonIdents.insert
     }
 
     /// Return the already-interned Builtin.Str type identifier.
     pub fn builtinStrTypeIdent(self: *const Store) Idx {
-        return self.findByString("Builtin.Str") orelse unreachable;
+        return self.findByString("Builtin.Str") orelse unreachable; // ModuleEnv.init interns the Str qualified name through CommonIdents.insert
     }
 };
 

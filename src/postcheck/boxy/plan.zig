@@ -1742,7 +1742,7 @@ pub const ProgramPlan = struct {
                     else
                         boxyPlanInvariant("boxy nominal representation had a non-nominal child")
                 else
-                    unreachable;
+                    unreachable; // class_count returned early for every kind other than alias and nominal
                 if (child_class != class) continue;
                 if (seen == visit_index) return child;
                 seen += 1;
@@ -2486,7 +2486,7 @@ const LiteralPlanner = struct {
             },
             .empty_record, .empty_tag_union => {},
             .pending, .err => boxyPlanInvariant("invalid checked type reached literal evidence planning"),
-            .alias, .flex, .rigid => unreachable,
+            .alias, .flex, .rigid => unreachable, // alias, flex, and rigid payloads returned above
         }
         try self.appendWord(&key, @intCast(children.items.len));
         const constructor = self.constructor_ids.get(key.items) orelse blk: {
@@ -4805,7 +4805,7 @@ const Builder = struct {
                         typeRef(site.view, bodies.expr(hash.hasher).ty),
                         typeRef(site.view, expr.ty),
                     ),
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => unreachable,
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => unreachable, // derived_root_after_operands is pushed only for structural_eq and structural_hash
                 }
             },
             .low_level_after_args => |site| {
@@ -5146,22 +5146,23 @@ const Builder = struct {
                         checked_runtime_type,
                     );
                     const runtime_type = typeRef(contract.view, contract.derivation.runtime_ty);
+                    const runtime_kind: GeneratedCodecKind = switch (codec.kind) {
+                        .parser_constructor => .parser_runtime,
+                        .encoder_constructor => .encoder_runtime,
+                        .parser_runtime,
+                        .encoder_runtime,
+                        .encoder_record_fields,
+                        .encoder_dict_fields,
+                        .encoder_sequence_elements,
+                        .encoder_tag_payload_elements,
+                        .encoder_value_thunk,
+                        .encoder_dict_key_thunk,
+                        => unreachable, // the enclosing prong matched only parser_constructor and encoder_constructor
+                    };
                     return try self.pushPlanActions(actions, &.{
                         .{ .ensure_worker = .{
                             .source = .{ .generated_codec = .{
-                                .kind = switch (codec.kind) {
-                                    .parser_constructor => .parser_runtime,
-                                    .encoder_constructor => .encoder_runtime,
-                                    .parser_runtime,
-                                    .encoder_runtime,
-                                    .encoder_record_fields,
-                                    .encoder_dict_fields,
-                                    .encoder_sequence_elements,
-                                    .encoder_tag_payload_elements,
-                                    .encoder_value_thunk,
-                                    .encoder_dict_key_thunk,
-                                    => unreachable,
-                                },
+                                .kind = runtime_kind,
                                 .shape = typeRef(contract.view, contract.derivation.shape_ty),
                                 .runtime_type = runtime_type,
                                 .capture_type = typeRef(contract.view, contract.derivation.encoding_ty),
@@ -6590,7 +6591,7 @@ const Builder = struct {
         const ref_id = switch (expr.data) {
             .lookup_local => |lookup| lookup.resolved.?,
             .lookup_external, .lookup_required => |resolved| resolved.?,
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => unreachable,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => unreachable, // the callable_lookup step rejected non-lookup expressions before pushing this site
         };
         const stored_fn = self.storedFnSourceForProcedureValueRef(view, ref_id);
         const source = if (stored_fn) |stored|
@@ -7313,7 +7314,7 @@ const Builder = struct {
                                 .{ tag.tag_name, @tagName(rep.kind), @backingInt(rep_id), @backingInt(rep.source_type.ty) },
                             );
                         }
-                        unreachable;
+                        unreachable; // optimized builds treat a violated compiler invariant as unreachable (design.md)
                     };
                     return try actions.append(self.allocator, child.at(state, node, ext.rep, const_type));
                 };
@@ -7384,7 +7385,7 @@ const Builder = struct {
             .procedure_binding,
             .procedure_use,
             .generated_field_iterator,
-            => unreachable,
+            => unreachable, // workerSourceForConstFnValue* produce only procedure_template, nested_expr, and generated_codec sources
         };
         try self.pushPlanActions(actions, &.{
             .{ .ensure_worker = .{ .source = source, .checked_type = checked_type, .root_request = null } },
@@ -22442,7 +22443,7 @@ fn boxyPlanInvariant(comptime message: []const u8) noreturn {
     if (@import("builtin").mode == .debug) {
         base.invariant("boxy plan invariant violated: {s}", .{message});
     }
-    unreachable;
+    unreachable; // optimized builds treat a violated compiler invariant as unreachable (design.md)
 }
 
 /// The nested procedure site expression that `expr` constructs: the site's
@@ -22773,12 +22774,12 @@ test "boxy planner walks callable eval finalized const function bodies" {
 test "boxy planner describes an imported hosted worker's type variables on the Roc side of its extern" {
     const gpa = std.testing.allocator;
 
-    var root_checked_module = minimalCheckedModule(gpa);
+    var root_checked_module = try minimalCheckedModule(gpa);
     defer root_checked_module.canonical_names.deinit();
     defer root_checked_module.checked_types.deinit(gpa);
     defer root_checked_module.checked_bodies.deinit(gpa);
 
-    var import_checked_module = minimalCheckedModule(gpa);
+    var import_checked_module = try minimalCheckedModule(gpa);
     import_checked_module.key = moduleKey(2);
     defer import_checked_module.canonical_names.deinit();
     defer import_checked_module.checked_types.deinit(gpa);
@@ -22999,12 +23000,12 @@ test "boxy planner describes an imported hosted worker's type variables on the R
 test "boxy planner records relation-owned source type for platform-required direct calls" {
     const gpa = std.testing.allocator;
 
-    var platform_checked_module = minimalCheckedModule(gpa);
+    var platform_checked_module = try minimalCheckedModule(gpa);
     defer platform_checked_module.canonical_names.deinit();
     defer platform_checked_module.checked_types.deinit(gpa);
     defer platform_checked_module.checked_bodies.deinit(gpa);
 
-    var app_checked_module = minimalCheckedModule(gpa);
+    var app_checked_module = try minimalCheckedModule(gpa);
     app_checked_module.key = moduleKey(3);
     defer app_checked_module.canonical_names.deinit();
     defer app_checked_module.checked_types.deinit(gpa);
@@ -24252,7 +24253,7 @@ test "boxy empty tag rows share their tail representation and descriptor" {
 
 test "boxy Bool retains its closed row for generic descriptor arguments" {
     const gpa = std.testing.allocator;
-    var module = minimalCheckedModule(gpa);
+    var module = try minimalCheckedModule(gpa);
     defer module.canonical_names.deinit();
     defer module.checked_types.deinit(gpa);
     const bool_ty: checked.CheckedTypeId = @fromBackingInt(@intCast(fixtureTableIndex(0)));
@@ -25190,7 +25191,7 @@ fn expectCheckedExprWorkerBody(
 test "boxy planner resolves procedure-template workers to checked bodies" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedModule(gpa);
+    var checked_module = try minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -25214,7 +25215,7 @@ test "boxy planner resolves procedure-template workers to checked bodies" {
 test "boxy planner resolves top-level direct bindings to checked bodies" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedModule(gpa);
+    var checked_module = try minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
@@ -25249,7 +25250,7 @@ test "boxy planner resolves top-level direct bindings to checked bodies" {
 test "boxy planner resolves callable eval bindings to finalized const function expressions" {
     const gpa = std.testing.allocator;
 
-    var checked_module = minimalCheckedModule(gpa);
+    var checked_module = try minimalCheckedModule(gpa);
     defer checked_module.canonical_names.deinit();
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);

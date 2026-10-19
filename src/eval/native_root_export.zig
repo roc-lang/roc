@@ -413,8 +413,7 @@ fn missingCallableResolver(_: ?*anyopaque, _: [*]u8) error{RuntimeError}!Callabl
 }
 
 fn invariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .debug) compilerInvariant("native root export invariant violated: {s}", .{message});
-    unreachable;
+    compilerInvariant("native root export invariant violated: {s}", .{message});
 }
 
 fn testSlot(program: *Program.Result, idx: layout.Idx) Allocator.Error!lir.LIR.StaticDataId {

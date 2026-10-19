@@ -1774,7 +1774,8 @@ const WorkQueue = struct {
             .join_body => |walk| {
                 try self.joins.push(allocator, .{
                     .walk = walk,
-                    .component = self.components.get(walk.join) orelse unreachable,
+                    .component = self.components.get(walk.join) orelse
+                        base.invariant("ARC borrow certifier invariant violated: queued join {d} has no liveness component", .{@backingInt(walk.join)}),
                     .sequence = self.sequence,
                 });
                 self.sequence += 1;
@@ -3406,7 +3407,7 @@ const Certifier = struct {
                     break :blk conditional;
                 },
                 .borrowed, .representation => try self.bindFresh(&state, local, 0, &.{}),
-                .unbound => unreachable,
+                .unbound => unreachable, // the loop skips unbound entries above
             };
             if (entry.abi_live) self.values.items[value].always_live = true;
             if (!entry.claims.isEmpty()) try state.setClaims(value, entry.claims);
@@ -4252,7 +4253,7 @@ const Certifier = struct {
         var successors = std.ArrayList(LIR.CFStmtId).empty;
         defer successors.deinit(self.allocator);
         while (work.pop()) |stmt| {
-            const node_index = graph.indices.get(stmt) orelse unreachable;
+            const node_index = graph.indices.get(stmt) orelse unreachable; // ensureReadBeforeRebindNode indexes every stmt before queueing it
             node_reads.clearRetainingCapacity();
 
             // String-match captures are branch-local definitions. The graph
@@ -4393,7 +4394,8 @@ const Certifier = struct {
         var succ_cursor: u32 = 0;
         for (graph.nodes.items, 0..) |node, node_index| {
             for (graph.successors.items[node.successor_start..][0..node.successor_len]) |successor| {
-                succs[succ_cursor] = @intCast(graph.indices.get(successor) orelse unreachable);
+                const successor_node = graph.indices.get(successor) orelse unreachable; // appendReadBeforeRebindSuccessor indexes every successor it records
+                succs[succ_cursor] = @intCast(successor_node);
                 succ_cursor += 1;
             }
             succ_starts[node_index + 1] = succ_cursor;
@@ -4412,7 +4414,8 @@ const Certifier = struct {
         const components = try collections.scc.compute(graph_allocator, succ_starts, succs, preds.starts, preds.targets);
         var joins = self.join_bodies.iterator();
         while (joins.next()) |join| {
-            const node = graph.indices.get(join.value_ptr.*) orelse unreachable;
+            const node = graph.indices.get(join.value_ptr.*) orelse
+                base.invariant("ARC borrow certifier invariant violated: join {d} body is missing from the read-before-rebind graph", .{@backingInt(join.key_ptr.*)});
             try self.join_components.put(join.key_ptr.*, components.component_of[node]);
         }
 
@@ -4431,7 +4434,7 @@ const Certifier = struct {
 
         for (cache_roots.items) |root| {
             if (self.reads_before_rebind_cache.contains(root)) continue;
-            const node_index = graph.indices.get(root) orelse unreachable;
+            const node_index = graph.indices.get(root) orelse unreachable; // every cache root was indexed by ensureReadBeforeRebindNode before being recorded
             try self.reads_before_rebind_cache.put(root, rows[node_index]);
         }
 

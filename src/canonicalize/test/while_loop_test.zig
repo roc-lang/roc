@@ -115,7 +115,7 @@ test "while True with an exit canonicalizes as infinite_loop" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const stmt = try firstBlockStatement(&test_env, canonical_expr.get_idx());
 
     try testing.expectEqual(.s_infinite_loop, std.meta.activeTag(stmt));
@@ -135,7 +135,7 @@ test "for statement propagates loop-body captures to an enclosing closure" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     try expectInnerClosureCaptures(&test_env, canonical_expr.get_idx(), &.{ "callback", "count" });
 }
 
@@ -153,7 +153,7 @@ test "while statement propagates loop captures to an enclosing closure" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     try expectInnerClosureCaptures(&test_env, canonical_expr.get_idx(), &.{ "keep_going", "callback" });
 }
 test "while parenthesized True canonicalizes as infinite_loop" {
@@ -167,7 +167,7 @@ test "while parenthesized True canonicalizes as infinite_loop" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const stmt = try firstBlockStatement(&test_env, canonical_expr.get_idx());
 
     try testing.expectEqual(.s_infinite_loop, std.meta.activeTag(stmt));
@@ -184,7 +184,7 @@ test "while Bool.True canonicalizes as infinite_loop" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const stmt = try firstBlockStatement(&test_env, canonical_expr.get_idx());
 
     try testing.expectEqual(.s_infinite_loop, std.meta.activeTag(stmt));
@@ -201,7 +201,7 @@ test "while False does not canonicalize as infinite_loop" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const stmt = try firstBlockStatement(&test_env, canonical_expr.get_idx());
 
     try testing.expectEqual(.s_while, std.meta.activeTag(stmt));
@@ -218,7 +218,7 @@ test "while block True condition with no statements canonicalizes as infinite_lo
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const stmt = try firstBlockStatement(&test_env, canonical_expr.get_idx());
 
     try testing.expectEqual(.s_infinite_loop, std.meta.activeTag(stmt));
@@ -238,7 +238,7 @@ test "while block True condition with statements does not canonicalize as infini
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const stmt = try firstBlockStatement(&test_env, canonical_expr.get_idx());
 
     try testing.expectEqual(.s_while, std.meta.activeTag(stmt));
@@ -256,7 +256,7 @@ test "non-builtin nominal True does not canonicalize as infinite_loop" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const stmt = try blockStatementAt(&test_env, canonical_expr.get_idx(), 1);
 
     try testing.expectEqual(.s_while, std.meta.activeTag(stmt));
@@ -273,7 +273,7 @@ test "while True with loop-owned break canonicalizes as breakable_loop" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const stmt = try firstBlockStatement(&test_env, canonical_expr.get_idx());
 
     try testing.expectEqual(.s_breakable_loop, std.meta.activeTag(stmt));
@@ -292,7 +292,7 @@ test "break inside if makes while True breakable_loop" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const stmt = try firstBlockStatement(&test_env, canonical_expr.get_idx());
 
     try testing.expectEqual(.s_breakable_loop, std.meta.activeTag(stmt));
@@ -311,7 +311,7 @@ test "break inside nested loop does not make outer while True breakable" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const stmt = try firstBlockStatement(&test_env, canonical_expr.get_idx());
 
     try testing.expectEqual(.s_infinite_loop, std.meta.activeTag(stmt));
@@ -329,7 +329,7 @@ test "while True with no exits warns" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const stmt = try firstBlockStatement(&test_env, canonical_expr.get_idx());
 
     try testing.expectEqual(.s_infinite_loop, std.meta.activeTag(stmt));
@@ -347,7 +347,7 @@ test "return inside while True suppresses infinite loop warning" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const stmt = try firstLambdaBodyStatement(&test_env, canonical_expr.get_idx());
 
     try testing.expectEqual(.s_infinite_loop, std.meta.activeTag(stmt));
@@ -365,7 +365,7 @@ test "try suffix inside while True suppresses infinite loop warning" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const stmt = try firstLambdaBodyStatement(&test_env, canonical_expr.get_idx());
 
     try testing.expectEqual(.s_infinite_loop, std.meta.activeTag(stmt));
@@ -383,7 +383,7 @@ test "crash inside while True suppresses infinite loop warning" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const stmt = try firstBlockStatement(&test_env, canonical_expr.get_idx());
 
     try testing.expectEqual(.s_infinite_loop, std.meta.activeTag(stmt));
@@ -401,7 +401,7 @@ test "expect inside while True does not suppress infinite loop warning" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const stmt = try firstBlockStatement(&test_env, canonical_expr.get_idx());
 
     try testing.expectEqual(.s_infinite_loop, std.meta.activeTag(stmt));
@@ -419,7 +419,7 @@ test "try suffix inside expect does not suppress infinite loop warning" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const stmt = try firstBlockStatement(&test_env, canonical_expr.get_idx());
 
     try testing.expectEqual(.s_infinite_loop, std.meta.activeTag(stmt));
@@ -439,7 +439,7 @@ test "return inside nested lambda does not count as infinite loop exit" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const stmt = try firstBlockStatement(&test_env, canonical_expr.get_idx());
 
     try testing.expectEqual(.s_infinite_loop, std.meta.activeTag(stmt));
@@ -459,7 +459,7 @@ test "crash inside nested lambda does not count as infinite loop exit" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const stmt = try firstBlockStatement(&test_env, canonical_expr.get_idx());
 
     try testing.expectEqual(.s_infinite_loop, std.meta.activeTag(stmt));

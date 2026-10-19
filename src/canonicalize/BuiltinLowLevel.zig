@@ -136,7 +136,7 @@ fn scratchFmt(
     scratch.clearRetainingCapacity();
     const len = std.fmt.count(fmt, args);
     try scratch.resize(gpa, len);
-    _ = std.fmt.bufPrint(scratch.items, fmt, args) catch unreachable;
+    _ = std.fmt.bufPrint(scratch.items, fmt, args) catch unreachable; // scratch was resized to std.fmt.count of the same format and args
     return scratch.items;
 }
 

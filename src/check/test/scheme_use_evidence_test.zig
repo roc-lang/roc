@@ -337,7 +337,7 @@ test "annotated recursive self use whose body closes the annotation row records 
     }
     try std.testing.expect(walk_expr_var != null);
 
-    const self_use_offset = std.mem.find(u8, source, "walk(Close)") orelse unreachable;
+    const self_use_offset = std.mem.find(u8, source, "walk(Close)") orelse return error.TestUnexpectedResult;
     var walk_self_use_records: usize = 0;
     for (env.scheme_uses.items.items) |record| {
         if (record.slot_kind != @backingInt(Slot.value_use)) continue;
@@ -366,7 +366,7 @@ test "recursive reference provenance marks the annotated self use but not an ext
     defer test_env.deinit();
     try test_env.assertDefType("main", "U64");
 
-    const self_use_offset = std.mem.find(u8, source, "grow(n - 1)") orelse unreachable;
+    const self_use_offset = std.mem.find(u8, source, "grow(n - 1)") orelse return error.TestUnexpectedResult;
     const env = test_env.module_env;
     var recursive_records: usize = 0;
     for (env.scheme_uses.items.items) |record| {

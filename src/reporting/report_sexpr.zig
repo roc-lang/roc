@@ -212,7 +212,7 @@ fn pushEscapedString(tree: *SExprTree, value: []const u8) Allocator.Error!void {
             '\r' => try escaped.appendSlice("\\r"),
             0x00...0x08, 0x0b, 0x0c, 0x0e...0x1f, 0x7f => {
                 var buf: [8]u8 = undefined;
-                const formatted = std.fmt.bufPrint(&buf, "\\u{{{x:0>2}}}", .{byte}) catch unreachable;
+                const formatted = std.fmt.bufPrint(&buf, "\\u{{{x:0>2}}}", .{byte}) catch unreachable; // "\u{XX}" is 6 bytes, within the 8-byte buffer
                 try escaped.appendSlice(formatted);
             },
             else => try escaped.append(byte),

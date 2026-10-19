@@ -21,7 +21,6 @@
 
 const std = @import("std");
 const invariant = @import("invariant.zig").invariant;
-const builtin = @import("builtin");
 const collections = @import("collections");
 
 const Allocator = std.mem.Allocator;
@@ -152,11 +151,7 @@ const Policy = struct {
 
 fn assertSupportsInserts(supports_inserts: bool) void {
     if (supports_inserts) return;
-
-    if (comptime builtin.mode == .debug) {
-        invariant("SerialStringInterner invariant violated: attempted to insert into frozen interner", .{});
-    }
-    unreachable;
+    invariant("SerialStringInterner invariant violated: attempted to insert into frozen interner", .{});
 }
 
 /// Look up a string's serial id without modifying the interner. Safe on frozen

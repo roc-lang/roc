@@ -884,7 +884,7 @@ const EmissionOwner = struct {
 
     fn execute(self: *EmissionOwner, allocator: Allocator) ResourceError!void {
         switch (self.phase) {
-            .source => unreachable,
+            .source => unreachable, // runArcTasks runs EmissionOwner only in the planning and emission phases
             .planning => try self.plan(allocator),
             .emission => try self.emit(allocator),
         }
@@ -2535,7 +2535,7 @@ const Inserter = struct {
                         try self.collectReleaseAllInto(&terminal.releases, owned);
                     }
                 },
-                .none => unreachable,
+                .none => unreachable, // the check at the top of this loop rejects scheduled plans without a terminal
                 .switch_stmt, .initialized_payload_switch, .str_match, .boxy_tag_match, .str_match_set => {},
             }
             for (plan.steps.items[0..plan.step_count]) |*step| {
@@ -7475,7 +7475,7 @@ const Inserter = struct {
                     if (self.current_rewrite_stmt) |stmt_id| self.store.getCFStmt(stmt_id) else null,
                 });
             }
-            unreachable;
+            unreachable; // ARC requests RC helpers only for refcounted locals, whose helper plan is never noop
         }
         return LIR.RcHelper.fromConcrete(helper);
     }
@@ -7713,8 +7713,7 @@ fn argMaskBit(index: usize) u64 {
 }
 
 fn arcInvariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .debug) invariant(message, .{});
-    unreachable;
+    invariant(message, .{});
 }
 
 /// Convert an intentional fixture-table position while preserving enum inference.

@@ -692,7 +692,7 @@ const AbiHooks = struct {
     /// Crash at code checking rejected and already reported.
     pub fn crashCheckedError(_: AbiHooks, message: []const u8) Error {
         builtins.dev_wrappers.roc_builtins_checked_error_crashed(message.ptr, message.len);
-        unreachable;
+        unreachable; // roc_builtins_checked_error_crashed ends in the noreturn RocOps.crash
     }
 
     /// Call the `kind` method slot the first argument's descriptor carries
@@ -768,7 +768,7 @@ const AbiHooks = struct {
             .@"4" => scratch.alignedAlloc(u8, .@"4", sa.size),
             .@"8" => scratch.alignedAlloc(u8, .@"8", sa.size),
             .@"16" => scratch.alignedAlloc(u8, .@"16", sa.size),
-            _ => unreachable,
+            _ => invariant("boxy ABI layout alignment {d} exceeds 16 bytes", .{sa.alignment.toByteUnits()}),
         } catch return error.OutOfMemory;
         return Value.fromSlice(slice);
     }

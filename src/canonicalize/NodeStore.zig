@@ -1467,7 +1467,7 @@ pub fn recordLiteralDispatchPlan(
 
 /// Retain the exact equality constraint created for this literal pattern.
 pub fn recordLiteralPatternEquality(store: *NodeStore, node_idx: Node.Idx, fn_var: types.Var) void {
-    const plan = store.literalDispatchPlanForNode(node_idx) orelse unreachable;
+    const plan = store.literalDispatchPlanForNode(node_idx) orelse base.invariant("literal pattern node {d} has no literal dispatch plan", .{@backingInt(node_idx)});
     std.debug.assert(plan.pattern_context_plus_one != 0);
     const context = store.literal_pattern_contexts.get(@fromBackingInt(@intCast(plan.pattern_context_plus_one - 1)));
     context.equality_fn_var_plus_one = @backingInt(fn_var) + 1;
@@ -4440,7 +4440,7 @@ pub fn getRecordDestruct(store: *const NodeStore, idx: CIR.Pattern.RecordDestruc
         0 => CIR.Pattern.RecordDestruct.Kind{ .Required = @fromBackingInt(@intCast(kind_data.len)) },
         1 => CIR.Pattern.RecordDestruct.Kind{ .SubPattern = @fromBackingInt(@intCast(kind_data.len)) },
         2 => CIR.Pattern.RecordDestruct.Kind{ .Rest = @fromBackingInt(@intCast(kind_data.len)) },
-        else => unreachable,
+        else => unreachable, // addRecordDestruct encodes only kind tags 0, 1, and 2
     };
 
     return CIR.Pattern.RecordDestruct{
@@ -4649,7 +4649,7 @@ pub fn fieldAccessSegmentAt(
     position: u32,
 ) CIR.Expr.FieldAccessSegment.Idx {
     std.debug.assert(position < span.len);
-    const raw = std.math.add(u32, @backingInt(span.start), position) catch unreachable;
+    const raw = std.math.add(u32, @backingInt(span.start), position) catch unreachable; // position < span.len, and every node of the span has a u32 index in the store
     const segment_idx: CIR.Expr.FieldAccessSegment.Idx = @fromBackingInt(@intCast(raw));
     const node_idx: Node.Idx = @fromBackingInt(@intCast(raw));
     std.debug.assert(raw < store.nodes.len());

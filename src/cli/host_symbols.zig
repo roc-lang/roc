@@ -739,7 +739,7 @@ test "ELF scanner rejects overflowing and unsupported section ranges" {
             4 => bad_strtab.sh_size = std.math.maxInt(u64),
             5 => bad_symtab.sh_offset = std.math.maxInt(u64) - 1,
             6 => bad_symtab.sh_size = std.math.maxInt(u64),
-            else => unreachable,
+            else => return error.TestUnexpectedResult,
         }
         try std.testing.expect(!scanInput(&bad, &remaining));
         var seen = std.StringHashMap(void).init(std.testing.allocator);
@@ -777,7 +777,7 @@ test "Mach-O scanner rejects malformed load commands and symbol ranges" {
             1 => bad_command.cmdsize = @sizeOf(macho.load_command),
             2 => bad_command.symoff = std.math.maxInt(u32),
             3 => bad_command.stroff = std.math.maxInt(u32),
-            else => unreachable,
+            else => return error.TestUnexpectedResult,
         }
         try std.testing.expect(!scanInput(&bad, &remaining));
     }

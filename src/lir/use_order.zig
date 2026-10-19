@@ -351,7 +351,7 @@ pub const UseOrder = struct {
             owned.* = switch (source) {
                 .owned => |marks| try Scratch.initTables(allocator, store, marks),
                 .compact => |domain| try Scratch.initTablesInDomain(allocator, store, .with_marks, domain),
-                .scratch => unreachable,
+                .scratch => unreachable, // scratch is null only for owned and compact sources
             };
             break :owned owned;
         };

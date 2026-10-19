@@ -1290,10 +1290,9 @@ fn staticDataRelocationSymbol(
         .address => .data,
         .function_pointer => .function,
     };
-    const kind_index = switch (kind) {
-        .data => data_index,
-        .function => function_index,
-        .global, .section, .event, .table => unreachable,
+    const kind_index = switch (relocation.kind) {
+        .address => data_index,
+        .function_pointer => function_index,
     };
     if (kind_index.first(relocation.target_symbol_name)) |symbol_index| {
         return SymbolIndex.fromRaw(symbol_index);
@@ -2333,7 +2332,7 @@ pub fn materializeFuncBodies(self: *Self) Allocator.Error!void {
 
         // Parse the body length from the code_bytes (LEB128 encoded at fn_offset).
         var cursor: usize = @intCast(fn_offset);
-        const body_len = readU32(self.code_bytes.items, &cursor) catch unreachable;
+        const body_len = readU32(self.code_bytes.items, &cursor) catch unreachable; // every function_offsets entry starts a body-size LEB128 that parseCodeSection read or the dead-function rebuild wrote
         const body_start: usize = cursor;
         const body_end: usize = body_start + body_len;
 
@@ -2728,7 +2727,7 @@ pub fn eliminateDeadCode(self: *Self, called_fns: []const bool) Allocator.Error!
         if (live_flags[global_fn_idx]) {
             // Parse body length to advance offset.
             var cursor: usize = offset;
-            const body_len = readU32(self.code_bytes.items, &cursor) catch unreachable;
+            const body_len = readU32(self.code_bytes.items, &cursor) catch unreachable; // live bodies were copied verbatim from offsets whose body-size LEB128 parseCodeSection already read
             offset = @intCast(cursor + body_len);
         } else {
             // Dummy: 1 byte LEB128 size + 3 bytes body = 4 bytes.
@@ -3610,11 +3609,13 @@ pub fn encodeRelocatable(self: *Self, allocator: Allocator) RelocatableEncodeErr
     try self.encodeLinkingSection(allocator, &output, symbol_encode_map);
     section_index += 1;
     if (self.reloc_code.entries.items.len > 0) {
-        try self.encodeRelocationSection(allocator, &output, "reloc.CODE", code_section_index orelse unreachable, self.reloc_code.entries.items, code_fn_count_leb_size, symbol_encode_map);
+        const code_index = code_section_index orelse roc_base.invariant("WASM module invariant violated: reloc.CODE has {d} entries but the module encodes no code section", .{self.reloc_code.entries.items.len});
+        try self.encodeRelocationSection(allocator, &output, "reloc.CODE", code_index, self.reloc_code.entries.items, code_fn_count_leb_size, symbol_encode_map);
         section_index += 1;
     }
     if (self.reloc_data.entries.items.len > 0) {
-        try self.encodeRelocationSection(allocator, &output, "reloc.DATA", data_section_index orelse unreachable, self.reloc_data.entries.items, 0, symbol_encode_map);
+        const data_index = data_section_index orelse roc_base.invariant("WASM module invariant violated: reloc.DATA has {d} entries but the module encodes no data section", .{self.reloc_data.entries.items.len});
+        try self.encodeRelocationSection(allocator, &output, "reloc.DATA", data_index, self.reloc_data.entries.items, 0, symbol_encode_map);
         section_index += 1;
     }
 
@@ -4783,7 +4784,7 @@ test "preload—parses reloc.CODE section entries" {
             try std.testing.expectEqual(@as(u32, 1), idx.offset);
             try std.testing.expectEqual(@as(u32, 0), idx.symbol_index);
         },
-        .offset => unreachable,
+        .offset => return error.TestUnexpectedResult,
     }
 }
 
@@ -7423,7 +7424,7 @@ test "encode—output is valid WASM (magic, version, section ordering)" {
 
         // Read section size (LEB128)
         var cursor: usize = pos;
-        const section_size = readU32(output, &cursor) catch unreachable;
+        const section_size = try readU32(output, &cursor);
         pos = cursor + section_size;
     }
 
@@ -7447,7 +7448,7 @@ test "encode—code section function count includes dummies" {
         const section_id = output[pos];
         pos += 1;
         var cursor: usize = pos;
-        const section_size = readU32(output, &cursor) catch unreachable;
+        const section_size = try readU32(output, &cursor);
         if (section_id == @backingInt(SectionId.code_section)) {
             code_section_start = cursor;
             break;
@@ -7459,7 +7460,7 @@ test "encode—code section function count includes dummies" {
 
     // Read function count from the code section
     var cursor = code_section_start.?;
-    const func_count = readU32(output, &cursor) catch unreachable;
+    const func_count = try readU32(output, &cursor);
 
     // Should be dummies (1) + real functions (2) = 3
     try std.testing.expectEqual(@as(u32, 3), func_count);
@@ -7481,10 +7482,10 @@ test "encode—dummy functions prepended before real functions in code section" 
         const section_id = output[pos];
         pos += 1;
         var cursor: usize = pos;
-        const section_size = readU32(output, &cursor) catch unreachable;
+        const section_size = try readU32(output, &cursor);
         if (section_id == @backingInt(SectionId.code_section)) {
             // Skip the function count
-            _ = readU32(output, &cursor) catch unreachable;
+            _ = try readU32(output, &cursor);
             code_body_start = cursor;
             break;
         }
@@ -7495,13 +7496,13 @@ test "encode—dummy functions prepended before real functions in code section" 
     var cursor = code_body_start.?;
 
     // First function should be the dummy: body size = 3, body = DUMMY_FUNCTION
-    const dummy_size = readU32(output, &cursor) catch unreachable;
+    const dummy_size = try readU32(output, &cursor);
     try std.testing.expectEqual(@as(u32, DUMMY_FUNCTION.len), dummy_size);
     try std.testing.expectEqualSlices(u8, &DUMMY_FUNCTION, output[cursor .. cursor + dummy_size]);
     cursor += dummy_size;
 
     // Second function (main): body size = 3, body = [0x00, nop, end]
-    const main_size = readU32(output, &cursor) catch unreachable;
+    const main_size = try readU32(output, &cursor);
     try std.testing.expectEqual(@as(u32, 3), main_size);
     try std.testing.expectEqual(@as(u8, 0x00), output[cursor]); // no locals
     try std.testing.expectEqual(Op.nop, output[cursor + 1]);
@@ -7509,7 +7510,7 @@ test "encode—dummy functions prepended before real functions in code section" 
     cursor += main_size;
 
     // Third function (helper): body size = 4, body = [0x00, nop, nop, end]
-    const helper_size = readU32(output, &cursor) catch unreachable;
+    const helper_size = try readU32(output, &cursor);
     try std.testing.expectEqual(@as(u32, 4), helper_size);
     try std.testing.expectEqual(@as(u8, 0x00), output[cursor]); // no locals
     try std.testing.expectEqual(Op.nop, output[cursor + 1]);
@@ -7535,12 +7536,12 @@ test "encode—linking section NOT present in output" {
         const section_id = output[pos];
         pos += 1;
         var cursor: usize = pos;
-        const section_size = readU32(output, &cursor) catch unreachable;
+        const section_size = try readU32(output, &cursor);
         const section_end = cursor + section_size;
 
         if (section_id == @backingInt(SectionId.custom_section)) {
             // Read custom section name
-            const name_len = readU32(output, &cursor) catch unreachable;
+            const name_len = try readU32(output, &cursor);
             const name = output[cursor .. cursor + name_len];
             try std.testing.expect(!std.mem.eql(u8, name, "linking"));
         }
@@ -7567,12 +7568,12 @@ test "encode—reloc.CODE section NOT present in output" {
         const section_id = output[pos];
         pos += 1;
         var cursor: usize = pos;
-        const section_size = readU32(output, &cursor) catch unreachable;
+        const section_size = try readU32(output, &cursor);
         const section_end = cursor + section_size;
 
         if (section_id == @backingInt(SectionId.custom_section)) {
             // Read custom section name
-            const name_len = readU32(output, &cursor) catch unreachable;
+            const name_len = try readU32(output, &cursor);
             const name = output[cursor .. cursor + name_len];
             try std.testing.expect(!std.mem.eql(u8, name, "reloc.CODE"));
         }

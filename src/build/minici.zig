@@ -240,6 +240,7 @@ const jobs = [_]Job{
     .{ .name = "run-check-semantic-audit", .placement = .source },
     .{ .name = "run-check-postcheck-architecture", .placement = .source },
     .{ .name = "run-check-panic", .placement = .source },
+    .{ .name = "run-check-unreachable-rationale", .placement = .source },
     .{ .name = "run-check-cli-global-stdio", .placement = .source },
     .{ .name = "run-check-test-wiring" },
     .{ .name = "run-check-builtin-format", .placement = .primary_host },
@@ -967,10 +968,9 @@ fn writeProgressPrefix(writer: *std.Io.Writer, progress: Progress) std.Io.Writer
 }
 
 fn printProgressPrefix(progress: Progress) void {
-    // Two 20-digit numbers, up to 20 bytes of padding, and the fixed text.
     var buf: [96]u8 = undefined;
     var writer = std.Io.Writer.fixed(&buf);
-    writeProgressPrefix(&writer, progress) catch unreachable;
+    writeProgressPrefix(&writer, progress) catch unreachable; // buf fits two 20-digit numbers, up to 20 bytes of padding, and the fixed text
     std.debug.print("{s}", .{writer.buffered()});
 }
 

@@ -1889,30 +1889,10 @@ pub const Coordinator = struct {
 
     /// Return the published checked artifact for a package root module.
     pub fn rootCheckedArtifact(self: *Coordinator, package_name: []const u8) *const check.CheckedArtifact.CheckedModuleArtifact {
-        const pkg = self.packages.get(package_name) orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("compile.coordinator.rootCheckedArtifact missing package {s}", .{package_name});
-            }
-            unreachable;
-        };
-        const root_id = pkg.root_module_id orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("compile.coordinator.rootCheckedArtifact missing root module for package {s}", .{package_name});
-            }
-            unreachable;
-        };
-        const root_mod = pkg.getModule(root_id) orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("compile.coordinator.rootCheckedArtifact root id out of range for package {s}", .{package_name});
-            }
-            unreachable;
-        };
-        return root_mod.checkedArtifact() orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("compile.coordinator.rootCheckedArtifact missing checked artifact for package {s}", .{package_name});
-            }
-            unreachable;
-        };
+        const pkg = self.packages.get(package_name) orelse base.invariant("compile.coordinator.rootCheckedArtifact missing package {s}", .{package_name});
+        const root_id = pkg.root_module_id orelse base.invariant("compile.coordinator.rootCheckedArtifact missing root module for package {s}", .{package_name});
+        const root_mod = pkg.getModule(root_id) orelse base.invariant("compile.coordinator.rootCheckedArtifact root id out of range for package {s}", .{package_name});
+        return root_mod.checkedArtifact() orelse base.invariant("compile.coordinator.rootCheckedArtifact missing checked artifact for package {s}", .{package_name});
     }
 
     /// Collect published checked artifacts available to post-check lowering.
@@ -1965,22 +1945,12 @@ pub const Coordinator = struct {
             try views.append(allocator, view);
 
             for (view.direct_import_artifact_keys) |dependency_key| {
-                const artifact = self.checkedArtifactByKey(dependency_key) orelse {
-                    if (builtin.mode == .debug) {
-                        base.invariant("compile.coordinator missing direct dependency checked artifact", .{});
-                    }
-                    unreachable;
-                };
+                const artifact = self.checkedArtifactByKey(dependency_key) orelse base.invariant("compile.coordinator missing direct dependency checked artifact", .{});
                 try pending.append(allocator, check.CheckedArtifact.importedView(artifact));
             }
 
             for (view.public_api_dependencies.type_owner_artifacts) |dependency_key| {
-                const artifact = self.checkedArtifactByKey(dependency_key) orelse {
-                    if (builtin.mode == .debug) {
-                        base.invariant("compile.coordinator missing type-owner dependency checked artifact", .{});
-                    }
-                    unreachable;
-                };
+                const artifact = self.checkedArtifactByKey(dependency_key) orelse base.invariant("compile.coordinator missing type-owner dependency checked artifact", .{});
                 try pending.append(allocator, check.CheckedArtifact.importedView(artifact));
             }
         }
@@ -2006,10 +1976,7 @@ pub const Coordinator = struct {
     }
 
     fn coordinatorInvariant(comptime message: []const u8, args: anytype) noreturn {
-        if (builtin.mode == .debug) {
-            base.invariant("compile.coordinator invariant violated: " ++ message, args);
-        }
-        unreachable;
+        base.invariant("compile.coordinator invariant violated: " ++ message, args);
     }
 
     fn appendPublicApiDependencyViewByKey(
@@ -2022,12 +1989,7 @@ pub const Coordinator = struct {
         if (std.mem.eql(u8, &key.bytes, &root_artifact.key.bytes)) return;
         if (rootRelationContainsArtifact(root_artifact, key)) return;
         if (importedArtifactViewExists(views.items, key)) return;
-        const artifact = self.checkedArtifactByKey(key) orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("compile.coordinator invariant violated: public API dependency references unavailable checked artifact", .{});
-            }
-            unreachable;
-        };
+        const artifact = self.checkedArtifactByKey(key) orelse base.invariant("compile.coordinator invariant violated: public API dependency references unavailable checked artifact", .{});
         try appendImportedArtifactViewIfMissing(views, allocator, root_artifact.key, artifact);
     }
 
@@ -2288,12 +2250,7 @@ pub const Coordinator = struct {
     }
 
     pub fn appRootCheckedArtifact(self: *Coordinator) *const check.CheckedArtifact.CheckedModuleArtifact {
-        const app_package_name = self.app_package_name orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("compile.coordinator.appRootCheckedArtifact called before markAppPackage", .{});
-            }
-            unreachable;
-        };
+        const app_package_name = self.app_package_name orelse base.invariant("compile.coordinator.appRootCheckedArtifact called before markAppPackage", .{});
         return self.rootCheckedArtifact(app_package_name);
     }
 
@@ -2306,12 +2263,7 @@ pub const Coordinator = struct {
         errdefer views.deinit(allocator);
 
         for (root_artifact.platform_required_bindings.bindings) |binding| {
-            const artifact = self.checkedArtifactByKey(binding.app_value.artifact) orelse {
-                if (builtin.mode == .debug) {
-                    base.invariant("compile.coordinator.collectRelationArtifactViews missing app artifact for platform relation", .{});
-                }
-                unreachable;
-            };
+            const artifact = self.checkedArtifactByKey(binding.app_value.artifact) orelse base.invariant("compile.coordinator.collectRelationArtifactViews missing app artifact for platform relation", .{});
             try appendImportedArtifactViewIfMissing(&views, allocator, root_artifact.key, artifact);
         }
 
@@ -2362,29 +2314,11 @@ pub const Coordinator = struct {
             }
             return null;
         };
-        const pkg = self.packages.get(location.pkg_name) orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("compile.coordinator checked artifact registry points at missing package {s}", .{location.pkg_name});
-            }
-            unreachable;
-        };
-        const mod = pkg.getModule(location.module_id) orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("compile.coordinator checked artifact registry points at missing module {d} in package {s}", .{ location.module_id, location.pkg_name });
-            }
-            unreachable;
-        };
-        const artifact = mod.checkedArtifact() orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("compile.coordinator checked artifact registry points at unpublished module {s}:{d}", .{ location.pkg_name, location.module_id });
-            }
-            unreachable;
-        };
+        const pkg = self.packages.get(location.pkg_name) orelse base.invariant("compile.coordinator checked artifact registry points at missing package {s}", .{location.pkg_name});
+        const mod = pkg.getModule(location.module_id) orelse base.invariant("compile.coordinator checked artifact registry points at missing module {d} in package {s}", .{ location.module_id, location.pkg_name });
+        const artifact = mod.checkedArtifact() orelse base.invariant("compile.coordinator checked artifact registry points at unpublished module {s}:{d}", .{ location.pkg_name, location.module_id });
         if (!std.mem.eql(u8, &artifact.key.bytes, &key.bytes)) {
-            if (builtin.mode == .debug) {
-                base.invariant("compile.coordinator checked artifact registry returned stale key for {s}:{d}", .{ location.pkg_name, location.module_id });
-            }
-            unreachable;
+            base.invariant("compile.coordinator checked artifact registry returned stale key for {s}:{d}", .{ location.pkg_name, location.module_id });
         }
         return artifact;
     }
@@ -2401,12 +2335,7 @@ pub const Coordinator = struct {
         mod: *ModuleState,
     ) Allocator.Error!void {
         const artifact = mod.checkedArtifact() orelse return;
-        const module_id = moduleIdForPtr(pkg, mod) orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("compile.coordinator could not locate checked artifact module {s} in package {s}", .{ mod.name, pkg.name });
-            }
-            unreachable;
-        };
+        const module_id = moduleIdForPtr(pkg, mod) orelse base.invariant("compile.coordinator could not locate checked artifact module {s} in package {s}", .{ mod.name, pkg.name });
         try self.checked_artifact_index.put(artifact.key.bytes, .{
             .pkg_name = pkg.name,
             .module_id = module_id,
@@ -3119,7 +3048,7 @@ pub const Coordinator = struct {
                 defer ice.leave();
                 return self.executeTypeCheck(t, allocators);
             },
-            .post_check => unreachable,
+            .post_check => coordinatorInvariant("post-check tasks run through the post-check executor, never executeTaskInline", .{}),
         }
     }
 
@@ -3199,7 +3128,7 @@ pub const Coordinator = struct {
             .type_checked,
             .operation_failed,
             .worker_oom,
-            => unreachable,
+            => coordinatorInvariant("post-check session received a {t} result", .{std.meta.activeTag(result)}),
         };
     }
 
@@ -3381,7 +3310,7 @@ pub const Coordinator = struct {
             env_len,
             record_len,
         );
-        _ = env_writer.writeToBuffer(entry[canonicalized_module_cache_header_len..][0..env_len]) catch unreachable;
+        _ = env_writer.writeToBuffer(entry[canonicalized_module_cache_header_len..][0..env_len]) catch unreachable; // the slice is exactly env_writer.total_bytes long
         canonicalized_cache_entry.encode(parse_record, entry[canonicalized_module_cache_header_len + env_len ..][0..record_len]);
 
         manager.storeRawBytesIn(scratch, .canonicalized, cache_key, entry, entries_dir, env.module_name);
@@ -3436,7 +3365,7 @@ pub const Coordinator = struct {
             return;
         };
         writeCheckedModuleCacheHeader(.platform_pairing, bytes[0..checked_module_cache_header_len], key, 0, writer.total_bytes, @splat(0));
-        _ = writer.writeToBuffer(bytes[checked_module_cache_header_len..]) catch unreachable;
+        _ = writer.writeToBuffer(bytes[checked_module_cache_header_len..]) catch unreachable; // bytes was allocated with writer.total_bytes after the header
         manager.storeRawBytes(key.bytes, bytes, directory, artifact.moduleEnvConst().module_name);
     }
 
@@ -3943,19 +3872,15 @@ pub const Coordinator = struct {
     /// The package a worker result names, which the coordinator registered
     /// before scheduling any of its modules.
     fn registeredPackage(self: *Coordinator, package_name: []const u8, module_name: []const u8, comptime when: []const u8) *PackageState {
-        return self.packages.get(package_name) orelse {
-            if (builtin.mode == .debug) base.invariant("package '{s}' not found " ++ when ++ " (module={s})", .{ package_name, module_name });
-            unreachable;
-        };
+        return self.packages.get(package_name) orelse
+            base.invariant("package '{s}' not found " ++ when ++ " (module={s})", .{ package_name, module_name });
     }
 
     /// The module `module_id` names in `pkg`, which the coordinator
     /// registered before handing out the id.
     fn registeredModule(pkg: *PackageState, package_name: []const u8, module_id: ModuleId, module_name: []const u8, comptime when: []const u8) *ModuleState {
-        return pkg.getModule(module_id) orelse {
-            if (builtin.mode == .debug) base.invariant("module id={} not found in package '{s}' " ++ when ++ " (module={s})", .{ module_id, package_name, module_name });
-            unreachable;
-        };
+        return pkg.getModule(module_id) orelse
+            base.invariant("module id={} not found in package '{s}' " ++ when ++ " (module={s})", .{ module_id, package_name, module_name });
     }
 
     /// Handle a result from a worker
@@ -3973,7 +3898,7 @@ pub const Coordinator = struct {
             .type_checked => |*r| try self.handleTypeChecked(r),
             .operation_failed => |r| return self.handleOperationFailed(r),
             .worker_oom => return error.OutOfMemory,
-            .post_check => unreachable,
+            .post_check => coordinatorInvariant("post-check completions are received by the post-check session, never handleResult", .{}),
         }
     }
 
@@ -6279,6 +6204,7 @@ const PatternExtractionRegionStatsError = error{
     PatternExtractionResolvedRefMissing,
     PatternExtractionCallableLookupWasNotLexical,
     PatternExtractionConstantLookupWasNotHoisted,
+    PatternExtractionValidationRootHadExtraction,
 };
 
 var shared_test_builtins: ?eval.BuiltinModules = null;
@@ -6531,7 +6457,7 @@ fn serializedCheckedArtifactBytes(
     try Coordinator.serializeForCache(check.CheckedArtifact.CheckedModuleArtifact, &inspection, &writer, arena_impl.allocator());
     const bytes = try allocator.alloc(u8, writer.total_bytes);
     errdefer allocator.free(bytes);
-    _ = writer.writeToBuffer(bytes) catch unreachable;
+    _ = writer.writeToBuffer(bytes) catch unreachable; // bytes was allocated with exactly writer.total_bytes
     return bytes;
 }
 
@@ -8128,13 +8054,13 @@ fn hashPatternExtractionRegionsForView(
         switch (root.kind) {
             .callable_binding => if (resolved != .pattern_binder) return error.PatternExtractionCallableLookupWasNotLexical,
             .hoisted_constant => if (resolved != .selected_hoisted_const) return error.PatternExtractionConstantLookupWasNotHoisted,
-            .hoisted_validation,
+            .hoisted_validation => return error.PatternExtractionValidationRootHadExtraction,
             .constant,
             .expect,
             .numeral_conversion,
             .quote_conversion,
             .repl_expr,
-            => unreachable,
+            => unreachable, // is_selected_root skipped every root of these kinds
         }
 
         hasher.update(&view.key.bytes);

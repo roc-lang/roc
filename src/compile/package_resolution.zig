@@ -1327,7 +1327,7 @@ pub const Resolver = struct {
                         .{
                             if (task.missing.is_platform) "platform" else "package",
                             task.missing.url,
-                            task.max_expanded_bytes orelse unreachable,
+                            task.max_expanded_bytes orelse base.invariant("package resolution invariant violated: a fetch without a size limit reported {s}", .{@errorName(err)}),
                             if (task.missing.is_platform) "--max-transitive-mb" else "--max-package-mb",
                         },
                     );
@@ -1625,7 +1625,7 @@ pub const Resolver = struct {
         // Index 0: the root. A URL-launched root carries its bundle URL as
         // both identity and UrlInfo, exactly like a URL dependency would.
         const root_url_info: ?Resolved.UrlInfo = if (self.root_url) |url| blk: {
-            const parsed = base.url.parseUrlPath(url) catch unreachable;
+            const parsed = base.url.parseUrlPath(url) catch unreachable; // BuildEnv.setRootUrl rejects URLs parseUrlPath does not accept
             break :blk .{
                 .url = try out.dupe(u8, url),
                 .url_id = parsed.url_id,
@@ -1680,7 +1680,7 @@ pub const Resolver = struct {
                 });
             } else {
                 const node = self.url_nodes.get(choice.hash).?;
-                const parsed = base.url.parseUrlPath(choice.url) catch unreachable;
+                const parsed = base.url.parseUrlPath(choice.url) catch unreachable; // URL-group candidates are recorded only after parseUrlPath accepted their spec
                 try group_to_index.put(self.gpa, try self.arena().dupe(u8, group), @intCast(packages.items.len));
                 try packages.append(out, .{
                     .kind = node.kind,
@@ -1745,7 +1745,7 @@ pub const Resolver = struct {
                 .url => |target| target.group,
                 .local => |group| group,
                 .compiler_owned => |platform| compiler_platforms.groupKey(platform),
-                .invalid => unreachable,
+                .invalid => unreachable, // an invalid edge records a diagnostic, which returned ResolutionFailed above
             };
             break :blk group_to_index.get(group).?;
         } else null;
@@ -4152,9 +4152,9 @@ test "the reserved 0.0.0 version is rejected" {
 /// The knobs are globals because `fetchUrl` is a bare function pointer in the
 /// `CoreCtx` vtable, with nowhere to hang per-test state. The tests using them
 /// run in one thread, one after another.
-fn testReplaceConfig(args: []const ReplaceDepArg) Config {
+fn testReplaceConfig(args: []const ReplaceDepArg) error{TooManyReplacements}!Config {
     var config = Config{};
-    for (args) |arg| config.replace_deps.append(arg) catch unreachable;
+    for (args) |arg| try config.replace_deps.append(arg);
     return config;
 }
 
@@ -4211,7 +4211,7 @@ test "replace-dep: a local replacement covers direct and transitive declarations
     try testRegisterAsciiAnsi(&registry, test_ascii_url);
     defer testFreeAsciiAnsi(&registry);
 
-    var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&.{
+    var resolver = Resolver.init(gpa, registry.fetcher(), try testReplaceConfig(&.{
         .{ .old = test_ascii_url, .new = "/work/roc-ascii/main.roc" },
     }));
     defer resolver.deinit();
@@ -4248,7 +4248,7 @@ test "replace-dep: separate release URLs require separate flags" {
 
     // One flag leaves ANSI's other release untouched.
     {
-        var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&.{
+        var resolver = Resolver.init(gpa, registry.fetcher(), try testReplaceConfig(&.{
             .{ .old = test_ascii_url, .new = "/work/roc-ascii/main.roc" },
         }));
         defer resolver.deinit();
@@ -4264,7 +4264,7 @@ test "replace-dep: separate release URLs require separate flags" {
         .{ .{ .old = test_ascii_other_url, .new = "/work/roc-ascii/main.roc" }, .{ .old = test_ascii_url, .new = "/work/roc-ascii/main.roc" } },
     };
     for (orders) |order| {
-        var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&order));
+        var resolver = Resolver.init(gpa, registry.fetcher(), try testReplaceConfig(&order));
         defer resolver.deinit();
         var resolved = try resolver.resolve("/app/main.roc");
         defer resolved.deinit();
@@ -4294,7 +4294,7 @@ test "replace-dep: the replacement's header supplies dependencies, at every dept
         .{ .alias = "chars", .spec = test_ascii_url, .is_platform = false },
     } });
 
-    var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&.{
+    var resolver = Resolver.init(gpa, registry.fetcher(), try testReplaceConfig(&.{
         .{ .old = test_ansi_url, .new = "/work/roc-ansi/main.roc" },
         .{ .old = test_ascii_url, .new = "/work/roc-ascii/main.roc" },
     }));
@@ -4317,7 +4317,7 @@ test "replace-dep: declarations only inside a discarded original do not count as
     defer testFreeAsciiAnsi(&registry);
     try registry.locals.put("/work/roc-ansi/main.roc", .{});
 
-    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+    try testExpectResolutionFails(&registry, "/app/main.roc", try testReplaceConfig(&.{
         .{ .old = test_ansi_url, .new = "/work/roc-ansi/main.roc" },
         .{ .old = test_ascii_other_url, .new = "/work/roc-ascii/main.roc" },
     }), "Unused Dependency Replacement");
@@ -4331,7 +4331,7 @@ test "replace-dep: an unused flag is an error" {
     defer testFreeAsciiAnsi(&registry);
 
     // A near-miss URL (different hash) matches nothing.
-    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+    try testExpectResolutionFails(&registry, "/app/main.roc", try testReplaceConfig(&.{
         .{ .old = "https://example.com/ascii/0.5.0/hashTypo.tar.zst", .new = "/work/roc-ascii/main.roc" },
     }), "Unused Dependency Replacement");
 }
@@ -4351,23 +4351,23 @@ test "replace-dep: aliases, directories, and the compiler are rejected for OLD a
     try std.testing.expectEqual(ReplaceDepSource.url, classifyReplaceDepSource(test_ascii_url));
     try std.testing.expectEqual(ReplaceDepSource.compiler, classifyReplaceDepSource("roc"));
 
-    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+    try testExpectResolutionFails(&registry, "/app/main.roc", try testReplaceConfig(&.{
         .{ .old = "ascii", .new = "/work/roc-ascii/main.roc" },
     }), "Invalid Dependency Replacement");
-    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+    try testExpectResolutionFails(&registry, "/app/main.roc", try testReplaceConfig(&.{
         .{ .old = test_ascii_url, .new = "ascii" },
     }), "Invalid Dependency Replacement");
-    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+    try testExpectResolutionFails(&registry, "/app/main.roc", try testReplaceConfig(&.{
         .{ .old = test_ascii_url, .new = "/work/roc-ascii" },
     }), "Invalid Dependency Replacement");
-    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+    try testExpectResolutionFails(&registry, "/app/main.roc", try testReplaceConfig(&.{
         .{ .old = "roc", .new = "/work/roc-ascii/main.roc" },
     }), "Compiler Cannot Be Replaced");
     // Malformed URLs and paths that do not exist are rejected too.
-    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+    try testExpectResolutionFails(&registry, "/app/main.roc", try testReplaceConfig(&.{
         .{ .old = test_ascii_url, .new = "http://example.com/ascii/0.5.0/hashAscii.tar.zst" },
     }), "Invalid Dependency Replacement");
-    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+    try testExpectResolutionFails(&registry, "/app/main.roc", try testReplaceConfig(&.{
         .{ .old = test_ascii_url, .new = "/work/missing/main.roc" },
     }), "Invalid Dependency Replacement");
 }
@@ -4381,24 +4381,24 @@ test "replace-dep: duplicate sources, chains, and cycles are rejected" {
     try registry.symlinks.put("/work/link/main.roc", "/work/roc-ascii/main.roc");
     try registry.locals.put("/work/other/main.roc", .{});
 
-    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+    try testExpectResolutionFails(&registry, "/app/main.roc", try testReplaceConfig(&.{
         .{ .old = test_ascii_url, .new = "/work/roc-ascii/main.roc" },
         .{ .old = test_ascii_url, .new = "/work/other/main.roc" },
     }), "Duplicate Dependency Replacement");
     // Two spellings of one root file are one source.
-    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+    try testExpectResolutionFails(&registry, "/app/main.roc", try testReplaceConfig(&.{
         .{ .old = "/work/roc-ascii/main.roc", .new = test_ascii_url },
         .{ .old = "/work/link/main.roc", .new = test_ascii_other_url },
     }), "Duplicate Dependency Replacement");
-    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+    try testExpectResolutionFails(&registry, "/app/main.roc", try testReplaceConfig(&.{
         .{ .old = test_ascii_url, .new = test_ascii_other_url },
         .{ .old = test_ascii_other_url, .new = "/work/roc-ascii/main.roc" },
     }), "Dependency Replacement Chain");
-    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+    try testExpectResolutionFails(&registry, "/app/main.roc", try testReplaceConfig(&.{
         .{ .old = test_ascii_url, .new = test_ascii_other_url },
         .{ .old = test_ascii_other_url, .new = test_ascii_url },
     }), "Dependency Replacement Chain");
-    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+    try testExpectResolutionFails(&registry, "/app/main.roc", try testReplaceConfig(&.{
         .{ .old = test_ascii_url, .new = test_ascii_url },
     }), "Dependency Replacement Cycle");
 }
@@ -4413,7 +4413,7 @@ test "replace-dep: replacing a package and a dependency declared inside it is no
         .{ .alias = "ascii", .spec = test_ascii_url, .is_platform = false },
     } });
 
-    var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&.{
+    var resolver = Resolver.init(gpa, registry.fetcher(), try testReplaceConfig(&.{
         .{ .old = test_ansi_url, .new = "/work/roc-ansi/main.roc" },
         .{ .old = test_ascii_url, .new = "/work/roc-ascii/main.roc" },
     }));
@@ -4437,7 +4437,7 @@ test "replace-dep: a published replacement is exact and never version-solved awa
 
     // A -> B replaces every A, and the app root accepts the new release.
     {
-        var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&.{
+        var resolver = Resolver.init(gpa, registry.fetcher(), try testReplaceConfig(&.{
             .{ .old = test_ascii_url, .new = fork_url },
         }));
         defer resolver.deinit();
@@ -4453,7 +4453,7 @@ test "replace-dep: a published replacement is exact and never version-solved awa
         .{ .alias = "ascii", .spec = test_ascii_url, .is_platform = false },
         .{ .alias = "newer", .spec = fork_newer_url, .is_platform = false },
     } });
-    try testExpectResolutionFails(&registry, "/pkg/main.roc", testReplaceConfig(&.{
+    try testExpectResolutionFails(&registry, "/pkg/main.roc", try testReplaceConfig(&.{
         .{ .old = test_ascii_url, .new = fork_url },
     }), "Dependency Replacement Conflict");
 
@@ -4462,7 +4462,7 @@ test "replace-dep: a published replacement is exact and never version-solved awa
         .{ .alias = "ascii", .spec = test_ascii_url, .is_platform = false },
         .{ .alias = "older", .spec = fork_url, .is_platform = false },
     } });
-    var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&.{
+    var resolver = Resolver.init(gpa, registry.fetcher(), try testReplaceConfig(&.{
         .{ .old = test_ascii_url, .new = fork_newer_url },
     }));
     defer resolver.deinit();
@@ -4482,7 +4482,7 @@ test "replace-dep: a failed replacement download never uses the original" {
     try testRegisterAsciiAnsi(&registry, test_ascii_url);
     defer testFreeAsciiAnsi(&registry);
 
-    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+    try testExpectResolutionFails(&registry, "/app/main.roc", try testReplaceConfig(&.{
         .{ .old = test_ascii_url, .new = "https://example.com/gone/ascii/0.5.0/hashGone.tar.zst" },
     }), "Package Download Failed");
 }
@@ -4496,7 +4496,7 @@ test "replace-dep: platforms are replaceable and must stay platforms" {
     try registry.locals.put("/work/basic-cli/platform/main.roc", .{ .kind = .platform });
 
     {
-        var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&.{
+        var resolver = Resolver.init(gpa, registry.fetcher(), try testReplaceConfig(&.{
             .{ .old = test_platform_url, .new = "/work/basic-cli/platform/main.roc" },
         }));
         defer resolver.deinit();
@@ -4507,10 +4507,10 @@ test "replace-dep: platforms are replaceable and must stay platforms" {
         try std.testing.expectEqual(HeaderKind.platform, selected.kind);
     }
 
-    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+    try testExpectResolutionFails(&registry, "/app/main.roc", try testReplaceConfig(&.{
         .{ .old = test_platform_url, .new = "/work/roc-ascii/main.roc" },
     }), "Invalid Platform");
-    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+    try testExpectResolutionFails(&registry, "/app/main.roc", try testReplaceConfig(&.{
         .{ .old = test_ascii_url, .new = "/work/basic-cli/platform/main.roc" },
     }), "Invalid Package Dependency");
 }
@@ -4533,12 +4533,12 @@ test "replace-dep: platform consistency is validated against effective sources" 
     } });
 
     // Replacing only one of two differing declarations is a mismatch...
-    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+    try testExpectResolutionFails(&registry, "/app/main.roc", try testReplaceConfig(&.{
         .{ .old = test_platform_url, .new = "/work/platform/main.roc" },
     }), "Platform Dependency Mismatch");
 
     // ...and mapping both onto one source makes the graph consistent.
-    var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&.{
+    var resolver = Resolver.init(gpa, registry.fetcher(), try testReplaceConfig(&.{
         .{ .old = test_platform_url, .new = "/work/platform/main.roc" },
         .{ .old = other_platform_url, .new = "/work/platform/main.roc" },
     }));
@@ -4574,7 +4574,7 @@ test "replace-dep: a relative platform declaration resolves while local sources 
     try registry.urls.put(test_ascii_url, .{});
     try registry.locals.put("/work/roc-ascii/main.roc", .{});
 
-    var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&.{
+    var resolver = Resolver.init(gpa, registry.fetcher(), try testReplaceConfig(&.{
         .{ .old = test_ascii_url, .new = "/work/roc-ascii/main.roc" },
     }));
     defer resolver.deinit();
@@ -4608,7 +4608,7 @@ test "replace-dep: local and versionless sources match by canonical path and exa
     // The command-line selector is relative to the working directory.
     try registry.symlinks.put("./vendor/json/main.roc", "/repo/vendor/json/main.roc");
 
-    var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&.{
+    var resolver = Resolver.init(gpa, registry.fetcher(), try testReplaceConfig(&.{
         .{ .old = "./vendor/json/main.roc", .new = "/work/json/main.roc" },
         .{ .old = versionless_url, .new = "/work/tools/main.roc" },
     }));
@@ -4640,7 +4640,7 @@ test "replace-dep: a local declaration with no canonical path is an error, not a
     // `/repo/missing/main.roc` is not registered, so it cannot be
     // canonicalized. Resolution must report that edge explicitly instead of
     // continuing with its spelling.
-    var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&.{
+    var resolver = Resolver.init(gpa, registry.fetcher(), try testReplaceConfig(&.{
         .{ .old = "./vendor/json/main.roc", .new = "/work/json/main.roc" },
     }));
     defer resolver.deinit();
@@ -4671,7 +4671,7 @@ test "replace-dep: identical aliases for unrelated sources are not conflated" {
     } });
 
     // A platform root works like any other root.
-    var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&.{
+    var resolver = Resolver.init(gpa, registry.fetcher(), try testReplaceConfig(&.{
         .{ .old = test_ascii_url, .new = "/work/roc-ascii/main.roc" },
     }));
     defer resolver.deinit();

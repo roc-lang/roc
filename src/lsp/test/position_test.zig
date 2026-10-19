@@ -136,7 +136,7 @@ test "a position converts back to the offset it came from" {
                 try std.testing.expectEqual(@as(u32, @intCast(line)), found.line);
                 try std.testing.expectEqual(@as(?u32, offset), table.offsetAt(found.line, found.character));
                 if (column == text.len) break;
-                column += std.unicode.utf8ByteSequenceLength(text[column]) catch unreachable;
+                column += std.unicode.utf8ByteSequenceLength(text[column]) catch return error.TestUnexpectedResult;
             }
         }
     }

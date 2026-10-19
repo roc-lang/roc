@@ -12,6 +12,7 @@
 //! versionless) dependency is a hard error with a structured failure.
 
 const std = @import("std");
+const base = @import("base");
 const collections = @import("collections");
 const can = @import("can");
 const check = @import("check");
@@ -622,7 +623,7 @@ const Extractor = struct {
             if (!std.mem.eql(u8, &input.artifact.key.bytes, &owner_module.bytes)) break;
             if (!publicInputOwnsType(input, owner_module, statement)) continue;
             const root_len = if (input.public_type_decl) |root_statement|
-                (typeDeclName(input.module_env, root_statement) orelse unreachable).len
+                publicTypeDeclName(input, root_statement).len
             else
                 0;
             // The nearest public root owns the reference. Equal roots retain
@@ -687,6 +688,11 @@ fn typeDeclName(module_env: *const ModuleEnv, statement_idx: can.CIR.Statement.I
     return module_env.getIdentText(module_env.store.getTypeHeader(header_idx).relative_name);
 }
 
+fn publicTypeDeclName(input: ModuleInput, root_statement: can.CIR.Statement.Idx) []const u8 {
+    return typeDeclName(input.module_env, root_statement) orelse
+        base.invariant("bump invariant violated: public namespace '{s}' has a public_type_decl that is not a type declaration", .{input.exposed_name});
+}
+
 fn publicInputOwnsType(
     input: ModuleInput,
     owner_module: CheckedArtifact.ModuleId,
@@ -710,7 +716,7 @@ fn publicInputOwnsType(
 
 fn publicItemPath(alloc: Allocator, input: ModuleInput, source_name: []const u8) Allocator.Error![]const u8 {
     const root_statement = input.public_type_decl orelse return try alloc.dupe(u8, source_name);
-    const root_name = typeDeclName(input.module_env, root_statement) orelse unreachable;
+    const root_name = publicTypeDeclName(input, root_statement);
     std.debug.assert(nameIsPublic(source_name, root_name));
     return if (source_name.len == root_name.len)
         try alloc.dupe(u8, input.exposed_name)

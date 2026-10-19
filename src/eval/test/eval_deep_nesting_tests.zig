@@ -56,7 +56,10 @@ fn numberedLines(
         for (0..n) |i| len += std.fmt.count(format, args(i));
         var buf: [len]u8 = undefined;
         var at: usize = 0;
-        for (0..n) |i| at += (std.fmt.bufPrint(buf[at..], format, args(i)) catch unreachable).len;
+        for (0..n) |i| {
+            const written = std.fmt.bufPrint(buf[at..], format, args(i)) catch unreachable; // buf's length is std.fmt.count over these same arguments
+            at += written.len;
+        }
         const lines = buf;
         return &lines;
     }

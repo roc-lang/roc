@@ -101,7 +101,7 @@ pub fn classifyWindows(store: *const Store, start: Idx) Class {
         .box, .box_of_zst, .erased_box, .ptr => return .integer, // single pointer
         .list, .list_of_zst => return .memory, // 24-byte aggregate
         .struct_, .tag_union, .closure, .erased_callable => {},
-        .zst => unreachable,
+        .zst => unreachable, // the size assertion above holds: callers never pass zero-sized values across the C ABI
     }
 
     if (size == 1 or size == 2 or size == 4 or size == 8) return .integer;
@@ -148,7 +148,7 @@ pub fn classifySystemV(allocator: std.mem.Allocator, store: *const Store, idx: I
             try classifyAggregateSysV(allocator, store, &result, 0, idx);
             return finishSystemV(result, size);
         },
-        .zst => unreachable,
+        .zst => unreachable, // the size assertion above holds: callers never pass zero-sized values across the C ABI
     }
 }
 

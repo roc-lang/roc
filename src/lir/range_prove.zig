@@ -3035,7 +3035,7 @@ const Pass = struct {
         return switch (a) {
             .value_of, .len_of => |local| std.math.order(@backingInt(local), @backingInt(switch (b) {
                 .value_of, .len_of => |other| other,
-                .constant => unreachable,
+                .constant => unreachable, // the tag check above makes b's tag equal a's
             })),
             .constant => |value| std.math.order(value, b.constant),
         };
@@ -4985,7 +4985,7 @@ const Pass = struct {
                 self.orderingFact(pred.b, pred.a, 0, origin)
             else
                 self.orderingFact(pred.a, pred.b, -1, origin),
-            .eq, .ne => unreachable,
+            .eq, .ne => unreachable, // the only caller passes ordering predicates (lt, lte, gt, gte)
         };
     }
 
@@ -5166,8 +5166,7 @@ const Pass = struct {
             },
             // A hint with no result to describe.
             .list_prefetch => try self.bindFresh(s.target),
-            // LIR lowering splits this into an alias and `list_prefetch`.
-            .list_prefetched => unreachable,
+            .list_prefetched => unreachable, // LIR lowering splits this into an alias and `list_prefetch`
             .list_capacity => {
                 // A list's capacity is a non-negative count with no tighter
                 // statically known bound.
@@ -5885,7 +5884,7 @@ const Pass = struct {
             .compare,
             .crash,
             => try self.bindFresh(s.target),
-            .num_plus, .num_minus, .num_times => unreachable,
+            .num_plus, .num_minus, .num_times => unreachable, // lowering resolves source-policy arithmetic to a family member before LIR
         }
     }
 
@@ -5918,7 +5917,7 @@ const Pass = struct {
         else if (s.op == .num_is_eq)
             .eq
         else
-            unreachable;
+            unreachable; // the only caller's prong admits just num_is_eq/lt/lte/gt/gte
 
         // `a < b` holds when `a <= b - 1`; it fails when `b <= a`. The
         // remaining kinds reduce to those two shapes.
@@ -5976,7 +5975,7 @@ const Pass = struct {
     };
 
     fn modelFamilyArith(self: *Pass, stmt: CFStmtId, s: anytype, args: anytype, arg_count: usize) ResourceError!void {
-        const entry = CheckedArithmetic.classify(s.op) orelse unreachable;
+        const entry = CheckedArithmetic.classify(s.op) orelse unreachable; // the only caller's prong admits just the twelve family members
         const operand_layout = if (arg_count > 0) self.localLayout(GuardedList.at(args, 0)) else self.localLayout(s.target);
         const max = trackedIntMax(operand_layout);
         if (arg_count != 2 or max == null) {
@@ -6297,7 +6296,7 @@ const Pass = struct {
 
     fn rewriteAsArithmeticCrash(self: *Pass, stmt: CFStmtId, operation: CheckedArithmetic.Operation) ResourceError!void {
         const op = CheckedArithmetic.member(operation, .crash_on_overflow);
-        const message = CheckedArithmetic.overflowMessage(op) orelse unreachable;
+        const message = CheckedArithmetic.overflowMessage(op) orelse unreachable; // op is a family member, and overflowMessage covers every family member
         self.store.getCFStmtPtr(stmt).* = .{ .crash = .{
             .msg = .{ .literal = try self.store.insertString(message) },
         } };

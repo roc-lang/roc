@@ -141,7 +141,7 @@ pub fn hasherDomain(op: LowLevel) builtins.hash.HasherDomain {
     if (op == .hasher_write_dec) return .dec;
     if (op == .hasher_write_bytes) return .bytes;
     if (op == .hasher_write_str) return .str;
-    unreachable;
+    @import("base").invariant("LIR invariant violated: hasherDomain expects a hasher_write op, got {s}", .{@tagName(op)});
 }
 
 /// Byte width of the scalar handed to `hasher_write_u64` for a fixed-width
@@ -153,7 +153,7 @@ pub fn hasherU64Width(op: LowLevel) u8 {
     if (op == .hasher_write_u16 or op == .hasher_write_i16) return 2;
     if (op == .hasher_write_u32 or op == .hasher_write_i32 or op == .hasher_write_f32) return 4;
     if (op == .hasher_write_u64 or op == .hasher_write_i64 or op == .hasher_write_f64) return 8;
-    unreachable;
+    @import("base").invariant("LIR invariant violated: hasherU64Width expects a 1/2/4/8-byte hasher_write op, got {s}", .{@tagName(op)});
 }
 
 test "lir tests" {

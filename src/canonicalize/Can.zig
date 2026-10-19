@@ -5,7 +5,6 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const builtin = @import("builtin");
 const testing = std.testing;
 const base = @import("base");
 const state_discipline = base.state_discipline;
@@ -882,12 +881,13 @@ fn qualifiedNameIdentFromTokens(
     defer self.qualified_ident_bytes.clearFrom(top);
 
     for (qualifier_tokens) |raw_token| {
-        const segment = self.parse_ir.tokens.resolveIdentifier(@intCast(raw_token)) orelse unreachable;
+        const segment = self.parse_ir.tokens.resolveIdentifier(@intCast(raw_token)) orelse unreachable; // the parser builds token spans only from identifier tokens
         try self.qualified_ident_bytes.items.appendSlice(self.parse_ir.env.getIdent(segment));
         try self.qualified_ident_bytes.append('.');
     }
 
-    const final_ident = self.parse_ir.tokens.resolveIdentifier(final_token) orelse unreachable;
+    const final_ident = self.parse_ir.tokens.resolveIdentifier(final_token) orelse
+        base.invariant("canonicalization invariant violated: the final token of a qualified name is not an identifier", .{});
     try self.qualified_ident_bytes.items.appendSlice(self.parse_ir.env.getIdent(final_ident));
 
     return try self.env.insertIdent(Ident.for_text(self.qualified_ident_bytes.sliceFromStart(top)));
@@ -1470,7 +1470,8 @@ fn topLevelDefIsSelected(
     const def = self.env.store.getDef(def_idx);
     const pattern = self.env.store.getPattern(def.pattern);
     if (pattern != .assign) return true;
-    return (selected_by_ident.get(pattern.assign.ident) orelse unreachable) == def_idx;
+    const selected_def = selected_by_ident.get(pattern.assign.ident) orelse unreachable; // the map is keyed by every assign-pattern def in scratch_global_value_defs, the only defs passed here
+    return selected_def == def_idx;
 }
 
 fn globalDefIntroducesValueBinding(
@@ -1582,12 +1583,7 @@ fn registerMethodForDispatchOwner(
     switch (entry.value_ptr.kind) {
         .declaration_owner => switch (kind) {
             // The associated-value duplicate check owns this source error.
-            .declaration_owner => {
-                if (builtin.mode == .debug) {
-                    base.invariant("canonicalization invariant violated: duplicate declaration-owned method registration", .{});
-                }
-                unreachable;
-            },
+            .declaration_owner => base.invariant("canonicalization invariant violated: duplicate declaration-owned method registration", .{}),
             // A method declared by its receiver wins over a namespace extension.
             .receiver_extension => return,
         },
@@ -2366,7 +2362,7 @@ fn joinedQualifierIdent(
     qualifier_tokens: []const u32,
 ) std.mem.Allocator.Error!Ident.Idx {
     std.debug.assert(qualifier_tokens.len > 0);
-    const final_ident = self.parse_ir.tokens.resolveIdentifier(@intCast(qualifier_tokens[qualifier_tokens.len - 1])) orelse unreachable;
+    const final_ident = self.parse_ir.tokens.resolveIdentifier(@intCast(qualifier_tokens[qualifier_tokens.len - 1])) orelse unreachable; // the parser builds token spans only from identifier tokens
     return self.joinedQualifiedIdent(qualifier_tokens[0 .. qualifier_tokens.len - 1], final_ident);
 }
 
@@ -2381,7 +2377,7 @@ fn joinedQualifiedIdent(
     defer self.clearScratchBytesFrom(bytes_top);
 
     for (qualifier_tokens, 0..) |raw_tok, index| {
-        const segment = self.parse_ir.tokens.resolveIdentifier(@intCast(raw_tok)) orelse unreachable;
+        const segment = self.parse_ir.tokens.resolveIdentifier(@intCast(raw_tok)) orelse unreachable; // the parser builds token spans only from identifier tokens
         if (index > 0) try self.scratchAppendByte('.');
         try self.scratchAppendSlice(self.env.getIdent(segment));
     }
@@ -2572,7 +2568,7 @@ const AliasCycleContext = struct {
         defer scc_members.deinit(gpa);
 
         while (true) {
-            const member = self.stack.pop() orelse unreachable;
+            const member = self.stack.pop() orelse unreachable; // `stmt_idx` is an SCC root, so it and the members above it are still on the stack
             const removed = self.on_stack.remove(member);
             std.debug.assert(removed);
             try scc_members.append(gpa, member);
@@ -2605,7 +2601,7 @@ const AliasCycleContext = struct {
 
         while (frames.items.len > 0) {
             const top = &frames.items[frames.items.len - 1];
-            const decl = self.aliasDecl(top.stmt_idx) orelse unreachable;
+            const decl = self.aliasDecl(top.stmt_idx) orelse unreachable; // visit is entered only for type aliases and pushes only dependencies whose aliasDecl is non-null
             const dependencies = self.can.parse_ir.decl_index.typeDependencies(decl.type_dependencies);
 
             if (top.next_dependency < dependencies.len) {
@@ -2631,7 +2627,7 @@ const AliasCycleContext = struct {
 
             const finished = top.stmt_idx;
             try self.finishStatement(finished);
-            _ = frames.pop() orelse unreachable;
+            _ = frames.pop() orelse unreachable; // the loop condition guarantees `top` is still on the stack
 
             if (frames.items.len > 0) {
                 const parent = frames.items[frames.items.len - 1].stmt_idx;
@@ -2722,7 +2718,7 @@ const AliasCycleContext = struct {
         stmt_idx: AST.Statement.Idx,
         members: []const AST.Statement.Idx,
     ) AST.Statement.Idx {
-        const decl = self.aliasDecl(stmt_idx) orelse unreachable;
+        const decl = self.aliasDecl(stmt_idx) orelse unreachable; // SCC members are statements visit began, all of which are type aliases
         for (self.can.parse_ir.decl_index.typeDependencies(decl.type_dependencies)) |dependency| {
             const dep_stmt_idx = self.dependencyStatement(decl, dependency) orelse continue;
             if (dep_stmt_idx == stmt_idx) continue;
@@ -2732,7 +2728,7 @@ const AliasCycleContext = struct {
             }
         }
 
-        unreachable;
+        unreachable; // every member of an SCC with more than one statement has an alias dependency on another member
     }
 
     fn stmtSliceContains(members: []const AST.Statement.Idx, needle: AST.Statement.Idx) bool {
@@ -3624,9 +3620,9 @@ fn processAssociatedBlock(
         while (labels.pop()) |label| {
             switch (label) {
                 .dispatch => {},
-                .enter => self.cleanupAssociatedEnterWork(enter_stack.pop() orelse unreachable),
-                .next => _ = next_stack.pop() orelse unreachable,
-                .exit => self.exitAssociatedBlockState(exit_stack.pop() orelse unreachable),
+                .enter => self.cleanupAssociatedEnterWork(enter_stack.pop() orelse unreachable), // each label is pushed only after its entry is appended to the matching stack
+                .next => _ = next_stack.pop() orelse unreachable, // each label is pushed only after its entry is appended to the matching stack
+                .exit => self.exitAssociatedBlockState(exit_stack.pop() orelse unreachable), // each label is pushed only after its entry is appended to the matching stack
             }
         }
         labels.deinit(self.env.gpa);
@@ -3655,7 +3651,7 @@ fn processAssociatedBlock(
             continue :associated_kernel_loop label;
         },
         .enter => {
-            const work = enter_stack.pop() orelse unreachable;
+            const work = enter_stack.pop() orelse unreachable; // each label is pushed only after its entry is appended to the matching stack
             const state = try self.enterAssociatedBlockState(work);
             var state_owned_by_stacks = false;
             errdefer if (!state_owned_by_stacks) {
@@ -3670,7 +3666,7 @@ fn processAssociatedBlock(
             continue :associated_kernel_loop .dispatch;
         },
         .next => {
-            const state = next_stack.pop() orelse unreachable;
+            const state = next_stack.pop() orelse unreachable; // each label is pushed only after its entry is appended to the matching stack
             switch (try self.canonicalizeAssociatedItems(state)) {
                 .done => {},
                 .nested => |nested_work| {
@@ -3696,7 +3692,7 @@ fn processAssociatedBlock(
             continue :associated_kernel_loop .dispatch;
         },
         .exit => {
-            const state = exit_stack.pop() orelse unreachable;
+            const state = exit_stack.pop() orelse unreachable; // each label is pushed only after its entry is appended to the matching stack
             self.exitAssociatedBlockState(state);
             continue :associated_kernel_loop .dispatch;
         },
@@ -4105,12 +4101,7 @@ fn localAssociatedContext(
     _: *Self,
     block_context: ?BlockStatementContext,
 ) BlockStatementContext {
-    return block_context orelse {
-        if (builtin.mode == .debug) {
-            base.invariant("local associated value invariant violated: missing enclosing block context", .{});
-        }
-        unreachable;
-    };
+    return block_context orelse base.invariant("local associated value invariant violated: missing enclosing block context", .{});
 }
 
 fn propagateBlockStatementFreeVars(
@@ -5134,7 +5125,7 @@ pub fn canonicalizeFile(
                                 try self.env.setExposedValueNodeIndexById(name_ident, def_idx_u32);
                             }
                         },
-                        .malformed => unreachable,
+                        .malformed => unreachable, // the loop above skips malformed statements
                     }
                     break;
                 }
@@ -5524,12 +5515,7 @@ pub fn validateForChecking(self: *Self) std.mem.Allocator.Error!void {
                     .not_found => try self.reportTypeModuleOrDefaultAppError(),
                     // checkMainFunction reported the wrong arity
                     .invalid => {},
-                    .valid => {
-                        if (builtin.mode == .debug) {
-                            base.invariant("entry module with a valid main! was not classified as a default app", .{});
-                        }
-                        unreachable;
-                    },
+                    .valid => base.invariant("entry module with a valid main! was not classified as a default app", .{}),
                 } else {
                     try self.pushModuleFileDiagnostic(.type_module_missing_matching_type);
                 }
@@ -5921,7 +5907,7 @@ fn pushDestructuredLiteralParts(
         .alternatives,
         .as,
         .malformed,
-        => unreachable,
+        => unreachable, // callers pass only patterns that destructuredLiteralShapesMatch accepted, which are records and tuples
     }
 }
 
@@ -6059,10 +6045,8 @@ fn bindDestructuredName(self: *Self, ident: Ident.Idx, region: Region) std.mem.A
                 .original_region = self.env.store.getPatternRegion(shadowed_pattern_idx),
             } });
         },
-        // is_var=false
-        .top_level_var_error => unreachable,
-        // is_declaration=true
-        .var_across_function_boundary, .var_reassigned_in_expect, .var_reassignment_ok => unreachable,
+        .top_level_var_error => unreachable, // an `.assign` pattern is not a var pattern
+        .var_across_function_boundary, .var_reassigned_in_expect, .var_reassignment_ok => unreachable, // is_declaration is true, and these results require a non-declaration
     }
     return pattern_idx;
 }
@@ -6498,9 +6482,10 @@ fn addQualifiedExposedType(
     // Whether the qualifier's module defines that declaration is settled when
     // the module completes, so the entry waits for the drain.
     const qualifier_tokens = self.parse_ir.store.tokenSlice(qualifiers);
-    const module_ident = self.parse_ir.tokens.resolveIdentifier(qualifier_tokens[0]) orelse unreachable;
+    const module_ident = self.parse_ir.tokens.resolveIdentifier(qualifier_tokens[0]) orelse unreachable; // the parser builds token spans only from identifier tokens
     const nested_ident = try self.qualifiedNameIdentFromTokens(qualifier_tokens[1..], final_token);
-    const public_ident = self.parse_ir.tokens.resolveIdentifier(alias_token orelse final_token) orelse unreachable;
+    const public_ident = self.parse_ir.tokens.resolveIdentifier(alias_token orelse final_token) orelse
+        base.invariant("canonicalization invariant violated: the exposed name token is not an identifier", .{});
     _ = try self.pushDeferredRef(.{
         .import_idx = null,
         .kind = .header_exposure,
@@ -6877,10 +6862,11 @@ fn resolveLiteralTypeSuffix(
         .path => |path| path,
     };
     if (path.qualifiers.span.len == 0) {
-        const type_name = self.parse_ir.tokens.resolveIdentifier(path.final_token) orelse unreachable;
+        const type_name = self.parse_ir.tokens.resolveIdentifier(path.final_token) orelse unreachable; // parseLiteralTypeSuffix builds suffix paths only from `.Upper` identifier tokens
         return try self.resolveUnqualifiedLiteralTypeSuffix(type_name, region);
     }
 
+    const final_type_name = self.parse_ir.tokens.resolveIdentifier(path.final_token) orelse unreachable; // parseLiteralTypeSuffix builds suffix paths only from `.Upper` identifier tokens
     const qualified_name_ident = try self.qualifiedNameIdent(path.qualifiers, path.final_token);
     return switch (try self.resolveQualifiedTypeName(path.qualifiers, path.final_token, qualified_name_ident, region)) {
         .found => |found| .{ .resolved = .{
@@ -6890,8 +6876,7 @@ fn resolveLiteralTypeSuffix(
                 .local => |stmt_idx| .{ .resolved = .{ .local = stmt_idx } },
                 .external => |external| blk: {
                     if (self.importIsCompilerBuiltin(external.import_idx)) {
-                        const type_name = self.parse_ir.tokens.resolveIdentifier(path.final_token) orelse unreachable;
-                        if (self.env.idents.numKindFromTypeIdent(type_name)) |num_kind| break :blk .{ .resolved = .{ .builtin = num_kind } };
+                        if (self.env.idents.numKindFromTypeIdent(final_type_name)) |num_kind| break :blk .{ .resolved = .{ .builtin = num_kind } };
                     }
                     break :blk .{ .resolved = .{ .external = .{
                         .import_idx = external.import_idx,
@@ -8118,15 +8103,14 @@ fn parseSingleQuoteCodepoint(
 
     if (escaped) {
         const c = inner_text[1];
-        // The tokenizer validated this escape against the shared alphabet, so
-        // every byte here is in the table's domain.
-        switch (escape.lookup(c) orelse unreachable) {
+        const escape_kind = escape.lookup(c) orelse unreachable; // the tokenizer emits a SingleQuote token only after validating its escape against this alphabet
+        switch (escape_kind) {
             .byte => |b| {
                 return b;
             },
             .unicode => {
                 const hex_code = inner_text[3 .. inner_text.len - 1];
-                const codepoint = std.fmt.parseInt(u21, hex_code, 16) catch unreachable;
+                const codepoint = std.fmt.parseInt(u21, hex_code, 16) catch unreachable; // the tokenizer emits a SingleQuote token only after validating its unicode escape's hex digits and range
 
                 std.debug.assert(std.unicode.utf8ValidCodepoint(codepoint));
 
@@ -8134,7 +8118,7 @@ fn parseSingleQuoteCodepoint(
             },
         }
     } else {
-        const view = std.unicode.Utf8View.init(inner_text) catch unreachable;
+        const view = std.unicode.Utf8View.init(inner_text) catch unreachable; // chompSingleQuoteLiteral emits a SingleQuote token only around a valid UTF-8 codepoint
 
         var iterator = view.iterator();
 
@@ -8296,7 +8280,7 @@ pub fn canonicalizeExpr(
     self: *Self,
     ast_expr_idx: AST.Expr.Idx,
 ) std.mem.Allocator.Error!CanonicalizedExpr {
-    return try self.runExprKernel(.{ .expr = ast_expr_idx }) orelse unreachable;
+    return try self.runExprKernel(.{ .expr = ast_expr_idx }) orelse unreachable; // the kernel returns null only for a `.statements` root
 }
 
 fn canonicalizedMalformedExpr(self: *Self, diagnostic: Diagnostic) std.mem.Allocator.Error!CanonicalizedExpr {
@@ -8953,7 +8937,8 @@ fn canonicalizeUnqualifiedIdentExpr(
         },
         .not_found => {
             if (self.scopeLookupExposedItem(ident)) |exposed_info| {
-                const import_idx = self.scopeLookupImportedModule(exposed_info.module_name) orelse unreachable;
+                const import_idx = self.scopeLookupImportedModule(exposed_info.module_name) orelse
+                    base.invariant("canonicalization invariant violated: an exposed item's module has no import in scope", .{});
                 if (exposed_info.target) |target| {
                     if (target.valueDefNode()) |target_node_idx| {
                         return try self.canonicalizedExternalLookup(import_idx, target_node_idx, exposed_info.original_name, region);
@@ -10596,34 +10581,38 @@ fn canonicalizeBlockTypeDeclStatement(
 ) std.mem.Allocator.Error!BlockTypeDeclStatementResult {
     const region = self.parse_ir.tokenizedRegionToRegion(type_decl.region);
 
-    const is_type_var_alias = type_dispatch_check: {
-        if (type_decl.kind != .alias) break :type_dispatch_check false;
-        const ast_header = self.parse_ir.store.getTypeHeader(type_decl.header) catch break :type_dispatch_check false;
+    const type_var_alias: ?struct {
+        header: AST.TypeHeader,
+        type_var_ident: Ident.Idx,
+        type_var_anno: CIR.TypeAnno.Idx,
+    } = type_dispatch_check: {
+        if (type_decl.kind != .alias) break :type_dispatch_check null;
+        const ast_header = self.parse_ir.store.getTypeHeader(type_decl.header) catch break :type_dispatch_check null;
         const header_args = self.parse_ir.store.typeAnnoSlice(ast_header.args);
-        if (header_args.len > 0) break :type_dispatch_check false;
+        if (header_args.len > 0) break :type_dispatch_check null;
 
         const ast_anno = self.parse_ir.store.getTypeAnno(type_decl.anno);
-        if (ast_anno != .ty_var) break :type_dispatch_check false;
+        if (ast_anno != .ty_var) break :type_dispatch_check null;
 
         const type_var_tok = ast_anno.ty_var.tok;
-        const type_var_ident = self.parse_ir.tokens.resolveIdentifier(type_var_tok) orelse break :type_dispatch_check false;
-        const lookup_result = self.scopeLookupTypeVar(type_var_ident);
-        if (lookup_result != .found) break :type_dispatch_check false;
-
-        break :type_dispatch_check true;
-    };
-
-    if (is_type_var_alias) {
-        const ast_header = self.parse_ir.store.getTypeHeader(type_decl.header) catch unreachable;
-        const alias_name = self.parse_ir.tokens.resolveIdentifier(ast_header.name) orelse unreachable;
-
-        const ast_anno = self.parse_ir.store.getTypeAnno(type_decl.anno);
-        const type_var_tok = ast_anno.ty_var.tok;
-        const type_var_ident = self.parse_ir.tokens.resolveIdentifier(type_var_tok) orelse unreachable;
+        const type_var_ident = self.parse_ir.tokens.resolveIdentifier(type_var_tok) orelse break :type_dispatch_check null;
         const type_var_anno = switch (self.scopeLookupTypeVar(type_var_ident)) {
             .found => |anno_idx| anno_idx,
-            .not_found => unreachable,
+            .not_found => break :type_dispatch_check null,
         };
+
+        break :type_dispatch_check .{
+            .header = ast_header,
+            .type_var_ident = type_var_ident,
+            .type_var_anno = type_var_anno,
+        };
+    };
+
+    if (type_var_alias) |var_alias| {
+        const alias_name = self.parse_ir.tokens.resolveIdentifier(var_alias.header.name) orelse
+            base.invariant("canonicalization invariant violated: type alias header name token is not an identifier", .{});
+        const type_var_ident = var_alias.type_var_ident;
+        const type_var_anno = var_alias.type_var_anno;
 
         const stmt_idx = try self.env.addStatement(Statement{ .s_type_var_alias = .{
             .alias_name = alias_name,
@@ -11722,7 +11711,7 @@ fn runExprKernel(
                                 const earlier = self.parse_ir.store.getRecordField(earlier_idx);
                                 const earlier_name = self.parse_ir.tokens.resolveIdentifier(earlier.name).?;
                                 if (field_name.eql(earlier_name)) break self.parse_ir.tokens.resolve(earlier.name);
-                            } else unreachable;
+                            } else unreachable; // field_work holds only earlier fields' names, and is_duplicate found this name there
                             last_duplicate_diag = try self.env.addDiagnostic(Diagnostic{ .duplicate_record_field = .{
                                 .field_name = field_name,
                                 .duplicate_region = self.parse_ir.tokens.resolve(field.name),
@@ -12064,7 +12053,7 @@ fn runExprKernel(
                     const free_vars_start = self.scratch_free_vars.top();
                     const right_expr = self.parse_ir.store.getExpr(e.right);
                     if (e.target_kind == .method_call) {
-                        if (right_expr != .method_call) unreachable;
+                        if (right_expr != .method_call) base.invariant("canonicalization invariant violated: a method-call pipe target is not a method call", .{});
                         const method = right_expr.method_call;
                         const method_name = self.parse_ir.tokens.resolveIdentifier(method.method_token) orelse {
                             const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
@@ -12427,7 +12416,7 @@ fn runExprKernel(
                         });
                         try stacks.push(.parse, frame_allocator, .{ .idx = crash_stmt.expr, .target = .scratch });
                     },
-                    .decl, .@"var", .expect, .@"for", .@"while", .@"break", .import, .file_import, .type_decl, .type_anno, .malformed => unreachable,
+                    .decl, .@"var", .expect, .@"for", .@"while", .@"break", .import, .file_import, .type_decl, .type_anno, .malformed => unreachable, // the enclosing `if` admits only expr, dbg, return, and crash
                 }
                 continue :expr_kernel_loop .dispatch;
             }
@@ -13364,7 +13353,7 @@ fn runExprKernel(
             else if (operator_token.tag == .OpBang)
                 try self.addBoolNotCall(can_operand.idx, state.region)
             else
-                unreachable;
+                unreachable; // finish_unary is pushed only for OpUnaryMinus and OpBang operators
 
             child_slots.shrinkRetainingCapacity(result_start);
             try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = can_operand.free_vars, .diverges = can_operand.diverges });
@@ -13540,7 +13529,7 @@ fn runExprKernel(
             switch (try self.resolveIdentExpr(state.callee)) {
                 .tag_member => |access| {
                     // A method call's receiver precedes its piped argument.
-                    const piped = child_slots.pop() orelse unreachable;
+                    const piped = child_slots.pop() orelse unreachable; // arrow_ident_callee runs after the piped argument pushed above it stored its result slot
                     try child_slots.append(frame_allocator, .{ .expr = access.receiver });
                     try child_slots.append(frame_allocator, piped);
                     try stacks.push(.finish_method_call, frame_allocator, .{
@@ -13714,7 +13703,8 @@ fn runExprKernel(
             errdefer if (!path_finished) self.env.rollbackFieldAccessPath(path_builder);
 
             for (ast_segments) |ast_segment| {
-                const field_name = self.parse_ir.tokens.resolveIdentifier(ast_segment.field_token) orelse unreachable;
+                const field_name = self.parse_ir.tokens.resolveIdentifier(ast_segment.field_token) orelse
+                    base.invariant("canonicalization invariant violated: a field access segment token is not an identifier", .{});
                 const field_region = self.parse_ir.tokens.resolve(ast_segment.field_token);
                 _ = self.env.appendFieldAccessPathSegmentAssumeCapacity(path_builder, .{
                     .name = field_name,
@@ -14012,7 +14002,8 @@ fn runExprKernel(
             const capture_info: Expr.Capture.Span = blk: {
                 const scratch_start = self.env.store.scratch.?.captures.top();
                 for (captures_slice) |pattern_idx| {
-                    const name = self.boundPatternIdent(pattern_idx) orelse unreachable;
+                    const name = self.boundPatternIdent(pattern_idx) orelse
+                        base.invariant("canonicalization invariant violated: a captured pattern binds no identifier", .{});
                     const capture = Expr.Capture{
                         .name = name,
                         .pattern_idx = pattern_idx,
@@ -14522,8 +14513,10 @@ fn runExprKernel(
 /// the operand's type and any source declarations shadowing Bool.
 fn addBoolNotCall(self: *Self, operand: Expr.Idx, region: Region) std.mem.Allocator.Error!Expr.Idx {
     const callee = if (self.builtin_auto_imported_types.get(self.env.idents.bool)) |bool_info| blk: {
-        const bool_stmt = bool_info.statement_idx orelse unreachable;
-        const type_node = bool_info.env.getExposedNodeIndexByStatementIdx(bool_stmt) orelse unreachable;
+        const bool_stmt = bool_info.statement_idx orelse
+            base.invariant("compiler invariant violated: auto-imported builtin type Bool has no declaration", .{});
+        const type_node = bool_info.env.getExposedNodeIndexByStatementIdx(bool_stmt) orelse
+            base.invariant("compiler invariant violated: auto-imported builtin type Bool has no exposed node", .{});
         break :blk try self.canonicalizedExternalAssociatedLookup(
             try self.getOrCreateCompilerBuiltinAutoImport(),
             type_node,
@@ -14535,9 +14528,11 @@ fn addBoolNotCall(self: *Self, operand: Expr.Idx, region: Region) std.mem.Alloca
         // Builtin.roc refers to its own Bool declaration, including forward
         // references from definitions that precede Bool.not.
         const builtin_ident = try self.env.insertIdent(Ident.for_text("Builtin"));
-        const owner_path = self.moduleParserTypePathForSegments(&.{ builtin_ident, self.env.idents.bool }) orelse unreachable;
+        const owner_path = self.moduleParserTypePathForSegments(&.{ builtin_ident, self.env.idents.bool }) orelse
+            base.invariant("compiler invariant violated: Builtin.roc has no Builtin.Bool type path", .{});
         const qualified = try self.insertQualifiedIdent("Builtin.Bool", "not");
-        const pattern = (try self.lookupOrCreateAssocValuePattern(owner_path, self.env.idents.not, qualified, region)) orelse unreachable;
+        const pattern = (try self.lookupOrCreateAssocValuePattern(owner_path, self.env.idents.not, qualified, region)) orelse
+            base.invariant("compiler invariant violated: Builtin.roc has no Builtin.Bool.not value", .{});
         break :blk try self.canonicalizedAssociatedLookup(owner_path, self.env.idents.not, pattern, region);
     };
     const args_start = self.env.store.scratchExprTop();
@@ -14670,7 +14665,8 @@ fn resolveRecordBuilderMap2(
     // through the `where` clause, which the checker's record-builder `map2`
     // return rule does not cover.
     if (mapper.qualifiers.span.len == 0) {
-        const type_ident = self.parse_ir.tokens.resolveIdentifier(mapper.token) orelse unreachable;
+        const type_ident = self.parse_ir.tokens.resolveIdentifier(mapper.token) orelse
+            base.invariant("canonicalization invariant violated: a record builder mapper token is not an identifier", .{});
         if ((try self.typeDispatchOwnerStatement(type_ident, map2_name)) != null) {
             return .{ .malformed = .{ .not_implemented = .{
                 .feature = try self.env.insertString("record builder on a type variable alias"),
@@ -15436,7 +15432,7 @@ fn finishTagExprWithArgs(
         // Get the qualifier token
         const qualifier_toks = self.parse_ir.store.tokenSlice(e.qualifiers);
         const type_tok_idx = qualifier_toks[0];
-        const type_tok_ident = self.parse_ir.tokens.resolveIdentifier(type_tok_idx) orelse unreachable;
+        const type_tok_ident = self.parse_ir.tokens.resolveIdentifier(type_tok_idx) orelse unreachable; // the parser builds token spans only from identifier tokens
         const type_tok_region = self.parse_ir.tokens.resolve(type_tok_idx);
 
         // First, try to lookup the type as a local declaration
@@ -15622,7 +15618,7 @@ fn finishTagExprWithArgs(
 
         // Check if the first qualifier is an imported name
         const first_tok_idx = qualifier_toks[0];
-        const first_tok_ident = self.parse_ir.tokens.resolveIdentifier(first_tok_idx) orelse unreachable;
+        const first_tok_ident = self.parse_ir.tokens.resolveIdentifier(first_tok_idx) orelse unreachable; // the parser builds token spans only from identifier tokens
         const is_imported = (try self.scopeLookupOrPrepareModule(first_tok_ident)) != null;
 
         // Build the full qualified type name from ALL qualifiers (the tag name is separate in e.token)
@@ -15883,7 +15879,7 @@ fn introduceStringPatternCapture(
                 .region = region,
             } });
         },
-        .var_reassigned_in_expect, .var_reassignment_ok => unreachable,
+        .var_reassigned_in_expect, .var_reassignment_ok => unreachable, // is_declaration is true, and these results require a non-declaration
     }
 
     return pattern_idx;
@@ -16039,7 +16035,7 @@ fn desugarInterpolatedString(
     defer gpa.free(tmp_patterns);
     for (interps.items, 0..) |interp_idx, i| {
         var name_buf: [32]u8 = undefined;
-        const name = std.fmt.bufPrint(&name_buf, "#interp_{d}", .{self.interp_tmp_counter}) catch unreachable;
+        const name = std.fmt.bufPrint(&name_buf, "#interp_{d}", .{self.interp_tmp_counter}) catch unreachable; // "#interp_" plus at most 10 digits of a u32 fits in 32 bytes
         self.interp_tmp_counter += 1;
         const tmp_ident = try self.env.insertIdent(Ident.for_text(name));
         const interp_region = self.env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(interp_idx));
@@ -16157,7 +16153,8 @@ fn adoptValueForwardReference(
     std.debug.assert(parser_decl.pattern == @backingInt(ast_pattern_idx));
     const ast_pattern = self.parse_ir.store.getPattern(ast_pattern_idx);
     if (ast_pattern != .ident) return null;
-    const ident = self.parse_ir.tokens.resolveIdentifier(ast_pattern.ident.ident_tok) orelse unreachable;
+    const ident = self.parse_ir.tokens.resolveIdentifier(ast_pattern.ident.ident_tok) orelse
+        base.invariant("canonicalization invariant violated: an identifier pattern token is not an identifier", .{});
     const placeholder = (try self.takeValueForwardReference(parser_decl_idx, ident)) orelse return null;
     self.env.store.setRegionAt(ModuleEnv.nodeIdxFrom(placeholder), self.parse_ir.tokenizedRegionToRegion(ast_pattern.ident.region));
     return placeholder;
@@ -16198,7 +16195,7 @@ fn finishTagPattern(
         // Get the last token of the qualifiers
         const qualifier_toks = self.parse_ir.store.tokenSlice(qualifiers);
         const type_tok_idx = qualifier_toks[0];
-        const type_tok_ident = self.parse_ir.tokens.resolveIdentifier(type_tok_idx) orelse unreachable;
+        const type_tok_ident = self.parse_ir.tokens.resolveIdentifier(type_tok_idx) orelse unreachable; // the parser builds token spans only from identifier tokens
         const type_tok_region = self.parse_ir.tokens.resolve(type_tok_idx);
 
         // Lookup the type ident in scope
@@ -16324,7 +16321,7 @@ fn finishTagPattern(
         // exposed-node facts; otherwise resolve the full path locally.
         const qualifier_toks = self.parse_ir.store.tokenSlice(qualifiers);
         const first_tok_idx = qualifier_toks[0];
-        const first_tok_ident = self.parse_ir.tokens.resolveIdentifier(first_tok_idx) orelse unreachable;
+        const first_tok_ident = self.parse_ir.tokens.resolveIdentifier(first_tok_idx) orelse unreachable; // the parser builds token spans only from identifier tokens
         const type_tok_idx = qualifier_toks[qualifier_toks.len - 1];
         const type_tok_region = self.parse_ir.tokens.resolve(type_tok_idx);
 
@@ -17259,7 +17256,7 @@ const ExprKernelWork = struct {
 
     inline fn popLabel(self: *ExprKernelWork) ?ExprKernelLabel {
         const label = self.work.popLabel() orelse return null;
-        self.current_target = self.targets.pop() orelse unreachable;
+        self.current_target = self.targets.pop() orelse unreachable; // push appends one target for every work item it pushes
         return label;
     }
 
@@ -17966,8 +17963,7 @@ fn canonicalizePatternInGroup(
                                         .region = list_rest_region,
                                     } });
                                 },
-                                // List rest patterns are always declarations, never reassignments
-                                .var_reassigned_in_expect, .var_reassignment_ok => unreachable,
+                                .var_reassigned_in_expect, .var_reassignment_ok => unreachable, // a list rest pattern is introduced as a declaration, never a reassignment
                             }
                         }
 
@@ -18093,8 +18089,7 @@ fn canonicalizePatternInGroup(
                             } });
                             continue :patternkernel_loop .dispatch;
                         },
-                        // As patterns are always declarations, never reassignments
-                        .var_reassigned_in_expect, .var_reassignment_ok => unreachable,
+                        .var_reassigned_in_expect, .var_reassignment_ok => unreachable, // an as pattern is introduced as a declaration, never a reassignment
                     }
                 }
 
@@ -18754,7 +18749,7 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
         },
         .parens_after_inner => {
             const region = stacks.take(.parens_after_inner);
-            const inner_anno = last orelse unreachable;
+            const inner_anno = last orelse unreachable; // every .parse item sets `last` before the work pushed beneath it resumes
             last = try self.env.addTypeAnno(.{ .parens = .{
                 .anno = inner_anno,
             } }, region);
@@ -18803,7 +18798,7 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
         },
         .apply_args_after => {
             const state = stacks.take(.apply_args_after);
-            const arg_anno_idx = last orelse unreachable;
+            const arg_anno_idx = last orelse unreachable; // every .parse item sets `last` before the work pushed beneath it resumes
             try self.env.store.addScratchTypeAnno(arg_anno_idx);
             try stacks.push(.apply_args_next, frame_allocator, .{
                 .region = state.region,
@@ -18840,7 +18835,7 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
         },
         .tuple_after_elem => {
             const state = stacks.take(.tuple_after_elem);
-            const elem_idx = last orelse unreachable;
+            const elem_idx = last orelse unreachable; // every .parse item sets `last` before the work pushed beneath it resumes
             try self.env.store.addScratchTypeAnno(elem_idx);
             try self.scratch_vars.append(ModuleEnv.varFrom(elem_idx));
             try stacks.push(.tuple_next, frame_allocator, .{
@@ -19021,7 +19016,7 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
         },
         .record_after_field => {
             const state = stacks.take(.record_after_field);
-            const canonicalized_ty = last orelse unreachable;
+            const canonicalized_ty = last orelse unreachable; // every .parse item sets `last` before the work pushed beneath it resumes
             // Canonicalize the default value expression: any PURE
             // expression, an ordinary expression in the enclosing (module
             // top-level) scope. The checker types it against the field's
@@ -19053,7 +19048,7 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
         },
         .record_after_named_ext => {
             const state = stacks.take(.record_after_named_ext);
-            const ext = last orelse unreachable;
+            const ext = last orelse unreachable; // every .parse item sets `last` before the work pushed beneath it resumes
             self.env.store.clearScratchAnnoRecordFieldsFrom(state.scratch_top);
             self.scratch_seen_record_fields.clearFrom(state.scratch_seen_record_fields_top);
             last = try self.env.addTypeAnno(.{ .record = .{
@@ -19065,7 +19060,7 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
         },
         .tag_union_after_named_ext => {
             const state = stacks.take(.tag_union_after_named_ext);
-            const ext = last orelse unreachable;
+            const ext = last orelse unreachable; // every .parse item sets `last` before the work pushed beneath it resumes
             try stacks.push(.tag_union_tags_next, frame_allocator, .{
                 .tag_union = state.tag_union,
                 .region = state.region,
@@ -19104,7 +19099,7 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
         },
         .tag_union_tag_after => {
             const state = stacks.take(.tag_union_tag_after);
-            const tag_idx = last orelse unreachable;
+            const tag_idx = last orelse unreachable; // every .tag_parse item sets `last` before the work pushed beneath it resumes
             var found_duplicate = false;
             const tag_anno = self.env.store.getTypeAnno(tag_idx);
             if (tag_anno == .tag) {
@@ -19229,7 +19224,7 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
         },
         .tag_args_after => {
             const state = stacks.take(.tag_args_after);
-            const arg_idx = last orelse unreachable;
+            const arg_idx = last orelse unreachable; // every .parse item sets `last` before the work pushed beneath it resumes
             try self.env.store.addScratchTypeAnno(arg_idx);
             try stacks.push(.tag_args_next, frame_allocator, .{
                 .region = state.region,
@@ -19267,7 +19262,7 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
         },
         .func_args_after => {
             const state = stacks.take(.func_args_after);
-            const arg_anno_idx = last orelse unreachable;
+            const arg_anno_idx = last orelse unreachable; // every .parse item sets `last` before the work pushed beneath it resumes
             try self.env.store.addScratchTypeAnno(arg_anno_idx);
             try stacks.push(.func_args_next, frame_allocator, .{
                 .func = state.func,
@@ -19280,7 +19275,7 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
         },
         .func_after_ret => {
             const state = stacks.take(.func_after_ret);
-            const ret_anno_idx = last orelse unreachable;
+            const ret_anno_idx = last orelse unreachable; // every .parse item sets `last` before the work pushed beneath it resumes
             self.env.store.clearScratchTypeAnnosFrom(state.scratch_top);
             last = try self.env.addTypeAnno(.{ .@"fn" = .{
                 .args = state.args_span,
@@ -19343,7 +19338,8 @@ fn resolveTypePath(
     const qualifier_toks = self.parse_ir.store.tokenSlice(qualifiers);
 
     // Get the type ident
-    const type_name_ident = self.parse_ir.tokens.resolveIdentifier(token) orelse unreachable;
+    const type_name_ident = self.parse_ir.tokens.resolveIdentifier(token) orelse
+        base.invariant("canonicalization invariant violated: a type name token is not an identifier", .{});
     const type_name_region = self.parse_ir.tokens.resolve(token);
 
     if (qualifier_toks.len == 0) {
@@ -19503,7 +19499,8 @@ fn resolveQualifiedTypeName(
 ) std.mem.Allocator.Error!QualifiedTypeResolution {
     const qualifier_toks = self.parse_ir.store.tokenSlice(qualifiers);
     std.debug.assert(qualifier_toks.len > 0);
-    const type_name_ident = self.parse_ir.tokens.resolveIdentifier(final_token) orelse unreachable;
+    const type_name_ident = self.parse_ir.tokens.resolveIdentifier(final_token) orelse
+        base.invariant("canonicalization invariant violated: the final token of a qualified type name is not an identifier", .{});
     const type_name_region = self.parse_ir.tokens.resolve(final_token);
 
     // A local associated type (e.g., Foo.Bar) is in scope under its full qualified name.
@@ -19511,7 +19508,7 @@ fn resolveQualifiedTypeName(
         return .{ .found = .{ .name = qualified_name_ident, .target = .{ .local = type_decl_idx } } };
     }
 
-    const first_qualifier_ident = self.parse_ir.tokens.resolveIdentifier(qualifier_toks[0]) orelse unreachable;
+    const first_qualifier_ident = self.parse_ir.tokens.resolveIdentifier(qualifier_toks[0]) orelse unreachable; // the parser builds token spans only from identifier tokens
     if (self.lookupBuiltinAutoImportedType(first_qualifier_ident)) |auto_imported_type| {
         if (try self.lookupNestedAutoImportedTypeNode(auto_imported_type, first_qualifier_ident, self.env.getIdent(qualified_name_ident))) |target_node_idx| {
             const import_idx = try self.getOrCreateAutoImportedTypeImport(auto_imported_type);
@@ -20228,7 +20225,7 @@ fn recordScopeExitError(self: *Self, err: Scope.Error) void {
         error.NotInScope,
         error.TopLevelVarError,
         error.VarAcrossFunctionBoundary,
-        => unreachable,
+        => unreachable, // every scopeExit pops a scope its matching scopeEnter pushed, which can fail only with OutOfMemory
         error.OutOfMemory => self.scope_exit_oom = true,
     }
 }
@@ -21061,9 +21058,7 @@ fn getOrCreateAutoImportIdent(self: *Self, module_ident: Ident.Idx) std.mem.Allo
 /// declaration's constraints resolve against it.
 fn canonicalizeWhereAliasReceiver(self: *Self, ast_anno_idx: AST.TypeAnno.Idx) std.mem.Allocator.Error!TypeAnno.Idx {
     const ast_anno = self.parse_ir.store.getTypeAnno(ast_anno_idx);
-    // The parser only builds a where alias declaration from a lowercase
-    // receiver token, so anything else is a compiler bug.
-    if (ast_anno != .ty_var) unreachable;
+    if (ast_anno != .ty_var) unreachable; // the parser builds a where alias declaration only from a lowercase receiver token
     const receiver = ast_anno.ty_var;
     const region = self.parse_ir.tokenizedRegionToRegion(receiver.region);
     const name = self.parse_ir.tokens.resolveIdentifier(receiver.tok) orelse {
@@ -21086,8 +21081,7 @@ fn canonicalizeWhereAliasClauses(
     header_idx: CIR.TypeHeader.Idx,
     receiver: TypeAnno.Idx,
 ) std.mem.Allocator.Error!CIR.WhereClause.Span {
-    // The parser only builds a where alias declaration from a `where` clause.
-    const where_coll = type_decl.where orelse unreachable;
+    const where_coll = type_decl.where orelse unreachable; // the parser builds a where alias declaration only from a `where` clause
     const where_slice = self.parse_ir.store.whereClauseSlice(.{ .span = self.parse_ir.store.getCollection(where_coll).span });
     const where_start = self.env.store.scratchWhereClauseTop();
 
@@ -21580,12 +21574,8 @@ fn exposeTopLevelTypesForExplicitRoots(self: *Self) std.mem.Allocator.Error!void
         if (declIndexTypeKind(decl.kind) == null) continue;
         const type_ident = decl.name_ident orelse continue;
         const stmt_id: AST.Statement.Idx = @fromBackingInt(@intCast(decl.statement));
-        const stmt_idx = self.parserTypeDeclStatement(stmt_id) orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("explicit-root invariant violated: missing canonical statement for AST type decl {d}", .{@backingInt(stmt_id)});
-            }
-            unreachable;
-        };
+        const stmt_idx = self.parserTypeDeclStatement(stmt_id) orelse
+            base.invariant("explicit-root invariant violated: missing canonical statement for AST type decl {d}", .{@backingInt(stmt_id)});
 
         try self.env.setExposedTypeNodeIndexById(type_ident, @backingInt(stmt_idx));
     }
