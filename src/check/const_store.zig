@@ -522,10 +522,32 @@ const StoredFn = struct {
     evidence_frame_head: ?u32 = null,
 };
 
+/// A type node as `ConstTypeStore` keeps it: `ConstType` with its two large
+/// payloads, `named` and `erased`, held out of line by index, so a node takes
+/// a few words rather than the size of the largest payload.
+pub const StoredConstType = union(enum) {
+    primitive: Primitive,
+    named: u32,
+    record: ConstRange,
+    tuple: ConstRange,
+    tag_union: ConstRange,
+    list: ConstTypeId,
+    box: ConstTypeId,
+    func: @FieldType(ConstType, "func"),
+    erased: u32,
+    zst,
+};
+
+/// Payload of a `named` const type node.
+pub const ConstNamedType = @FieldType(ConstType, "named");
+
 /// Store of monomorphic type evidence attached to compile-time constants.
 pub const ConstTypeStore = struct {
     allocator: Allocator,
-    types: std.ArrayList(ConstType),
+    types: std.ArrayList(StoredConstType),
+    /// Out-of-line payloads of `named` and `erased` nodes.
+    named_pool: std.ArrayList(ConstNamedType),
+    erased_pool: std.ArrayList(names.TypeDigest),
     /// Flat pool of `ConstTypeId`s for tuple/function args and tag payloads.
     type_pool: std.ArrayList(ConstTypeId),
     /// Flat pool of record fields.
@@ -541,6 +563,8 @@ pub const ConstTypeStore = struct {
         return .{
             .allocator = allocator,
             .types = .empty,
+            .named_pool = .empty,
+            .erased_pool = .empty,
             .type_pool = .empty,
             .field_pool = .empty,
             .tag_pool = .empty,
@@ -554,14 +578,31 @@ pub const ConstTypeStore = struct {
         return id;
     }
 
-    pub fn fill(self: *ConstTypeStore, id: ConstTypeId, ty: ConstType) void {
-        self.types.items[@backingInt(id)] = ty;
+    /// Install the content of a node `reserve` returned.
+    pub fn fill(self: *ConstTypeStore, id: ConstTypeId, ty: ConstType) Allocator.Error!void {
+        self.types.items[@backingInt(id)] = switch (ty) {
+            .named => |named| blk: {
+                const index: u32 = @intCast(self.named_pool.items.len);
+                try self.named_pool.append(self.allocator, named);
+                break :blk .{ .named = index };
+            },
+            .erased => |digest| blk: {
+                const index: u32 = @intCast(self.erased_pool.items.len);
+                try self.erased_pool.append(self.allocator, digest);
+                break :blk .{ .erased = index };
+            },
+            inline .primitive, .record, .tuple, .tag_union, .list, .box, .func, .zst => |payload, tag| @unionInit(StoredConstType, @tagName(tag), payload),
+        };
     }
 
     pub fn append(self: *ConstTypeStore, ty: ConstType) Allocator.Error!ConstTypeId {
         const id = try self.reserve();
-        self.fill(id, ty);
+        try self.fill(id, ty);
         return id;
+    }
+
+    pub fn typeCount(self: *const ConstTypeStore) usize {
+        return self.types.items.len;
     }
 
     pub fn appendTypeSpan(self: *ConstTypeStore, ids: []const ConstTypeId) Allocator.Error!ConstRange {
@@ -581,7 +622,11 @@ pub const ConstTypeStore = struct {
     }
 
     pub fn get(self: *const ConstTypeStore, id: ConstTypeId) ConstType {
-        return self.types.items[@backingInt(id)];
+        return switch (self.types.items[@backingInt(id)]) {
+            .named => |index| .{ .named = self.named_pool.items[index] },
+            .erased => |index| .{ .erased = self.erased_pool.items[index] },
+            inline .primitive, .record, .tuple, .tag_union, .list, .box, .func, .zst => |payload, tag| @unionInit(ConstType, @tagName(tag), payload),
+        };
     }
 
     pub fn typeSpan(self: *const ConstTypeStore, range: ConstRange) []const ConstTypeId {
@@ -716,15 +761,15 @@ pub const ConstTypeStore = struct {
         const ops = &frame.ops;
         switch (source.get(ty)) {
             .primitive => |primitive| {
-                self.fill(out, .{ .primitive = primitive });
+                try self.fill(out, .{ .primitive = primitive });
                 return out;
             },
             .zst => {
-                self.fill(out, .zst);
+                try self.fill(out, .zst);
                 return out;
             },
             .erased => |erased| {
-                self.fill(out, .{ .erased = erased });
+                try self.fill(out, .{ .erased = erased });
                 return out;
             },
             .list, .box => |elem| try ops.append(self.allocator, .{ .child = elem }),
@@ -844,7 +889,7 @@ pub const ConstTypeStore = struct {
                 } };
             },
         };
-        self.fill(frame.out, cloned);
+        try self.fill(frame.out, cloned);
     }
 
     fn translateRecordFieldName(name_translation: ?NameTranslation, id: names.RecordFieldNameId) Allocator.Error!names.RecordFieldNameId {
@@ -891,14 +936,16 @@ pub const ConstTypeStore = struct {
     }
 
     pub const Serialized = extern struct {
-        types: artifact_serialize.SerializedSlice(ConstType) = .{},
+        types: artifact_serialize.SerializedSlice(StoredConstType) = .{},
+        named_pool: artifact_serialize.SerializedSlice(ConstNamedType) = .{},
+        erased_pool: artifact_serialize.SerializedSlice(names.TypeDigest) = .{},
         type_pool: artifact_serialize.SerializedSlice(ConstTypeId) = .{},
         field_pool: artifact_serialize.SerializedSlice(TypeField) = .{},
         tag_pool: artifact_serialize.SerializedSlice(TypeTag) = .{},
         declared_field_pool: artifact_serialize.SerializedSlice(TypeDeclaredField) = .{},
 
         comptime {
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 5);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 7);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(ConstTypeStore, @This());
@@ -910,6 +957,8 @@ pub const ConstTypeStore = struct {
     pub fn deinit(self: *ConstTypeStore) void {
         if (!self.serialized) {
             self.types.deinit(self.allocator);
+            self.named_pool.deinit(self.allocator);
+            self.erased_pool.deinit(self.allocator);
             self.type_pool.deinit(self.allocator);
             self.field_pool.deinit(self.allocator);
             self.tag_pool.deinit(self.allocator);
@@ -1270,7 +1319,7 @@ pub const ConstStore = struct {
 
         comptime {
             // 9 value/function side lists + 5 nested type-store lists.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 14);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 16);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(ConstStore, @This());
@@ -1444,7 +1493,7 @@ pub const ConstStore = struct {
                 try pending.append(self.allocator, .{ .exit_fn = index });
                 const mark = pending.items.len;
                 for (self.getFn(node.id).captures) |capture| {
-                    if (@backingInt(capture.ty) >= self.type_store.types.items.len) {
+                    if (@backingInt(capture.ty) >= self.type_store.typeCount()) {
                         constStoreInvariant("completed store contains an out-of-range capture type id");
                     }
                     try pending.append(self.allocator, .{ .value = .{ .id = capture.value, .delayed_depth = node.delayed_depth + 1 } });

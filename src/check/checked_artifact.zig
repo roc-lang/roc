@@ -33337,7 +33337,7 @@ pub const CheckedModuleArtifact = struct {
             // procedure templates and callable contract types add one each,
             // and the single-source-call template list one more. Nested procedure runtime captures add one. The
             // compile-time root read table adds its rows and refs.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 234);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 236);
         }
 
         /// Every field but the inline POD `key` and `module_identity`: the
@@ -34975,7 +34975,7 @@ pub const CheckedModuleArtifact = struct {
                 },
                 .stored_const => |stored| {
                     std.debug.assert(@backingInt(stored.node) < self.const_store.values.items.len);
-                    std.debug.assert(@backingInt(stored.root_type) < self.const_store.type_store.types.items.len);
+                    std.debug.assert(@backingInt(stored.root_type) < self.const_store.type_store.typeCount());
                 },
                 .reserved => base.invariant(
                     "checked artifact invariant violated: exported const template was not sealed",
@@ -35181,7 +35181,7 @@ pub const CheckedModuleArtifact = struct {
             switch (template.state) {
                 .stored_const => |stored| {
                     std.debug.assert(@backingInt(stored.node) < self.const_store.values.items.len);
-                    std.debug.assert(@backingInt(stored.root_type) < self.const_store.type_store.types.items.len);
+                    std.debug.assert(@backingInt(stored.root_type) < self.const_store.type_store.typeCount());
                 },
                 .eval_template, .reserved, .unimplemented => {},
             }
@@ -39495,8 +39495,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x71, 0x5E, 0xCC, 0xB2, 0x11, 0x5C, 0x97, 0x61, 0xDF, 0x0E, 0x72, 0xC0, 0x6F, 0x31, 0x2C, 0x4E,
-        0x63, 0xC4, 0x8D, 0x4D, 0x8B, 0xA9, 0xBA, 0x2F, 0xF6, 0x6B, 0x3D, 0x31, 0x43, 0xEE, 0xE8, 0x20,
+        0x41, 0xD0, 0x64, 0xE5, 0x74, 0x7F, 0x5C, 0xCF, 0xFA, 0x61, 0x50, 0xC0, 0xDC, 0x23, 0x28, 0x36,
+        0x78, 0x52, 0x4B, 0x2E, 0xA7, 0x04, 0xD9, 0x8F, 0x57, 0xAE, 0x06, 0x33, 0xCE, 0xAF, 0x0E, 0x4D,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

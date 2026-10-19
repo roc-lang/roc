@@ -71631,7 +71631,7 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
         .args = .{},
         .backing = .{ .ty = recursive, .use = .inspectable },
     } });
-    stored_types.fill(recursive, .{ .tuple = try stored_types.appendTypeSpan(&.{recursive_alias}) });
+    try stored_types.fill(recursive, .{ .tuple = try stored_types.appendTypeSpan(&.{recursive_alias}) });
     const root = try stored_types.append(.{ .tuple = try stored_types.appendTypeSpan(&.{ alias, nominal, str, recursive_alias }) });
 
     var program = Ast.Program.init(gpa);
