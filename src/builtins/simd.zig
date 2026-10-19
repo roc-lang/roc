@@ -430,9 +430,150 @@ fn carryless(a: u64, b: u64) u128 {
     return out;
 }
 
+/// The lane-wise operations whose lane semantics coincide with Zig's vector
+/// operators, so they are evaluated as one vector operation per call.
+const VectorLaneOp = enum {
+    add_wrap,
+    sub_wrap,
+    add_sat,
+    sub_sat,
+    neg_wrap,
+    abs_wrap,
+    min,
+    max,
+    abs_diff,
+    avg_rounded,
+    mul_wrap,
+    eq_lanes,
+    gt_lanes,
+    gte_lanes,
+    shl_wrap,
+    shr_wrap,
+    shr_zf_wrap,
+};
+
+fn vectorLaneOp(op: Op) ?VectorLaneOp {
+    return switch (op) {
+        .add_wrap => .add_wrap,
+        .sub_wrap => .sub_wrap,
+        .add_sat => .add_sat,
+        .sub_sat => .sub_sat,
+        .neg_wrap => .neg_wrap,
+        .abs_wrap => .abs_wrap,
+        .min => .min,
+        .max => .max,
+        .abs_diff => .abs_diff,
+        .avg_rounded => .avg_rounded,
+        .mul_wrap => .mul_wrap,
+        .eq_lanes => .eq_lanes,
+        .gt_lanes => .gt_lanes,
+        .gte_lanes => .gte_lanes,
+        .shl_wrap => .shl_wrap,
+        .shr_wrap => .shr_wrap,
+        .shr_zf_wrap => .shr_zf_wrap,
+        .load_16_unchecked,
+        .store_16_unchecked,
+        .append_16,
+        .splat,
+        .get_lane_unchecked,
+        .with_lane_unchecked,
+        .to_u128_bits,
+        .from_u128_bits,
+        .mul_high,
+        .mul_q15_sat,
+        .mul_wide_lo,
+        .mul_wide_hi,
+        .dot_pairs,
+        .dot_pairs_sat,
+        .sad,
+        .@"and",
+        .@"or",
+        .xor,
+        .not,
+        .bit_select,
+        .bitmask,
+        .shr_rounded,
+        .interleave_lo,
+        .interleave_hi,
+        .even_lanes,
+        .odd_lanes,
+        .reverse_lanes,
+        .table_lookup,
+        .concat_shift_bytes,
+        .widen_lo,
+        .widen_hi,
+        .pairwise_add_widen,
+        .narrow_wrap,
+        .narrow_sat,
+        .sum_lanes,
+        .sum_lanes_wrap,
+        .clmul_lo,
+        .clmul_hi,
+        => null,
+    };
+}
+
+/// `getLane` numbers lanes from the low bits, which is vector element order
+/// only when a `u128` and a vector share little-endian memory layout.
+const vector_lanes_match_bits = @import("builtin").cpu.arch.endian() == .little;
+
+fn evalVectorLaneOp(op: VectorLaneOp, kind: Kind, a: u128, b: u128) u128 {
+    switch (kind) {
+        inline .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => |k| {
+            const lanes = comptime k.laneCount();
+            const bits = comptime k.laneBits();
+            const U = @Int(.unsigned, bits);
+            const S = @Int(.signed, bits);
+            const Lane = if (comptime k.isSigned()) S else U;
+            const UV = @Vector(lanes, U);
+            const SV = @Vector(lanes, S);
+            const LV = @Vector(lanes, Lane);
+            const ua: UV = @bitCast(a);
+            const ub: UV = @bitCast(b);
+            const la: LV = @bitCast(a);
+            const lb: LV = @bitCast(b);
+            const all_ones: UV = @splat(std.math.maxInt(U));
+            const zeros: UV = @splat(0);
+            const count: @Vector(lanes, std.math.Log2Int(U)) = @splat(@intCast(@as(u64, @truncate(b)) % bits));
+            const result: UV = switch (op) {
+                .add_wrap => ua +% ub,
+                .sub_wrap => ua -% ub,
+                .mul_wrap => ua *% ub,
+                .add_sat => @bitCast(la +| lb),
+                .sub_sat => @bitCast(la -| lb),
+                .neg_wrap => zeros -% ua,
+                .abs_wrap => blk: {
+                    const sa: SV = @bitCast(a);
+                    break :blk @select(U, sa < @as(SV, @splat(0)), zeros -% ua, ua);
+                },
+                .min => @bitCast(@min(la, lb)),
+                .max => @bitCast(@max(la, lb)),
+                .abs_diff => @select(U, ua >= ub, ua -% ub, ub -% ua),
+                .avg_rounded => (ua >> @splat(1)) +% (ub >> @splat(1)) +% ((ua | ub) & @as(UV, @splat(1))),
+                .eq_lanes => @select(U, ua == ub, all_ones, zeros),
+                .gt_lanes => @select(U, la > lb, all_ones, zeros),
+                .gte_lanes => @select(U, la >= lb, all_ones, zeros),
+                .shl_wrap => ua << count,
+                .shr_wrap => @bitCast(la >> count),
+                .shr_zf_wrap => ua >> count,
+            };
+            return @bitCast(result);
+        },
+    }
+}
+
 /// Evaluate a non-memory SIMD low-level operation. Scalar arguments occupy the
 /// low bits of `a`, `b`, or `c`, exactly like their Roc scalar representation.
 pub fn eval(op: Op, arg_kind: Kind, ret_kind: Kind, a: u128, b: u128, c: u128) u128 {
+    if (comptime vector_lanes_match_bits) {
+        if (vectorLaneOp(op)) |lane_op| return evalVectorLaneOp(lane_op, arg_kind, a, b);
+    }
+    return evalLanewise(op, arg_kind, ret_kind, a, b, c);
+}
+
+/// `eval` computed one lane at a time from the lane definitions above. It is
+/// the semantic reference the vector evaluation is tested against.
+fn evalLanewise(op: Op, arg_kind: Kind, ret_kind: Kind, a: u128, b: u128, c: u128) u128 {
     return switch (op) {
         .splat => splat(ret_kind, @truncate(a)),
         .get_lane_unchecked => getLane(a, arg_kind, @truncate(b)),
@@ -512,4 +653,28 @@ test "SIMD pinned edge cases" {
     const narrowed = eval(.narrow_sat, .u16x8, .u8x16, words, words, 0);
     try std.testing.expectEqual(@as(u128, 0xffffffffffffffffffffffffffffffff), eval(.eq_lanes, .u8x16, .u8x16, narrowed, bytes, 0));
     try std.testing.expectEqual(@as(u128, 65535), eval(.bitmask, .u8x16, .u8x16, eval(.eq_lanes, .u8x16, .u8x16, narrowed, bytes, 0), 0, 0));
+}
+
+test "vector lane evaluation matches the lane-at-a-time definition" {
+    var prng = std.Random.DefaultPrng.init(0x51_3d_0c_a1);
+    const random = prng.random();
+    const edge_lanes = [_]u64{ 0, 1, 0x7f, 0x80, 0xff, 0x7fff, 0x8000, 0xffff, 0x7fff_ffff, 0x8000_0000, 0xffff_ffff, 0x7fff_ffff_ffff_ffff, 0x8000_0000_0000_0000, 0xffff_ffff_ffff_ffff };
+    inline for (comptime std.enums.values(VectorLaneOp)) |lane_op| {
+        const op = @field(Op, @tagName(lane_op));
+        for (std.enums.values(Kind)) |kind| {
+            var iteration: usize = 0;
+            while (iteration < 400) : (iteration += 1) {
+                var a = random.int(u128);
+                var b = random.int(u128);
+                if (iteration % 2 == 0) {
+                    for (0..kind.laneCount()) |lane| {
+                        a = withLane(a, kind, @intCast(lane), edge_lanes[random.uintLessThan(usize, edge_lanes.len)]);
+                        b = withLane(b, kind, @intCast(lane), edge_lanes[random.uintLessThan(usize, edge_lanes.len)]);
+                    }
+                }
+                if (iteration % 3 == 0) b = random.uintLessThan(u128, 200);
+                try std.testing.expectEqual(evalLanewise(op, kind, kind, a, b, 0), eval(op, kind, kind, a, b, 0));
+            }
+        }
+    }
 }
