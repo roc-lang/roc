@@ -605,10 +605,25 @@ pub const InterfaceConstraints = struct {
         };
     }
 
+    /// The domain of constraints whose settled leaves and names already
+    /// belong to the instantiating graph's stores.
+    pub const GraphDomain = struct {
+        pub fn mapScalar(_: GraphDomain, comptime T: type, value: T) Allocator.Error!T {
+            return value;
+        }
+    };
+
     pub fn instantiate(self: InterfaceConstraints, graph: *InstGraph) Allocator.Error![]const NodeId {
+        return self.instantiateFrom(graph, GraphDomain{});
+    }
+
+    /// Instantiate constraints whose settled leaves and names belong to
+    /// another store domain, reading them in place: `domain.mapScalar` maps
+    /// each leaf and name into the graph's stores as instantiation reaches it.
+    pub fn instantiateFrom(self: InterfaceConstraints, graph: *InstGraph, domain: anytype) Allocator.Error![]const NodeId {
         const node_ids = try graph.allocator.alloc(NodeId, self.nodes.len);
         defer graph.allocator.free(node_ids);
-        try self.instantiateNodes(graph, node_ids);
+        try self.instantiateNodes(graph, node_ids, domain);
         const roots = try graph.arena().alloc(NodeId, self.roots.len);
         for (self.roots, roots) |root, *out| out.* = node_ids[@backingInt(root)];
         return roots;
@@ -616,15 +631,16 @@ pub const InterfaceConstraints = struct {
 
     /// Instantiate every captured node, writing the graph node standing for
     /// each into `node_ids`.
-    fn instantiateNodes(self: InterfaceConstraints, graph: *InstGraph, node_ids: []NodeId) Allocator.Error!void {
+    fn instantiateNodes(self: InterfaceConstraints, graph: *InstGraph, node_ids: []NodeId, domain: anytype) Allocator.Error!void {
         std.debug.assert(node_ids.len == self.nodes.len);
         const kind_ids = try graph.allocator.alloc(FieldKindId, self.kinds.len);
         defer graph.allocator.free(kind_ids);
-        var instance = Instance{
+        var instance = Instance(@TypeOf(domain)){
             .graph = graph,
             .allocator = graph.arena(),
             .nodes = node_ids,
             .kinds = kind_ids,
+            .domain = domain,
         };
         // A settled leaf that backs a captured nominal becomes a backing cell
         // owned by that nominal, like any imported nominal's backing.
@@ -644,10 +660,13 @@ pub const InterfaceConstraints = struct {
                 // Each settled leaf enters as its own occurrence, so marks a
                 // graph accumulated on its shared import of the same type
                 // cannot reach what the summary relates.
-                .mono => |ty| if (owned_backings.bit_length != 0 and owned_backings.isSet(index))
-                    try graph.importOwnedBacking(ty)
-                else
-                    try graph.importMonoIndependent(ty),
+                .mono => |source_ty| blk: {
+                    const ty = try domain.mapScalar(Type.TypeId, source_ty);
+                    break :blk if (owned_backings.bit_length != 0 and owned_backings.isSet(index))
+                        try graph.importOwnedBacking(ty)
+                    else
+                        try graph.importMonoIndependent(ty);
+                },
                 .open => try graph.newNode(.{ .unresolved = InstVariable.placeholder() }),
             };
         }
@@ -663,7 +682,7 @@ pub const InterfaceConstraints = struct {
                 .open => |index| self.open_nodes[index],
             };
             _ = try graph.replaceContentWithoutSnapshotInvalidation(id, try mapValue(&instance, InstNode, node.content));
-            if (node.finished) |ty| try graph.registerImportedMono(id, ty);
+            if (node.finished) |ty| try graph.registerImportedMono(id, try domain.mapScalar(Type.TypeId, ty));
             graph.private_backing_roots.items[@backingInt(id)] = graph.private_backing_roots.items[@backingInt(id)] or node.private_backing;
             if (node.recursive_slot) graph.markRecursiveValueSlot(id);
             if (node.forced_dynamic) graph.markForcedDynamicIteratorRoot(id);
@@ -765,7 +784,7 @@ pub const InterfaceConstraints = struct {
         // An open class without a witness reads its settled type from an
         // instance of these constraints.
         const instance = try arena.allocator().alloc(NodeId, self.nodes.len);
-        try self.instantiateNodes(graph, instance);
+        try self.instantiateNodes(graph, instance, GraphDomain{});
         var renumberer = EquivalenceRenumberer{ .source = self, .graph = graph, .instance = instance, .types = graph.types, .name_store = graph.name_store, .allocator = arena.allocator() };
         const constraints = try renumberer.run();
         var writer = IdentityWriter{ .graph = graph };
@@ -1687,22 +1706,26 @@ pub const InterfaceConstraints = struct {
         }
     };
 
-    const Instance = struct {
-        graph: *InstGraph,
-        allocator: Allocator,
-        nodes: []NodeId,
-        kinds: []FieldKindId,
+    fn Instance(comptime Domain: type) type {
+        return struct {
+            graph: *InstGraph,
+            allocator: Allocator,
+            nodes: []NodeId,
+            kinds: []FieldKindId,
+            /// Maps the constraints' settled leaves and names into the graph's stores.
+            domain: Domain,
 
-        fn node(self: *Instance, id: NodeId) Allocator.Error!NodeId {
-            return self.nodes[@backingInt(id)];
-        }
-        fn kind(self: *Instance, id: FieldKindId) Allocator.Error!FieldKindId {
-            return self.kinds[@backingInt(id)];
-        }
-        fn scalar(_: *Instance, comptime T: type, value: T) Allocator.Error!T {
-            return value;
-        }
-    };
+            fn node(self: *@This(), id: NodeId) Allocator.Error!NodeId {
+                return self.nodes[@backingInt(id)];
+            }
+            fn kind(self: *@This(), id: FieldKindId) Allocator.Error!FieldKindId {
+                return self.kinds[@backingInt(id)];
+            }
+            fn scalar(self: *@This(), comptime T: type, value: T) Allocator.Error!T {
+                return self.domain.mapScalar(T, value);
+            }
+        };
+    }
 
     fn Copier(comptime Context: type) type {
         return struct {
@@ -14220,6 +14243,86 @@ test "interface constraints preserve open rows and independent request variables
     const closed = try InterfaceConstraints.capture(graph, graph.arena(), first);
     const closed_identity = try closed.identity(graph);
     try std.testing.expect(!std.mem.eql(u8, before.bytes, closed_identity.bytes));
+}
+
+test "interface constraints instantiate in place from another store domain like a relocated copy" {
+    const allocator = std.testing.allocator;
+    var source_types = Type.Store.init(allocator);
+    defer source_types.deinit();
+    var source_names = names.NameStore.init(allocator);
+    defer source_names.deinit();
+    var types = Type.Store.init(allocator);
+    defer types.deinit();
+    var name_store = names.NameStore.init(allocator);
+    defer name_store.deinit();
+    // Equal text has unrelated ids in the two name stores.
+    _ = try name_store.internTagLabel("Unrelated");
+
+    const source_graph = try InstGraph.create(allocator, &source_types, &source_names);
+    defer source_graph.destroy();
+    const found = try source_names.internTagLabel("Found");
+    const str_node = try source_graph.newNode(.{ .primitive = .str });
+    const settled = try source_graph.newNode(.{ .list = str_node });
+    const tail = try source_graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_tag_union) });
+    const row = try source_graph.newNode(.{ .tag_union = .{
+        .tags = try source_graph.arena().dupe(InstTag, &.{.{ .name = found, .checked_name = found, .payloads = try source_graph.arena().dupe(NodeId, &.{settled}) }}),
+        .ext = tail,
+    } });
+    const constraints = try InterfaceConstraints.capture(source_graph, source_graph.arena(), &.{ row, tail });
+    try std.testing.expect(for (constraints.nodes) |node| {
+        if (node == .mono) break true;
+    } else false);
+
+    const graph = try InstGraph.create(allocator, &types, &name_store);
+    defer graph.destroy();
+    var relocation = Type.Store.TypeRelocation.init(allocator, &source_types, &source_names, &types, &name_store);
+    defer relocation.deinit();
+    const Domain = struct {
+        relocation: *Type.Store.TypeRelocation,
+        types: *Type.Store,
+        name_store: *names.NameStore,
+        source_types: *const Type.Store,
+        source_names: *const names.NameStore,
+
+        pub fn mapScalar(self: @This(), comptime T: type, value: T) Allocator.Error!T {
+            if (T == Type.TypeId) {
+                if (self.relocation.get(self.source_types, value)) |mapped| return mapped;
+                var imported = try self.types.importTypes(self.name_store, self.source_types, self.source_names, self.relocation, &.{value});
+                defer imported.deinit();
+                return imported.roots[0];
+            }
+            const name_relocation = self.relocation.namesRelocation();
+            if (T == names.TagNameId) return name_relocation.relocateTagLabel(self.source_names, value);
+            if (T == names.RecordFieldNameId) return name_relocation.relocateRecordFieldLabel(self.source_names, value);
+            if (T == names.TypeNameId) return name_relocation.relocateTypeName(self.source_names, value);
+            if (T == names.ModuleIdentityId) return name_relocation.relocateModuleIdentity(self.source_names, value);
+            return value;
+        }
+    };
+    const domain = Domain{
+        .relocation = &relocation,
+        .types = &types,
+        .name_store = &name_store,
+        .source_types = &source_types,
+        .source_names = &source_names,
+    };
+
+    const in_place = try constraints.instantiateFrom(graph, domain);
+    const copied = try constraints.copy(graph.arena(), domain);
+    const from_copy = try copied.instantiate(graph);
+    const in_place_identity = try (try InterfaceConstraints.capture(graph, graph.arena(), in_place)).identity(graph);
+    const copy_identity = try (try InterfaceConstraints.capture(graph, graph.arena(), from_copy)).identity(graph);
+    try std.testing.expect(try in_place_identity.eql(copy_identity, &types, &name_store));
+    // The two instances stay independent.
+    try std.testing.expect(!graph.sameClass(in_place[1], from_copy[1]));
+
+    // Names and settled leaves crossed into the instantiating graph's stores.
+    const tags = (try graph.content(in_place[0])).tag_union.tags;
+    try std.testing.expectEqual(@as(usize, 1), tags.len);
+    try std.testing.expectEqualStrings("Found", name_store.tagLabelText(tags[0].name));
+    try std.testing.expect(tags[0].name != found);
+    const payload = try graph.content(tags[0].payloads[0]);
+    try std.testing.expect(payload == .list);
 }
 
 test "interface constraints preserve recursive and field-presence topology" {
