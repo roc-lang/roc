@@ -22338,7 +22338,7 @@ const BodyContext = struct {
     }
 
     fn recordField(self: *const BodyContext, ty: Type.TypeId, name: names.RecordFieldNameId) Type.Field {
-        return sortedRecordField(self.typeStore().fieldSpan(recordFieldsSpan(self.typeStore(), ty)), self.nameStore(), name);
+        return sortedRecordField(recordFields(self.typeStore(), ty), self.nameStore(), name);
     }
 
     fn optionalSlotInfo(self: *BodyContext, slot_ty: Type.TypeId) Allocator.Error!Builder.OptionalSlotInfo {
@@ -37679,7 +37679,7 @@ const BodyContext = struct {
         const bound_exprs = try self.fieldNameBoundExprsFromLocals(renamed_length_locals, null, info.shortest_field.ty);
         const shortest_expr = bound_exprs[0];
         const longest_expr = bound_exprs[1];
-        const backing_type_fields = try GuardedList.dupe(self.allocator, Type.Field, self.typeStore().fieldSpan(recordFieldsSpan(self.typeStore(), fields_backing_ty)));
+        const backing_type_fields = try GuardedList.dupe(self.allocator, Type.Field, recordFields(self.typeStore(), fields_backing_ty));
         defer self.allocator.free(backing_type_fields);
         const backing_values = try self.allocator.alloc(DraftFieldExpr, backing_type_fields.len);
         defer self.allocator.free(backing_values);
@@ -37901,7 +37901,7 @@ const BodyContext = struct {
         );
         const shortest_expr = bound_exprs[0];
         const longest_expr = bound_exprs[1];
-        const backing_type_fields = self.typeStore().fieldSpan(recordFieldsSpan(self.typeStore(), fields_backing_ty));
+        const backing_type_fields = recordFields(self.typeStore(), fields_backing_ty);
         const backing_values = try self.allocator.alloc(DraftFieldExpr, backing_type_fields.len);
         defer self.allocator.free(backing_values);
         for (0..GuardedList.borrowLen(backing_type_fields)) |index| {
@@ -39341,7 +39341,7 @@ const BodyContext = struct {
         len_expr: DraftExprId,
         step_expr: DraftExprId,
     ) Allocator.Error!DraftExprId {
-        const fields = self.typeStore().fieldSpan(recordFieldsSpan(self.typeStore(), backing_ty));
+        const fields = recordFields(self.typeStore(), backing_ty);
         const lowered = try self.allocator.alloc(DraftFieldExpr, fields.len);
         defer self.allocator.free(lowered);
         const topology = try self.iteratorRepresentationNames(.iter);
@@ -39391,7 +39391,7 @@ const BodyContext = struct {
         item_expr: DraftExprId,
         rest_expr: DraftExprId,
     ) Allocator.Error!DraftExprId {
-        const fields = self.typeStore().fieldSpan(recordFieldsSpan(self.typeStore(), ty));
+        const fields = recordFields(self.typeStore(), ty);
         const lowered = try self.allocator.alloc(DraftFieldExpr, fields.len);
         defer self.allocator.free(lowered);
         const topology = try self.iteratorRepresentationNames(.iter);
@@ -39420,7 +39420,7 @@ const BodyContext = struct {
         ty: Type.TypeId,
         rest_expr: DraftExprId,
     ) Allocator.Error!DraftExprId {
-        const fields = self.typeStore().fieldSpan(recordFieldsSpan(self.typeStore(), ty));
+        const fields = recordFields(self.typeStore(), ty);
         const lowered = try self.allocator.alloc(DraftFieldExpr, fields.len);
         defer self.allocator.free(lowered);
         const topology = try self.iteratorRepresentationNames(.iter);
@@ -39517,7 +39517,7 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const backing_ty = namedBackingType(self.typeStore(), field_handle_ty) orelse
             Common.invariant("generated Field handle expected a named backing type");
-        const fields = self.typeStore().fieldSpan(recordFieldsSpan(self.typeStore(), backing_ty));
+        const fields = recordFields(self.typeStore(), backing_ty);
         const lowered = try self.allocator.alloc(DraftFieldExpr, fields.len);
         defer self.allocator.free(lowered);
 
