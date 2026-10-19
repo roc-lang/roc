@@ -292,6 +292,27 @@ pub fn runBorrowed(
     return lowerer.finish();
 }
 
+/// Whether this consumer runs a test: whether a root it lowers carries
+/// test-plan metadata. Only a consumer that runs tests observes expects. One
+/// that shares a test program's producer for other roots, as compile-time
+/// evaluation does, runs them as ordinary expects.
+fn consumerRunsTests(
+    allocator: std.mem.Allocator,
+    produced_root_count: usize,
+    options: Options,
+) std.mem.Allocator.Error!bool {
+    if (options.test_plan_metadata.len == 0) return false;
+    const manifest = options.root_manifest orelse return true;
+    const selected = manifest.roots orelse return true;
+    var tested = try std.DynamicBitSetUnmanaged.initEmpty(allocator, produced_root_count);
+    defer tested.deinit(allocator);
+    for (options.test_plan_metadata) |metadata| tested.set(metadata.request_index);
+    for (selected) |position| {
+        if (tested.isSet(position)) return true;
+    }
+    return false;
+}
+
 const CaptureAbi = enum {
     finite,
     erased,
@@ -1072,7 +1093,7 @@ const Lowerer = struct {
             .inline_plan = options.inline_plan,
             .inline_scope_rebases = std.AutoHashMap(InlineScopeRebaseKey, LIR.InlineScopeId).init(allocator),
             .inline_expects = options.inline_expects,
-            .observe_expects = options.test_plan_metadata.len != 0,
+            .observe_expects = try consumerRunsTests(allocator, solved.lifted.rootsView().len, options),
             .list_in_place_map = options.list_in_place_map,
             .dict_seed_mode = options.dict_seed_mode,
             .completed_scalar_values = options.completed_scalar_values,
