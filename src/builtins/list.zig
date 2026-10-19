@@ -311,6 +311,62 @@ pub const RocList = extern struct {
         );
     }
 
+    /// Frees a unique allocation whose visible elements were moved into
+    /// another list, which now owns their references. Only elements outside
+    /// the visible window (those a seamless slice does not show) are released.
+    fn freeAfterMovingElements(
+        self: RocList,
+        alignment: u32,
+        element_width: usize,
+        elements_refcounted: bool,
+        dec_context: ?*anyopaque,
+        dec: Dec,
+        roc_ops: *RocOps,
+    ) void {
+        std.debug.assert(self.isUnique(roc_ops));
+        if (self.isSeamlessSlice()) {
+            self.decrefAfterMovingSliceElements(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
+        } else {
+            utils.decref(
+                self.getAllocationDataPtr(roc_ops),
+                self.capacity_or_alloc_ptr,
+                alignment,
+                elements_refcounted,
+                .atomic,
+                roc_ops,
+            );
+        }
+    }
+
+    /// Consumes `self` after its visible elements were copied to `copies`,
+    /// leaving each copy owning one reference. A unique allocation hands its
+    /// element references to the copies; a shared one keeps them, so each copy
+    /// is retained.
+    fn releaseAfterCopyingElements(
+        self: RocList,
+        copies: [*]u8,
+        alignment: u32,
+        element_width: usize,
+        elements_refcounted: bool,
+        inc_context: ?*anyopaque,
+        inc: Inc,
+        dec_context: ?*anyopaque,
+        dec: Dec,
+        roc_ops: *RocOps,
+    ) void {
+        if (elements_refcounted) {
+            if (self.isUnique(roc_ops)) {
+                self.freeAfterMovingElements(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
+                return;
+            }
+            var i: usize = 0;
+            while (i < self.len()) : (i += 1) {
+                inc(inc_context, copies + i * element_width);
+            }
+        }
+        self.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
+    }
+
     pub fn elements(self: RocList, comptime T: type) ?[*]T {
         if (self.bytes) |bytes| {
             return utils.alignedPtrCast([*]T, bytes, @src());
@@ -1072,24 +1128,13 @@ pub fn listReleaseExcessCapacity(
         list.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
         return RocList.empty();
     } else {
-        // TODO: This can be made more efficient, but has to work around the `decref`.
-        // If the list is unique, we can avoid incrementing and decrementing the live items.
-        // We can just decrement the dead elements and free the old list.
-        // This pattern is also like true in other locations like listConcat and listDropAt.
         const output = RocList.list_allocate(alignment, old_length, element_width, elements_refcounted, roc_ops);
-        if (list.bytes) |source_ptr| {
-            const dest_ptr = output.bytes orelse unreachable;
+        // A non-empty list has bytes.
+        const source_ptr = list.bytes orelse unreachable;
+        const dest_ptr = output.bytes orelse unreachable;
 
-            @memcpy(dest_ptr[0..(old_length * element_width)], source_ptr[0..(old_length * element_width)]);
-            if (elements_refcounted) {
-                var i: usize = 0;
-                while (i < old_length) : (i += 1) {
-                    const element = source_ptr + i * element_width;
-                    inc(inc_context, element);
-                }
-            }
-        }
-        list.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
+        @memcpy(dest_ptr[0..(old_length * element_width)], source_ptr[0..(old_length * element_width)]);
+        list.releaseAfterCopyingElements(dest_ptr, alignment, element_width, elements_refcounted, inc_context, inc, dec_context, dec, roc_ops);
         return output;
     }
 }
@@ -1524,6 +1569,14 @@ pub fn listDropAt(
         const tail_size = (size - drop_index - 1) * element_width;
         @memcpy(tail_target[0..tail_size], tail_source[0..tail_size]);
 
+        if (elements_refcounted and list.isUnique(roc_ops)) {
+            // A unique seamless slice: the kept elements move into `output`,
+            // so only the dropped one is released here.
+            dec(dec_context, source_ptr + drop_index * element_width);
+            list.freeAfterMovingElements(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
+            return output;
+        }
+
         if (elements_refcounted) {
             var i: usize = 0;
             while (i < output.len()) : (i += 1) {
@@ -1745,17 +1798,7 @@ pub fn listConcat(
         const src_slice = source_b[0..(list_b.len() * element_width)];
         @memmove(dest_slice, src_slice);
 
-        // Increment refcount of all cloned elements.
-        if (elements_refcounted) {
-            var i: usize = 0;
-            while (i < list_b.len()) : (i += 1) {
-                const cloned_elem = source_b + i * element_width;
-                inc(inc_context, cloned_elem);
-            }
-        }
-
-        // decrement list b.
-        list_b.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
+        list_b.releaseAfterCopyingElements(dest_slice.ptr, alignment, element_width, elements_refcounted, inc_context, inc, dec_context, dec, roc_ops);
 
         return resized_list_a;
     } else if (can_consume_b) {
@@ -1785,17 +1828,7 @@ pub fn listConcat(
         std.mem.copyBackwards(u8, source_b[byte_count_a .. byte_count_a + byte_count_b], source_b[0..byte_count_b]);
         @memcpy(source_b[0..byte_count_a], source_a[0..byte_count_a]);
 
-        // Increment refcount of all cloned elements.
-        if (elements_refcounted) {
-            var i: usize = 0;
-            while (i < list_a.len()) : (i += 1) {
-                const cloned_elem = source_a + i * element_width;
-                inc(inc_context, cloned_elem);
-            }
-        }
-
-        // decrement list a.
-        list_a.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
+        list_a.releaseAfterCopyingElements(source_b, alignment, element_width, elements_refcounted, inc_context, inc, dec_context, dec, roc_ops);
 
         return resized_list_b;
     }
@@ -1810,24 +1843,12 @@ pub fn listConcat(
     @memcpy(target[0..(list_a.len() * element_width)], source_a[0..(list_a.len() * element_width)]);
     @memcpy(target[(list_a.len() * element_width)..(total_length * element_width)], source_b[0..(list_b.len() * element_width)]);
 
-    // Increment refcount of all cloned elements.
-    if (elements_refcounted) {
-        var i: usize = 0;
-        while (i < list_a.len()) : (i += 1) {
-            const cloned_elem = source_a + i * element_width;
-            inc(inc_context, cloned_elem);
-        }
-        i = 0;
-        while (i < list_b.len()) : (i += 1) {
-            const cloned_elem = source_b + i * element_width;
-            inc(inc_context, cloned_elem);
-        }
-    }
-
-    // Decrement both consumed lists. Even if both values share an allocation, they
-    // are separate owned references at this call boundary.
-    list_a.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
-    list_b.decref(alignment, element_width, elements_refcounted, dec_context, dec, roc_ops);
+    // Release both consumed lists. Even if both values share an allocation, they
+    // are separate owned references at this call boundary: the first release
+    // sees the allocation shared and retains its copies, and the second sees it
+    // unique and hands its window over, releasing every element outside it.
+    list_a.releaseAfterCopyingElements(target, alignment, element_width, elements_refcounted, inc_context, inc, dec_context, dec, roc_ops);
+    list_b.releaseAfterCopyingElements(target + list_a.len() * element_width, alignment, element_width, elements_refcounted, inc_context, inc, dec_context, dec, roc_ops);
 
     return output;
 }
@@ -2094,8 +2115,10 @@ test "listConcat refcounted seamless slice releases backing allocation when reus
 
     try std.testing.expect(!result.isSeamlessSlice());
     try std.testing.expectEqual(@as(usize, 4), result.len());
-    try std.testing.expectEqual(@as(usize, right_data.len), inc_count);
-    try std.testing.expectEqual(@as(usize, left_data.len - slice.len() + right_data.len), dec_count);
+    // The unique `right` hands its elements to the result, so only the
+    // elements outside the slice's window are released.
+    try std.testing.expectEqual(@as(usize, 0), inc_count);
+    try std.testing.expectEqual(@as(usize, left_data.len - slice.len()), dec_count);
 
     const elements = result.elements(u8).?[0..result.len()];
     try std.testing.expectEqual(@as(u8, 2), elements[0]);
@@ -3255,8 +3278,10 @@ test "listDropAt middle element from seamless slice clones before shifting" {
 
     try std.testing.expect(!dropped.isSeamlessSlice());
     try std.testing.expectEqual(@as(usize, 2), dropped.len());
-    try std.testing.expectEqual(@as(usize, 2), inc_count);
-    try std.testing.expectEqual(@as(usize, data.len), dec_count);
+    // The unique slice moves its kept elements, so only the dropped element
+    // and the one outside the window are released.
+    try std.testing.expectEqual(@as(usize, 0), inc_count);
+    try std.testing.expectEqual(@as(usize, data.len - dropped.len()), dec_count);
 
     const elements = dropped.elements(u8).?[0..dropped.len()];
     try std.testing.expectEqual(@as(u8, 2), elements[0]);
