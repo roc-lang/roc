@@ -158,6 +158,8 @@ pub const ModuleAliasLookupResult = union(enum) {
 /// Information about an exposed item
 pub const ExposedItemInfo = struct {
     module_name: Ident.Idx,
+    /// The import statement that brought this item into scope.
+    import_idx: CIR.Import.Idx,
     original_name: Ident.Idx,
     target: ?collections.ExposedItemTarget = null,
     /// True when this item is an import's own name, which denotes the
