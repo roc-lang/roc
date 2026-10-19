@@ -23,43 +23,89 @@ const Var = types.Var;
 /// Represents a directed graph of dependencies between top-level definitions.
 /// Edges point from dependent to dependency (A -> B means A depends on B).
 pub const DependencyGraph = struct {
-    /// Map from def_idx to list of def_idx it depends on
-    edges: std.AutoHashMapUnmanaged(CIR.Def.Idx, std.ArrayList(CIR.Def.Idx)),
-
     /// All defs in the graph
     nodes: []const CIR.Def.Idx,
+    /// Each def's first position in `nodes`.
+    positions: collections.DenseMap(CIR.Def.Idx, u32),
+    /// Edges in the order they were added, until `finish` groups them.
+    added: std.ArrayList(AddedEdge),
+    /// After `finish`, the dependencies of `nodes[i]` are
+    /// `dependencies[dependency_starts[i]..dependency_starts[i + 1]]`, in the
+    /// order they were added.
+    dependency_starts: []u32,
+    dependencies: []CIR.Def.Idx,
 
     allocator: std.mem.Allocator,
 
-    pub fn init(allocator: std.mem.Allocator, defs: []const CIR.Def.Idx) DependencyGraph {
+    const AddedEdge = struct {
+        from_position: u32,
+        to: CIR.Def.Idx,
+    };
+
+    pub fn init(allocator: std.mem.Allocator, defs: []const CIR.Def.Idx) std.mem.Allocator.Error!DependencyGraph {
+        var positions = collections.DenseMap(CIR.Def.Idx, u32).init(allocator);
+        errdefer positions.deinit();
+        for (defs, 0..) |def_idx, position| {
+            const gop = try positions.getOrPut(def_idx);
+            if (!gop.found_existing) gop.value_ptr.* = std.math.cast(u32, position) orelse return error.OutOfMemory;
+        }
         return DependencyGraph{
-            .edges = .{},
             .nodes = defs,
+            .positions = positions,
+            .added = .empty,
+            .dependency_starts = &.{},
+            .dependencies = &.{},
             .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *DependencyGraph) void {
-        var iter = self.edges.valueIterator();
-        while (iter.next()) |list| {
-            list.deinit(self.allocator);
-        }
-        self.edges.deinit(self.allocator);
+        self.positions.deinit();
+        self.added.deinit(self.allocator);
+        self.allocator.free(self.dependency_starts);
+        self.allocator.free(self.dependencies);
     }
 
     /// Add an edge: from_def depends on to_def
     pub fn addEdge(self: *DependencyGraph, from_def: CIR.Def.Idx, to_def: CIR.Def.Idx) std.mem.Allocator.Error!void {
-        const gop = try self.edges.getOrPut(self.allocator, from_def);
-        if (!gop.found_existing) {
-            gop.value_ptr.* = .empty;
+        const from_position = self.positions.get(from_def) orelse
+            base.invariant("dependency graph edge from a def outside the graph", .{});
+        try self.added.append(self.allocator, .{ .from_position = from_position, .to = to_def });
+    }
+
+    /// Group the added edges by dependent. Dependencies are read only after this.
+    pub fn finish(self: *DependencyGraph) std.mem.Allocator.Error!void {
+        const starts = try self.allocator.alloc(u32, self.nodes.len + 1);
+        errdefer self.allocator.free(starts);
+        const dependencies = try self.allocator.alloc(CIR.Def.Idx, self.added.items.len);
+        errdefer self.allocator.free(dependencies);
+        if (self.added.items.len > std.math.maxInt(u32)) return error.OutOfMemory;
+
+        @memset(starts, 0);
+        for (self.added.items) |edge| starts[edge.from_position + 1] += 1;
+        for (1..starts.len) |position| starts[position] += starts[position - 1];
+        for (self.added.items) |edge| {
+            dependencies[starts[edge.from_position]] = edge.to;
+            starts[edge.from_position] += 1;
         }
-        try gop.value_ptr.append(self.allocator, to_def);
+        // Each start advanced to the next node's; shift them back.
+        var position = self.nodes.len;
+        while (position > 0) : (position -= 1) starts[position] = starts[position - 1];
+        starts[0] = 0;
+
+        self.allocator.free(self.dependency_starts);
+        self.allocator.free(self.dependencies);
+        self.dependency_starts = starts;
+        self.dependencies = dependencies;
+        self.added.clearAndFree(self.allocator);
     }
 
     /// Get dependencies of a def
     pub fn getDependencies(self: *const DependencyGraph, def: CIR.Def.Idx) []const CIR.Def.Idx {
-        const list = self.edges.get(def) orelse return &.{};
-        return list.items;
+        std.debug.assert(self.added.items.len == 0);
+        const position = self.positions.get(def) orelse return &.{};
+        if (self.dependency_starts.len == 0) return &.{};
+        return self.dependencies[self.dependency_starts[position]..self.dependency_starts[position + 1]];
     }
 };
 
@@ -305,21 +351,30 @@ const DemandSummary = struct {
     }
 };
 
-const LocalCallables = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx);
+const LocalCallables = collections.DenseMap(CIR.Pattern.Idx, CIR.Expr.Idx);
 
 const DemandAnalyzer = struct {
     cir: *const ModuleEnv,
     allocator: std.mem.Allocator,
     summary_defs: []const CIR.Def.Idx,
-    graph_def_set: std.AutoHashMapUnmanaged(CIR.Def.Idx, void) = .{},
+    graph_def_set: collections.DenseMap(CIR.Def.Idx, void),
     pattern_to_def: collections.DenseMap(CIR.Pattern.Idx, CIR.Def.Idx),
-    resolved_literal_targets: std.AutoHashMapUnmanaged(Var, std.ArrayListUnmanaged(CIR.Def.Idx)) = .{},
-    scheme_use_by_node: std.AutoHashMapUnmanaged(CIR.Node.Idx, u32) = .{},
-    summaries: std.AutoHashMapUnmanaged(CIR.Expr.Idx, DemandSummary) = .{},
-    active_lambdas: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .{},
+    /// The distinct checker-selected targets of each literal callable root,
+    /// in first-selected order: `resolved_literal_target_defs[run.start..][0..run.len]`.
+    resolved_literal_targets: collections.DenseMap(Var, TargetRun),
+    resolved_literal_target_defs: std.ArrayListUnmanaged(CIR.Def.Idx) = .empty,
+    scheme_use_by_node: collections.DenseMap(CIR.Node.Idx, u32),
+    summaries: collections.DenseMap(CIR.Expr.Idx, DemandSummary),
+    active_lambdas: collections.DenseMap(CIR.Expr.Idx, void),
     /// The lambdas of `summary_defs`, whose summaries `computeSummaries`
     /// computes as jobs of their own.
-    summary_lambdas: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .{},
+    summary_lambdas: collections.DenseMap(CIR.Expr.Idx, void),
+    /// Inline lambda frames not in use by a walk. Frames are boxed so a
+    /// summary being folded into stays in place while the fold starts
+    /// further lambda walks; a finished frame's box is reused.
+    free_frames: std.ArrayListUnmanaged(*DemandSummary) = .empty,
+    /// How many frame boxes exist, in use or free.
+    frame_count: usize = 0,
     /// Set when a summary job's walk needs a summary lambda's summary that
     /// is not computed yet: that lambda's job runs first, then the walk
     /// resumes.
@@ -336,12 +391,18 @@ const DemandAnalyzer = struct {
             .cir = cir,
             .allocator = allocator,
             .summary_defs = summary_defs,
+            .graph_def_set = .init(allocator),
             .pattern_to_def = .init(allocator),
+            .resolved_literal_targets = .init(allocator),
+            .scheme_use_by_node = .init(allocator),
+            .summaries = .init(allocator),
+            .active_lambdas = .init(allocator),
+            .summary_lambdas = .init(allocator),
         };
         errdefer analyzer.deinit();
 
         for (graph_defs) |def_idx| {
-            try analyzer.graph_def_set.put(allocator, def_idx, {});
+            try analyzer.graph_def_set.put(def_idx, {});
         }
 
         var binders: std.ArrayList(CIR.Pattern.Idx) = .empty;
@@ -352,21 +413,12 @@ const DemandAnalyzer = struct {
             try mapDefBinderPatterns(cir, &analyzer.pattern_to_def, def_idx, &binders, &binder_scratch, allocator);
         }
 
-        for (resolved_literal_targets) |target| {
-            const fn_root = cir.types.resolveVar(target.fn_var).var_;
-            const entry = try analyzer.resolved_literal_targets.getOrPut(allocator, fn_root);
-            if (!entry.found_existing) entry.value_ptr.* = .empty;
-            for (entry.value_ptr.items) |existing| {
-                if (existing == target.target_def) break;
-            } else {
-                try entry.value_ptr.append(allocator, target.target_def);
-            }
-        }
+        try analyzer.indexResolvedLiteralTargets(resolved_literal_targets);
 
         for (cir.scheme_uses.items.items, 0..) |record, record_index| {
             switch (@as(ModuleEnv.SchemeUseRecord.Slot, @fromBackingInt(@intCast(record.slot_kind)))) {
                 .value_use, .shared_value_use => {
-                    const entry = try analyzer.scheme_use_by_node.getOrPut(allocator, @fromBackingInt(@intCast(record.node_idx)));
+                    const entry = try analyzer.scheme_use_by_node.getOrPut(@fromBackingInt(@intCast(record.node_idx)));
                     if (!entry.found_existing) entry.value_ptr.* = @intCast(record_index);
                 },
                 .nested_function_use, .dispatch_target, .recursive_dispatch_target, .recursive_reference, .recursive_value_reference, .where_method_use => {},
@@ -381,15 +433,73 @@ const DemandAnalyzer = struct {
         while (summary_iter.next()) |summary| {
             summary.deinit(self.allocator);
         }
-        self.summaries.deinit(self.allocator);
+        self.summaries.deinit();
         self.pattern_to_def.deinit();
-        self.graph_def_set.deinit(self.allocator);
-        var resolved_iter = self.resolved_literal_targets.valueIterator();
-        while (resolved_iter.next()) |targets| targets.deinit(self.allocator);
-        self.resolved_literal_targets.deinit(self.allocator);
-        self.scheme_use_by_node.deinit(self.allocator);
-        self.active_lambdas.deinit(self.allocator);
-        self.summary_lambdas.deinit(self.allocator);
+        self.graph_def_set.deinit();
+        self.resolved_literal_targets.deinit();
+        self.resolved_literal_target_defs.deinit(self.allocator);
+        self.scheme_use_by_node.deinit();
+        self.active_lambdas.deinit();
+        self.summary_lambdas.deinit();
+        for (self.free_frames.items) |frame| self.allocator.destroy(frame);
+        self.free_frames.deinit(self.allocator);
+    }
+
+    const TargetRun = struct { start: u32, len: u32 };
+
+    /// Group the checker-selected targets by their callable's root, each
+    /// root's distinct targets in the order they were first selected.
+    fn indexResolvedLiteralTargets(self: *DemandAnalyzer, targets: []const ResolvedLiteralTarget) std.mem.Allocator.Error!void {
+        const Selected = struct { root: Var, def: CIR.Def.Idx, seq: u32 };
+        const selected = try self.allocator.alloc(Selected, targets.len);
+        defer self.allocator.free(selected);
+        for (targets, selected, 0..) |target, *entry, seq| {
+            entry.* = .{
+                .root = self.cir.types.resolveVar(target.fn_var).var_,
+                .def = target.target_def,
+                .seq = std.math.cast(u32, seq) orelse return error.OutOfMemory,
+            };
+        }
+        std.sort.pdq(Selected, selected, {}, struct {
+            fn lessThan(_: void, a: Selected, b: Selected) bool {
+                if (a.root != b.root) return @backingInt(a.root) < @backingInt(b.root);
+                return a.seq < b.seq;
+            }
+        }.lessThan);
+
+        try self.resolved_literal_target_defs.ensureTotalCapacity(self.allocator, selected.len);
+        var i: usize = 0;
+        while (i < selected.len) {
+            const root = selected[i].root;
+            const start = self.resolved_literal_target_defs.items.len;
+            while (i < selected.len and selected[i].root == root) : (i += 1) {
+                const run = self.resolved_literal_target_defs.items[start..];
+                if (std.mem.findScalar(CIR.Def.Idx, run, selected[i].def) != null) continue;
+                self.resolved_literal_target_defs.appendAssumeCapacity(selected[i].def);
+            }
+            try self.resolved_literal_targets.put(root, .{
+                .start = @intCast(start),
+                .len = @intCast(self.resolved_literal_target_defs.items.len - start),
+            });
+        }
+    }
+
+    fn takeFrame(self: *DemandAnalyzer) std.mem.Allocator.Error!*DemandSummary {
+        const frame = self.free_frames.pop() orelse frame: {
+            // Reserve the slot the frame returns to, so giving it back cannot fail.
+            try self.free_frames.ensureTotalCapacity(self.allocator, self.frame_count + 1);
+            const fresh = try self.allocator.create(DemandSummary);
+            self.frame_count += 1;
+            break :frame fresh;
+        };
+        frame.* = .{};
+        return frame;
+    }
+
+    /// Release a frame's summary and keep its box for the next frame.
+    fn releaseFrame(self: *DemandAnalyzer, frame: *DemandSummary) void {
+        frame.deinit(self.allocator);
+        self.free_frames.appendAssumeCapacity(frame);
     }
 
     /// The summary of one lambda being computed: its argument patterns and
@@ -398,16 +508,16 @@ const DemandAnalyzer = struct {
     const SummaryJob = struct {
         lambda: CIR.Expr.Idx,
         computed: DemandSummary = .{},
-        local_callables: LocalCallables = .{},
-        walk: Walk = .{},
+        local_callables: LocalCallables,
+        walk: Walk,
         /// Argument patterns walked so far; one more once the body walk has
         /// started.
         next_part: usize = 0,
 
-        fn deinit(job: *SummaryJob, allocator: std.mem.Allocator) void {
-            job.walk.deinit(allocator);
-            job.local_callables.deinit(allocator);
-            job.computed.deinit(allocator);
+        fn deinit(job: *SummaryJob, analyzer: *DemandAnalyzer) void {
+            job.walk.deinit(analyzer);
+            job.local_callables.deinit();
+            job.computed.deinit(analyzer.allocator);
         }
     };
 
@@ -419,7 +529,7 @@ const DemandAnalyzer = struct {
     fn computeSummaries(self: *DemandAnalyzer) std.mem.Allocator.Error!void {
         for (self.summary_defs) |def_idx| {
             const lambda_idx = self.lambdaFromDef(def_idx) orelse continue;
-            if (self.cir.store.getExpr(lambda_idx) == .e_lambda) try self.summary_lambdas.put(self.allocator, lambda_idx, {});
+            if (self.cir.store.getExpr(lambda_idx) == .e_lambda) try self.summary_lambdas.put(lambda_idx, {});
         }
         defer self.summary_lambdas.clearRetainingCapacity();
 
@@ -427,7 +537,7 @@ const DemandAnalyzer = struct {
         defer {
             for (jobs.items) |*job| {
                 _ = self.active_lambdas.remove(job.lambda);
-                job.deinit(self.allocator);
+                job.deinit(self);
             }
             jobs.deinit(self.allocator);
         }
@@ -457,8 +567,8 @@ const DemandAnalyzer = struct {
                     const args = self.cir.store.slicePatterns(self.cir.store.getExpr(job.lambda).e_lambda.args);
                     if (job.next_part <= args.len) {
                         // Each argument pattern and the body is a walk of its own.
-                        job.walk.deinit(self.allocator);
-                        job.walk = .{};
+                        job.walk.deinit(self);
+                        job.walk = .init(self.allocator);
                         if (job.next_part < args.len) {
                             try job.walk.push(self.allocator, .{ .visit_pattern = args[job.next_part] });
                         } else {
@@ -468,7 +578,7 @@ const DemandAnalyzer = struct {
                         continue;
                     }
                     var finished = jobs.pop().?;
-                    defer finished.deinit(self.allocator);
+                    defer finished.deinit(self);
                     _ = self.active_lambdas.remove(finished.lambda);
                     if (try self.mergeSummary(finished.lambda, &finished.computed)) changed = true;
                 }
@@ -478,14 +588,18 @@ const DemandAnalyzer = struct {
 
     fn startSummaryJob(self: *DemandAnalyzer, jobs: *std.ArrayList(SummaryJob), lambda_idx: CIR.Expr.Idx) std.mem.Allocator.Error!void {
         try jobs.ensureUnusedCapacity(self.allocator, 1);
-        try self.active_lambdas.put(self.allocator, lambda_idx, {});
-        jobs.appendAssumeCapacity(.{ .lambda = lambda_idx });
+        try self.active_lambdas.put(lambda_idx, {});
+        jobs.appendAssumeCapacity(.{
+            .lambda = lambda_idx,
+            .local_callables = .init(self.allocator),
+            .walk = .init(self.allocator),
+        });
     }
 
     /// Merge a computed summary into the lambda's stored summary; true when
     /// the stored summary grew or was created.
     fn mergeSummary(self: *DemandAnalyzer, lambda_idx: CIR.Expr.Idx, computed: *const DemandSummary) std.mem.Allocator.Error!bool {
-        const gop = try self.summaries.getOrPut(self.allocator, lambda_idx);
+        const gop = try self.summaries.getOrPut(lambda_idx);
         if (!gop.found_existing) {
             gop.value_ptr.* = .{};
         }
@@ -493,8 +607,8 @@ const DemandAnalyzer = struct {
     }
 
     fn collectDefDependencies(self: *DemandAnalyzer, def_idx: CIR.Def.Idx, out: *DemandSummary) std.mem.Allocator.Error!void {
-        var local_callables = LocalCallables{};
-        defer local_callables.deinit(self.allocator);
+        var local_callables = LocalCallables.init(self.allocator);
+        defer local_callables.deinit();
 
         const def = self.cir.store.getDef(def_idx);
         try self.walkDemand(def.expr, out, &local_callables);
@@ -504,14 +618,14 @@ const DemandAnalyzer = struct {
     /// Every graph dep a def's demand reaches: its own, and each summarized
     /// lambda's reached through `deps_from`, visiting each lambda once.
     fn expandDeps(self: *DemandAnalyzer, demand: *DemandSummary) std.mem.Allocator.Error!void {
-        var visited = std.AutoHashMapUnmanaged(CIR.Expr.Idx, void).empty;
-        defer visited.deinit(self.allocator);
+        var visited = collections.DenseMap(CIR.Expr.Idx, void).init(self.allocator);
+        defer visited.deinit();
         var pending = std.ArrayList(CIR.Expr.Idx).empty;
         defer pending.deinit(self.allocator);
         var roots = demand.deps_from.keyIterator();
         while (roots.next()) |lambda_idx| try pending.append(self.allocator, lambda_idx.*);
         while (pending.pop()) |lambda_idx| {
-            if ((try visited.getOrPut(self.allocator, lambda_idx)).found_existing) continue;
+            if ((try visited.getOrPut(lambda_idx)).found_existing) continue;
             const summary = self.summaries.getPtr(lambda_idx) orelse continue;
             var deps = summary.deps.keyIterator();
             while (deps.next()) |def_idx| _ = try demand.addDep(self.allocator, def_idx.*);
@@ -567,7 +681,7 @@ const DemandAnalyzer = struct {
         local_callables: *LocalCallables,
     ) std.mem.Allocator.Error!void {
         if (self.lambdaFromExprWithLocals(expr_idx, local_callables)) |lambda_idx| {
-            try local_callables.put(self.allocator, pattern_idx, lambda_idx);
+            try local_callables.put(pattern_idx, lambda_idx);
         }
     }
 
@@ -602,9 +716,8 @@ const DemandAnalyzer = struct {
 
     const Walk = struct {
         work: std.ArrayList(WalkItem) = .empty,
-        /// Summaries of the lambdas whose bodies are being walked inline.
-        /// Each is boxed so a summary being folded into stays in place while
-        /// the fold starts further lambda walks.
+        /// Summaries of the lambdas whose bodies are being walked inline,
+        /// in boxes from `DemandAnalyzer.takeFrame`.
         frames: std.ArrayList(*DemandSummary) = .empty,
         /// Dedups omitted-default expression pushes per walk, mirroring
         /// `collectNameReferences`'s `scratch_seen_defaults` (see its doc
@@ -613,18 +726,17 @@ const DemandAnalyzer = struct {
         /// defaults would otherwise re-walk with product growth. Demand
         /// contributions are set-based and frames fold into their parents,
         /// so one visit per walk reaches the walk's output.
-        seen_defaults: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .{},
+        seen_defaults: collections.DenseMap(CIR.Expr.Idx, void),
 
-        fn deinit(walk: *Walk, allocator: std.mem.Allocator) void {
-            walk.seen_defaults.deinit(allocator);
-            walk.work.deinit(allocator);
-            for (walk.frames.items) |frame| destroyFrame(allocator, frame);
-            walk.frames.deinit(allocator);
+        fn init(allocator: std.mem.Allocator) Walk {
+            return .{ .seen_defaults = .init(allocator) };
         }
 
-        fn destroyFrame(allocator: std.mem.Allocator, frame: *DemandSummary) void {
-            frame.deinit(allocator);
-            allocator.destroy(frame);
+        fn deinit(walk: *Walk, analyzer: *DemandAnalyzer) void {
+            walk.seen_defaults.deinit();
+            walk.work.deinit(analyzer.allocator);
+            for (walk.frames.items) |frame| analyzer.releaseFrame(frame);
+            walk.frames.deinit(analyzer.allocator);
         }
 
         fn push(walk: *Walk, allocator: std.mem.Allocator, item: WalkItem) std.mem.Allocator.Error!void {
@@ -639,8 +751,8 @@ const DemandAnalyzer = struct {
         out: *DemandSummary,
         local_callables: *LocalCallables,
     ) std.mem.Allocator.Error!void {
-        var walk = Walk{};
-        defer walk.deinit(self.allocator);
+        var walk = Walk.init(self.allocator);
+        defer walk.deinit(self);
         try walk.push(self.allocator, .{ .visit = root_expr });
 
         try self.drainWalk(&walk, out, local_callables);
@@ -667,7 +779,7 @@ const DemandAnalyzer = struct {
                 .apply_called_value => |expr_idx| try self.applyCalledValue(walk, current, expr_idx, local_callables),
                 .finish_lambda => |fin| {
                     const computed = walk.frames.pop().?;
-                    defer Walk.destroyFrame(self.allocator, computed);
+                    defer self.releaseFrame(computed);
                     _ = self.active_lambdas.remove(fin.lambda);
                     const parent: *DemandSummary = if (walk.frames.items.len > 0)
                         walk.frames.items[walk.frames.items.len - 1]
@@ -686,8 +798,8 @@ const DemandAnalyzer = struct {
         out: *DemandSummary,
         local_callables: *LocalCallables,
     ) std.mem.Allocator.Error!void {
-        var walk = Walk{};
-        defer walk.deinit(self.allocator);
+        var walk = Walk.init(self.allocator);
+        defer walk.deinit(self);
         try walk.push(self.allocator, .{ .visit_pattern = root_pattern });
 
         try self.drainWalk(&walk, out, local_callables);
@@ -734,11 +846,9 @@ const DemandAnalyzer = struct {
         const expr = self.cir.store.getExpr(lambda_idx);
         if (expr != .e_lambda) return;
 
-        try self.active_lambdas.put(self.allocator, lambda_idx, {});
+        try self.active_lambdas.put(lambda_idx, {});
         try walk.frames.ensureUnusedCapacity(self.allocator, 1);
-        const frame = try self.allocator.create(DemandSummary);
-        frame.* = .{};
-        walk.frames.appendAssumeCapacity(frame);
+        walk.frames.appendAssumeCapacity(try self.takeFrame());
         // The finish item pops first-in-last-out: argument patterns and the
         // body run inside the frame, then the frame folds into its parent.
         try walk.push(self.allocator, .{ .finish_lambda = .{ .lambda = lambda_idx, .args = call_args, .demand_node = demand_node } });
@@ -1068,7 +1178,7 @@ const DemandAnalyzer = struct {
                 // shared defaults don't re-walk with product growth.
                 var omissions = default_omissions.omittedDefaults(self.cir, nominal.nominal_type_decl, nominal.backing_expr);
                 while (omissions.next()) |omitted| {
-                    const entry = try walk.seen_defaults.getOrPut(self.allocator, omitted.default_expr);
+                    const entry = try walk.seen_defaults.getOrPut(omitted.default_expr);
                     if (entry.found_existing) continue;
                     try walk.push(self.allocator, .{ .visit = omitted.default_expr });
                 }
@@ -1234,7 +1344,7 @@ const DemandAnalyzer = struct {
         else
             source_fn_var;
         const fn_root = self.cir.types.resolveVar(fn_var).var_;
-        if (self.resolved_literal_targets.get(fn_root)) |target_defs| return .{ .targets = target_defs.items };
+        if (self.resolved_literal_targets.get(fn_root)) |run| return .{ .targets = self.resolved_literal_target_defs.items[run.start..][0..run.len] };
         return .{ .requirement = fn_var };
     }
 
@@ -1437,7 +1547,7 @@ pub fn buildDependencyGraphWithResolvedLiteralTargets(
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!DependencyGraph {
     const defs_slice = cir.store.sliceDefs(all_defs);
-    var graph = DependencyGraph.init(allocator, defs_slice);
+    var graph = try DependencyGraph.init(allocator, defs_slice);
     errdefer graph.deinit();
 
     var analyzer = try DemandAnalyzer.init(cir, defs_slice, defs_slice, resolved_literal_targets, allocator);
@@ -1458,6 +1568,7 @@ pub fn buildDependencyGraphWithResolvedLiteralTargets(
         }
     }
 
+    try graph.finish();
     return graph;
 }
 
@@ -1523,9 +1634,9 @@ pub fn collectNameReferences(
     cir: *const ModuleEnv,
     pattern_to_def: *const collections.DenseMap(CIR.Pattern.Idx, CIR.Def.Idx),
     root_expr: CIR.Expr.Idx,
-    out: *std.AutoHashMapUnmanaged(CIR.Def.Idx, void),
+    out: *collections.DenseMap(CIR.Def.Idx, void),
     scratch_stack: *std.ArrayList(CIR.Expr.Idx),
-    scratch_seen_defaults: *std.AutoHashMapUnmanaged(CIR.Expr.Idx, void),
+    scratch_seen_defaults: *collections.DenseMap(CIR.Expr.Idx, void),
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!void {
     scratch_stack.clearRetainingCapacity();
@@ -1536,19 +1647,19 @@ pub fn collectNameReferences(
         switch (cir.store.getExpr(expr_idx)) {
             .e_lookup_local => |lookup| {
                 if (pattern_to_def.get(lookup.pattern_idx)) |def_idx| {
-                    try out.put(allocator, def_idx, {});
+                    try out.put(def_idx, {});
                 }
             },
             .e_type_method_call => |call| {
                 if (cir.lookupMethodBindingForOwnerConst(call.type_dispatch_stmt, call.method_name)) |binding| {
-                    try out.put(allocator, binding.def_idx, {});
+                    try out.put(binding.def_idx, {});
                 }
                 for (cir.store.sliceExpr(call.args)) |arg| try scratch_stack.append(allocator, arg);
             },
             .e_type_dispatch_call => |call| {
                 switch (call.owner) {
                     .statement => |stmt| if (cir.lookupMethodBindingForOwnerConst(stmt, call.method_name)) |binding| {
-                        try out.put(allocator, binding.def_idx, {});
+                        try out.put(binding.def_idx, {});
                     },
                     .dispatcher => {},
                 }
@@ -1560,7 +1671,7 @@ pub fn collectNameReferences(
                 for (cir.store.sliceCaptures(closure.captures)) |capture_idx| {
                     const capture = cir.store.getCapture(capture_idx);
                     if (pattern_to_def.get(capture.pattern_idx)) |def_idx| {
-                        try out.put(allocator, def_idx, {});
+                        try out.put(def_idx, {});
                     }
                 }
             },
@@ -1665,7 +1776,7 @@ pub fn collectNameReferences(
                 // comment for why the pushes dedup).
                 var omissions = default_omissions.omittedDefaults(cir, nominal.nominal_type_decl, nominal.backing_expr);
                 while (omissions.next()) |omitted| {
-                    const entry = try scratch_seen_defaults.getOrPut(allocator, omitted.default_expr);
+                    const entry = try scratch_seen_defaults.getOrPut(omitted.default_expr);
                     if (entry.found_existing) continue;
                     try scratch_stack.append(allocator, omitted.default_expr);
                 }
@@ -1755,15 +1866,17 @@ pub fn computeCheckOrder(
         try def_position.put(def_idx, @intCast(position));
     }
 
-    var graph = DependencyGraph.init(allocator, defs_slice);
+    var graph = try DependencyGraph.init(allocator, defs_slice);
     defer graph.deinit();
 
-    var refs: std.AutoHashMapUnmanaged(CIR.Def.Idx, void) = .{};
-    defer refs.deinit(allocator);
+    // The check order depends on the set of references only: groups are
+    // emitted by source position and their dependency lists are sorted.
+    var refs = collections.DenseMap(CIR.Def.Idx, void).init(allocator);
+    defer refs.deinit();
     var scratch_stack: std.ArrayList(CIR.Expr.Idx) = .empty;
     defer scratch_stack.deinit(allocator);
-    var scratch_seen_defaults: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .{};
-    defer scratch_seen_defaults.deinit(allocator);
+    var scratch_seen_defaults = collections.DenseMap(CIR.Expr.Idx, void).init(allocator);
+    defer scratch_seen_defaults.deinit();
 
     for (defs_slice) |def_idx| {
         refs.clearRetainingCapacity();
@@ -1774,6 +1887,7 @@ pub fn computeCheckOrder(
             try graph.addEdge(def_idx, ref_def_idx.*);
         }
     }
+    try graph.finish();
 
     var tarjan_order = try computeSCCs(&graph, allocator);
     defer tarjan_order.deinit();
@@ -1799,12 +1913,10 @@ pub fn computeCheckOrder(
         }
     }
 
-    var successors = try allocator.alloc(std.ArrayList(u32), group_count);
-    defer {
-        for (successors) |*list| list.deinit(allocator);
-        allocator.free(successors);
-    }
-    for (successors) |*list| list.* = .empty;
+    // Cross-group edges (predecessor group, successor group) in discovery order.
+    const GroupEdge = struct { from: u32, to: u32 };
+    var group_edges: std.ArrayList(GroupEdge) = .empty;
+    defer group_edges.deinit(allocator);
     const indegree = try allocator.alloc(u32, group_count);
     defer allocator.free(indegree);
     @memset(indegree, 0);
@@ -1821,11 +1933,30 @@ pub fn computeCheckOrder(
                 const edge_key = (@as(u64, dep_group) << 32) | @as(u64, @intCast(group_index));
                 const gop = try seen_edges.getOrPut(allocator, edge_key);
                 if (gop.found_existing) continue;
-                try successors[dep_group].append(allocator, @intCast(group_index));
+                try group_edges.append(allocator, .{ .from = dep_group, .to = @intCast(group_index) });
                 indegree[group_index] += 1;
             }
         }
     }
+
+    // Each group's successors, in discovery order:
+    // `successors[successor_starts[g]..successor_starts[g + 1]]`.
+    const successor_starts = try allocator.alloc(u32, group_count + 1);
+    defer allocator.free(successor_starts);
+    const successors = try allocator.alloc(u32, group_edges.items.len);
+    defer allocator.free(successors);
+    if (group_edges.items.len > std.math.maxInt(u32)) return error.OutOfMemory;
+    @memset(successor_starts, 0);
+    for (group_edges.items) |edge| successor_starts[edge.from + 1] += 1;
+    for (1..successor_starts.len) |group| successor_starts[group] += successor_starts[group - 1];
+    for (group_edges.items) |edge| {
+        successors[successor_starts[edge.from]] = edge.to;
+        successor_starts[edge.from] += 1;
+    }
+    // Each start advanced to the next group's; shift them back.
+    var start_group = group_count;
+    while (start_group > 0) : (start_group -= 1) successor_starts[start_group] = successor_starts[start_group - 1];
+    successor_starts[0] = 0;
 
     // Priority = source position of the group's first (earliest) member.
     const group_priority = try allocator.alloc(u32, group_count);
@@ -1863,7 +1994,7 @@ pub fn computeCheckOrder(
             .defs = try allocator.dupe(CIR.Def.Idx, scc.defs),
             .is_recursive = scc.is_recursive,
         });
-        for (successors[group_index].items) |successor| {
+        for (successors[successor_starts[group_index]..successor_starts[group_index + 1]]) |successor| {
             indegree[successor] -= 1;
             if (indegree[successor] == 0) try ready.push(allocator, successor);
         }
@@ -1876,10 +2007,8 @@ pub fn computeCheckOrder(
     const group_dependency_starts = try allocator.alloc(u32, group_count + 1);
     errdefer allocator.free(group_dependency_starts);
     @memset(group_dependency_starts, 0);
-    for (successors) |list| {
-        for (list.items) |dependent| {
-            group_dependency_starts[emitted_index[dependent] + 1] += 1;
-        }
+    for (successors) |dependent| {
+        group_dependency_starts[emitted_index[dependent] + 1] += 1;
     }
     for (1..group_count + 1) |i| {
         group_dependency_starts[i] += group_dependency_starts[i - 1];
@@ -1888,8 +2017,8 @@ pub fn computeCheckOrder(
     errdefer allocator.free(group_dependencies);
     const fill = try allocator.dupe(u32, group_dependency_starts[0..group_count]);
     defer allocator.free(fill);
-    for (successors, 0..) |list, dependency| {
-        for (list.items) |dependent| {
+    for (0..group_count) |dependency| {
+        for (successors[successor_starts[dependency]..successor_starts[dependency + 1]]) |dependent| {
             const dependent_index = emitted_index[dependent];
             group_dependencies[fill[dependent_index]] = emitted_index[dependency];
             fill[dependent_index] += 1;

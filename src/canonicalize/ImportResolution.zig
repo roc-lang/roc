@@ -230,8 +230,8 @@ fn entryImport(entry: DeferredImportRef) CIR.Import.Idx {
 const Resolver = struct {
     env: *ModuleEnv,
     inputs: Inputs,
-    /// Import outcomes by the exact import spelling.
-    outcomes: std.StringHashMap(ResolvedImport.Resolution),
+    /// Each of this module's imports' outcome, by import index.
+    outcomes: []?ResolvedImport.Resolution,
     /// Every environment the drain may reach, by content identity.
     by_identity: std.AutoHashMap(base.ModuleIdentity.Hash, *const ModuleEnv),
     /// Scratch buffer for assembling qualified lookup names.
@@ -251,7 +251,7 @@ const Resolver = struct {
         var self = Resolver{
             .env = env,
             .inputs = inputs,
-            .outcomes = std.StringHashMap(ResolvedImport.Resolution).init(env.gpa),
+            .outcomes = &.{},
             .by_identity = std.AutoHashMap(base.ModuleIdentity.Hash, *const ModuleEnv).init(env.gpa),
             .scratch = std.ArrayList(u8).empty,
             .receiver_extensions = std.AutoHashMap(ModuleEnv.MethodKey, ReceiverExtension).init(env.gpa),
@@ -260,24 +260,33 @@ const Resolver = struct {
         };
         errdefer self.deinit();
 
+        const import_count: usize = @intCast(env.imports.imports.len());
+        self.outcomes = try env.gpa.alloc(?ResolvedImport.Resolution, import_count);
+        @memset(self.outcomes, null);
         switch (inputs.imports) {
-            .explicit => |imports| for (imports) |import| {
-                try self.outcomes.put(import.import_name, import.resolution);
-                switch (import.resolution) {
-                    .available => |available| try self.registerEnv(available.module_env),
-                    .rejected, .missing_public_type => {},
+            .explicit => |imports| {
+                // Explicit outcomes name their import by its exact spelling;
+                // the last outcome given for a spelling is the one that holds.
+                var by_name = std.StringHashMap(ResolvedImport.Resolution).init(env.gpa);
+                defer by_name.deinit();
+                for (imports) |import| {
+                    try by_name.put(import.import_name, import.resolution);
+                    switch (import.resolution) {
+                        .available => |available| try self.registerEnv(available.module_env),
+                        .rejected, .missing_public_type => {},
+                    }
+                }
+                for (self.outcomes, 0..) |*outcome, idx| {
+                    outcome.* = by_name.get(env.common.strings.get(env.imports.imports.items.items[idx]));
                 }
             },
             .resolved_store => |envs| {
-                const count: u32 = @intCast(env.imports.imports.len());
-                var idx: u32 = 0;
-                while (idx < count) : (idx += 1) {
-                    const name = env.common.strings.get(env.imports.imports.items.items[idx]);
+                for (self.outcomes, 0..) |*outcome, idx| {
                     // An import the store left unresolved names no module at
                     // all, which is exactly the absence the drain reads below.
                     const resolved = env.imports.getResolvedModule(@fromBackingInt(@intCast(idx))) orelse continue;
                     if (resolved >= envs.len) continue;
-                    try self.outcomes.put(name, .{ .available = .{ .module_env = envs[resolved] } });
+                    outcome.* = .{ .available = .{ .module_env = envs[resolved] } };
                     try self.registerEnv(envs[resolved]);
                 }
             },
@@ -287,7 +296,7 @@ const Resolver = struct {
     }
 
     fn deinit(self: *Resolver) void {
-        self.outcomes.deinit();
+        self.env.gpa.free(self.outcomes);
         self.by_identity.deinit();
         self.scratch.deinit(self.env.gpa);
         self.receiver_extensions.deinit();
@@ -312,9 +321,8 @@ const Resolver = struct {
     /// The outcome recorded for one of this module's imports.
     fn outcomeFor(self: *const Resolver, import_idx: CIR.Import.Idx) ?ResolvedImport.Resolution {
         const idx: usize = @backingInt(import_idx);
-        if (idx >= self.env.imports.imports.len()) return null;
-        const name = self.env.common.strings.get(self.env.imports.imports.items.items[idx]);
-        return self.outcomes.get(name);
+        if (idx >= self.outcomes.len) return null;
+        return self.outcomes[idx];
     }
 
     /// Record the content identity each import resolved to, so that a module
