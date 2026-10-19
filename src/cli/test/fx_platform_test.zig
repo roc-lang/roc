@@ -2546,6 +2546,45 @@ test "a build evaluates a root that an earlier build's cached module left uneval
     }
 }
 
+// repro for https://github.com/roc-lang/roc/issues/12437
+test "roc test passes against the object cache a roc check wrote" {
+    const allocator = testing.allocator;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const cache_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(cache_path);
+    var cache_env = std.process.Environ.Map.init(allocator);
+    defer cache_env.deinit();
+    try cache_env.put("ROC_CACHE_DIR", cache_path);
+
+    // The app's parser combinator chain specializes package lambda-set
+    // members at an app type. `roc test` must compile its own copy of each
+    // one the cached entries `roc check` wrote call by identity.
+    const check_result = try util.runRocWithEnv(
+        std.testing.io,
+        allocator,
+        &.{"check"},
+        "test/fx/check_then_test_served_callees.roc",
+        &cache_env,
+    );
+    defer allocator.free(check_result.stdout);
+    defer allocator.free(check_result.stderr);
+    try util.checkSuccess(check_result);
+
+    const test_result = try util.runRocWithEnv(
+        std.testing.io,
+        allocator,
+        &.{"test"},
+        "test/fx/check_then_test_served_callees.roc",
+        &cache_env,
+    );
+    defer allocator.free(test_result.stdout);
+    defer allocator.free(test_result.stderr);
+    try util.checkSuccess(test_result);
+    try testing.expect(std.mem.find(u8, test_result.stdout, "All (1) tests passed") != null);
+}
+
 /// Build a compile-time demand pack test app for the dev backend against the
 /// object cache in `cache_env`, run it, and report its output and whether the
 /// build observed `table`'s `dbg`.

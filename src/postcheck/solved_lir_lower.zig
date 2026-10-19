@@ -719,6 +719,12 @@ const LowerSite = struct {
     }
 };
 
+/// A lambda-set member or app function a served entry calls by identity.
+const ServedMember = struct {
+    entry: LIR.LirProcSpecId,
+    fn_id: Type.FnId,
+};
+
 const Lowerer = struct {
     allocator: std.mem.Allocator,
     solved: *const Solved.Program,
@@ -762,10 +768,10 @@ const Lowerer = struct {
     keep_specialization_procs: bool,
     kept_spec_fns: std.ArrayList(Type.FnId),
     kept_spec_index: usize,
-    /// The lambda-set members of entries the object cache serves
-    /// (`queueCallableMembers`), which the program lowers and retains, and
-    /// how many are queued.
-    served_member_fns: std.ArrayList(Type.FnId) = .empty,
+    /// The lambda-set members and app functions of entries the object cache
+    /// serves (`queueCallableMembers`), each with the entry that calls it,
+    /// which the program lowers as served callees, and how many are queued.
+    served_member_fns: std.ArrayList(ServedMember) = .empty,
     served_member_index: usize = 0,
     inline_plan: SolvedInline.Plan,
     inline_scope_rebases: std.AutoHashMap(InlineScopeRebaseKey, LIR.InlineScopeId),
@@ -1826,10 +1832,10 @@ const Lowerer = struct {
             self.served_member_index < self.served_member_fns.items.len)
         {
             while (self.served_member_index < self.served_member_fns.items.len) {
-                const fn_id = self.served_member_fns.items[self.served_member_index];
+                const member = self.served_member_fns.items[self.served_member_index];
                 self.served_member_index += 1;
-                const proc = try self.markReachableFn(fn_id);
-                try self.result.retained_procs.append(self.allocator, proc);
+                const callee = try self.markReachableFn(member.fn_id);
+                try self.result.served_callees.append(self.allocator, .{ .entry = member.entry, .callee = callee });
             }
             // A kept specialization whose calls were all inlined is reached
             // here instead, between epochs, so the queue is never extended
@@ -3100,11 +3106,11 @@ const Lowerer = struct {
                 var app_callees = std.ArrayList(Lifted.FnId).empty;
                 defer app_callees.deinit(self.allocator);
                 try self.solved.lifted.appCalleesReachedBy(spec.source, &app_callees, self.allocator);
-                for (app_callees.items) |callee| try self.served_member_fns.append(self.allocator, try self.ensureOwnFnSpec(callee, .finite));
+                for (app_callees.items) |callee| try self.served_member_fns.append(self.allocator, .{ .entry = proc, .fn_id = try self.ensureOwnFnSpec(callee, .finite) });
             }
-            for (0..arg_tys.len) |i| try self.queueCallableMembers(GuardedList.at(arg_tys, i));
-            if (entry.capture_arg_ty) |capture_arg_ty| try self.queueCallableMembers(capture_arg_ty);
-            try self.queueCallableMembers(entry.ret);
+            for (0..arg_tys.len) |i| try self.queueCallableMembers(proc, GuardedList.at(arg_tys, i));
+            if (entry.capture_arg_ty) |capture_arg_ty| try self.queueCallableMembers(proc, capture_arg_ty);
+            try self.queueCallableMembers(proc, entry.ret);
         }
         entry.proc_owner = fn_id;
         self.fn_entries.items[index] = entry;
@@ -5344,7 +5350,7 @@ const Lowerer = struct {
     /// a member whose identity names its template by site may have code the
     /// entry's own copy predates; this program lowers each, so the splice
     /// links the entry's calls to the program's current code.
-    fn queueCallableMembers(self: *Lowerer, root: Type.TypeId) Common.LowerError!void {
+    fn queueCallableMembers(self: *Lowerer, served_entry: LIR.LirProcSpecId, root: Type.TypeId) Common.LowerError!void {
         var visited = collections.DenseMap(Type.TypeId, void).init(self.allocator);
         defer visited.deinit();
         var stack = std.ArrayList(Type.TypeId).empty;
@@ -5376,7 +5382,7 @@ const Lowerer = struct {
                     const variants = self.types.fnVariantSpan(span);
                     for (0..variants.len) |index| {
                         const variant = GuardedList.at(variants, index);
-                        try self.served_member_fns.append(self.allocator, variant.target);
+                        try self.served_member_fns.append(self.allocator, .{ .entry = served_entry, .fn_id = variant.target });
                         if (variant.capture_ty) |capture_ty| try stack.append(self.allocator, capture_ty);
                     }
                 },

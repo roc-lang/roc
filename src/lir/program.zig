@@ -652,16 +652,22 @@ pub const SpecProc = struct {
     proc: LIR.LirProcSpecId,
 };
 
+/// A procedure an object-cache entry's served code calls by identity.
+pub const ServedCallee = struct {
+    entry: LIR.LirProcSpecId,
+    callee: LIR.LirProcSpecId,
+};
+
 /// Everything one lowering produced: the procedure store, its layouts, the
 /// root and specialization tables, and the static data the program carries.
 pub const Result = struct {
     store: LirStore,
     layouts: layout.Store,
     root_procs: std.ArrayList(LIR.LirProcSpecId) = .empty,
-    /// Procedures this program keeps though nothing it compiles reaches
-    /// them: the lambda-set members an object-cache entry it takes calls by
-    /// identity, which the program supplies its own code for.
-    retained_procs: std.ArrayList(LIR.LirProcSpecId) = .empty,
+    /// The procedures each object-cache entry this program takes calls by
+    /// identity, which the program supplies its own code for. The entry's
+    /// procedure is body-less, so these are its only outgoing edges.
+    served_callees: std.ArrayList(ServedCallee) = .empty,
     /// The procedure lowered for each template specialization, by the
     /// specialization's content key (`Monotype.Ast.specIdentityKey`). Only
     /// the specialization's own procedure is listed, never SpecConstr clones
@@ -764,7 +770,7 @@ pub const Result = struct {
         self.requested_layouts.deinit(allocator);
         self.root_metadata.deinit(allocator);
         self.root_procs.deinit(allocator);
-        self.retained_procs.deinit(allocator);
+        self.served_callees.deinit(allocator);
         self.spec_procs.deinit(allocator);
         self.layouts.deinit();
         self.store.deinit();

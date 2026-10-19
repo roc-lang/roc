@@ -98,6 +98,11 @@ const Pass = struct {
     export_queue: std.ArrayList(LirProgram.StaticDataSymbolId),
     plan_stack: std.ArrayList(LirProgram.ConstPlanId),
     stmt_stack: std.ArrayList(LIR.CFStmtId),
+    /// `Result.served_callees` grouped by entry: the callees of `proc` are
+    /// `served_callees[served_starts[proc]..served_starts[proc + 1]]`. Both
+    /// are empty when the program takes no entry with served callees.
+    served_starts: []u32,
+    served_callees: []LIR.LirProcSpecId,
 
     fn init(result: *LirProgram.Result, frozen: ?*LirProgram.FrozenStaticData) Allocator.Error!Pass {
         const allocator = result.store.allocator;
@@ -158,9 +163,32 @@ const Pass = struct {
             }
         }
 
+        const edges = result.served_callees.items;
+        const served_starts = try allocator.alloc(u32, if (edges.len == 0) 0 else proc_count + 1);
+        errdefer allocator.free(served_starts);
+        const served_callees = try allocator.alloc(LIR.LirProcSpecId, edges.len);
+        errdefer allocator.free(served_callees);
+        if (edges.len != 0) {
+            @memset(served_starts, 0);
+            for (edges) |edge| {
+                if (@backingInt(edge.entry) >= proc_count) reachableProcInvariant("served callee entry exceeds proc_specs len");
+                served_starts[@backingInt(edge.entry) + 1] += 1;
+            }
+            for (1..served_starts.len) |index| served_starts[index] += served_starts[index - 1];
+            const cursor = try allocator.dupe(u32, served_starts[0..proc_count]);
+            defer allocator.free(cursor);
+            for (edges) |edge| {
+                const slot = &cursor[@backingInt(edge.entry)];
+                served_callees[slot.*] = edge.callee;
+                slot.* += 1;
+            }
+        }
+
         return .{
             .result = result,
             .frozen = frozen,
+            .served_starts = served_starts,
+            .served_callees = served_callees,
             .reachable_exports = reachable_exports,
             .old_export_to_new = old_export_to_new,
             .static_data_exports = static_data_exports,
@@ -182,6 +210,8 @@ const Pass = struct {
     }
 
     fn deinit(self: *Pass) void {
+        self.allocator.free(self.served_callees);
+        self.allocator.free(self.served_starts);
         self.allocator.free(self.static_data_exports);
         self.allocator.free(self.old_export_to_new);
         self.allocator.free(self.reachable_exports);
@@ -201,9 +231,6 @@ const Pass = struct {
 
     fn run(self: *Pass) Allocator.Error!void {
         for (self.result.root_procs.items) |proc| {
-            try self.markProc(proc);
-        }
-        for (self.result.retained_procs.items) |proc| {
             try self.markProc(proc);
         }
         for (self.result.const_roots.items) |root| {
@@ -266,6 +293,12 @@ const Pass = struct {
 
     fn markProcBodyEdges(self: *Pass, proc_id: LIR.LirProcSpecId) Allocator.Error!void {
         const proc = self.store.getProcSpec(proc_id);
+        // A served entry is body-less; its code's calls by identity are
+        // edges of their own.
+        if (self.served_starts.len != 0) {
+            const index = @backingInt(proc_id);
+            for (self.served_callees[self.served_starts[index]..self.served_starts[index + 1]]) |callee| try self.markProc(callee);
+        }
         if (proc.body) |body| try self.stmt_stack.append(self.allocator, body);
         const join_points = self.store.getJoinPointSpan(proc.join_points);
         for (0..join_points.len) |index| {
@@ -535,9 +568,14 @@ const Pass = struct {
         for (self.result.root_procs.items) |*proc| {
             proc.* = self.remapProc(proc.*);
         }
-        for (self.result.retained_procs.items) |*proc| {
-            proc.* = self.remapProc(proc.*);
+        // An entry that was unreachable takes its served callees with it.
+        var kept_served: usize = 0;
+        for (self.result.served_callees.items) |edge| {
+            const entry = self.old_to_new[@backingInt(edge.entry)] orelse continue;
+            self.result.served_callees.items[kept_served] = .{ .entry = entry, .callee = self.remapProc(edge.callee) };
+            kept_served += 1;
         }
+        self.result.served_callees.shrinkRetainingCapacity(kept_served);
         // A specialization whose procedure was unreachable leaves the table.
         var kept: usize = 0;
         for (self.result.spec_procs.items) |spec_proc| {
@@ -1371,6 +1409,60 @@ test "CTFE code demand retains union identities and omits runtime-only procedure
     try std.testing.expectEqualSlices(LIR.LirProcSpecId, &.{ procs[0], procs[1] }, result.root_procs.items);
     for (result.store.getProcSpecs()) |proc| try std.testing.expectEqual(ret, proc.body.?);
     try std.testing.expectEqual(@as(u32, 2), @backingInt(exports[0].relocations[0].procedure.?));
+}
+
+test "served entries reach the callees their code calls by identity" {
+    const allocator = std.testing.allocator;
+    var result = try LirProgram.Result.init(allocator, base.target.TargetUsize.native);
+    defer result.deinit();
+    const local = try result.store.addLocal(.{ .layout_idx = .zst });
+    const ret = try result.store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
+    var callees: [2]LIR.LirProcSpecId = undefined;
+    for (&callees, 0..) |*proc, index| proc.* = try result.store.addProcSpec(.{
+        .name = result.store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(@intCast(index + 1)),
+        .args = .empty(),
+        .body = ret,
+        .ret_layout = .zst,
+    }, .none);
+    var entries: [2]LIR.LirProcSpecId = undefined;
+    for (&entries, 0..) |*proc, index| proc.* = try result.store.addProcSpec(.{
+        .name = result.store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(@intCast(index + 3)),
+        .args = .empty(),
+        .body = null,
+        .ret_layout = .zst,
+        .external = true,
+    }, .none);
+    const call = try result.store.addCFStmt(.{ .assign_call = .{
+        .target = local,
+        .proc = entries[0],
+        .args = LIR.LocalSpan.empty(),
+        .next = ret,
+    } }, .test_fixture);
+    const root = try result.store.addProcSpec(.{
+        .name = result.store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(5),
+        .args = .empty(),
+        .body = call,
+        .ret_layout = .zst,
+    }, .none);
+    try result.root_procs.append(allocator, root);
+    try result.served_callees.appendSlice(allocator, &.{
+        .{ .entry = entries[1], .callee = callees[1] },
+        .{ .entry = entries[0], .callee = callees[0] },
+    });
+
+    const demand = try collectProcDemand(allocator, &result, &.{root}, &.{});
+    defer allocator.free(demand);
+    try std.testing.expectEqualSlices(LIR.LirProcSpecId, &.{ callees[0], entries[0], root }, demand);
+
+    try run(&result);
+    try std.testing.expectEqual(@as(u32, 3), result.store.procSpecCount());
+    try std.testing.expectEqual(@as(usize, 1), result.served_callees.items.len);
+    const edge = result.served_callees.items[0];
+    try std.testing.expectEqual(LIR.ProcIdentity.forTest(1), result.store.getProcSpec(edge.callee).identity);
+    try std.testing.expectEqual(LIR.ProcIdentity.forTest(3), result.store.getProcSpec(edge.entry).identity);
 }
 
 test "erased callable pruning frees evidence for fully and partly discarded sets" {
