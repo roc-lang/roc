@@ -313,7 +313,18 @@ const CaptureSpanId = struct {
     fn fromOwn(start: u32, len: u32) CaptureSpanId {
         return .{ .source = .own, .start = start, .len = len };
     }
+
+    /// Marks a column slot whose span is not computed yet; no span starts at
+    /// this offset.
+    const unset: CaptureSpanId = .{ .source = .own, .start = std.math.maxInt(u32), .len = 0 };
+
+    fn isUnset(self: CaptureSpanId) bool {
+        return self.source == .own and self.start == std.math.maxInt(u32);
+    }
 };
+
+/// Marks a compile-time site column slot whose LIR site is not added yet.
+const no_comptime_site: LIR.ComptimeSiteId = @fromBackingInt(std.math.maxInt(u32));
 
 /// A capture span identifies its captures structurally (source, start and
 /// length) rather than as a dense index, so it is a hashable key.
@@ -573,6 +584,76 @@ const TypedLiftedLocal = struct {
     ty: Type.TypeId,
 };
 
+/// A map over a pair key whose `primary` field is a dense id that rarely
+/// pairs with more than one value of the key's other fields. The primary id
+/// indexes a dense column of chain heads, and each chain threads that id's
+/// entries through one shared node list, so a lookup reads a column slot and
+/// walks a chain of a few nodes, and clearing is proportional to the live
+/// entries.
+fn DenseChainMap(comptime Key: type, comptime primary: []const u8, comptime V: type) type {
+    return struct {
+        const Self = @This();
+        const Primary = @FieldType(Key, primary);
+        const end: u32 = std.math.maxInt(u32);
+        const Node = struct { key: Key, value: V, next: u32 };
+
+        heads: collections.DenseMap(Primary, u32),
+        nodes: std.ArrayList(Node) = .empty,
+
+        fn init(allocator: std.mem.Allocator) Self {
+            return .{ .heads = collections.DenseMap(Primary, u32).init(allocator) };
+        }
+
+        fn deinit(self: *Self) void {
+            self.nodes.deinit(self.heads.allocator);
+            self.heads.deinit();
+        }
+
+        fn clearRetainingCapacity(self: *Self) void {
+            self.heads.clearRetainingCapacity();
+            self.nodes.clearRetainingCapacity();
+        }
+
+        fn find(self: *const Self, key: Key) ?u32 {
+            var index = self.heads.get(@field(key, primary)) orelse return null;
+            while (index != end) {
+                const node = self.nodes.items[index];
+                if (std.meta.eql(node.key, key)) return index;
+                index = node.next;
+            }
+            return null;
+        }
+
+        fn get(self: *const Self, key: Key) ?V {
+            const index = self.find(key) orelse return null;
+            return self.nodes.items[index].value;
+        }
+
+        fn contains(self: *const Self, key: Key) bool {
+            return self.find(key) != null;
+        }
+
+        fn put(self: *Self, key: Key, value: V) std.mem.Allocator.Error!void {
+            if (self.find(key)) |index| {
+                self.nodes.items[index].value = value;
+                return;
+            }
+            if (self.nodes.items.len >= end) return error.OutOfMemory;
+            try self.nodes.ensureUnusedCapacity(self.heads.allocator, 1);
+            const head = try self.heads.getOrPut(@field(key, primary));
+            const index: u32 = @intCast(self.nodes.items.len);
+            self.nodes.appendAssumeCapacity(.{
+                .key = key,
+                .value = value,
+                .next = if (head.found_existing) head.value_ptr.* else end,
+            });
+            head.value_ptr.* = index;
+        }
+    };
+}
+
+const TypedLocalMap = DenseChainMap(TypedLiftedLocal, "local", LIR.LocalId);
+
 const EquivalentNamedLayout = struct {
     ty: Type.TypeId,
     layout_idx: layout.Idx,
@@ -767,7 +848,7 @@ const Lowerer = struct {
     served_member_fns: std.ArrayList(Type.FnId) = .empty,
     served_member_index: usize = 0,
     inline_plan: SolvedInline.Plan,
-    inline_scope_rebases: std.AutoHashMap(InlineScopeRebaseKey, LIR.InlineScopeId),
+    inline_scope_rebases: InlineScopeRebases,
     inline_expects: InlineExpectMode,
     observe_expects: bool,
     list_in_place_map: bool,
@@ -805,7 +886,8 @@ const Lowerer = struct {
     recursive_value_capture_ids: collections.DenseMap(check.CheckedModule.CaptureId, void),
     recursive_slot_types: collections.DenseMap(Type.TypeId, Type.TypeId),
     own_captures: std.ArrayList(SolvedType.Capture),
-    own_capture_spans: []?CaptureSpanId,
+    /// Each lifted function's own capture span, or `CaptureSpanId.unset`.
+    own_capture_spans: []CaptureSpanId,
     roots: std.ArrayList(RootEntry),
     literal_roots: std.ArrayList(LiteralRootEntry),
     layout_requests: std.ArrayList(LayoutRequest),
@@ -842,23 +924,25 @@ const Lowerer = struct {
     root_requests: Common.RootRequests,
     symbols: Common.SymbolGen,
     local_map: collections.DenseMap(Lifted.LocalId, LIR.LocalId),
-    typed_local_map: std.AutoHashMap(TypedLiftedLocal, LIR.LocalId),
+    typed_local_map: TypedLocalMap,
     /// Producer-authored initialization condition for every loop-carried
     /// payload cell. This dense index is built once from loop initializers so
     /// enclosing shared continuations can preserve the exact condition even
     /// when their definition precedes the loop in expression order.
-    payload_conditions: []?PayloadCondition,
+    payload_conditions: collections.DenseMap(Lifted.LocalId, PayloadCondition),
     /// Dense lexical index for sparse loop updates. Local ids are globally
     /// unique, so entering and leaving a loop installs and clears its exact
     /// parameters without scanning enclosing parameter spans per jump.
     active_loop_params: collections.DenseMap(Lifted.LocalId, ActiveLoopParam),
     local_types: collections.DenseMap(LIR.LocalId, Type.TypeId),
-    comptime_site_map: []?LIR.ComptimeSiteId,
+    /// Each lifted compile-time site's LIR site, or `no_comptime_site`.
+    comptime_site_map: []LIR.ComptimeSiteId,
     next_join_point: u32 = 0,
     loop_stack: std.ArrayList(LoopContext),
     join_stack: std.ArrayList(JoinContext),
     current_ret_ty: ?Type.TypeId = null,
     current_proc_locals: ?*ProcLocalSet = null,
+    lane_scratch: LaneScratch,
     current_fn: ?Type.FnId = null,
     current_proc: ?LIR.LirProcSpecId = null,
     current_erased_reuse: ?LIR.LocalId = null,
@@ -913,14 +997,77 @@ const Lowerer = struct {
 
     aggregate_bindings: ?*AggregateBindings = null,
 
-    const ProcLocalSet = std.AutoArrayHashMapUnmanaged(u32, void);
+    const ProcLocalSet = collections.DenseMap(LIR.LocalId, void);
+
+    /// Scratch one lowering lane reuses across the procedures and
+    /// expressions it lowers. Every use is scoped to one procedure or one
+    /// task frame and leaves the scratch as it found it.
+    const LaneScratch = struct {
+        allocator: std.mem.Allocator,
+        /// Each lowered procedure's set of the locals it touches.
+        proc_locals: collections.DenseMapPool(LIR.LocalId, void),
+        /// A procedure's touched locals in id order, while they are written
+        /// as its frame span.
+        frame_locals: std.ArrayList(LIR.LocalId) = .empty,
+        /// The argument positions inlined calls bound directly to caller
+        /// locals. A known call's positions occupy one run from the start
+        /// its task records until the call finishes, and inner calls stack
+        /// their runs above it.
+        inline_substitutions: std.ArrayList(bool) = .empty,
+        /// Arenas a finished match or constant query released, kept for the
+        /// next one. Each is heap-allocated so an arena's allocator stays
+        /// valid while its owning task frame moves.
+        spare_arenas: std.ArrayList(*base.SingleThreadArena) = .empty,
+
+        const spare_arena_capacity = 256 * 1024;
+
+        fn init(allocator: std.mem.Allocator) LaneScratch {
+            return .{
+                .allocator = allocator,
+                .proc_locals = collections.DenseMapPool(LIR.LocalId, void).init(allocator),
+            };
+        }
+
+        fn deinit(self: *LaneScratch) void {
+            for (self.spare_arenas.items) |arena| self.destroyArena(arena);
+            self.spare_arenas.deinit(self.allocator);
+            self.inline_substitutions.deinit(self.allocator);
+            self.frame_locals.deinit(self.allocator);
+            self.proc_locals.deinit();
+        }
+
+        /// An empty arena, reusing a released arena's buffers when one is
+        /// spare.
+        fn acquireArena(self: *LaneScratch) std.mem.Allocator.Error!*base.SingleThreadArena {
+            if (self.spare_arenas.pop()) |arena| return arena;
+            const arena = try self.allocator.create(base.SingleThreadArena);
+            arena.* = base.SingleThreadArena.init(self.allocator);
+            return arena;
+        }
+
+        /// Empty an arena from `acquireArena` and keep its buffers for the
+        /// next one. An arena that grew large is freed instead, as is one the
+        /// spare list has no room for.
+        fn releaseArena(self: *LaneScratch, arena: *base.SingleThreadArena) void {
+            if (arena.queryCapacity() > spare_arena_capacity or !arena.reset(.retain_capacity)) {
+                self.destroyArena(arena);
+                return;
+            }
+            self.spare_arenas.append(self.allocator, arena) catch self.destroyArena(arena);
+        }
+
+        fn destroyArena(self: *LaneScratch, arena: *base.SingleThreadArena) void {
+            arena.deinit();
+            self.allocator.destroy(arena);
+        }
+    };
 
     const FnBodyWorkspace = struct {
         allocator: std.mem.Allocator,
-        inline_scope_rebases: std.AutoHashMap(InlineScopeRebaseKey, LIR.InlineScopeId),
+        inline_scope_rebases: InlineScopeRebases,
         captures: collections.DenseMap(Lifted.LocalId, CaptureBinding),
         local_map: collections.DenseMap(Lifted.LocalId, LIR.LocalId),
-        typed_local_map: std.AutoHashMap(TypedLiftedLocal, LIR.LocalId),
+        typed_local_map: TypedLocalMap,
         local_types: collections.DenseMap(LIR.LocalId, Type.TypeId),
         active_loop_params: collections.DenseMap(Lifted.LocalId, ActiveLoopParam),
         loop_stack: std.ArrayList(LoopContext),
@@ -929,16 +1076,17 @@ const Lowerer = struct {
         /// Erased-result demands already classified; see the lowerer's.
         erased_demands: collections.DenseMap(Type.TypeId, ErasedResultDemand),
         tail_call_scratch: lir_core.TailCallBuilder,
+        lane_scratch: LaneScratch,
         erased_owner_states: std.ArrayList(ErasedOwnerState),
         erased_call_owner_uses: std.ArrayList(ErasedCallOwnerUse),
 
         fn init(allocator: std.mem.Allocator) FnBodyWorkspace {
             return .{
                 .allocator = allocator,
-                .inline_scope_rebases = std.AutoHashMap(InlineScopeRebaseKey, LIR.InlineScopeId).init(allocator),
+                .inline_scope_rebases = InlineScopeRebases.init(allocator),
                 .captures = collections.DenseMap(Lifted.LocalId, CaptureBinding).init(allocator),
                 .local_map = collections.DenseMap(Lifted.LocalId, LIR.LocalId).init(allocator),
-                .typed_local_map = std.AutoHashMap(TypedLiftedLocal, LIR.LocalId).init(allocator),
+                .typed_local_map = TypedLocalMap.init(allocator),
                 .local_types = collections.DenseMap(LIR.LocalId, Type.TypeId).init(allocator),
                 .active_loop_params = collections.DenseMap(Lifted.LocalId, ActiveLoopParam).init(allocator),
                 .loop_stack = .empty,
@@ -946,6 +1094,7 @@ const Lowerer = struct {
                 .return_forwarding_locals = collections.DenseMap(LIR.LocalId, void).init(allocator),
                 .erased_demands = collections.DenseMap(Type.TypeId, ErasedResultDemand).init(allocator),
                 .tail_call_scratch = lir_core.TailCallBuilder.initScratch(allocator),
+                .lane_scratch = LaneScratch.init(allocator),
                 .erased_owner_states = .empty,
                 .erased_call_owner_uses = .empty,
             };
@@ -957,6 +1106,7 @@ const Lowerer = struct {
             self.return_forwarding_locals.deinit();
             self.erased_demands.deinit();
             self.tail_call_scratch.deinit();
+            self.lane_scratch.deinit();
             self.join_stack.deinit(self.allocator);
             self.loop_stack.deinit(self.allocator);
             self.active_loop_params.deinit();
@@ -972,6 +1122,8 @@ const Lowerer = struct {
         source: Lifted.InlineScopeId,
         outer: LIR.InlineScopeId,
     };
+
+    const InlineScopeRebases = DenseChainMap(InlineScopeRebaseKey, "source", LIR.InlineScopeId);
 
     const LoopContext = struct {
         join_id: LIR.JoinPointId,
@@ -1000,9 +1152,8 @@ const Lowerer = struct {
         solved: *const Solved.Program,
         options: Options,
     ) Common.LowerError!Lowerer {
-        const payload_conditions = try allocator.alloc(?PayloadCondition, solved.lifted.localCount());
-        errdefer allocator.free(payload_conditions);
-        @memset(payload_conditions, null);
+        var payload_conditions = collections.DenseMap(Lifted.LocalId, PayloadCondition).init(allocator);
+        errdefer payload_conditions.deinit();
         for (0..solved.lifted.exprCount()) |raw_expr| {
             const expr_id: Lifted.ExprId = @fromBackingInt(@intCast(@as(u32, @intCast(raw_expr))));
             const expr = solved.lifted.getExpr(expr_id);
@@ -1016,21 +1167,21 @@ const Lowerer = struct {
                 if (initial.data != .uninitialized_payload) continue;
                 const param = GuardedList.at(params, index);
                 const condition = initial.data.uninitialized_payload;
-                const slot = &payload_conditions[@backingInt(param.local)];
-                if (slot.* != null and (slot.*.?.condition != condition.condition or slot.*.?.mask != condition.mask)) {
+                const slot = try payload_conditions.getOrPut(param.local);
+                if (slot.found_existing and (slot.value_ptr.condition != condition.condition or slot.value_ptr.mask != condition.mask)) {
                     Common.invariant("one loop payload local had conflicting initialization conditions");
                 }
-                slot.* = .{ .condition = condition.condition, .mask = condition.mask };
+                slot.value_ptr.* = .{ .condition = condition.condition, .mask = condition.mask };
             }
         }
 
-        const comptime_site_map = try allocator.alloc(?LIR.ComptimeSiteId, solved.lifted.comptimeSiteCount());
+        const comptime_site_map = try allocator.alloc(LIR.ComptimeSiteId, solved.lifted.comptimeSiteCount());
         errdefer allocator.free(comptime_site_map);
-        @memset(comptime_site_map, null);
+        @memset(comptime_site_map, no_comptime_site);
 
-        const own_capture_spans = try allocator.alloc(?CaptureSpanId, solved.lifted.fnCount());
+        const own_capture_spans = try allocator.alloc(CaptureSpanId, solved.lifted.fnCount());
         errdefer allocator.free(own_capture_spans);
-        @memset(own_capture_spans, null);
+        @memset(own_capture_spans, CaptureSpanId.unset);
 
         var recursive_value_locals = collections.DenseMap(Lifted.LocalId, void).init(allocator);
         errdefer recursive_value_locals.deinit();
@@ -1069,7 +1220,7 @@ const Lowerer = struct {
             .kept_spec_fns = .empty,
             .kept_spec_index = 0,
             .inline_plan = options.inline_plan,
-            .inline_scope_rebases = std.AutoHashMap(InlineScopeRebaseKey, LIR.InlineScopeId).init(allocator),
+            .inline_scope_rebases = InlineScopeRebases.init(allocator),
             .inline_expects = options.inline_expects,
             .observe_expects = options.test_plan_metadata.len != 0,
             .list_in_place_map = options.list_in_place_map,
@@ -1118,7 +1269,7 @@ const Lowerer = struct {
             .packed_literals = std.AutoHashMap(PackedLiteralKey, LIR.ListLiteral).init(allocator),
             .symbols = .{ .next = solved.lifted.next_symbol },
             .local_map = collections.DenseMap(Lifted.LocalId, LIR.LocalId).init(allocator),
-            .typed_local_map = std.AutoHashMap(TypedLiftedLocal, LIR.LocalId).init(allocator),
+            .typed_local_map = TypedLocalMap.init(allocator),
             .payload_conditions = payload_conditions,
             .active_loop_params = collections.DenseMap(Lifted.LocalId, ActiveLoopParam).init(allocator),
             .local_types = collections.DenseMap(LIR.LocalId, Type.TypeId).init(allocator),
@@ -1134,6 +1285,7 @@ const Lowerer = struct {
             .prep_statement_pool = collections.DenseMapPool(Lifted.StmtId, void).init(allocator),
             .prep_local_pool = collections.DenseMapPool(Lifted.LocalId, void).init(allocator),
             .tail_call_scratch = lir_core.TailCallBuilder.initScratch(allocator),
+            .lane_scratch = LaneScratch.init(allocator),
             .erased_owner_state_prefix = &.{},
             .erased_owner_states = .empty,
             .erased_call_owner_uses = .empty,
@@ -1226,13 +1378,14 @@ const Lowerer = struct {
         self.prep_statement_pool.deinit();
         self.prep_local_pool.deinit();
         self.tail_call_scratch.deinit();
+        self.lane_scratch.deinit();
         self.erased_call_owner_uses.deinit(self.allocator);
         self.erased_owner_states.deinit(self.allocator);
         self.join_stack.deinit(self.allocator);
         self.loop_stack.deinit(self.allocator);
         self.allocator.free(self.comptime_site_map);
         self.typed_local_map.deinit();
-        self.allocator.free(self.payload_conditions);
+        self.payload_conditions.deinit();
         self.active_loop_params.deinit();
         self.local_types.deinit();
         self.local_map.deinit();
@@ -1312,14 +1465,14 @@ const Lowerer = struct {
         self.result = undefined;
         self.runtime_schemas = RuntimeSchemaStore.init(self.allocator);
         self.local_map = collections.DenseMap(Lifted.LocalId, LIR.LocalId).init(self.allocator);
-        self.payload_conditions = &.{};
+        self.payload_conditions = collections.DenseMap(Lifted.LocalId, PayloadCondition).init(self.allocator);
         self.active_loop_params = collections.DenseMap(Lifted.LocalId, ActiveLoopParam).init(self.allocator);
         self.own_capture_spans = &.{};
         self.own_captures = .empty;
         self.recursive_slot_types = collections.DenseMap(Type.TypeId, Type.TypeId).init(self.allocator);
         self.recursive_value_capture_ids = collections.DenseMap(check.CheckedModule.CaptureId, void).init(self.allocator);
         self.recursive_value_locals = collections.DenseMap(Lifted.LocalId, void).init(self.allocator);
-        self.typed_local_map = std.AutoHashMap(TypedLiftedLocal, LIR.LocalId).init(self.allocator);
+        self.typed_local_map = TypedLocalMap.init(self.allocator);
         self.local_types = collections.DenseMap(LIR.LocalId, Type.TypeId).init(self.allocator);
         self.static_initializer_queue = .empty;
         self.packed_plans = collections.DenseMap(layout.Idx, lir_core.PackedData.Plan).init(self.allocator);
@@ -1342,6 +1495,7 @@ const Lowerer = struct {
         self.prep_statement_pool = collections.DenseMapPool(Lifted.StmtId, void).init(self.allocator);
         self.prep_local_pool = collections.DenseMapPool(Lifted.LocalId, void).init(self.allocator);
         self.tail_call_scratch = lir_core.TailCallBuilder.initScratch(self.allocator);
+        self.lane_scratch = LaneScratch.init(self.allocator);
         self.return_forwarding_ambiguous = false;
         self.return_forwarding_repeatable_depth = 0;
         self.erased_owner_states = .empty;
@@ -1685,6 +1839,7 @@ const Lowerer = struct {
         worker.prep_statement_pool = collections.DenseMapPool(Lifted.StmtId, void).init(workspace.allocator);
         worker.prep_local_pool = collections.DenseMapPool(Lifted.LocalId, void).init(workspace.allocator);
         worker.tail_call_scratch = workspace.tail_call_scratch;
+        worker.lane_scratch = workspace.lane_scratch;
         worker.return_forwarding_ambiguous = false;
         worker.return_forwarding_repeatable_depth = 0;
         // Packed literal ids name string views in the body shard's own store,
@@ -1730,6 +1885,7 @@ const Lowerer = struct {
         workspace.return_forwarding_locals = self.return_forwarding_locals;
         workspace.erased_demands = self.erased_demands;
         workspace.tail_call_scratch = self.tail_call_scratch;
+        workspace.lane_scratch = self.lane_scratch;
         workspace.erased_owner_states = self.erased_owner_states;
         workspace.erased_call_owner_uses = self.erased_call_owner_uses;
         if (deinit_store) self.result.store.deinit();
@@ -2507,8 +2663,8 @@ const Lowerer = struct {
         const saved_proc_locals = self.current_proc_locals;
         const saved_current_fn = self.current_fn;
         const saved_current_proc = self.current_proc;
-        var proc_locals: ProcLocalSet = .{};
-        defer proc_locals.deinit(self.allocator);
+        var proc_locals = self.lane_scratch.proc_locals.acquire();
+        defer self.lane_scratch.proc_locals.release(&proc_locals);
         defer {
             self.current_ret_ty = saved_ret_ty;
             self.current_proc_locals = saved_proc_locals;
@@ -2651,8 +2807,8 @@ const Lowerer = struct {
                 const saved_current_fn = self.current_fn;
                 const saved_current_proc = self.current_proc;
                 const saved_erased_reuse = self.current_erased_reuse;
-                var proc_locals: ProcLocalSet = .{};
-                defer proc_locals.deinit(self.allocator);
+                var proc_locals = self.lane_scratch.proc_locals.acquire();
+                defer self.lane_scratch.proc_locals.release(&proc_locals);
 
                 self.current_proc_locals = &proc_locals;
                 self.current_ret_ty = entry.ret;
@@ -2760,8 +2916,8 @@ const Lowerer = struct {
         const saved_proc_locals = self.current_proc_locals;
         const saved_current_fn = self.current_fn;
         const saved_current_proc = self.current_proc;
-        var proc_locals: ProcLocalSet = .{};
-        defer proc_locals.deinit(self.allocator);
+        var proc_locals = self.lane_scratch.proc_locals.acquire();
+        defer self.lane_scratch.proc_locals.release(&proc_locals);
         self.current_proc_locals = &proc_locals;
         self.current_ret_ty = ret_ty;
         self.current_fn = fn_id;
@@ -3136,7 +3292,8 @@ const Lowerer = struct {
     fn ownCaptureSpanForFn(self: *Lowerer, fn_id: Lifted.FnId) std.mem.Allocator.Error!CaptureSpanId {
         const raw_fn = @backingInt(fn_id);
         if (raw_fn >= self.own_capture_spans.len) Common.invariant("own capture span requested for a missing lifted function");
-        if (self.own_capture_spans[raw_fn]) |existing| return existing;
+        const existing = self.own_capture_spans[raw_fn];
+        if (!existing.isUnset()) return existing;
 
         const fn_ = self.solved.lifted.getFn(fn_id);
         const capture_locals = self.solved.lifted.typedLocalSpan(fn_.captures);
@@ -3327,8 +3484,8 @@ const Lowerer = struct {
     /// from a frozen image does (see `ComptimeScalarValues`); null leaves the
     /// value to its slot.
     fn lowerConstructionExprInto(self: *Lowerer, where: LowerSite, target: LIR.LocalId, expr_id: Lifted.ExprId, ty: Type.TypeId, next: LIR.CFStmtId) Common.LowerError!?LIR.CFStmtId {
-        var arena = base.SingleThreadArena.init(self.allocator);
-        defer arena.deinit();
+        const arena = try self.lane_scratch.acquireArena();
+        defer self.lane_scratch.releaseArena(arena);
         const layout_idx = self.result.store.getLocal(target).layout_idx;
         const construction = try self.constructionOfExpr(arena.allocator(), expr_id, ty, layout_idx) orelse return null;
         // The rebuilt constant carries the restored constant expression's
@@ -4422,6 +4579,12 @@ const Lowerer = struct {
         return self.stringLiteral(id).text();
     }
 
+    /// The lifted program's rows. Lowering never changes the lifted program,
+    /// so these slices stay valid for the whole lowering.
+    fn liftedView(self: *const Lowerer) Lifted.ProgramView {
+        return self.solved.lifted.view();
+    }
+
     fn stringLiteral(self: *const Lowerer, id: Lifted.StringLiteralId) Mono.StringLiteral {
         return self.solved.lifted.getStringLiteral(id);
     }
@@ -4434,7 +4597,7 @@ const Lowerer = struct {
 
     fn noteLocal(self: *Lowerer, local: LIR.LocalId) Common.LowerError!void {
         if (self.current_proc_locals) |locals| {
-            try locals.put(self.allocator, @backingInt(local), {});
+            try locals.put(local, {});
         }
     }
 
@@ -4448,7 +4611,8 @@ const Lowerer = struct {
 
     fn lowerComptimeSite(self: *Lowerer, site: Lifted.ComptimeSiteId) Common.LowerError!LIR.ComptimeSiteId {
         const index = @backingInt(site);
-        if (self.comptime_site_map[index]) |existing| return existing;
+        const existing = self.comptime_site_map[index];
+        if (existing != no_comptime_site) return existing;
         if (self.worker_callback) {
             self.missingWorkerPreparation("Solved-LIR worker referenced an unprepared compile-time site");
         }
@@ -4487,15 +4651,14 @@ const Lowerer = struct {
         Common.invariant("test-plan expect has no prepared observation site");
     }
 
-    fn writeFrameLocals(self: *Lowerer, locals: *ProcLocalSet) Common.LowerError!LIR.LocalSpan {
-        const raw_ids = locals.keys();
-        const sorted = try self.allocator.alloc(LIR.LocalId, raw_ids.len);
-        defer self.allocator.free(sorted);
-        for (raw_ids, 0..) |raw_id, i| {
-            sorted[i] = @fromBackingInt(@intCast(raw_id));
-        }
-        std.mem.sort(LIR.LocalId, sorted, {}, localIdLessThan);
-        return try self.result.store.addLocalSpan(sorted);
+    fn writeFrameLocals(self: *Lowerer, locals: *const ProcLocalSet) Common.LowerError!LIR.LocalSpan {
+        const sorted = &self.lane_scratch.frame_locals;
+        sorted.clearRetainingCapacity();
+        try sorted.ensureTotalCapacity(self.allocator, locals.count());
+        var keys = locals.constKeyIterator();
+        while (keys.next()) |local| sorted.appendAssumeCapacity(local);
+        std.mem.sort(LIR.LocalId, sorted.items, {}, localIdLessThan);
+        return try self.result.store.addLocalSpan(sorted.items);
     }
 
     fn stackProbeForProc(self: *Lowerer, args: LIR.LocalSpan, frame_locals: LIR.LocalSpan, ret_layout: layout.Idx) LIR.StackProbe {
@@ -6086,10 +6249,10 @@ const Lowerer = struct {
         target: LIR.LocalId,
         result_ty: Type.TypeId,
         callee: Lifted.FnId,
-        /// Owned.
-        args: []Lifted.ExprId,
-        /// Owned.
-        capture_operands: []Lifted.CaptureOperand,
+        /// Borrowed from the lifted program.
+        args: []const Lifted.ExprId,
+        /// Borrowed from the lifted program.
+        capture_operands: []const Lifted.CaptureOperand,
         is_cold: bool,
         next: LIR.CFStmtId,
         target_fn: Type.FnId = undefined,
@@ -6103,8 +6266,8 @@ const Lowerer = struct {
         target: LIR.LocalId,
         result_ty: Type.TypeId,
         callee: Type.FnId,
-        /// Owned.
-        args: []Lifted.ExprId,
+        /// Borrowed from the lifted program.
+        args: []const Lifted.ExprId,
         capture_arg: ?LIR.LocalId,
         is_cold: bool,
         next: LIR.CFStmtId,
@@ -6116,19 +6279,22 @@ const Lowerer = struct {
         /// The capture value types, then the argument types.
         arg_tys: []Type.TypeId = &.{},
         lowered: ?LoweredExprLocals = null,
-        /// The argument positions an inlined call bound directly to the
-        /// caller locals they read.
-        substituted: ?[]bool = null,
+        /// Where the argument positions an inlined call bound directly to
+        /// the caller locals they read start in the lane's
+        /// `inline_substitutions`.
+        substituted_start: ?usize = null,
     };
 
     const InlineCallTask = struct {
         where: LowerSite,
         target: LIR.LocalId,
         callee: Type.FnId,
-        /// Owned.
-        arg_locals: []LIR.LocalId,
-        /// Owned. One local per callee capture, in capture order.
-        capture_locals: []LIR.LocalId,
+        /// Borrowed from the calling known call's lowered arguments, which
+        /// outlive this task.
+        arg_locals: []const LIR.LocalId,
+        /// Borrowed like `arg_locals`. One local per callee capture, in
+        /// capture order.
+        capture_locals: []const LIR.LocalId,
         body_expr: Lifted.ExprId,
         next: LIR.CFStmtId,
         /// The bindings the callee's arguments and captures shadowed, once
@@ -6144,8 +6310,8 @@ const Lowerer = struct {
         callee_ty: Type.TypeId,
         /// Owned.
         variants: []Type.FnVariant,
-        /// Owned.
-        args: []Lifted.ExprId,
+        /// Borrowed from the lifted program.
+        args: []const Lifted.ExprId,
         next: LIR.CFStmtId,
         callee: LIR.LocalId = undefined,
         done: LIR.JoinPointId = undefined,
@@ -6572,44 +6738,25 @@ const Lowerer = struct {
                 if (task.forwarding) |scope| self.leaveReturnForwarding(scope);
                 task.forwarding = null;
             },
-            .direct_call => |*task| {
-                self.allocator.free(task.args);
-                task.args = &.{};
-                self.allocator.free(task.capture_operands);
-                task.capture_operands = &.{};
-            },
             .known_call => |*task| {
-                self.allocator.free(task.args);
-                task.args = &.{};
                 self.allocator.free(task.capture_values);
                 task.capture_values = &.{};
                 self.allocator.free(task.arg_tys);
                 task.arg_tys = &.{};
                 if (task.lowered) |lowered| lowered.deinit(self.allocator);
                 task.lowered = null;
-                if (task.substituted) |mask| self.allocator.free(mask);
-                task.substituted = null;
+                if (task.substituted_start) |start| self.lane_scratch.inline_substitutions.shrinkRetainingCapacity(start);
+                task.substituted_start = null;
             },
-            .inline_call => |*task| {
-                self.restoreInlineCallArgs(task);
-                self.allocator.free(task.arg_locals);
-                task.arg_locals = &.{};
-                self.allocator.free(task.capture_locals);
-                task.capture_locals = &.{};
-            },
+            .inline_call => |*task| self.restoreInlineCallArgs(task),
             .callable_call => |*task| {
                 self.allocator.free(task.variants);
                 task.variants = &.{};
-                self.allocator.free(task.args);
-                task.args = &.{};
                 self.allocator.free(task.bodies);
                 task.bodies = &.{};
             },
             .match_ => |*task| {
-                if (task.arena) |arena| {
-                    arena.deinit();
-                    self.allocator.destroy(arena);
-                }
+                if (task.arena) |arena| self.lane_scratch.releaseArena(arena);
                 task.arena = null;
             },
             .block => |*task| {
@@ -6623,10 +6770,7 @@ const Lowerer = struct {
             },
             .loop_ => |*task| self.leaveLoop(task),
             .join_point => |*task| self.leaveJoinPoint(task),
-            .callable_variant => |*task| {
-                if (task.call) |call| self.allocator.free(call.args);
-                task.call = null;
-            },
+            .callable_variant => |*task| task.call = null,
             .recursive_let => |*task| {
                 self.allocator.free(task.slots);
                 task.slots = &.{};
@@ -6638,6 +6782,7 @@ const Lowerer = struct {
             .payload_switch,
             .try_sequence,
             .try_record_sequence,
+            .direct_call,
             => {},
         }
     }
@@ -7146,8 +7291,8 @@ const Lowerer = struct {
             const id = try self.lirStaticDataFor(candidate, ty, layout_idx);
             // A list of copies keeps its slot and also names its fresh form
             // and its item count.
-            var arena = base.SingleThreadArena.init(self.allocator);
-            defer arena.deinit();
+            const arena = try self.lane_scratch.acquireArena();
+            defer self.lane_scratch.releaseArena(arena);
             var fresh_alternative: ?LIR.LirProcSpecId = null;
             var list_len: ?u64 = null;
             if (try self.uniformListOfExpr(arena.allocator(), candidate.runtime_expr, ty, layout_idx)) |uniform| {
@@ -7916,9 +8061,9 @@ const Lowerer = struct {
         call: @FieldType(Lifted.ExprData, "call_proc"),
         next: LIR.CFStmtId,
     ) Common.LowerError!LowerStep {
-        const args = try GuardedList.dupe(self.allocator, Lifted.ExprId, self.solved.lifted.exprSpan(call.args));
-        errdefer self.allocator.free(args);
-        const capture_operands = try GuardedList.dupe(self.allocator, Lifted.CaptureOperand, self.solved.lifted.captureOperandSpan(call.captures));
+        const lifted = self.liftedView();
+        const args = lifted.exprSpan(call.args);
+        const capture_operands = lifted.captureOperandSpan(call.captures);
         return .{ .tail = .{ .direct_call = .{
             .where = where,
             .target = target,
@@ -7953,8 +8098,7 @@ const Lowerer = struct {
         };
         task.captures = try self.capturesForFn(callee);
         const capture_items = self.captureSpan(task.captures);
-        const args = try self.allocator.dupe(Lifted.ExprId, task.args);
-        errdefer self.allocator.free(args);
+        const args = task.args;
         if (capture_items.len == 0) {
             if (task.capture_operands.len != 0) Common.invariant("direct call carried capture operands for a capture-free callee");
             return .{ .tail = .{ .known_call = .{
@@ -8010,7 +8154,9 @@ const Lowerer = struct {
     fn stepKnownCall(self: *Lowerer, frame: *LowerFrame, task: *KnownCallTask, input: ?LIR.CFStmtId) Common.LowerError!LowerStep {
         if (frame.cursor == 1) {
             const lowered = task.lowered.?;
-            return .{ .tail = try self.operandChainSkipping(task.where, lowered, task.arg_tys, task.substituted, null, input.?) };
+            const start = task.substituted_start.?;
+            const substituted = self.lane_scratch.inline_substitutions.items[start..][0..lowered.ids.len];
+            return .{ .tail = try self.operandChainSkipping(task.where, lowered, task.arg_tys, substituted, null, input.?) };
         }
         const callee = task.callee;
         const where = task.where;
@@ -8061,16 +8207,17 @@ const Lowerer = struct {
                 // the body's branches, so a caller that keeps the local on
                 // one outcome would retain it across every other outcome's
                 // consuming use.
-                const substituted = try self.allocator.alloc(bool, lowered.ids.len);
-                task.substituted = substituted;
+                const substitutions = &self.lane_scratch.inline_substitutions;
+                const start = substitutions.items.len;
+                try substitutions.ensureUnusedCapacity(self.allocator, lowered.ids.len);
+                task.substituted_start = start;
                 for (lowered.exprs, task.arg_tys, 0..) |arg_expr, arg_ty, i| {
                     const source = try self.inlineArgumentLocal(arg_expr, arg_ty, lowered.ids[i], call_target);
-                    substituted[i] = source != null;
+                    substitutions.appendAssumeCapacity(source != null);
                     if (source) |local| lowered.ids[i] = local;
                 }
-                const capture_locals = try self.allocator.dupe(LIR.LocalId, lowered.ids[0..capture_count]);
-                errdefer self.allocator.free(capture_locals);
-                const arg_locals = try self.allocator.dupe(LIR.LocalId, lowered.ids[capture_count..]);
+                const capture_locals = lowered.ids[0..capture_count];
+                const arg_locals = lowered.ids[capture_count..];
                 frame.cursor = 1;
                 return .{ .call = .{ .inline_call = .{
                     .where = where,
@@ -8214,8 +8361,7 @@ const Lowerer = struct {
             // Branch lowering can lower argument types that append more variants to
             // self.types, so keep this iteration independent of the store backing.
             const variants = try GuardedList.dupe(self.allocator, Type.FnVariant, self.types.fnVariantSpan(content.callable));
-            errdefer self.allocator.free(variants);
-            const args = try GuardedList.dupe(self.allocator, Lifted.ExprId, self.solved.lifted.exprSpan(arg_span));
+            const args = self.liftedView().exprSpan(arg_span);
             return .{ .tail = .{ .callable_call = .{
                 .where = where,
                 .target = target,
@@ -8366,9 +8512,8 @@ const Lowerer = struct {
         arg_exprs: []const Lifted.ExprId,
         next: LIR.CFStmtId,
     ) Common.LowerError!LowerTask {
-        const args = try self.allocator.dupe(Lifted.ExprId, arg_exprs);
+        const args = arg_exprs;
         if (variant.capture_ty) |_| {
-            errdefer self.allocator.free(args);
             const payload = try self.addLocalForLayout(self.tagUnionPayloadLayout(self.result.store.getLocal(callee).layout_idx, variant_index));
             return .{ .callable_variant = .{
                 .where = where,
@@ -8688,12 +8833,8 @@ const Lowerer = struct {
         // (src/postcheck/match_tree.zig): one multiway test per tested
         // occurrence, one discriminant/length/field read per position, and
         // branch bodies lowered exactly once.
-        const arena_state = try self.allocator.create(base.SingleThreadArena);
-        arena_state.* = base.SingleThreadArena.init(self.allocator);
-        errdefer {
-            arena_state.deinit();
-            self.allocator.destroy(arena_state);
-        }
+        const arena_state = try self.lane_scratch.acquireArena();
+        errdefer self.lane_scratch.releaseArena(arena_state);
         const arena = arena_state.allocator();
 
         const shapes = try arena.create(MatchTreeCtx.ShapeInterner);
@@ -8751,10 +8892,7 @@ const Lowerer = struct {
                     .guard => |guard| return .{ .call = exprTask(task.where, guard.cond, guard.guard, null, guard.next) },
                 },
                 .done => |branch_chain| {
-                    if (task.arena) |arena| {
-                        arena.deinit();
-                        self.allocator.destroy(arena);
-                    }
+                    if (task.arena) |arena| self.lane_scratch.releaseArena(arena);
                     task.arena = null;
                     frame.cursor = 1;
                     return .{ .call = exprTask(task.where, task.scrutinee_local, task.scrutinee, task.scrutinee_ty, branch_chain) };
@@ -9243,7 +9381,7 @@ const Lowerer = struct {
                     if (!has_lexical_binding and try self.captureBindingForLocal(retained_local.local) != null) continue;
                     const lir_local = try self.localFor(retained_local.local);
                     try retained_locals.append(self.allocator, lir_local);
-                    if (self.payload_conditions[@backingInt(retained_local.local)]) |payload| {
+                    if (self.payload_conditions.get(retained_local.local)) |payload| {
                         try maybe_uninitialized_retained.append(self.allocator, lir_local);
                         try maybe_uninitialized_conditions.append(self.allocator, try self.localFor(payload.condition));
                         try maybe_uninitialized_condition_masks.append(self.allocator, payload.mask);
