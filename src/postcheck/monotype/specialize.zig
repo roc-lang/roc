@@ -34,6 +34,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const check = @import("check");
+const collections = @import("collections");
 const Ast = @import("ast.zig");
 const Type = @import("type.zig");
 
@@ -271,6 +272,25 @@ pub const SpecLookupAddress = struct {
     }
 };
 
+/// Hashes a lookup address by a fold of its fields. The digests are uniformly
+/// distributed content hashes, so eight bytes of each identify its bucket as
+/// well as all thirty-two; equality still compares the whole address.
+const SpecLookupAddressContext = struct {
+    pub fn hash(_: SpecLookupAddressContext, address: SpecLookupAddress) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        const scalars = [_]u32{ address.callable_kind, address.index_a, address.index_b, address.index_c, @intFromBool(address.default_root) };
+        hasher.update(std.mem.asBytes(&scalars));
+        inline for (.{ "module_bytes", "method_scope", "owner_fn_digest", "default_root_module", "evidence_digest", "codec_contract_digest", "type_digest" }) |field| {
+            hasher.update(@field(address, field)[0..8]);
+        }
+        return hasher.final();
+    }
+
+    pub fn eql(_: SpecLookupAddressContext, left: SpecLookupAddress, right: SpecLookupAddress) bool {
+        return std.meta.eql(left, right);
+    }
+};
+
 /// A request that a record served through its solved view: the request's
 /// type is less specific than the record's own request, and equals the type
 /// the record's body solved to.
@@ -283,6 +303,8 @@ pub const SolvedViewHit = struct {
 /// no record's identity was rewritten after `reserve` and that every lookup
 /// entry belongs to some record's request or solved view.
 const identity_shadow_enabled = builtin.mode == .debug;
+
+const SpecLookupBucket = collections.ChainedBuckets(SpecLookupAddress, Ast.SpecId, SpecLookupAddressContext);
 
 /// Direct specialization reservation table keyed by callable identity, its
 /// dispatch context, and the closed requested (or solved-alias) type digest.
@@ -297,11 +319,11 @@ pub const SpecBuilder = struct {
     /// One owned copy per distinct evidence topology, shared by every record
     /// whose topology is equal, found through `owned_evidence_by_digest`.
     owned_evidence: std.ArrayList(OwnedEvidence),
-    owned_evidence_by_digest: std.AutoHashMap(Ast.EvidenceDigest, std.ArrayList(u32)),
+    owned_evidence_by_digest: collections.AutoChainedBuckets(Ast.EvidenceDigest, u32),
     /// The owned copy each program evidence position was already found
     /// equal to.
     owned_evidence_by_program_span: std.AutoHashMap(ProgramEvidenceSpan, u32),
-    lookup: std.AutoHashMap(SpecLookupAddress, std.ArrayList(Ast.SpecId)),
+    lookup: SpecLookupBucket,
     /// Every request a record served through its solved view, in the order
     /// requests arrived. Together with the records' own request identities,
     /// these are every identity that resolved to a record, which does not
@@ -324,9 +346,9 @@ pub const SpecBuilder = struct {
             .records = records,
             .local_evidence = .empty,
             .owned_evidence = .empty,
-            .owned_evidence_by_digest = std.AutoHashMap(Ast.EvidenceDigest, std.ArrayList(u32)).init(allocator),
+            .owned_evidence_by_digest = .empty,
             .owned_evidence_by_program_span = std.AutoHashMap(ProgramEvidenceSpan, u32).init(allocator),
-            .lookup = std.AutoHashMap(SpecLookupAddress, std.ArrayList(Ast.SpecId)).init(allocator),
+            .lookup = .empty,
             .solved_view_hits = .empty,
             .counters = null,
             .reserved_identities = if (identity_shadow_enabled) .empty else {},
@@ -337,16 +359,12 @@ pub const SpecBuilder = struct {
         if (identity_shadow_enabled) {
             self.reserved_identities.deinit(self.allocator);
         }
-        var lists = self.lookup.valueIterator();
-        while (lists.next()) |list| list.deinit(self.allocator);
-        self.lookup.deinit();
+        self.lookup.deinit(self.allocator);
         self.solved_view_hits.deinit(self.allocator);
         self.local_evidence.deinit(self.allocator);
         for (self.owned_evidence.items) |evidence| evidence.deinit(self.allocator);
         self.owned_evidence.deinit(self.allocator);
-        var owned_buckets = self.owned_evidence_by_digest.valueIterator();
-        while (owned_buckets.next()) |bucket| bucket.deinit(self.allocator);
-        self.owned_evidence_by_digest.deinit();
+        self.owned_evidence_by_digest.deinit(self.allocator);
         self.owned_evidence_by_program_span.deinit();
     }
 
@@ -362,10 +380,7 @@ pub const SpecBuilder = struct {
     ) std.mem.Allocator.Error!ReserveResult {
         if (!evidenceDigestMatches(identity, evidence)) invariant("Monotype specialization evidence digest did not match its exact topology");
         const address = SpecLookupAddress.from(identity.callable, identity.method_scope, identity.evidence_digest, identity.codec_contract_digest, identity.request_fn_ty_digest);
-        const gop = try self.lookup.getOrPut(address);
-        if (!gop.found_existing) gop.value_ptr.* = .empty;
-
-        if (try self.matchInBucket(gop.value_ptr.items, identity, evidence)) |hit| {
+        if (try self.matchInBucket(self.lookup.get(address), identity, evidence)) |hit| {
             return .{
                 .spec = hit.local.spec,
                 .target = hit.target(),
@@ -375,6 +390,7 @@ pub const SpecBuilder = struct {
 
         const spec_id: Ast.SpecId = @fromBackingInt(@intCast(@as(u32, @intCast(self.records.len()))));
         if (self.local_evidence.items.len != @backingInt(spec_id)) invariant("Monotype local specialization evidence table diverged from its records");
+        try self.lookup.ensureUnusedCapacity(self.allocator, 1, 1);
         const owned_index = try self.ownedEvidenceIndex(evidence);
         try self.records.append(self.allocator, .{
             .identity = identity,
@@ -392,7 +408,7 @@ pub const SpecBuilder = struct {
         errdefer if (identity_shadow_enabled) {
             _ = self.reserved_identities.pop();
         };
-        try gop.value_ptr.append(self.allocator, spec_id);
+        self.lookup.appendAssumeCapacity(address, spec_id);
         return .{
             .spec = spec_id,
             .target = .{ .local = fn_id },
@@ -418,9 +434,15 @@ pub const SpecBuilder = struct {
     ) std.mem.Allocator.Error!?LookupResult {
         if (!evidenceDigestMatches(identity, evidence)) invariant("Monotype specialization lookup evidence digest did not match its exact topology");
         const address = SpecLookupAddress.from(identity.callable, identity.method_scope, identity.evidence_digest, identity.codec_contract_digest, identity.request_fn_ty_digest);
-        const entries = self.lookup.get(address) orelse return null;
-        self.countCandidatesBy(identity.callable, entries.items.len);
-        return try self.matchInBucket(entries.items, identity, evidence);
+        const entries = self.lookup.get(address);
+        if (entries.isEmpty()) return null;
+        if (self.counters != null) {
+            var counted = entries;
+            var amount: usize = 0;
+            while (counted.next()) |_| amount += 1;
+            self.countCandidatesBy(identity.callable, amount);
+        }
+        return try self.matchInBucket(entries, identity, evidence);
     }
 
     /// Match `identity` against one lookup bucket. Request-view matches win
@@ -430,7 +452,7 @@ pub const SpecBuilder = struct {
     /// the exact structural equality collision authority remain.
     fn matchInBucket(
         self: *SpecBuilder,
-        entries: []const Ast.SpecId,
+        entries: SpecLookupBucket.Iterator,
         identity: Ast.SpecIdentity,
         evidence: EvidenceView,
     ) std.mem.Allocator.Error!?LookupResult {
@@ -438,14 +460,16 @@ pub const SpecBuilder = struct {
         // program position is known to equal one, comparing copies is
         // comparing topologies.
         const known: ?u32 = if (evidence.program_span) |span| self.owned_evidence_by_program_span.get(span) else null;
-        for (entries) |local_spec| {
+        var request_view = entries;
+        while (request_view.next()) |local_spec| {
             const record = self.recordPtr(local_spec);
             if (!self.localEvidenceEql(local_spec, evidence, known)) continue;
             if (!try self.localCodecContractMatches(record.identity, identity)) continue;
             if (!try self.localViewMatches(record.identity.request_fn_ty, record.identity.request_fn_ty_digest, identity)) continue;
             return localResult(local_spec, record, record.identity.request_fn_ty);
         }
-        for (entries) |local_spec| {
+        var solved_view = entries;
+        while (solved_view.next()) |local_spec| {
             const record = self.recordPtr(local_spec);
             if (record.status != .ready) continue;
             if (!self.localEvidenceEql(local_spec, evidence, known)) continue;
@@ -558,10 +582,9 @@ pub const SpecBuilder = struct {
         spec: Ast.SpecId,
     ) std.mem.Allocator.Error!void {
         const address = SpecLookupAddress.from(callable, method_scope, evidence_digest, codec_contract_digest, type_digest);
-        const gop = try self.lookup.getOrPut(address);
-        if (!gop.found_existing) gop.value_ptr.* = .empty;
-        for (gop.value_ptr.items) |existing| if (existing == spec) return;
-        try gop.value_ptr.append(self.allocator, spec);
+        var existing = self.lookup.get(address);
+        while (existing.next()) |entry_spec| if (entry_spec == spec) return;
+        try self.lookup.append(self.allocator, address, spec);
     }
 
     fn recordPtr(self: *SpecBuilder, spec: Ast.SpecId) *Ast.SpecRecord {
@@ -587,17 +610,17 @@ pub const SpecBuilder = struct {
     }
 
     fn ownedEvidenceIndexByTopology(self: *SpecBuilder, evidence: EvidenceView) std.mem.Allocator.Error!u32 {
-        const bucket = try self.owned_evidence_by_digest.getOrPut(evidence.digest);
-        if (!bucket.found_existing) bucket.value_ptr.* = .empty;
-        for (bucket.value_ptr.items) |index| {
+        var bucket = self.owned_evidence_by_digest.get(evidence.digest);
+        while (bucket.next()) |index| {
             if (evidenceEql(self.owned_evidence.items[index].view(), evidence)) return index;
         }
+        try self.owned_evidence_by_digest.ensureUnusedCapacity(self.allocator, 1, 1);
         const index: u32 = @intCast(self.owned_evidence.items.len);
         const owned = try OwnedEvidence.init(self.allocator, evidence);
         errdefer owned.deinit(self.allocator);
         try self.owned_evidence.append(self.allocator, owned);
         errdefer _ = self.owned_evidence.pop();
-        try bucket.value_ptr.append(self.allocator, index);
+        self.owned_evidence_by_digest.appendAssumeCapacity(evidence.digest, index);
         return index;
     }
 
@@ -674,14 +697,16 @@ pub const SpecBuilder = struct {
 
         // Reverse: every lookup entry must be an address the record's history
         // produced, and no address may list the same record twice.
-        var iterator = self.lookup.iterator();
-        while (iterator.next()) |entry| {
-            for (entry.value_ptr.items, 0..) |spec_id, entry_index| {
+        var addresses = self.lookup.keyIterator();
+        while (addresses.next()) |address| {
+            var specs = self.lookup.get(address.*);
+            while (specs.next()) |spec_id| {
                 const record = self.records.get(@backingInt(spec_id));
-                if (!addressInRecordHistory(record, entry.key_ptr.*)) {
+                if (!addressInRecordHistory(record, address.*)) {
                     return .record_reachable_from_foreign_key;
                 }
-                for (entry.value_ptr.items[entry_index + 1 ..]) |later_spec| if (later_spec == spec_id) return .record_reachable_from_foreign_key;
+                var later = specs;
+                while (later.next()) |later_spec| if (later_spec == spec_id) return .record_reachable_from_foreign_key;
             }
         }
         return null;
@@ -689,8 +714,8 @@ pub const SpecBuilder = struct {
 
     fn recordReachableAt(self: *const SpecBuilder, spec: Ast.SpecId, record: Ast.SpecRecord, digest: names.TypeDigest) bool {
         const address = SpecLookupAddress.from(record.identity.callable, record.identity.method_scope, record.identity.evidence_digest, record.identity.codec_contract_digest, digest);
-        const entries = self.lookup.get(address) orelse return false;
-        for (entries.items) |entry_spec| if (entry_spec == spec) return true;
+        var entries = self.lookup.get(address);
+        while (entries.next()) |entry_spec| if (entry_spec == spec) return true;
         return false;
     }
 

@@ -40,6 +40,9 @@ pub const DenseMap = @import("DenseMap.zig").DenseMap;
 /// A direct-indexed map over dense IDs that takes its allocator per call.
 pub const DenseMapUnmanaged = @import("DenseMap.zig").DenseMapUnmanaged;
 pub const RingQueue = @import("RingQueue.zig").RingQueue;
+/// A multimap whose buckets are chains through one shared node list.
+pub const ChainedBuckets = @import("ChainedBuckets.zig").ChainedBuckets;
+pub const AutoChainedBuckets = @import("ChainedBuckets.zig").AutoChainedBuckets;
 pub const VersionedDenseMap = @import("VersionedMap.zig").VersionedDenseMap;
 pub const VersionedHashMap = @import("VersionedMap.zig").VersionedHashMap;
 pub const DenseMapPool = @import("DenseMap.zig").DenseMapPool;
@@ -112,6 +115,7 @@ test "collections tests" {
     std.testing.refAllDecls(@import("DeterministicAllocator.zig"));
     std.testing.refAllDecls(@import("DenseMap.zig"));
     std.testing.refAllDecls(@import("RingQueue.zig"));
+    std.testing.refAllDecls(@import("ChainedBuckets.zig"));
     std.testing.refAllDecls(@import("any_all.zig"));
     std.testing.refAllDecls(@import("VersionedMap.zig"));
     std.testing.refAllDecls(@import("IndexedStack.zig"));
