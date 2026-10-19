@@ -313,6 +313,20 @@ pub const MonoLlvmCodeGen = struct {
     /// call supplies this storage and every member passes it along.
     /// Indexed by tail group.
     tail_scratch: std.ArrayList(TailScratch) = .empty,
+    /// Per procedure, its `FastSignature`, computed on first use. It depends
+    /// only on the procedure and its tail group's storage, so it is cleared
+    /// whenever `tail_scratch` is recomputed. The signatures' slices live in
+    /// `fast_signature_arena`.
+    fast_signatures: collections.DenseMap(u32, FastSignature),
+    fast_signature_arena: Base.SingleThreadArena,
+    /// Parameter types and arguments of the direct call being emitted by
+    /// `emitFastDirectCall` or `emitFrameReplacingCall`.
+    fast_call_param_types: std.ArrayList(LlvmBuilder.Type) = .empty,
+    fast_call_args: std.ArrayList(LlvmBuilder.Value) = .empty,
+    /// The image of one refcounted static byte backing while it is built.
+    refcounted_bytes_scratch: std.ArrayList(u8) = .empty,
+    /// Scratch for the C-ABI lowering of one hosted call, reset per call.
+    hosted_abi_arena: Base.SingleThreadArena,
     /// The current fast body's group storage parameter, if its group has any.
     current_tail_scratch: ?LlvmBuilder.Value = null,
     current_tail_group: ?lir.LIR.TailGroupId = null,
@@ -386,6 +400,16 @@ pub const MonoLlvmCodeGen = struct {
     compiled_joins: collections.DenseMap(u32, void),
     stmt_incoming_counts: collections.DenseMap(u32, u32),
     stmt_entry_blocks: collections.DenseMap(u32, LlvmBuilder.Function.Block.Index),
+    /// Store-indexed statement marks for one statement-graph walk at a time:
+    /// a statement is visited when its mark equals `stmt_visit_epoch`.
+    stmt_visit_marks: std.ArrayList(u32) = .empty,
+    stmt_visit_epoch: u32 = 0,
+    /// Case blocks of the switches being emitted, one run per switch (see
+    /// `StmtWork`).
+    switch_case_blocks: std.ArrayList(LlvmBuilder.Function.Block.Index) = .empty,
+    /// Captures of the string-match bodies queued for emission, one run per
+    /// body (see `StmtWork`).
+    str_match_captures: std.ArrayList(DeferredStrCaptureBinding) = .empty,
     /// Reusable store-indexed columns. Only a procedure's explicit inventory
     /// is invalidated at its end; growing the store initializes only new rows.
     local_slot_storage: std.ArrayList(LocalSlot) = .empty,
@@ -589,6 +613,9 @@ pub const MonoLlvmCodeGen = struct {
             .boxy_worker_procs = boxy_worker_procs,
             .proc_registry = collections.DenseMap(u32, LlvmBuilder.Function.Index).init(allocator),
             .fast_registry = collections.DenseMap(u32, LlvmBuilder.Function.Index).init(allocator),
+            .fast_signatures = collections.DenseMap(u32, FastSignature).init(allocator),
+            .fast_signature_arena = Base.SingleThreadArena.init(allocator),
+            .hosted_abi_arena = Base.SingleThreadArena.init(allocator),
             .symbol_functions = std.StringHashMap(LlvmBuilder.Function.Index).init(allocator),
             .static_bytes = std.StringHashMap(LlvmBuilder.Value).init(allocator),
             .static_refcounted_backings = collections.DenseMap(u32, LlvmBuilder.Value).init(allocator),
@@ -654,6 +681,12 @@ pub const MonoLlvmCodeGen = struct {
         self.proc_registry.deinit();
         self.fast_registry.deinit();
         self.tail_scratch.deinit(self.allocator);
+        self.fast_signatures.deinit();
+        self.fast_signature_arena.deinit();
+        self.fast_call_param_types.deinit(self.allocator);
+        self.fast_call_args.deinit(self.allocator);
+        self.refcounted_bytes_scratch.deinit(self.allocator);
+        self.hosted_abi_arena.deinit();
         self.tail_scratch_slots.deinit(self.allocator);
         self.clearTailDrivers();
         self.tail_drivers.deinit(self.allocator);
@@ -672,6 +705,9 @@ pub const MonoLlvmCodeGen = struct {
         self.compiled_joins.deinit();
         self.stmt_incoming_counts.deinit();
         self.stmt_entry_blocks.deinit();
+        self.stmt_visit_marks.deinit(self.allocator);
+        self.switch_case_blocks.deinit(self.allocator);
+        self.str_match_captures.deinit(self.allocator);
     }
 
     /// Clears per-module caches while retaining allocated capacity.
@@ -679,6 +715,7 @@ pub const MonoLlvmCodeGen = struct {
         self.proc_registry.clearRetainingCapacity();
         self.fast_registry.clearRetainingCapacity();
         self.tail_scratch.clearRetainingCapacity();
+        self.clearFastSignatures();
         self.tail_scratch_slots.clearRetainingCapacity();
         self.tail_scratch_slots_owner = null;
         self.clearTailDrivers();
@@ -1905,10 +1942,20 @@ pub const MonoLlvmCodeGen = struct {
         scratch: TailScratch,
     };
 
-    fn fastSignature(self: *MonoLlvmCodeGen, arena: std.mem.Allocator, proc: LirProcSpec) Error!FastSignature {
-        const arg_layouts = try self.procArgLayouts(proc, .explicit);
-        const owned = try arena.dupe(layout.Idx, arg_layouts);
-        self.allocator.free(arg_layouts);
+    fn clearFastSignatures(self: *MonoLlvmCodeGen) void {
+        self.fast_signatures.clearRetainingCapacity();
+        _ = self.fast_signature_arena.reset(.retain_capacity);
+    }
+
+    fn fastSignature(self: *MonoLlvmCodeGen, proc_id: LirProcSpecId) Error!FastSignature {
+        if (self.fast_signatures.get(@backingInt(proc_id))) |sig| return sig;
+        const sig = try self.computeFastSignature(self.fast_signature_arena.allocator(), self.store.getProcSpec(proc_id));
+        try self.fast_signatures.put(@backingInt(proc_id), sig);
+        return sig;
+    }
+
+    fn computeFastSignature(self: *MonoLlvmCodeGen, arena: std.mem.Allocator, proc: LirProcSpec) Error!FastSignature {
+        const owned = try self.procArgLayoutsIn(arena, proc, .explicit);
         const lowered = layout.abi.lower(arena, self.layouts(), self.abiTarget(), owned, proc.ret_layout, false) catch return error.OutOfMemory;
         const scratch: TailScratch = if (proc.tail_group) |group| blk: {
             if (@backingInt(group) >= self.tail_scratch.items.len) llvmInvariantFmt("tail group {d} has no recorded argument storage", .{@backingInt(group)});
@@ -1990,6 +2037,7 @@ pub const MonoLlvmCodeGen = struct {
     /// pointer, which can leave further arguments to the storage.
     fn computeTailScratch(self: *MonoLlvmCodeGen, procs: []const LirProcSpec) Error!void {
         self.tail_scratch.clearRetainingCapacity();
+        self.clearFastSignatures();
         var group_count: usize = 0;
         for (procs) |proc| {
             if (proc.tail_group) |group| group_count = @max(group_count, @as(usize, @backingInt(group)) + 1);
@@ -2174,9 +2222,7 @@ pub const MonoLlvmCodeGen = struct {
             wip.cursor = .{ .block = block };
             const proc = self.store.getProcSpec(member);
             const fast = self.fast_registry.get(@backingInt(member)) orelse return error.CompilationFailed;
-            var arena_state = Base.SingleThreadArena.init(self.allocator);
-            defer arena_state.deinit();
-            const sig = try self.fastSignature(arena_state.allocator(), proc);
+            const sig = try self.fastSignature(member);
             const offsets = try self.allocator.alloc(u32, sig.arg_layouts.len);
             defer self.allocator.free(offsets);
             _ = self.tailArgOffsets(sig.arg_layouts, offsets);
@@ -2350,20 +2396,14 @@ pub const MonoLlvmCodeGen = struct {
     fn fastProcFunctionName(self: *MonoLlvmCodeGen, builder: *LlvmBuilder, proc_id: LirProcSpecId, proc: LirProcSpec) Error!LlvmBuilder.StrtabString {
         return switch (self.proc_symbol_mode) {
             .local_index => builder.strtabStringFmt("roc_proc_{d}.fast", .{@backingInt(proc_id)}) catch return error.OutOfMemory,
-            .lir_symbol => blk: {
-                const name = std.fmt.allocPrint(self.allocator, "{s}{s}{s}.fast", .{ self.static_symbol_prefix, lir.ProcIdentity.symbol_name_prefix, &proc.identity.symbolHex() }) catch return error.OutOfMemory;
-                defer self.allocator.free(name);
-                break :blk try self.exportedFunctionName(builder, name);
-            },
+            .lir_symbol => try self.procSymbolFunctionName(builder, proc, ".fast"),
         };
     }
 
     fn declareFastProcSpec(self: *MonoLlvmCodeGen, proc_id: LirProcSpecId, proc: LirProcSpec) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const ptr_ty = builder.ptrType(.default) catch return error.OutOfMemory;
-        var arena_state = Base.SingleThreadArena.init(self.allocator);
-        defer arena_state.deinit();
-        const sig = try self.fastSignature(arena_state.allocator(), proc);
+        const sig = try self.fastSignature(proc_id);
 
         var param_types = std.ArrayList(LlvmBuilder.Type).empty;
         defer param_types.deinit(self.allocator);
@@ -2476,9 +2516,7 @@ pub const MonoLlvmCodeGen = struct {
         const entry = wip.block(0, "entry") catch return error.OutOfMemory;
         wip.cursor = .{ .block = entry };
 
-        var arena_state = Base.SingleThreadArena.init(self.allocator);
-        defer arena_state.deinit();
-        const sig = try self.fastSignature(arena_state.allocator(), proc);
+        const sig = try self.fastSignature(proc_id);
         const offsets = try self.computeArgOffsets(sig.arg_layouts, true);
         defer self.allocator.free(offsets);
 
@@ -2569,11 +2607,7 @@ pub const MonoLlvmCodeGen = struct {
     ) Error!LlvmBuilder.StrtabString {
         return switch (self.proc_symbol_mode) {
             .local_index => builder.strtabStringFmt("roc_proc_{d}", .{@backingInt(proc_id)}) catch return error.OutOfMemory,
-            .lir_symbol => blk: {
-                const name = std.fmt.allocPrint(self.allocator, "{s}{s}{s}", .{ self.static_symbol_prefix, lir.ProcIdentity.symbol_name_prefix, &proc.identity.symbolHex() }) catch return error.OutOfMemory;
-                defer self.allocator.free(name);
-                break :blk try self.exportedFunctionName(builder, name);
-            },
+            .lir_symbol => try self.procSymbolFunctionName(builder, proc, ""),
         };
     }
 
@@ -2583,9 +2617,7 @@ pub const MonoLlvmCodeGen = struct {
         const builder = self.builder orelse return error.CompilationFailed;
         const fast_func: ?LlvmBuilder.Function.Index = if (fastAbiEligible(proc)) self.fast_registry.get(@backingInt(proc_id)) else null;
         const func = fast_func orelse self.proc_registry.get(@backingInt(proc_id)) orelse return error.CompilationFailed;
-        var fast_arena = Base.SingleThreadArena.init(self.allocator);
-        defer fast_arena.deinit();
-        const fast_sig: ?FastSignature = if (fast_func != null) try self.fastSignature(fast_arena.allocator(), proc) else null;
+        const fast_sig: ?FastSignature = if (fast_func != null) try self.fastSignature(proc_id) else null;
 
         const outer_wip = self.wip;
         const outer_rc_scratch = self.rc_arg_scratch;
@@ -3094,6 +3126,23 @@ pub const MonoLlvmCodeGen = struct {
         }) catch return error.OutOfMemory;
     }
 
+    /// The exported function name of `proc`'s LIR symbol followed by `suffix`,
+    /// assembled in one buffer.
+    fn procSymbolFunctionName(self: *MonoLlvmCodeGen, builder: *LlvmBuilder, proc: LirProcSpec, comptime suffix: []const u8) Error!LlvmBuilder.StrtabString {
+        const exact_prefix: []const u8 = if (self.target.os.tag == .macos) "\x01_" else "";
+        var name_sfa_buffer: [128]u8 align(@alignOf(usize)) = undefined;
+        var name_sfa = std.heap.BufferFirstAllocator.init(&name_sfa_buffer, self.allocator);
+        const name_alloc = name_sfa.allocator();
+        const name = try name_alloc.alloc(u8, exact_prefix.len + self.static_symbol_prefix.len + lir.ProcIdentity.symbol_name_len + suffix.len);
+        defer name_alloc.free(name);
+        @memcpy(name[0..exact_prefix.len], exact_prefix);
+        @memcpy(name[exact_prefix.len..][0..self.static_symbol_prefix.len], self.static_symbol_prefix);
+        const symbol_start = exact_prefix.len + self.static_symbol_prefix.len;
+        _ = proc.identity.writeSymbolName(name[symbol_start..][0..lir.ProcIdentity.symbol_name_len]);
+        @memcpy(name[symbol_start + lir.ProcIdentity.symbol_name_len ..], suffix);
+        return builder.strtabString(name) catch return error.OutOfMemory;
+    }
+
     fn exportedFunctionName(self: *MonoLlvmCodeGen, builder: *LlvmBuilder, name: []const u8) Error!LlvmBuilder.StrtabString {
         if (self.target.os.tag != .macos) {
             return builder.strtabString(name) catch return error.OutOfMemory;
@@ -3149,12 +3198,16 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn procArgLayouts(self: *MonoLlvmCodeGen, proc: LirProcSpec, scope: ProcArgLayoutScope) Error![]layout.Idx {
+        return self.procArgLayoutsIn(self.allocator, proc, scope);
+    }
+
+    fn procArgLayoutsIn(self: *MonoLlvmCodeGen, allocator: Allocator, proc: LirProcSpec, scope: ProcArgLayoutScope) Error![]layout.Idx {
         const params = self.store.getLocalSpan(proc.args);
         const count = switch (scope) {
             .all => params.len,
             .explicit => try explicitProcParamCount(proc.abi, params.len),
         };
-        const result = try self.allocator.alloc(layout.Idx, count);
+        const result = try allocator.alloc(layout.Idx, count);
         for (0..count) |i| {
             const local = GuardedList.at(params, i);
             const layout_slot = &result[i];
@@ -3391,13 +3444,15 @@ pub const MonoLlvmCodeGen = struct {
         _ = wip.retVoid() catch return error.OutOfMemory;
     }
 
-    /// Heap-backed glue carried across the children of one `switch_stmt` while
-    /// the explicit work stack drives statement emission. The branch case blocks
-    /// were already allocated and the LLVM switch instruction already finished;
+    /// Glue carried across the children of one `switch_stmt` while the
+    /// explicit work stack drives statement emission. The branch case blocks
+    /// were already created and the LLVM switch instruction already finished;
     /// these continuations only set the cursor and queue each branch body.
     const SwitchState = struct {
-        branches: lir.LirStore.StoreSpanBorrow(lir.CFSwitchBranch, "cf_switch_branches"),
-        branch_blocks: []LlvmBuilder.Function.Block.Index,
+        branches: lir.LIR.CFSwitchBranchSpan,
+        /// Where the branch case blocks start in `switch_case_blocks`, one
+        /// per branch.
+        blocks_start: u32,
         default_block: LlvmBuilder.Function.Block.Index,
         default_branch: CFStmtId,
         default_is_cold: bool,
@@ -3421,7 +3476,7 @@ pub const MonoLlvmCodeGen = struct {
         uninitialized_branch: CFStmtId,
     };
 
-    /// Heap-backed glue carried across the children of one `join` statement: the
+    /// Glue carried across the children of one `join` statement: the
     /// remainder subtree and (the first time the join is seen) the join body.
     const JoinState = struct {
         key: u32,
@@ -3433,7 +3488,9 @@ pub const MonoLlvmCodeGen = struct {
     const StrMatchBody = struct {
         block: LlvmBuilder.Function.Block.Index,
         stmt: CFStmtId,
-        captures: []const DeferredStrCaptureBinding = &.{},
+        /// The body's run of `str_match_captures`.
+        captures_start: u32 = 0,
+        captures_len: u32 = 0,
     };
 
     /// Drives statement-LIR emission with an explicit heap-backed work stack so
@@ -3442,16 +3499,20 @@ pub const MonoLlvmCodeGen = struct {
     /// exact post-children glue of `switch_stmt` and `join` that recursion
     /// previously interleaved. Continuations are pushed before their child so
     /// the child's whole subtree is emitted first, preserving emission order.
+    ///
+    /// Control statements nest on the work stack, so the runs they keep in
+    /// `switch_case_blocks` and `str_match_captures` are released in reverse
+    /// order of creation: each run is the top of its list when released.
     const StmtWork = union(enum) {
         node: CFStmtId,
-        switch_branch: struct { state: *SwitchState, index: u32 },
-        switch_default: *SwitchState,
-        switch_free: *SwitchState,
+        switch_branch: struct { state: SwitchState, index: u32 },
+        switch_default: SwitchState,
+        /// Releases a switch's case blocks, which start at this index.
+        switch_free: u32,
         cold_region_end,
-        initialized_payload_branch: struct { state: *InitializedPayloadSwitchState, initialized: bool },
-        initialized_payload_free: *InitializedPayloadSwitchState,
-        join_after_remainder: *JoinState,
-        join_after_body: *JoinState,
+        initialized_payload_branch: struct { state: InitializedPayloadSwitchState, initialized: bool },
+        join_after_remainder: JoinState,
+        join_after_body: JoinState,
         str_match_body: StrMatchBody,
         boxy_tag_body: struct { block: LlvmBuilder.Function.Block.Index, stmt: CFStmtId },
     };
@@ -3462,25 +3523,31 @@ pub const MonoLlvmCodeGen = struct {
         const wa = sfa.allocator();
         var work = std.ArrayList(StmtWork).empty;
         defer work.deinit(wa);
+        const case_blocks_base = self.switch_case_blocks.items.len;
+        const captures_base = self.str_match_captures.items.len;
+        errdefer {
+            self.switch_case_blocks.shrinkRetainingCapacity(case_blocks_base);
+            self.str_match_captures.shrinkRetainingCapacity(captures_base);
+        }
         try work.append(wa, .{ .node = stmt_id });
         while (work.pop()) |item| {
             switch (item) {
                 .node => |node_id| try self.compileStmtNode(node_id, wa, &work),
                 .switch_branch => |sb| {
                     const wip = self.wip orelse return error.CompilationFailed;
-                    wip.cursor = .{ .block = sb.state.branch_blocks[sb.index] };
-                    if (sb.index + 1 < sb.state.branch_blocks.len) {
+                    wip.cursor = .{ .block = self.switch_case_blocks.items[sb.state.blocks_start + sb.index] };
+                    if (sb.index + 1 < sb.state.branches.len) {
                         try work.append(wa, .{ .switch_branch = .{ .state = sb.state, .index = sb.index + 1 } });
                     } else {
                         try work.append(wa, .{ .switch_default = sb.state });
                     }
-                    const branch = GuardedList.at(sb.state.branches, sb.index);
+                    const branch = GuardedList.at(self.store.getCFSwitchBranches(sb.state.branches), sb.index);
                     try work.append(wa, .{ .node = branch.body });
                 },
                 .switch_default => |state| {
                     const wip = self.wip orelse return error.CompilationFailed;
                     wip.cursor = .{ .block = state.default_block };
-                    try work.append(wa, .{ .switch_free = state });
+                    try work.append(wa, .{ .switch_free = state.blocks_start });
                     if (state.default_is_cold) {
                         // The default subtree is emitted before this marker
                         // pops, bracketing the region exactly: a jump out to a
@@ -3493,9 +3560,9 @@ pub const MonoLlvmCodeGen = struct {
                     try work.append(wa, .{ .node = state.default_branch });
                 },
                 .cold_region_end => self.cold_depth -= 1,
-                .switch_free => |state| {
-                    self.allocator.free(state.branch_blocks);
-                    self.allocator.destroy(state);
+                .switch_free => |blocks_start| {
+                    std.debug.assert(blocks_start <= self.switch_case_blocks.items.len);
+                    self.switch_case_blocks.shrinkRetainingCapacity(blocks_start);
                 },
                 .initialized_payload_branch => |branch| {
                     const wip = self.wip orelse return error.CompilationFailed;
@@ -3505,12 +3572,8 @@ pub const MonoLlvmCodeGen = struct {
                         try work.append(wa, .{ .node = branch.state.initialized_branch });
                     } else {
                         wip.cursor = .{ .block = branch.state.uninitialized_block };
-                        try work.append(wa, .{ .initialized_payload_free = branch.state });
                         try work.append(wa, .{ .node = branch.state.uninitialized_branch });
                     }
-                },
-                .initialized_payload_free => |state| {
-                    self.allocator.destroy(state);
                 },
                 .join_after_remainder => |state| {
                     const wip = self.wip orelse return error.CompilationFailed;
@@ -3522,25 +3585,23 @@ pub const MonoLlvmCodeGen = struct {
                         try work.append(wa, .{ .node = state.body });
                     } else {
                         wip.cursor = .{ .block = state.after_block };
-                        self.allocator.destroy(state);
                     }
                 },
                 .join_after_body => |state| {
                     const wip = self.wip orelse return error.CompilationFailed;
                     if (!self.currentBlockHasTerminator()) _ = wip.br(state.after_block) catch return error.CompilationFailed;
                     wip.cursor = .{ .block = state.after_block };
-                    self.allocator.destroy(state);
                 },
                 .str_match_body => |body| {
                     const wip = self.wip orelse return error.CompilationFailed;
                     wip.cursor = .{ .block = body.block };
                     self.clearDeferredStrCaptures();
-                    for (body.captures) |capture| {
+                    const captures_end = body.captures_start + body.captures_len;
+                    std.debug.assert(captures_end == self.str_match_captures.items.len or body.captures_len == 0);
+                    for (self.str_match_captures.items[body.captures_start..captures_end]) |capture| {
                         try self.installDeferredStrCapture(capture.local, capture.capture);
                     }
-                    if (body.captures.len > 0) {
-                        self.allocator.free(body.captures);
-                    }
+                    if (body.captures_len > 0) self.str_match_captures.shrinkRetainingCapacity(body.captures_start);
                     try work.append(wa, .{ .node = body.stmt });
                 },
                 .boxy_tag_body => |body| {
@@ -3556,17 +3617,14 @@ pub const MonoLlvmCodeGen = struct {
         self.stmt_incoming_counts.clearRetainingCapacity();
         self.stmt_entry_blocks.clearRetainingCapacity();
 
-        var visited = std.AutoHashMap(u32, void).init(self.allocator);
-        defer visited.deinit();
+        try self.beginStmtVisit();
 
         var stack = std.ArrayList(CFStmtId).empty;
         defer stack.deinit(self.allocator);
         try self.noteStmtIncoming(&stack, entry);
 
         while (stack.pop()) |stmt_id| {
-            const key = @backingInt(stmt_id);
-            if (visited.contains(key)) continue;
-            try visited.put(key, {});
+            if (!self.markStmtVisited(stmt_id)) continue;
 
             switch (self.store.getCFStmtImmediate(stmt_id).*) {
                 inline .assign_ref,
@@ -3689,16 +3747,14 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn inlineShapeOf(self: *MonoLlvmCodeGen, body: CFStmtId, shape: *InlineShape) Error!void {
-        var visited = std.AutoHashMap(u32, void).init(self.allocator);
-        defer visited.deinit();
+        try self.beginStmtVisit();
         var work = std.ArrayList(CFStmtId).empty;
         defer work.deinit(self.allocator);
         var joins = std.ArrayList(struct { id: lir.LIR.JoinPointId, body: CFStmtId }).empty;
         defer joins.deinit(self.allocator);
         try work.append(self.allocator, body);
         while (work.pop()) |stmt_id| {
-            const entry = try visited.getOrPut(@backingInt(stmt_id));
-            if (entry.found_existing) continue;
+            if (!self.markStmtVisited(stmt_id)) continue;
             shape.count += 1;
             const stmt = self.store.getCFStmt(stmt_id);
             switch (stmt) {
@@ -3751,11 +3807,10 @@ pub const MonoLlvmCodeGen = struct {
         if (shape.count > max_wrapper_inline_stmts) return;
         // A loop is a join reached again from inside its own body.
         for (joins.items) |join| {
-            visited.clearRetainingCapacity();
+            try self.beginStmtVisit();
             try work.append(self.allocator, join.body);
             while (work.pop()) |stmt_id| {
-                const entry = try visited.getOrPut(@backingInt(stmt_id));
-                if (entry.found_existing) continue;
+                if (!self.markStmtVisited(stmt_id)) continue;
                 const stmt = self.store.getCFStmt(stmt_id);
                 if (stmt == .jump and stmt.jump.target == join.id) {
                     shape.has_loop = true;
@@ -3765,6 +3820,29 @@ pub const MonoLlvmCodeGen = struct {
                 try lir.BodyClone.appendSuccessors(self.store, &work, stmt_id, self.allocator);
             }
         }
+    }
+
+    /// Start a statement-graph walk: no statement is visited yet.
+    fn beginStmtVisit(self: *MonoLlvmCodeGen) Error!void {
+        const count = self.store.cfStmtCount();
+        if (count > self.stmt_visit_marks.items.len) {
+            const old_len = self.stmt_visit_marks.items.len;
+            try self.stmt_visit_marks.resize(self.allocator, count);
+            @memset(self.stmt_visit_marks.items[old_len..], 0);
+        }
+        if (self.stmt_visit_epoch == std.math.maxInt(u32)) {
+            @memset(self.stmt_visit_marks.items, 0);
+            self.stmt_visit_epoch = 0;
+        }
+        self.stmt_visit_epoch += 1;
+    }
+
+    /// Mark `stmt_id` visited in the current walk; false if it already was.
+    fn markStmtVisited(self: *MonoLlvmCodeGen, stmt_id: CFStmtId) bool {
+        const mark = &self.stmt_visit_marks.items[@backingInt(stmt_id)];
+        if (mark.* == self.stmt_visit_epoch) return false;
+        mark.* = self.stmt_visit_epoch;
+        return true;
     }
 
     fn noteStmtIncoming(self: *MonoLlvmCodeGen, stack: *std.ArrayList(CFStmtId), stmt_id: CFStmtId) Error!void {
@@ -4569,7 +4647,7 @@ pub const MonoLlvmCodeGen = struct {
         }
 
         if (self.fast_registry.get(@backingInt(proc_id))) |fast| {
-            try self.emitFastDirectCall(target, proc, fast, arg_locals, out_desc, is_cold);
+            try self.emitFastDirectCall(target, proc_id, proc, fast, arg_locals, out_desc, is_cold);
             return;
         }
 
@@ -4600,6 +4678,7 @@ pub const MonoLlvmCodeGen = struct {
     fn emitFastDirectCall(
         self: *MonoLlvmCodeGen,
         target: LocalId,
+        proc_id: LirProcSpecId,
         proc: LirProcSpec,
         fast: LlvmBuilder.Function.Index,
         arg_locals: anytype,
@@ -4607,15 +4686,13 @@ pub const MonoLlvmCodeGen = struct {
         is_cold: bool,
     ) Error!void {
         const builder, const wip = try self.builderAndWip();
-        var arena_state = Base.SingleThreadArena.init(self.allocator);
-        defer arena_state.deinit();
-        const sig = try self.fastSignature(arena_state.allocator(), proc);
+        const sig = try self.fastSignature(proc_id);
         if (sig.arg_layouts.len != arg_locals.len) return error.CompilationFailed;
 
-        var param_types = std.ArrayList(LlvmBuilder.Type).empty;
-        defer param_types.deinit(self.allocator);
-        var call_args = std.ArrayList(LlvmBuilder.Value).empty;
-        defer call_args.deinit(self.allocator);
+        const param_types = &self.fast_call_param_types;
+        param_types.clearRetainingCapacity();
+        const call_args = &self.fast_call_args;
+        call_args.clearRetainingCapacity();
         var attrs_wip: LlvmBuilder.FunctionAttributes.Wip = .{};
         defer attrs_wip.deinit(builder);
         const ptr_ty = try self.ptrType();
@@ -4637,7 +4714,7 @@ pub const MonoLlvmCodeGen = struct {
                     try param_types.append(self.allocator, ptr_ty);
                     try call_args.append(self.allocator, self.slot(arg_local).ptr);
                 },
-                .registers => |registers| try self.appendCAbiRegisterCallArg(builder, &attrs_wip, &param_types, &call_args, registers, self.slot(arg_local).ptr, arg_layout),
+                .registers => |registers| try self.appendCAbiRegisterCallArg(builder, &attrs_wip, param_types, call_args, registers, self.slot(arg_local).ptr, arg_layout),
             }
         }
         const out_desc_ptr = if (sig.desc_index != null) try self.boxyOutDescPtr("direct_call_desc") else null;
@@ -4682,15 +4759,13 @@ pub const MonoLlvmCodeGen = struct {
         const arg_locals = self.store.getLocalSpan(args);
         try self.materializeLocalSpanIfDeferred(arg_locals);
 
-        var arena_state = Base.SingleThreadArena.init(self.allocator);
-        defer arena_state.deinit();
-        const sig = try self.fastSignature(arena_state.allocator(), proc);
+        const sig = try self.fastSignature(proc_id);
         if (sig.arg_layouts.len != arg_locals.len) return error.CompilationFailed;
 
-        var param_types = std.ArrayList(LlvmBuilder.Type).empty;
-        defer param_types.deinit(self.allocator);
-        var call_args = std.ArrayList(LlvmBuilder.Value).empty;
-        defer call_args.deinit(self.allocator);
+        const param_types = &self.fast_call_param_types;
+        param_types.clearRetainingCapacity();
+        const call_args = &self.fast_call_args;
+        call_args.clearRetainingCapacity();
         var attrs_wip: LlvmBuilder.FunctionAttributes.Wip = .{};
         defer attrs_wip.deinit(builder);
         const ptr_ty = try self.ptrType();
@@ -4711,7 +4786,7 @@ pub const MonoLlvmCodeGen = struct {
                     try param_types.append(self.allocator, ptr_ty);
                     try call_args.append(self.allocator, try self.writeTailArg(self.ownTailScratch(), sig, i, self.slot(arg_local).ptr));
                 },
-                .registers => |registers| try self.appendCAbiRegisterCallArg(builder, &attrs_wip, &param_types, &call_args, registers, self.slot(arg_local).ptr, arg_layout),
+                .registers => |registers| try self.appendCAbiRegisterCallArg(builder, &attrs_wip, param_types, call_args, registers, self.slot(arg_local).ptr, arg_layout),
             }
         }
         // The callee writes its result descriptor where this procedure's
@@ -7833,15 +7908,16 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     /// Emits the LLVM switch instruction and queues each branch body (and the
-    /// default body) as work items. The case blocks and branch slice are carried
-    /// to the continuations via a heap `SwitchState` freed by `.switch_free`.
+    /// default body) as work items. The case blocks are a run of
+    /// `switch_case_blocks` released by `.switch_free`.
     fn emitSwitch(self: *MonoLlvmCodeGen, sw: anytype, wa: Allocator, work: *std.ArrayList(StmtWork)) Error!void {
         try self.materializeLocalIfDeferred(sw.cond);
         try self.materializeAllDeferredStrCaptures();
         const builder, const wip = try self.builderAndWip();
         const branches = self.store.getCFSwitchBranches(sw.branches);
         const default_block = wip.block(0, "switch_default") catch return error.OutOfMemory;
-        const branch_blocks = try self.allocator.alloc(LlvmBuilder.Function.Block.Index, branches.len);
+        const blocks_start: u32 = @intCast(self.switch_case_blocks.items.len);
+        const branch_blocks = try self.switch_case_blocks.addManyAsSlice(self.allocator, branches.len);
         for (branch_blocks) |*block| block.* = wip.block(0, "switch_case") catch return error.OutOfMemory;
         const cond = try self.readSwitchValue(self.slot(sw.cond).ptr, self.localLayout(sw.cond));
         if (sw.default_is_cold and branches.len == 1) {
@@ -7859,10 +7935,9 @@ pub const MonoLlvmCodeGen = struct {
             switch_inst.finish(wip);
         }
 
-        const state = try self.allocator.create(SwitchState);
-        state.* = .{
-            .branches = branches,
-            .branch_blocks = branch_blocks,
+        const state: SwitchState = .{
+            .branches = sw.branches,
+            .blocks_start = blocks_start,
             .default_block = default_block,
             .default_branch = sw.default_branch,
             .default_is_cold = sw.default_is_cold,
@@ -7884,14 +7959,12 @@ pub const MonoLlvmCodeGen = struct {
         const is_initialized = wip.icmp(.eq, masked, mask, "") catch return error.OutOfMemory;
         _ = wip.brCond(is_initialized, initialized_block, uninitialized_block, if (sw.uninitialized_is_cold) .then_likely else .none) catch return error.OutOfMemory;
 
-        const state = try self.allocator.create(InitializedPayloadSwitchState);
-        state.* = .{
+        try work.append(wa, .{ .initialized_payload_branch = .{ .state = .{
             .initialized_block = initialized_block,
             .uninitialized_block = uninitialized_block,
             .initialized_branch = sw.initialized_branch,
             .uninitialized_branch = sw.uninitialized_branch,
-        };
-        try work.append(wa, .{ .initialized_payload_branch = .{ .state = state, .initialized = true } });
+        }, .initialized = true } });
     }
 
     fn emitDecrefIfInitialized(
@@ -7978,13 +8051,10 @@ pub const MonoLlvmCodeGen = struct {
         const final_miss_block = wip.block(0, "str_match_set_miss") catch return error.OutOfMemory;
         const source = try self.emitStrMatchSourceShape(self.slot(str_match_set.source).ptr);
 
-        var match_bodies = std.ArrayList(StrMatchBody).empty;
-        errdefer {
-            for (match_bodies.items) |body| {
-                if (body.captures.len > 0) self.allocator.free(body.captures);
-            }
-            match_bodies.deinit(self.allocator);
-        }
+        // The miss body runs after every arm's body, so it sits below them on
+        // the work stack; the arm bodies are pushed in arm order as their
+        // tests are emitted.
+        try work.append(wa, .{ .str_match_body = .{ .block = final_miss_block, .stmt = str_match_set.on_miss } });
 
         var index: usize = 0;
         while (index < arms.len) {
@@ -7995,7 +8065,7 @@ pub const MonoLlvmCodeGen = struct {
                     final_miss_block
                 else
                     wip.block(0, "str_match_set_next") catch return error.OutOfMemory;
-                try match_bodies.append(self.allocator, try self.emitStrMatchArmTest(str_match_set.source, source, arm, next_miss_block));
+                try work.append(wa, .{ .str_match_body = try self.emitStrMatchArmTest(str_match_set.source, source, arm, next_miss_block) });
                 if (index + 1 < arms.len) {
                     wip.cursor = .{ .block = next_miss_block };
                 }
@@ -8014,9 +8084,9 @@ pub const MonoLlvmCodeGen = struct {
                 wip.block(0, "str_match_set_next") catch return error.OutOfMemory;
 
             if (self.strMatchSetDistinctFirstByteCount(arms, index, segment_end) > 1) {
-                try self.emitStrMatchSetFirstByteDispatch(str_match_set.source, source, arms, index, segment_end, segment_miss_block, &match_bodies);
+                try self.emitStrMatchSetFirstByteDispatch(str_match_set.source, source, arms, index, segment_end, segment_miss_block, wa, work);
             } else {
-                try self.emitStrMatchSetLinearRange(str_match_set.source, source, arms, index, segment_end, segment_miss_block, &match_bodies);
+                try self.emitStrMatchSetLinearRange(str_match_set.source, source, arms, index, segment_end, segment_miss_block, wa, work);
             }
 
             if (segment_end < arms.len) {
@@ -8024,21 +8094,6 @@ pub const MonoLlvmCodeGen = struct {
             }
             index = segment_end;
         }
-
-        try work.append(wa, .{ .str_match_body = .{ .block = final_miss_block, .stmt = str_match_set.on_miss } });
-        const owned_bodies = try match_bodies.toOwnedSlice(self.allocator);
-        var handed_off = false;
-        errdefer if (!handed_off) {
-            for (owned_bodies) |body| {
-                if (body.captures.len > 0) self.allocator.free(body.captures);
-            }
-            self.allocator.free(owned_bodies);
-        };
-        for (owned_bodies) |body| {
-            try work.append(wa, .{ .str_match_body = body });
-        }
-        handed_off = true;
-        self.allocator.free(owned_bodies);
     }
 
     fn strMatchSetDistinctFirstByteCount(self: *MonoLlvmCodeGen, arms: anytype, start: usize, end: usize) usize {
@@ -8065,7 +8120,8 @@ pub const MonoLlvmCodeGen = struct {
         start: usize,
         end: usize,
         miss_block: LlvmBuilder.Function.Block.Index,
-        match_bodies: *std.ArrayList(StrMatchBody),
+        wa: Allocator,
+        work: *std.ArrayList(StmtWork),
     ) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
 
@@ -8075,7 +8131,7 @@ pub const MonoLlvmCodeGen = struct {
                 miss_block
             else
                 wip.block(0, "str_match_set_next") catch return error.OutOfMemory;
-            try match_bodies.append(self.allocator, try self.emitStrMatchArmTest(source_local, source, arm, next_miss_block));
+            try work.append(wa, .{ .str_match_body = try self.emitStrMatchArmTest(source_local, source, arm, next_miss_block) });
             if (index + 1 < end) {
                 wip.cursor = .{ .block = next_miss_block };
             }
@@ -8090,7 +8146,8 @@ pub const MonoLlvmCodeGen = struct {
         start: usize,
         end: usize,
         miss_block: LlvmBuilder.Function.Block.Index,
-        match_bodies: *std.ArrayList(StrMatchBody),
+        wa: Allocator,
+        work: *std.ArrayList(StmtWork),
     ) Error!void {
         const builder, const wip = try self.builderAndWip();
         const usize_ty = self.ptrSizedIntType();
@@ -8141,7 +8198,7 @@ pub const MonoLlvmCodeGen = struct {
                     miss_block
                 else
                     wip.block(0, "str_match_set_next") catch return error.OutOfMemory;
-                try match_bodies.append(self.allocator, try self.emitStrMatchArmTest(source_local, source, arm, next_miss_block));
+                try work.append(wa, .{ .str_match_body = try self.emitStrMatchArmTest(source_local, source, arm, next_miss_block) });
                 if (emitted_in_bucket < remaining_in_bucket) {
                     wip.cursor = .{ .block = next_miss_block };
                 }
@@ -8179,8 +8236,9 @@ pub const MonoLlvmCodeGen = struct {
         const zero = builder.intValue(usize_ty, 0) catch return error.OutOfMemory;
         try self.storeUsize(cursor_ptr, zero);
 
-        var captures = std.ArrayList(DeferredStrCaptureBinding).empty;
-        errdefer captures.deinit(self.allocator);
+        const captures = &self.str_match_captures;
+        const captures_start: u32 = @intCast(captures.items.len);
+        errdefer captures.shrinkRetainingCapacity(captures_start);
 
         const prefix = self.store.getStringLiteral(arm.prefix);
         if (prefix.len > 0) {
@@ -8237,9 +8295,12 @@ pub const MonoLlvmCodeGen = struct {
             .tail => _ = wip.br(on_match_block) catch return error.OutOfMemory,
         }
 
-        const match_captures = try captures.toOwnedSlice(self.allocator);
-        errdefer self.allocator.free(match_captures);
-        return .{ .block = on_match_block, .stmt = arm.on_match, .captures = match_captures };
+        return .{
+            .block = on_match_block,
+            .stmt = arm.on_match,
+            .captures_start = captures_start,
+            .captures_len = @intCast(captures.items.len - captures_start),
+        };
     }
 
     fn emitStrMatchSourceShape(self: *MonoLlvmCodeGen, source_ptr: LlvmBuilder.Value) Error!StrMatchSource {
@@ -8861,7 +8922,7 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Registers the join point, queues the remainder subtree, and lets
     /// `.join_after_remainder`/`.join_after_body` emit the branch-back glue and
-    /// the join body. Heap `JoinState` is freed by the final continuation.
+    /// the join body.
     fn emitJoin(self: *MonoLlvmCodeGen, join_stmt: anytype, wa: Allocator, work: *std.ArrayList(StmtWork)) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
         const key = @backingInt(join_stmt.id);
@@ -8869,14 +8930,12 @@ pub const MonoLlvmCodeGen = struct {
         const after_block = wip.block(0, "join_after") catch return error.OutOfMemory;
         try self.join_points.put(key, .{ .block = join_block, .params = join_stmt.params, .body = join_stmt.body });
 
-        const state = try self.allocator.create(JoinState);
-        state.* = .{
+        try work.append(wa, .{ .join_after_remainder = .{
             .key = key,
             .join_block = join_block,
             .after_block = after_block,
             .body = join_stmt.body,
-        };
-        try work.append(wa, .{ .join_after_remainder = state });
+        } });
         try work.append(wa, .{ .node = join_stmt.remainder });
     }
 
@@ -9369,8 +9428,8 @@ pub const MonoLlvmCodeGen = struct {
         }
 
         const bytes = self.store.getString(backing);
-        const storage = self.allocator.alloc(u8, data_offset + bytes.len) catch return error.OutOfMemory;
-        defer self.allocator.free(storage);
+        self.refcounted_bytes_scratch.clearRetainingCapacity();
+        const storage = self.refcounted_bytes_scratch.addManyAsSlice(self.allocator, data_offset + bytes.len) catch return error.OutOfMemory;
 
         @memset(storage[0..data_offset], 0);
         const rc_offset: usize = @intCast(@as(i64, @intCast(data_offset)) + builtins.utils.targetRefcountOffset(@intCast(word_size)));
@@ -13264,9 +13323,8 @@ pub const MonoLlvmCodeGen = struct {
         const builder, const wip = try self.builderAndWip();
         const ptr_ty = try self.ptrType();
 
-        var arena_state = Base.SingleThreadArena.init(self.allocator);
-        defer arena_state.deinit();
-        const arena = arena_state.allocator();
+        _ = self.hosted_abi_arena.reset(.retain_capacity);
+        const arena = self.hosted_abi_arena.allocator();
 
         // The host reaches its own runtime operations directly, so hosted
         // functions never take a leading host pointer.
