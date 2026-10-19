@@ -236,6 +236,11 @@ pub const Report = struct {
     headline: Document,
     severity: Severity,
     document: Document,
+    /// The file a report is about as a whole, for a report that has no source
+    /// region because nothing in the file's text is the problem (for example,
+    /// a definition the file lacks). Renderers name it in place of a position.
+    /// Owned by `owned_strings`.
+    file: ?[]const u8,
     allocator: Allocator,
     owned_strings: std.array_list.Managed([]const u8),
 
@@ -246,6 +251,7 @@ pub const Report = struct {
             .headline = Document.init(allocator),
             .severity = severity,
             .document = Document.init(allocator),
+            .file = null,
             .allocator = allocator,
             .owned_strings = std.array_list.Managed([]const u8).init(allocator),
         };
@@ -288,6 +294,12 @@ pub const Report = struct {
         const owned_copy = try self.allocator.dupe(u8, string);
         try self.owned_strings.append(owned_copy);
         return owned_copy;
+    }
+
+    /// Mark the report as being about `path` as a whole. A report with a
+    /// source region already names its file there, so it never has one.
+    pub fn setFile(self: *Report, path: []const u8) Allocator.Error!void {
+        self.file = try self.addOwnedString(path);
     }
 
     /// Render the report to the specified writer and target format.

@@ -336,7 +336,7 @@ const UniquenessFixture = struct {
                 try s.addCFStmt(.{ .assign_low_level = .{
                     .target = result,
                     .op = .list_reverse,
-                    .rc_effect = core.LIR.LowLevel.RcEffect.runtimeUniqueness(1),
+                    .rc_effect = try s.addRcEffect(core.LIR.LowLevel.RcEffect.runtimeUniqueness(1)),
                     .args = try s.addLocalSpan(&.{param}),
                     .next = ret,
                 } }, .test_fixture)
@@ -532,7 +532,7 @@ const OutcomeFixture = struct {
         const mutate = try s.addCFStmt(.{ .assign_low_level = .{
             .target = changed,
             .op = .list_reverse,
-            .rc_effect = core.LIR.LowLevel.RcEffect.runtimeUniqueness(1),
+            .rc_effect = try s.addRcEffect(core.LIR.LowLevel.RcEffect.runtimeUniqueness(1)),
             .args = try s.addLocalSpan(&.{param}),
             .next = success,
         } }, .test_fixture);
@@ -569,14 +569,14 @@ const OutcomeFixture = struct {
         const caller_failure = try s.addCFStmt(.{ .assign_low_level = .{
             .target = answer,
             .op = .list_len,
-            .rc_effect = core.LIR.LowLevel.list_len.rcEffect(),
+            .rc_effect = try s.addRcEffect(core.LIR.LowLevel.list_len.rcEffect()),
             .args = try s.addLocalSpan(&.{input}),
             .next = caller_ret,
         } }, .test_fixture);
         const refine = try switchStmt(s, discriminant, caller_success, caller_failure);
         const read = try s.addCFStmt(.{ .assign_ref = .{
             .target = discriminant,
-            .op = .{ .discriminant = .{ .source = call_result } },
+            .op = .discriminant(call_result),
             .next = refine,
         } }, .test_fixture);
         const call = try s.addCFStmt(.{ .assign_call = .{
@@ -632,7 +632,7 @@ const OutcomeFixture = struct {
                 const stmt = s.getCFStmt(cursor);
                 if (stmt == .assign_low_level) {
                     try testing.expectEqual(core.LIR.LowLevel.list_reverse, stmt.assign_low_level.op);
-                    try testing.expectEqual(@as(u64, if (proc == 0) 0 else 1), stmt.assign_low_level.unique_args);
+                    try testing.expectEqual(@as(u64, if (proc == 0) 0 else 1), s.stmtRowOrDefault(stmt.assign_low_level.extra).unique_args);
                     break;
                 }
                 if (stmt == .switch_stmt) {
@@ -772,7 +772,7 @@ const DismantleRangeFixture = struct {
         } }, .test_fixture);
         const first_branch = try s.addCFStmt(.{ .assign_ref = .{
             .target = first_read,
-            .op = .{ .field = .{ .source = pair, .field_idx = 0 } },
+            .op = .field(pair, 0),
             .next = first_call,
         } }, .test_fixture);
         const second_call = try s.addCFStmt(.{ .assign_call = .{
@@ -783,7 +783,7 @@ const DismantleRangeFixture = struct {
         } }, .test_fixture);
         const second_branch = try s.addCFStmt(.{ .assign_ref = .{
             .target = second_read,
-            .op = .{ .field = .{ .source = pair, .field_idx = 1 } },
+            .op = .field(pair, 1),
             .next = second_call,
         } }, .test_fixture);
         const choose = try s.addCFStmt(.{ .switch_stmt = .{

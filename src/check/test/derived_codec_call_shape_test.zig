@@ -48,5 +48,5 @@ test "a list parser whose element type is never determined is reported" {
         \\parsed_ok = (List.parser_for(Format.Default))({}) == Err(Bad)
     );
     defer env.deinit();
-    try env.assertOneTypeError("Undetermined Codec Type");
+    try env.assertOneTypeError("Missing Method");
 }
