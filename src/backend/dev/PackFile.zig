@@ -210,6 +210,8 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
 /// Decode a pack. Every slice in the result is owned by the pack's arena,
 /// which holds one copy of `bytes` that the decoded strings alias.
 pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
+    // A pack of another format is declined before anything is copied.
+    try checkFormat(bytes, magic);
     var arena = collections.SingleThreadArena.init(allocator);
     const owned = arena.allocator().dupe(u8, bytes) catch |err| {
         arena.deinit();
@@ -430,6 +432,8 @@ pub fn writeObject(
 /// Decode an object pack. Every slice in the result is owned by its arena,
 /// which holds one copy of `bytes` that the object aliases.
 pub fn readObject(allocator: Allocator, bytes: []const u8) ReadError!ObjectPack {
+    // A pack of another format is declined before anything is copied.
+    try checkFormat(bytes, object_magic);
     var arena = collections.SingleThreadArena.init(allocator);
     const owned = arena.allocator().dupe(u8, bytes) catch |err| {
         arena.deinit();
@@ -542,6 +546,13 @@ const Writer = struct {
         try self.raw(data);
     }
 };
+
+/// Reject bytes that do not start with `expected_magic` and this format version.
+fn checkFormat(bytes: []const u8, expected_magic: []const u8) ReadError!void {
+    var reader = Reader{ .bytes = bytes };
+    if (!std.mem.eql(u8, try reader.raw(expected_magic.len), expected_magic)) return error.MalformedPack;
+    if (try reader.word() != format_version) return error.UnsupportedPackVersion;
+}
 
 const Reader = struct {
     bytes: []const u8,
