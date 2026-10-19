@@ -798,9 +798,10 @@ comptime {
     // guards cross-version mismatches. `tail_call_builder`, `proc_rewrite` and
     // `facts` are transient worker state, not serialized, and default to
     // null or empty in views. The layout store's `digest_cache` is a memo
-    // each view starts empty.
+    // each view starts empty, and its `commit_scratch` and
+    // `scratch_field_offsets` are scratch that views start empty.
     std.debug.assert(@typeInfo(LirStore).@"struct".field_names.len == 35);
-    std.debug.assert(@typeInfo(layout_mod.Store).@"struct".field_names.len == 17);
+    std.debug.assert(@typeInfo(layout_mod.Store).@"struct".field_names.len == 19);
     std.debug.assert(@typeInfo(base.StringLiteral.Store).@"struct".field_names.len == 1);
 
     // The header is authored field by field in image storage and is part of a
@@ -1004,6 +1005,8 @@ fn deinitViewedLayouts(layouts: *layout_mod.Store, allocator: std.mem.Allocator)
     layouts.tag_union_variants.deinit(allocator);
     layouts.interned_layouts.deinit(allocator);
     layouts.interned_key_bytes.deinit(allocator);
+    layouts.scratch_field_offsets.deinit(allocator);
+    layouts.commit_scratch.promote(allocator).deinit();
     layouts.digest_cache.destroy(allocator);
 }
 
