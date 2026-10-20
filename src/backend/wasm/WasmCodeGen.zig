@@ -5850,7 +5850,7 @@ fn compileProcBodies(self: *Self, proc_specs: []const LirProcSpec) Allocator.Err
         for (jobs[0..count]) |*job| try appendNamedHelpers(self.allocator, job.artifact.?.entities, &roots);
         try self.generateHelperBodies(roots.items);
         for (jobs[0..count]) |*job| {
-            const func_idx = self.registered_procs.get(@backingInt(job.unit.proc)) orelse unreachable;
+            const func_idx = self.registered_procs.get(@backingInt(job.unit.proc)) orelse unreachable; // pass 1 of compileAllProcSpecs registered every proc that pass 2 compiles
             try self.commitBody(self.localFunctionIndexFromGlobal(func_idx), &job.artifact.?);
         }
         self.assertHelperBodiesCommitted();
