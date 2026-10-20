@@ -4289,3 +4289,55 @@ test "tag union discriminant offsets beyond 16 bits are committed exactly" {
     const with_str = try store.putTagUnion(&[_]Idx{ .zst, payload_with_str });
     try expectTagUnionMetrics(&store, with_str, 65_552, 65_560, 65_560, 65_568);
 }
+
+test "RC helper plans are noop exactly for layouts without refcounted data" {
+    const testing = std.testing;
+
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    const plain_struct = try store.putStructFields(&[_]StructField{
+        .{ .index = 0, .layout = .u8 },
+        .{ .index = 1, .layout = .u64 },
+    });
+    const str_struct = try store.putStructFields(&[_]StructField{
+        .{ .index = 0, .layout = .u64 },
+        .{ .index = 1, .layout = .str },
+    });
+    const elems = [_]Idx{
+        .bool,
+        .str,
+        .u64,
+        .dec,
+        .opaque_ptr,
+        .zst,
+        .u8x16,
+        try store.insertList(.u64),
+        try store.insertList(.str),
+        try store.insertBox(.u64),
+        try store.insertBox(.str),
+        try store.insertBox(.zst),
+        try store.insertPtr(.str),
+        try store.insertErasedCallable(),
+        plain_struct,
+        str_struct,
+        try store.putTagUnion(&[_]Idx{ .zst, .u64 }),
+        try store.putTagUnion(&[_]Idx{ .zst, str_struct }),
+    };
+
+    for (elems) |elem| {
+        const contains_refcounted = store.layoutContainsRefcounted(store.getLayout(elem));
+        for ([_]rc_helper.RcOp{ .incref, .decref, .free, .host_drop }) |op| {
+            const plan = store.rcHelperPlan(.{ .op = op, .layout_idx = elem });
+            try testing.expectEqual(!contains_refcounted, plan == .noop);
+        }
+
+        // A list builtin's "items are refcounted" flag agrees with whether
+        // its item callbacks exist.
+        const list = try store.insertList(elem);
+        if (store.getLayout(list).tag != .list) continue;
+        const abi = store.builtinListAbi(list);
+        const item_plan = store.rcHelperPlan(.{ .op = .decref, .layout_idx = abi.elem_layout_idx.? });
+        try testing.expectEqual(abi.contains_refcounted, item_plan != .noop);
+    }
+}

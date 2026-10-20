@@ -1149,9 +1149,10 @@ fn emitCryptoLowLevel(self: *Self, op: CryptoLowLevel, args: anytype) Allocator.
     try self.emitFpOffset(result_offset);
 }
 
+/// The function table index of the RC helper for a layout that contains
+/// refcounted data.
 fn builtinInternalRcHelperTableIndex(self: *Self, helper_key: RcHelperKey) Allocator.Error!u32 {
-    const helper_plan = self.getLayoutStore().rcHelperPlan(helper_key);
-    if (helper_plan == .noop) return 0;
+    std.debug.assert(self.getLayoutStore().rcHelperPlan(helper_key) != .noop);
     return self.rcHelperTableIndex(helper_key);
 }
 

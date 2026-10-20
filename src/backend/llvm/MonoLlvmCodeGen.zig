@@ -10840,7 +10840,7 @@ pub const MonoLlvmCodeGen = struct {
 
         if (needs_incref) {
             const incref_fn = if (enabled)
-                (try self.declareRcHelper(.{ .op = .incref, .layout_idx = abi.elem_layout_idx.? }, .atomic))
+                try self.declareRefcountedRcHelper(.{ .op = .incref, .layout_idx = abi.elem_layout_idx.? }, .atomic)
             else
                 null;
             try call_args.append(
@@ -10852,7 +10852,7 @@ pub const MonoLlvmCodeGen = struct {
 
         if (needs_decref) {
             const decref_fn = if (enabled)
-                (try self.declareRcHelper(.{ .op = .decref, .layout_idx = abi.elem_layout_idx.? }, .atomic))
+                try self.declareRefcountedRcHelper(.{ .op = .decref, .layout_idx = abi.elem_layout_idx.? }, .atomic)
             else
                 null;
             try call_args.append(
@@ -11722,14 +11722,14 @@ pub const MonoLlvmCodeGen = struct {
             },
             .box => {
                 const abi = self.layouts().builtinBoxAbi(target_layout);
-                const enabled = abi.contains_refcounted and abi.elem_layout_idx != null;
+                const enabled = abi.contains_refcounted;
                 const null_ptr = builder.nullValue(ptr_ty) catch return error.OutOfMemory;
                 const payload_incref = if (enabled)
-                    (try self.declareRcHelper(.{ .op = .incref, .layout_idx = abi.elem_layout_idx.? }, .atomic))
+                    try self.declareRefcountedRcHelper(.{ .op = .incref, .layout_idx = abi.elem_layout_idx.? }, .atomic)
                 else
                     null;
                 const payload_decref = if (enabled)
-                    (try self.declareRcHelper(.{ .op = .decref, .layout_idx = abi.elem_layout_idx.? }, .atomic))
+                    try self.declareRefcountedRcHelper(.{ .op = .decref, .layout_idx = abi.elem_layout_idx.? }, .atomic)
                 else
                     null;
                 const mode = if ((unique_args & 1) != 0) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable;
@@ -11925,8 +11925,14 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn declareRcHelper(self: *MonoLlvmCodeGen, helper_key: layout.RcHelperKey, atomicity: RcAtomicity) Error!?LlvmBuilder.Function.Index {
-        const builder = self.builder orelse return error.CompilationFailed;
         if (self.layouts().rcHelperPlan(helper_key) == .noop) return null;
+        return try self.declareRefcountedRcHelper(helper_key, atomicity);
+    }
+
+    /// Declare the RC helper for a layout that contains refcounted data.
+    fn declareRefcountedRcHelper(self: *MonoLlvmCodeGen, helper_key: layout.RcHelperKey, atomicity: RcAtomicity) Error!LlvmBuilder.Function.Index {
+        const builder = self.builder orelse return error.CompilationFailed;
+        std.debug.assert(self.layouts().rcHelperPlan(helper_key) != .noop);
 
         const cache_key = rcHelperCacheKey(helper_key, atomicity);
         if (self.rc_helpers.get(cache_key)) |entry| return entry.function;
