@@ -13146,14 +13146,6 @@ pub const MonoLlvmCodeGen = struct {
         _ = wip.store(.normal, store_value, ptr, self.alignmentForLayout(layout_idx)) catch return error.OutOfMemory;
     }
 
-    fn storeIntToLayout(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, value: LlvmBuilder.Value, layout_idx: layout.Idx) Error!void {
-        if (self.layoutValue(layout_idx).tag == .tag_union) {
-            try self.storeTagDiscriminant(ptr, layout_idx, value);
-            return;
-        }
-        try self.storeScalar(ptr, layout_idx, value);
-    }
-
     fn storeIntLiteral(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, layout_idx: layout.Idx, value: i64) Error!void {
         return self.storeI128Literal(ptr, layout_idx, i64LiteralBits(value));
     }
@@ -13232,18 +13224,6 @@ pub const MonoLlvmCodeGen = struct {
         const wip = self.wip orelse return error.CompilationFailed;
         const byte = try self.coerceScalar(cond, .i8, false);
         _ = wip.store(.normal, byte, ptr, LlvmBuilder.Alignment.fromByteUnits(1)) catch return error.OutOfMemory;
-    }
-
-    fn readSwitchValue(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, layout_idx: layout.Idx) Error!LlvmBuilder.Value {
-        const layout_val = self.layoutValue(layout_idx);
-        if (layout_val.tag == .tag_union) {
-            return self.readTagDiscriminant(ptr, layout_idx);
-        }
-        const value = if (layout_idx == .bool) blk: {
-            const b = try self.loadBool(ptr);
-            break :blk try self.coerceScalar(b, .i64, false);
-        } else try self.loadScalar(ptr, layout_idx);
-        return self.coerceScalar(value, .i64, false);
     }
 
     fn readTagDiscriminant(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, layout_idx: layout.Idx) Error!LlvmBuilder.Value {
