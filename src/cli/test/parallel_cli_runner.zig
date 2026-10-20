@@ -14207,13 +14207,12 @@ fn runGlueRuntimeCase(
         };
     }
 
-    // Zig 0.16.0 and 0.17.0-dev.1464 mislower two natural C ABI aggregate
-    // signatures exercised by layout-probe. On x64mac, Zig splits a two-f64
-    // aggregate after FP-register exhaustion instead of rolling the whole
-    // aggregate back to the stack. On arm64musl, Zig starts a 16-byte-aligned
-    // Dec aggregate in x5 instead of rounding up to x6. CGlue and RustGlue
-    // continue to exercise both signatures on these targets.
-    // TODO #10392: Remove this skip after Roc uses a Zig version that lowers both signatures correctly.
+    // Zig 0.17.0 mislowers a natural C ABI aggregate signature exercised by
+    // layout-probe on arm64musl: after five integer arguments occupy x0-x4,
+    // Zig passes the 16-byte-aligned Dec aggregate in x5/x6 instead of
+    // rounding up to the even pair x6/x7 as AAPCS64 requires. CGlue and
+    // RustGlue continue to exercise this signature on arm64musl.
+    // TODO #10392: Remove this skip after Roc uses a Zig version that lowers this signature correctly.
     if (native_target) |target| {
         if (runtime.language == .zig and std.mem.eql(u8, runtime.platform.name, "layout-probe")) {
             if (zigCompilerMislowersLayoutProbeAbi(target.roc_target)) {
@@ -14377,8 +14376,7 @@ fn zigGlueUnsupportedVectorAggregates(language: GlueLanguage, platform_name: []c
 }
 
 fn zigCompilerMislowersLayoutProbeAbi(roc_target_name: []const u8) bool {
-    return std.mem.eql(u8, roc_target_name, "x64mac") or
-        std.mem.eql(u8, roc_target_name, "arm64musl");
+    return std.mem.eql(u8, roc_target_name, "arm64musl");
 }
 
 fn runGlueRuntimeCommand(
@@ -17197,9 +17195,9 @@ test "Zig vector aggregate exclusion is limited to the Zig layout-probe host" {
 }
 
 test "Zig layout-probe ABI skip is limited to affected native targets" {
-    try std.testing.expect(zigCompilerMislowersLayoutProbeAbi("x64mac"));
     try std.testing.expect(zigCompilerMislowersLayoutProbeAbi("arm64musl"));
 
+    try std.testing.expect(!zigCompilerMislowersLayoutProbeAbi("x64mac"));
     try std.testing.expect(!zigCompilerMislowersLayoutProbeAbi("x64musl"));
     try std.testing.expect(!zigCompilerMislowersLayoutProbeAbi("arm64mac"));
     try std.testing.expect(!zigCompilerMislowersLayoutProbeAbi("x64win"));
