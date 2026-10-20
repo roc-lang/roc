@@ -4617,7 +4617,7 @@ test "solved type digest treats a transparent alias as its backing" {
     const module = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xA5))));
     const type_name = try name_store.internTypeName("Count");
     const alias = try program.types.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = undefined },
+        .named_type = .{ .module = .{}, .ty = undefined, .ty_module = .{} },
         .def = .{ .module = module, .type_name = type_name },
         .kind = .alias,
         .args = .empty(),

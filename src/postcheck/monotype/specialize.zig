@@ -796,19 +796,19 @@ test "monotype spec builder shares equal nominal requests while preserving check
     const module = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const name = try name_store.internTypeName("Value");
     const first = try types.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)), .ty_module = .{} },
         .def = .{ .module = module, .type_name = name, .source_decl = 7 },
         .kind = .nominal,
         .args = Type.Span.empty(),
     } });
     const second = try types.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)), .ty_module = .{} },
         .def = .{ .module = module, .type_name = name, .source_decl = 7 },
         .kind = .nominal,
         .args = Type.Span.empty(),
     } });
     const distinct = try types.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(3)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(3)), .ty_module = .{} },
         .def = .{ .module = module, .type_name = name, .source_decl = 8 },
         .kind = .nominal,
         .args = Type.Span.empty(),
@@ -1132,14 +1132,14 @@ test "monotype spec builder uses exact type equality after digest match" {
     const second_name = try name_store.internTypeName("Second");
 
     const first_ty = try type_store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)), .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = first_name },
         .kind = .alias,
         .args = Type.Span.empty(),
         .backing = null,
     } });
     const second_ty = try type_store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)), .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = second_name },
         .kind = .alias,
         .args = Type.Span.empty(),

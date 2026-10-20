@@ -39,6 +39,7 @@ const Var = types.Var;
 const CompactWriter = collections.CompactWriter;
 const StringLiteral = base.StringLiteral;
 const output_type_roots = @import("output_type_roots.zig");
+const value_identity = @import("value_identity.zig");
 
 /// Publishes each visited root into a checked type store.
 const CheckedTypeRootPublisher = struct {
@@ -111,7 +112,7 @@ pub const ModuleEnvStorage = union(enum) {
 /// identity hash and nothing else, so its bits are its identity and every
 /// keyed container agrees with `eql`. The hash inputs live on the artifact
 /// (`CheckedModuleArtifact.source_hash`, `module_identity`,
-/// `checking_context_identity`, `direct_import_artifact_keys`). `extern` so it
+/// `checking_context_identity`, `direct_import_module_keys`). `extern` so it
 /// can be a POD inline field of `CheckedModuleArtifact.Serialized`.
 pub const CheckedModuleArtifactKey = extern struct {
     bytes: [32]u8 = @as([32]u8, @splat(0)),
@@ -132,13 +133,13 @@ pub const CheckedModuleArtifactKey = extern struct {
         source: []const u8,
         module_identity: ModuleIdentity,
         checking_context_identity: CheckingContextIdentity,
-        direct_import_artifact_keys: []const CheckedModuleArtifactKey,
+        direct_import_module_keys: []const CheckedModuleArtifactKey,
     ) CheckedModuleArtifactKey {
         return computeFromSourceHash(
             hashBytes(source),
             module_identity,
             checking_context_identity,
-            direct_import_artifact_keys,
+            direct_import_module_keys,
         );
     }
 
@@ -146,14 +147,14 @@ pub const CheckedModuleArtifactKey = extern struct {
         source_hash: [32]u8,
         module_identity: ModuleIdentity,
         checking_context_identity: CheckingContextIdentity,
-        direct_import_artifact_keys: []const CheckedModuleArtifactKey,
+        direct_import_module_keys: []const CheckedModuleArtifactKey,
     ) CheckedModuleArtifactKey {
         return .{ .bytes = computeCheckedArtifactKeyBytes(
             source_hash,
             build_options.compiler_artifact_hash,
             hashModuleIdentity(module_identity),
             hashCheckingContextIdentity(checking_context_identity),
-            hashDirectImportArtifactKeys(direct_import_artifact_keys),
+            hashDirectImportArtifactKeys(direct_import_module_keys),
         ) };
     }
 };
@@ -166,14 +167,14 @@ fn computeCheckedArtifactKeyBytes(
     compiler_artifact_hash: [32]u8,
     module_identity_hash: [32]u8,
     checking_context_identity_hash: [32]u8,
-    direct_import_artifact_keys_hash: [32]u8,
+    direct_import_module_keys_hash: [32]u8,
 ) [32]u8 {
     var hasher = base.Sha256.init(.{});
     hasher.update(&source_hash);
     hasher.update(&compiler_artifact_hash);
     hasher.update(&module_identity_hash);
     hasher.update(&checking_context_identity_hash);
-    hasher.update(&direct_import_artifact_keys_hash);
+    hasher.update(&direct_import_module_keys_hash);
     return hasher.finalResult();
 }
 
@@ -181,21 +182,21 @@ test "checked artifact key final bytes include compiler artifact hash" {
     const source_hash = @as([32]u8, @splat(1));
     const module_identity_hash = @as([32]u8, @splat(2));
     const checking_context_identity_hash = @as([32]u8, @splat(3));
-    const direct_import_artifact_keys_hash = @as([32]u8, @splat(4));
+    const direct_import_module_keys_hash = @as([32]u8, @splat(4));
 
     const first = computeCheckedArtifactKeyBytes(
         source_hash,
         @as([32]u8, @splat(5)),
         module_identity_hash,
         checking_context_identity_hash,
-        direct_import_artifact_keys_hash,
+        direct_import_module_keys_hash,
     );
     const second = computeCheckedArtifactKeyBytes(
         source_hash,
         @as([32]u8, @splat(6)),
         module_identity_hash,
         checking_context_identity_hash,
-        direct_import_artifact_keys_hash,
+        direct_import_module_keys_hash,
     );
 
     try std.testing.expect(!std.meta.eql(first, second));
@@ -27067,7 +27068,7 @@ pub const PlatformPairing = struct {
                 "key",
                 "source_hash",
                 "module_identity",
-                "direct_import_artifact_keys",
+                "direct_import_module_keys",
                 "public_api_dependencies",
                 "module_env",
                 "exports",
@@ -27096,6 +27097,11 @@ pub const PlatformPairing = struct {
                 "interface_capabilities",
                 "top_level_values",
                 "hoisted_constants",
+                // Value reuse metadata: borrowed from the platform. Reuse
+                // moves values between versions of a module's own entry,
+                // never into a composition.
+                "compile_time_root_identities",
+                "compile_time_root_portability",
                 // Runtime ownership and preparation state, not checked data.
                 "evaluation_state",
                 "serialized_backing",
@@ -27449,7 +27455,7 @@ pub fn pairCheckedPlatform(
             .root => {},
         };
     }
-    result.lowering_visibility = try collectLoweringVisibility(session, result.key.digest(), result.direct_import_artifact_keys, result.method_lookup_scope, result.public_api_dependencies, &result.checked_types, &result.checked_procedure_templates, &result.callable_eval_templates, &result.entry_wrappers, &result.const_templates, &result.resolved_value_refs, &result.top_level_procedure_bindings, &result.platform_required_bindings, &result.root_requests, &.{}, available_artifacts, &relations, &result.exported_procedure_templates, &result.exported_procedure_bindings, &result.exported_const_templates);
+    result.lowering_visibility = try collectLoweringVisibility(session, result.key.digest(), result.direct_import_module_keys, result.method_lookup_scope, result.public_api_dependencies, &result.checked_types, &result.checked_procedure_templates, &result.callable_eval_templates, &result.entry_wrappers, &result.const_templates, &result.resolved_value_refs, &result.top_level_procedure_bindings, &result.platform_required_bindings, &result.root_requests, &.{}, available_artifacts, &relations, &result.exported_procedure_templates, &result.exported_procedure_bindings, &result.exported_const_templates);
     return result;
 }
 
@@ -30679,7 +30685,7 @@ pub fn appendPlatformRelationDependencyArtifactKeysFromView(
     binding: PlatformRequiredBinding,
     binding_relation_closure: ImportedTemplateClosureView,
 ) Allocator.Error!void {
-    for (relation_artifact.direct_import_artifact_keys) |key| {
+    for (relation_artifact.direct_import_module_keys) |key| {
         try appendClosureArtifactKey(allocator, keys, key.digest());
     }
 
@@ -31605,7 +31611,7 @@ const LoweringVisibilityBuilder = struct {
 fn collectLoweringVisibility(
     allocator: Allocator,
     artifact_key: ModuleId,
-    direct_import_artifact_keys: []const CheckedModuleArtifactKey,
+    direct_import_module_keys: []const CheckedModuleArtifactKey,
     method_lookup_scope: MethodLookupScope,
     public_api_dependencies: PublicApiDependencies,
     checked_types: *const CheckedTypeStore,
@@ -31634,7 +31640,7 @@ fn collectLoweringVisibility(
     );
     defer builder.deinit();
 
-    for (direct_import_artifact_keys) |key| try builder.appendKey(key.digest());
+    for (direct_import_module_keys) |key| try builder.appendKey(key.digest());
     for (method_lookup_scope.module_ids) |key| try builder.appendKey(key);
     for (public_api_dependencies.artifacts) |key| try builder.appendKey(key);
     for (public_api_dependencies.type_owner_artifacts) |key| try builder.appendKey(key);
@@ -32761,6 +32767,22 @@ pub const ConstTemplateTable = struct {
         }
     }
 
+    /// Replace a stored constant's template with an equal stored value: a
+    /// compiler with runtime safety installs a transplanted value in place
+    /// of the one evaluation stored (design.md "Compile-Time Value Reuse
+    /// Across Edits").
+    pub fn replaceStoredConst(
+        self: *ConstTemplateTable,
+        ref: ConstRef,
+        template: StoredConstTemplate,
+    ) void {
+        const record = self.recordForRef(ref);
+        switch (record.state) {
+            .stored_const => record.state = .{ .stored_const = template },
+            .reserved, .eval_template, .unimplemented => checkedArtifactInvariant("replaced a constant template that held no stored value", .{}),
+        }
+    }
+
     pub fn get(self: *const ConstTemplateTable, ref: ConstRef) ConstTemplate {
         const idx = @backingInt(ref.template);
         if (idx >= self.templates.items.len) {
@@ -33166,6 +33188,78 @@ pub const CompileTimeRootReadTable = struct {
     }
 };
 
+/// Value identity and site of a compile-time root (design.md "Compile-Time
+/// Value Reuse Across Edits").
+pub const CompileTimeRootIdentity = value_identity.CompileTimeRootIdentity;
+
+/// Every compile-time root's value identity and site, dense by root id, and
+/// the module's value context, computed when the module is published.
+pub const CompileTimeRootIdentityTable = struct {
+    rows: []const CompileTimeRootIdentity = &.{},
+    /// The module's value context (`value_identity.ModuleIdentities.context`):
+    /// one digest in every published module, none in a table that was never
+    /// computed.
+    context: []const [32]u8 = &.{},
+    /// The identities of the module's exported definitions, sorted by name.
+    exports: []const value_identity.ExportIdentity = &.{},
+    /// The platform requirements code reachable from its methods looks up,
+    /// by name digest.
+    method_requires: []const [32]u8 = &.{},
+    /// The platform requirements code reachable from its exported
+    /// definitions looks up, by name digest.
+    export_requires: []const [32]u8 = &.{},
+
+    pub const Serialized = extern struct {
+        rows: SerializedSlice(CompileTimeRootIdentity) = .{},
+        context: SerializedSlice([32]u8) = .{},
+        exports: SerializedSlice(value_identity.ExportIdentity) = .{},
+        method_requires: SerializedSlice([32]u8) = .{},
+        export_requires: SerializedSlice([32]u8) = .{},
+        const Serde = artifact_serialize.SliceStoreSerde(CompileTimeRootIdentityTable, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserialize;
+    };
+
+    pub fn validate(self: CompileTimeRootIdentityTable, root_count: usize) error{CorruptArtifact}!void {
+        if (self.rows.len != 0 and self.rows.len != root_count) return error.CorruptArtifact;
+        if (self.context.len > 1) return error.CorruptArtifact;
+    }
+
+    /// The module's value context, when it was computed.
+    pub fn valueContext(self: CompileTimeRootIdentityTable) ?[32]u8 {
+        return if (self.context.len == 1) self.context[0] else null;
+    }
+
+    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
+};
+
+/// Whether each completed compile-time root's stored data can move into a
+/// later version of its module (design.md "Compile-Time Value Reuse Across
+/// Edits"), dense by root id: one byte per root, 1 when portable. Recomputed
+/// after each finalization of the module; empty before its first.
+pub const CompileTimeRootPortability = struct {
+    portable: []const u8 = &.{},
+
+    pub const Serialized = extern struct {
+        portable: SerializedSlice(u8) = .{},
+        const Serde = artifact_serialize.SliceStoreSerde(CompileTimeRootPortability, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserialize;
+    };
+
+    pub fn isPortable(self: CompileTimeRootPortability, root: ComptimeRootId) bool {
+        if (self.portable.len == 0) return false;
+        return self.portable[@backingInt(root)] == 1;
+    }
+
+    pub fn validate(self: CompileTimeRootPortability, root_count: usize) error{CorruptArtifact}!void {
+        if (self.portable.len != 0 and self.portable.len != root_count) return error.CorruptArtifact;
+        for (self.portable) |flag| if (flag > 1) return error.CorruptArtifact;
+    }
+
+    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
+};
+
 /// Checked module publication, including typed stores and compile-time observations.
 pub const CheckedModuleArtifact = struct {
     key: CheckedModuleArtifactKey,
@@ -33175,7 +33269,7 @@ pub const CheckedModuleArtifact = struct {
     canonical_names: canonical.CanonicalNameStore,
     module_identity: ModuleIdentity,
     checking_context_identity: CheckingContextIdentity,
-    direct_import_artifact_keys: []CheckedModuleArtifactKey = &.{},
+    direct_import_module_keys: []CheckedModuleArtifactKey = &.{},
     public_api_dependencies: PublicApiDependencies = .{},
     lowering_visibility: LoweringVisibility = .{},
     method_lookup_scope: MethodLookupScope = .{},
@@ -33216,6 +33310,8 @@ pub const CheckedModuleArtifact = struct {
     const_store: ConstStore,
     compile_time_debug: CompileTimeDebugStore = .{},
     compile_time_root_reads: CompileTimeRootReadTable = .{},
+    compile_time_root_identities: CompileTimeRootIdentityTable = .{},
+    compile_time_root_portability: CompileTimeRootPortability = .{},
     /// Process-local publication state; cache entries always contain finalized output.
     evaluation_state: enum { prepared, finalized } = .finalized,
     /// Owns the evaluation columns of a finalized artifact that a compilation
@@ -33241,7 +33337,7 @@ pub const CheckedModuleArtifact = struct {
     /// app binding environment. Local checked IDs retain the module's key.
     pub fn codeGenerationKey(self: *const CheckedModuleArtifact) CheckedModuleArtifactKey {
         if (self.pairing_arena == null) return self.key;
-        return CheckedModuleArtifactKey.computeFromSourceHash(self.source_hash, self.module_identity, self.checking_context_identity, self.direct_import_artifact_keys);
+        return CheckedModuleArtifactKey.computeFromSourceHash(self.source_hash, self.module_identity, self.checking_context_identity, self.direct_import_module_keys);
     }
 
     pub fn moduleEnv(self: *CheckedModuleArtifact) *ModuleEnv {
@@ -33406,7 +33502,7 @@ pub const CheckedModuleArtifact = struct {
         key: CheckedModuleArtifactKey,
         source_hash: [32]u8,
         module_identity: ModuleIdentitySerialized,
-        direct_import_artifact_keys: SerializedSlice(CheckedModuleArtifactKey),
+        direct_import_module_keys: SerializedSlice(CheckedModuleArtifactKey),
         canonical_names: canonical.CanonicalNameStore.Serialized,
         checking_context_identity: CheckingContextIdentity.Serialized,
         public_api_dependencies: PublicApiDependencies.Serialized,
@@ -33448,6 +33544,8 @@ pub const CheckedModuleArtifact = struct {
         const_store: ConstStore.Serialized,
         compile_time_debug: CompileTimeDebugStore.Serialized,
         compile_time_root_reads: CompileTimeRootReadTable.Serialized,
+        compile_time_root_identities: CompileTimeRootIdentityTable.Serialized,
+        compile_time_root_portability: CompileTimeRootPortability.Serialized,
 
         pub const root_contract: collections.serde_validation.RootContract = .{
             .Owner = CheckedModuleArtifact,
@@ -33462,7 +33560,7 @@ pub const CheckedModuleArtifact = struct {
         };
 
         comptime {
-            // The TRUE total relocation fixup count: 1 (`direct_import_artifact_keys`)
+            // The TRUE total relocation fixup count: 1 (`direct_import_module_keys`)
             // + the recursive sum of every sub-store, now including the `SafeList`/
             // interner base pointers (`canonical_names` = 22 via its 7 interners +
             // `proc_bases`; `checked_types` includes its `var_names` interner = 3).
@@ -33474,10 +33572,12 @@ pub const CheckedModuleArtifact = struct {
             // plans add one, and state merge plans one more. Promoted local
             // procedure templates and callable contract types add one each,
             // and the single-source-call template list one more. Nested procedure runtime captures add one. The
-            // compile-time root read table adds its rows and refs. Stored
+            // compile-time root read table adds its rows and refs, the root
+            // identity table its rows, value context, exports and method and
+            // export requirements, and the portability column one more. Stored
             // function evidence keeps its target and structural payloads in
             // two pools of their own.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 240);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 246);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -33538,6 +33638,8 @@ pub const CheckedModuleArtifact = struct {
             const roots = self.compile_time_roots.deserialize(base_addr);
             try observations.validate(roots.roots.len);
             try self.compile_time_root_reads.deserialize(base_addr).validate(roots.roots.len);
+            try self.compile_time_root_identities.deserialize(base_addr).validate(roots.roots.len);
+            try self.compile_time_root_portability.deserialize(base_addr).validate(roots.roots.len);
         }
 
         pub fn deserialize(
@@ -33675,7 +33777,7 @@ pub const CheckedModuleArtifact = struct {
         if (self.serialized_backing) |backing| {
             // Frozen artifact: every sub-store aliases `backing`, so running the
             // per-sub-store frees would free into the buffer (and the unconditional
-            // `direct_import_artifact_keys` free below points into it too). Free
+            // `direct_import_module_keys` free below points into it too). Free
             // only the buffer and the injected env storage, mirroring how a
             // `cached_buffer`/`static_builtin`-backed module is torn down.
             if (deinit_module_env) {
@@ -34909,7 +35011,7 @@ pub const CheckedModuleArtifact = struct {
                 self.source_hash,
                 self.module_identity,
                 self.checking_context_identity,
-                self.direct_import_artifact_keys,
+                self.direct_import_module_keys,
             )));
         }
 
@@ -35419,7 +35521,7 @@ pub const ImportedModuleView = struct {
     module_env: *const ModuleEnv,
     canonical_names: *const canonical.CanonicalNameStore,
     module_identity: ModuleIdentity,
-    direct_import_artifact_keys: []const CheckedModuleArtifactKey = &.{},
+    direct_import_module_keys: []const CheckedModuleArtifactKey = &.{},
     public_api_dependencies: PublicApiDependencies = .{},
     lowering_visibility: LoweringVisibility = .{},
     method_lookup_scope: []const ModuleId = &.{},
@@ -35451,14 +35553,16 @@ pub const ImportedModuleView = struct {
     interface_capabilities: *const ModuleInterfaceCapabilities,
     const_store: *const ConstStore,
     compile_time_root_reads: *const CompileTimeRootReadTable = &no_compile_time_root_reads,
+    compile_time_root_identities: *const CompileTimeRootIdentityTable = &no_compile_time_root_identities,
 
     /// The keys of the modules this module imports directly.
     pub fn directImportKeys(self: ImportedModuleView) []const CheckedModuleArtifactKey {
-        return self.direct_import_artifact_keys;
+        return self.direct_import_module_keys;
     }
 };
 
 const no_compile_time_root_reads: CompileTimeRootReadTable = .{};
+const no_compile_time_root_identities: CompileTimeRootIdentityTable = .{};
 
 /// Public `LoweringModuleView` declaration.
 pub const LoweringModuleView = struct {
@@ -35475,7 +35579,7 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .module_env = artifact.moduleEnvConst(),
         .canonical_names = &artifact.canonical_names,
         .module_identity = artifact.module_identity,
-        .direct_import_artifact_keys = artifact.direct_import_artifact_keys,
+        .direct_import_module_keys = artifact.direct_import_module_keys,
         .public_api_dependencies = artifact.public_api_dependencies,
         .lowering_visibility = artifact.lowering_visibility,
         .method_lookup_scope = artifact.method_lookup_scope.module_ids,
@@ -35507,6 +35611,7 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .interface_capabilities = &artifact.interface_capabilities,
         .const_store = &artifact.const_store,
         .compile_time_root_reads = &artifact.compile_time_root_reads,
+        .compile_time_root_identities = &artifact.compile_time_root_identities,
     };
 }
 
@@ -36693,14 +36798,14 @@ pub fn checkedModuleKeyFromTypedModule(
     );
     defer checking_context_identity.deinit(allocator);
 
-    const direct_import_artifact_keys = try directImportArtifactKeysFromModule(allocator, module, inputs.imports);
-    defer allocator.free(direct_import_artifact_keys);
+    const direct_import_module_keys = try directImportArtifactKeysFromModule(allocator, module, inputs.imports);
+    defer allocator.free(direct_import_module_keys);
 
     return CheckedModuleArtifactKey.computeFromSourceHash(
         hashModuleSourceInputs(module_env),
         module_identity,
         checking_context_identity,
-        direct_import_artifact_keys,
+        direct_import_module_keys,
     );
 }
 
@@ -36748,14 +36853,14 @@ pub fn publishFromTypedModule(
     );
     errdefer checking_context_identity.deinit(allocator);
 
-    const direct_import_artifact_keys = try directImportArtifactKeysFromModule(allocator, module, inputs.imports);
-    errdefer allocator.free(direct_import_artifact_keys);
+    const direct_import_module_keys = try directImportArtifactKeysFromModule(allocator, module, inputs.imports);
+    errdefer allocator.free(direct_import_module_keys);
     const source_hash = hashModuleSourceInputs(module_env);
     const artifact_key = CheckedModuleArtifactKey.computeFromSourceHash(
         source_hash,
         module_identity,
         checking_context_identity,
-        direct_import_artifact_keys,
+        direct_import_module_keys,
     );
 
     const exports = try collectPublishedExportDefs(allocator, module);
@@ -37122,6 +37227,28 @@ pub fn publishFromTypedModule(
     template_iterator_refs.deinit(allocator);
     plan_build_data.deinit(allocator);
 
+    const module_identities = try value_identity.compute(allocator, .{
+        .env = module.moduleEnvConst(),
+        .names = &canonical_names,
+        .types = checked_types.view(),
+        .roots = compile_time_roots.roots,
+        .top_level_values = &top_level_values,
+        .context = .{
+            .compiler_artifact = build_options.compiler_artifact_hash,
+            .checking_context = hashCheckingContextIdentity(checking_context_identity),
+            .direct_import_keys = hashDirectImportArtifactKeys(direct_import_module_keys),
+        },
+        .own_identity = module_identity.stable_hash,
+    });
+    var compile_time_root_identities = CompileTimeRootIdentityTable{
+        .rows = module_identities.roots,
+        .exports = module_identities.exports,
+        .method_requires = module_identities.method_requires,
+        .export_requires = module_identities.export_requires,
+    };
+    errdefer compile_time_root_identities.deinit(allocator);
+    compile_time_root_identities.context = try allocator.dupe([32]u8, &.{module_identities.context});
+
     var provided_exports = try ProvidedExportTable.fromModule(
         allocator,
         module,
@@ -37310,7 +37437,7 @@ pub fn publishFromTypedModule(
     var lowering_visibility = try collectLoweringVisibility(
         allocator,
         artifact_key.digest(),
-        direct_import_artifact_keys,
+        direct_import_module_keys,
         method_lookup_scope,
         public_api_dependencies,
         checked_types,
@@ -37342,7 +37469,7 @@ pub fn publishFromTypedModule(
         .canonical_names = canonical_names,
         .module_identity = module_identity,
         .checking_context_identity = checking_context_identity,
-        .direct_import_artifact_keys = direct_import_artifact_keys,
+        .direct_import_module_keys = direct_import_module_keys,
         .public_api_dependencies = public_api_dependencies,
         .lowering_visibility = lowering_visibility,
         .method_lookup_scope = method_lookup_scope,
@@ -37384,6 +37511,7 @@ pub fn publishFromTypedModule(
         .hoisted_constants = hoisted_constants,
         .const_templates = const_templates,
         .const_store = checked_const_store,
+        .compile_time_root_identities = compile_time_root_identities,
         .evaluation_state = .prepared,
     };
     checked_const_store = ConstStore.init(allocator);

@@ -26,6 +26,8 @@ pub const Var = enum {
     pack_stats,
     /// Print every compile-time demand decision.
     ctfe_demand_trace,
+    /// Print what each module's compile-time evaluation reused, verified, and stored.
+    ctfe_reuse_trace,
     /// Write one object and one manifest per module next to a native dev build.
     dev_pack_objects,
     /// Load the pack objects in the named directory into a native dev build.
@@ -46,6 +48,7 @@ pub const Var = enum {
             .pack_trace => "ROC_PACK_TRACE",
             .pack_stats => "ROC_PACK_STATS",
             .ctfe_demand_trace => "ROC_CTFE_DEMAND_TRACE",
+            .ctfe_reuse_trace => "ROC_CTFE_REUSE_TRACE",
             .dev_pack_objects => "ROC_DEV_PACK_OBJECTS",
             .dev_pack_hits => "ROC_DEV_PACK_HITS",
             .dev_artifact_roundtrip => "ROC_DEV_ARTIFACT_ROUNDTRIP",
