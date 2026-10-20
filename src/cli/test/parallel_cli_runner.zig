@@ -10405,6 +10405,10 @@ fn customCtfeCacheMixing(
         return customInfraFailure(allocator, timer, "failed to add a module header: {}", .{err});
     const library_path = std.fs.path.join(allocator, &.{ std.fs.path.dirname(callable).?, "Callable.roc" }) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate library path: {}", .{err});
+    // On a case-insensitive file system `Callable.roc` would otherwise replace
+    // the staged entrypoint's contents under its lowercase spelling.
+    std.Io.Dir.cwd().deleteFile(io, callable) catch |err|
+        return customInfraFailure(allocator, timer, "failed to remove the staged entrypoint: {}", .{err});
     std.Io.Dir.cwd().writeFile(io, .{ .sub_path = library_path, .data = library }) catch |err|
         return customInfraFailure(allocator, timer, "failed to write library: {}", .{err});
     if (runRocAndCheck(io, allocator, &isolated, timer, timeout_ms, .{ .args = &.{ "check", "--no-color" }, .roc_file = library_path })) |failure| return failure;
