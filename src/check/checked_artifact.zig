@@ -9356,6 +9356,86 @@ test "nested closed record canonical keys agree across solver and checked repres
     try std.testing.expectEqualSlices(u8, &source_key.bytes, &substituted.key.bytes);
 }
 
+test "published closed roots compose three deep and a closed cyclic root does not" {
+    const testing = std.testing;
+    const TestEnv = @import("test/TestEnv.zig");
+    const allocator = testing.allocator;
+
+    var test_env = try TestEnv.init("Main", "value = {}");
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    const types_store = &test_env.module_env.types;
+    const inner_name = try test_env.module_env.insertIdent(Ident.for_text("inner"));
+    const middle_name = try test_env.module_env.insertIdent(Ident.for_text("middle"));
+    const outer_name = try test_env.module_env.insertIdent(Ident.for_text("outer"));
+    const Build = struct {
+        fn record(store: *types.Store, name: Ident.Idx, field: Var) Allocator.Error!Var {
+            return try store.freshFromContent(.{ .structure = .{ .record = .{
+                .fields = try store.appendRecordFields(&.{.{ .name = name, .presence = .required(field) }}),
+                .ext = try store.freshFromContent(.{ .structure = .empty_record }),
+            } } });
+        }
+    };
+    const leaf = try types_store.freshFromContent(.{ .structure = .empty_record });
+    const inner = try Build.record(types_store, inner_name, leaf);
+    const middle = try Build.record(types_store, middle_name, inner);
+    const outer = try Build.record(types_store, outer_name, middle);
+    // A closed recursive tuple and a parent that holds it beside `inner`.
+    const cyclic = try types_store.fresh();
+    try types_store.setVarContent(cyclic, .{ .structure = .{ .tuple = .{ .elems = try types_store.appendVars(&.{ cyclic, leaf }) } } });
+    const holder = try types_store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try types_store.appendVars(&.{ cyclic, inner }) } } });
+
+    const source_modules = [_]TypedCIR.Modules.SourceModule{
+        .{ .precompiled = test_env.module_env },
+    };
+    var modules = try TypedCIR.Modules.init(allocator, &source_modules);
+    defer modules.deinit();
+    const module = modules.module(0);
+    const imports = CheckedImportViews{ .current_owner = testCheckedModuleKey(1), .direct = &.{} };
+
+    const fresh_outer = try canonical_type_keys.fromVarInfo(allocator, module.typeStoreConst(), module.moduleEnvConst(), outer);
+    const fresh_holder = try canonical_type_keys.fromVarInfo(allocator, module.typeStoreConst(), module.moduleEnvConst(), holder);
+    const fresh_cyclic = try canonical_type_keys.fromVarInfo(allocator, module.typeStoreConst(), module.moduleEnvConst(), cyclic);
+    try testing.expect(fresh_outer.composable);
+    // The cyclic root's own encoding writes a cycle reference, so it is not
+    // composable; its parent refers to it by key and is.
+    try testing.expect(!fresh_cyclic.composable);
+    try testing.expect(!fresh_cyclic.contains_identity_variables);
+    try testing.expect(fresh_holder.composable);
+
+    // Publish children first, so each parent's key is composed from its
+    // children's stored keys, and then publish only the outermost roots.
+    for ([_]bool{ true, false }) |children_first| {
+        var names = canonical.CanonicalNameStore.init(allocator);
+        defer names.deinit();
+        var store = CheckedTypeStore{};
+        defer store.deinit(allocator);
+        var active = try CheckedSourceTypeRoots.init(allocator, module);
+        defer active.deinit();
+
+        if (children_first) {
+            for ([_]Var{ leaf, inner, middle, cyclic }) |child| {
+                _ = try appendCheckedTypeRoot(allocator, module, &names, imports, &store, &active, child);
+            }
+        }
+        const checked_outer = try appendCheckedTypeRoot(allocator, module, &names, imports, &store, &active, outer);
+        const checked_holder = try appendCheckedTypeRoot(allocator, module, &names, imports, &store, &active, holder);
+        const checked_cyclic = try appendCheckedTypeRoot(allocator, module, &names, imports, &store, &active, cyclic);
+
+        try testing.expectEqualSlices(u8, &fresh_outer.key.bytes, &store.roots.items[@backingInt(checked_outer)].key.bytes);
+        try testing.expectEqualSlices(u8, &fresh_holder.key.bytes, &store.roots.items[@backingInt(checked_holder)].key.bytes);
+        try testing.expectEqualSlices(u8, &fresh_cyclic.key.bytes, &store.roots.items[@backingInt(checked_cyclic)].key.bytes);
+        try testing.expect(store.rootIsComposable(checked_outer));
+        try testing.expect(!store.rootIsComposable(checked_cyclic));
+        try testing.expect(store.rootIsComposable(checked_holder));
+        for ([_]CheckedTypeId{ checked_outer, checked_holder, checked_cyclic }, [_]canonical.CanonicalTypeKey{ fresh_outer.key, fresh_holder.key, fresh_cyclic.key }) |root, expected| {
+            const substituted = try substitutedCheckedTypeKeyInfo(allocator, &names, &store, root, &.{}, &.{});
+            try testing.expectEqualSlices(u8, &expected.bytes, &substituted.key.bytes);
+        }
+    }
+}
+
 test "a synthetic function over composed roots shares the source function root" {
     const allocator = std.testing.allocator;
 
