@@ -628,8 +628,6 @@ pub fn lowLevelAccess(op: LowLevel) OpAccess {
         .ptr_load,
         .ptr_cast,
         .crash,
-        .list_map_can_reuse,
-        .list_item_size_at_most,
         => .{},
     };
 }
