@@ -7198,7 +7198,7 @@ fn resolveUrlBundle(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMemor
                 .err = make_err,
             } });
         };
-        compile.package_resolution.sweepStalePackageStaging(ctx.coreCtx(), ctx.arena, cache_dir_path);
+        compile.package_resolution.sweepStalePackageCacheEntries(ctx.coreCtx(), ctx.arena, cache_dir_path);
 
         // Download into a staging directory and publish it with a rename, so
         // the hash-named directory never exists half-written. Other processes
