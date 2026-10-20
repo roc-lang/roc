@@ -17630,6 +17630,58 @@ test "RC alias of a parameter consumed in the body solves the parameter owned" {
     try f.expectRc(call_result, 0, 0, 0);
 }
 
+test "RC pinned signature borrows a parameter holding a demand hole" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const hole = try f.layouts.insertLayout(layout_mod.Layout.hole());
+    const list_hole = try f.layouts.insertList(hole);
+
+    // A demand-shaped procedure whose list parameter holds a hole: its body
+    // reads the list header and nothing else. It carries a code key, so ARC
+    // pins it to the signature its types determine instead of solving it.
+    const param = try f.local(list_hole);
+    const view = try f.local(list_hole);
+    const len = try f.local(.u64);
+    const callee_ret = try f.ret(len);
+    const read_len = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = len,
+        .op = .list_len,
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.RcEffect.none()),
+        .args = try f.span(&.{view}),
+        .next = callee_ret,
+    } }, .test_fixture);
+    const view_assign = try f.assignRefLocal(view, param, read_len);
+    const callee = try f.addProc(&.{param}, view_assign, .u64);
+    f.store.getProcSpecPtr(callee).code_key = @splat(1);
+
+    // The caller passes a dying list of strings where the hole is expected.
+    const list = try f.local(f.list_str);
+    const result = try f.local(.u64);
+    const caller_ret = try f.ret(result);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = result,
+        .proc = callee,
+        .args = try f.span(&.{list}),
+        .next = caller_ret,
+    } }, .test_fixture);
+    const caller_body = try f.assignList(list, &.{}, call);
+    _ = try f.addProc(&.{}, caller_body, .u64);
+
+    try f.run();
+
+    // The pinned signature borrows the hole-holding position by its type, so
+    // the callee touches no refcount and the caller releases its own list
+    // after the call.
+    const pinned: arc_sig.RcSig = .{
+        .borrowed_params = @intCast(f.store.getProcSpecImmediate(callee).rc_borrowed_params),
+    };
+    try testing.expectEqual(arc_sig.Mode.borrowed, pinned.paramMode(0));
+    try f.expectRc(param, 0, 0, 0);
+    try f.expectRc(view, 0, 0, 0);
+    try f.expectRc(list, 0, 1, 0);
+}
+
 test "ARC ownership iteration skips absent resources and preserves release order" {
     var arena = collections.SingleThreadArena.init(testing.allocator);
     defer arena.deinit();

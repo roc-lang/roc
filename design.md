@@ -729,8 +729,9 @@ callee exactly when it reaches the entry. A splice never follows a symbolic
 reference to a procedure the program compiles itself, so the entry calls the
 program's current code of each closure it receives. Because such code was compiled
 against an earlier body of the procedures it calls by identity, ARC pins
-every procedure with a code key to the signature its types determine (all
-parameters and the return owned, no return uniqueness). An entry whose code reaches the
+every procedure with a code key to the signature its types determine (every
+parameter owned except one holding a demand hole, which is borrowed; the
+return owned; no return uniqueness). An entry whose code reaches the
 app from outside it (`Lifted.Program.appCalleesReachedBy`) is offered under
 its identity only, never under a reservation-time key, and a program that
 takes it lowers every app function it reaches as a served callee of the
@@ -15504,9 +15505,14 @@ hole-holding layout; an inlined shaped body binds its parameters to the
 caller's locals directly.
 
 No refcount plan exists for a value holding a hole. ARC borrows every such
-parameter, because the body never consumes it, and two invariants pin this:
-requesting a refcount operation on such a value fails, and so does a
-procedure signature that owns such a parameter.
+parameter, because the body never consumes it: the solver starts the position
+borrowed and nothing demands it, and a pinned signature (a code-keyed, root,
+hosted, or erased-callable procedure's, which is the one its types determine)
+borrows the position by its type. Two invariants pin this: requesting a
+refcount operation on such a value fails, and so does a procedure signature
+that owns such a parameter. The interpreter's refcount-effect conformance
+observer names such a value's own allocation, a list or box header, and
+nothing behind it.
 
 A shaped specialization's procedure identity renders its holes as holes, so
 the object cache keys it by its demand-shaped types with no further change,
@@ -19835,6 +19841,9 @@ before solving and never weakened:
 - hosted procs: every refcounted arg owned by the host, result owned. This
   keeps the LirImage And Hosted Functions contract unchanged.
 - erased-callable procs (`ProcAbi.erased_callable`): all-owned, as above.
+- code-keyed procs (`LIR.LirProcSpec.code_key`): all-owned, as above.
+- a parameter holding a demand hole, in every pinned signature: borrowed
+  ("Specialization By Demand").
 - low-level ops: each concrete operation's `RcEffect` is its signature; it is
   explicit static data on the op, never inferred. An ARC-only borrowed-result
   variant is likewise an explicit operation and signature, selected only by
