@@ -46,14 +46,17 @@ pub const uses_software_rounds = rounds.arch_class == .x86_64 and builtin.os.tag
 /// extension: its assembler accepts any x86 instruction, whereas Zig's
 /// self-hosted x86_64 backend (the Debug backend) encodes only instructions in
 /// the target CPU's feature set and rejects the SHA and SSSE3 ones otherwise.
-/// So a self-hosted build without the feature has no hardware rounds to
-/// dispatch to and uses the portable rounds; build.zig keeps Debug builds on a
-/// machine with the extension at `hasHardwareSupport` (see `withSha256Floor`
-/// there).
+/// A self-hosted build therefore dispatches only when its target carries the
+/// extension as a floor (`x86_floor` in src/builtins/sha256.zig): build.zig
+/// adds it to every x86_64 Debug build but macOS (`withSha256Floor`), the
+/// rounds are encodable, and CPUID still decides whether this machine runs
+/// them. A self-hosted build without the feature has no hardware rounds to
+/// dispatch to and uses the portable rounds.
 ///
 /// This dispatch is for the compiler binary only. Code compiled into Roc
 /// programs, including the `Crypto` builtins, never selects rounds at runtime.
-pub const dispatches_at_runtime = rounds.arch_class == .x86_64 and !rounds.hasHardwareSupport and !uses_software_rounds and builtin.zig_backend == .stage2_llvm;
+pub const dispatches_at_runtime = rounds.arch_class == .x86_64 and !rounds.hasHardwareSupport and !uses_software_rounds and
+    (builtin.zig_backend == .stage2_llvm or (rounds.x86_floor and builtin.zig_backend != .stage2_c));
 
 fn compress(state: *rounds.State, blocks: []const rounds.Block) void {
     // Frozen-image consumers use digest metadata without hashing. Enforce
