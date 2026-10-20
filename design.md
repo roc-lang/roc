@@ -7958,8 +7958,12 @@ unique call's owning functions through the selected inline plan. If an owning
 wrapper has multiple direct inline sites or also survives as a function value,
 the nested single-use body remains a procedure; a non-inlined owner establishes
 a single procedure-body boundary. Bodies with procedure-relative returns or
-loop control not owned by a loop inside the body remain procedures, and cycles
-consisting entirely of selected inline bodies are rejected before lowering. The
+loop control not owned by a loop inside the body remain procedures. A
+candidate body on a cycle of direct calls among closed candidate bodies (a
+strongly connected component of that call graph, or a body that calls itself)
+remains a procedure too, decided before lowering. The components depend on the
+call graph alone, never on the order a program numbers its functions in, so
+every program that contains a procedure makes the same decisions inside it. The
 analyzer records the complete decision before LIR generation; direct
 Solved-to-LIR lowering only substitutes arguments and dumbly lowers a selected
 body at its unique call site. An argument that is a plain read of a caller
