@@ -21917,6 +21917,99 @@ stack-argument copies emitted after frame finalization instead explicitly use
 X9-X11, which are volatile and carry no incoming C-ABI arguments. They preserve
 all argument registers and introduce no new callee-save or frame requirements.
 
+## LLVM Value Representation
+
+Immediately before emitting a procedure's body, the LLVM backend plans how each
+of the procedure's LIR locals is represented (`src/backend/llvm/ValuePlan.zig`).
+The plan is LLVM-specific preparation: it runs only inside the LLVM backend's
+procedure emission, so dev-backend, wasm, interpreter, and compile-time
+compilations never run it, and nothing upstream of the backend changes for it.
+It consumes explicit data only: the procedure's statements and their operands,
+local layouts, join declarations, the emitter's shared-statement edge counts,
+`lir.StackPlan` liveness over the explicit control-flow graph, and the
+procedure signatures of the Internal Calling Convention. It is valid for the
+emission of that one body; its store-indexed representation and value columns
+are reset from the procedure's own inventory when the body finishes, including
+on allocation failure, so specializations that reuse a `LocalId` never observe
+each other's plans.
+
+A local is either `memory`, one fixed-size entry-block slot with activation
+lifetime, or SSA, a sequence of LLVM values. Only a layout with a scalar
+carrier can be SSA: Bool as `i1`, an integer as `iN`, Dec as `i128`, F32 and F64,
+and a SIMD vector as its LLVM vector type. Strings, lists, boxes, pointers,
+records, tag unions, and callables stay in memory, because their consumers (RC
+helpers, builtins, field projections, host boundaries) take addresses. The
+backend does not split aggregates into components: Record Component Bindings
+and Join-Parameter Scalarization already give LIR one scalar local per component
+wherever a program reads an aggregate component-wise, and those locals become
+SSA here. A second aggregate-splitting mechanism in the backend is forbidden.
+
+A scalar-carrier local is SSA unless some operand position needs its address.
+Each operand position has a declared access. A `value` access reaches the local
+only through the emitter's representation-agnostic helpers (scalar and Bool
+reads and writes, copies, reads and writes of the local's bytes at an explicit
+memory destination, and register-piece assembly); an `address` access uses the
+local's slot. `ValuePlan.lowLevelAccess` declares the value accesses of
+low-level operations, `noteAddressedOperands` declares each statement kind's,
+and calls and the prologue follow the procedure signatures: register pieces and
+tail-group storage are value accesses, while an argument passed indirectly, a
+result returned through a pointer, a result a tail driver writes, and every
+operand of a hosted call are address accesses. A required address is a planned
+representation, not an emission-time fallback. Asking for the slot of an SSA
+local is a compiler invariant violation.
+
+An SSA local is `dominating` when it has one definition, or is a parameter that
+only the prologue defines, and is not live on entry to the procedure. Liveness
+then proves the definition dominates every read, so the emitter records its
+value once. Every other SSA local is `merged`. The merge points are exactly the
+blocks the emitter enters along more than one edge: a join's body, entered by
+its jumps (a loop's back edge is a jump), and a statement with more than one
+incoming edge, which the emitter gives a shared block. For each merge point the
+plan lists the merged locals live on entry to it, from `StackPlan`'s exact
+read-before-write liveness, so phis are pruned to live locals.
+
+Emission is a rename walk over the emitter's structured control flow. The
+emitter holds each SSA local's current definition, and every write of a merged
+local is journaled. Each branch arm (switch cases and default, both sides of an
+initialized-payload switch, string-match arms and miss, both sides of a Boxy tag
+match) and each join body first rolls the journal back to the length recorded at
+its branch or join statement, so an arm starts from exactly the definitions that
+reach it and never from a sibling arm's, whatever order the arms are emitted in.
+Every edge into a merge point, a jump or an arrival at a shared statement,
+records its block and the current definitions of the point's live merged
+locals. Entering a merge point creates one phi per such local at the start of
+its block and makes the phi the local's definition. The phis are open: their
+incoming lists are completed after the whole body is emitted, so back edges and
+edges recorded before the phis exist (a join's remainder is emitted before its
+body) need no special case. The construction never uses the most recently
+emitted value of a `LocalId`, which need not dominate the next use.
+
+The emitter creates blocks in emission order, which is not dominance order: a
+join's body block exists before the remainder that jumps to it, and a shared
+statement's block before arms emitted later. The LLVM builder therefore lays a
+function's blocks out in reverse postorder when it finishes the function, so
+every definition precedes its non-phi uses in layout order, as the bitcode
+encoding of operands by backward distance requires.
+
+A read that no definition reaches, in code no path from entry reaches or of a
+possibly-uninitialized local that LIR reads only behind its initialization
+guard, yields zero of the local's type, never `undef` or `poison`.
+
+Join parameters are ordinary locals: LIR jumps carry no operands, and lowering
+snapshots every replacement value before writing any parameter. Each write is
+an ordinary definition in program order, so simultaneous updates, including
+swaps and refcounted values released after the rebinding, keep LIR's order. The
+backend emits LIR's explicit `incref`, `decref`, and `free` statements unchanged
+and infers no ownership from SSA form.
+
+Memory boundaries are explicit helpers that write an SSA local's bytes to a
+destination or define it from bytes at a source: aggregate construction, field
+and payload loads, packed argument buffers, tail-group storage, and result
+pointers. A Bool is `i1` in SSA form and one byte in memory, and reading the byte
+tests it against zero. With local debug info enabled, a named SSA local reports
+each definition, phis included, with `llvm.dbg.value` in its procedure's own
+scope. Memory locals keep `llvm.dbg.declare`.
+
 ## Internal Calling Convention
 
 The LLVM backend gives every procedure two functions. The packed function,
@@ -21929,10 +22022,48 @@ classifies them: scalars and small aggregates as register pieces, large
 aggregates by pointer, and a small result returned by value. It is internal
 and `fastcc`, so the classification only decides how a value splits into
 scalars while LLVM assigns the registers. A direct Roc call targets the fast
-function, loading each argument's pieces from its slot and storing a by-value
-result into the target slot; the packed function is an adapter that unpacks
-the argument bytes and calls the fast one. Erased callables keep the public
-erased ABI, and hosted procedures keep the C ABI of the host.
+function; the packed function is an adapter that unpacks the argument bytes
+and calls the fast one. Erased callables keep the public erased ABI, and hosted
+procedures keep the C ABI of the host.
+
+Only a direct Roc call, an ordinary or frame-replacing `assign_call` whose
+callee has a body, and a WebAssembly tail driver dispatching to a member of its
+tail group reach a fast function, and all of them read the callee's one
+signature. Every boundary whose consumer does
+not know the callee's signature keeps a fixed ABI and reaches the body through
+the packed adapter: exported entrypoint wrappers (the platform's C ABI on one
+side, the packed function on the other), in-process evaluation entrypoints,
+Boxy dictionary thunks, procedure references stored in values (`proc_ref`
+literals and packed erased functions), frozen and static-data relocations and
+object-cache packs, which name the packed function by its external symbol.
+Erased callables are only ever called through
+function pointers and keep the erased ABI with no fast function. Hosted calls
+use the host's C ABI, builtins use their declared signatures, and none of these
+boundaries changes when a fast signature does. An escaping procedure is always
+reached through its packed function, so its fast function never needs a
+signature its consumers know.
+
+Each procedure's fast signature is built once, when the procedure is declared,
+and the declaration, the body's prologue and returns, direct and
+frame-replacing calls, the packed adapter, tail drivers, and the value plan all
+read that one signature. Register pieces move between an SSA local and its
+parameters or result directly: the local's bits are split into pieces at the
+call or return, and pieces are combined into the local's value in the prologue
+or after the call, by byte offset and target endianness. A scalar helper kept
+out of line is therefore `define internal fastcc i64 @f(i64)` with no argument
+pack or result slot, and its callers pass and receive values. An aggregate
+argument's pieces load from its slot, and a by-value aggregate result stores
+into the target's slot.
+
+The attributes follow from these contracts. An indirect argument points at the
+caller's own slot for the argument local, not at a private copy, so it is
+`readonly` and `nocapture` (the callee copies it into its own frame on entry)
+but never `noalias`: one local can be passed twice. The `sret` result pointer is
+`noalias` because the caller passes the target's slot, which no argument of the
+same call names. The packed function's argument pack is a fresh caller buffer,
+so it is `noalias`, `readonly`, and `nocapture`. The erased ABI's result,
+capture, and reuse pointers carry no `noalias`, since the result can be written
+into a reused allocation that the capture points into.
 
 ## Dev Backend Register Lifetimes
 

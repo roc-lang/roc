@@ -21,5 +21,6 @@ test "backend llvm tests" {
     std.testing.refAllDecls(ir);
     std.testing.refAllDecls(bitcode_writer);
     std.testing.refAllDecls(@import("MonoLlvmCodeGen.zig"));
+    std.testing.refAllDecls(@import("ValuePlan.zig"));
     std.testing.refAllDecls(@import("debugger_constants.zig"));
 }
