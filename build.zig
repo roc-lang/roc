@@ -17,10 +17,6 @@ const Step = std.Build.Step;
 
 var build_checks_exe: ?*Step.Compile = null;
 
-/// Whether a Debug build for this machine gets its CPU's SHA-256 instructions
-/// when the CPU has them (`hostBuildsDebugWithSha`); `-Ddebug-sha-floor`.
-var debug_sha_floor = true;
-
 fn buildChecksRun(b: *std.Build, command: []const u8) *Step.Run {
     const exe = build_checks_exe orelse blk: {
         // ReleaseFast on purpose. The source checks read every Zig file under
@@ -504,16 +500,16 @@ fn getReleaseTargetQuery(b: *std.Build, target: ResolvedTarget) std.Target.Query
 /// choice stands and `TypeDigestHasher` reports a missing feature at compile
 /// time.
 ///
-/// A Debug build for this machine's own x86_64 architecture and OS also gets
-/// the SHA extension (with the SSSE3 the rounds use) when this machine has
-/// it. Debug uses Zig's self-hosted x86_64 backend, which encodes only
-/// instructions in the target CPU's feature set, so without the feature such
-/// a build has no hardware rounds at all and computes every digest with the
-/// portable rounds (see `dispatches_at_runtime` in
-/// src/base/sha256.zig). The floor keeps Debug builds and test suites
-/// on hardware rounds where the CPU allows it; a machine without the
-/// extension gets the portable rounds, and every LLVM build stays at the
-/// architecture baseline and dispatches at runtime, like a released binary.
+/// A Debug build for an x86_64 target other than macOS also gets the SHA
+/// extension, with the SSSE3 the rounds use (`debugBuildsWithSha`). Debug uses
+/// Zig's self-hosted x86_64 backend, which encodes only instructions in the
+/// target CPU's feature set, so without the feature such a build has no
+/// hardware rounds at all. The feature is added to the generic x86-64 model,
+/// which the rounds read as a floor rather than a CPU (`x86_floor` in
+/// src/builtins/sha256.zig): the compiler's digests choose rounds with CPUID
+/// (`dispatches_at_runtime` in src/base/sha256.zig), so the build runs on
+/// CPUs without the extension, and every machine resolves the same target, so
+/// CI's shared build is a cache hit on every runner.
 fn withSha256Floor(b: *std.Build, target: ResolvedTarget, optimize: std.builtin.OptimizeMode) ResolvedTarget {
     var query = target.query;
     switch (query.cpu_model) {
@@ -521,7 +517,7 @@ fn withSha256Floor(b: *std.Build, target: ResolvedTarget, optimize: std.builtin.
         .native, .explicit => return target,
     }
     addSha256Floor(&query);
-    if (optimize == .debug and hostBuildsDebugWithSha(target)) {
+    if (optimize == .debug and debugBuildsWithSha(target)) {
         query.cpu_features_add.addFeature(@backingInt(std.Target.x86.Feature.sha));
         query.cpu_features_add.addFeature(@backingInt(std.Target.x86.Feature.ssse3));
     }
@@ -549,20 +545,13 @@ fn withoutSha256Floor(b: *std.Build, target: ResolvedTarget) ResolvedTarget {
     return b.resolveTargetQuery(query);
 }
 
-/// Whether `target` is this machine's own x86_64 architecture and OS, this
-/// machine's CPU has the SHA extension and SSSE3, and `-Ddebug-sha-floor` has
-/// not turned the floor off. `builtin.cpu` here is the CPU the build runner
-/// was compiled for, which Zig detects from the machine, so a build that
-/// another machine will run, as CI's shared build is, turns the floor off to
-/// get one compilation that every x86-64 machine runs. x86_64 macOS never
-/// takes the floor: it computes digests with the portable rounds unless
-/// `-Dcpu` names its CPU (see `uses_software_rounds` in src/base/sha256.zig).
-fn hostBuildsDebugWithSha(target: ResolvedTarget) bool {
-    if (!debug_sha_floor) return false;
-    if (builtin.target.cpu.arch != .x86_64) return false;
-    if (target.result.cpu.arch != .x86_64 or target.result.os.tag != builtin.target.os.tag) return false;
-    if (target.result.os.tag == .macos) return false;
-    return builtin.cpu.hasAll(.x86, &.{ .sha, .ssse3 });
+/// Whether a Debug build for `target` gets the x86 SHA extension and SSSE3:
+/// every x86_64 target but macOS, whose Intel Macs compute digests with the
+/// portable rounds (`uses_software_rounds` in src/base/sha256.zig). The
+/// answer depends on the target alone, never on the machine running the
+/// build, so a build one machine makes for another resolves the same target.
+fn debugBuildsWithSha(target: ResolvedTarget) bool {
+    return target.result.cpu.arch == .x86_64 and target.result.os.tag != .macos;
 }
 
 /// The target for everything that is compiled to run on this machine during
@@ -601,8 +590,8 @@ fn hostToolTarget(b: *std.Build, optimize: OptimizeMode) ResolvedTarget {
 /// architecture baseline and the rounds are chosen for the CPU it runs on: at
 /// runtime by CPUID on every x86_64 target except macOS (see
 /// `dispatches_at_runtime` in src/base/sha256.zig), and always the
-/// portable rounds on x86_64 macOS (see `uses_software_rounds` there). Debug
-/// builds for this machine are the one exception, in `withSha256Floor`.
+/// portable rounds on x86_64 macOS (see `uses_software_rounds` there). x86_64
+/// Debug builds carry the extension as a floor, in `withSha256Floor`.
 fn addSha256Floor(query: *std.Target.Query) void {
     const arch = query.cpu_arch orelse builtin.target.cpu.arch;
     switch (roc_target.classifyCpuArch(arch)) {
@@ -1692,7 +1681,6 @@ const wasm_static_lib_carts = [_]WasmStaticLibCart{
 };
 
 pub fn build(b: *std.Build) void {
-    debug_sha_floor = b.option(bool, "debug-sha-floor", "Give a Debug build for this machine its CPU's SHA-256 instructions when the CPU has them (default: true). CI passes false: it compiles on one runner and tests on others whose CPUs differ in the SHA extension, so its Debug builds stay at the architecture baseline, one compilation on every runner, and use the portable rounds") orelse true;
     test_fixtures = .{ .b = b };
 
     // Build/run split used by MiniCI:
