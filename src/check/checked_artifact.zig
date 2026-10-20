@@ -9432,7 +9432,7 @@ test "published closed roots compose three deep and a closed cyclic root does no
     var modules = try TypedCIR.Modules.init(allocator, &source_modules);
     defer modules.deinit();
     const module = modules.module(0);
-    const imports = CheckedImportViews{ .current_owner = testCheckedModuleKey(1), .direct = &.{} };
+    const imports = CheckedImportViews{ .current_owner = testCheckedModuleKey(1).digest(), .direct = &.{} };
 
     const fresh_outer = try canonical_type_keys.fromVarInfo(allocator, module.typeStoreConst(), module.moduleEnvConst(), outer);
     const fresh_holder = try canonical_type_keys.fromVarInfo(allocator, module.typeStoreConst(), module.moduleEnvConst(), holder);
