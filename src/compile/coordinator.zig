@@ -676,8 +676,6 @@ pub const ModuleState = struct {
     rejected_imports: std.ArrayList([]const u8),
     /// Modules that depend on this one (for waking dependents)
     dependents: std.ArrayList(ModuleId),
-    /// Transitive local imports known for this module.
-    reachable_local_imports: std.bit_set.DynamicBitSetUnmanaged,
     /// Diagnostic reports
     reports: std.ArrayList(Report),
     /// Minimum dependency depth from root
@@ -700,7 +698,6 @@ pub const ModuleState = struct {
             .external_imports = std.ArrayList([]const u8).empty,
             .rejected_imports = std.ArrayList([]const u8).empty,
             .dependents = std.ArrayList(ModuleId).empty,
-            .reachable_local_imports = .{},
             .reports = std.ArrayList(Report).empty,
             .depth = std.math.maxInt(u32),
             .compile_time_ns = 0,
@@ -727,6 +724,19 @@ pub const ModuleState = struct {
         return .{
             .env = env,
             .checked_artifact = self.checkedArtifact(),
+        };
+    }
+
+    /// The output of a module that completed successfully, or null for a module
+    /// that is pending or completed with failure. Successful completion is only
+    /// reached after the module's checked artifact is installed.
+    pub fn checkedModule(self: *ModuleState) ?compile_package.CheckedModuleData {
+        if (!self.completedSuccessfully()) return null;
+        const artifact = self.checkedArtifact() orelse
+            base.invariant("compile.coordinator.ModuleState.checkedModule successful module {s} had no checked artifact", .{self.name});
+        return .{
+            .env = artifact.moduleEnv(),
+            .checked_artifact = artifact,
         };
     }
 
@@ -839,7 +849,6 @@ pub const ModuleState = struct {
         }
         self.rejected_imports.deinit(gpa);
         self.dependents.deinit(gpa);
-        self.reachable_local_imports.deinit(gpa);
         for (self.reports.items) |*rep| {
             rep.deinit();
         }
@@ -1097,101 +1106,6 @@ pub const PackageState = struct {
         const mod = &self.modules.items[id];
         if (!mod.completedSuccessfully()) return null;
         return mod.semanticData();
-    }
-
-    pub fn moduleReaches(self: *const PackageState, from: ModuleId, target: ModuleId) bool {
-        const reachable = self.modules.items[from].reachable_local_imports;
-        return target < reachable.bit_length and reachable.isSet(target);
-    }
-
-    fn addReachableLocalImport(
-        self: *PackageState,
-        gpa: Allocator,
-        module_id: ModuleId,
-        reachable_id: ModuleId,
-        delta: ?*std.ArrayList(ModuleId),
-    ) Allocator.Error!bool {
-        const reachable = &self.modules.items[module_id].reachable_local_imports;
-        const needed_len = @as(usize, reachable_id) + 1;
-        if (reachable.bit_length < needed_len) {
-            try reachable.resize(gpa, needed_len, false);
-        }
-        if (reachable.isSet(reachable_id)) return false;
-
-        reachable.set(reachable_id);
-        if (delta) |delta_list| try delta_list.append(gpa, reachable_id);
-        return true;
-    }
-
-    pub fn recordLocalImportReachability(
-        self: *PackageState,
-        gpa: Allocator,
-        module_id: ModuleId,
-        imported_id: ModuleId,
-    ) Allocator.Error!void {
-        var initial_delta = std.ArrayList(ModuleId).empty;
-        defer initial_delta.deinit(gpa);
-
-        _ = try self.addReachableLocalImport(gpa, module_id, imported_id, &initial_delta);
-
-        const imported_reachable = &self.modules.items[imported_id].reachable_local_imports;
-        if (imported_reachable.bit_length > 0) {
-            var iter = imported_reachable.iterator(.{});
-            while (iter.next()) |reachable| {
-                _ = try self.addReachableLocalImport(gpa, module_id, @intCast(reachable), &initial_delta);
-            }
-        }
-
-        if (initial_delta.items.len == 0) return;
-        try self.propagateReachabilityDelta(gpa, module_id, initial_delta.items);
-    }
-
-    fn propagateReachabilityDelta(
-        self: *PackageState,
-        gpa: Allocator,
-        module_id: ModuleId,
-        initial_delta: []const ModuleId,
-    ) Allocator.Error!void {
-        const WorkItem = struct {
-            module_id: ModuleId,
-            delta_start: usize,
-            delta_len: usize,
-        };
-
-        var all_delta = std.ArrayList(ModuleId).empty;
-        defer all_delta.deinit(gpa);
-        try all_delta.appendSlice(gpa, initial_delta);
-
-        var work = std.ArrayList(WorkItem).empty;
-        defer work.deinit(gpa);
-        try work.append(gpa, .{
-            .module_id = module_id,
-            .delta_start = 0,
-            .delta_len = initial_delta.len,
-        });
-
-        var work_index: usize = 0;
-        while (work_index < work.items.len) : (work_index += 1) {
-            const item = work.items[work_index];
-            const item_delta_end = item.delta_start + item.delta_len;
-            const dependents = self.modules.items[item.module_id].dependents.items;
-
-            for (dependents) |dependent_id| {
-                const new_delta_start = all_delta.items.len;
-                for (item.delta_start..item_delta_end) |delta_index| {
-                    const reachable_id = all_delta.items[delta_index];
-                    _ = try self.addReachableLocalImport(gpa, dependent_id, reachable_id, &all_delta);
-                }
-                const new_delta_len = all_delta.items.len - new_delta_start;
-                if (new_delta_len == 0) continue;
-
-                try work.append(gpa, .{
-                    .module_id = dependent_id,
-                    .delta_start = new_delta_start,
-                    .delta_len = new_delta_len,
-                });
-            }
-        }
     }
 };
 
@@ -2084,9 +1998,10 @@ pub const Coordinator = struct {
     }
 
     /// Whether the app root finished checking. A root that failed (for
-    /// example as a dependent of an import cycle) has no checked artifact, so
-    /// the build has no program; every checked module still finishes its
-    /// independent compile-time work and every report is still emitted.
+    /// example as a dependent of a module whose source was rejected) has no
+    /// checked artifact, so the build has no program; every checked module
+    /// still finishes its independent compile-time work and every report is
+    /// still emitted.
     fn appRootChecked(self: *Coordinator) bool {
         const app_root = self.findRootModule(.app) orelse self.findRootModule(.default_app) orelse return false;
         return app_root.mod.checkedArtifact() != null;
@@ -2602,6 +2517,8 @@ pub const Coordinator = struct {
             if (!made_progress) {
                 if (try self.tryUnblockAllWaiting()) {
                     made_progress = true;
+                } else if (self.inflight.load(.acquire) == 0 and self.task_channel.isEmpty()) {
+                    if (try self.resolveImportCycles()) made_progress = true;
                 }
             }
 
@@ -3073,6 +2990,208 @@ pub const Coordinator = struct {
             }
         }
         return any_unblocked;
+    }
+
+    /// Resolve every import cycle once no task is queued or running.
+    ///
+    /// Modules in an import cycle wait on each other, so they are still pending
+    /// when the scheduler goes idle. By then every registered module has been
+    /// parsed and has registered its imports, so each package's local import
+    /// graph is complete, and its cycles are exactly the strongly connected
+    /// components of its pending modules that contain an import edge. Deciding
+    /// on the complete graph makes the outcome independent of the order in
+    /// which modules were discovered and scheduled.
+    ///
+    /// Every import edge inside such a component is rejected the way import
+    /// resolution rejects an import: each member reports the cycle and is
+    /// checked with those imports bound as missing, while its other imports
+    /// and every module that imports it proceed normally.
+    fn resolveImportCycles(self: *Coordinator) Allocator.Error!bool {
+        var resolved_any = false;
+        var pkg_it = self.packages.iterator();
+        while (pkg_it.next()) |entry| {
+            if (try self.resolvePackageImportCycles(entry.value_ptr.*)) resolved_any = true;
+        }
+        return resolved_any;
+    }
+
+    /// Find the import cycles among one package's pending modules with an
+    /// iterative Tarjan traversal, then reject the edges inside each cycle.
+    fn resolvePackageImportCycles(self: *Coordinator, pkg: *PackageState) Allocator.Error!bool {
+        const modules = pkg.modules.items;
+        const unvisited = std.math.maxInt(u32);
+
+        const visit_index = try self.gpa.alloc(u32, modules.len);
+        defer self.gpa.free(visit_index);
+        @memset(visit_index, unvisited);
+        const lowlink = try self.gpa.alloc(u32, modules.len);
+        defer self.gpa.free(lowlink);
+        var on_stack = try std.DynamicBitSetUnmanaged.initEmpty(self.gpa, modules.len);
+        defer on_stack.deinit(self.gpa);
+
+        const Frame = struct {
+            module_id: ModuleId,
+            next_edge: u32,
+        };
+        var frames = std.ArrayList(Frame).empty;
+        defer frames.deinit(self.gpa);
+        var component_stack = std.ArrayList(ModuleId).empty;
+        defer component_stack.deinit(self.gpa);
+
+        // Members of each cyclic component, stored contiguously and delimited
+        // by `cycle_ends`.
+        var cycle_members = std.ArrayList(ModuleId).empty;
+        defer cycle_members.deinit(self.gpa);
+        var cycle_ends = std.ArrayList(u32).empty;
+        defer cycle_ends.deinit(self.gpa);
+
+        var next_visit: u32 = 0;
+        for (modules, 0..) |*root, root_index| {
+            if (root.completion != .pending or visit_index[root_index] != unvisited) continue;
+
+            visit_index[root_index] = next_visit;
+            lowlink[root_index] = next_visit;
+            next_visit += 1;
+            on_stack.set(root_index);
+            try component_stack.append(self.gpa, @intCast(root_index));
+            try frames.append(self.gpa, .{ .module_id = @intCast(root_index), .next_edge = 0 });
+
+            while (frames.items.len > 0) {
+                const frame = &frames.items[frames.items.len - 1];
+                const current = frame.module_id;
+                const imports = modules[current].imports.items;
+                if (frame.next_edge < imports.len) {
+                    const target = imports[frame.next_edge].module_id;
+                    frame.next_edge += 1;
+                    if (modules[target].completion != .pending) continue;
+                    if (visit_index[target] == unvisited) {
+                        visit_index[target] = next_visit;
+                        lowlink[target] = next_visit;
+                        next_visit += 1;
+                        on_stack.set(target);
+                        try component_stack.append(self.gpa, target);
+                        try frames.append(self.gpa, .{ .module_id = target, .next_edge = 0 });
+                    } else if (on_stack.isSet(target)) {
+                        lowlink[current] = @min(lowlink[current], visit_index[target]);
+                    }
+                    continue;
+                }
+
+                _ = frames.pop();
+                if (frames.items.len > 0) {
+                    const parent = frames.items[frames.items.len - 1].module_id;
+                    lowlink[parent] = @min(lowlink[parent], lowlink[current]);
+                }
+                if (lowlink[current] != visit_index[current]) continue;
+
+                const component_start = cycle_members.items.len;
+                while (true) {
+                    const member = component_stack.pop().?;
+                    on_stack.unset(member);
+                    try cycle_members.append(self.gpa, member);
+                    if (member == current) break;
+                }
+                const is_cycle = cycle_members.items.len - component_start > 1 or
+                    moduleImportsModule(&modules[current], current);
+                if (is_cycle) {
+                    try cycle_ends.append(self.gpa, @intCast(cycle_members.items.len));
+                } else {
+                    cycle_members.shrinkRetainingCapacity(component_start);
+                }
+            }
+        }
+
+        if (cycle_ends.items.len == 0) return false;
+
+        // `visit_index` is no longer needed, so it records each cycle member's
+        // component; every other module keeps `unvisited` there.
+        @memset(visit_index, unvisited);
+        var members_start: u32 = 0;
+        for (cycle_ends.items, 0..) |members_end, component| {
+            for (cycle_members.items[members_start..members_end]) |member| visit_index[member] = @intCast(component);
+            members_start = members_end;
+        }
+
+        for (cycle_members.items) |member| {
+            try self.rejectImportsWithinCycle(pkg, member, visit_index);
+        }
+        for (cycle_members.items) |member| {
+            try self.tryUnblock(pkg, member);
+        }
+        return true;
+    }
+
+    fn moduleImportsModule(mod: *const ModuleState, target: ModuleId) bool {
+        for (mod.imports.items) |edge| {
+            if (edge.module_id == target) return true;
+        }
+        return false;
+    }
+
+    /// Report the cycle on one of its members and turn that member's imports of
+    /// modules in its own cycle into rejected imports.
+    fn rejectImportsWithinCycle(
+        self: *Coordinator,
+        pkg: *PackageState,
+        member_id: ModuleId,
+        component_of: []const u32,
+    ) Allocator.Error!void {
+        const member = &pkg.modules.items[member_id];
+        if (member.phase != .WaitingOnImports) {
+            coordinatorInvariant(
+                "import cycle member '{s}' was in phase {s}",
+                .{ member.name, @tagName(member.phase) },
+            );
+        }
+        const component = component_of[member_id];
+
+        var rejected_names = std.ArrayList(u8).empty;
+        defer rejected_names.deinit(self.gpa);
+        var rejected_count: usize = 0;
+        for (member.imports.items) |edge| {
+            if (component_of[edge.module_id] != component) continue;
+            if (rejected_count > 0) try rejected_names.appendSlice(self.gpa, ", ");
+            try rejected_names.append(self.gpa, '`');
+            try rejected_names.appendSlice(self.gpa, edge.import_name);
+            try rejected_names.append(self.gpa, '`');
+            rejected_count += 1;
+        }
+        try member.rejected_imports.ensureUnusedCapacity(self.gpa, rejected_count);
+
+        const headline = if (rejected_count == 1)
+            try std.fmt.allocPrint(
+                self.gpa,
+                "The import {s} leads back to this module through an import cycle. Cycles between modules are not allowed, so this import is unavailable.",
+                .{rejected_names.items},
+            )
+        else
+            try std.fmt.allocPrint(
+                self.gpa,
+                "The imports {s} lead back to this module through an import cycle. Cycles between modules are not allowed, so these imports are unavailable.",
+                .{rejected_names.items},
+            );
+        defer self.gpa.free(headline);
+        var report = try Report.init(self.gpa, "Import Cycle Detected", headline, .runtime_error);
+        errdefer report.deinit();
+        try member.reports.append(self.gpa, report);
+
+        var kept: usize = 0;
+        for (member.imports.items) |edge| {
+            if (component_of[edge.module_id] != component) {
+                member.imports.items[kept] = edge;
+                kept += 1;
+                continue;
+            }
+            const target = &pkg.modules.items[edge.module_id];
+            const dependent_index = std.mem.findScalar(ModuleId, target.dependents.items, member_id) orelse
+                coordinatorInvariant(
+                    "module '{s}' imported '{s}' without being its dependent",
+                    .{ member.name, target.name },
+                );
+            _ = target.dependents.orderedRemove(dependent_index);
+            member.rejected_imports.appendAssumeCapacity(edge.import_name);
+        }
+        member.imports.shrinkRetainingCapacity(kept);
     }
 
     /// Check if all work is complete.
@@ -4044,8 +4163,8 @@ pub const Coordinator = struct {
     const ImportRegistration = enum {
         /// The module's imports are registered and it may proceed.
         proceed,
-        /// The module is finished for this build: it failed, closed a cycle,
-        /// or was already complete.
+        /// The module is finished for this build: it failed or was already
+        /// complete.
         halted,
     };
 
@@ -4109,8 +4228,6 @@ pub const Coordinator = struct {
             const child_id = try pkg.ensureModule(self.gpa, resolved.module_name, resolved.path);
             const current_mod = registeredModule(pkg, package_name, module_id, module_name, "after ensureModule");
 
-            const closes_cycle = child_id == module_id or pkg.moduleReaches(child_id, module_id);
-
             try current_mod.imports.append(self.gpa, .{
                 .import_name = try self.gpa.dupe(u8, imp.import_name),
                 .module_id = child_id,
@@ -4121,16 +4238,6 @@ pub const Coordinator = struct {
             const new_depth = current_mod.depth +| 1;
             if (new_depth < child.depth) {
                 child.depth = new_depth;
-            }
-
-            try pkg.recordLocalImportReachability(self.gpa, module_id, child_id);
-
-            // Record the closing edge before handling the error so the graph
-            // contains the exact SCC and failure propagation reaches every
-            // cycle member and transitive dependent.
-            if (closes_cycle) {
-                try self.handleCycleInline(pkg, module_id);
-                return .halted;
             }
 
             if (child.phase == .Parse) {
@@ -4790,38 +4897,6 @@ pub const Coordinator = struct {
         const report = try Report.initWithPath(self.gpa, title, "", mod.path, after, .fatal);
         try appendReportOwned(self.gpa, &mod.reports, report);
         return operation_error;
-    }
-
-    /// Handle a cycle after its closing edge has been recorded. Reachability is
-    /// the package's exact transitive closure, so mutual reachability names the
-    /// complete strongly connected component without a second graph traversal.
-    fn handleCycleInline(self: *Coordinator, pkg: *PackageState, module_id: ModuleId) Allocator.Error!void {
-        var cycle_members = std.ArrayList(ModuleRef).empty;
-        defer cycle_members.deinit(self.gpa);
-
-        for (pkg.modules.items, 0..) |*candidate, candidate_index| {
-            const candidate_id: ModuleId = @intCast(candidate_index);
-            const module_reaches_candidate = candidate_id == module_id or pkg.moduleReaches(module_id, candidate_id);
-            const candidate_reaches_module = candidate_id == module_id or pkg.moduleReaches(candidate_id, module_id);
-            if (!module_reaches_candidate or !candidate_reaches_module) continue;
-
-            const rep = try Report.init(
-                self.gpa,
-                "Import Cycle Detected",
-                "This module participates in an import cycle. Cycles between modules are not allowed.",
-                .runtime_error,
-            );
-            try candidate.reports.append(self.gpa, rep);
-            try cycle_members.append(self.gpa, .{
-                .pkg_name = pkg.name,
-                .module_id = candidate_id,
-            });
-        }
-
-        if (cycle_members.items.len == 0) {
-            coordinatorInvariant("cycle-closing module '{s}' belonged to no SCC", .{pkg.modules.items[module_id].name});
-        }
-        try self.completeModulesWithFailure(cycle_members.items);
     }
 
     fn buildCanonicalizeImports(

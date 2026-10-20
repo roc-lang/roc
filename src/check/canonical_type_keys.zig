@@ -1436,11 +1436,13 @@ test "issue 11128 scheme writer reuses scratch with fresh identity and cycle num
     var writer = SchemeWriter.init(counter.allocator(), &store, &env);
     defer writer.deinit();
     for (roots) |root| _ = try writer.fromVar(root);
+    try std.testing.expectEqual(roots.len, writer.test_digests);
     const allocated = counter.allocated_bytes;
     for (0..128) |_| {
         for (roots, expected) |root, key| try std.testing.expectEqualDeep(key, try writer.fromVar(root));
     }
     try std.testing.expectEqual(allocated, counter.allocated_bytes);
+    try std.testing.expectEqual(roots.len * 129, writer.test_digests);
 }
 
 test "issue 11128 scheme writer recovers from every allocation failure" {
@@ -1915,6 +1917,39 @@ test "composed keys are the same whether or not a retaining writer keyed the chi
     const holder_fresh = try fromVarInfo(allocator, &store, &env, holder);
     _ = try writer.fromVar(cyclic);
     try std.testing.expectEqualDeep(holder_fresh, try writer.fromVar(holder));
+}
+
+test "scheme keys compose the same whether or not their closed children were keyed first" {
+    const allocator = std.testing.allocator;
+
+    var env = try ModuleEnv.init(allocator, "");
+    defer env.deinit();
+    const field_name = try env.insertIdent(Ident.for_text("field"));
+    var store = try TypeStore.initCapacity(allocator, 16, 8);
+    defer store.deinit();
+
+    const leaf = try store.freshFromContent(.{ .structure = .empty_record });
+    const record = try store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = try store.appendRecordFields(&.{.{ .name = field_name, .presence = .required(leaf) }}),
+        .ext = try store.freshFromContent(.{ .structure = .empty_record }),
+    } } });
+    const a = try store.fresh();
+    const callable = try store.freshFromContent(.{ .structure = .{ .fn_pure = .{
+        .args = try store.appendVars(&.{ record, a }),
+        .ret = a,
+    } } });
+
+    const fresh = try schemeFromVar(allocator, &store, &env, callable);
+    var scheme_writer = SchemeWriter.init(allocator, &store, &env);
+    defer scheme_writer.deinit();
+    try std.testing.expectEqualDeep(fresh, try scheme_writer.fromVar(callable));
+
+    var writer = TypeWriter.init(allocator, &store, &env);
+    defer writer.deinit();
+    writer.retainComposedKeys();
+    const record_info = try writer.fromVar(record);
+    try std.testing.expect(record_info.composable);
+    try std.testing.expectEqualDeep(fresh, try writer.schemeFromVar(callable));
 }
 
 test "err-sensitive keys distinguish erroneous content inside closed subtrees" {
