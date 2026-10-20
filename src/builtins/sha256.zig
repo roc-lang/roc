@@ -118,10 +118,23 @@ pub const Rounds = enum {
     }
 };
 
-/// Whether the CPU features this code is compiled for carry the SHA-256
-/// instructions. The C backend cannot emit the inline assembly the hardware
-/// rounds are written in, so it always compiles the portable rounds.
-pub const hasHardwareSupport = builtin.zig_backend != .stage2_c and Rounds.forCpu(builtin.cpu) != .portable;
+/// Whether this code is compiled for the generic x86-64 CPU model with the SHA
+/// extension added: the floor build.zig gives x86_64 Debug builds
+/// (`withSha256Floor`). The generic model names no CPU, so the extension is a
+/// floor the build asserts for its own code, not a promise about the machine
+/// that runs it: the floor lets Zig's self-hosted backend encode the hardware
+/// rounds, and the compiler's dispatch (`src/base/sha256.zig`) runs them only
+/// once CPUID has confirmed the extension. A build that names a CPU model with
+/// the extension (`-Dcpu=native`, `-Dcpu=icelake_server`) is a promise, and
+/// `hasHardwareSupport` holds for it.
+pub const x86_floor = arch_class == .x86_64 and builtin.cpu.model == &std.Target.x86.cpu.x86_64 and Rounds.forCpu(builtin.cpu) == .x86_sha;
+
+/// Whether the CPU this code is compiled for is promised to have the SHA-256
+/// instructions, so `compressForTarget` may run the hardware rounds without a
+/// check: a named CPU model whose feature set carries them, never the x86
+/// floor. The C backend cannot emit the inline assembly the hardware rounds
+/// are written in, so it always compiles the portable rounds.
+pub const hasHardwareSupport = builtin.zig_backend != .stage2_c and !x86_floor and Rounds.forCpu(builtin.cpu) != .portable;
 
 /// The rounds `compressForTarget` runs: fixed by the CPU features this code
 /// is compiled for.
