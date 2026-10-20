@@ -17626,7 +17626,8 @@ const Builder = struct {
 
     /// Which children a representation path may step through: `.runtime`
     /// follows only children that carry a runtime descriptor; `.type_position`
-    /// also follows a function's arguments and result.
+    /// also follows a function's arguments and result, and the type arguments
+    /// that describe a nominal's shared backing template.
     const RepPathPositions = enum { runtime, type_position };
 
     /// The representation inside `value_root` at the position `target`
@@ -17699,7 +17700,9 @@ const Builder = struct {
                 .runtime => !childCarriesRuntimeDescriptor(child.role),
                 .type_position => switch (child.role) {
                     .function_arg, .function_ret => false,
-                    .alias_backing, .nominal_backing, .record_field, .record_ext, .tuple_elem, .tag_payload, .tag_ext, .list_elem, .box_payload, .alias_arg, .nominal_arg, .nominal_padding_field => !childCarriesRuntimeDescriptor(child.role),
+                    // A nominal's type arguments stand in for its shared
+                    // backing template, which the walk below does not enter.
+                    .alias_backing, .nominal_backing, .record_field, .record_ext, .tuple_elem, .tag_payload, .tag_ext, .list_elem, .box_payload, .alias_arg, .nominal_arg, .nominal_padding_field => !self.plan.childCarriesHiddenDescriptor(current, child),
                 },
             };
             if (skipped) continue;
