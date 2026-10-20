@@ -347,7 +347,7 @@ jobs:
         if: runner.os == 'Windows'
         uses: ./.github/actions/flaky-retry
         with:
-          command: zig build build-test-eval-runner
+          command: zig build build-test-eval-runner -Ddebug-sha-floor=false
           retry_count: 3
 
       # The remaining compilation happens here, where network flakes surface
@@ -359,10 +359,15 @@ jobs:
       # to be here was a stale copy of that default plus a bare `503`, which
       # matched the runner temp path (`.../2fdaaa19-b503-4660-...`) printed in
       # every failed build command -- so a deterministic failure retried 4x.
+      # `-Ddebug-sha-floor=false` here and in every shard: the shards run this
+      # build on runners whose x86-64 CPUs differ in the SHA extension, and a
+      # Debug build keyed on this runner's CPU is a cache miss on a runner with
+      # the other kind, which then recompiles everything the shard runs (see
+      # `hostBuildsDebugWithSha` in build.zig).
       - name: Build MiniCI binaries
         uses: ./.github/actions/flaky-retry
         with:
-          command: zig build build-ci
+          command: zig build build-ci -Ddebug-sha-floor=false
           retry_count: 3
 
       # zstd on all cores, instead of upload-artifact's single-threaded zip
@@ -538,7 +543,7 @@ jobs:
           arch: x64
 
       - name: Run MiniCI
-        run: zig build minici -- --minici-skip-build --minici-shard ${{ matrix.minici_shard }}
+        run: zig build minici -- --minici-skip-build --minici-shard ${{ matrix.minici_shard }} -Ddebug-sha-floor=false
 
       # `.zig-cache` doubles as Zig's global cache, its local cache, and the
       # build temp dir. It is restored from the MiniCI build artifact, so the

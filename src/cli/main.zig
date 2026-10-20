@@ -10379,6 +10379,7 @@ fn writeDevWasmObject(
     static_data_exports: []const backend.StaticDataExport,
     linked_packs: []const *const backend.dev.PackFile.ObjectPack,
     target: RocTarget,
+    executor: ?base.post_check_task_executor.Executor,
 ) CliMainError![]const u8 {
     if (entrypoints.len == 0) {
         if (builtin.mode == .debug) {
@@ -10408,6 +10409,7 @@ fn writeDevWasmObject(
     );
     wasm_module_owned_here = false;
     defer codegen.deinit();
+    codegen.executor = executor;
     codegen.configureStackPointerReloc(stack_pointer_symbol);
     codegen.configureTableReloc(table_symbol);
     codegen.configureRelocatableObject();
@@ -10544,6 +10546,7 @@ fn rocBuildWasm(
     entrypoints: []const backend.Entrypoint,
     static_data_exports: []const backend.StaticDataExport,
     linked_packs: []const *const backend.dev.PackFile.ObjectPack,
+    executor: ?base.post_check_task_executor.Executor,
 ) CliMainError!void {
     if (entrypoints.len == 0) {
         if (builtin.mode == .debug) {
@@ -10564,7 +10567,7 @@ fn rocBuildWasm(
     if (link_type == .archive) {
         // Archives package whatever inputs the platform declared (possibly
         // just the app); no platform wasm file is required.
-        const obj_path = try writeDevWasmObject(ctx, scratch_dir, lowered, entrypoints, static_data_exports, linked_packs, target);
+        const obj_path = try writeDevWasmObject(ctx, scratch_dir, lowered, entrypoints, static_data_exports, linked_packs, target, executor);
         try writeArchiveOutput(ctx, .wasm32, final_output_path, link_inputs, &.{obj_path});
         return;
     }
@@ -10585,6 +10588,7 @@ fn rocBuildWasm(
         static_data_exports,
         linked_packs,
         target,
+        executor,
     );
 
     try linkWasmOutput(ctx, args, target, link_inputs, final_output_path, obj_path, scratch_dir);
@@ -11760,6 +11764,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
             // The optimized object packs that served this program's
             // specializations, composed into its object.
             if (loaded_packs) |packs| try packs.linkedObjectPacks(ctx.arena) else &.{},
+            build_env.postCheckExecutor(),
         );
         reporter.end();
 
