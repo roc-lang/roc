@@ -657,10 +657,10 @@ checking_call_arg: bool = false,
 /// in its body remain strict dependencies of the surrounding value.
 checking_immediate_callee: bool = false,
 /// True when checking the expression that supplies an enclosing block's,
-/// conditional's, or match's value. The enclosing expression consumes that
-/// value as its own, so a standalone lambda here is not generalized: a
-/// generalized lambda would give the enclosing expression a scheme, and only
-/// a value binding may quantify.
+/// conditional's, or match's value, or an enclosing lambda's body. The
+/// enclosing expression consumes that value as its own, so a standalone
+/// lambda here is not generalized: a generalized lambda would give the
+/// enclosing expression a scheme, and only a value binding may quantify.
 checking_forwarded_result: bool = false,
 /// The callee expression of the call whose callee is being checked.
 direct_callee_expr: ?CIR.Expr.Idx = null,
@@ -29383,6 +29383,7 @@ fn resumeExpectCheck(self: *Self, task: *ExprTask, state: *ExpectCheck, env: *En
 // function //
 
 const LambdaCheck = struct {
+    saved_call_position: ?CallPositionFlags = null,
     lambda_expr: CIR.Expr.Idx = undefined,
     arg_vars: []Var = &.{},
     mb_anno_func: ?types_mod.Func = null,
@@ -29403,6 +29404,8 @@ fn resumeLambdaCheck(self: *Self, task: *ExprTask, state: *LambdaCheck, env: *En
     const body_var = ModuleEnv.varFrom(lambda.body);
 
     if (child_does_fx) |body_does_fx| {
+        self.restoreCallPosition(state.saved_call_position.?);
+        state.saved_call_position = null;
         try self.closeAbsentConstructedPayloadVarsForLambda(expr_idx, lambda.body, body_var);
         if (state.mb_anno_func) |expected_func| {
             // A `?` return composes the annotated result from the body's
@@ -29641,6 +29644,9 @@ fn resumeLambdaCheck(self: *Self, task: *ExprTask, state: *LambdaCheck, env: *En
     try self.function_effect_dependency_frame_starts.append(self.gpa, effect_dependencies_start);
     state.effect_dependencies_start = effect_dependencies_start;
 
+    // The body's value is this function's result, so a lambda there is
+    // consumed by this function and takes no scheme of its own.
+    state.saved_call_position = self.scopeChildCallPosition(false, false, true);
     return .{ .child = .{
         .expr = lambda.body,
         .expected = if (state.mb_anno_func) |expected_func|
@@ -29679,6 +29685,8 @@ fn releaseLambdaCheck(self: *Self, state: *LambdaCheck) void {
 }
 
 fn abortLambdaCheck(self: *Self, state: *LambdaCheck) void {
+    if (state.saved_call_position) |saved| self.restoreCallPosition(saved);
+    state.saved_call_position = null;
     self.releaseLambdaCheck(state);
 }
 
