@@ -1850,13 +1850,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!ValueLocation {
             const args = self.store.getLocalSpan(ll.args);
 
-            // A baseline target computes the SIMD ops whose native instructions
-            // are above its architecture's oldest revision by calling the
-            // target-independent implementation instead of emitting them.
-            if (self.simdOpUsesBaselineBuiltin(ll.op)) {
-                return self.generateSimdViaBuiltin(ll, args);
-            }
-
             switch (ll.op) {
                 .num_plus, .num_minus, .num_times => unreachable,
                 // LIR lowering splits this into an alias and `list_prefetch`.
@@ -5063,6 +5056,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return @bitCast(bytes);
         }
 
+        fn simdSplatBits(kind: builtins.simd.Kind, value: u64) u128 {
+            var bits: u128 = 0;
+            for (0..kind.laneCount()) |lane| {
+                bits = builtins.simd.withLane(bits, kind, @intCast(lane), value);
+            }
+            return bits;
+        }
+
         fn simdLaneWeights(kind: builtins.simd.Kind) u128 {
             var bits: u128 = 0;
             for (0..kind.laneCount()) |lane| {
@@ -5177,6 +5178,25 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const lane_bytes: u8 = @intCast(kind.laneBits() / 8);
             if (lane_bytes > 1) try self.emitShiftImm(.shl, .w64, index, index, @ctz(lane_bytes));
 
+            if (comptime target.toCpuArch() == .x86_64) {
+                if (self.cpu_level == .v1) {
+                    // Selecting a runtime lane inside a register takes PSHUFB,
+                    // which is SSSE3, so read the lane from a spill slot.
+                    const slot = self.codegen.allocStackSlot(16);
+                    try self.codegen.emitStoreStackV128(slot, vector.reg);
+                    try self.codegen.emitAdd(.w64, index, index, frame_ptr);
+                    const result = try self.allocTempGeneral();
+                    switch (kind.laneBits()) {
+                        8 => try self.emitLoadW8(result, index, slot),
+                        16 => try self.emitLoadW16(result, index, slot),
+                        32 => try self.emitLoad(.w32, result, index, slot),
+                        64 => try self.emitLoad(.w64, result, index, slot),
+                        else => unreachable,
+                    }
+                    return .{ .general_reg = result };
+                }
+            }
+
             const indices = try self.allocTempVector(protected);
             defer self.codegen.freeFloat(indices);
             protected |= floatRegMask(indices);
@@ -5290,6 +5310,61 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
                     },
                 }
+            } else if (self.cpu_level == .v1) switch (op) {
+                // PSHUFB is SSSE3, so permute with fixed dword and word
+                // shuffles, shifts, and packs instead.
+                .simd_reverse_lanes => switch (kind.laneBits()) {
+                    64 => try self.emitX86Shuffle(.dwords, result, lhs.reg, 0x4E),
+                    32 => try self.emitX86Shuffle(.dwords, result, lhs.reg, 0x1B),
+                    16, 8 => {
+                        try self.emitX86Shuffle(.low_words, result, lhs.reg, 0x1B);
+                        try self.emitX86Shuffle(.high_words, result, result, 0x1B);
+                        try self.emitX86Shuffle(.dwords, result, result, 0x4E);
+                        if (kind.laneBits() == 8) {
+                            // The words are reversed; swap the bytes in each.
+                            const high_bytes = try self.allocTempVector(protected);
+                            defer self.codegen.freeFloat(high_bytes);
+                            try self.emitX86ShiftImm(.shl, 16, high_bytes, result, 8);
+                            try self.emitX86ShiftImm(.shr, 16, result, result, 8);
+                            try self.emitX86PackedBinary(.map_0f, 0xEB, result, result, high_bytes);
+                        }
+                    },
+                    else => unreachable,
+                },
+                .simd_even_lanes, .simd_odd_lanes => {
+                    const odd = op == .simd_odd_lanes;
+                    switch (kind.laneBits()) {
+                        64 => try self.emitX86PackedBinary(.map_0f, if (odd) 0x6D else 0x6C, result, lhs.reg, rhs.?.reg),
+                        32 => {
+                            const rhs_lanes = try self.allocTempVector(protected);
+                            defer self.codegen.freeFloat(rhs_lanes);
+                            const selector: u8 = if (odd) 0x0D else 0x08;
+                            try self.emitX86Shuffle(.dwords, result, lhs.reg, selector);
+                            try self.emitX86Shuffle(.dwords, rhs_lanes, rhs.?.reg, selector);
+                            try self.emitX86PackedBinary(.map_0f, 0x6C, result, result, rhs_lanes);
+                        },
+                        // Sign-extend each selected lane across its
+                        // double-width container, so the signed saturating
+                        // pack keeps it exactly.
+                        16, 8 => {
+                            const rhs_lanes = try self.allocTempVector(protected);
+                            defer self.codegen.freeFloat(rhs_lanes);
+                            const lane_bits = kind.laneBits();
+                            const container_bits = lane_bits * 2;
+                            if (odd) {
+                                try self.emitX86ShiftImm(.sar, container_bits, result, lhs.reg, lane_bits);
+                                try self.emitX86ShiftImm(.sar, container_bits, rhs_lanes, rhs.?.reg, lane_bits);
+                            } else {
+                                try self.emitX86ShiftImm(.shl, container_bits, result, lhs.reg, lane_bits);
+                                try self.emitX86ShiftImm(.sar, container_bits, result, result, lane_bits);
+                                try self.emitX86ShiftImm(.shl, container_bits, rhs_lanes, rhs.?.reg, lane_bits);
+                                try self.emitX86ShiftImm(.sar, container_bits, rhs_lanes, rhs_lanes, lane_bits);
+                            }
+                            try self.emitX86PackedBinary(.map_0f, if (lane_bits == 8) 0x63 else 0x6B, result, result, rhs_lanes);
+                        },
+                        else => unreachable,
+                    }
+                },
             } else switch (op) {
                 .simd_reverse_lanes => {
                     const control = try self.materializeVectorConstant(simdReverseByteIndices(kind), protected);
@@ -5325,6 +5400,29 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             protected |= floatRegMask(result);
             if (comptime target.toCpuArch() == .aarch64) {
                 try self.codegen.emit.simdThreeReg(0x4E000000, result, table.reg, indices.reg);
+            } else if (self.cpu_level == .v1) {
+                // PSHUFB is SSSE3, so gather the bytes through memory.
+                // Clamping every index to 16 lets the one zero byte after the
+                // table answer all of the out-of-range indices.
+                const table_slot = self.codegen.allocStackSlot(32);
+                const index_slot = self.codegen.allocStackSlot(16);
+                try self.codegen.emitStoreStackV128(table_slot, table.reg);
+                const byte = try self.allocTempGeneral();
+                defer self.codegen.freeGeneral(byte);
+                try self.codegen.emitLoadImm(byte, 0);
+                try self.codegen.emitStoreStack(.w64, table_slot + 16, byte);
+                const limit = try self.materializeVectorConstant(simdSplatBits(.u8x16, 16), protected);
+                defer self.releaseAcquiredVector(limit);
+                try self.emitX86PackedBinary(.map_0f, 0xDA, result, indices.reg, limit.reg);
+                try self.codegen.emitStoreStackV128(index_slot, result);
+                for (0..16) |lane| {
+                    const lane_offset = index_slot + @as(i32, @intCast(lane));
+                    try self.emitLoadStackW8(byte, lane_offset);
+                    try self.codegen.emitAdd(.w64, byte, byte, frame_ptr);
+                    try self.emitLoadW8(byte, byte, table_slot);
+                    try self.emitStoreW8(frame_ptr, lane_offset, byte);
+                }
+                try self.codegen.emitLoadStackV128(result, index_slot);
             } else {
                 const fixup = try self.allocTempVector(protected);
                 defer self.codegen.freeFloat(fixup);
@@ -5351,6 +5449,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const count = try self.ensureInGeneralReg(count_loc);
             defer self.codegen.freeGeneral(count);
             const result = try self.allocTempVector(protected);
+            // PALIGNR is SSSE3, so a baseline target combines two whole-register
+            // byte shifts instead.
+            const shifted_rhs: ?FloatReg = if (comptime target.toCpuArch() == .x86_64)
+                (if (self.cpu_level == .v1) try self.allocTempVector(protected | floatRegMask(result)) else null)
+            else
+                null;
+            defer if (shifted_rhs) |reg| self.codegen.freeFloat(reg);
 
             var case_patches: [16]usize = undefined;
             for (0..16) |shift| {
@@ -5365,7 +5470,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 if (shift == 0) {
                     try self.codegen.emitMoveV128(result, lhs.reg);
                 } else if (comptime target.toCpuArch() == .x86_64) {
-                    try self.codegen.emit.vexRegRegRegImm8(.map_0f3a, .p66, false, 0x0F, result, rhs.reg, lhs.reg, @intCast(shift));
+                    if (shifted_rhs) |high| {
+                        try self.emitX86ShiftImm(.shr_bytes, 0, result, lhs.reg, @intCast(shift));
+                        try self.emitX86ShiftImm(.shl_bytes, 0, high, rhs.reg, @intCast(16 - shift));
+                        try self.emitX86PackedBinary(.map_0f, 0xEB, result, result, high);
+                    } else {
+                        try self.codegen.emit.vexRegRegRegImm8(.map_0f3a, .p66, false, 0x0F, result, rhs.reg, lhs.reg, @intCast(shift));
+                    }
                 } else {
                     try self.codegen.emit.simdThreeReg(0x6E000000 | (@as(u32, @intCast(shift)) << 11), result, lhs.reg, rhs.reg);
                 }
@@ -5394,6 +5505,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 };
                 const signed_base: u32 = if (source_kind.isSigned()) 0x0F00A400 else 0x2F00A400;
                 try self.codegen.emit.simdTwoReg(signed_base | size_opcode | (if (high) @as(u32, 0x40000000) else 0), dst, src);
+            } else if (self.cpu_level == .v1) {
+                // PMOVSX and PMOVZX are SSE4.1. Interleaving each lane with
+                // its extension (zero, or its sign mask) widens it in place.
+                const extension = try self.allocTempVector(protected_mask | floatRegMask(dst) | floatRegMask(src));
+                defer self.codegen.freeFloat(extension);
+                if (source_kind.isSigned()) {
+                    try self.emitX86SignMask(extension, src, source_kind.laneBits());
+                } else {
+                    try self.emitX86PackedBinary(.map_0f, 0xEF, extension, extension, extension);
+                }
+                const opcode: u8 = if (high)
+                    x86PackedOpcode(source_kind, 0x68, 0x69, 0x6A, 0)
+                else
+                    x86PackedOpcode(source_kind, 0x60, 0x61, 0x62, 0);
+                try self.emitX86PackedBinary(.map_0f, opcode, dst, src, extension);
             } else {
                 const widened_source = if (high) blk: {
                     const shifted = try self.allocTempVector(protected_mask);
@@ -5441,6 +5567,46 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitX86PackedBinary(.map_0f, if (high) 0x6D else 0x6C, dst, dst, odd_product);
         }
 
+        /// 32 x 32 -> 64-bit lane products without PMULDQ, which is SSE4.1.
+        ///
+        /// PMULUDQ multiplies the even dwords as unsigned values. A signed
+        /// product differs from the unsigned one only in its high dword, which
+        /// must additionally drop `b` when `a` is negative and `a` when `b` is.
+        fn emitX86MulWide32To64Baseline(
+            self: *Self,
+            dst: FloatReg,
+            lhs: FloatReg,
+            rhs: FloatReg,
+            signed: bool,
+            high: bool,
+            protected_mask: u32,
+        ) Allocator.Error!void {
+            // Copy the two selected lanes of each operand into its even dwords.
+            const selector: u8 = if (high) 0xFA else 0x50;
+            const protect = protected_mask | floatRegMask(dst) | floatRegMask(lhs) | floatRegMask(rhs);
+            const spread_rhs = try self.allocTempVector(protect);
+            defer self.codegen.freeFloat(spread_rhs);
+            if (!signed) {
+                try self.emitX86Shuffle(.dwords, dst, lhs, selector);
+                try self.emitX86Shuffle(.dwords, spread_rhs, rhs, selector);
+                try self.emitX86PackedBinary(.map_0f, 0xF4, dst, dst, spread_rhs);
+                return;
+            }
+            const correction = try self.allocTempVector(protect | floatRegMask(spread_rhs));
+            defer self.codegen.freeFloat(correction);
+            try self.emitX86SignMask(correction, lhs, 32);
+            try self.emitX86PackedBinary(.map_0f, 0xDB, correction, correction, rhs);
+            try self.emitX86SignMask(spread_rhs, rhs, 32);
+            try self.emitX86PackedBinary(.map_0f, 0xDB, spread_rhs, spread_rhs, lhs);
+            try self.emitX86PackedBinary(.map_0f, 0xFE, correction, correction, spread_rhs);
+            try self.emitX86Shuffle(.dwords, dst, lhs, selector);
+            try self.emitX86Shuffle(.dwords, spread_rhs, rhs, selector);
+            try self.emitX86PackedBinary(.map_0f, 0xF4, dst, dst, spread_rhs);
+            try self.emitX86Shuffle(.dwords, correction, correction, selector);
+            try self.emitX86ShiftImm(.shl, 64, correction, correction, 32);
+            try self.emitX86PackedBinary(.map_0f, 0xFB, dst, dst, correction);
+        }
+
         fn generateSimdMultiply(self: *Self, ll: anytype, args: anytype) Allocator.Error!ValueLocation {
             const MultiplyOp = enum(u16) {
                 simd_mul_wrap = @backingInt(lir.LowLevel.simd_mul_wrap),
@@ -5485,7 +5651,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     },
                 }
             } else switch (op) {
-                .simd_mul_wrap => {
+                .simd_mul_wrap => if (self.cpu_level == .v1 and source_kind.laneBits() == 32) {
+                    // PMULLD is SSE4.1. PMULUDQ multiplies the even dwords into
+                    // whole qwords, and each product's low dword is the
+                    // wrapped lane; the odd dwords take a shift first.
+                    const odd_lhs = try self.allocTempVector(protected);
+                    defer self.codegen.freeFloat(odd_lhs);
+                    const odd_rhs = try self.allocTempVector(protected | floatRegMask(odd_lhs));
+                    defer self.codegen.freeFloat(odd_rhs);
+                    try self.emitX86PackedBinary(.map_0f, 0xF4, result, lhs.reg, rhs.reg);
+                    try self.emitX86ShiftImm(.shr, 64, odd_lhs, lhs.reg, 32);
+                    try self.emitX86ShiftImm(.shr, 64, odd_rhs, rhs.reg, 32);
+                    try self.emitX86PackedBinary(.map_0f, 0xF4, odd_lhs, odd_lhs, odd_rhs);
+                    try self.emitX86Shuffle(.dwords, result, result, 0x08);
+                    try self.emitX86Shuffle(.dwords, odd_lhs, odd_lhs, 0x08);
+                    try self.emitX86PackedBinary(.map_0f, 0x62, result, result, odd_lhs);
+                } else {
                     const multiply_map: @TypeOf(self.codegen.emit).VexMap = if (source_kind.laneBits() == 32) .map_0f38 else .map_0f;
                     try self.emitX86PackedBinary(
                         multiply_map,
@@ -5502,14 +5683,36 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     lhs.reg,
                     rhs.reg,
                 ),
-                .simd_mul_q15_sat => {
+                .simd_mul_q15_sat => if (self.cpu_level == .v1) {
+                    // PMULHRSW is SSSE3. Interleaving the low and high product
+                    // halves rebuilds each whole 32-bit product, which is then
+                    // rounded and shifted at that width; PACKSSDW supplies the
+                    // saturation, including the `-32768 * -32768` corner.
+                    const upper = try self.allocTempVector(protected);
+                    defer self.codegen.freeFloat(upper);
+                    {
+                        const high_halves = try self.allocTempVector(protected | floatRegMask(upper));
+                        defer self.codegen.freeFloat(high_halves);
+                        try self.emitX86PackedBinary(.map_0f, 0xE5, high_halves, lhs.reg, rhs.reg);
+                        try self.emitX86PackedBinary(.map_0f, 0xD5, result, lhs.reg, rhs.reg);
+                        try self.emitX86PackedBinary(.map_0f, 0x69, upper, result, high_halves);
+                        try self.emitX86PackedBinary(.map_0f, 0x61, result, result, high_halves);
+                    }
+                    const rounding = try self.materializeVectorConstant(simdSplatBits(.i32x4, 0x4000), protected | floatRegMask(upper));
+                    defer self.releaseAcquiredVector(rounding);
+                    try self.emitX86PackedBinary(.map_0f, 0xFE, result, result, rounding.reg);
+                    try self.emitX86PackedBinary(.map_0f, 0xFE, upper, upper, rounding.reg);
+                    try self.emitX86ShiftImm(.sar, 32, result, result, 15);
+                    try self.emitX86ShiftImm(.sar, 32, upper, upper, 15);
+                    try self.emitX86PackedBinary(.map_0f, 0x6B, result, result, upper);
+                } else {
                     try self.codegen.emit.vexRegRegReg(.map_0f38, .p66, false, 0x0B, result, lhs.reg, rhs.reg);
                     const minimum = try self.allocTempVector(protected);
                     defer self.codegen.freeFloat(minimum);
                     const corner = try self.allocTempVector(protected | floatRegMask(minimum));
                     defer self.codegen.freeFloat(corner);
                     try self.emitX86PackedBinary(.map_0f, 0x75, minimum, lhs.reg, lhs.reg);
-                    try self.codegen.emit.vexPackedShiftImm8(0x71, 6, minimum, minimum, 15);
+                    try self.emitX86ShiftImm(.shl, 16, minimum, minimum, 15);
                     try self.emitX86PackedBinary(.map_0f, 0x75, corner, lhs.reg, minimum);
                     try self.emitX86PackedBinary(.map_0f, 0x75, minimum, rhs.reg, minimum);
                     try self.emitX86PackedBinary(.map_0f, 0xDB, corner, corner, minimum);
@@ -5518,7 +5721,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .simd_mul_wide_lo, .simd_mul_wide_hi => {
                     const high = op == .simd_mul_wide_hi;
                     if (source_kind.laneBits() == 32) {
-                        try self.emitX86MulWide32To64(result, lhs.reg, rhs.reg, source_kind.isSigned(), high, protected);
+                        if (self.cpu_level == .v1) {
+                            try self.emitX86MulWide32To64Baseline(result, lhs.reg, rhs.reg, source_kind.isSigned(), high, protected);
+                        } else {
+                            try self.emitX86MulWide32To64(result, lhs.reg, rhs.reg, source_kind.isSigned(), high, protected);
+                        }
+                    } else if (self.cpu_level == .v1 and source_kind.laneBits() == 16) {
+                        // PMULLD is SSE4.1. Interleaving the low and high
+                        // halves of the 16-bit products forms the whole ones.
+                        const high_halves = try self.allocTempVector(protected);
+                        defer self.codegen.freeFloat(high_halves);
+                        try self.emitX86PackedBinary(.map_0f, if (source_kind.isSigned()) 0xE5 else 0xE4, high_halves, lhs.reg, rhs.reg);
+                        try self.emitX86PackedBinary(.map_0f, 0xD5, result, lhs.reg, rhs.reg);
+                        try self.emitX86PackedBinary(.map_0f, if (high) 0x69 else 0x61, result, result, high_halves);
                     } else {
                         try self.emitSimdWiden(result, lhs.reg, source_kind, high, protected);
                         const wide_rhs = try self.allocTempVector(protected);
@@ -5536,6 +5751,52 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
             }
             return .{ .vector_reg = .{ .reg = result, .kind = destination_kind } };
+        }
+
+        /// Clamp every lane of `src` into `destination_kind`'s range, leaving
+        /// the result in `dst` at the source width so that truncating it is
+        /// exact. `zero` holds an all-zero vector. A signed source here always
+        /// has an unsigned destination, so its negative lanes become zero.
+        ///
+        /// The destination maximum is one less than a power of two, so a lane
+        /// is above it exactly when shifting out the maximum's bits leaves
+        /// something. ORing that lane's all-ones flag into it makes every bit
+        /// the truncation keeps one, which is the unsigned maximum; a signed
+        /// destination then clears its sign bit.
+        fn emitX86ClampForNarrow(
+            self: *Self,
+            dst: FloatReg,
+            src: FloatReg,
+            zero: FloatReg,
+            source_kind: builtins.simd.Kind,
+            destination_kind: builtins.simd.Kind,
+            protected_mask: u32,
+        ) Allocator.Error!void {
+            const lane_bits = source_kind.laneBits();
+            const maximum_bits: u7 = destination_kind.laneBits() - @intFromBool(destination_kind.isSigned());
+            const protect = protected_mask | floatRegMask(dst) | floatRegMask(src) | floatRegMask(zero);
+            var value = src;
+            if (source_kind.isSigned()) {
+                std.debug.assert(!destination_kind.isSigned());
+                try self.emitX86SignMask(dst, src, lane_bits);
+                try self.emitX86PackedBinary(.map_0f, 0xDF, dst, dst, src);
+                value = dst;
+            }
+            {
+                const above = try self.allocTempVector(protect);
+                defer self.codegen.freeFloat(above);
+                try self.emitX86ShiftImm(.shr, lane_bits, above, value, maximum_bits);
+                try self.emitX86PackedBinary(.map_0f, x86PackedOpcode(source_kind, 0, 0x65, 0x66, 0), above, above, zero);
+                try self.emitX86PackedBinary(.map_0f, 0xEB, dst, value, above);
+            }
+            if (destination_kind.isSigned()) {
+                const maximum = try self.materializeVectorConstant(
+                    simdSplatBits(source_kind, (@as(u64, 1) << @intCast(maximum_bits)) - 1),
+                    protect,
+                );
+                defer self.releaseAcquiredVector(maximum);
+                try self.emitX86PackedBinary(.map_0f, 0xDB, dst, dst, maximum.reg);
+            }
         }
 
         fn generateSimdWidthChange(self: *Self, ll: anytype, args: anytype) Allocator.Error!ValueLocation {
@@ -5576,6 +5837,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         result,
                         lhs.reg,
                     );
+                } else if (self.cpu_level == .v1) {
+                    // PHADDW and PHADDD are SSSE3. Extend the even and odd
+                    // lanes within their double-width containers and add them.
+                    const lane_bits = source_kind.laneBits();
+                    const container_bits = lane_bits * 2;
+                    const odd = try self.allocTempVector(protected);
+                    defer self.codegen.freeFloat(odd);
+                    try self.emitX86ShiftImm(.shl, container_bits, result, lhs.reg, lane_bits);
+                    if (source_kind.isSigned()) {
+                        try self.emitX86ShiftImm(.sar, container_bits, result, result, lane_bits);
+                        try self.emitX86ShiftImm(.sar, container_bits, odd, lhs.reg, lane_bits);
+                    } else {
+                        try self.emitX86ShiftImm(.shr, container_bits, result, result, lane_bits);
+                        try self.emitX86ShiftImm(.shr, container_bits, odd, lhs.reg, lane_bits);
+                    }
+                    try self.emitX86PackedBinary(.map_0f, x86PackedOpcode(destination_kind, 0, 0xFD, 0xFE, 0), result, result, odd);
                 } else {
                     try self.emitSimdWiden(result, lhs.reg, source_kind, false, protected);
                     const high = try self.allocTempVector(protected);
@@ -5595,6 +5872,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const size = neonSizeBits(destination_kind);
                     try self.codegen.emit.simdTwoReg(0x0E212800 | size, result, lhs.reg);
                     try self.codegen.emit.simdTwoReg(0x4E212800 | size, result, rhs.?.reg);
+                } else if (self.cpu_level == .v1) {
+                    try self.emitX86NarrowWrapBaseline(result, lhs.reg, rhs.?.reg, source_kind, protected);
                 } else {
                     const low_control = try self.materializeVectorConstant(simdNarrowByteIndices(source_kind, destination_kind, false), protected);
                     try self.codegen.emit.vexRegRegReg(.map_0f38, .p66, false, 0x00, result, lhs.reg, low_control.reg);
@@ -5616,6 +5895,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         0x2E214800;
                     try self.codegen.emit.simdTwoReg(low_base | size, result, lhs.reg);
                     try self.codegen.emit.simdTwoReg((low_base | 0x40000000) | size, result, rhs.?.reg);
+                } else if (self.cpu_level == .v1 and !(source_kind.isSigned() and (destination_kind.isSigned() or destination_kind.laneBits() == 8))) {
+                    // The signed-to-signed and I16x8-to-U8x16 packs are SSE2
+                    // and take the general path below. The rest need SSE4.1
+                    // clamps or PACKUSDW, so clamp with SSE2 and truncate.
+                    const clamped_rhs = try self.allocTempVector(protected);
+                    defer self.codegen.freeFloat(clamped_rhs);
+                    {
+                        const zero = try self.allocTempVector(protected | floatRegMask(clamped_rhs));
+                        defer self.codegen.freeFloat(zero);
+                        try self.emitX86PackedBinary(.map_0f, 0xEF, zero, zero, zero);
+                        const clamp_protect = protected | floatRegMask(zero) | floatRegMask(clamped_rhs);
+                        try self.emitX86ClampForNarrow(result, lhs.reg, zero, source_kind, destination_kind, clamp_protect);
+                        try self.emitX86ClampForNarrow(clamped_rhs, rhs.?.reg, zero, source_kind, destination_kind, clamp_protect);
+                    }
+                    try self.emitX86NarrowWrapBaseline(result, result, clamped_rhs, source_kind, protected | floatRegMask(clamped_rhs));
                 } else {
                     var pack_lhs = lhs.reg;
                     var pack_rhs = rhs.?.reg;
@@ -5691,7 +5985,33 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (comptime target.toCpuArch() == .x86_64) {
                 switch (op) {
                     .simd_dot_pairs => try self.emitX86PackedBinary(.map_0f, 0xF5, result, lhs.reg, rhs.reg),
-                    .simd_dot_pairs_sat => try self.emitX86PackedBinary(.map_0f38, 0x04, result, lhs.reg, rhs.reg),
+                    .simd_dot_pairs_sat => if (self.cpu_level == .v1) {
+                        // PMADDUBSW is SSSE3. Every unsigned-by-signed byte
+                        // product fits in 16 bits, so multiply the even and odd
+                        // bytes separately, each extended within its word, and
+                        // add the two products with signed saturation.
+                        const odd_lhs = try self.allocTempVector(protected);
+                        defer self.codegen.freeFloat(odd_lhs);
+                        const rhs_bytes = try self.allocTempVector(protected | floatRegMask(odd_lhs));
+                        defer self.codegen.freeFloat(rhs_bytes);
+                        {
+                            const low_bytes = try self.materializeVectorConstant(
+                                simdSplatBits(.u16x8, 0xFF),
+                                protected | floatRegMask(odd_lhs) | floatRegMask(rhs_bytes),
+                            );
+                            defer self.releaseAcquiredVector(low_bytes);
+                            try self.emitX86PackedBinary(.map_0f, 0xDB, result, lhs.reg, low_bytes.reg);
+                        }
+                        try self.emitX86ShiftImm(.shr, 16, odd_lhs, lhs.reg, 8);
+                        try self.emitX86ShiftImm(.shl, 16, rhs_bytes, rhs.reg, 8);
+                        try self.emitX86ShiftImm(.sar, 16, rhs_bytes, rhs_bytes, 8);
+                        try self.emitX86PackedBinary(.map_0f, 0xD5, result, result, rhs_bytes);
+                        try self.emitX86ShiftImm(.sar, 16, rhs_bytes, rhs.reg, 8);
+                        try self.emitX86PackedBinary(.map_0f, 0xD5, odd_lhs, odd_lhs, rhs_bytes);
+                        try self.emitX86PackedBinary(.map_0f, 0xED, result, result, odd_lhs);
+                    } else {
+                        try self.emitX86PackedBinary(.map_0f38, 0x04, result, lhs.reg, rhs.reg);
+                    },
                     .simd_sad => try self.emitX86PackedBinary(.map_0f, 0xF6, result, lhs.reg, rhs.reg),
                 }
             } else switch (op) {
@@ -5759,6 +6079,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const result = try self.allocTempGeneral();
 
             if (comptime target.toCpuArch() == .x86_64) {
+                if (kind.laneBits() == 16 and self.cpu_level == .v1) {
+                    // PEXT is BMI2. Packing the words into bytes with signed
+                    // saturation keeps each word's sign bit for PMOVMSKB.
+                    const packed_words = try self.allocTempVector(floatRegMask(vector.reg));
+                    defer self.codegen.freeFloat(packed_words);
+                    try self.emitX86PackedBinary(.map_0f, 0x63, packed_words, vector.reg, vector.reg);
+                    try self.codegen.emit.packedMoveMask(result, packed_words, 8);
+                    try self.codegen.emit.andRegImm32(result, 0xFF);
+                    return .{ .general_reg = result };
+                }
                 try self.codegen.emit.packedMoveMask(result, vector.reg, kind.laneBits());
                 if (kind.laneBits() == 16) {
                     const mask = try self.allocTempGeneral();
@@ -5893,12 +6223,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.emitX86PackedBinary(.map_0f, 0xDB, result, result, masks);
                 }
             } else if (ll.op == .simd_shr_wrap and kind.isSigned() and kind.laneBits() == 64) {
-                const zero = try self.allocTempVector(protected);
-                defer self.codegen.freeFloat(zero);
-                const sign = try self.allocTempVector(protected | floatRegMask(zero));
+                const sign = try self.allocTempVector(protected);
                 defer self.codegen.freeFloat(sign);
-                try self.emitX86PackedBinary(.map_0f, 0xEF, zero, vector.reg, vector.reg);
-                try self.emitX86PackedBinary(.map_0f38, 0x37, sign, zero, vector.reg);
+                try self.emitX86SignMask(sign, vector.reg, 64);
                 try self.emitX86PackedBinary(.map_0f, 0xD3, result, vector.reg, counts);
                 const inverse = try self.allocTempGeneral();
                 defer self.codegen.freeGeneral(inverse);
@@ -5927,12 +6254,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             count: GeneralReg,
             protected_mask: u32,
         ) Allocator.Error!void {
-            const zero = try self.allocTempVector(protected_mask);
-            defer self.codegen.freeFloat(zero);
-            const sign = try self.allocTempVector(protected_mask | floatRegMask(zero));
+            const sign = try self.allocTempVector(protected_mask | floatRegMask(dst) | floatRegMask(src));
             defer self.codegen.freeFloat(sign);
-            try self.emitX86PackedBinary(.map_0f, 0xEF, zero, src, src);
-            try self.emitX86PackedBinary(.map_0f38, 0x37, sign, zero, src);
+            try self.emitX86SignMask(sign, src, 64);
             try self.emitX86PackedBinary(.map_0f, 0xD3, dst, src, count_vector);
             const inverse = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(inverse);
@@ -5953,6 +6277,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             destination_kind: builtins.simd.Kind,
             protected_mask: u32,
         ) Allocator.Error!void {
+            if (self.cpu_level == .v1) {
+                return self.emitX86NarrowWrapBaseline(dst, low, high, source_kind, protected_mask);
+            }
             const low_control = try self.materializeVectorConstant(simdNarrowByteIndices(source_kind, destination_kind, false), protected_mask);
             try self.codegen.emit.vexRegRegReg(.map_0f38, .p66, false, 0x00, dst, low, low_control.reg);
             self.releaseAcquiredVector(low_control);
@@ -6057,6 +6384,57 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .vector_reg = .{ .reg = result, .kind = kind } };
         }
 
+        /// Sum the 8- or 16-bit lanes of `vector` into `dst` without PHADDW
+        /// or PHADDD, which are SSSE3. The result has the same register form
+        /// as the default-level lowering: sign-extended for `I8x16`, and the
+        /// zero-extended 32-bit sum otherwise.
+        fn emitX86SumNarrowLanesBaseline(self: *Self, dst: GeneralReg, vector: FloatReg, kind: builtins.simd.Kind) Allocator.Error!void {
+            const protect = floatRegMask(vector);
+            const sums = try self.allocTempVector(protect);
+            defer self.codegen.freeFloat(sums);
+            const other = try self.allocTempVector(protect | floatRegMask(sums));
+            defer self.codegen.freeFloat(other);
+            switch (kind) {
+                // PSADBW against zero sums each eight-byte half into its qword.
+                // Signed bytes are summed with their sign bits flipped, which
+                // adds 128 to each of the 16 lanes.
+                .u8x16, .i8x16 => {
+                    try self.emitX86PackedBinary(.map_0f, 0xEF, other, other, other);
+                    if (kind == .i8x16) {
+                        const bias = try self.materializeVectorConstant(simdSplatBits(.u8x16, 0x80), protect | floatRegMask(sums) | floatRegMask(other));
+                        defer self.releaseAcquiredVector(bias);
+                        try self.emitX86PackedBinary(.map_0f, 0xEF, sums, vector, bias.reg);
+                        try self.emitX86PackedBinary(.map_0f, 0xF6, sums, sums, other);
+                    } else {
+                        try self.emitX86PackedBinary(.map_0f, 0xF6, sums, vector, other);
+                    }
+                    try self.emitX86Shuffle(.dwords, other, sums, 0x4E);
+                    try self.emitX86PackedBinary(.map_0f, 0xD4, sums, sums, other);
+                    try self.codegen.emit.movGeneralFromVector(dst, sums, true);
+                    if (kind == .i8x16) try self.emitSubImm(.w64, dst, dst, 16 * 128);
+                    return;
+                },
+                // Zero-extend the words to dwords and add the two halves.
+                .u16x8 => {
+                    try self.emitSimdWiden(sums, vector, .u16x8, false, protect | floatRegMask(sums) | floatRegMask(other));
+                    try self.emitSimdWiden(other, vector, .u16x8, true, protect | floatRegMask(sums) | floatRegMask(other));
+                    try self.emitX86PackedBinary(.map_0f, 0xFE, sums, sums, other);
+                },
+                // PMADDWD against ones adds adjacent signed words into dwords.
+                .i16x8 => {
+                    const ones = try self.materializeVectorConstant(simdSplatBits(.i16x8, 1), protect | floatRegMask(sums) | floatRegMask(other));
+                    defer self.releaseAcquiredVector(ones);
+                    try self.emitX86PackedBinary(.map_0f, 0xF5, sums, vector, ones.reg);
+                },
+                .u32x4, .i32x4, .u64x2, .i64x2 => unreachable,
+            }
+            try self.emitX86Shuffle(.dwords, other, sums, 0x4E);
+            try self.emitX86PackedBinary(.map_0f, 0xFE, sums, sums, other);
+            try self.emitX86Shuffle(.dwords, other, sums, 0xB1);
+            try self.emitX86PackedBinary(.map_0f, 0xFE, sums, sums, other);
+            try self.codegen.emit.movGeneralFromVector(dst, sums, false);
+        }
+
         fn generateSimdSum(self: *Self, args: anytype) Allocator.Error!ValueLocation {
             const vector_local = GuardedList.at(args, 0);
             const kind = self.simdKindForLayout(self.localLayout(vector_local)) orelse unreachable;
@@ -6086,7 +6464,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 return .{ .general_reg = result };
             }
 
-            if (kind.laneBits() <= 16) {
+            if (kind.laneBits() <= 16 and self.cpu_level == .v1) {
+                try self.emitX86SumNarrowLanesBaseline(result, vector.reg, kind);
+            } else if (kind.laneBits() <= 16) {
                 const pairs_kind: builtins.simd.Kind = switch (kind) {
                     .u8x16 => .u16x8,
                     .i8x16 => .i16x8,
@@ -6135,653 +6515,56 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const other = try self.allocTempGeneral();
                 defer self.codegen.freeGeneral(other);
                 try self.codegen.emit.movGeneralFromVector(result, low, true);
-                try self.codegen.emit.extractQword(other, low, 1);
+                try self.emitX86ExtractHighQword(other, low, floatRegMask(vector.reg) | floatRegMask(low) | floatRegMask(high));
                 try self.codegen.emitAdd(.w64, result, result, other);
             } else {
                 const high = try self.allocTempGeneral();
                 defer self.codegen.freeGeneral(high);
                 try self.codegen.emit.movGeneralFromVector(result, vector.reg, true);
-                try self.codegen.emit.extractQword(high, vector.reg, 1);
+                try self.emitX86ExtractHighQword(high, vector.reg, 0);
                 try self.codegen.emitAdd(.w64, result, result, high);
             }
             return .{ .general_reg = result };
         }
 
-        /// How many leading vector locals and trailing scalar locals a SIMD op
-        /// passes to `builtins.simd.eval`, in `a`, `b`, `c` order.
-        const SimdBuiltinArity = struct { vectors: u8, scalars: u8 };
-
-        /// Whether a SIMD op reaches its native instructions only above the
-        /// architecture's oldest revision, and so is computed by calling the
-        /// target-independent builtin when compiling for a baseline target.
+        /// Carryless 64 x 64 -> 128-bit multiply of one qword lane of each
+        /// operand in general-purpose registers. PCLMULQDQ and AArch64's
+        /// 64-bit PMULL both come from crypto extensions above the baseline.
         ///
-        /// The x86 list is broad because legacy SSE stops at SSE2: variable
-        /// byte shuffles, 64-bit lane compares, the SSE4.1 min/max forms, the
-        /// SSSE3 multiply-accumulate forms, and carryless multiply all sit
-        /// above it. Converting these to baseline vector sequences one at a
-        /// time is tracked in roc-lang/roc#10552.
-        fn simdOpUsesBaselineBuiltin(self: *Self, op: lir.LowLevel) bool {
-            if (self.cpu_level != .v1) return false;
-            if (comptime target.toCpuArch() != .x86_64) {
-                // NEON is mandatory in Armv8.0-A, so every other op already has
-                // a baseline instruction. Carryless multiply is PMULL64, which
-                // the AES extension supplies rather than base NEON.
-                return op == .simd_clmul_lo or op == .simd_clmul_hi;
-            }
-            return simdBuiltinArity(op) != null;
-        }
+        /// The loop always runs 64 times, walking `b` from its most
+        /// significant bit down: each step doubles the 128-bit product, then
+        /// adds `a` when the current bit of `b` is set.
+        fn emitSimdClmulBaseline(self: *Self, dst: FloatReg, lhs: FloatReg, rhs: FloatReg, high_lanes: bool) Allocator.Error!void {
+            const lane_offset: i32 = if (high_lanes) 8 else 0;
+            const operands = self.codegen.allocStackSlot(32);
+            try self.codegen.emitStoreStackV128(operands, lhs);
+            try self.codegen.emitStoreStackV128(operands + 16, rhs);
+            const a, const b, const product_low, const product_high, const scratch, const count = try self.allocTempGenerals(6);
+            defer self.freeGenerals(.{ a, b, product_low, product_high, scratch, count });
+            try self.codegen.emitLoadStack(.w64, a, operands + lane_offset);
+            try self.codegen.emitLoadStack(.w64, b, operands + 16 + lane_offset);
+            try self.codegen.emitLoadImm(product_low, 0);
+            try self.codegen.emitLoadImm(product_high, 0);
+            try self.codegen.emitLoadImm(count, 64);
 
-        fn simdBuiltinArity(op: lir.LowLevel) ?SimdBuiltinArity {
-            return switch (op) {
-                .simd_abs_wrap,
-                .simd_reverse_lanes,
-                .simd_widen_lo,
-                .simd_widen_hi,
-                .simd_pairwise_add_widen,
-                .simd_sum_lanes,
-                .simd_sum_lanes_wrap,
-                .simd_bitmask,
-                => .{ .vectors = 1, .scalars = 0 },
+            const loop = self.codegen.currentOffset();
+            try self.emitShiftImm(.shr, .w64, scratch, product_low, 63);
+            try self.emitShiftImm(.shl, .w64, product_high, product_high, 1);
+            try self.codegen.emitOr(.w64, product_high, product_high, scratch);
+            try self.emitShiftImm(.shl, .w64, product_low, product_low, 1);
+            try self.emitShiftImm(.sar, .w64, scratch, b, 63);
+            try self.codegen.emitAnd(.w64, scratch, scratch, a);
+            try self.codegen.emitXor(.w64, product_low, product_low, scratch);
+            try self.emitShiftImm(.shl, .w64, b, b, 1);
+            try self.emitSubImm(.w64, count, count, 1);
+            try self.emitCmpImm(count, 0);
+            const repeat = try self.emitJumpIfNotEqual();
+            try self.codegen.patchJump(repeat, loop);
 
-                .simd_min,
-                .simd_max,
-                .simd_eq_lanes,
-                .simd_gt_lanes,
-                .simd_gte_lanes,
-                .simd_even_lanes,
-                .simd_odd_lanes,
-                .simd_table_lookup,
-                .simd_narrow_wrap,
-                .simd_narrow_sat,
-                .simd_dot_pairs_sat,
-                .simd_mul_q15_sat,
-                .simd_mul_wide_lo,
-                .simd_mul_wide_hi,
-                .simd_clmul_lo,
-                .simd_clmul_hi,
-                // SSE2 multiplies 16-bit lanes but not 32-bit ones, and the
-                // widening forms it does have are unsigned only.
-                .simd_mul_wrap,
-                .simd_mul_high,
-                => .{ .vectors = 2, .scalars = 0 },
-
-                .simd_shl_wrap,
-                .simd_shr_wrap,
-                .simd_shr_zf_wrap,
-                .simd_shr_rounded,
-                // Extracting a runtime-indexed lane goes through PSHUFB, which
-                // is SSSE3. This one returns an integer rather than a vector.
-                .simd_get_lane_unchecked,
-                => .{ .vectors = 1, .scalars = 1 },
-
-                .simd_concat_shift_bytes => .{ .vectors = 2, .scalars = 1 },
-
-                .str_is_eq,
-                .str_is_eq_static_small,
-                .str_static_small_word_eq,
-                .str_static_small_word_caseless_eq,
-                .str_concat,
-                .str_contains,
-                .str_trim,
-                .str_trim_start,
-                .str_trim_end,
-                .str_caseless_ascii_equals,
-                .str_with_ascii_lowercased,
-                .str_with_ascii_uppercased,
-                .str_starts_with,
-                .str_ends_with,
-                .str_repeat,
-                .str_drop_prefix,
-                .str_drop_prefix_caseless_ascii,
-                .str_drop_suffix,
-                .str_split_first,
-                .str_split_last,
-                .str_count_utf8_bytes,
-                .str_get_utf8_byte_unsafe,
-                .str_substring_unsafe,
-                .str_with_capacity,
-                .str_reserve,
-                .str_release_excess_capacity,
-                .str_to_utf8,
-                .str_from_utf8_lossy,
-                .str_from_utf8_validated,
-                .str_from_utf16_le_short,
-                .str_from_utf16_be_short,
-                .str_from_utf32_le_short,
-                .str_from_utf32_be_short,
-                .str_from_utf8,
-                .str_split_on,
-                .str_join_with,
-                .str_inspect,
-                .u8_to_str,
-                .i8_to_str,
-                .u16_to_str,
-                .i16_to_str,
-                .u32_to_str,
-                .i32_to_str,
-                .u64_to_str,
-                .i64_to_str,
-                .u128_to_str,
-                .i128_to_str,
-                .dec_to_str,
-                .f32_to_str,
-                .f64_to_str,
-                .list_len,
-                .list_capacity,
-                .list_get_unsafe,
-                .list_prefetched,
-                .list_prefetch,
-                .list_append_unsafe,
-                .list_concat,
-                .list_append_range_within,
-                .list_copy_range_within,
-                .list_append_range_within_unsafe,
-                .list_append_sublist,
-                .list_append_le_bytes,
-                .list_append_le_bytes_unsafe,
-                .list_slack_unique,
-                .list_owned_unique,
-                .list_set_in_place_unsafe,
-                .list_with_capacity,
-                .list_drop_at,
-                .list_sublist,
-                .list_sublist_borrowed,
-                .list_set,
-                .list_replace_unsafe,
-                .list_swap,
-                .list_prepend,
-                .list_take_first,
-                .list_take_last,
-                .list_reverse,
-                .list_reserve,
-                .list_reserve_for_append,
-                .list_release_excess_capacity,
-                .list_clear,
-                .list_map_prepare_reuse,
-                .list_map_can_reuse,
-                .list_item_size_at_most,
-                .list_map_cast_unsafe,
-                .list_map_extract_unsafe,
-                .list_map_write_unsafe,
-                .bool_not,
-                .bool_likely,
-                .dict_pseudo_seed,
-                .hasher_finish,
-                .hasher_write_bool,
-                .hasher_write_u8,
-                .hasher_write_u16,
-                .hasher_write_u32,
-                .hasher_write_u64,
-                .hasher_write_u128,
-                .hasher_write_i8,
-                .hasher_write_i16,
-                .hasher_write_i32,
-                .hasher_write_i64,
-                .hasher_write_i128,
-                .hasher_write_f32,
-                .hasher_write_f64,
-                .hasher_write_dec,
-                .hasher_write_bytes,
-                .hasher_write_str,
-                .crypto_sha256_hash_bytes,
-                .crypto_sha256_hasher_empty,
-                .crypto_sha256_hasher_write,
-                .crypto_sha256_hasher_finish,
-                .crypto_blake3_hash_bytes,
-                .crypto_blake3_hasher_empty,
-                .crypto_blake3_hasher_write,
-                .crypto_blake3_hasher_finish,
-                .num_is_eq,
-                .num_is_gt,
-                .num_is_gte,
-                .num_is_lt,
-                .num_is_lte,
-                .num_negate,
-                .num_abs,
-                .num_abs_diff,
-                .num_plus,
-                .num_minus,
-                .num_times,
-                .num_int_add_wrap,
-                .num_int_add_crash_on_overflow,
-                .num_int_add_overflows,
-                .num_int_add_proven_cannot_overflow,
-                .num_int_sub_wrap,
-                .num_int_sub_crash_on_overflow,
-                .num_int_sub_overflows,
-                .num_int_sub_proven_cannot_overflow,
-                .num_int_mul_wrap,
-                .num_int_mul_crash_on_overflow,
-                .num_int_mul_overflows,
-                .num_int_mul_proven_cannot_overflow,
-                .num_float_add,
-                .num_float_sub,
-                .num_float_mul,
-                .dec_mul,
-                .num_div_by,
-                .num_div_by_checked,
-                .num_div_trunc_by,
-                .num_div_trunc_by_checked,
-                .num_rem_by,
-                .num_rem_by_checked,
-                .num_mod_by,
-                .num_mod_by_checked,
-                .num_negate_checked,
-                .num_abs_checked,
-                .num_pow,
-                .num_atan2,
-                .num_sqrt,
-                .num_sin,
-                .num_cos,
-                .num_tan,
-                .num_asin,
-                .num_acos,
-                .num_atan,
-                .num_floor,
-                .num_ceiling,
-                .f32_to_bits,
-                .f32_from_bits,
-                .f64_to_bits,
-                .f64_from_bits,
-                .num_shift_left_by,
-                .num_shift_right_by,
-                .num_shift_right_zf_by,
-                .num_bitwise_and,
-                .num_bitwise_or,
-                .num_bitwise_xor,
-                .num_bitwise_not,
-                .num_count_one_bits,
-                .num_count_leading_zero_bits,
-                .num_count_trailing_zero_bits,
-                .num_from_le_bytes_unchecked,
-                .simd_load_16_unchecked,
-                .simd_store_16_unchecked,
-                .simd_append_16,
-                .simd_splat,
-                .simd_with_lane_unchecked,
-                .simd_to_u128_bits,
-                .simd_from_u128_bits,
-                .simd_add_wrap,
-                .simd_sub_wrap,
-                .simd_add_sat,
-                .simd_sub_sat,
-                .simd_neg_wrap,
-                .simd_abs_diff,
-                .simd_avg_rounded,
-                .simd_dot_pairs,
-                .simd_sad,
-                .simd_and,
-                .simd_or,
-                .simd_xor,
-                .simd_not,
-                .simd_bit_select,
-                .simd_interleave_lo,
-                .simd_interleave_hi,
-                .u8_from_str,
-                .i8_from_str,
-                .u16_from_str,
-                .i16_from_str,
-                .u32_from_str,
-                .i32_from_str,
-                .u64_from_str,
-                .i64_from_str,
-                .u128_from_str,
-                .i128_from_str,
-                .dec_from_str,
-                .dec_to_attos,
-                .dec_from_attos,
-                .f32_from_str,
-                .f64_from_str,
-                .u8_from_str_prefix,
-                .u8_from_utf8_prefix,
-                .i8_from_str_prefix,
-                .i8_from_utf8_prefix,
-                .u16_from_str_prefix,
-                .u16_from_utf8_prefix,
-                .i16_from_str_prefix,
-                .i16_from_utf8_prefix,
-                .u32_from_str_prefix,
-                .u32_from_utf8_prefix,
-                .i32_from_str_prefix,
-                .i32_from_utf8_prefix,
-                .u64_from_str_prefix,
-                .u64_from_utf8_prefix,
-                .i64_from_str_prefix,
-                .i64_from_utf8_prefix,
-                .u128_from_str_prefix,
-                .u128_from_utf8_prefix,
-                .i128_from_str_prefix,
-                .i128_from_utf8_prefix,
-                .dec_from_str_prefix,
-                .dec_from_utf8_prefix,
-                .f32_from_str_prefix,
-                .f32_from_utf8_prefix,
-                .f64_from_str_prefix,
-                .f64_from_utf8_prefix,
-                .u8_to_i8_wrap,
-                .u8_to_i8_try,
-                .u8_to_i16,
-                .u8_to_i32,
-                .u8_to_i64,
-                .u8_to_i128,
-                .u8_to_u16,
-                .u8_to_u32,
-                .u8_to_u64,
-                .u8_to_u128,
-                .u8_to_f32,
-                .u8_to_f64,
-                .u8_to_dec,
-                .i8_to_i16,
-                .i8_to_i32,
-                .i8_to_i64,
-                .i8_to_i128,
-                .i8_to_u8_wrap,
-                .i8_to_u8_try,
-                .i8_to_u16_wrap,
-                .i8_to_u16_try,
-                .i8_to_u32_wrap,
-                .i8_to_u32_try,
-                .i8_to_u64_wrap,
-                .i8_to_u64_try,
-                .i8_to_u128_wrap,
-                .i8_to_u128_try,
-                .i8_to_f32,
-                .i8_to_f64,
-                .i8_to_dec,
-                .u16_to_i8_wrap,
-                .u16_to_i8_try,
-                .u16_to_i16_wrap,
-                .u16_to_i16_try,
-                .u16_to_i32,
-                .u16_to_i64,
-                .u16_to_i128,
-                .u16_to_u8_wrap,
-                .u16_to_u8_try,
-                .u16_to_u32,
-                .u16_to_u64,
-                .u16_to_u128,
-                .u16_to_f32,
-                .u16_to_f64,
-                .u16_to_dec,
-                .i16_to_i8_wrap,
-                .i16_to_i8_try,
-                .i16_to_i32,
-                .i16_to_i64,
-                .i16_to_i128,
-                .i16_to_u8_wrap,
-                .i16_to_u8_try,
-                .i16_to_u16_wrap,
-                .i16_to_u16_try,
-                .i16_to_u32_wrap,
-                .i16_to_u32_try,
-                .i16_to_u64_wrap,
-                .i16_to_u64_try,
-                .i16_to_u128_wrap,
-                .i16_to_u128_try,
-                .i16_to_f32,
-                .i16_to_f64,
-                .i16_to_dec,
-                .u32_to_i8_wrap,
-                .u32_to_i8_try,
-                .u32_to_i16_wrap,
-                .u32_to_i16_try,
-                .u32_to_i32_wrap,
-                .u32_to_i32_try,
-                .u32_to_i64,
-                .u32_to_i128,
-                .u32_to_u8_wrap,
-                .u32_to_u8_try,
-                .u32_to_u16_wrap,
-                .u32_to_u16_try,
-                .u32_to_u64,
-                .u32_to_u128,
-                .u32_to_f32,
-                .u32_to_f64,
-                .u32_to_dec,
-                .i32_to_i8_wrap,
-                .i32_to_i8_try,
-                .i32_to_i16_wrap,
-                .i32_to_i16_try,
-                .i32_to_i64,
-                .i32_to_i128,
-                .i32_to_u8_wrap,
-                .i32_to_u8_try,
-                .i32_to_u16_wrap,
-                .i32_to_u16_try,
-                .i32_to_u32_wrap,
-                .i32_to_u32_try,
-                .i32_to_u64_wrap,
-                .i32_to_u64_try,
-                .i32_to_u128_wrap,
-                .i32_to_u128_try,
-                .i32_to_f32,
-                .i32_to_f64,
-                .i32_to_dec,
-                .u64_to_i8_wrap,
-                .u64_to_i8_try,
-                .u64_to_i16_wrap,
-                .u64_to_i16_try,
-                .u64_to_i32_wrap,
-                .u64_to_i32_try,
-                .u64_to_i64_wrap,
-                .u64_to_i64_try,
-                .u64_to_i128,
-                .u64_to_u8_wrap,
-                .u64_to_u8_try,
-                .u64_to_u16_wrap,
-                .u64_to_u16_try,
-                .u64_to_u32_wrap,
-                .u64_to_u32_try,
-                .u64_to_u128,
-                .u64_to_f32,
-                .u64_to_f64,
-                .u64_to_dec,
-                .i64_to_i8_wrap,
-                .i64_to_i8_try,
-                .i64_to_i16_wrap,
-                .i64_to_i16_try,
-                .i64_to_i32_wrap,
-                .i64_to_i32_try,
-                .i64_to_i128,
-                .i64_to_u8_wrap,
-                .i64_to_u8_try,
-                .i64_to_u16_wrap,
-                .i64_to_u16_try,
-                .i64_to_u32_wrap,
-                .i64_to_u32_try,
-                .i64_to_u64_wrap,
-                .i64_to_u64_try,
-                .i64_to_u128_wrap,
-                .i64_to_u128_try,
-                .i64_to_f32,
-                .i64_to_f64,
-                .i64_to_dec,
-                .u128_to_i8_wrap,
-                .u128_to_i8_try,
-                .u128_to_i16_wrap,
-                .u128_to_i16_try,
-                .u128_to_i32_wrap,
-                .u128_to_i32_try,
-                .u128_to_i64_wrap,
-                .u128_to_i64_try,
-                .u128_to_i128_wrap,
-                .u128_to_i128_try,
-                .u128_to_u8_wrap,
-                .u128_to_u8_try,
-                .u128_to_u16_wrap,
-                .u128_to_u16_try,
-                .u128_to_u32_wrap,
-                .u128_to_u32_try,
-                .u128_to_u64_wrap,
-                .u128_to_u64_try,
-                .u128_to_f32,
-                .u128_to_f64,
-                .u128_to_dec_try_unsafe,
-                .i128_to_i8_wrap,
-                .i128_to_i8_try,
-                .i128_to_i16_wrap,
-                .i128_to_i16_try,
-                .i128_to_i32_wrap,
-                .i128_to_i32_try,
-                .i128_to_i64_wrap,
-                .i128_to_i64_try,
-                .i128_to_u8_wrap,
-                .i128_to_u8_try,
-                .i128_to_u16_wrap,
-                .i128_to_u16_try,
-                .i128_to_u32_wrap,
-                .i128_to_u32_try,
-                .i128_to_u64_wrap,
-                .i128_to_u64_try,
-                .i128_to_u128_wrap,
-                .i128_to_u128_try,
-                .i128_to_f32,
-                .i128_to_f64,
-                .i128_to_dec_try_unsafe,
-                .f32_to_i8_trunc,
-                .f32_to_i8_try_unsafe,
-                .f32_to_i16_trunc,
-                .f32_to_i16_try_unsafe,
-                .f32_to_i32_trunc,
-                .f32_to_i32_try_unsafe,
-                .f32_to_i64_trunc,
-                .f32_to_i64_try_unsafe,
-                .f32_to_i128_trunc,
-                .f32_to_i128_try_unsafe,
-                .f32_to_u8_trunc,
-                .f32_to_u8_try_unsafe,
-                .f32_to_u16_trunc,
-                .f32_to_u16_try_unsafe,
-                .f32_to_u32_trunc,
-                .f32_to_u32_try_unsafe,
-                .f32_to_u64_trunc,
-                .f32_to_u64_try_unsafe,
-                .f32_to_u128_trunc,
-                .f32_to_u128_try_unsafe,
-                .f32_to_f64,
-                .f64_to_i8_trunc,
-                .f64_to_i8_try_unsafe,
-                .f64_to_i16_trunc,
-                .f64_to_i16_try_unsafe,
-                .f64_to_i32_trunc,
-                .f64_to_i32_try_unsafe,
-                .f64_to_i64_trunc,
-                .f64_to_i64_try_unsafe,
-                .f64_to_i128_trunc,
-                .f64_to_i128_try_unsafe,
-                .f64_to_u8_trunc,
-                .f64_to_u8_try_unsafe,
-                .f64_to_u16_trunc,
-                .f64_to_u16_try_unsafe,
-                .f64_to_u32_trunc,
-                .f64_to_u32_try_unsafe,
-                .f64_to_u64_trunc,
-                .f64_to_u64_try_unsafe,
-                .f64_to_u128_trunc,
-                .f64_to_u128_try_unsafe,
-                .f64_to_f32_wrap,
-                .f64_to_f32_try_unsafe,
-                .dec_to_i8_trunc,
-                .dec_to_i8_try_unsafe,
-                .dec_to_i16_trunc,
-                .dec_to_i16_try_unsafe,
-                .dec_to_i32_trunc,
-                .dec_to_i32_try_unsafe,
-                .dec_to_i64_trunc,
-                .dec_to_i64_try_unsafe,
-                .dec_to_i128_trunc,
-                .dec_to_u8_trunc,
-                .dec_to_u8_try_unsafe,
-                .dec_to_u16_trunc,
-                .dec_to_u16_try_unsafe,
-                .dec_to_u32_trunc,
-                .dec_to_u32_try_unsafe,
-                .dec_to_u64_trunc,
-                .dec_to_u64_try_unsafe,
-                .dec_to_u128_trunc,
-                .dec_to_u128_try_unsafe,
-                .dec_to_f32_wrap,
-                .dec_to_f32_try_unsafe,
-                .dec_to_f64,
-                .box_box,
-                .box_unbox,
-                .box_unbox_borrowed,
-                .box_prepare_update,
-                .erased_capture_load,
-                .ptr_alloca,
-                .box_alloc_zeroed,
-                .ptr_store,
-                .ptr_load,
-                .ptr_cast,
-                .compare,
-                .crash,
-                => null,
-            };
-        }
-
-        /// Compute a SIMD op by calling the target-independent implementation
-        /// in `builtins/simd.zig`.
-        ///
-        /// That implementation defines each op's bit-exact meaning without
-        /// reference to any architecture and is the oracle the interpreter,
-        /// compile-time evaluator, and differential corpus already agree with,
-        /// so its answer is the same one a native sequence produces. Operands
-        /// travel through a stack buffer because three `u128` arguments and a
-        /// `u128` result do not fit the integer argument registers.
-        fn generateSimdViaBuiltin(self: *Self, ll: anytype, args: anytype) Allocator.Error!ValueLocation {
-            const arity = simdBuiltinArity(ll.op) orelse unreachable;
-            const op_index = ll.op.simdOpIndex() orelse unreachable;
-
-            const first_local = GuardedList.at(args, 0);
-            const arg_kind = self.simdKindForLayout(self.localLayout(first_local)) orelse unreachable;
-            const ret_vector = self.simdKindForLayout(ll.ret_layout);
-            const ret_kind = ret_vector orelse arg_kind;
-
-            const args_offset = self.codegen.allocStackSlot(3 * 16);
-            const zero = try self.allocTempGeneral();
-            defer self.codegen.freeGeneral(zero);
-            try self.codegen.emitLoadImm(zero, 0);
-            for (0..3) |slot_index| {
-                const slot_offset = args_offset + @as(i32, @intCast(slot_index)) * 16;
-                try self.codegen.emitStoreStack(.w64, slot_offset, zero);
-                try self.codegen.emitStoreStack(.w64, slot_offset + 8, zero);
-            }
-
-            var slot: u8 = 0;
-            while (slot < arity.vectors) : (slot += 1) {
-                const local = GuardedList.at(args, slot);
-                const vector = try self.acquireVectorLocal(local, arg_kind, 0);
-                defer self.releaseAcquiredVector(vector);
-                try self.codegen.emitStoreStackV128(args_offset + @as(i32, slot) * 16, vector.reg);
-            }
-            while (slot < arity.vectors + arity.scalars) : (slot += 1) {
-                const scalar_loc = try self.emitValueLocal(GuardedList.at(args, slot));
-                const scalar = try self.ensureInGeneralReg(scalar_loc);
-                defer self.codegen.freeGeneral(scalar);
-                try self.codegen.emitStoreStack(.w64, args_offset + @as(i32, slot) * 16, scalar);
-            }
-
-            const result_offset = self.codegen.allocStackSlot(16);
-            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-            defer builder.deinit();
-            try builder.addLeaArg(frame_ptr, result_offset);
-            try builder.addImmArg(op_index);
-            try builder.addImmArg(@backingInt(arg_kind));
-            try builder.addImmArg(@backingInt(ret_kind));
-            try builder.addLeaArg(frame_ptr, args_offset);
-            try self.callBuiltin(&builder, .simd_eval);
-
-            if (ret_vector) |kind| {
-                const result = try self.allocTempVector(0);
-                try self.codegen.emitLoadStackV128(result, result_offset);
-                return .{ .vector_reg = .{ .reg = result, .kind = kind } };
-            }
-
-            // `simd_bitmask` is the one routed op whose result is an integer;
-            // it lands in the low bits of the returned value.
-            const result = try self.allocTempGeneral();
-            try self.codegen.emitLoadStack(.w64, result, result_offset);
-            return .{ .general_reg = result };
+            const product = self.codegen.allocStackSlot(16);
+            try self.codegen.emitStoreStack(.w64, product, product_low);
+            try self.codegen.emitStoreStack(.w64, product + 8, product_high);
+            try self.codegen.emitLoadStackV128(dst, product);
         }
 
         fn generateSimdClmul(self: *Self, ll: anytype, args: anytype) Allocator.Error!ValueLocation {
@@ -6792,7 +6575,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer self.releaseAcquiredVector(rhs);
             protected |= floatRegMask(rhs.reg);
             const result = try self.allocTempVector(protected);
-            if (comptime target.toCpuArch() == .x86_64) {
+            if (self.cpu_level == .v1) {
+                try self.emitSimdClmulBaseline(result, lhs.reg, rhs.reg, ll.op == .simd_clmul_hi);
+            } else if (comptime target.toCpuArch() == .x86_64) {
                 try self.codegen.emit.vexRegRegRegImm8(
                     .map_0f3a,
                     .p66,
@@ -6863,15 +6648,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // VEX is an AVX encoding, so the baseline reaches these same
                 // opcodes through legacy SSE. Legacy SSE reads and writes one
                 // register for the left operand, so materialize `lhs` in `dst`
-                // first. Ops whose opcode lives outside the `0F` map are above
-                // the baseline entirely and are routed to the SIMD builtin
-                // before reaching here.
+                // first. Opcodes outside the `0F` map are above the baseline
+                // entirely; each op that would use one emits its own SSE2
+                // sequence at this level instead.
                 if (map != .map_0f) {
-                    // Reaching here means an op that needs an instruction
-                    // outside the `0F` map was not routed to the SIMD builtin,
-                    // and emitting it in the legacy encoding would produce a
-                    // binary that still requires SSSE3 or later. Fail rather
-                    // than encode it.
+                    // Emitting an opcode outside the `0F` map in the legacy
+                    // encoding would produce a binary that still requires
+                    // SSSE3 or later.
                     if (builtin.mode == .debug) {
                         base.invariant(
                             "baseline codegen invariant violated: SIMD op needs an opcode above the x86-64 baseline",
@@ -6896,6 +6679,239 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 return;
             }
             try self.codegen.emit.vexRegRegReg(map, .p66, false, opcode, dst, lhs, rhs);
+        }
+
+        /// `pshufd`, `pshuflw`, or `pshufhw`: permute the lanes of `src` into
+        /// `dst` by an immediate selector. All three are SSE2.
+        fn emitX86Shuffle(
+            self: *Self,
+            comptime lanes: enum { dwords, low_words, high_words },
+            dst: FloatReg,
+            src: FloatReg,
+            selector: u8,
+        ) Allocator.Error!void {
+            const prefix = switch (lanes) {
+                .dwords => .p66,
+                .low_words => .pf2,
+                .high_words => .pf3,
+            };
+            if (self.cpu_level == .v1) {
+                try self.codegen.emit.sseRegRegImm8(.map_0f, prefix, 0x70, dst, src, selector);
+            } else {
+                try self.codegen.emit.vexRegRegImm8(.map_0f, prefix, false, 0x70, dst, src, selector);
+            }
+        }
+
+        const X86ShiftImm = enum { shl, shr, sar, shl_bytes, shr_bytes };
+
+        /// Shift every `lane_bits`-wide lane of `src` by an immediate into
+        /// `dst`. The byte forms shift the whole register and ignore
+        /// `lane_bits`. All of them are SSE2.
+        fn emitX86ShiftImm(
+            self: *Self,
+            comptime op: X86ShiftImm,
+            lane_bits: u7,
+            dst: FloatReg,
+            src: FloatReg,
+            amount: u8,
+        ) Allocator.Error!void {
+            const opcode: u8 = switch (op) {
+                .shl_bytes, .shr_bytes => 0x73,
+                .shl, .shr, .sar => switch (lane_bits) {
+                    16 => 0x71,
+                    32 => 0x72,
+                    64 => 0x73,
+                    else => unreachable,
+                },
+            };
+            std.debug.assert(op != .sar or lane_bits != 64);
+            const digit: u3 = switch (op) {
+                .shl => 6,
+                .shr => 2,
+                .sar => 4,
+                .shl_bytes => 7,
+                .shr_bytes => 3,
+            };
+            if (self.cpu_level == .v1) {
+                if (dst != src) try self.codegen.emit.movdqaRegReg(dst, src);
+                try self.codegen.emit.ssePackedShiftImm8(opcode, digit, dst, amount);
+                return;
+            }
+            try self.codegen.emit.vexPackedShiftImm8(opcode, digit, dst, src, amount);
+        }
+
+        /// Set each lane of `dst` to all ones where that lane of `src` is
+        /// negative and to zero elsewhere.
+        fn emitX86SignMask(self: *Self, dst: FloatReg, src: FloatReg, lane_bits: u7) Allocator.Error!void {
+            std.debug.assert(dst != src);
+            switch (lane_bits) {
+                // There is no byte arithmetic shift, so compare against zero.
+                8 => {
+                    try self.emitX86PackedBinary(.map_0f, 0xEF, dst, dst, dst);
+                    try self.emitX86PackedBinary(.map_0f, 0x64, dst, dst, src);
+                },
+                16 => try self.emitX86ShiftImm(.sar, 16, dst, src, 15),
+                32 => try self.emitX86ShiftImm(.sar, 32, dst, src, 31),
+                64 => if (self.cpu_level == .v1) {
+                    // PCMPGTQ is SSE4.2 and there is no qword arithmetic
+                    // shift, so spread each high dword's sign over its qword.
+                    try self.emitX86ShiftImm(.sar, 32, dst, src, 31);
+                    try self.emitX86Shuffle(.dwords, dst, dst, 0xF5);
+                } else {
+                    try self.emitX86PackedBinary(.map_0f, 0xEF, dst, dst, dst);
+                    try self.emitX86PackedBinary(.map_0f38, 0x37, dst, dst, src);
+                },
+                else => unreachable,
+            }
+        }
+
+        /// Move the high qword of `src` into `dst`.
+        fn emitX86ExtractHighQword(self: *Self, dst: GeneralReg, src: FloatReg, protected_mask: u32) Allocator.Error!void {
+            if (self.cpu_level == .v1) {
+                // PEXTRQ is SSE4.1.
+                const high = try self.allocTempVector(protected_mask | floatRegMask(src));
+                defer self.codegen.freeFloat(high);
+                try self.emitX86Shuffle(.dwords, high, src, 0x4E);
+                try self.codegen.emit.movGeneralFromVector(dst, high, true);
+                return;
+            }
+            try self.codegen.emit.extractQword(dst, src, 1);
+        }
+
+        /// Truncate every lane of `low` and `high` to half its width and pack
+        /// the results, `low` first, into `dst` using only SSE2. `dst` may be
+        /// `low` but not `high`.
+        fn emitX86NarrowWrapBaseline(
+            self: *Self,
+            dst: FloatReg,
+            low: FloatReg,
+            high: FloatReg,
+            source_kind: builtins.simd.Kind,
+            protected_mask: u32,
+        ) Allocator.Error!void {
+            std.debug.assert(dst != high);
+            const protect = protected_mask | floatRegMask(dst) | floatRegMask(low) | floatRegMask(high);
+            const narrowed_high = try self.allocTempVector(protect);
+            defer self.codegen.freeFloat(narrowed_high);
+            switch (source_kind.laneBits()) {
+                // PACKUSWB saturates, so clear each word's high byte first.
+                16 => {
+                    const mask = try self.materializeVectorConstant(simdSplatBits(.u16x8, 0xFF), protect | floatRegMask(narrowed_high));
+                    defer self.releaseAcquiredVector(mask);
+                    try self.emitX86PackedBinary(.map_0f, 0xDB, dst, low, mask.reg);
+                    try self.emitX86PackedBinary(.map_0f, 0xDB, narrowed_high, high, mask.reg);
+                    try self.emitX86PackedBinary(.map_0f, 0x67, dst, dst, narrowed_high);
+                },
+                // PACKSSDW saturates, so sign-extend each dword's low word
+                // first; the pack then keeps exactly that word.
+                32 => {
+                    try self.emitX86ShiftImm(.shl, 32, dst, low, 16);
+                    try self.emitX86ShiftImm(.sar, 32, dst, dst, 16);
+                    try self.emitX86ShiftImm(.shl, 32, narrowed_high, high, 16);
+                    try self.emitX86ShiftImm(.sar, 32, narrowed_high, narrowed_high, 16);
+                    try self.emitX86PackedBinary(.map_0f, 0x6B, dst, dst, narrowed_high);
+                },
+                64 => {
+                    try self.emitX86Shuffle(.dwords, dst, low, 0x08);
+                    try self.emitX86Shuffle(.dwords, narrowed_high, high, 0x08);
+                    try self.emitX86PackedBinary(.map_0f, 0x6C, dst, dst, narrowed_high);
+                },
+                else => unreachable,
+            }
+        }
+
+        /// Lane-wise minimum or maximum for the lane kinds whose PMIN/PMAX
+        /// forms are SSE4.1.
+        fn emitX86MinMaxBaseline(
+            self: *Self,
+            is_max: bool,
+            kind: builtins.simd.Kind,
+            dst: FloatReg,
+            lhs: FloatReg,
+            rhs: FloatReg,
+            protected_mask: u32,
+        ) Allocator.Error!void {
+            std.debug.assert(dst != lhs and dst != rhs);
+            switch (kind) {
+                // With `excess = a -sat b`, max(a, b) = b + excess and
+                // min(a, b) = a - excess.
+                .u16x8 => {
+                    const excess = try self.allocTempVector(protected_mask);
+                    defer self.codegen.freeFloat(excess);
+                    try self.emitX86PackedBinary(.map_0f, 0xD9, excess, lhs, rhs);
+                    if (is_max) {
+                        try self.emitX86PackedBinary(.map_0f, 0xFD, dst, rhs, excess);
+                    } else {
+                        try self.emitX86PackedBinary(.map_0f, 0xF9, dst, lhs, excess);
+                    }
+                },
+                // Flipping each byte's sign bit maps signed order onto the
+                // unsigned order that PMINUB and PMAXUB compare.
+                .i8x16 => {
+                    const bias = try self.materializeVectorConstant(simdSplatBits(.u8x16, 0x80), protected_mask);
+                    defer self.releaseAcquiredVector(bias);
+                    const biased_rhs = try self.allocTempVector(protected_mask | floatRegMask(bias.reg));
+                    defer self.codegen.freeFloat(biased_rhs);
+                    try self.emitX86PackedBinary(.map_0f, 0xEF, dst, lhs, bias.reg);
+                    try self.emitX86PackedBinary(.map_0f, 0xEF, biased_rhs, rhs, bias.reg);
+                    try self.emitX86PackedBinary(.map_0f, if (is_max) 0xDE else 0xDA, dst, dst, biased_rhs);
+                    try self.emitX86PackedBinary(.map_0f, 0xEF, dst, dst, bias.reg);
+                },
+                .u32x4, .i32x4, .u64x2, .i64x2 => {
+                    const greater = try self.allocTempVector(protected_mask);
+                    defer self.codegen.freeFloat(greater);
+                    const protect = protected_mask | floatRegMask(greater);
+                    try self.emitBasicSimdVector(.simd_gt_lanes, kind, greater, lhs, rhs, null, protect);
+                    try self.emitBasicSimdVector(
+                        .simd_bit_select,
+                        kind,
+                        dst,
+                        greater,
+                        if (is_max) lhs else rhs,
+                        if (is_max) rhs else lhs,
+                        protect,
+                    );
+                },
+                .u8x16, .i16x8 => unreachable,
+            }
+        }
+
+        /// Qword `lhs > rhs` from dword operations, since PCMPGTQ is SSE4.2.
+        ///
+        /// A qword is greater when its high dword is greater, or when the high
+        /// dwords are equal and its low dword is greater as an unsigned value.
+        /// In that second case `rhs - lhs` borrows into the high dword and
+        /// leaves it all ones. Only the high dword of each partial result is
+        /// meaningful, so the final shuffle copies it over the low one.
+        fn emitX86GreaterQwordsBaseline(
+            self: *Self,
+            signed: bool,
+            dst: FloatReg,
+            lhs: FloatReg,
+            rhs: FloatReg,
+            protected_mask: u32,
+        ) Allocator.Error!void {
+            std.debug.assert(dst != lhs and dst != rhs);
+            const protect = protected_mask | floatRegMask(dst) | floatRegMask(lhs) | floatRegMask(rhs);
+            const partial = try self.allocTempVector(protect);
+            defer self.codegen.freeFloat(partial);
+            try self.emitX86PackedBinary(.map_0f, 0x76, dst, lhs, rhs);
+            try self.emitX86PackedBinary(.map_0f, 0xFB, partial, rhs, lhs);
+            try self.emitX86PackedBinary(.map_0f, 0xDB, dst, dst, partial);
+            if (signed) {
+                try self.emitX86PackedBinary(.map_0f, 0x66, partial, lhs, rhs);
+            } else {
+                // Flipping the sign bits turns the unsigned order of the high
+                // dwords into the signed order PCMPGTD compares. The equality
+                // and borrow terms above do not depend on those bits.
+                const bias = try self.materializeVectorConstant(simdSplatBits(.u64x2, @as(u64, 1) << 63), protect | floatRegMask(partial));
+                defer self.releaseAcquiredVector(bias);
+                try self.emitX86PackedBinary(.map_0f, 0xEF, partial, lhs, bias.reg);
+                try self.emitX86PackedBinary(.map_0f, 0xEF, bias.reg, bias.reg, rhs);
+                try self.emitX86PackedBinary(.map_0f, 0x66, partial, partial, bias.reg);
+            }
+            try self.emitX86PackedBinary(.map_0f, 0xEB, dst, dst, partial);
+            try self.emitX86Shuffle(.dwords, dst, dst, 0xF5);
         }
 
         fn emitBasicSimdVector(
@@ -6952,11 +6968,24 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         r.?,
                     ),
                     .simd_neg_wrap => {
-                        try self.codegen.emit.vexRegRegReg(.map_0f, .p66, false, 0xEF, dst, lhs, lhs);
+                        std.debug.assert(dst != lhs);
+                        try self.emitX86PackedBinary(.map_0f, 0xEF, dst, lhs, lhs);
                         try self.emitX86PackedBinary(.map_0f, x86PackedOpcode(kind, 0xF8, 0xF9, 0xFA, 0xFB), dst, dst, lhs);
                     },
-                    .simd_abs_wrap => try self.codegen.emit.vexRegReg(.map_0f38, .p66, false, x86PackedOpcode(kind, 0x1C, 0x1D, 0x1E, 0), dst, lhs),
-                    .simd_min, .simd_max => {
+                    .simd_abs_wrap => if (self.cpu_level == .v1) {
+                        // PABSB/W/D are SSSE3. Complementing each negative lane
+                        // and subtracting its all-ones sign mask adds the one.
+                        const sign = try self.allocTempVector(protected_mask);
+                        defer self.codegen.freeFloat(sign);
+                        try self.emitX86SignMask(sign, lhs, kind.laneBits());
+                        try self.emitX86PackedBinary(.map_0f, 0xEF, dst, lhs, sign);
+                        try self.emitX86PackedBinary(.map_0f, x86PackedOpcode(kind, 0xF8, 0xF9, 0xFA, 0xFB), dst, dst, sign);
+                    } else {
+                        try self.codegen.emit.vexRegReg(.map_0f38, .p66, false, x86PackedOpcode(kind, 0x1C, 0x1D, 0x1E, 0), dst, lhs);
+                    },
+                    .simd_min, .simd_max => if (self.cpu_level == .v1 and kind != .u8x16 and kind != .i16x8) {
+                        try self.emitX86MinMaxBaseline(op == .simd_max, kind, dst, lhs, r.?, protected_mask);
+                    } else {
                         const is_max = op == .simd_max;
                         const map: @TypeOf(self.codegen.emit).VexMap = switch (kind) {
                             .u8x16, .i16x8 => .map_0f,
@@ -7003,14 +7032,26 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.emitX86PackedBinary(.map_0f, 0xDF, tmp, lhs, third.?);
                         try self.emitX86PackedBinary(.map_0f, 0xEB, dst, dst, tmp);
                     },
-                    .simd_eq_lanes => try self.emitX86PackedBinary(
-                        compare_map,
-                        x86PackedOpcode(kind, 0x74, 0x75, 0x76, 0x29),
-                        dst,
-                        lhs,
-                        r.?,
-                    ),
-                    .simd_gt_lanes => if (kind.isSigned()) {
+                    .simd_eq_lanes => if (self.cpu_level == .v1 and kind.laneBits() == 64) {
+                        // PCMPEQQ is SSE4.1. A qword is equal exactly when both
+                        // of its dwords are.
+                        const swapped = try self.allocTempVector(protected_mask);
+                        defer self.codegen.freeFloat(swapped);
+                        try self.emitX86PackedBinary(.map_0f, 0x76, dst, lhs, r.?);
+                        try self.emitX86Shuffle(.dwords, swapped, dst, 0xB1);
+                        try self.emitX86PackedBinary(.map_0f, 0xDB, dst, dst, swapped);
+                    } else {
+                        try self.emitX86PackedBinary(
+                            compare_map,
+                            x86PackedOpcode(kind, 0x74, 0x75, 0x76, 0x29),
+                            dst,
+                            lhs,
+                            r.?,
+                        );
+                    },
+                    .simd_gt_lanes => if (self.cpu_level == .v1 and kind.laneBits() == 64) {
+                        try self.emitX86GreaterQwordsBaseline(kind.isSigned(), dst, lhs, r.?, protected_mask);
+                    } else if (kind.isSigned()) {
                         try self.emitX86PackedBinary(
                             compare_map,
                             x86PackedOpcode(kind, 0x64, 0x65, 0x66, 0x37),
@@ -7029,13 +7070,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 try self.emitX86PackedBinary(.map_0f, 0xFC, sign, sign, sign);
                             }
                         } else {
-                            try self.codegen.emit.vexPackedShiftImm8(
-                                x86PackedOpcode(kind, 0, 0x71, 0x72, 0x73),
-                                6,
-                                sign,
-                                sign,
-                                @intCast(kind.laneBits() - 1),
-                            );
+                            try self.emitX86ShiftImm(.shl, kind.laneBits(), sign, sign, @intCast(kind.laneBits() - 1));
                         }
                         try self.emitX86PackedBinary(.map_0f, 0xEF, dst, lhs, sign);
                         try self.emitX86PackedBinary(.map_0f, 0xEF, biased_rhs, r.?, sign);

@@ -3042,10 +3042,18 @@ pub fn build(b: *std.Build) void {
     run_simd_runtime_dev.addArgs(&.{ "--opt=dev", "--no-cache", "test/simd/differential.roc" });
     run_simd_runtime_dev.step.dependOn(build_test_hosts_step);
 
+    // The host architecture's `v1` target is a consumer of its own: its dev
+    // backend lowers every op whose default instructions sit above the
+    // baseline through different sequences.
+    const run_simd_runtime_v1_dev = b.addSystemCommand(&.{ "bash", "ci/run_simd_v1_differential.sh" });
+    run_simd_runtime_v1_dev.addFileArg(fixture_roc);
+    run_simd_runtime_v1_dev.setCwd(test_fixtures.mutableRoot(&.{build_test_hosts_step}));
+    run_simd_runtime_v1_dev.step.dependOn(&run_simd_runtime_dev.step);
+
     const run_simd_runtime_speed = b.addRunArtifact(roc_exe);
     run_simd_runtime_speed.setCwd(test_fixtures.mutableRoot(&.{build_test_hosts_step}));
     run_simd_runtime_speed.addArgs(&.{ "--opt=speed", "--no-cache", "test/simd/differential.roc" });
-    run_simd_runtime_speed.step.dependOn(&run_simd_runtime_dev.step);
+    run_simd_runtime_speed.step.dependOn(&run_simd_runtime_v1_dev.step);
 
     const run_simd_ctfe = b.addRunArtifact(roc_exe);
     run_simd_ctfe.setCwd(test_fixtures.mutableRoot(&.{build_test_hosts_step}));
