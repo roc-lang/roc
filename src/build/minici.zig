@@ -123,6 +123,10 @@ const Shard = struct {
 };
 
 /// Shard boundaries are balanced from measured per-job CI timings. The
+/// strategy differential runs every eval program under two lowering strategies
+/// and two backends, which alone takes most of a 120-minute job on the slowest
+/// host, so it is the last job in `jobs` and each host runs it as a shard of
+/// its own. The
 /// "MiniCI shards cover" tests prove that, for each host, the shards run every
 /// job exactly once: the `source` shard and the Linux shards together run every
 /// job, and each of the macOS and Windows shard sets runs every `every_host`
@@ -132,15 +136,18 @@ const shards = [_]Shard{
     .{ .name = "linux-core", .host = .linux, .lane = .primary, .selection = .{ .before = "run-test-eval" } },
     .{ .name = "linux-eval", .host = .linux, .lane = .primary, .selection = .{ .from = "run-test-eval", .to = "run-test-eval" } },
     .{ .name = "linux-simd", .host = .linux, .lane = .primary, .selection = .{ .from = "run-test-simd-differential", .to = "run-test-eval-host-effects" } },
-    .{ .name = "linux-harness", .host = .linux, .lane = .primary, .selection = .{ .after = "run-test-eval-host-effects" } },
+    .{ .name = "linux-harness", .host = .linux, .lane = .primary, .selection = .{ .after = "run-test-eval-host-effects", .before = strategy_differential_job } },
+    .{ .name = "linux-strategy", .host = .linux, .lane = .primary, .selection = .{ .from = strategy_differential_job } },
     .{ .name = "macos-core", .host = .macos, .lane = .secondary, .selection = .{ .before = "run-test-eval" } },
     .{ .name = "macos-eval", .host = .macos, .lane = .secondary, .selection = .{ .from = "run-test-eval", .to = "run-test-eval" } },
-    .{ .name = "macos-harness", .host = .macos, .lane = .secondary, .selection = .{ .after = "run-test-eval" } },
+    .{ .name = "macos-harness", .host = .macos, .lane = .secondary, .selection = .{ .after = "run-test-eval", .before = strategy_differential_job } },
+    .{ .name = "macos-strategy", .host = .macos, .lane = .secondary, .selection = .{ .from = strategy_differential_job } },
     .{ .name = "windows-core", .host = .windows, .lane = .secondary, .selection = .{ .to = last_module_test_job } },
     .{ .name = "windows-zig", .host = .windows, .lane = .secondary, .selection = .{ .after = last_module_test_job, .before = "run-test-eval" } },
     .{ .name = "windows-eval", .host = .windows, .lane = .secondary, .selection = .{ .from = "run-test-eval", .to = "run-test-eval" } },
     .{ .name = "windows-simd", .host = .windows, .lane = .secondary, .selection = .{ .from = "run-test-simd-differential", .to = "run-test-eval-host-effects" } },
-    .{ .name = "windows-harness", .host = .windows, .lane = .secondary, .selection = .{ .after = "run-test-eval-host-effects" } },
+    .{ .name = "windows-harness", .host = .windows, .lane = .secondary, .selection = .{ .after = "run-test-eval-host-effects", .before = strategy_differential_job } },
+    .{ .name = "windows-strategy", .host = .windows, .lane = .secondary, .selection = .{ .from = strategy_differential_job } },
 };
 
 fn shardByName(name: []const u8) ?Shard {
@@ -219,6 +226,9 @@ const zig_test_suite_jobs = zig_test_suite_jobs: {
 /// The Windows lanes split right after the module tests.
 const last_module_test_job = module_test_jobs[module_test_jobs.len - 1].name;
 
+/// The job every host runs as its own shard (see `shards`).
+const strategy_differential_job = "run-test-strategy-differential";
+
 const jobs = [_]Job{
     // `build.zig` keeps build work behind `build-ci`, and MiniCI checks it: a
     // job that runs a compile step it does not list in `expected_compiles`
@@ -283,7 +293,6 @@ const jobs = [_]Job{
     // limit; this catches growth before the website's nightly bump does.
     .{ .name = "run-check-echo-wasm-size", .placement = .primary_host },
     .{ .name = "run-test-eval-host-effects", .kind = .harness },
-    .{ .name = "run-test-strategy-differential", .kind = .harness },
     .{ .name = "run-test-playground", .kind = .harness },
     .{ .name = "run-test-cli", .kind = .harness },
     .{ .name = "run-test-serialization-sizes" },
@@ -293,6 +302,8 @@ const jobs = [_]Job{
     .{ .name = "run-test-dylib" },
     .{ .name = "run-test-archive" },
     .{ .name = "run-coverage-parser" },
+    // Last, so that the `*-strategy` shards select it alone (see `shards`).
+    .{ .name = strategy_differential_job, .kind = .harness },
 };
 
 fn printUsageError(comptime message: []const u8, arg: []const u8) void {
