@@ -1288,7 +1288,10 @@ pub fn retainReachable(allocator: Allocator, set: *const Set, catalog: *const Pr
         artifacts[written] = artifact;
         written += 1;
     }
-    return .{ .arena = arena, .artifacts = artifacts, .source_files = try a.dupe([32]u8, set.source_files) };
+    // Allocated before the arena is copied into the result, which must own
+    // every node.
+    const source_files = try a.dupe([32]u8, set.source_files);
+    return .{ .arena = arena, .artifacts = artifacts, .source_files = source_files };
 }
 
 /// A program's machine code in its one layout: every artifact of the code
@@ -2592,6 +2595,8 @@ test "an image keeps only the code its roots reach" {
             testProc(4, "\x04\x04\x04\x04", &.{}, &.{}, &.{}, &.{}),
             .{ .kind = .{ .rc_helper = "roc__rc_decref_x" }, .code = "\xeb\x00\xc3", .entry = 2, .frame = null, .refs = &.{}, .relocations = &.{}, .data = &.{} },
         },
+        // The kept set owns its copy of the file table too.
+        .source_files = &.{@as([32]u8, @splat(1))},
     };
     var aliases = std.StringHashMap([]const u8).init(allocator);
     defer aliases.deinit();
