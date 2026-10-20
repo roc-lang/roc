@@ -787,16 +787,31 @@ pub const CoffWriter = struct {
         }
     };
 
-    /// Name bytes for a section header: short names inline, longer ones as
-    /// a "/offset" reference into the string table.
+    /// Name bytes for a section header: short names inline, longer ones as a
+    /// reference into the string table. The reference is "/" and the decimal
+    /// offset when that fits in the 8-byte field, and otherwise "//" and the
+    /// offset as six big-endian base64 digits, which covers every u32 offset.
     fn sectionName(self: *Self, name: []const u8) Allocator.Error![8]u8 {
         var bytes: [8]u8 = std.mem.zeroes([8]u8);
         if (name.len <= 8) {
             @memcpy(bytes[0..name.len], name);
             return bytes;
         }
-        const offset = try self.addString(name);
-        _ = std.fmt.bufPrint(&bytes, "/{d}", .{offset}) catch unreachable;
+        var offset = try self.addString(name);
+        if (offset <= 9_999_999) {
+            bytes[0] = '/';
+            _ = std.fmt.printInt(bytes[1..], offset, 10, .lower, .{});
+            return bytes;
+        }
+        const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        bytes[0] = '/';
+        bytes[1] = '/';
+        var i: usize = bytes.len;
+        while (i > 2) {
+            i -= 1;
+            bytes[i] = alphabet[offset % 64];
+            offset /= 64;
+        }
         return bytes;
     }
 
@@ -1373,6 +1388,47 @@ test "coff with long symbol name" {
     // Should produce valid COFF
     const machine = std.mem.readInt(u16, output.items[0..2], .little);
     try std.testing.expectEqual(COFF.IMAGE_FILE_MACHINE_AMD64, machine);
+}
+
+test "coff long section names stay addressable once the string table exceeds 9,999,999 bytes" {
+    // repro for https://github.com/roc-lang/roc/issues/12453
+    // A long section name must be encoded so that its 8-byte header field refers
+    // back to the name in the string table, even when "/<decimal offset>" no
+    // longer fits in 8 bytes; PE/COFF uses "//<base64 offset>" for that case.
+    var writer = try CoffWriter.init(std.testing.allocator, .x86_64);
+    defer writer.deinit();
+
+    const filler = try std.testing.allocator.alloc(u8, 10_000_000);
+    defer std.testing.allocator.free(filler);
+    @memset(filler, 'a');
+    _ = try writer.addString(filler);
+
+    const name = ".debug_abbrev";
+    const bytes = try writer.sectionName(name);
+
+    try std.testing.expectEqual(@as(u8, '/'), bytes[0]);
+    const offset: usize = if (bytes[1] == '/') blk: {
+        var value: usize = 0;
+        for (bytes[2..]) |c| {
+            const digit: usize = switch (c) {
+                'A'...'Z' => c - 'A',
+                'a'...'z' => c - 'a' + 26,
+                '0'...'9' => c - '0' + 52,
+                '+' => 62,
+                '/' => 63,
+                else => return error.TestUnexpectedResult,
+            };
+            value = value * 64 + digit;
+        }
+        break :blk value;
+    } else blk: {
+        const digits = std.mem.sliceTo(bytes[1..], 0);
+        break :blk try std.fmt.parseInt(usize, digits, 10);
+    };
+
+    try std.testing.expect(offset + name.len < writer.strtab.items.len);
+    try std.testing.expectEqualSlices(u8, name, writer.strtab.items[offset..][0..name.len]);
+    try std.testing.expectEqual(@as(u8, 0), writer.strtab.items[offset + name.len]);
 }
 
 test "coff aarch64" {
