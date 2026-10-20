@@ -14206,8 +14206,9 @@ fn runGlueRuntimeCase(
     // Zig 0.17.0 mislowers a natural C ABI aggregate signature exercised by
     // layout-probe on arm64musl: after five integer arguments occupy x0-x4,
     // Zig passes the 16-byte-aligned Dec aggregate in x5/x6 instead of
-    // rounding up to the even pair x6/x7 as AAPCS64 requires. CGlue and
-    // RustGlue continue to exercise this signature on arm64musl.
+    // rounding up to the even pair x6/x7 as AAPCS64 requires
+    // (https://codeberg.org/ziglang/zig/issues/37341). CGlue and RustGlue
+    // continue to exercise this signature on arm64musl.
     // TODO #10392: Remove this skip after Roc uses a Zig version that lowers this signature correctly.
     if (native_target) |target| {
         if (runtime.language == .zig and std.mem.eql(u8, runtime.platform.name, "layout-probe")) {
