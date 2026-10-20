@@ -19891,7 +19891,9 @@ const EvidencePass = struct {
         const pairs = module_env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
         const copied_callable = self.pairForResolved(pairs, signature_root) orelse
             checkedArtifactInvariant("where-method-use record omitted its signature callable copy", .{});
-        if (self.types.resolveVar(copied_callable).var_ != fn_root) {
+        // Either callable may be written through a transparent alias, whose
+        // backing, not the alias view, is what the use relation unified.
+        if (self.types.resolveThroughAliases(copied_callable).var_ != self.types.resolveThroughAliases(fn_var).var_) {
             checkedArtifactInvariant("where-method-use callable copy did not resolve to its body constraint", .{});
         }
         if (self.types.resolveVar(candidate.constraint.fn_var).var_ == signature_root) return .independent_reuse_slot_nested;

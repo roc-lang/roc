@@ -87,6 +87,9 @@ const WasmLinking = @import("WasmLinking.zig");
 const WasmLayout = @import("WasmLayout.zig");
 const Storage = @import("Storage.zig");
 const CodeBuilder = @import("CodeBuilder.zig");
+const BodyArtifact = @import("BodyArtifact.zig");
+const task_waves = @import("../task_waves.zig");
+const tasks = base.post_check_task_executor;
 const BuiltinSignatures = @import("builtin_signatures.zig");
 const index_types = @import("index_types.zig");
 const Op = WasmModule.Op;
@@ -387,6 +390,23 @@ relocatable_object: bool = false,
 /// Whether final in-memory codegen should still emit relocation edges for
 /// static-data addresses so final DCE can trace data liveness explicitly.
 track_static_data_addresses: bool = false,
+/// The owner whose module and fixed tables a body worker reads, or null on
+/// the owner itself; see `tables()`.
+frozen: ?*const Self = null,
+/// Where a body worker records the module entities its body names, which
+/// only the owner creates; null on the owner.
+recorder: ?*BodyArtifact.Recorder = null,
+/// Executor that generates procedure and RC helper bodies. Without one,
+/// every body is generated inline on `sequential_lane` through the same
+/// callback.
+executor: ?tasks.Executor = null,
+/// The lane inline body generation uses, kept across waves like a worker's.
+sequential_lane: tasks.LaneState,
+/// Generated RC helper bodies waiting for the commit that reserves them, by
+/// cache key.
+helper_artifacts: std.AutoHashMap(u64, BodyArtifact.Artifact),
+/// What body generation did, for tests and timing reports.
+body_metrics: BodyMetrics = .{},
 pub fn init(
     allocator: Allocator,
     store: *const LirStore,
@@ -433,6 +453,8 @@ pub fn init(
         .active_stmt_generations = collections.DenseMap(u32, void).init(allocator),
         .stmt_generation_counts = collections.DenseMap(u32, u32).init(allocator),
         .precomputed_overflow_results = collections.DenseMap(u32, void).init(allocator),
+        .sequential_lane = tasks.LaneState.init(allocator),
+        .helper_artifacts = std.AutoHashMap(u64, BodyArtifact.Artifact).init(allocator),
     };
 }
 
@@ -528,6 +550,10 @@ pub fn deinit(self: *Self) void {
     self.active_stmt_generations.deinit();
     self.stmt_generation_counts.deinit();
     self.precomputed_overflow_results.deinit();
+    self.sequential_lane.deinit();
+    var helper_it = self.helper_artifacts.valueIterator();
+    while (helper_it.next()) |artifact| artifact.deinit();
+    self.helper_artifacts.deinit();
 }
 
 fn beginFunction(self: *Self, local_idx: LocalFunctionIndex) Allocator.Error!void {
@@ -593,24 +619,40 @@ fn emitI32Const(self: *Self, value: i32) Allocator.Error!void {
 /// table offset: LLD may reserve slot zero or place another object's elements
 /// first. The function-symbol relocation lets LLD write the exact final slot,
 /// relative to `__table_base` so the object stays linkable as a shared module.
+///
+/// `table_idx` may be a body worker's placeholder for a slot its owner has not
+/// created yet. Its operand is then deferred: the minimal immediate is
+/// inserted at commit, and the relocatable form's symbol is the placeholder.
 fn emitFunctionTableIndexConst(self: *Self, table_idx: u32) Allocator.Error!void {
-    if (!self.relocatable_object) return self.emitI32Const(@intCast(table_idx));
-
-    if (table_idx >= self.module.table_func_indices.items.len) {
-        wasmInvariantFmt(
-            "WasmCodeGen invariant violated: table index {d} outside element segment of length {d}",
-            .{ table_idx, self.module.table_func_indices.items.len },
-        );
+    const deferred = CodeBuilder.deferredRef(table_idx);
+    if (!self.relocatable_object) {
+        const ref = deferred orelse return self.emitI32Const(@intCast(table_idx));
+        try self.currentCode().append(self.allocator, Op.i32_const);
+        return self.currentBody().addDeferred(self.allocator, .{
+            .code_pos = @intCast(self.currentCode().items.len),
+            .ref = ref,
+            .form = .compact_signed,
+        });
     }
-    const function_idx = self.module.table_func_indices.items[table_idx];
-    const symbol = self.function_symbols_by_index.get(function_idx) orelse {
-        wasmInvariantFmt(
-            "WasmCodeGen invariant violated: table function {d} has no relocation symbol",
-            .{function_idx},
-        );
+
+    const symbol = if (deferred != null) SymbolIndex.fromRaw(table_idx) else symbol: {
+        const module = &self.tables().module;
+        if (table_idx >= module.table_func_indices.items.len) {
+            wasmInvariantFmt(
+                "WasmCodeGen invariant violated: table index {d} outside element segment of length {d}",
+                .{ table_idx, module.table_func_indices.items.len },
+            );
+        }
+        const function_idx = module.table_func_indices.items[table_idx];
+        break :symbol self.tables().function_symbols_by_index.get(function_idx) orelse {
+            wasmInvariantFmt(
+                "WasmCodeGen invariant violated: table function {d} has no relocation symbol",
+                .{function_idx},
+            );
+        };
     };
 
-    try self.emitPicBaseGet(try self.picBaseSymbol(&self.table_base_symbol, "__table_base"));
+    try self.emitPicBaseGet(try self.picBaseSymbol(.table));
     try self.currentCode().append(self.allocator, Op.i32_const);
     const relocation_offset: u32 = @intCast(self.currentCode().items.len);
     try self.currentBody().addIndexRelocation(
@@ -1110,13 +1152,17 @@ fn emitCryptoLowLevel(self: *Self, op: CryptoLowLevel, args: anytype) Allocator.
 fn builtinInternalRcHelperTableIndex(self: *Self, helper_key: RcHelperKey) Allocator.Error!u32 {
     const helper_plan = self.getLayoutStore().rcHelperPlan(helper_key);
     if (helper_plan == .noop) return 0;
+    return self.rcHelperTableIndex(helper_key);
+}
 
+/// The table slot of the RC helper for `helper_key`, compiling the helper and
+/// adding its slot on first use. Table entries serve runtime-checked list ops
+/// and erased-callable on_drop slots, which belong to no RC statement and make
+/// no thread-confinement claim, so they always use the atomic helper family.
+fn rcHelperTableIndex(self: *Self, helper_key: RcHelperKey) Allocator.Error!u32 {
     const cache_key = rcHelperCacheKey(helper_key, .atomic);
+    if (self.recorder) |recorder| return recorder.placeholder(.{ .rc_helper_table = cache_key });
     if (self.rc_helper_table_indices.get(cache_key)) |table_idx| return table_idx;
-
-    // Table entries serve runtime-checked list ops, whose RC is internal to
-    // the op and makes no thread-confinement claim, so they always use the
-    // atomic helper family.
     const func_idx = try self.compileBuiltinInternalRcHelper(helper_key, .atomic);
     const table_idx = self.module.addTableElement(func_idx) catch return error.OutOfMemory;
     try self.rc_helper_table_indices.put(cache_key, table_idx);
@@ -1214,10 +1260,11 @@ fn boxyListElementDescForLocals(
 
 fn functionIndexForSymbol(self: *const Self, symbol: SymbolIndex) u32 {
     const raw_symbol = symbol.raw();
-    if (raw_symbol >= self.module.linking.symbol_table.items.len) {
+    const symbol_table = self.tables().module.linking.symbol_table.items;
+    if (raw_symbol >= symbol_table.len) {
         wasmInvariantFmt("WASM/codegen invariant violated: symbol index {d} outside linking symbol table", .{raw_symbol});
     }
-    const sym = self.module.linking.symbol_table.items[raw_symbol];
+    const sym = symbol_table[raw_symbol];
     if (sym.kind != .function) {
         wasmInvariantFmt("WASM/codegen invariant violated: symbol index {d} is not a function symbol", .{raw_symbol});
     }
@@ -1225,6 +1272,7 @@ fn functionIndexForSymbol(self: *const Self, symbol: SymbolIndex) u32 {
 }
 
 fn recordFunctionSymbol(self: *Self, func_idx: u32, symbol: SymbolIndex) Allocator.Error!void {
+    self.assertOwner();
     const gop = self.function_symbols_by_index.getOrPut(func_idx) catch return error.OutOfMemory;
     if (gop.found_existing) {
         wasmInvariantFmt(
@@ -1293,10 +1341,15 @@ fn addLirProcFunctionSymbol(
     );
 }
 
-/// Resolve the undefined PIC base global `name`, importing it on first use.
+/// Resolve the undefined PIC base global, importing it on first use.
 /// A merged module may already import it (LLVM PIC objects do), so prefer that
 /// symbol over adding a second import of the same global.
-fn picBaseSymbol(self: *Self, cache: *?SymbolIndex, name: []const u8) Allocator.Error!SymbolIndex {
+fn picBaseSymbol(self: *Self, which: BodyArtifact.PicBase) Allocator.Error!SymbolIndex {
+    if (self.recorder) |recorder| return SymbolIndex.fromRaw(try recorder.placeholder(.{ .pic_base = which }));
+    const cache, const name = switch (which) {
+        .memory => .{ &self.memory_base_symbol, "__memory_base" },
+        .table => .{ &self.table_base_symbol, "__table_base" },
+    };
     if (cache.*) |symbol| return symbol;
     const symbol = if (self.module.findSymbolByNameAndKind(name, .global)) |existing|
         SymbolIndex.fromRaw(existing)
@@ -1321,7 +1374,7 @@ fn emitPicBaseGet(self: *Self, symbol: SymbolIndex) Allocator.Error!void {
 /// linker place this object's segments anywhere. A static final link defines
 /// `__memory_base` as zero, so the sequence still yields the absolute address.
 fn emitPicDataAddress(self: *Self, symbol: SymbolIndex, addend: i32) Allocator.Error!void {
-    try self.emitPicBaseGet(try self.picBaseSymbol(&self.memory_base_symbol, "__memory_base"));
+    try self.emitPicBaseGet(try self.picBaseSymbol(.memory));
     self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
     const code_pos: u32 = @intCast(self.currentCode().items.len);
     try self.currentBody().addOffsetRelocation(
@@ -1335,10 +1388,22 @@ fn emitPicDataAddress(self: *Self, symbol: SymbolIndex, addend: i32) Allocator.E
     self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
 }
 
+/// `address` may be a body worker's placeholder for a segment its owner has
+/// not created yet, whose symbol is the placeholder and whose offset is
+/// unknown; the operand holding that offset is then deferred.
 fn emitDataAddressConst(self: *Self, address: DataAddress, addend: i32) Allocator.Error!void {
     if (self.relocatable_object) return self.emitPicDataAddress(address.symbol, addend);
 
     self.currentCode().append(self.allocator, Op.i32_const) catch return error.OutOfMemory;
+    if (CodeBuilder.deferredRef(address.symbol.raw())) |ref| {
+        const code_pos: u32 = @intCast(self.currentCode().items.len);
+        if (self.track_static_data_addresses) {
+            try self.currentBody().addOffsetRelocation(self.allocator, .memory_addr_sleb, code_pos, address.symbol, addend);
+            WasmModule.appendPaddedI32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory;
+            return self.currentBody().addDeferred(self.allocator, .{ .code_pos = code_pos, .ref = ref, .addend = addend, .form = .padded_signed });
+        }
+        return self.currentBody().addDeferred(self.allocator, .{ .code_pos = code_pos, .ref = ref, .addend = addend, .form = .compact_signed });
+    }
     const absolute: i32 = @intCast(@as(i64, @intCast(address.offset)) + @as(i64, addend));
     if (self.track_static_data_addresses) {
         // Final in-memory codegen already knows the address; the relocation
@@ -1359,6 +1424,7 @@ fn emitDataAddressConst(self: *Self, address: DataAddress, addend: i32) Allocato
 
 fn staticDataSymbol(self: *Self, id: LIR.StaticDataId) Allocator.Error!SymbolIndex {
     const raw_id: u32 = @backingInt(id);
+    if (self.recorder) |recorder| return SymbolIndex.fromRaw(try recorder.placeholder(.{ .static_data = raw_id }));
     if (self.static_data_symbols.get(raw_id)) |symbol| return symbol;
 
     const symbol_name = try lir.Program.staticDataSymbolName(self.allocator, id);
@@ -1413,6 +1479,7 @@ fn emitCallIndirect(self: *Self, type_idx: u32) Allocator.Error!void {
 }
 
 fn allocStaticDataName(self: *Self, prefix: []const u8) Allocator.Error![]const u8 {
+    self.assertOwner();
     const name = std.fmt.allocPrint(
         self.allocator,
         "{s}.{d}",
@@ -1433,6 +1500,7 @@ fn addStaticDataSymbol(
     symbol_offset: u32,
     symbol_size: u32,
 ) Allocator.Error!DataAddress {
+    self.assertOwner();
     const segment_index: u32 = @intCast(self.module.data_segments.items.len);
     const segment_offset = self.module.addDataSegmentWithInfo(data, align_bytes, segment_name, 0) catch return error.OutOfMemory;
     const symbol = self.module.addDataSymbol(
@@ -1525,7 +1593,7 @@ pub fn flushPendingBodies(self: *Self) Allocator.Error!void {
 }
 
 fn localFunctionIndexFromGlobal(self: *const Self, global_func_idx: u32) LocalFunctionIndex {
-    return index_types.functionToLocal(FunctionIndex.fromRaw(global_func_idx), self.module.importCount());
+    return index_types.functionToLocal(FunctionIndex.fromRaw(global_func_idx), self.tables().module.importCount());
 }
 
 /// Register the shared wasm types used by indirect calls and enable the table.
@@ -2649,7 +2717,7 @@ fn emitRawRcHelperCallByKey(
     // This is only reached while emitting a compiled helper's body, where every
     // nested child helper slot has already been reserved by the compile driver, so
     // resolve the target from the cache instead of (re-)entering compilation.
-    const helper_func_idx = self.rcHelperFuncIdx(helper_key, atomicity);
+    const helper_func_idx = try self.rcHelperFuncIdx(helper_key, atomicity);
     try self.emitLocalGet(value_ptr_local);
     switch (helper_key.op) {
         .incref => {
@@ -2665,7 +2733,8 @@ fn emitRawRcHelperCallByKey(
 }
 
 /// Look up a previously-reserved RC helper's global function index.
-fn rcHelperFuncIdx(self: *Self, helper_key: RcHelperKey, atomicity: RcAtomicity) u32 {
+fn rcHelperFuncIdx(self: *Self, helper_key: RcHelperKey, atomicity: RcAtomicity) Allocator.Error!u32 {
+    if (self.recorder) |recorder| return recorder.placeholder(.{ .reserved_rc_helper = rcHelperCacheKey(helper_key, atomicity) });
     return self.rc_helper_funcs.get(rcHelperCacheKey(helper_key, atomicity)) orelse {
         if (builtin.mode == .debug) {
             base.invariant(
@@ -2886,7 +2955,7 @@ fn rcPlanNeedsCompiledHelper(helper_plan: RcHelperPlan) bool {
 /// Append, in body-emission order, the child helper keys called inside the body of
 /// the helper for `helper_plan`. Mirrors `generateBuiltinInternalRcHelperBody`'s
 /// child-helper call sites so the reservation pre-order matches on-demand compilation.
-fn appendRcHelperChildKeys(self: *Self, helper_plan: RcHelperPlan, out: *std.ArrayList(RcHelperKey), oa: Allocator) Allocator.Error!void {
+fn appendRcHelperChildKeys(self: *const Self, helper_plan: RcHelperPlan, out: *std.ArrayList(RcHelperKey), oa: Allocator) Allocator.Error!void {
     const ls = self.getLayoutStore();
     switch (helper_plan) {
         // list_incref's body increments the allocation in place; no child call.
@@ -2939,6 +3008,7 @@ fn rcHelperParamTypes(op: layout.RcOp, buf: *[builtins.rc_callback_abi.max_param
 /// Reserve a module function slot for an RC helper (no body emitted yet), caching
 /// its global function index. Returns the reserved index.
 fn reserveRcHelperFunc(self: *Self, helper_key: RcHelperKey, atomicity: RcAtomicity) Allocator.Error!u32 {
+    self.assertOwner();
     const helper_plan = self.getLayoutStore().rcHelperPlan(helper_key);
     if (helper_plan == .noop) {
         if (builtin.mode == .debug) {
@@ -2971,10 +3041,13 @@ fn reserveRcHelperFunc(self: *Self, helper_key: RcHelperKey, atomicity: RcAtomic
 /// needs a compiled body—the same pre-order in which on-demand compilation would
 /// assign function indices, and the `rc_helper_funcs` cache doubles as the visited
 /// set so runtime-recursive (self-referential) helpers terminate. Then each newly
-/// reserved helper's body is emitted; because every child slot is already reserved,
-/// body emission resolves child references from the cache without re-entering
-/// compilation. Both phases are driven by explicit heap-backed work stacks.
+/// reserved helper's generated body is committed, in reservation order; because
+/// every child slot is already reserved, each commit resolves its child calls
+/// from the cache. Helper bodies are generated before any commit that can reach
+/// them (`generateHelperBodies`). Both phases are driven by explicit heap-backed
+/// work stacks.
 fn compileBuiltinInternalRcHelper(self: *Self, helper_key: RcHelperKey, atomicity: RcAtomicity) Allocator.Error!u32 {
+    if (self.recorder) |recorder| return recorder.placeholder(.{ .rc_helper = rcHelperCacheKey(helper_key, atomicity) });
     if (self.rc_helper_funcs.get(rcHelperCacheKey(helper_key, atomicity))) |func_idx| {
         return func_idx;
     }
@@ -3016,9 +3089,15 @@ fn compileBuiltinInternalRcHelper(self: *Self, helper_key: RcHelperKey, atomicit
         }
     }
 
-    // Emit each reserved helper body. Child references resolve from the cache.
+    // Commit each reserved helper body. Child references resolve from the cache.
     for (to_emit.items) |key| {
-        try self.emitRcHelperBody(key, atomicity);
+        const cache_key = rcHelperCacheKey(key, atomicity);
+        var artifact = (self.helper_artifacts.fetchRemove(cache_key) orelse wasmInvariantFmt(
+            "WASM/codegen invariant violated: RC helper {d} was committed before its body was generated",
+            .{cache_key},
+        )).value;
+        defer artifact.deinit();
+        try self.commitBody(self.localFunctionIndexFromGlobal(self.rc_helper_funcs.get(cache_key).?), &artifact);
     }
 
     return root_func_idx;
@@ -3027,6 +3106,8 @@ fn compileBuiltinInternalRcHelper(self: *Self, helper_key: RcHelperKey, atomicit
 /// Compile the exact atomic helper functions named by static-data
 /// relocations and place their callable addresses in the Wasm table.
 pub fn compileStaticDataRcHelpers(self: *Self, helpers: []const RcHelperKey) Allocator.Error!void {
+    var roots: std.ArrayList(u64) = .empty;
+    defer roots.deinit(self.allocator);
     for (helpers) |helper_key| {
         if (self.getLayoutStore().rcHelperPlan(helper_key) == .noop) {
             if (builtin.mode == .debug) {
@@ -3037,20 +3118,17 @@ pub fn compileStaticDataRcHelpers(self: *Self, helpers: []const RcHelperKey) All
             }
             unreachable;
         }
-        const cache_key = rcHelperCacheKey(helper_key, .atomic);
-        if (self.rc_helper_table_indices.contains(cache_key)) continue;
-        const func_idx = try self.compileBuiltinInternalRcHelper(helper_key, .atomic);
-        const table_idx = self.module.addTableElement(func_idx) catch return error.OutOfMemory;
-        try self.rc_helper_table_indices.put(cache_key, table_idx);
+        try roots.append(self.allocator, rcHelperCacheKey(helper_key, .atomic));
     }
+    try self.generateHelperBodies(roots.items);
+    for (helpers) |helper_key| _ = try self.rcHelperTableIndex(helper_key);
+    self.assertHelperBodiesCommitted();
 }
 
-/// Emit the body of an already-reserved RC helper function. Child helper references
-/// resolve from `rc_helper_funcs` (reserved up front), so this never recurses.
-fn emitRcHelperBody(self: *Self, helper_key: RcHelperKey, atomicity: RcAtomicity) Allocator.Error!void {
-    const func_idx = self.rc_helper_funcs.get(rcHelperCacheKey(helper_key, atomicity)).?;
-    const defined_local = self.localFunctionIndexFromGlobal(func_idx);
-
+/// Emit the body of an RC helper function at `defined_local`. Its child
+/// helper calls name helpers its closure reservation already placed, so this
+/// never recurses.
+fn emitRcHelperBody(self: *Self, helper_key: RcHelperKey, atomicity: RcAtomicity, defined_local: LocalFunctionIndex) Allocator.Error!void {
     var param_buf: [builtins.rc_callback_abi.max_params]ValType = undefined;
     const param_types = rcHelperParamTypes(helper_key.op, &param_buf);
 
@@ -5661,6 +5739,7 @@ fn emitConversion(self: *Self, source: ValType, target: ValType) Allocator.Error
 }
 
 fn internFuncType(self: *Self, params: []const ValType, results: []const ValType) Allocator.Error!u32 {
+    self.assertOwner();
     if (self.cpu_level == .v1) for ([_][]const ValType{ params, results }) |types| {
         for (types) |vt| if (vt == .v128) wasmInvariantFmt("WASM/codegen invariant violated: v128 function type declared for WebAssembly 1.0", .{});
     };
@@ -5708,12 +5787,320 @@ pub fn compileAllProcSpecs(self: *Self, proc_specs: []const LirProcSpec) Allocat
         }
         try self.generateBoxyDictProcThunk(proc_id, proc);
     }
-    // Pass 2: Compile proc bodies.
-    for (proc_specs, 0..) |proc, i| {
-        if (proc.is_static_initializer) continue;
-        try self.compileProcSpecBody(@fromBackingInt(@intCast(@as(u32, @intCast(i)))), proc);
-    }
+    // Pass 2: Generate proc bodies, committing them in spec-id order.
+    try self.compileProcBodies(proc_specs);
     try self.compileTailDrivers();
+}
+
+/// Procedure and RC helper bodies a wave generates at once.
+const body_wave_capacity = 32;
+
+/// Counters for one module's body generation.
+pub const BodyMetrics = struct {
+    /// Includes the submissions of a wave that failed.
+    tasks_submitted: u64 = 0,
+    procedures_generated: u64 = 0,
+    helpers_generated: u64 = 0,
+    /// The most procedure bodies one wave generated.
+    peak_inflight_procedures: u64 = 0,
+    /// The most RC helper bodies one wave generated.
+    peak_inflight_helpers: u64 = 0,
+};
+
+/// One body a worker generates: a procedure's, or an RC helper's by cache key.
+const BodyUnit = union(enum) {
+    proc: LIR.LirProcSpecId,
+    rc_helper: u64,
+};
+
+const BodyJob = struct {
+    owner: *const Self,
+    unit: BodyUnit,
+    artifact: ?BodyArtifact.Artifact = null,
+    oom: bool = false,
+
+    pub fn skipped(_: *const BodyJob) bool {
+        return false;
+    }
+
+    pub fn execute(context: *anyopaque, worker: tasks.Worker) ?*anyopaque {
+        const self: *BodyJob = @ptrCast(@alignCast(context));
+        self.artifact = self.owner.generateBody(self.unit, worker) catch |err| switch (err) {
+            error.OutOfMemory => {
+                self.oom = true;
+                return self;
+            },
+        };
+        return self;
+    }
+};
+
+fn deinitJobArtifacts(jobs: []BodyJob) void {
+    for (jobs) |*job| {
+        if (job.artifact) |*artifact| artifact.deinit();
+    }
+}
+
+/// Run one wave of body jobs on the executor, or inline without one.
+fn runBodyWave(self: *Self, jobs: []BodyJob, kind: std.meta.Tag(BodyUnit)) Allocator.Error!void {
+    var admission: task_waves.Admission = .{ .submitted = self.body_metrics.tasks_submitted };
+    defer {
+        self.body_metrics.tasks_submitted = admission.submitted;
+        const peak = switch (kind) {
+            .proc => &self.body_metrics.peak_inflight_procedures,
+            .rc_helper => &self.body_metrics.peak_inflight_helpers,
+        };
+        peak.* = @max(peak.*, admission.peak);
+    }
+    try task_waves.execute(BodyJob, self.allocator, jobs, self.executor, &self.sequential_lane, &admission);
+    switch (kind) {
+        .proc => self.body_metrics.procedures_generated +|= jobs.len,
+        .rc_helper => self.body_metrics.helpers_generated +|= jobs.len,
+    }
+}
+
+/// Generate every non-static-initializer procedure body in bounded waves.
+/// After each wave, the helper bodies its commits can create are generated,
+/// then the wave's procedures commit in spec-id order, which fixes every
+/// lazily created entity's index independently of worker count and timing.
+fn compileProcBodies(self: *Self, proc_specs: []const LirProcSpec) Allocator.Error!void {
+    var roots: std.ArrayList(u64) = .empty;
+    defer roots.deinit(self.allocator);
+    var cursor: usize = 0;
+    while (cursor < proc_specs.len) {
+        var jobs: [body_wave_capacity]BodyJob = undefined;
+        var count: usize = 0;
+        defer deinitJobArtifacts(jobs[0..count]);
+        while (cursor < proc_specs.len and count < body_wave_capacity) : (cursor += 1) {
+            if (proc_specs[cursor].is_static_initializer) continue;
+            jobs[count] = .{ .owner = self, .unit = .{ .proc = @fromBackingInt(@intCast(@as(u32, @intCast(cursor)))) } };
+            count += 1;
+        }
+        try self.runBodyWave(jobs[0..count], .proc);
+        roots.clearRetainingCapacity();
+        for (jobs[0..count]) |*job| try appendNamedHelpers(self.allocator, job.artifact.?.entities, &roots);
+        try self.generateHelperBodies(roots.items);
+        for (jobs[0..count]) |*job| {
+            const func_idx = self.registered_procs.get(@backingInt(job.unit.proc)) orelse unreachable;
+            try self.commitBody(self.localFunctionIndexFromGlobal(func_idx), &job.artifact.?);
+        }
+        self.assertHelperBodiesCommitted();
+    }
+}
+
+/// Append the cache key of every RC helper `entities` can make a commit create.
+fn appendNamedHelpers(allocator: Allocator, entities: []const BodyArtifact.Entity, roots: *std.ArrayList(u64)) Allocator.Error!void {
+    for (entities) |entity| switch (entity) {
+        .rc_helper, .rc_helper_table => |cache_key| try roots.append(allocator, cache_key),
+        .reserved_rc_helper, .capture_drop_table, .static_str, .static_data, .message, .pic_base => {},
+    };
+}
+
+/// Generate, into `helper_artifacts`, the body of every RC helper that the
+/// module does not have yet and that committing bodies naming the `roots`
+/// helpers can create: each root, the child helpers its closure reservation
+/// reaches, and the helpers those bodies name in turn, until none is left.
+fn generateHelperBodies(self: *Self, roots: []const u64) Allocator.Error!void {
+    var queue: std.ArrayList(u64) = .empty;
+    defer queue.deinit(self.allocator);
+    var queued = std.AutoHashMap(u64, void).init(self.allocator);
+    defer queued.deinit();
+    var named: std.ArrayList(u64) = .empty;
+    defer named.deinit(self.allocator);
+    for (roots) |cache_key| try self.queueHelperClosure(cache_key, &queue, &queued);
+    var cursor: usize = 0;
+    while (cursor < queue.items.len) {
+        var jobs: [body_wave_capacity]BodyJob = undefined;
+        var count: usize = 0;
+        defer deinitJobArtifacts(jobs[0..count]);
+        while (cursor < queue.items.len and count < body_wave_capacity) : (cursor += 1) {
+            jobs[count] = .{ .owner = self, .unit = .{ .rc_helper = queue.items[cursor] } };
+            count += 1;
+        }
+        try self.runBodyWave(jobs[0..count], .rc_helper);
+        for (jobs[0..count]) |*job| {
+            named.clearRetainingCapacity();
+            try appendNamedHelpers(self.allocator, job.artifact.?.entities, &named);
+            for (named.items) |cache_key| try self.queueHelperClosure(cache_key, &queue, &queued);
+            try self.helper_artifacts.putNoClobber(job.unit.rc_helper, job.artifact.?);
+            job.artifact = null;
+        }
+    }
+}
+
+/// Queue `cache_key`'s helper and every child its closure reservation
+/// (`compileBuiltinInternalRcHelper`) reaches, skipping helpers the module
+/// already has.
+fn queueHelperClosure(self: *const Self, cache_key: u64, queue: *std.ArrayList(u64), queued: *std.AutoHashMap(u64, void)) Allocator.Error!void {
+    var stack: std.ArrayList(u64) = .empty;
+    defer stack.deinit(self.allocator);
+    var children: std.ArrayList(RcHelperKey) = .empty;
+    defer children.deinit(self.allocator);
+    try stack.append(self.allocator, cache_key);
+    while (stack.pop()) |key| {
+        if (self.rc_helper_funcs.contains(key)) continue;
+        if ((try queued.getOrPut(key)).found_existing) continue;
+        try queue.append(self.allocator, key);
+        const helper = decodeRcHelperCacheKey(key);
+        children.clearRetainingCapacity();
+        try self.appendRcHelperChildKeys(self.getLayoutStore().rcHelperPlan(helper.key), &children, self.allocator);
+        for (children.items) |child| {
+            if (!rcPlanNeedsCompiledHelper(self.getLayoutStore().rcHelperPlan(child))) continue;
+            try stack.append(self.allocator, rcHelperCacheKey(child, helper.atomicity));
+        }
+    }
+}
+
+fn assertHelperBodiesCommitted(self: *const Self) void {
+    if (self.helper_artifacts.count() != 0) {
+        wasmInvariantFmt("WASM/codegen invariant violated: {d} generated RC helper bodies were never committed", .{self.helper_artifacts.count()});
+    }
+}
+
+/// Generate one body on a worker against this owner's fixed tables.
+fn generateBody(self: *const Self, unit: BodyUnit, worker: tasks.Worker) Allocator.Error!BodyArtifact.Artifact {
+    const storage = try laneStorage(worker);
+    var recorder = BodyArtifact.Recorder.init(worker.scratch);
+    defer recorder.deinit();
+    var body_worker = self.bodyWorker(worker.scratch, &recorder);
+    // The lane's binding column outlives each body; see `Storage`.
+    std.mem.swap(Storage, &body_worker.storage, storage);
+    defer {
+        std.mem.swap(Storage, &body_worker.storage, storage);
+        body_worker.deinit();
+    }
+    const local = switch (unit) {
+        .proc => |proc_id| local: {
+            try body_worker.compileProcSpecBody(proc_id, self.store.getProcSpec(proc_id));
+            break :local self.localFunctionIndexFromGlobal(self.registered_procs.get(@backingInt(proc_id)) orelse unreachable);
+        },
+        .rc_helper => |cache_key| local: {
+            const helper = decodeRcHelperCacheKey(cache_key);
+            const local = LocalFunctionIndex.fromRaw(0);
+            try body_worker.emitRcHelperBody(helper.key, helper.atomicity, local);
+            break :local local;
+        },
+    };
+    return BodyArtifact.Artifact.capture(worker.allocator, body_worker.pending_bodies.getPtr(local).?, &recorder);
+}
+
+const LaneStorageKey = struct {
+    var value: u8 = 0;
+};
+
+/// The binding column this lane lends every body it generates.
+fn laneStorage(worker: tasks.Worker) Allocator.Error!*Storage {
+    const key: *const anyopaque = @ptrCast(&LaneStorageKey.value);
+    if (worker.lane_state.get(key)) |opaque_storage| return @ptrCast(@alignCast(opaque_storage));
+    const storage = try worker.allocator.create(Storage);
+    errdefer worker.allocator.destroy(storage);
+    storage.* = Storage.init(worker.allocator);
+    errdefer storage.deinit();
+    try worker.lane_state.put(key, storage, destroyLaneStorage);
+    return storage;
+}
+
+fn destroyLaneStorage(opaque_storage: *anyopaque) void {
+    const storage: *Storage = @ptrCast(@alignCast(opaque_storage));
+    const allocator = storage.allocator;
+    storage.deinit();
+    allocator.destroy(storage);
+}
+
+/// A body worker: private per-function emission state on `allocator`, the
+/// owner's fixed scalar configuration, and read-only access to the owner's
+/// module and tables through `tables()`. It records every entity it would
+/// otherwise create in `recorder`.
+fn bodyWorker(self: *const Self, allocator: Allocator, recorder: *BodyArtifact.Recorder) Self {
+    var worker = Self.init(allocator, self.store, self.layout_store, self.erased_arg_desc_offsets, self.erased_arg_desc_params, self.boxy_worker_procs, self.cpu_level);
+    worker.frozen = self;
+    worker.recorder = recorder;
+    worker.external_calls = self.external_calls;
+    worker.runtime_symbol_targets = self.runtime_symbol_targets;
+    worker.on_drop_type_idx = self.on_drop_type_idx;
+    worker.indirect_call_types_registered = self.indirect_call_types_registered;
+    worker.proc_arg_counts_offset = self.proc_arg_counts_offset;
+    worker.tail_area = self.tail_area;
+    worker.stack_pointer_symbol = self.stack_pointer_symbol;
+    worker.indirect_table_symbol = self.indirect_table_symbol;
+    worker.relocatable_object = self.relocatable_object;
+    worker.track_static_data_addresses = self.track_static_data_addresses;
+    return worker;
+}
+
+/// The module and the tables fixed before any body is generated. A body
+/// worker reads its owner's, which no one writes while workers run.
+fn tables(self: *const Self) *const Self {
+    return self.frozen orelse self;
+}
+
+/// Creating a module entity is the owner's alone.
+fn assertOwner(self: *const Self) void {
+    std.debug.assert(self.frozen == null);
+}
+
+const DecodedRcHelper = struct { key: RcHelperKey, atomicity: RcAtomicity };
+
+fn decodeRcHelperCacheKey(cache_key: u64) DecodedRcHelper {
+    return .{
+        .key = RcHelperKey.decode(cache_key & 0x3_ffff_ffff),
+        .atomicity = @fromBackingInt(@as(u1, @intCast((cache_key >> 34) & 1))),
+    };
+}
+
+/// Create, in list order, each entity `artifact` names that the module does
+/// not have yet, then place its body at `local` with those entities filled in.
+fn commitBody(self: *Self, local: LocalFunctionIndex, artifact: *const BodyArtifact.Artifact) Allocator.Error!void {
+    self.assertOwner();
+    const resolved = try self.allocator.alloc(CodeBuilder.Resolved, artifact.entities.len);
+    defer self.allocator.free(resolved);
+    for (artifact.entities, resolved) |entity, *out| out.* = try self.materializeEntity(entity);
+    var body = try artifact.body.resolveDeferred(self.allocator, resolved);
+    errdefer body.deinit(self.allocator);
+    const gop = try self.pending_bodies.getOrPut(local);
+    if (gop.found_existing) {
+        wasmInvariantFmt("WasmCodeGen invariant violated: duplicate body for local function {d}", .{local.raw()});
+    }
+    gop.value_ptr.* = body;
+}
+
+/// The entity, created now if this is the first commit that names it, through
+/// the same path a body emitted against the module would have created it.
+fn materializeEntity(self: *Self, entity: BodyArtifact.Entity) Allocator.Error!CodeBuilder.Resolved {
+    return switch (entity) {
+        .rc_helper => |cache_key| blk: {
+            const helper = decodeRcHelperCacheKey(cache_key);
+            break :blk self.resolvedFunction(try self.compileBuiltinInternalRcHelper(helper.key, helper.atomicity));
+        },
+        .reserved_rc_helper => |cache_key| blk: {
+            const helper = decodeRcHelperCacheKey(cache_key);
+            break :blk self.resolvedFunction(try self.rcHelperFuncIdx(helper.key, helper.atomicity));
+        },
+        .rc_helper_table => |cache_key| self.resolvedTableSlot(try self.rcHelperTableIndex(decodeRcHelperCacheKey(cache_key).key)),
+        .capture_drop_table => |key| self.resolvedTableSlot(try self.boxyCaptureDropTableIndex(
+            @fromBackingInt(@intCast(key >> 32)),
+            @truncate(key),
+        )),
+        .static_str => |backing| resolvedData(try self.staticStrDataOffset(@fromBackingInt(backing))),
+        .static_data => |id| .{ .value = 0, .symbol = try self.staticDataSymbol(@fromBackingInt(id)) },
+        .message => |bytes| resolvedData(try self.messageDataAddress(bytes)),
+        .pic_base => |which| .{ .value = 0, .symbol = try self.picBaseSymbol(which) },
+    };
+}
+
+fn resolvedFunction(self: *const Self, func_idx: u32) CodeBuilder.Resolved {
+    return .{ .value = func_idx, .symbol = self.function_symbols_by_index.get(func_idx) orelse wasmInvariantFmt(
+        "WASM/codegen invariant violated: created function {d} has no symbol",
+        .{func_idx},
+    ) };
+}
+
+fn resolvedTableSlot(self: *const Self, table_idx: u32) CodeBuilder.Resolved {
+    return .{ .value = table_idx, .symbol = self.resolvedFunction(self.module.table_func_indices.items[table_idx]).symbol };
+}
+
+fn resolvedData(address: DataAddress) CodeBuilder.Resolved {
+    return .{ .value = address.offset, .symbol = address.symbol };
 }
 
 /// The function that finishes an ordinary call into a tail group: while a
@@ -5737,12 +6124,17 @@ fn isTailGroupMember(proc: LirProcSpec) bool {
         proc.body != null and !proc.is_static_initializer;
 }
 
-fn tailDriverFor(self: *Self, proc: LirProcSpec) Allocator.Error!?*TailDriver {
+fn tailDriverFor(self: *const Self, proc: LirProcSpec) Allocator.Error!?*const TailDriver {
+    const index = try self.tailDriverIndex(proc) orelse return null;
+    return &self.tables().tail_drivers.items[index];
+}
+
+fn tailDriverIndex(self: *const Self, proc: LirProcSpec) Allocator.Error!?usize {
     if (!isTailGroupMember(proc)) return null;
     const result = try self.resolveValType(proc.ret_layout);
-    for (self.tail_drivers.items) |*driver| {
+    for (self.tables().tail_drivers.items, 0..) |driver, index| {
         if (driver.group == proc.tail_group.? and driver.result == result and
-            driver.returns_desc == (proc.runtime_ret_desc != null)) return driver;
+            driver.returns_desc == (proc.runtime_ret_desc != null)) return index;
     }
     return null;
 }
@@ -5769,7 +6161,7 @@ fn registerTailDrivers(self: *Self, proc_specs: []const LirProcSpec) Allocator.E
     for (proc_specs, 0..) |proc, i| {
         if (!isTailGroupMember(proc)) continue;
         area_size = @max(area_size, try self.tailArgOffsets(proc, null));
-        const driver = try self.tailDriverFor(proc) orelse blk: {
+        const driver = if (try self.tailDriverIndex(proc)) |index| &self.tail_drivers.items[index] else blk: {
             const result = try self.resolveValType(proc.ret_layout);
             const returns_desc = proc.runtime_ret_desc != null;
             const type_idx = if (returns_desc)
@@ -6172,7 +6564,7 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
     const key: u32 = @backingInt(proc_id);
 
     // Get the pre-registered func_idx (must exist—registerProcSpec runs in pass 1)
-    const func_idx = self.registered_procs.get(key) orelse unreachable;
+    const func_idx = self.tables().registered_procs.get(key) orelse unreachable;
 
     const args = self.store.getLocalSpan(proc.args);
     const ret_vt = try self.resolveValType(proc.ret_layout);
@@ -6235,7 +6627,7 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
         // The runtime names the callable it invokes by the function pointer
         // callable values hold, which is this procedure's table index. A
         // procedure without one is never the callee of an erased call.
-        if (self.proc_table_indices.get(key)) |table_idx|
+        if (self.tables().proc_table_indices.get(key)) |table_idx|
             try self.emitFunctionTableIndexConst(table_idx)
         else
             try self.emitNullPtr();
@@ -6279,7 +6671,7 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
     } else if (proc.c_abi_entry) {
         // The procedure's code is a linked object-cache entry; this body
         // forwards to its C-ABI entry.
-        const target = self.linked_entry_targets.get(@backingInt(proc_id)) orelse wasmInvariantFmt(
+        const target = self.tables().linked_entry_targets.get(@backingInt(proc_id)) orelse wasmInvariantFmt(
             "WASM/codegen invariant violated: linked proc {d} has no registered C-ABI entry",
             .{@backingInt(proc_id)},
         );
@@ -6348,14 +6740,7 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
     self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
     self.endFunction();
 
-    // Propagate stack memory usage to outer scope
-    const proc_used_stack_memory = self.uses_stack_memory;
-
-    // Restore state
     self.restoreState(saved);
-
-    // If the proc used stack memory, the outer scope needs to know
-    if (proc_used_stack_memory) self.uses_stack_memory = true;
 }
 
 fn requireProcBody(proc_id: LIR.LirProcSpecId, proc: LirProcSpec) LIR.CFStmtId {
@@ -6526,7 +6911,7 @@ pub fn registerBoxySymbolTargets(self: *Self) HostedSymbolError!void {
 }
 
 fn emitBoxyCall(self: *Self, name: []const u8) Allocator.Error!void {
-    const target = self.boxy_symbol_targets.get(name) orelse wasmInvariantFmt(
+    const target = self.tables().boxy_symbol_targets.get(name) orelse wasmInvariantFmt(
         "WASM/codegen invariant violated: Boxy symbol {s} was not registered before proc compilation",
         .{name},
     );
@@ -6624,7 +7009,7 @@ fn bindBoxyOutDesc(self: *Self, target: ProcLocalId, out_desc_ptr: u32) Allocato
 }
 
 fn emitBoxyRuntimeInit(self: *Self) Allocator.Error!void {
-    if (self.boxy_symbol_targets.count() == 0) return;
+    if (self.tables().boxy_symbol_targets.count() == 0) return;
     // Generated code reaches the host through linker symbols, so the runtime
     // takes no ops table from it.
     try self.emitNullPtr();
@@ -6633,7 +7018,7 @@ fn emitBoxyRuntimeInit(self: *Self) Allocator.Error!void {
     for (self.boxy_worker_procs) |proc_id| {
         const proc = self.store.getProcSpec(proc_id);
         const proc_index = @backingInt(proc_id);
-        const table_idx = self.boxy_dict_thunk_table_indices.get(proc_index) orelse wasmInvariantFmt(
+        const table_idx = self.tables().boxy_dict_thunk_table_indices.get(proc_index) orelse wasmInvariantFmt(
             "Boxy worker proc {d} had no generated dispatch thunk",
             .{proc_index},
         );
@@ -6650,7 +7035,7 @@ fn emitBoxyRuntimeInit(self: *Self) Allocator.Error!void {
     // registered here: no packing statement builds those values.
     for (self.store.getProcSpecs(), 0..) |proc_spec, index| {
         const capture_layout = proc_spec.static_erased_capture_layout orelse continue;
-        const table_idx = self.proc_table_indices.get(@intCast(index)) orelse wasmInvariantFmt(
+        const table_idx = self.tables().proc_table_indices.get(@intCast(index)) orelse wasmInvariantFmt(
             "WasmCodeGen invariant violated: frozen erased worker {d} missing table index",
             .{index},
         );
@@ -6958,7 +7343,7 @@ pub fn registerLinkedEntryTargets(self: *Self, proc_specs: []const LIR.LirProcSp
 /// The linker symbol a hosted procedure's calls go to, registered before
 /// proc compilation by registerHostedSymbolTargets.
 fn hostedSymbolTarget(self: *const Self, hosted: LIR.HostedProc) HostedSymbolTarget {
-    return self.hosted_symbol_targets.get(hosted.dispatch_index) orelse {
+    return self.tables().hosted_symbol_targets.get(hosted.dispatch_index) orelse {
         if (builtin.mode == .debug) {
             base.invariant(
                 "WASM/codegen invariant violated: hosted dispatch index {d} has no registered symbol target",
@@ -7987,7 +8372,7 @@ fn generateLiteral(self: *Self, target: ProcLocalId, value: LIR.LiteralValue) Al
         .bytes_literal => |bytes_idx| try self.generateBytesLiteral(bytes_idx),
         .proc_ref => |proc_id| {
             const key: u32 = @backingInt(proc_id);
-            const table_idx = self.proc_table_indices.get(key) orelse {
+            const table_idx = self.tables().proc_table_indices.get(key) orelse {
                 wasmInvariantFmt(
                     "WasmCodeGen invariant violated: proc_ref target {d} missing table index",
                     .{@backingInt(proc_id)},
@@ -8085,16 +8470,7 @@ fn emitRuntimeDiagnosticCall(self: *Self, args_slot: u32, diagnostic: RuntimeDia
 }
 
 fn emitRocStaticStringCall(self: *Self, diagnostic: RuntimeDiagnostic, msg: []const u8) Allocator.Error!void {
-    const segment_name = try self.allocStaticDataName(".rodata.roc_msg");
-    const symbol_name = try self.allocStaticDataName("roc.msg");
-    const msg_address = try self.addStaticDataSymbol(
-        msg,
-        1,
-        segment_name,
-        symbol_name,
-        0,
-        @intCast(msg.len),
-    );
+    const msg_address = try self.messageDataAddress(msg);
     const args_slot = try self.allocStackMemory(8, 4);
 
     try self.emitFpOffset(args_slot);
@@ -8415,7 +8791,7 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
             );
         }
     }
-    const func_idx = self.registered_procs.get(proc_key) orelse {
+    const func_idx = self.tables().registered_procs.get(proc_key) orelse {
         if (builtin.mode == .debug) {
             base.invariant("generateCall: unresolved proc call target {d}", .{@backingInt(c.proc)});
         }
@@ -8679,7 +9055,7 @@ fn generatePackedErasedFn(self: *Self, c: anytype) Allocator.Error!void {
         }
     }
     const proc_key: u32 = @backingInt(c.proc);
-    const table_idx = self.proc_table_indices.get(proc_key) orelse {
+    const table_idx = self.tables().proc_table_indices.get(proc_key) orelse {
         wasmInvariantFmt(
             "WasmCodeGen invariant violated: packed erased fn target {d} missing table index",
             .{@backingInt(c.proc)},
@@ -8790,6 +9166,7 @@ fn boxyCaptureDropKey(capture_layout: layout.Idx, desc_field_offset: u32) u64 {
 
 fn boxyCaptureDropTableIndex(self: *Self, capture_layout: layout.Idx, desc_field_offset: u32) Allocator.Error!u32 {
     const key = boxyCaptureDropKey(capture_layout, desc_field_offset);
+    if (self.recorder) |recorder| return recorder.placeholder(.{ .capture_drop_table = key });
     if (self.boxy_capture_drop_table_indices.get(key)) |table_idx| return table_idx;
 
     var param_buf: [builtins.rc_callback_abi.max_params]ValType = undefined;
@@ -8850,25 +9227,26 @@ fn erasedCallableOnDropTableIndex(self: *Self, on_drop: LIR.ErasedCallableOnDrop
         .none => null,
         .rc_helper => |helper_key| blk: {
             if (self.getLayoutStore().rcHelperPlan(helper_key) == .noop) break :blk null;
-            // The on_drop slot is filled at closure creation, which is not an
-            // RC statement and makes no thread-confinement claim, so it always
-            // uses the atomic helper family (atomic is always sound).
-            const cache_key = rcHelperCacheKey(helper_key, .atomic);
-            if (self.rc_helper_table_indices.get(cache_key)) |table_idx| break :blk table_idx;
-            const func_idx = try self.compileBuiltinInternalRcHelper(helper_key, .atomic);
-            const table_idx = self.module.addTableElement(func_idx) catch return error.OutOfMemory;
-            try self.rc_helper_table_indices.put(cache_key, table_idx);
-            break :blk table_idx;
+            break :blk try self.rcHelperTableIndex(helper_key);
         },
         .boxy_capture => |drop| try self.boxyCaptureDropTableIndex(drop.capture_layout, drop.desc_field_offset),
     };
 }
 
 /// Emit a call instruction.
+///
+/// `func_idx` may be a body worker's placeholder for a function its owner
+/// has not created yet. Every such function gets a symbol when it is created,
+/// so the call is relocatable and its padded operand is deferred.
 fn emitCall(self: *Self, func_idx: u32) Allocator.Error!void {
+    if (CodeBuilder.deferredRef(func_idx)) |ref| {
+        const code_pos: u32 = @intCast(self.currentCode().items.len + 1);
+        try self.currentBody().emitRelocatableCall(self.allocator, SymbolIndex.fromRaw(func_idx), 0);
+        return self.currentBody().addDeferred(self.allocator, .{ .code_pos = code_pos, .ref = ref, .form = .padded_unsigned });
+    }
     // Keep direct-call relocations whenever a target symbol exists so final-link
     // DCE can trace generated call edges after surgical linking.
-    if (self.function_symbols_by_index.get(func_idx)) |symbol| {
+    if (self.tables().function_symbols_by_index.get(func_idx)) |symbol| {
         try self.currentBody().emitRelocatableCall(self.allocator, symbol, func_idx);
         return;
     }
@@ -12715,8 +13093,24 @@ fn generateBytesLiteral(self: *Self, literal: LIR.ListLiteral) Allocator.Error!v
     }
 }
 
+/// A fresh read-only segment holding a runtime diagnostic message.
+fn messageDataAddress(self: *Self, msg: []const u8) Allocator.Error!DataAddress {
+    if (self.recorder) |recorder| return .{ .offset = 0, .symbol = SymbolIndex.fromRaw(try recorder.placeholder(.{ .message = msg })) };
+    const segment_name = try self.allocStaticDataName(".rodata.roc_msg");
+    const symbol_name = try self.allocStaticDataName("roc.msg");
+    return self.addStaticDataSymbol(
+        msg,
+        1,
+        segment_name,
+        symbol_name,
+        0,
+        @intCast(msg.len),
+    );
+}
+
 fn staticStrDataOffset(self: *Self, backing_idx: base.StringLiteral.Idx) Allocator.Error!DataAddress {
     const key: u32 = @backingInt(backing_idx);
+    if (self.recorder) |recorder| return .{ .offset = 0, .symbol = SymbolIndex.fromRaw(try recorder.placeholder(.{ .static_str = key })) };
     if (self.static_str_offsets.get(key)) |offset| return offset;
 
     const backing_bytes = self.store.getString(backing_idx);
@@ -16720,7 +17114,7 @@ test "wasm backend fuses overflow predicate with matching wrapping result" {
         .value = .{ .i64_literal = .{ .value = 40, .layout_idx = .u64 } },
         .next = rhs_literal,
     } }, .test_fixture);
-    _ = try store.addProcSpec(.{
+    const proc_id = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(1),
         .args = LIR.LocalSpan.empty(),
@@ -16728,10 +17122,161 @@ test "wasm backend fuses overflow predicate with matching wrapping result" {
         .ret_layout = .u64,
     }, .none);
 
+    // Emit the body directly so its emission state stays observable.
     var codegen = Self.init(allocator, &store, &layouts, &.{}, &.{}, &.{}, .default);
     defer codegen.deinit();
-    try codegen.compileAllProcSpecs(store.getProcSpecs());
+    try codegen.registerProcSpec(proc_id, store.getProcSpec(proc_id));
+    try codegen.compileProcSpecBody(proc_id, store.getProcSpec(proc_id));
     try std.testing.expectEqual(@as(usize, 1), codegen.precomputed_overflow_results.count());
+}
+
+/// Runs at most `lanes` callbacks at once and completes the newest first, so
+/// a wave's completions arrive in reverse submission order.
+const ReversingTestExecutor = struct {
+    allocator: Allocator,
+    lane: tasks.LaneState,
+    lanes: usize,
+    pending: [4]tasks.Task = undefined,
+    len: usize = 0,
+
+    fn executor(self: *ReversingTestExecutor) tasks.Executor {
+        return .{ .context = self, .worker_count = self.lanes, .beginFn = begin, .submitFn = submit, .receiveFn = receive, .endFn = end };
+    }
+    fn begin(_: *anyopaque) void {}
+    fn submit(context: *anyopaque, task: tasks.Task) Allocator.Error!void {
+        const self: *ReversingTestExecutor = @ptrCast(@alignCast(context));
+        self.pending[self.len] = task;
+        self.len += 1;
+    }
+    fn receive(context: *anyopaque) tasks.Completion {
+        const self: *ReversingTestExecutor = @ptrCast(@alignCast(context));
+        self.len -= 1;
+        const task = self.pending[self.len];
+        var scratch = std.heap.ArenaAllocator.init(self.allocator);
+        defer scratch.deinit();
+        const value = task.run(task.context, .{ .id = 0, .allocator = self.allocator, .scratch = scratch.allocator(), .lane_state = &self.lane });
+        return .{ .id = task.id, .worker_id = 0, .value = value };
+    }
+    fn end(context: *anyopaque) void {
+        const self: *ReversingTestExecutor = @ptrCast(@alignCast(context));
+        std.debug.assert(self.len == 0);
+    }
+};
+
+const CommitOrderMode = enum { final_tracked, final_untracked, relocatable };
+
+/// Everything a module's index spaces and code depend on, as one byte string.
+fn moduleLayoutDigest(allocator: Allocator, module: *const WasmModule) Allocator.Error![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    try out.appendSlice(allocator, module.code_bytes.items);
+    var hasher = std.hash.Wyhash.init(0);
+    std.hash.autoHashStrat(&hasher, module.function_offsets.items, .DeepRecursive);
+    std.hash.autoHashStrat(&hasher, module.func_type_indices.items, .DeepRecursive);
+    std.hash.autoHashStrat(&hasher, module.func_types.items, .DeepRecursive);
+    std.hash.autoHashStrat(&hasher, module.table_func_indices.items, .DeepRecursive);
+    for (module.data_segments.items) |segment| {
+        std.hash.autoHashStrat(&hasher, segment.offset, .Deep);
+        std.hash.autoHashStrat(&hasher, segment.data, .Deep);
+        std.hash.autoHashStrat(&hasher, segment.name, .Deep);
+    }
+    std.hash.autoHashStrat(&hasher, module.linking.symbol_table.items, .DeepRecursive);
+    std.hash.autoHashStrat(&hasher, module.reloc_code.entries.items, .DeepRecursive);
+    std.hash.autoHashStrat(&hasher, module.global_imports.items, .DeepRecursive);
+    try out.appendSlice(allocator, std.mem.asBytes(&hasher.final()));
+    return out.toOwnedSlice(allocator);
+}
+
+fn commitOrderModule(
+    allocator: Allocator,
+    store: *const LirStore,
+    layouts: *const LayoutStore,
+    mode: CommitOrderMode,
+    executor: ?tasks.Executor,
+    metrics: *BodyMetrics,
+) (Allocator.Error || HostedSymbolError)![]u8 {
+    var codegen = Self.init(allocator, store, layouts, &.{}, &.{}, &.{}, .default);
+    defer codegen.deinit();
+    codegen.executor = executor;
+    switch (mode) {
+        .final_tracked => codegen.configureStaticDataAddressTracking(),
+        .final_untracked => {},
+        .relocatable => {
+            codegen.module.addMemoryImport();
+            codegen.configureTableReloc(try codegen.module.addTableImportWithSymbol());
+            codegen.configureStackPointerReloc(try codegen.module.addStackPointerImportWithSymbol());
+            codegen.configureRelocatableObject();
+        },
+    }
+    try codegen.registerHostedSymbolTargets(store.getProcSpecs());
+    try codegen.registerIndirectCallTypes();
+    try codegen.compileAllProcSpecs(store.getProcSpecs());
+    try codegen.flushPendingBodies();
+    metrics.* = codegen.body_metrics;
+    return moduleLayoutDigest(allocator, &codegen.module);
+}
+
+test "wasm bodies that share lazily created entities commit in spec order at every completion order" {
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u32);
+    defer layouts.deinit();
+    const strs = try layouts.insertList(.str);
+    const nested = try layouts.insertList(strs);
+    const boxed = try layouts.insertBox(nested);
+    const tuple = try layouts.putTuple(&.{ layouts.getLayout(strs), layouts.getLayout(boxed), layouts.getLayout(nested) });
+    const tuples = try layouts.insertList(tuple);
+    const shared_text = "a string backing long enough to need its own data segment";
+    const own_text = "another backing that only one procedure names";
+    const shared = try store.insertString(shared_text);
+    const own = try store.insertString(own_text);
+
+    // Each procedure releases its argument, whose helper closure overlaps the
+    // others', and returns a string literal; the literals share one backing.
+    const arg_layouts = [_]layout.Idx{ tuples, nested, tuple, strs, boxed, tuples, nested, tuple, strs };
+    for (arg_layouts, 0..) |arg_layout, i| {
+        const arg = try store.addLocal(.{ .layout_idx = arg_layout });
+        const text = try store.addLocal(.{ .layout_idx = .str });
+        const backing: base.StringLiteral.Idx, const len: u32 = if (i == 4) .{ own, own_text.len } else .{ shared, shared_text.len };
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = text } }, .test_fixture);
+        const literal = try store.addCFStmt(.{ .assign_literal = .{
+            .target = text,
+            .value = .{ .str_literal = .{ .backing = backing, .offset = 0, .len = len } },
+            .next = ret,
+        } }, .test_fixture);
+        const release = try store.addCFStmt(.{ .decref = .{
+            .value = arg,
+            .rc = try store.addRcHelperRef(LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = arg_layout })),
+            .next = literal,
+        } }, .test_fixture);
+        _ = try store.addProcSpec(.{
+            .name = store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(@intCast(i + 1)),
+            .args = try store.addLocalSpan(&.{arg}),
+            .body = release,
+            .ret_layout = .str,
+        }, .none);
+    }
+
+    for ([_]CommitOrderMode{ .final_tracked, .final_untracked, .relocatable }) |mode| {
+        var serial_metrics: BodyMetrics = .{};
+        const expected = try commitOrderModule(allocator, &store, &layouts, mode, null, &serial_metrics);
+        defer allocator.free(expected);
+        try std.testing.expectEqual(@as(u64, arg_layouts.len), serial_metrics.procedures_generated);
+        try std.testing.expect(serial_metrics.helpers_generated > 1);
+        try std.testing.expect(serial_metrics.peak_inflight_helpers > 1);
+        for ([_]usize{ 1, 2, 4 }) |lanes| {
+            var executor = ReversingTestExecutor{ .allocator = allocator, .lane = tasks.LaneState.init(allocator), .lanes = lanes };
+            defer executor.lane.deinit();
+            var metrics: BodyMetrics = .{};
+            const actual = try commitOrderModule(allocator, &store, &layouts, mode, executor.executor(), &metrics);
+            defer allocator.free(actual);
+            try std.testing.expectEqualSlices(u8, expected, actual);
+            try std.testing.expectEqual(serial_metrics.helpers_generated, metrics.helpers_generated);
+            try std.testing.expectEqual(serial_metrics.tasks_submitted, metrics.tasks_submitted);
+        }
+    }
 }
 
 test "U128 to I64 try conversion bounds the low word by I64's highest value" {
@@ -17028,7 +17573,9 @@ fn procCompileBindingRowsVisited(allocator: Allocator, proc_count: usize) Alloca
     var codegen = Self.init(allocator, &store, &layouts, &.{}, &.{}, &.{}, .default);
     defer codegen.deinit();
     try codegen.compileAllProcSpecs(store.getProcSpecs());
-    return codegen.storage.rows_visited;
+    // Inline generation lends every body the sequential lane's column.
+    const lane_storage: *Storage = @ptrCast(@alignCast(codegen.sequential_lane.get(@ptrCast(&LaneStorageKey.value)).?));
+    return lane_storage.rows_visited;
 }
 
 /// The instruction subset these fixtures emit, so a scan that meets anything

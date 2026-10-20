@@ -500,16 +500,16 @@ fn getReleaseTargetQuery(b: *std.Build, target: ResolvedTarget) std.Target.Query
 /// choice stands and `TypeDigestHasher` reports a missing feature at compile
 /// time.
 ///
-/// A Debug build for this machine's own x86_64 architecture and OS also gets
-/// the SHA extension (with the SSSE3 the rounds use) when this machine has
-/// it. Debug uses Zig's self-hosted x86_64 backend, which encodes only
-/// instructions in the target CPU's feature set, so without the feature such
-/// a build has no hardware rounds at all and computes every digest with the
-/// portable rounds (see `dispatches_at_runtime` in
-/// src/base/sha256.zig). The floor keeps Debug builds and test suites
-/// on hardware rounds where the CPU allows it; a machine without the
-/// extension gets the portable rounds, and every LLVM build stays at the
-/// architecture baseline and dispatches at runtime, like a released binary.
+/// A Debug build for an x86_64 target other than macOS also gets the SHA
+/// extension, with the SSSE3 the rounds use (`debugBuildsWithSha`). Debug uses
+/// Zig's self-hosted x86_64 backend, which encodes only instructions in the
+/// target CPU's feature set, so without the feature such a build has no
+/// hardware rounds at all. The feature is added to the generic x86-64 model,
+/// which the rounds read as a floor rather than a CPU (`x86_floor` in
+/// src/builtins/sha256.zig): the compiler's digests choose rounds with CPUID
+/// (`dispatches_at_runtime` in src/base/sha256.zig), so the build runs on
+/// CPUs without the extension, and every machine resolves the same target, so
+/// CI's shared build is a cache hit on every runner.
 fn withSha256Floor(b: *std.Build, target: ResolvedTarget, optimize: std.builtin.OptimizeMode) ResolvedTarget {
     var query = target.query;
     switch (query.cpu_model) {
@@ -517,7 +517,7 @@ fn withSha256Floor(b: *std.Build, target: ResolvedTarget, optimize: std.builtin.
         .native, .explicit => return target,
     }
     addSha256Floor(&query);
-    if (optimize == .debug and hostBuildsDebugWithSha(target)) {
+    if (optimize == .debug and debugBuildsWithSha(target)) {
         query.cpu_features_add.addFeature(@backingInt(std.Target.x86.Feature.sha));
         query.cpu_features_add.addFeature(@backingInt(std.Target.x86.Feature.ssse3));
     }
@@ -545,17 +545,13 @@ fn withoutSha256Floor(b: *std.Build, target: ResolvedTarget) ResolvedTarget {
     return b.resolveTargetQuery(query);
 }
 
-/// Whether `target` is this machine's own x86_64 architecture and OS and this
-/// machine's CPU has the SHA extension and SSSE3. `builtin.cpu` here is the
-/// CPU the build runner was compiled for, which Zig detects from the machine.
-/// x86_64 macOS never takes the floor: it computes digests with the portable
-/// rounds unless `-Dcpu` names its CPU (see `uses_software_rounds` in
-/// src/base/sha256.zig).
-fn hostBuildsDebugWithSha(target: ResolvedTarget) bool {
-    if (builtin.target.cpu.arch != .x86_64) return false;
-    if (target.result.cpu.arch != .x86_64 or target.result.os.tag != builtin.target.os.tag) return false;
-    if (target.result.os.tag == .macos) return false;
-    return builtin.cpu.hasAll(.x86, &.{ .sha, .ssse3 });
+/// Whether a Debug build for `target` gets the x86 SHA extension and SSSE3:
+/// every x86_64 target but macOS, whose Intel Macs compute digests with the
+/// portable rounds (`uses_software_rounds` in src/base/sha256.zig). The
+/// answer depends on the target alone, never on the machine running the
+/// build, so a build one machine makes for another resolves the same target.
+fn debugBuildsWithSha(target: ResolvedTarget) bool {
+    return target.result.cpu.arch == .x86_64 and target.result.os.tag != .macos;
 }
 
 /// The target for everything that is compiled to run on this machine during
@@ -594,8 +590,8 @@ fn hostToolTarget(b: *std.Build, optimize: OptimizeMode) ResolvedTarget {
 /// architecture baseline and the rounds are chosen for the CPU it runs on: at
 /// runtime by CPUID on every x86_64 target except macOS (see
 /// `dispatches_at_runtime` in src/base/sha256.zig), and always the
-/// portable rounds on x86_64 macOS (see `uses_software_rounds` there). Debug
-/// builds for this machine are the one exception, in `withSha256Floor`.
+/// portable rounds on x86_64 macOS (see `uses_software_rounds` there). x86_64
+/// Debug builds carry the extension as a floor, in `withSha256Floor`.
 fn addSha256Floor(query: *std.Target.Query) void {
     const arch = query.cpu_arch orelse builtin.target.cpu.arch;
     switch (roc_target.classifyCpuArch(arch)) {
@@ -1044,6 +1040,7 @@ fn createAndRunBuiltinCompiler(
             .{ .name = "roc_target", .module = roc_modules.roc_target },
             .{ .name = "static_data", .module = roc_modules.static_data },
             .{ .name = "sljmp", .module = roc_modules.sljmp },
+            .{ .name = "value_rules", .module = roc_modules.value_rules },
         },
     });
     // The interpreter's hosted-call trampoline is hand-written assembly; attach
@@ -1737,6 +1734,8 @@ pub fn build(b: *std.Build) void {
     const run_test_simd_differential_step = b.step("run-test-simd-differential", "Run the exhaustive integer-SIMD oracle corpus through every compiler consumer");
     const build_test_eval_host_effects_runner_step = b.step("build-test-eval-host-effects-runner", "Build runtime host-effects eval test runner");
     const run_test_eval_host_effects_step = b.step("run-test-eval-host-effects", "Run runtime host-effects eval tests across supported backends");
+    const build_test_strategy_differential_runner_step = b.step("build-test-strategy-differential-runner", "Build the cross-strategy differential harness");
+    const run_test_strategy_differential_step = b.step("run-test-strategy-differential", "Run every eval and host-effects program under both lowering strategies and require agreement");
     const build_playground_step = b.step("build-playground", "Build the WASM playground");
     const build_playground_wasm_archive_step = b.step("build-playground-wasm-archive", "Build playground.wasm and zstd-compress it under zig-out/lib/playground");
     const build_repl_wasm_step = b.step("build-repl-wasm", "Build the dedicated REPL WebAssembly module");
@@ -3031,6 +3030,35 @@ pub fn build(b: *std.Build) void {
         null,
         build_test_eval_host_effects_runner_step,
         run_test_eval_host_effects_step,
+        eval_host_effects_run_args,
+    );
+
+    const strategy_differential_exe = b.addExecutable(.{
+        .name = "strategy-differential-runner",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/eval/test/strategy_differential_runner.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    strategy_differential_exe.stack_size = stack_budget.roc_stack_size;
+    configureBackend(strategy_differential_exe, target);
+    roc_modules.addAll(strategy_differential_exe);
+    strategy_differential_exe.root_module.addImport("builtins", roc_modules.builtins);
+    strategy_differential_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    strategy_differential_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
+    strategy_differential_exe.root_module.addImport("test_harness", createTestHarnessModule(b, roc_modules));
+    strategy_differential_exe.root_module.addImport("simd_test_sources", simd_test_sources_module);
+    strategy_differential_exe.step.dependOn(&write_compiled_builtins.step);
+    llvm_support.add(strategy_differential_exe);
+    _ = install_and_run(
+        b,
+        no_bin,
+        strategy_differential_exe,
+        null,
+        build_test_strategy_differential_runner_step,
+        run_test_strategy_differential_step,
         eval_host_effects_run_args,
     );
 
@@ -4531,6 +4559,7 @@ pub fn build(b: *std.Build) void {
     build_ci_step.dependOn(build_test_lsp_integration_runner_step);
     build_ci_step.dependOn(build_test_eval_runner_step);
     build_ci_step.dependOn(build_test_eval_host_effects_runner_step);
+    build_ci_step.dependOn(build_test_strategy_differential_runner_step);
     build_ci_step.dependOn(build_web_step);
     // CI runs `run-test-repl-wasm` and `run-test-echo-wasm` on a shard after
     // MiniCI, so their native runners are built here with the modules.
@@ -5197,6 +5226,7 @@ fn buildBoxyRuntimeObject(
     boxy_eval_module.addImport("collections", roc_modules.collections);
     boxy_eval_module.addImport("builtins", roc_modules.builtins);
     boxy_eval_module.addImport("build_options", roc_modules.build_options);
+    boxy_eval_module.addImport("value_rules", roc_modules.value_rules);
 
     obj.root_module.addImport("base", roc_modules.base);
     obj.root_module.addImport("builtins", roc_modules.builtins);
