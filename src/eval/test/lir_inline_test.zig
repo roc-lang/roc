@@ -3284,7 +3284,7 @@ test "differently ordered source record rows produce normalized monotype rows" {
     for (type_view.types) |content| {
         const span = switch (content) {
             .record => |fields| fields,
-            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => continue,
+            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => continue,
         };
         const fields = type_view.fieldSpan(span);
         if (fields.len != 2) continue;

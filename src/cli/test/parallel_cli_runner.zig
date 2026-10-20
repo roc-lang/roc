@@ -7894,7 +7894,7 @@ fn procSymbols(allocator: Allocator, bytes: []const u8) Allocator.Error!std.Stri
     var symbols = std.StringHashMap(void).init(allocator);
     errdefer symbols.deinit();
     var index: usize = 0;
-    while (std.mem.indexOfPos(u8, bytes, index, prefix)) |start| {
+    while (std.mem.findPos(u8, bytes, index, prefix)) |start| {
         var end = start + prefix.len;
         while (end < bytes.len and std.ascii.isHex(bytes[end])) end += 1;
         if (end != start + prefix.len) try symbols.put(bytes[start..end], {});

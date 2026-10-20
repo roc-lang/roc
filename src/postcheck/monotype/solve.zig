@@ -5107,7 +5107,7 @@ pub const InstGraph = struct {
                         false;
                     if (!numeric_default and variable.row_default == null and variable.origin != .checked_variable) return false;
                 },
-                .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
+                .primitive, .empty_tag_union, .empty_record, .erased, .zst, .hole => {},
                 .list, .box => |child| try pending.append(self.allocator, child),
                 .tuple => |items| try pending.appendSlice(self.allocator, items),
                 .func => |function| {

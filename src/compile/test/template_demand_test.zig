@@ -9,25 +9,27 @@ const BuildEnv = @import("../compile_build.zig").BuildEnv;
 const CheckedArtifact = check.CheckedArtifact;
 const Demand = CheckedArtifact.SchemeVarDemand;
 
+fn setupFailed(err: anytype) error{TestUnexpectedResult} {
+    std.debug.print("building the test module failed: {s}\n", .{@errorName(err)});
+    return error.TestUnexpectedResult;
+}
+
 /// Check `source` as module `Demand.roc` and compare the demand vector of
 /// each named top-level function with its expected vector.
-fn expectDemands(source: []const u8, expected: []const struct { []const u8, []const Demand }) !void {
+fn expectDemands(source: []const u8, expected: []const struct { []const u8, []const Demand }) error{ TestUnexpectedResult, TestExpectedEqual, OutOfMemory }!void {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    try tmp.dir.writeFile(io, .{ .sub_path = "Demand.roc", .data = source });
-    const cwd = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    tmp.dir.writeFile(io, .{ .sub_path = "Demand.roc", .data = source }) catch |err| return setupFailed(err);
+    const cwd = tmp.dir.realPathFileAlloc(io, ".", gpa) catch |err| return setupFailed(err);
     defer gpa.free(cwd);
-    const path = try tmp.dir.realPathFileAlloc(io, "Demand.roc", gpa);
+    const path = tmp.dir.realPathFileAlloc(io, "Demand.roc", gpa) catch |err| return setupFailed(err);
     defer gpa.free(path);
-    var build = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    var build = BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io) catch |err| return setupFailed(err);
     defer build.deinit();
-    build.build(path) catch |err| {
-        std.debug.print("build failed: {s}\n", .{@errorName(err)});
-        return err;
-    };
-    const reports = try build.drainReports();
+    build.build(path) catch |err| return setupFailed(err);
+    const reports = build.drainReports() catch |err| return setupFailed(err);
     defer build.freeDrainedReports(reports);
     for (reports) |module_reports| for (module_reports.reports) |report| {
         if (std.mem.eql(u8, report.title, "Module Header Deprecated")) continue;

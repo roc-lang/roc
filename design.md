@@ -15318,8 +15318,8 @@ const MonoProgramView = struct {
 A checked procedure template's body asks for a definite amount of each
 quantified variable of its scheme, and Monotype specializes the template over
 only that much of each variable's substitution. `List.len` reads a length at a
-fixed offset whatever its element type is, so every program has one `List.len`
-specialization, not one per element type.
+fixed offset whatever its item type is, so every program has one `List.len`
+specialization, not one per item type.
 
 #### Demand
 
@@ -15333,8 +15333,10 @@ The demand of a variable is one of three values, the same scale
   returned, or refcounted, which needs only their layout.
 - `full`: anything else: a dispatch on the variable, equality or hashing, a
   literal, interpolation or inspection, iteration, any function type that
-  mentions the variable (lambda sets are program-specific), a variable used as
-  a row extension, and a variable the scheme's root type does not mention.
+  mentions the variable (lambda sets are program-specific), an argument of a
+  builtin whose representation follows its argument's structure (`FieldNames`,
+  `FieldName`, `ParseTagUnionSpec`, `Iter`, `Stream`), a variable used as a row
+  extension, and a variable the scheme's root type does not mention.
 
 Checking computes the demand vector of every template once, when the checked
 artifact is published (`TemplateDemandPass`), and stores it beside the
@@ -15348,7 +15350,7 @@ local one is an edge, and edges propagate to a fixed point, so recursion
 through any number of templates converges. A direct operand of a call or a
 low-level operation that reads a local materializes nothing; every other
 expression or pattern whose type mentions a variable demands its layout. A
-variable a parameter holds by value rather than as a `List` or `Box` element
+variable a parameter holds by value rather than as a `List` item or `Box` payload
 demands at least its layout, because it sizes the parameter. A body that is
 not a checked Roc body (an intrinsic, an entry wrapper, a hosted procedure, or
 an unimplemented declaration, whose crash body still returns at its declared
@@ -15358,9 +15360,15 @@ type) demands all of every variable.
 
 A request Monotype resolves at seal time (`resolveDeferredTemplateSpecs`)
 whose every use in the requesting body is a direct call is shaped by its
-template's demand (`demandShapedRequest`): a `none` slot becomes the hole type,
-a `layout` slot becomes the layout representative of its substitution
-(`layout_key.zig`), and a `full` slot keeps its type. The template's checked
+template's demand (`demandShapedRequest`): a `none` slot whose substitution is
+known to be sized becomes the hole type, a `layout` slot (or a `none` slot not
+known to be sized) becomes the layout representative of its substitution
+(`layout_key.zig`), and a `full` slot keeps its type. A hole stands only for
+sized items because a list or box of zero-sized items has a runtime
+representation of its own (`LayoutKey.knownSized`: a primitive, list, or box is
+sized, a struct is when one of its components is, a tag union is when it has
+two tags or a sized payload; a function, an erased callable, and a recursive
+type are not known to be). The template's checked
 root instantiated at that substitution is the request type, so the request's
 identity digest, its lookup, and its body all follow the shaped type, and two
 requests that agree on everything their body demands reuse one
@@ -15368,7 +15376,9 @@ specialization. A request is not shaped when a slot is a checking error, when
 its function is also used as a value (a value's type is the program's), when
 its identity depends on its lexical context or a codec contract, when it is a
 result-row widening adapter, or when the shaped signature would hold a
-function type. The last rule means no lambda set ever crosses a shaped call.
+function anywhere, a boxed erased callable included (`LayoutKey.holdsFunction`).
+The last rule means no lambda set, and no erased callable's member set, ever
+crosses a shaped call.
 
 The layout representative of a type drops what layout selection ignores: a
 record becomes the tuple of its fields in their row order, and a nominal type
@@ -15391,10 +15401,10 @@ lifting preserves the mark.
 The hole is a type of its own in Monotype, Monotype's instantiation graph,
 Lambda Solved, and Lambda Mono, and a layout of its own (`LayoutTag.hole`):
 zero-sized, never refcounted, equal only to itself. Analysis places it only
-as a `List` or `Box` element in a parameter type, so a hole-holding value is
-always a list or box header, which every element type shares. A list or box of
-holes is an ordinary list or box layout, distinct from the zero-sized-element
-forms, and `builtinListAbi`/`builtinBoxAbi` report no element for it.
+as a `List` item or `Box` payload in a parameter type, so a hole-holding value
+is always a list or box header, which every item type shares. A list or box of
+holes is an ordinary list or box layout, distinct from the zero-sized-item
+forms, and `builtinListAbi`/`builtinBoxAbi` report no item for it.
 
 `layout.Store.acceptsAtHoles` is the one relation later stages use where a
 value meets a hole: a layout accepts another when they are equal, when the
@@ -16938,10 +16948,11 @@ emit LIR.
 
 ### Layout-Keyed Builtin Procedures
 
-Monotype keys every specialization by its closed request type, and that stays
-true for Builtin templates: `List.len` requested at `List(Str)` and at
-`List(Point)` are two Monotype specializations, two lifted functions, and two
-Lambda Solved functions. For most Builtin templates the procedure they lower to
+Monotype keys every specialization by its closed request type, shaped by its
+template's demand (see "Specialization By Demand"): `List.len` requested at
+`List(Str)` and at `List(Point)` is one Monotype specialization, but a request
+that is not shaped, such as one that uses the template as a function value,
+keeps its full type. For most Builtin templates the procedure they lower to
 differs with the type. For a template whose body is one low-level operation over
 its parameters it need not: when that operation's lowering reads only the
 layouts of its operands and result, every request whose types commit the same

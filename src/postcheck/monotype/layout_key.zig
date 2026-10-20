@@ -18,7 +18,8 @@ const Type = @import("type.zig");
 
 const Allocator = std.mem.Allocator;
 const names = check.CheckedNames;
-const GuardedList = @import("collections").GuardedList;
+const collections = @import("collections");
+const GuardedList = collections.GuardedList;
 
 /// The layout representative of `root`, interned in `store`; null when a
 /// layout-only specialization cannot stand for it. That is when the type
@@ -32,7 +33,13 @@ pub fn layoutRepresentative(
     name_store: *const names.NameStore,
     root: Type.TypeId,
 ) Allocator.Error!?Type.TypeId {
-    var builder = Builder{ .allocator = allocator, .store = store, .name_store = name_store };
+    var builder = Builder{
+        .allocator = allocator,
+        .store = store,
+        .name_store = name_store,
+        .memo = collections.DenseMap(Type.TypeId, ?Type.TypeId).init(allocator),
+        .active = collections.DenseMap(Type.TypeId, void).init(allocator),
+    };
     defer builder.deinit();
     return builder.representative(root);
 }
@@ -46,15 +53,15 @@ pub fn layoutRepresentative(
 /// a recursive type, and a builtin whose representation follows its
 /// arguments.
 pub fn knownSized(allocator: Allocator, store: *const Type.Store, root: Type.TypeId) Allocator.Error!bool {
-    var visiting = std.AutoHashMapUnmanaged(Type.TypeId, void).empty;
-    defer visiting.deinit(allocator);
+    var visiting = collections.DenseMap(Type.TypeId, void).init(allocator);
+    defer visiting.deinit();
     var pending: std.ArrayList(Type.TypeId) = .empty;
     defer pending.deinit(allocator);
     // A type is sized when some one of its components is; walk components
     // until one decides it.
     try pending.append(allocator, root);
     while (pending.pop()) |ty| {
-        if ((try visiting.getOrPut(allocator, ty)).found_existing) continue;
+        if ((try visiting.getOrPut(ty)).found_existing) continue;
         switch (store.get(ty)) {
             .primitive, .list, .box => return true,
             // A boxed erased callable is a layout of its own, not a box.
@@ -90,13 +97,13 @@ pub fn knownSized(allocator: Allocator, store: *const Type.Store, root: Type.Typ
 /// Lambda solving relates the members of every callable a type holds, so a
 /// demand-shaped signature, whose call relates nothing, must hold none.
 pub fn holdsFunction(allocator: Allocator, store: *const Type.Store, root: Type.TypeId) Allocator.Error!bool {
-    var visited = std.AutoHashMapUnmanaged(Type.TypeId, void).empty;
-    defer visited.deinit(allocator);
+    var visited = collections.DenseMap(Type.TypeId, void).init(allocator);
+    defer visited.deinit();
     var pending: std.ArrayList(Type.TypeId) = .empty;
     defer pending.deinit(allocator);
     try pending.append(allocator, root);
     while (pending.pop()) |ty| {
-        if ((try visited.getOrPut(allocator, ty)).found_existing) continue;
+        if ((try visited.getOrPut(ty)).found_existing) continue;
         switch (store.get(ty)) {
             .func, .erased => return true,
             .primitive, .zst, .hole => {},
@@ -140,10 +147,10 @@ const Builder = struct {
     store: *Type.Store,
     name_store: *const names.NameStore,
     /// Each finished type's representative; null when it has none.
-    memo: std.AutoHashMapUnmanaged(Type.TypeId, ?Type.TypeId) = .empty,
+    memo: collections.DenseMap(Type.TypeId, ?Type.TypeId),
     /// Types whose components are being represented. Reaching one again is a
     /// cycle.
-    active: std.AutoHashMapUnmanaged(Type.TypeId, void) = .empty,
+    active: collections.DenseMap(Type.TypeId, void),
     frames: std.ArrayList(Frame) = .empty,
     scratch: std.ArrayList(Type.TypeId) = .empty,
     tag_scratch: std.ArrayList(Type.Store.TagInput) = .empty,
@@ -154,8 +161,8 @@ const Builder = struct {
     };
 
     fn deinit(self: *Builder) void {
-        self.memo.deinit(self.allocator);
-        self.active.deinit(self.allocator);
+        self.memo.deinit();
+        self.active.deinit();
         self.frames.deinit(self.allocator);
         self.scratch.deinit(self.allocator);
         self.tag_scratch.deinit(self.allocator);
@@ -173,7 +180,7 @@ const Builder = struct {
             if (!frame.expanded) {
                 if (self.active.contains(ty)) return null;
                 frame.expanded = true;
-                try self.active.put(self.allocator, ty, {});
+                try self.active.put(ty, {});
                 const before = self.frames.items.len;
                 try self.pushComponents(ty);
                 if (self.frames.items.len != before) continue;
@@ -181,7 +188,7 @@ const Builder = struct {
             _ = self.active.remove(ty);
             _ = self.frames.pop();
             const result = try self.finish(ty);
-            try self.memo.put(self.allocator, ty, result);
+            try self.memo.put(ty, result);
         }
         return self.memo.get(root).?;
     }

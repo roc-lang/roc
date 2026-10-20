@@ -28755,13 +28755,13 @@ const TypeVarMention = struct {
 const TypeVarMentions = struct {
     allocator: Allocator,
     checked_types: *const CheckedTypeStore,
-    memo: std.AutoHashMapUnmanaged(CheckedTypeId, artifact_serialize.Span) = .empty,
+    memo: collections.DenseMap(CheckedTypeId, artifact_serialize.Span),
     pool: std.ArrayList(TypeVarMention) = .empty,
     /// Walk state of one query: each (type, flags) pair is visited once, so a
     /// cyclic type terminates.
     pending: std.ArrayList(Step) = .empty,
     visited: std.AutoHashMapUnmanaged(Step, void) = .empty,
-    found: std.AutoArrayHashMapUnmanaged(CheckedTypeId, TypeVarMentionFlags) = .empty,
+    found: collections.DenseMap(CheckedTypeId, TypeVarMentionFlags),
 
     const Step = struct {
         ty: CheckedTypeId,
@@ -28769,11 +28769,11 @@ const TypeVarMentions = struct {
     };
 
     fn deinit(self: *TypeVarMentions) void {
-        self.memo.deinit(self.allocator);
+        self.memo.deinit();
         self.pool.deinit(self.allocator);
         self.pending.deinit(self.allocator);
         self.visited.deinit(self.allocator);
-        self.found.deinit(self.allocator);
+        self.found.deinit();
     }
 
     /// The variables `root` mentions, in ascending type-id order.
@@ -28828,7 +28828,7 @@ const TypeVarMentions = struct {
         while (it.next()) |entry| self.pool.appendAssumeCapacity(.{ .var_ty = entry.key_ptr.*, .flags = entry.value_ptr.* });
         const mentions = self.pool.items[start..];
         std.mem.sort(TypeVarMention, mentions, {}, lessThan);
-        try self.memo.put(self.allocator, root, .{ .start = @intCast(start), .len = @intCast(mentions.len) });
+        try self.memo.put(root, .{ .start = @intCast(start), .len = @intCast(mentions.len) });
         return mentions;
     }
 
@@ -28846,12 +28846,12 @@ const TypeVarMentions = struct {
                 ext_flags.row_extension = true;
                 try self.noteMention(ext, ext_flags);
             },
-            else => try self.push(ext, flags),
+            .pending, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => try self.push(ext, flags),
         }
     }
 
     fn noteMention(self: *TypeVarMentions, var_ty: CheckedTypeId, flags: TypeVarMentionFlags) Allocator.Error!void {
-        const entry = try self.found.getOrPut(self.allocator, var_ty);
+        const entry = try self.found.getOrPut(var_ty);
         entry.value_ptr.* = if (entry.found_existing) entry.value_ptr.merge(flags) else flags;
     }
 };
@@ -28972,7 +28972,7 @@ const TemplateDemandPass = struct {
                 .flex, .rigid => |variable| {
                     if (variable.constraints.len != 0 or variable.numeric_default_phase != null) demand.* = .full;
                 },
-                else => demand.* = .full,
+                .pending, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => demand.* = .full,
             }
         }
 
@@ -29002,10 +29002,8 @@ const TemplateDemandPass = struct {
 
         const root_expr = self.checked_bodies.body(body_id).root_expr;
         const root = self.checked_bodies.expr(root_expr);
-        const lambda = switch (root.data) {
-            .lambda => |lambda| lambda,
-            else => return self.raiseEverything(),
-        };
+        if (root.data != .lambda) return self.raiseEverything();
+        const lambda = root.data.lambda;
         self.work.clearRetainingCapacity();
         try self.work.append(self.allocator, .{ .expr = .{ .id = lambda.body, .role = .value } });
         for (lambda.args) |arg| try self.work.append(self.allocator, .{ .pattern = .{ .id = arg, .role = .parameter } });
@@ -29024,7 +29022,7 @@ const TemplateDemandPass = struct {
             switch (self.checked_types.payload(current)) {
                 .alias => |alias| current = alias.backing,
                 .function => |function| return function,
-                else => return null,
+                .pending, .err, .flex, .rigid, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return null,
             }
         }
         checkedArtifactInvariant("procedure template root alias chain was cyclic", .{});
@@ -37829,7 +37827,12 @@ pub fn publishFromTypedModule(
             .top_level_procedure_bindings = &top_level_procedure_bindings,
             .static_dispatch_plans = &static_dispatch_plans,
             .imports = .{ .current_owner = artifact_key, .direct = inputs.imports, .available = inputs.available_artifacts, .relations = inputs.relation_artifacts },
-            .mentions = .{ .allocator = allocator, .checked_types = checked_types },
+            .mentions = .{
+                .allocator = allocator,
+                .checked_types = checked_types,
+                .memo = collections.DenseMap(CheckedTypeId, artifact_serialize.Span).init(allocator),
+                .found = collections.DenseMap(CheckedTypeId, TypeVarMentionFlags).init(allocator),
+            },
         };
         defer demand_pass.deinit();
         try demand_pass.publish();
