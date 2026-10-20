@@ -312,13 +312,13 @@ pub const UseOrder = struct {
     const RowKind = enum { reads, defs };
 
     pub fn init(allocator: Allocator, store: *const LirStore, lists: []const []const LIR.CFStmtId) Allocator.Error!UseOrder {
-        return fromTopology(allocator, try initTopology(allocator, store, lists, .{ .owned = .with_marks }, null));
+        return fromTopology(allocator, try initTopology(allocator, store, lists, .{ .owned = .with_marks }, null, null));
     }
 
     /// An order over `lists` whose store-indexed tables are the caller's
     /// reusable `scratch`, which must outlive the order.
     pub fn initInScratch(allocator: Allocator, store: *const LirStore, lists: []const []const LIR.CFStmtId, scratch: *Scratch) Allocator.Error!UseOrder {
-        return fromTopology(allocator, try initTopology(allocator, store, lists, .{ .scratch = scratch }, null));
+        return fromTopology(allocator, try initTopology(allocator, store, lists, .{ .scratch = scratch }, null, null));
     }
 
     fn fromTopology(allocator: Allocator, topology: Topology) UseOrder {
@@ -347,12 +347,20 @@ pub const UseOrder = struct {
     /// With an executor of more than one lane, the three row tables are built
     /// as one session of three tasks; each table then belongs to the output
     /// allocator of the lane that built it.
+    /// Exact count of the row-table tasks a topology build submitted to an
+    /// executor and received back from it.
+    pub const TopologyTaskMetrics = struct {
+        submitted: u64 = 0,
+        committed: u64 = 0,
+    };
+
     pub fn initTopology(
         allocator: Allocator,
         store: *const LirStore,
         lists: []const []const LIR.CFStmtId,
         source: Tables,
         executor: ?*const task_executor.Executor,
+        task_metrics: ?*TopologyTaskMetrics,
     ) Allocator.Error!Topology {
         if (builtin.is_test) topology_builds += 1;
         const scratch: ?*Scratch = switch (source) {
@@ -417,7 +425,7 @@ pub const UseOrder = struct {
             .{ .store = store, .members = members, .tables = tables, .table = .preds },
         };
         errdefer for (&row_tables) |*table| table.release();
-        try RowTableTask.buildAll(allocator, &row_tables, executor);
+        try RowTableTask.buildAll(allocator, &row_tables, executor, task_metrics);
         const owned_unresolved = try allocator.dupe(u32, row_tables[2].unresolved.items);
         // Nothing below fails: the topology takes every row table.
         row_tables[2].unresolved.deinit(row_tables[2].allocator.?);
@@ -694,19 +702,35 @@ pub const UseOrder = struct {
 
         /// Builds every table, on lanes when there are several. A failed
         /// table leaves the others built for the caller to release.
-        fn buildAll(allocator: Allocator, row_tables: *[3]RowTableTask, executor: ?*const task_executor.Executor) Allocator.Error!void {
+        fn buildAll(allocator: Allocator, row_tables: *[3]RowTableTask, executor: ?*const task_executor.Executor, task_metrics: ?*TopologyTaskMetrics) Allocator.Error!void {
             const lanes = executor orelse return buildInline(allocator, row_tables);
             if (lanes.worker_count <= 1) return buildInline(allocator, row_tables);
-            var tasks: [3]task_executor.Task = undefined;
-            for (&tasks, row_tables, 0..) |*task, *context, id| task.* = .{ .id = id, .context = context, .run = run };
-            var completions: [3]task_executor.Completion = undefined;
-            try lanes.run(&tasks, &completions);
-            for (completions) |completion| {
-                if (completion.id >= row_tables.len or completion.worker_id >= lanes.worker_count) topologyInvariant("row table received invalid task identity");
-                const context = &row_tables[completion.id];
-                if (context.completed or completion.value != @as(*anyopaque, @ptrCast(context))) topologyInvariant("row table received invalid task completion");
-                context.completed = true;
+            var session = lanes.begin();
+            var submitted: usize = 0;
+            var received: usize = 0;
+            var failed = false;
+            while (received < submitted or (!failed and submitted < row_tables.len)) {
+                while (!failed and submitted < row_tables.len and session.canSubmit()) {
+                    session.submit(.{ .id = submitted, .context = &row_tables[submitted], .run = run }) catch {
+                        failed = true;
+                        break;
+                    };
+                    submitted += 1;
+                    if (task_metrics) |metrics| metrics.submitted += 1;
+                }
+                if (received < submitted) {
+                    const completion = session.receive();
+                    if (completion.id >= submitted or completion.worker_id >= lanes.worker_count) topologyInvariant("row table received invalid task identity");
+                    const context = &row_tables[completion.id];
+                    if (context.completed or completion.value != @as(*anyopaque, @ptrCast(context))) topologyInvariant("row table received invalid task completion");
+                    context.completed = true;
+                    if (task_metrics) |metrics| metrics.committed += 1;
+                    received += 1;
+                    if (context.failed) failed = true;
+                }
             }
+            session.end();
+            if (failed) return error.OutOfMemory;
             for (row_tables) |context| if (context.failed) return error.OutOfMemory;
         }
 
@@ -780,7 +804,7 @@ pub const UseOrder = struct {
         if (only_proc == null) return init(allocator, store, lists.items);
         const domain = try Domain.create(allocator, store, lists.items);
         errdefer domain.destroy(allocator);
-        return fromTopology(allocator, try initTopology(allocator, store, lists.items, .{ .compact = domain }, null));
+        return fromTopology(allocator, try initTopology(allocator, store, lists.items, .{ .compact = domain }, null, null));
     }
 
     pub fn deinit(self: *UseOrder) void {

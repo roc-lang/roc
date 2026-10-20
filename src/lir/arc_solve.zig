@@ -83,6 +83,9 @@ pub const UniquenessMetrics = struct {
     component_runs: u64 = 0,
     task_submitted: u64 = 0,
     task_committed: u64 = 0,
+    /// Row-table tasks of the use-order topology built on the executor's lanes.
+    topology_tasks_submitted: u64 = 0,
+    topology_tasks_committed: u64 = 0,
     signature_waves: u64 = 0,
     signature_changes: u64 = 0,
     statement_visits: u64 = 0,
@@ -4651,6 +4654,7 @@ const UniquenessStructure = struct {
         store: *const LirStore,
         rc_local: []const bool,
         executor: ?*const task_executor.Executor,
+        metrics: ?*UniquenessMetrics,
     ) SolveError!*UniquenessStructure {
         const self = try allocator.create(UniquenessStructure);
         errdefer allocator.destroy(self);
@@ -4730,7 +4734,13 @@ const UniquenessStructure = struct {
             local_to_dense[raw] = @intCast(component.locals.items.len);
             try component.locals.append(arena, @intCast(raw));
         }
-        var topology = try UseOrder.initTopology(allocator, store, lists, .{ .owned = .without_marks }, executor);
+        var topology_tasks: UseOrder.TopologyTaskMetrics = .{};
+        const built_topology = UseOrder.initTopology(allocator, store, lists, .{ .owned = .without_marks }, executor, &topology_tasks);
+        if (metrics) |counts| {
+            counts.topology_tasks_submitted += topology_tasks.submitted;
+            counts.topology_tasks_committed += topology_tasks.committed;
+        }
+        var topology = try built_topology;
         errdefer topology.deinit(allocator);
         const stmt_to_dense = try arena.alloc(u32, store.cfStmtCount());
         @memset(stmt_to_dense, no_local);
@@ -5080,7 +5090,7 @@ pub fn settleUniquenessWithOptions(
     const arena = memory.allocator();
     const proc_count = store.procSpecCount();
     const structure = solution.uniqueness_structure orelse blk: {
-        const built = try UniquenessStructure.build(allocator, store, rc_local, options.executor);
+        const built = try UniquenessStructure.build(allocator, store, rc_local, options.executor, options.metrics);
         solution.uniqueness_structure = built;
         break :blk built;
     };

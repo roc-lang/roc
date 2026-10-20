@@ -158,6 +158,10 @@ fn expectUniquenessMetrics(expected: arc_solve.UniquenessMetrics, actual: arc_so
     try testing.expectEqual(@as(u64, 0), expected.task_committed);
     try testing.expect(actual.task_submitted > 0);
     try testing.expectEqual(actual.task_submitted, actual.task_committed);
+    try testing.expectEqual(@as(u64, 0), expected.topology_tasks_submitted);
+    try testing.expectEqual(@as(u64, 0), expected.topology_tasks_committed);
+    try testing.expectEqual(@as(u64, topology_tasks), actual.topology_tasks_submitted);
+    try testing.expectEqual(@as(u64, topology_tasks), actual.topology_tasks_committed);
     inline for (.{ "settlements", "components", "component_runs", "signature_waves", "signature_changes", "statement_visits", "local_visits" }) |counter| {
         try testing.expectEqual(@field(expected, counter), @field(actual, counter));
     }
@@ -205,7 +209,7 @@ test "ARC executor reverse completions match inline RC bodies and identities acr
         var metrics: arc.ParallelMetrics = .{};
         try candidate.run(&interface, &metrics);
         try runner.expectDrained();
-        try testing.expectEqual(@as(u64, 120 + topology_tasks) + metrics.uniqueness.task_committed + metrics.dismantle_tasks_committed, runner.received);
+        try testing.expectEqual(@as(u64, 120) + metrics.uniqueness.topology_tasks_committed + metrics.uniqueness.task_committed + metrics.dismantle_tasks_committed, runner.received);
         try expectUniquenessMetrics(inline_metrics.uniqueness, metrics.uniqueness);
         // Forty statements fit one dismantle fact range.
         try testing.expectEqual(@as(u64, 1), metrics.dismantle_tasks_submitted);
