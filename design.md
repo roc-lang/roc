@@ -720,18 +720,21 @@ Direct LIR looks it up. Code whose identity names it never holds a copy of
 site-identified code: an entry whose body inlined one
 (`LIR.InlineScope.copies_site_code`) is not offered by identity, and its
 calls to one are extracted as symbolic references by identity rather than as
-references into the pack. A program that takes an entry lowers and retains
-every lambda-set member the entry's signature mentions
-(`Result.retained_procs`), and a splice never follows a symbolic reference
-to a procedure the program compiles itself, so the entry calls the program's
-current code of each closure it receives. Because such code was compiled
+references into the pack. A program that takes an entry lowers every
+lambda-set member the entry's signature mentions and records each as a
+served callee of that entry (`Result.served_callees`). The entry's procedure
+is body-less, so these are its outgoing edges: every reachability walk,
+runtime compaction and compile-time code demand alike, reaches a served
+callee exactly when it reaches the entry. A splice never follows a symbolic
+reference to a procedure the program compiles itself, so the entry calls the
+program's current code of each closure it receives. Because such code was compiled
 against an earlier body of the procedures it calls by identity, ARC pins
 every procedure with a code key to the signature its types determine (all
 parameters and the return owned, no return uniqueness). An entry whose code reaches the
 app from outside it (`Lifted.Program.appCalleesReachedBy`) is offered under
 its identity only, never under a reservation-time key, and a program that
-takes it lowers and retains every app function it reaches, so the entry
-calls that code's current version too.
+takes it lowers every app function it reaches as a served callee of the
+entry, so the entry calls that code's current version too.
 
 A package function that dispatches to a method of an app type records that
 method in its evidence. The evidence digest it is keyed by
@@ -2156,6 +2159,14 @@ Coordinator commits follow demand order, independently of completion order;
 helper closure, final placement, branch veneers, and object/image linking remain
 explicit coordinator responsibilities. Null-executor execution uses the same
 native procedure code ownership boundary, not a separate monolithic implementation.
+
+Explicit ARC helpers run through the same pipeline after the procedures, in
+frontier waves. A wave takes only helpers already in the helper queue when it
+starts, and its fragments commit in queue order, each appending its own helper
+demands to the end of the queue. The queue, and so every helper's placement,
+is therefore exactly the one a one-helper-at-a-time drain produces, at every
+worker count; helper calls into a later wave resolve through the symbolic
+references that every producer's placement settles.
 
 The compilation session retains owned relocatable native procedure code after
 compile-time evaluation, never its JIT image. Reuse requires the same producer LIR
@@ -3761,7 +3772,11 @@ The annotation root's type variable is also the static-dispatch constraint's
 callable variable. Checking declares that identity before completing owned
 constraints, then generates its type through ordinary annotation generation and
 unification. It allocates no second callable placeholder or bridging relation.
-Inference holes retain the existing body-checking and generalization rules, and
+A callable written through a function type alias is therefore an alias view
+whose backing carries the function structure, so every reader of a
+requirement's function structure resolves the callable through its aliases.
+A written type that is not a function through its aliases, or a bare type
+variable, is reported at its where clause. Inference holes retain the existing body-checking and generalization rules, and
 the named method's static-dispatch constraint is preserved even when its type
 is incomplete.
 
@@ -10638,7 +10653,7 @@ when `MethodRegistry.fromModule` finds the method's target is a procedure and
 the instance is `T -> Str`, and `inspect_evidence` is
 the use's evidence node, produced by the evidence pass. Monotype and Boxy
 planning and lowering select the declaring view exactly as method dispatch does
-and consume that decision through `MethodRegistry.lookupInspectOverride`; they
+and consume that decision through `MethodRegistry.inspectOverride`; they
 never re-examine the method's type. Monotype requests the method at `T -> Str`.
 Boxy plans its worker at the instance type and supplies the worker's hidden
 descriptors and dictionaries from the use's evidence, as it does for a resolved
@@ -13274,6 +13289,27 @@ descriptors, dictionaries, or host ABI adapters.
 
 ### Strategy Equivalence Tests
 
+Value rules must not depend on the strategy either. The cross-strategy
+differential harness (`zig build run-test-strategy-differential`,
+`src/eval/test/strategy_differential_runner.zig`) compiles every runnable eval
+case, every runtime host-effects case, and its own corpus
+(`strategy_differential_corpus.zig`) under `.lss` and `.boxy`, runs each on the
+LIR interpreter and the dev backend, and requires all four executions to agree
+on the inspect string or crash message, the `dbg` transcript, and the
+expect-failure transcript. An execution a case cannot run (a backend the case
+skips, a backend the host lacks) is counted and reported per reason, never
+silently skipped. An eval case whose `.boxy` executions do not yet agree is
+listed in `strategy_differential_gaps.zig` with the failure it shows and a
+reason; the harness counts these per reason, and fails on any unlisted
+failure, on a listed case that now agrees, and on an entry naming no case, so
+the list only shrinks. The harness's own corpus builds its values from a seed
+read after a `dbg` statement, which no compile-time evaluation performs, and
+requires each case to report that `dbg` at runtime, so each strategy's
+runtime rendering, equality, hashing, and matching run rather than a
+compile-time constant; a comptime check fails the build until every
+`ShapeKind` has an inspect, an equality, and a hashing case (or a stated
+exemption).
+
 The compiler does not perform production-release ABI equivalence verification
 between `.lss` and `.boxy`. Doing so would spend end-user time on an invariant
 that the compiler test suite owns.
@@ -13286,6 +13322,38 @@ descriptors/dictionaries, indirect calls, RC statement count, backend code size,
 or runtime performance are allowed.
 
 ## Shared Post-Check Model
+
+### Value Rules
+
+`Str.inspect` rendering, structural equality, structural hashing, and the
+selection of a `to_inspect` override are value rules: they depend on a
+type's shape, not on which strategy lowered it. They are defined once, in the
+`value_rules` module (`src/postcheck/value_rules/`), which depends on
+nothing else in the compiler so the standalone Boxy runtime object can import
+it too. Each consumer reads its own representation into the shared
+`ShapeKind` view through a comptime context:
+
+- `inspect.zig`: every literal inspection renders (`text`), and
+  `InspectSpec(Ctx)`, which decides from a shape what a rendering is (a whole
+  literal, the ordered parts of a record, tuple, or tag variant, a list loop,
+  an override call, ...). Monotype lowering builds rendering expressions from
+  it, Boxy lowering emits rendering LIR from it, and the Boxy runtime renders
+  descriptor-described values to bytes from it.
+- `inspect_override.zig`: `lookupInspectOverride`, the one selection of whose
+  registry decides an owner's override (the first view, in method-dispatch
+  search order, that declares `owner.to_inspect`), shared by Monotype
+  lowering, Boxy planning, and Boxy lowering.
+- `structural.zig`: what comparing and hashing a value means (component order,
+  short-circuit on the first unequal component, discriminant-then-payload
+  comparison, a tag's variant index hashed before its payloads, a list's
+  length before its items). `EqLower` and `HashLower` lower it to LIR for the
+  direct solved-to-LIR lowering's `structural_eq`/`structural_hash` and for
+  Boxy's derived equality and hashing; `EqEval` and `HashEval` evaluate it for
+  the Boxy runtime's descriptor-driven `assign_boxy_eq`/`assign_boxy_hash`, so
+  a value hashed by generic code and probed by specialized code lands in the
+  same bucket.
+
+### Typed Stores
 
 Every typed post-check IR has an explicit typed store. `.lss` uses this for
 the Monotype, Monotype Lifted, Lambda Solved, and Lambda Mono stages. `.boxy`
@@ -15460,7 +15528,7 @@ specialize=yes and specialize=no. Inspection is never a dispatch to
 override (Inspect Overrides), and a rejected declaration has no callable type
 to be one. `MethodRegistry.fromModule` records that decision on the rejected
 key itself (`inspect_override = null` beside `target = null`), and Monotype and
-Boxy consume it through `lookupInspectOverride` exactly as they consume an
+Boxy consume it through `MethodRegistry.inspectOverride` exactly as they consume an
 ineligible method's decision; neither stage branches on `rejected` to choose
 inspection's rendering. The program still reports the declaration's diagnostic
 and cannot be mistaken for valid.
@@ -20544,15 +20612,46 @@ consumed read through it takes those slots from the container, and its
 other uses observe its whole range. Its definition copies only the
 container's representation, which may name slots the container has already
 given away on that path; ARC writes those slots on the definition as the
-view's residual shell, numbered in the view's own layout. A view whose value
-reaches an owned operand reads its whole range there, so any take through it
-is rejected. This is what lets
+view's residual shell, numbered in the view's own layout. This is what lets
 `{ cursor, builder: { nodes, children }, node }` returned from one call
 hand `builder.nodes` to the next append without a retain: the builder is
 read as a view each time the source names it, and each list leaves the dying
 result by a take. A residual release reads a struct field whose slots are
 only partly residual as a view marked with its absent slots and releases the
 residual slots through it.
+
+A view whose value reaches a consuming operand (an owned direct-call
+position, a borrowed position whose owned variant takes a field, or a
+consumed or retained low-level position, with no other mention of the view's
+borrow forest in the same statement) is first solved as a take of its
+whole range at its definition. While it is, it holds those slots: reads
+through it, through its aliases, and through views nested in it are reads of
+the view, not of its container, and once the take is committed the view is a
+container in its own right, solved right after the container it was taken
+from, with its own field takes, whole uses, and residual release. Only an
+observation of its slots that does not go through it can reject that take.
+So when the view is lent whole and then a field is moved out of it, the view
+leaves the dying record intact, is lent, and gives up the field by a take of
+its own, and when a field is passed along before the view is moved whole, the
+field is read from the view without a take and the view itself still moves.
+A view whose take is rejected is a borrowed view again, and every read through
+it is solved as a read of its container. The innermost view whose definition
+is a take decides, per emission, where every view nested in it reads its
+slots: in an emission where that take applies, the view holding the slots is
+no view, and a view nested in it reads that view's own container.
+
+Every such view is solved as a take first. A view that the solve does not
+commit as a take leaves its binding borrowed from the container, so the
+binding and every binding borrowed onward from it observe its slots at each
+later mention, exactly like any other read solved borrowed, and its consuming
+operands become use-point take candidates of its range (see the use-point
+take rules below). Those mentions can reject other takes, including the
+take of a view that held the read, so the container is solved again with them
+until every view solved as a take is committed. Each round only rejects more
+views, so this terminates, and a container with no rejected view solves once.
+A view that holds its slots is a container whose reads are the reads through
+it, so use-point takes out of it, and nested views held by it, are solved in
+the view's own solve exactly as in its container's.
 
 An owned same-value binding (`ref.local` solved owned) is bound exactly once
 and holds the unit its definition gave it, whether that definition moved the
@@ -20837,8 +20936,10 @@ final mutation takes the container's unit. Candidate selection proves the
 absence of later observations over the explicit CFG, including borrowed
 descendants and whole container uses; it never guesses from operation names.
 
-A read solved borrowed holds no unit, so it never consumes at the read. Its
-binding, and every binding borrowed onward from it, carries the field to
+A read solved borrowed holds no unit, so it never consumes at the read, with
+one exception: a view whose value reaches a consuming operand is taken whole
+at its definition and then holds its slots (see the view rules above). Every
+other borrowed read's binding, and every binding borrowed onward from it, carries the field to
 where the value is consumed: an owned direct-call position, a borrowed
 position whose owned variant takes a field, or a consumed or retained
 low-level position, with no other mention of those bindings in the same
@@ -21975,6 +22076,50 @@ the highest `LocalId` any procedure reaches is the only store-proportional
 cost, and it is paid once for the module. The same rule forbids reintroducing
 that search at the producer: a whole-module finalization pass whose only
 consumer is wasm local binding trades one redundant traversal for another.
+
+## Wasm Body Generation
+
+`WasmCodeGen` generates procedure and RC helper bodies on the post-check
+executor and commits them on one owner, in an order that depends only on the
+program. Registration fixes every index a body may read before any body is
+generated: procedure function indices, symbols, and table slots, hosted,
+runtime, Boxy, and linked-entry imports, tail drivers and the tail area, and
+Boxy dictionary thunks. A body worker is a private `WasmCodeGen` that reads
+those through its owner (`tables()`), owns its function-local emission state,
+and borrows its lane's binding column (see "Wasm Local Binding").
+
+A worker never creates a module entity. Each entity that is created the first
+time some body names it—an RC helper function, an RC helper or Boxy
+capture-drop table slot, a string-backing or runtime-message data segment, a
+static-data symbol, a PIC base global—is recorded in the body's entity list
+in first-use order, keyed by its content identity (the helper cache key, the
+string backing id, the capture-drop key, the static-data id; every message
+is its own segment), and each operand naming it is a deferred operand or a
+relocation against a placeholder symbol. A padded operand keeps its width; an
+operand the module encodes as a minimal LEB128 is inserted when it is filled
+in, and every later relocation moves with the bytes it names. No import is
+ever created by a commit, so imports cannot shift a defined function index.
+
+The owner commits procedure bodies in spec-id order. Committing a body creates,
+in list order, each listed entity the module does not have yet, through the
+same functions that create it for a body emitted directly against the module,
+and then fills in the body's operands. An RC helper is created by reserving
+its whole child-helper closure in pre-order and then committing each newly
+reserved helper's body, which may create entities of its own; the order in
+which commits create entities is therefore the order on-demand creation during
+serial emission would produce, and every module index is a function of that
+order and the bodies' contents. Helper bodies are generated before the
+commits that reserve them: after each procedure wave, the helpers its commits
+can create (the named helpers, the child helpers their reservations reach, and
+the helpers those bodies name in turn, minus those the module already has) are
+generated in frontier waves and wait for the commit that reserves them; every
+one is committed before the next wave starts.
+
+Waves are bounded, admission stops on the first allocation failure, and every
+accepted callback drains before any owner state is touched, as for native
+procedure code. Without an executor every body is generated inline on a
+persistent sequential lane through the same callback, so `--jobs=1` and a
+multi-worker build emit the same bytes.
 
 ## Compile-Time Constants
 
