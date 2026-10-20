@@ -304,6 +304,10 @@ fn emptyLiftedProgram(allocator: Allocator) Lifted.Ast.Program {
         allocator,
         check.CheckedNames.NameStore.init(allocator),
         Mono.Type.Store.init(allocator),
+        .empty, // const_fn_evidence
+        .empty, // const_fn_evidence_targets
+        .empty, // const_fn_evidence_structurals
+        .empty, // const_fn_evidence_frames
         .empty, // exprs
         .empty, // pats
         .empty, // stmts
@@ -315,26 +319,24 @@ fn emptyLiftedProgram(allocator: Allocator) Lifted.Ast.Program {
         .empty, // field_exprs
         .empty, // field_access_segments
         .empty, // fn_def_captures
+        .empty, // capture_operands
         .empty, // record_destructs
         .empty, // str_pattern_steps
         .empty, // branches
         .empty, // if_branches
         .empty, // string_literals
-        .empty,
-        .empty,
-        .empty,
         Mono.Ast.ProcDebugNameMap.init(allocator),
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
+        .empty, // source_files
+        .empty, // expr_locs
+        .empty, // expr_regions
+        .empty, // stmt_locs
+        .empty, // stmt_regions
+        .empty, // inline_scopes
+        .empty, // expr_inline_scopes
+        .empty, // stmt_inline_scopes
+        .empty, // local_names
+        .empty, // static_data_values
+        .empty, // comptime_sites
         0,
     );
 }

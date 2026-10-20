@@ -136,6 +136,14 @@ const SymbolicAllocation = struct {
     list_element_count: ?usize,
 };
 
+/// One running initializer's locals, indexed by LIR local id. Frames are
+/// reused by later initializers; `written` names the slots to clear when the
+/// frame is released.
+const InitializerFrame = struct {
+    slots: []?*SymbolicValue,
+    written: std.ArrayList(lir.LIR.LocalId),
+};
+
 const StaticInitializerMachine = struct {
     arena: std.heap.ArenaAllocator,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
@@ -146,12 +154,11 @@ const StaticInitializerMachine = struct {
     static_active: []bool,
     frozen_roots: []?StaticDataSymbolId,
     string_backings: std.AutoHashMapUnmanaged(@import("base").StringLiteral.Idx, SymbolicAllocationId),
-    /// The locals of the initializer being evaluated, indexed by local id
-    /// over the whole store; `written` lists the ones it assigned, which are
-    /// cleared when it returns, so each initializer starts from an empty frame
-    /// without touching the whole table.
-    locals: []?*SymbolicValue,
-    written: std.ArrayList(lir.LIR.LocalId),
+    /// Frames for initializers that are running, followed by released frames
+    /// kept for reuse. An initializer reading a static value evaluates that
+    /// value's initializer in the next frame.
+    frames: std.ArrayList(*InitializerFrame),
+    frame_depth: usize,
 
     fn init(
         child_allocator: Allocator,
@@ -168,8 +175,6 @@ const StaticInitializerMachine = struct {
         @memset(static_active, false);
         const frozen_roots = try arena_allocator.alloc(?StaticDataSymbolId, static_count);
         @memset(frozen_roots, null);
-        const locals = try arena_allocator.alloc(?*SymbolicValue, lowered.lir_result.store.localCount());
-        @memset(locals, null);
         if (lowered.frozen_static_data) |frozen| {
             for (frozen.exports, 0..) |item, index| {
                 if (item.value_id) |id| {
@@ -189,8 +194,8 @@ const StaticInitializerMachine = struct {
             .static_active = static_active,
             .frozen_roots = frozen_roots,
             .string_backings = .empty,
-            .locals = locals,
-            .written = .empty,
+            .frames = .empty,
+            .frame_depth = 0,
         };
     }
 
@@ -263,17 +268,33 @@ const StaticInitializerMachine = struct {
 
     fn setLocal(
         self: *StaticInitializerMachine,
+        frame: *InitializerFrame,
         id: lir.LIR.LocalId,
         value: *SymbolicValue,
     ) Allocator.Error!void {
-        if (self.locals[@backingInt(id)] == null) try self.written.append(self.allocator(), id);
-        self.locals[@backingInt(id)] = value;
+        const slot = &frame.slots[@backingInt(id)];
+        if (slot.* == null) try frame.written.append(self.allocator(), id);
+        slot.* = value;
     }
 
-    /// Clear the frame of the initializer that just returned.
-    fn clearLocals(self: *StaticInitializerMachine) void {
-        for (self.written.items) |id| self.locals[@backingInt(id)] = null;
-        self.written.clearRetainingCapacity();
+    fn pushFrame(self: *StaticInitializerMachine) Allocator.Error!*InitializerFrame {
+        if (self.frame_depth == self.frames.items.len) {
+            const frame = try self.allocator().create(InitializerFrame);
+            const slots = try self.allocator().alloc(?*SymbolicValue, self.store().localCount());
+            @memset(slots, null);
+            frame.* = .{ .slots = slots, .written = .empty };
+            try self.frames.append(self.allocator(), frame);
+        }
+        const frame = self.frames.items[self.frame_depth];
+        self.frame_depth += 1;
+        return frame;
+    }
+
+    fn popFrame(self: *StaticInitializerMachine) void {
+        self.frame_depth -= 1;
+        const frame = self.frames.items[self.frame_depth];
+        for (frame.written.items) |id| frame.slots[@backingInt(id)] = null;
+        frame.written.clearRetainingCapacity();
     }
 
     /// A static value, evaluating first every static value its initializer
@@ -425,9 +446,9 @@ const StaticInitializerMachine = struct {
         if (!proc.args.isEmpty()) staticDataInvariant("static initializer procedure had runtime arguments");
         if (proc.hosted != null) staticDataInvariant("static initializer procedure was hosted");
         const body = proc.body orelse staticDataInvariant("static initializer procedure had no body");
-        if (self.written.items.len != 0) staticDataInvariant("static initializer evaluation started inside another initializer's frame");
-        defer self.clearLocals();
-        const locals = self.locals;
+        const frame = try self.pushFrame();
+        defer self.popFrame();
+        const locals = frame.slots;
 
         var current = body;
         while (true) {
@@ -435,37 +456,37 @@ const StaticInitializerMachine = struct {
                 .assign_ref => |assign| {
                     const target_layout = self.store().getLocal(assign.target).layout_idx;
                     const value = try self.evalRef(locals, assign.op, target_layout);
-                    try self.setLocal(assign.target, value);
+                    try self.setLocal(frame, assign.target, value);
                     current = assign.next;
                 },
                 .assign_literal => |assign| {
                     const target_layout = self.store().getLocal(assign.target).layout_idx;
-                    try self.setLocal(assign.target, try self.evalLiteral(assign.value, target_layout));
+                    try self.setLocal(frame, assign.target, try self.evalLiteral(assign.value, target_layout));
                     current = assign.next;
                 },
                 .assign_packed_erased_fn => |assign| {
                     const target_layout = self.store().getLocal(assign.target).layout_idx;
-                    try self.setLocal(assign.target, try self.evalPackedErasedFn(locals, self.store().stmtRow(assign.data), target_layout));
+                    try self.setLocal(frame, assign.target, try self.evalPackedErasedFn(locals, self.store().stmtRow(assign.data), target_layout));
                     current = assign.next;
                 },
                 .assign_low_level => |assign| {
                     const target_layout = self.store().getLocal(assign.target).layout_idx;
-                    try self.setLocal(assign.target, try self.evalLowLevel(locals, assign.op, assign.args, target_layout));
+                    try self.setLocal(frame, assign.target, try self.evalLowLevel(locals, assign.op, assign.args, target_layout));
                     current = assign.next;
                 },
                 .assign_list => |assign| {
                     const target_layout = self.store().getLocal(assign.target).layout_idx;
-                    try self.setLocal(assign.target, try self.evalList(locals, assign.elems, target_layout));
+                    try self.setLocal(frame, assign.target, try self.evalList(locals, assign.elems, target_layout));
                     current = assign.next;
                 },
                 .assign_struct => |assign| {
                     const target_layout = self.store().getLocal(assign.target).layout_idx;
-                    try self.setLocal(assign.target, try self.evalStruct(locals, assign.fields, target_layout));
+                    try self.setLocal(frame, assign.target, try self.evalStruct(locals, assign.fields, target_layout));
                     current = assign.next;
                 },
                 .assign_tag => |assign| {
                     const target_layout = self.store().getLocal(assign.target).layout_idx;
-                    try self.setLocal(assign.target, try self.evalTag(
+                    try self.setLocal(frame, assign.target, try self.evalTag(
                         locals,
                         assign.variant_index,
                         assign.discriminant,
@@ -477,7 +498,7 @@ const StaticInitializerMachine = struct {
                 .set_local => |assign| {
                     const source = local(locals, assign.value);
                     const target_layout = self.store().getLocal(assign.target).layout_idx;
-                    try self.setLocal(assign.target, try self.cloneValueAs(source, target_layout));
+                    try self.setLocal(frame, assign.target, try self.cloneValueAs(source, target_layout));
                     current = assign.next;
                 },
                 inline .incref, .decref, .decref_if_initialized, .free => |arc| current = arc.next,

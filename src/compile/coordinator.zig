@@ -517,9 +517,6 @@ test "canonicalized module cache header decodes bodies and rejects corrupt envel
     try std.testing.expect(decodeCanonicalizedModuleCacheEntry(key, scratch[0 .. total_len + 1]) == null);
 }
 
-/// Maximum scratch arena capacity retained by a worker after each task.
-const worker_scratch_retain_limit = 64 * 1024 * 1024;
-
 /// Allocators for a worker thread. Each worker has its own instance.
 /// This ensures thread-safe allocations without contention.
 ///
@@ -555,10 +552,12 @@ pub const WorkerAllocators = struct {
         self.arena_impl.deinit();
     }
 
-    /// Reset arena between tasks, retaining ordinary task capacity but trimming
-    /// unusually large scratch spikes so one wide module does not pin worker RSS.
+    /// Release a finished task's scratch. The worker keeps none of it: the
+    /// backing allocator decides how much freed memory stays ready for reuse,
+    /// so idle capacity is bounded in one place for every worker together
+    /// rather than once per worker.
     pub fn resetArena(self: *WorkerAllocators) void {
-        _ = self.arena_impl.reset(.{ .retain_with_limit = worker_scratch_retain_limit });
+        _ = self.arena_impl.reset(.free_all);
     }
 
     pub fn taskAllocators(self: *WorkerAllocators) WorkerTaskAllocators {
@@ -657,6 +656,14 @@ pub const ModuleState = struct {
     /// earlier compilation demanded: how many requested roots were
     /// unevaluated when it was reopened.
     reopened_unevaluated: ?usize = null,
+    /// Whether this module's solver type store was released once checking
+    /// finished (`Coordinator.release_checked_solver_types`). Its checked cache
+    /// entry can then be published only from `staged_checked_env`.
+    solver_types_released: bool = false,
+    /// The `ModuleEnv` part of this module's checked cache entry, written while
+    /// its solver types were still live. Published with the rest of the entry
+    /// once evaluation completes, or discarded.
+    staged_checked_env: ?CacheManager.StagedPart = null,
     /// Cached AST from parsing (owned, null after canonicalization)
     cached_ast: ?*AST,
     /// Current compilation phase
@@ -1240,6 +1247,11 @@ pub const Coordinator = struct {
     enable_hosted_transform: bool,
     /// Whether to retain exact source byte states for watch-mode refreshes.
     track_watch_inputs: bool,
+    /// Whether every module's solver type store is released once checking
+    /// finishes. Only a command that reads no module's solver types after
+    /// checking sets this: compile-time evaluation, lowering, and evaluation
+    /// reports read checked artifacts, regions, and source, never solver types.
+    release_checked_solver_types: bool = false,
     /// Name of the registered platform package, set via markPlatformPackage.
     /// App-root type checks wait for this package's root module to finish
     /// checking, so platform existence comes from explicit registration data
@@ -1384,6 +1396,7 @@ pub const Coordinator = struct {
         // Stop workers
         self.shutdown();
         self.inline_worker_allocs.deinit();
+        self.discardStagedCheckedParts();
 
         if (comptime trace_build) {
             std.debug.print("[COORD DEINIT] shutdown done, freeing packages...\n", .{});
@@ -1480,6 +1493,10 @@ pub const Coordinator = struct {
 
     pub fn setWatchInputTracking(self: *Coordinator, enabled: bool) void {
         self.track_watch_inputs = enabled;
+    }
+
+    pub fn setReleaseCheckedSolverTypes(self: *Coordinator, enabled: bool) void {
+        self.release_checked_solver_types = enabled;
     }
 
     /// Record which registered package is the app's platform. App-root type
@@ -1890,7 +1907,7 @@ pub const Coordinator = struct {
             try views.append(allocator, view);
 
             for (view.direct_import_artifact_keys) |dependency_key| {
-                const artifact = self.checkedArtifactByKey(dependency_key) orelse {
+                const artifact = self.checkedArtifactByKey(dependency_key.digest()) orelse {
                     if (builtin.mode == .debug) {
                         base.invariant("compile.coordinator missing direct dependency checked artifact", .{});
                     }
@@ -1915,19 +1932,12 @@ pub const Coordinator = struct {
 
     fn rootRelationContainsArtifact(
         root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        key: check.CheckedArtifact.CheckedModuleArtifactKey,
+        key: check.CheckedArtifact.ModuleId,
     ) bool {
         for (root_artifact.platform_required_bindings.bindings) |binding| {
             if (std.mem.eql(u8, &binding.app_value.artifact.bytes, &key.bytes)) return true;
         }
         return false;
-    }
-
-    fn checkedArtifactKeyEql(
-        a: CheckedArtifact.CheckedModuleArtifactKey,
-        b: CheckedArtifact.CheckedModuleArtifactKey,
-    ) bool {
-        return std.mem.eql(u8, &a.bytes, &b.bytes);
     }
 
     fn coordinatorInvariant(comptime message: []const u8, args: anytype) noreturn {
@@ -1942,7 +1952,7 @@ pub const Coordinator = struct {
         views: *std.ArrayList(check.CheckedArtifact.ImportedModuleView),
         allocator: Allocator,
         root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        key: check.CheckedArtifact.CheckedModuleArtifactKey,
+        key: check.CheckedArtifact.ModuleId,
     ) Allocator.Error!void {
         if (std.mem.eql(u8, &key.bytes, &root_artifact.key.bytes)) return;
         if (rootRelationContainsArtifact(root_artifact, key)) return;
@@ -1958,12 +1968,90 @@ pub const Coordinator = struct {
 
     fn importedArtifactViewExists(
         views: []const check.CheckedArtifact.ImportedModuleView,
-        key: check.CheckedArtifact.CheckedModuleArtifactKey,
+        key: check.CheckedArtifact.ModuleId,
     ) bool {
         for (views) |view| {
             if (std.mem.eql(u8, &view.key.bytes, &key.bytes)) return true;
         }
         return false;
+    }
+
+    /// Release the solver type store of every module this compilation checked
+    /// from source. Every module has finished checking, so no importer reads
+    /// those stores again, and nothing after checking reads them: evaluation,
+    /// lowering, and evaluation reports work from checked artifacts, regions,
+    /// and source. A module's checked cache entry serializes its `ModuleEnv`,
+    /// solver types included, so that part of the entry is written first.
+    fn releaseCheckedSolverTypes(self: *Coordinator) Allocator.Error!void {
+        var pkg_it = self.packages.iterator();
+        while (pkg_it.next()) |entry| {
+            for (entry.value_ptr.*.modules.items) |*mod| {
+                // Only a module awaiting evaluation publishes a checked entry
+                // after this point.
+                if (mod.pending_evaluation == null) continue;
+                const artifact = mod.checkedArtifact() orelse continue;
+                if (artifact.pairing_arena != null) continue;
+                // A cached env is a view of its entry's bytes, and the builtin
+                // env is static; only an env checked from source owns its store.
+                const env = switch (artifact.module_env) {
+                    .checked_source => |module_env| module_env,
+                    .static_builtin, .cached_buffer => continue,
+                };
+                // A module with reports is never cached.
+                if (mod.reports.items.len == 0) self.stageCheckedModuleEnv(mod, artifact);
+                env.types.deinit();
+                env.types = try @import("types").Store.init(env.gpa);
+                mod.solver_types_released = true;
+            }
+        }
+    }
+
+    /// Write `mod`'s `ModuleEnv` cache part to a staging file.
+    fn stageCheckedModuleEnv(self: *Coordinator, mod: *ModuleState, artifact: *const check.CheckedArtifact.CheckedModuleArtifact) void {
+        const manager = self.cache_manager orelse return;
+        if (!manager.config.enabled) return;
+        const entries_dir = manager.config.getCheckedArtifactCacheDir(manager.allocator) catch {
+            manager.recordStoreFailure();
+            return;
+        };
+        defer manager.allocator.free(entries_dir);
+        var arena = base.SingleThreadArena.init(manager.allocator);
+        defer arena.deinit();
+        var env_writer = CompactWriter.init();
+        serializeForCache(ModuleEnv, artifact.moduleEnvConst(), &env_writer, arena.allocator()) catch {
+            manager.recordStoreFailure();
+            return;
+        };
+        const Part = struct {
+            env: *const CompactWriter,
+
+            fn write(raw: *const anyopaque, destination: *std.Io.Writer) std.Io.Writer.Error!void {
+                const part: *const @This() = @ptrCast(@alignCast(raw));
+                try part.env.writeTo(destination);
+            }
+        };
+        const part = Part{ .env = &env_writer };
+        mod.staged_checked_env = manager.stageCheckedPart(
+            artifact.key.bytes,
+            .{ .context = &part, .write = Part.write },
+            env_writer.total_bytes,
+            entries_dir,
+            artifact.moduleEnvConst().module_name,
+        );
+    }
+
+    /// Delete the staged cache parts of modules whose entries were never
+    /// published, such as when compilation stopped before evaluation finished.
+    fn discardStagedCheckedParts(self: *Coordinator) void {
+        const manager = self.cache_manager orelse return;
+        var pkg_it = self.packages.iterator();
+        while (pkg_it.next()) |entry| {
+            for (entry.value_ptr.*.modules.items) |*mod| {
+                const part = mod.staged_checked_env orelse continue;
+                mod.staged_checked_env = null;
+                manager.discardStagedPart(part);
+            }
+        }
     }
 
     /// Finish the immutable platform's independent compile-time work, then
@@ -1975,6 +2063,7 @@ pub const Coordinator = struct {
         var finalization_timer = startStageTimer(self.roc_ctx.std_io);
         defer self.program_finalization_ns += readStageTimer(self.roc_ctx.std_io, &finalization_timer);
         if (!self.frontend_complete) coordinatorInvariant("checked program finalization preceded frontend completion", .{});
+        if (self.release_checked_solver_types) try self.releaseCheckedSolverTypes();
         self.checked_program = mode == .executable_artifacts and self.appRootChecked();
         if (self.checked_program and self.findRootModule(.platform) != null) {
             const platform_root = self.findRootModule(.platform).?;
@@ -2291,7 +2380,7 @@ pub const Coordinator = struct {
 
     pub fn checkedArtifactByKey(
         self: *Coordinator,
-        key: check.CheckedArtifact.CheckedModuleArtifactKey,
+        key: check.CheckedArtifact.ModuleId,
     ) ?*const check.CheckedArtifact.CheckedModuleArtifact {
         if (std.mem.eql(u8, &self.builtin_modules.checked_artifact.key.bytes, &key.bytes)) {
             return &self.builtin_modules.checked_artifact;
@@ -2646,7 +2735,7 @@ pub const Coordinator = struct {
             while (pending.pop()) |key| {
                 const entry = try dependencies.getOrPut(key.bytes);
                 if (entry.found_existing) continue;
-                const artifact = self.checkedArtifactByKey(key).?;
+                const artifact = self.checkedArtifactByKey(key.digest()).?;
                 try pending.appendSlice(self.gpa, artifact.direct_import_artifact_keys);
             }
         }
@@ -2759,7 +2848,7 @@ pub const Coordinator = struct {
         else if (ordered_modules.items.len != 0)
             ordered_modules.items[0].module
         else if (test_modules.len != 0)
-            self.checkedArtifactByKey(test_modules[0]) orelse coordinatorInvariant("program test module has no checked module data", .{})
+            self.checkedArtifactByKey(test_modules[0].digest()) orelse coordinatorInvariant("program test module has no checked module data", .{})
         else
             cached_debug_modules.items[0];
         const relations = try self.collectRelationArtifactViews(self.gpa, root);
@@ -2770,7 +2859,7 @@ pub const Coordinator = struct {
         var artifacts = self.checked_artifact_index.iterator();
         while (artifacts.next()) |entry| {
             const artifact = self.checkedArtifactByKey(.{ .bytes = entry.key_ptr.* }).?;
-            if (rootRelationContainsArtifact(root, artifact.key)) continue;
+            if (rootRelationContainsArtifact(root, artifact.key.digest())) continue;
             try appendImportedArtifactViewIfMissing(&imports, self.gpa, root.key, artifact);
         }
         std.mem.sort(CheckedArtifact.ImportedModuleView, imports.items, {}, struct {
@@ -2788,18 +2877,18 @@ pub const Coordinator = struct {
         // Then the program's tests, each owned by the module declaring it.
         var program_requests = std.ArrayList(CheckedArtifact.RootRequest).empty;
         defer program_requests.deinit(self.gpa);
-        var program_sources = std.ArrayList(CheckedArtifact.CheckedModuleArtifactKey).empty;
+        var program_sources = std.ArrayList(CheckedArtifact.ModuleId).empty;
         defer program_sources.deinit(self.gpa);
         if (!explicit_runtime) {
             try program_requests.appendSlice(self.gpa, entrypoint_requests);
-            try program_sources.appendNTimes(self.gpa, root.key, entrypoint_requests.len);
+            try program_sources.appendNTimes(self.gpa, root.key.digest(), entrypoint_requests.len);
             for (test_modules) |key| {
-                const artifact = self.checkedArtifactByKey(key) orelse
+                const artifact = self.checkedArtifactByKey(key.digest()) orelse
                     coordinatorInvariant("program test module has no checked module data", .{});
                 for (artifact.root_requests.requests) |request| {
                     if (request.kind != .test_expect) continue;
                     try program_requests.append(self.gpa, request);
-                    try program_sources.append(self.gpa, key);
+                    try program_sources.append(self.gpa, key.digest());
                 }
             }
         }
@@ -2825,7 +2914,7 @@ pub const Coordinator = struct {
         options.defer_debug_replay = !replay_cached_debug;
         var runtime_target: ?lir.CheckedPipeline.TargetConfig = if (self.runtime_lowering) |config| config.target else null;
         if (runtime_target) |*target| target.post_check_executor = self.postCheckExecutor();
-        var unfinalized = UnfinalizedReportDestinations{ .coordinator = self, .program_root = root.key };
+        var unfinalized = UnfinalizedReportDestinations{ .coordinator = self, .program_root = root.key.digest() };
         defer unfinalized.deinit();
         options.unfinalized_reports = .{ .context = &unfinalized, .module = UnfinalizedReportDestinations.module };
         std.debug.assert(self.program_session == null);
@@ -2891,7 +2980,7 @@ pub const Coordinator = struct {
             const self: *UnfinalizedReportDestinations = @ptrCast(@alignCast(context));
             const coord = self.coordinator;
             const builtin_artifact = &coord.builtin_modules.checked_artifact;
-            if (builtin_artifact.key.eql(key)) {
+            if (builtin_artifact.key.digest().eql(key)) {
                 if (self.builtin_problems == null) self.builtin_problems = try newState(coord);
                 return .{ .module = builtin_artifact, .problem_store = &self.builtin_problems.?.problems };
             }
@@ -2993,7 +3082,11 @@ pub const Coordinator = struct {
         const evaluated_more = if (mod.reopened_unevaluated) |before| unevaluatedRequestCount(artifact) < before else true;
         mod.reopened_unevaluated = null;
         if (mod.reports.items.len == mod.pre_check_report_count and evaluated_more) {
-            if (artifact.pairing_arena == null) self.storeCheckedModuleInCache(artifact, mod.has_source_version_pin) else self.storePlatformPairingInCache(artifact);
+            if (artifact.pairing_arena == null) self.storeCheckedModuleInCache(mod, artifact) else self.storePlatformPairingInCache(artifact);
+        }
+        if (mod.staged_checked_env) |part| {
+            mod.staged_checked_env = null;
+            if (self.cache_manager) |manager| manager.discardStagedPart(part);
         }
         state.deinit();
         mod.pending_evaluation = null;
@@ -3620,9 +3713,15 @@ pub const Coordinator = struct {
         return header.install(platform, arena);
     }
 
-    fn storeCheckedModuleInCache(self: *Coordinator, artifact: *const check.CheckedArtifact.CheckedModuleArtifact, has_source_version_pin: bool) void {
+    fn storeCheckedModuleInCache(self: *Coordinator, mod: *ModuleState, artifact: *const check.CheckedArtifact.CheckedModuleArtifact) void {
         const manager = self.cache_manager orelse return;
         if (!manager.config.enabled) return;
+        const staged_env = mod.staged_checked_env;
+        mod.staged_checked_env = null;
+        defer if (staged_env) |part| manager.discardStagedPart(part);
+        // A released solver type store survives only in its staged part; a
+        // staging failure was already counted when it happened.
+        if (mod.solver_types_released and staged_env == null) return;
 
         const entries_dir = manager.config.getCheckedArtifactCacheDir(manager.allocator) catch {
             manager.recordStoreFailure();
@@ -3638,9 +3737,14 @@ pub const Coordinator = struct {
         const arena_alloc = arena.allocator();
 
         var env_writer = CompactWriter.init();
-        serializeForCache(ModuleEnv, artifact.moduleEnvConst(), &env_writer, arena_alloc) catch {
-            manager.recordStoreFailure();
-            return;
+        const env_bytes: ?[]const u8 = if (staged_env) |part|
+            manager.readStagedPart(part, arena_alloc) orelse return
+        else bytes: {
+            serializeForCache(ModuleEnv, artifact.moduleEnvConst(), &env_writer, arena_alloc) catch {
+                manager.recordStoreFailure();
+                return;
+            };
+            break :bytes null;
         };
 
         var artifact_writer = CompactWriter.init();
@@ -3649,7 +3753,7 @@ pub const Coordinator = struct {
             return;
         };
 
-        const env_len = env_writer.total_bytes;
+        const env_len = if (env_bytes) |bytes| bytes.len else env_writer.total_bytes;
         const artifact_len = artifact_writer.total_bytes;
 
         var header: [checked_module_cache_header_len]u8 = undefined;
@@ -3659,21 +3763,22 @@ pub const Coordinator = struct {
             artifact.key,
             env_len,
             artifact_len,
-            canonicalized_cache_entry.pinValidationHash(has_source_version_pin, self.source_pin_version),
+            canonicalized_cache_entry.pinValidationHash(mod.has_source_version_pin, self.source_pin_version),
         );
         const Entry = struct {
             header: []const u8,
+            env_bytes: ?[]const u8,
             env: *const CompactWriter,
             artifact: *const CompactWriter,
 
             fn write(raw: *const anyopaque, destination: *std.Io.Writer) std.Io.Writer.Error!void {
                 const entry: *const @This() = @ptrCast(@alignCast(raw));
                 try destination.writeAll(entry.header);
-                try entry.env.writeTo(destination);
+                if (entry.env_bytes) |bytes| try destination.writeAll(bytes) else try entry.env.writeTo(destination);
                 try entry.artifact.writeTo(destination);
             }
         };
-        const entry = Entry{ .header = &header, .env = &env_writer, .artifact = &artifact_writer };
+        const entry = Entry{ .header = &header, .env_bytes = env_bytes, .env = &env_writer, .artifact = &artifact_writer };
         manager.storeStream(
             artifact.key.bytes,
             .{ .context = &entry, .write = Entry.write },
@@ -7960,7 +8065,7 @@ test "requires signature naming a for-clause alias resolves to the app declarati
         "Model",
         app_artifact.canonical_names.typeNameText(identity_payload.alias.name),
     );
-    try std.testing.expect(Coordinator.checkedArtifactKeyEql(identity_payload.alias.owner_module.*, app_artifact.key));
+    try std.testing.expect(identity_payload.alias.owner_module.eql(app_artifact.key.digest()));
 
     try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
@@ -8115,7 +8220,7 @@ test "hosted distinctness: identical hosted declarations bound to different plat
     // And the checked platform table binds two distinct target artifacts to
     // two distinct linker symbols in header order.
     var binding_count: usize = 0;
-    var first_target: ?check.CheckedArtifact.CheckedModuleArtifactKey = null;
+    var first_target: ?check.CheckedArtifact.ModuleId = null;
     var first_symbol: ?[]const u8 = null;
     for (view_groups) |views| {
         for (views) |view| {
@@ -10809,7 +10914,7 @@ test "successful compile-time dbg replays from warm checked cache without evalua
             }
         }
         try std.testing.expect(helper_key != null);
-        const maybe_artifact = coord.checkedArtifactByKey(helper_key.?);
+        const maybe_artifact = coord.checkedArtifactByKey(helper_key.?.digest());
         try std.testing.expect(maybe_artifact != null);
         const artifact = maybe_artifact.?;
         try std.testing.expectEqual(@as(usize, 1), artifact.compile_time_debug.entries.len);

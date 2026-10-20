@@ -2388,7 +2388,7 @@ test "scalarize keeps descriptor-bearing struct join parameters" {
 
     const state = try store.addLocal(.{ .layout_idx = f.pair });
     const state_desc = try store.addLocal(.{ .layout_idx = .opaque_ptr });
-    store.setLocalBoxyDesc(state, .{ .local = state_desc });
+    try store.setLocalBoxyDesc(state, .{ .local = state_desc });
     const num = try store.addLocal(.{ .layout_idx = .i64 });
     const text = try store.addLocal(.{ .layout_idx = .str });
     const wrapper = try store.addLocal(.{ .layout_idx = f.pair });

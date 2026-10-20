@@ -35,8 +35,8 @@ const DispatchScopeId = checked_ids.DispatchScopeId;
 /// Shared policy for checked evidence publication and Boxy's dictionary
 /// inventory. Quote and interpolation conversion evidence carries its method
 /// implementation even when the constraint originated at a literal.
-pub fn requiresRuntimeDictionary(origin: types.StaticDispatchConstraint.Origin) bool {
-    return if (origin.literalKind()) |kind| switch (kind) {
+pub fn requiresRuntimeDictionary(literal_kind: ?types.StaticDispatchConstraint.LiteralKind) bool {
+    return if (literal_kind) |kind| switch (kind) {
         .numeral => false,
         .quote, .interpolation => true,
     } else true;
@@ -2937,7 +2937,7 @@ const StaticDispatchConstraintIndex = struct {
             const entry = try index.by_fn_var.getOrPut(allocator, constraint.fn_var);
             if (entry.found_existing) {
                 const existing = index.constraints[entry.value_ptr.*];
-                if (staticDispatchConstraintsEquivalent(existing, constraint)) continue;
+                if (staticDispatchConstraintsEquivalent(store, existing, constraint)) continue;
                 if (@import("builtin").mode == .debug) {
                     base.invariant(
                         "checked static dispatch constraint invariant violated: duplicate fn_var {d}; existing idx={d} name={s} origin={s} negated={} new idx={d} name={s} origin={s} negated={}",
@@ -2973,12 +2973,12 @@ const StaticDispatchConstraintIndex = struct {
     }
 };
 
-fn staticDispatchConstraintsEquivalent(a: types.StaticDispatchConstraint, b: types.StaticDispatchConstraint) bool {
-    // origin now carries the binop-negation and literal payloads, so structural
-    // equality of origin subsumes the former separate field comparisons.
+fn staticDispatchConstraintsEquivalent(store: *const types.Store, a: types.StaticDispatchConstraint, b: types.StaticDispatchConstraint) bool {
+    // origin carries the binop-negation and literal payloads; numeral facts
+    // compare by content, not by their position in the store's pool.
     return a.fn_name == b.fn_name and
         a.fn_var == b.fn_var and
-        std.meta.eql(a.origin, b.origin);
+        std.meta.eql(store.resolveOrigin(a.origin), store.resolveOrigin(b.origin));
 }
 
 fn staticDispatchResultModeForCheckedValueCall(

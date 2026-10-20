@@ -87,11 +87,12 @@ pub const DocumentStore = struct {
 
         const entry = self.entries.getPtr(uri) orelse return error.DocumentNotFound;
 
-        var current = try self.allocator.dupe(u8, entry.text);
-        var current_owned = true;
-        defer if (current_owned) self.allocator.free(current);
+        // The stored text stays untouched until every change applies, so a
+        // failed change leaves the document as it was.
+        var current = try self.applyChangeToText(entry.text, changes[0]);
+        errdefer self.allocator.free(current);
 
-        for (changes) |change| {
+        for (changes[1..]) |change| {
             const updated = try self.applyChangeToText(current, change);
             self.allocator.free(current);
             current = updated;
@@ -100,7 +101,6 @@ pub const DocumentStore = struct {
         self.allocator.free(entry.text);
         entry.text = current;
         entry.version = version;
-        current_owned = false;
     }
 
     fn applyChangeToText(self: *DocumentStore, text: []const u8, change: ContentChange) (Allocator.Error || error{ InvalidRange, InvalidPosition })![]u8 {

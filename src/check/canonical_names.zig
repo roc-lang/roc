@@ -54,9 +54,15 @@ pub const IntrinsicWrapperId = enum(u32) { _ };
 /// Public `EntryWrapperId` declaration.
 pub const EntryWrapperId = enum(u32) { _ };
 
-/// Public `ArtifactRef` declaration.
-pub const ArtifactRef = struct {
+/// A checked module artifact named by its identity digest
+/// (`CheckedModuleArtifactKey.bytes`).
+pub const ArtifactRef = extern struct {
     bytes: [32]u8 = @as([32]u8, @splat(0)),
+
+    /// Integer equality over the digest: a single 256-bit compare.
+    pub fn eql(a: ArtifactRef, b: ArtifactRef) bool {
+        return @as(u256, @bitCast(a.bytes)) == @as(u256, @bitCast(b.bytes));
+    }
 };
 
 /// 32-byte deep module content identity carried raw at post-check boundaries
@@ -370,18 +376,18 @@ pub const CanonicalNameStore = struct {
     /// The interned names of one text domain below a captured boundary.
     pub const InternerPrefix = struct {
         bytes: []const u8,
-        ranges: []const NameInterner.Range,
+        ends: []const u32,
 
-        pub const empty: InternerPrefix = .{ .bytes = &.{}, .ranges = &.{} };
+        pub const empty: InternerPrefix = .{ .bytes = &.{}, .ends = &.{} };
 
         fn capture(interner: *const NameInterner) InternerPrefix {
-            return .{ .bytes = interner.bytes.items.items, .ranges = interner.ranges.items.items };
+            return .{ .bytes = interner.bytes.items.items, .ends = interner.ends.items.items };
         }
 
         fn borrow(self: InternerPrefix) NameInterner {
             return .{
                 .bytes = .{ .items = std.ArrayList(u8).fromOwnedSlice(@constCast(self.bytes)) },
-                .ranges = .{ .items = std.ArrayList(NameInterner.Range).fromOwnedSlice(@constCast(self.ranges)) },
+                .ends = .{ .items = std.ArrayList(u32).fromOwnedSlice(@constCast(self.ends)) },
                 .supports_inserts = false,
             };
         }
@@ -417,7 +423,7 @@ pub const CanonicalNameStore = struct {
         pub fn boundary(self: PrefixView) EpochBoundary {
             var result: EpochBoundary = undefined;
             inline for (interner_fields) |field| {
-                @field(result, field) = .{ .ids = @intCast(@field(self, field).ranges.len), .bytes = @intCast(@field(self, field).bytes.len) };
+                @field(result, field) = .{ .ids = @intCast(@field(self, field).ends.len), .bytes = @intCast(@field(self, field).bytes.len) };
             }
             result.proc_bases = @intCast(self.proc_bases.len);
             return result;
@@ -462,12 +468,12 @@ pub const CanonicalNameStore = struct {
     };
 
     /// Insert into one of this store's interners. A store that retains
-    /// superseded backings first reserves room for the text and its range, so
+    /// superseded backings first reserves room for the text and its end offset, so
     /// the insert never moves interned names a prefix view may be reading.
     fn insertName(self: *CanonicalNameStore, interner: *NameInterner, text: []const u8) Allocator.Error!u32 {
         if (self.superseded) |superseded| {
             _ = try superseded.ensureUnusedCapacity(u8, &interner.bytes.items, self.allocator, text.len);
-            _ = try superseded.ensureUnusedCapacity(NameInterner.Range, &interner.ranges.items, self.allocator, 1);
+            _ = try superseded.ensureUnusedCapacity(u32, &interner.ends.items, self.allocator, 1);
         }
         return interner.insert(self.allocator, text);
     }

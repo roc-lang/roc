@@ -147,19 +147,10 @@ pub const Serialized = extern struct {
     ) Allocator.Error!CommonEnv {
         const frozen = self.deserializeInto(base_addr, source);
 
-        // `enableRuntimeInserts` copies the interner's bytes and hash table;
-        // the parallel attribute column is copied here so `genUnique` can
-        // extend both halves of an owned store and `deinit` releases both.
+        // `enableRuntimeInserts` copies the interner's bytes and hash table so
+        // `genUnique` can extend an owned store and `deinit` releases it.
         var idents = frozen.idents;
         try idents.enableRuntimeInserts(gpa);
-        idents.attributes = frozen.idents.attributes.clone(gpa) catch |err| {
-            // The interner copy above is owned now, but the attribute column
-            // still aliases the serialized buffer, so it is emptied before the
-            // store is released rather than freed through this allocator.
-            idents.attributes = .{};
-            idents.deinit(gpa);
-            return err;
-        };
         errdefer idents.deinit(gpa);
 
         var strings = try frozen.strings.clone(gpa);

@@ -1584,7 +1584,9 @@ fn testFusionAllocationFailures(allocator: Allocator) TestError!void {
 }
 
 test "tag case fusion releases candidate on every allocation failure including initial join indexing" {
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, testFusionAllocationFailures, .{});
+    // Heap-layout dependent remaps would vary the allocation count between runs.
+    var deterministic = base.DeterministicAllocator.init(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), testFusionAllocationFailures, .{});
 }
 
 test "tag case fusion inventories scale with producers and not unrelated store size" {

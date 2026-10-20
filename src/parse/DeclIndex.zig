@@ -71,16 +71,31 @@ pub const Scope = struct {
     forward_policy: ForwardPolicy,
     owner_type_path: ?TypePathIdx,
     decls: Span,
-    value_decls: std.AutoHashMapUnmanaged(Ident.Idx, NameBucket),
-    type_decls: std.AutoHashMapUnmanaged(Ident.Idx, NameBucket),
-    import_alias_decls: std.AutoHashMapUnmanaged(Ident.Idx, NameBucket),
+    value_decls: std.AutoHashMapUnmanaged(Ident.Idx, StoredBucket),
+    type_decls: std.AutoHashMapUnmanaged(Ident.Idx, StoredBucket),
+    import_alias_decls: std.AutoHashMapUnmanaged(Ident.Idx, StoredBucket),
     region: TokenRegion,
 };
 
-/// All declarations sharing one source name in one parser scope.
+/// All declarations sharing one source name in one parser scope, as the
+/// index keeps them: the first inline, and any later ones in a list from
+/// `DeclIndex.bucket_overflow`. Most names have one declaration.
+pub const StoredBucket = struct {
+    first: DeclIdx,
+    overflow: OverflowIdx = .none,
+};
+
+/// A list in `DeclIndex.bucket_overflow`.
+pub const OverflowIdx = enum(u32) {
+    none = std.math.maxInt(u32),
+    _,
+};
+
+/// All declarations sharing one source name in one parser scope, in source
+/// order. A view of a `StoredBucket`; `DeclIndex.nameBucket` builds one.
 pub const NameBucket = struct {
     first: ?DeclIdx = null,
-    overflow: std.ArrayListUnmanaged(DeclIdx) = .empty,
+    overflow: []const DeclIdx = &.{},
 
     pub const Iterator = struct {
         bucket: NameBucket,
@@ -93,37 +108,24 @@ pub const NameBucket = struct {
             }
 
             const overflow_index = self.index - 1;
-            if (overflow_index >= self.bucket.overflow.items.len) return null;
+            if (overflow_index >= self.bucket.overflow.len) return null;
 
             self.index += 1;
-            return self.bucket.overflow.items[overflow_index];
+            return self.bucket.overflow[overflow_index];
         }
     };
 
-    pub fn append(self: *NameBucket, gpa: std.mem.Allocator, decl_idx: DeclIdx) std.mem.Allocator.Error!void {
-        if (self.first == null) {
-            self.first = decl_idx;
-            return;
-        }
-
-        try self.overflow.append(gpa, decl_idx);
-    }
-
-    pub fn deinit(self: *NameBucket, gpa: std.mem.Allocator) void {
-        self.overflow.deinit(gpa);
-    }
-
     pub fn count(self: NameBucket) usize {
-        return (if (self.first == null) @as(usize, 0) else 1) + self.overflow.items.len;
+        return (if (self.first == null) @as(usize, 0) else 1) + self.overflow.len;
     }
 
     pub fn at(self: NameBucket, index: usize) ?DeclIdx {
         if (index == 0) return self.first;
 
         const overflow_index = index - 1;
-        if (overflow_index >= self.overflow.items.len) return null;
+        if (overflow_index >= self.overflow.len) return null;
 
-        return self.overflow.items[overflow_index];
+        return self.overflow[overflow_index];
     }
 
     pub fn iter(self: NameBucket) Iterator {
@@ -249,8 +251,10 @@ type_dependency_segments: std.ArrayList(Ident.Idx),
 type_paths: std.ArrayList(TypePath),
 type_path_intern: std.AutoHashMapUnmanaged(TypePathKey, TypePathIdx),
 type_path_by_statement: collections.DenseMap(u32, TypePathIdx),
-type_decls_by_path: std.AutoHashMapUnmanaged(TypePathIdx, NameBucket),
-assoc_value_decls: std.AutoHashMapUnmanaged(AssocValue, NameBucket),
+type_decls_by_path: std.AutoHashMapUnmanaged(TypePathIdx, StoredBucket),
+assoc_value_decls: std.AutoHashMapUnmanaged(AssocValue, StoredBucket),
+/// Declarations after the first for names declared more than once.
+bucket_overflow: std.ArrayList(std.ArrayListUnmanaged(DeclIdx)),
 package_header_modules: std.ArrayList(PackageHeaderModule),
 imports: std.ArrayList(Import),
 explicit_unqualified_imports: std.AutoHashMapUnmanaged(Ident.Idx, void),
@@ -273,6 +277,7 @@ pub fn init(gpa: std.mem.Allocator) DeclIndex {
         .type_path_by_statement = .init(gpa),
         .type_decls_by_path = .{},
         .assoc_value_decls = .{},
+        .bucket_overflow = .empty,
         .package_header_modules = .empty,
         .imports = .empty,
         .explicit_unqualified_imports = .{},
@@ -283,11 +288,13 @@ pub fn init(gpa: std.mem.Allocator) DeclIndex {
 /// Release all declaration-index storage.
 pub fn deinit(self: *DeclIndex) void {
     for (self.scopes.items) |*scope| {
-        deinitNameBuckets(Ident.Idx, self.gpa, &scope.value_decls);
-        deinitNameBuckets(Ident.Idx, self.gpa, &scope.type_decls);
-        deinitNameBuckets(Ident.Idx, self.gpa, &scope.import_alias_decls);
+        scope.value_decls.deinit(self.gpa);
+        scope.type_decls.deinit(self.gpa);
+        scope.import_alias_decls.deinit(self.gpa);
     }
-    deinitNameBuckets(AssocValue, self.gpa, &self.assoc_value_decls);
+    self.assoc_value_decls.deinit(self.gpa);
+    for (self.bucket_overflow.items) |*overflow| overflow.deinit(self.gpa);
+    self.bucket_overflow.deinit(self.gpa);
     self.open_scope_decls.deinit(self.gpa);
     self.open_scope_decl_starts.deinit(self.gpa);
     self.scopes.deinit(self.gpa);
@@ -299,19 +306,29 @@ pub fn deinit(self: *DeclIndex) void {
     self.type_paths.deinit(self.gpa);
     self.type_path_intern.deinit(self.gpa);
     self.type_path_by_statement.deinit();
-    deinitNameBuckets(TypePathIdx, self.gpa, &self.type_decls_by_path);
+    self.type_decls_by_path.deinit(self.gpa);
     self.package_header_modules.deinit(self.gpa);
     self.imports.deinit(self.gpa);
     self.explicit_unqualified_imports.deinit(self.gpa);
     self.scope_stack.deinit(self.gpa);
 }
 
-fn deinitNameBuckets(comptime K: type, gpa: std.mem.Allocator, map: *std.AutoHashMapUnmanaged(K, NameBucket)) void {
-    var iter = map.valueIterator();
-    while (iter.next()) |bucket| {
-        bucket.deinit(gpa);
+/// The declarations a stored bucket holds.
+pub fn nameBucket(self: *const DeclIndex, stored: StoredBucket) NameBucket {
+    return .{
+        .first = stored.first,
+        .overflow = if (stored.overflow == .none) &.{} else self.bucket_overflow.items[@backingInt(stored.overflow)].items,
+    };
+}
+
+fn appendToBucket(self: *DeclIndex, bucket: *StoredBucket, decl_idx: DeclIdx) std.mem.Allocator.Error!void {
+    if (bucket.overflow == .none) {
+        const overflow: OverflowIdx = @fromBackingInt(@intCast(self.bucket_overflow.items.len));
+        if (overflow == .none) return error.OutOfMemory;
+        try self.bucket_overflow.append(self.gpa, .empty);
+        bucket.overflow = overflow;
     }
-    map.deinit(gpa);
+    try self.bucket_overflow.items[@backingInt(bucket.overflow)].append(self.gpa, decl_idx);
 }
 
 /// Push a new current declaration scope and return its index.
@@ -391,18 +408,18 @@ pub fn addDecl(self: *DeclIndex, decl: Decl) std.mem.Allocator.Error!DeclIdx {
     try self.decl_by_statement.put(decl.statement, idx);
     if (decl.name_ident) |ident| {
         if (declKindMayBindValue(decl.kind)) {
-            try addDeclToBucket(Ident.Idx, self.gpa, &self.scopes.items[@backingInt(decl.scope)].value_decls, ident, idx);
+            try self.addDeclToBucket(Ident.Idx, &self.scopes.items[@backingInt(decl.scope)].value_decls, ident, idx);
             if (decl.owner_type_path) |owner_path| {
-                try addDeclToBucket(AssocValue, self.gpa, &self.assoc_value_decls, .{
+                try self.addDeclToBucket(AssocValue, &self.assoc_value_decls, .{
                     .owner = owner_path,
                     .item = ident,
                 }, idx);
             }
         } else if (declKindMayBindType(decl.kind)) {
-            try addDeclToBucket(Ident.Idx, self.gpa, &self.scopes.items[@backingInt(decl.scope)].type_decls, ident, idx);
+            try self.addDeclToBucket(Ident.Idx, &self.scopes.items[@backingInt(decl.scope)].type_decls, ident, idx);
             if (decl.type_path) |path| {
                 try self.type_path_by_statement.put(decl.statement, path);
-                try addDeclToBucket(TypePathIdx, self.gpa, &self.type_decls_by_path, path, idx);
+                try self.addDeclToBucket(TypePathIdx, &self.type_decls_by_path, path, idx);
             }
         }
     }
@@ -416,28 +433,30 @@ pub fn addDecl(self: *DeclIndex, decl: Decl) std.mem.Allocator.Error!DeclIdx {
 pub fn addValueName(self: *DeclIndex, scope_idx: ScopeIdx, ident: Ident.Idx, decl_idx: DeclIdx) std.mem.Allocator.Error!void {
     const gop = try self.scopes.items[@backingInt(scope_idx)].value_decls.getOrPut(self.gpa, ident);
     if (!gop.found_existing) {
-        gop.value_ptr.* = .{};
+        gop.value_ptr.* = .{ .first = decl_idx };
+        return;
     }
     // A pattern binding the same name twice registers the declaration once.
-    var existing = gop.value_ptr.iter();
+    var existing = self.nameBucket(gop.value_ptr.*).iter();
     while (existing.next()) |registered| {
         if (registered == decl_idx) return;
     }
-    try gop.value_ptr.append(self.gpa, decl_idx);
+    try self.appendToBucket(gop.value_ptr, decl_idx);
 }
 
 fn addDeclToBucket(
+    self: *DeclIndex,
     comptime K: type,
-    gpa: std.mem.Allocator,
-    map: *std.AutoHashMapUnmanaged(K, NameBucket),
+    map: *std.AutoHashMapUnmanaged(K, StoredBucket),
     key: K,
     decl_idx: DeclIdx,
 ) std.mem.Allocator.Error!void {
-    const gop = try map.getOrPut(gpa, key);
+    const gop = try map.getOrPut(self.gpa, key);
     if (!gop.found_existing) {
-        gop.value_ptr.* = .{};
+        gop.value_ptr.* = .{ .first = decl_idx };
+        return;
     }
-    try gop.value_ptr.append(gpa, decl_idx);
+    try self.appendToBucket(gop.value_ptr, decl_idx);
 }
 
 fn declKindMayBindValue(kind: DeclKind) bool {
@@ -477,17 +496,17 @@ fn declKindMayBindType(kind: DeclKind) bool {
 /// Return all value-like declarations for a name in a scope.
 pub fn scopeValueDecls(self: *const DeclIndex, scope_idx: ScopeIdx, ident: Ident.Idx) NameBucket {
     const scope = &self.scopes.items[@backingInt(scope_idx)];
-    return scope.value_decls.get(ident) orelse .{};
+    return self.nameBucket(scope.value_decls.get(ident) orelse return .{});
 }
 
 /// Record the module alias introduced by an import declaration.
 pub fn addImportAliasDecl(self: *DeclIndex, scope_idx: ScopeIdx, ident: Ident.Idx, decl_idx: DeclIdx) std.mem.Allocator.Error!void {
-    try addDeclToBucket(Ident.Idx, self.gpa, &self.scopes.items[@backingInt(scope_idx)].import_alias_decls, ident, decl_idx);
+    try self.addDeclToBucket(Ident.Idx, &self.scopes.items[@backingInt(scope_idx)].import_alias_decls, ident, decl_idx);
 }
 
 /// Return all associated value declarations for an owner type path and item name.
 pub fn assocValueDecls(self: *const DeclIndex, owner: TypePathIdx, item: Ident.Idx) NameBucket {
-    return self.assoc_value_decls.get(.{ .owner = owner, .item = item }) orelse .{};
+    return self.nameBucket(self.assoc_value_decls.get(.{ .owner = owner, .item = item }) orelse return .{});
 }
 
 /// Record a package-header upper expose that canonicalization should consider
@@ -606,7 +625,7 @@ pub fn declForStatement(self: *const DeclIndex, statement: u32) ?DeclIdx {
 
 /// Return all parser type declarations recorded for a type path in source order.
 pub fn typeDeclsForPath(self: *const DeclIndex, path: TypePathIdx) NameBucket {
-    return self.type_decls_by_path.get(path) orelse .{};
+    return self.nameBucket(self.type_decls_by_path.get(path) orelse return .{});
 }
 
 /// Mark an adjacent annotation and value declaration as one source pair.
@@ -759,7 +778,7 @@ test "scopeValueDecls records only value-binding declarations" {
     try std.testing.expect(index.scopeValueDecls(scope_idx, var_anno_ident).count() != 0);
     try std.testing.expect(index.scopeValueDecls(scope_idx, import_ident).count() == 0);
     try std.testing.expect(index.scopeValueDecls(scope_idx, type_ident).count() == 0);
-    const import_alias_decls = index.scopes.items[@backingInt(scope_idx)].import_alias_decls.get(import_ident).?;
+    const import_alias_decls = index.nameBucket(index.scopes.items[@backingInt(scope_idx)].import_alias_decls.get(import_ident).?);
     try std.testing.expectEqual(@as(usize, 1), import_alias_decls.count());
     try std.testing.expectEqual(import_decl_idx, import_alias_decls.first.?);
 }

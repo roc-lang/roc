@@ -303,6 +303,34 @@ pub const StoredNode = union(enum(u8)) {
     zst,
 };
 
+/// Cached answers of a finished type's two containment walks: whether it
+/// contains an Iter or Stream interface, and whether it contains a named type
+/// whose backing is generated-private representation evidence, each at any
+/// structural depth.
+pub const Containment = packed struct(u8) {
+    iterator_interface: Answer = .unknown,
+    generated_private: Answer = .unknown,
+    _padding: u4 = 0,
+
+    pub const Answer = enum(u2) { unknown, no, yes };
+
+    pub const unknown: Containment = .{};
+
+    pub fn get(self: Containment, comptime query: Store.ContainmentQuery) ?bool {
+        return switch (@field(self, @tagName(query))) {
+            .unknown => null,
+            .no => false,
+            .yes => true,
+        };
+    }
+
+    pub fn with(self: Containment, comptime query: Store.ContainmentQuery, answer: bool) Containment {
+        var result = self;
+        @field(result, @tagName(query)) = if (answer) .yes else .no;
+        return result;
+    }
+};
+
 /// Store for monomorphic types and their shared spans.
 pub const Store = struct {
     /// Scoped diagnostic sink; never copied into store epochs or serialized.
@@ -314,6 +342,8 @@ pub const Store = struct {
     /// Digests of the erased nodes in `types`, by `StoredNode.erased` index.
     erased_digests: StoreList(names.TypeDigest, "erased_digests"),
     type_digests: StoreList(?names.TypeDigest, "type_digests"),
+    /// Empty until the first specialization digest is cached, which most
+    /// stores never compute; from then on it has a row per type.
     specialization_digests: StoreList(?names.TypeDigest, "specialization_digests"),
     equality_digests: StoreList(?names.TypeDigest, "equality_digests"),
     representation_digests: StoreList(?names.TypeDigest, "representation_digests"),
@@ -327,13 +357,8 @@ pub const Store = struct {
     /// without allowing a stale handle to abort a later owner.
     active_transaction: ?u64,
     transaction_epoch: u64,
-    /// Cached immutable answer for whether a finished type contains an Iter or
-    /// Stream interface at any structural depth.
-    iterator_interface_cache: StoreList(?bool, "iterator_interface_cache"),
-    /// Cached immutable answer for whether a finished type contains a named
-    /// type whose backing is generated-private representation evidence at
-    /// any structural depth.
-    generated_private_cache: StoreList(?bool, "generated_private_cache"),
+    /// Cached immutable containment answers per finished type.
+    containment_cache: StoreList(Containment, "containment_cache"),
     /// Reusable exact walk state, shared by both containment caches. Type ids are dense, so epochs provide cycle
     /// detection without allocating a dense map sized to the largest type id
     /// on every closed direct call.
@@ -362,14 +387,14 @@ pub const Store = struct {
     recursive_scc_ranks: std.ArrayList(u32),
     /// Each recorded shape's block digests, in rank order.
     recursive_scc_digests: std.ArrayList(names.TypeDigest),
-    /// Full-content-identity buckets for store-level acyclic interning: full
-    /// digest bytes to every committed candidate that hashed to them,
-    /// resolved to exact equality with `typeEql`. Keys and stored ids are
-    /// content-addressed, so entries stay valid across `restore`
-    /// truncations and need no rollback. A transaction seal reserves the
-    /// entries it will index before it mutates anything, so a bucket
-    /// may exist while empty, which reads identically to an absent one.
-    full_digest_interned: std.AutoHashMap(DigestBucketKey, std.ArrayList(TypeId)),
+    /// Full-content identity for store-level acyclic interning: full digest
+    /// bytes to the committed type that has them. The full digest encodes
+    /// everything `typeEql` compares (design.md, "Type digests"), so one
+    /// digest names one type. Keys and stored ids are content-addressed, so
+    /// entries stay valid across `restore` truncations and need no rollback.
+    /// A transaction seal reserves capacity for the entries it will index
+    /// before it mutates anything.
+    full_digest_interned: std.AutoHashMap(DigestBucketKey, TypeId),
     spans: StoreList(TypeId, "spans"),
     fields: StoreList(Field, "fields"),
     tags: StoreList(Tag, "tags"),
@@ -422,8 +447,7 @@ pub const Store = struct {
             .unfinished_type_count = 0,
             .active_transaction = null,
             .transaction_epoch = 0,
-            .iterator_interface_cache = .empty,
-            .generated_private_cache = .empty,
+            .containment_cache = .empty,
             .iterator_interface_pending = .empty,
             .iterator_interface_visited = .empty,
             .iterator_interface_visit_epochs = .empty,
@@ -432,7 +456,7 @@ pub const Store = struct {
             .recursive_scc_shapes = std.AutoHashMap([32]u8, RecursiveSccShape).init(allocator),
             .recursive_scc_ranks = .empty,
             .recursive_scc_digests = .empty,
-            .full_digest_interned = std.AutoHashMap(DigestBucketKey, std.ArrayList(TypeId)).init(allocator),
+            .full_digest_interned = std.AutoHashMap(DigestBucketKey, TypeId).init(allocator),
             .spans = .empty,
             .fields = .empty,
             .tags = .empty,
@@ -448,7 +472,7 @@ pub const Store = struct {
         if (!self.frozen) Common.invariant("Monotype type cloning requires a frozen graph");
         var result = Store.init(allocator);
         errdefer result.deinit();
-        inline for (.{ "types", "named_nodes", "erased_digests", "type_digests", "specialization_digests", "equality_digests", "representation_digests", "constructing", "iterator_interface_cache", "generated_private_cache", "spans", "fields", "tags", "declared_fields" }) |field| {
+        inline for (.{ "types", "named_nodes", "erased_digests", "type_digests", "specialization_digests", "equality_digests", "representation_digests", "constructing", "containment_cache", "spans", "fields", "tags", "declared_fields" }) |field| {
             try @field(result, field).appendSlice(allocator, @field(self, field).unsafeRawItemsForView());
         }
         // Traversal history is local, but every cloned type still needs a slot
@@ -460,14 +484,9 @@ pub const Store = struct {
         while (unfoldings.next()) |entry| {
             try result.recursive_digest_unfoldings.put(entry.key_ptr.*, entry.value_ptr.*);
         }
-        var buckets = self.full_digest_interned.iterator();
-        while (buckets.next()) |entry| {
-            var copied = std.ArrayList(TypeId).empty;
-            try copied.appendSlice(allocator, entry.value_ptr.items);
-            result.full_digest_interned.put(entry.key_ptr.*, copied) catch |err| {
-                copied.deinit(allocator);
-                return err;
-            };
+        var interned = self.full_digest_interned.iterator();
+        while (interned.next()) |entry| {
+            try result.full_digest_interned.put(entry.key_ptr.*, entry.value_ptr.*);
         }
         result.freeze();
         return result;
@@ -505,7 +524,7 @@ pub const Store = struct {
                         const digest = try self.computeDigest(name_store, ty, mode, null);
                         // Equality unwraps aliases before traversal, so also
                         // cache the answer on the original query id.
-                        self.setCachedDigest(ty, mode, digest);
+                        try self.setCachedDigest(ty, mode, digest);
                     }
                 }
                 @field(self.read_sharing_coverage, query) = true;
@@ -540,8 +559,6 @@ pub const Store = struct {
         self.tags.deinit(self.allocator);
         self.fields.deinit(self.allocator);
         self.spans.deinit(self.allocator);
-        var full_digest_buckets = self.full_digest_interned.valueIterator();
-        while (full_digest_buckets.next()) |bucket| bucket.deinit(self.allocator);
         self.full_digest_interned.deinit();
         self.recursive_digest_unfoldings.deinit();
         self.recursive_scc_shapes.deinit();
@@ -550,8 +567,7 @@ pub const Store = struct {
         self.iterator_interface_visit_epochs.deinit(self.allocator);
         self.iterator_interface_visited.deinit(self.allocator);
         self.iterator_interface_pending.deinit(self.allocator);
-        self.generated_private_cache.deinit(self.allocator);
-        self.iterator_interface_cache.deinit(self.allocator);
+        self.containment_cache.deinit(self.allocator);
         self.constructing.deinit(self.allocator);
         self.equality_digests.deinit(self.allocator);
         self.representation_digests.deinit(self.allocator);
@@ -689,8 +705,9 @@ pub const Store = struct {
         }
         try self.type_digests.append(self.allocator, null);
         errdefer _ = self.type_digests.pop();
-        try self.specialization_digests.append(self.allocator, null);
-        errdefer _ = self.specialization_digests.pop();
+        const specialization_digests_len = self.specialization_digests.len();
+        if (specialization_digests_len != 0) try self.specialization_digests.append(self.allocator, null);
+        errdefer self.specialization_digests.restoreLen(specialization_digests_len);
         try self.equality_digests.append(self.allocator, null);
         errdefer _ = self.equality_digests.pop();
         try self.representation_digests.append(self.allocator, null);
@@ -698,10 +715,8 @@ pub const Store = struct {
         try self.reservePrefixList(&self.constructing, 1);
         self.constructing.appendAssumeCapacity(false);
         errdefer _ = self.constructing.pop();
-        try self.iterator_interface_cache.append(self.allocator, null);
-        errdefer _ = self.iterator_interface_cache.pop();
-        try self.generated_private_cache.append(self.allocator, null);
-        errdefer _ = self.generated_private_cache.pop();
+        try self.containment_cache.append(self.allocator, .unknown);
+        errdefer _ = self.containment_cache.pop();
         try self.iterator_interface_visit_epochs.append(self.allocator, 0);
         return @fromBackingInt(@intCast(@as(u32, @intCast(index))));
     }
@@ -811,8 +826,7 @@ pub const Store = struct {
             Common.compilerBug("filled a Monotype slot without an unfinished construction");
         }
         self.unfinished_type_count -= 1;
-        self.iterator_interface_cache.set(index, null);
-        self.generated_private_cache.set(index, null);
+        self.containment_cache.set(index, .unknown);
     }
 
     pub fn get(self: *const Store, ty: TypeId) Content {
@@ -856,23 +870,20 @@ pub const Store = struct {
         return try self.containsAt(root, .generated_private);
     }
 
-    const ContainmentQuery = enum { iterator_interface, generated_private };
+    pub const ContainmentQuery = enum { iterator_interface, generated_private };
 
-    fn containmentCache(self: *Store, comptime query: ContainmentQuery) *StoreList(?bool, switch (query) {
-        .iterator_interface => "iterator_interface_cache",
-        .generated_private => "generated_private_cache",
-    }) {
-        return switch (query) {
-            .iterator_interface => &self.iterator_interface_cache,
-            .generated_private => &self.generated_private_cache,
-        };
+    fn cachedContainment(self: *const Store, index: usize, comptime query: ContainmentQuery) ?bool {
+        return self.containment_cache.unsafeRawItemsForView()[index].get(query);
+    }
+
+    fn setCachedContainment(self: *Store, index: usize, comptime query: ContainmentQuery, answer: bool) void {
+        self.containment_cache.set(index, self.containment_cache.get(index).with(query, answer));
     }
 
     fn containsAt(self: *Store, root: TypeId, comptime query: ContainmentQuery) std.mem.Allocator.Error!bool {
-        const cache = self.containmentCache(query);
         self.requireConstructed(root);
         const root_index = @backingInt(root);
-        if (cache.unsafeRawItemsForView()[root_index]) |cached| return cached;
+        if (self.cachedContainment(root_index, query)) |cached| return cached;
         if (self.borrowed_read_only) Common.invariant("borrowed Monotype containment cache miss");
 
         self.iterator_interface_pending.clearRetainingCapacity();
@@ -894,9 +905,9 @@ pub const Store = struct {
             try self.iterator_interface_visited.append(self.allocator, ty);
             self.requireConstructed(ty);
             if (ty != root) {
-                if (cache.unsafeRawItemsForView()[ty_index]) |cached| {
+                if (self.cachedContainment(ty_index, query)) |cached| {
                     if (cached) {
-                        cache.set(root_index, true);
+                        self.setCachedContainment(root_index, query, true);
                         return true;
                     }
                     continue;
@@ -944,8 +955,8 @@ pub const Store = struct {
                         .generated_private => if (named.backing) |backing| backing.authority == .generated_private else false,
                     };
                     if (found) {
-                        cache.set(ty_index, true);
-                        cache.set(root_index, true);
+                        self.setCachedContainment(ty_index, query, true);
+                        self.setCachedContainment(root_index, query, true);
                         return true;
                     }
                     const args = self.span(named.args);
@@ -964,7 +975,7 @@ pub const Store = struct {
             }
         }
         for (self.iterator_interface_visited.items) |visited| {
-            cache.set(@backingInt(visited), false);
+            self.setCachedContainment(@backingInt(visited), query, false);
         }
         return false;
     }
@@ -1092,7 +1103,7 @@ pub const Store = struct {
             Common.compilerBug("cannot capture a Monotype type epoch during speculative construction");
         }
         std.debug.assert(self.type_digests.len() == self.types.len());
-        std.debug.assert(self.specialization_digests.len() == self.types.len());
+        std.debug.assert(self.specialization_digests.len() == 0 or self.specialization_digests.len() == self.types.len());
         std.debug.assert(self.equality_digests.len() == self.types.len());
         std.debug.assert(self.representation_digests.len() == self.types.len());
         std.debug.assert(begin.types <= end.types and end.types <= self.types.len());
@@ -1169,8 +1180,7 @@ pub const Store = struct {
         representation_digests_len: usize,
         constructing_len: usize,
         unfinished_type_count: usize,
-        iterator_interface_cache_len: usize,
-        generated_private_cache_len: usize,
+        containment_cache_len: usize,
         iterator_interface_visit_epochs_len: usize,
         spans_len: usize,
         fields_len: usize,
@@ -1189,8 +1199,7 @@ pub const Store = struct {
             .representation_digests_len = self.representation_digests.len(),
             .constructing_len = self.constructing.len(),
             .unfinished_type_count = self.unfinished_type_count,
-            .iterator_interface_cache_len = self.iterator_interface_cache.len(),
-            .generated_private_cache_len = self.generated_private_cache.len(),
+            .containment_cache_len = self.containment_cache.len(),
             .iterator_interface_visit_epochs_len = self.iterator_interface_visit_epochs.len(),
             .spans_len = self.spans.len(),
             .fields_len = self.fields.len(),
@@ -1214,13 +1223,12 @@ pub const Store = struct {
         self.named_nodes.restoreLen(mark_.named_nodes_len);
         self.erased_digests.restoreLen(mark_.erased_digests_len);
         self.type_digests.restoreLen(mark_.type_digests_len);
-        self.specialization_digests.restoreLen(mark_.specialization_digests_len);
+        self.specialization_digests.restoreLen(@min(mark_.specialization_digests_len, self.specialization_digests.len()));
         self.equality_digests.restoreLen(mark_.equality_digests_len);
         self.representation_digests.restoreLen(mark_.representation_digests_len);
         self.constructing.restoreLen(mark_.constructing_len);
         self.unfinished_type_count = mark_.unfinished_type_count;
-        self.iterator_interface_cache.restoreLen(mark_.iterator_interface_cache_len);
-        self.generated_private_cache.restoreLen(mark_.generated_private_cache_len);
+        self.containment_cache.restoreLen(mark_.containment_cache_len);
         // A reserved slot that survives this restore may have been filled
         // after the mark with children that are now truncated and whose ids
         // can be reused, so clear every retained containment answer to force
@@ -1236,8 +1244,7 @@ pub const Store = struct {
         // *surviving* slot's mid-transaction fill before the rollback decision
         // would defeat that, and no caller does.
         if (mark_.unfinished_type_count != 0) {
-            @memset(self.iterator_interface_cache.unsafeRawItemsMutForStore(), null);
-            @memset(self.generated_private_cache.unsafeRawItemsMutForStore(), null);
+            @memset(self.containment_cache.unsafeRawItemsMutForStore(), .unknown);
         }
         self.iterator_interface_visit_epochs.restoreLen(mark_.iterator_interface_visit_epochs_len);
         self.spans.restoreLen(mark_.spans_len);
@@ -1480,12 +1487,10 @@ pub const Store = struct {
         const representative_of_offset = try temp.alloc(u32, suffix_len);
         var representatives = std.ArrayList(TypeId).empty;
 
-        // Speculative offsets grouped by digest, each group chained from its
-        // first classified offset through `group_next` in classification
-        // order. A candidate can only be equal to a digest-equal earlier
-        // candidate, so grouping replaces a scan of the whole suffix per node.
-        var suffix_groups = std.AutoHashMap(DigestBucketKey, SuffixGroup).init(temp);
-        const group_next = try temp.alloc(u32, suffix_len);
+        // The first classified speculative offset with each digest. A
+        // candidate can only be equal to a digest-equal earlier candidate, so
+        // this replaces a scan of the whole suffix per node.
+        var first_with_digest = std.AutoHashMap(DigestBucketKey, u32).init(temp);
 
         // Classify children before the parents that reach them, so comparing
         // a parent meets already-classified children through `classes` and
@@ -1505,20 +1510,17 @@ pub const Store = struct {
             // so it must not become the digest path's panic.
             digests[offset] = try self.computeCommitDigest(name_store, candidate, .full);
             const key = DigestBucketKey.from(digests[offset]);
-            const group = try suffix_groups.getOrPut(key);
-            const earlier_first: ?u32 = if (group.found_existing) group.value_ptr.first else null;
+            const first = try first_with_digest.getOrPut(key);
+            const earlier_first: ?u32 = if (first.found_existing) first.value_ptr.* else null;
+            if (!first.found_existing) first.value_ptr.* = @intCast(offset);
 
             var class: ?TypeId = null;
-            if (self.full_digest_interned.get(key)) |bucket| {
-                for (bucket.items) |existing| {
-                    if (try self.bucketHit(name_store, key, existing, candidate, resolver)) {
-                        class = existing;
-                        break;
-                    }
-                }
+            if (self.full_digest_interned.get(key)) |existing| {
+                try self.assertInternedHit(name_store, key, existing, candidate, resolver);
+                class = existing;
             }
             if (class == null) {
-                // Digest-equal candidates are one type; see `bucketHit`.
+                // Digest-equal candidates are one type; see `full_digest_interned`.
                 if (earlier_first) |earlier| {
                     if (std.debug.runtime_safety) {
                         const earlier_ty: TypeId = @fromBackingInt(@intCast(@as(u32, @intCast(mark_.types_len + earlier))));
@@ -1528,18 +1530,6 @@ pub const Store = struct {
                 }
             }
             classes[offset] = class orelse candidate;
-            // Re-fetched rather than reusing `group.value_ptr`: nothing above
-            // inserts into this map today, but a future one would move it.
-            // Every offset is grouped, not just representatives, so a later
-            // candidate compares against every digest-equal classified node.
-            const grouped = suffix_groups.getPtr(key).?;
-            group_next[offset] = SuffixGroup.end;
-            if (earlier_first == null) {
-                grouped.* = .{ .first = @intCast(offset), .last = @intCast(offset) };
-            } else {
-                group_next[grouped.last] = @intCast(offset);
-                grouped.last = @intCast(offset);
-            }
         }
 
         // Each speculative class is represented by its lowest offset, and
@@ -1594,7 +1584,7 @@ pub const Store = struct {
         // Preflight the durable index. Reserving the map slot and the bucket
         // room for every representative here -- while failing is still free --
         // is what lets the indexing step below run without a fallible call.
-        try self.reserveInternedCapacity(mark_, interned_original, &suffix_groups, group_next, representatives.items.len);
+        try self.full_digest_interned.ensureUnusedCapacity(@intCast(representatives.items.len));
 
         self.restore(mark_);
 
@@ -1623,14 +1613,12 @@ pub const Store = struct {
                     Common.compilerBug("recursive transaction changed a representative's content while rewriting references");
                 }
             }
-            self.setCachedDigest(durable, .full, digest);
+            try self.setCachedDigest(durable, .full, digest);
         }
         for (representatives.items, 0..) |original, representative_index| {
             const durable: TypeId = @fromBackingInt(@intCast(@as(u32, @intCast(mark_.types_len + representative_index))));
             const digest = digests[@backingInt(original) - mark_.types_len];
-            const bucket = self.full_digest_interned.getPtr(DigestBucketKey.from(digest)) orelse
-                Common.compilerBug("recursive transaction indexed a digest with no preflighted bucket");
-            bucket.appendAssumeCapacity(durable);
+            self.full_digest_interned.putAssumeCapacityNoClobber(DigestBucketKey.from(digest), durable);
         }
 
         self.active_transaction = null;
@@ -1775,7 +1763,7 @@ pub const Store = struct {
         // commit intern them by lookup instead of hashing each one again.
         for (closure.items, reserved) |source_ty, destination_ty| {
             inline for (.{ NamedDigestMode.full, NamedDigestMode.identity_only, NamedDigestMode.equality, NamedDigestMode.representation }) |mode| {
-                if (source.cachedDigest(source_ty, mode)) |digest| self.setCachedDigest(destination_ty, mode, digest);
+                if (source.cachedDigest(source_ty, mode)) |digest| try self.setCachedDigest(destination_ty, mode, digest);
             }
         }
 
@@ -2185,39 +2173,6 @@ pub const Store = struct {
         }
     }
 
-    /// One digest's speculative offsets during a seal: the first and last
-    /// classified, chained through the seal's `group_next`.
-    const SuffixGroup = struct {
-        first: u32,
-        last: u32,
-
-        const end = std.math.maxInt(u32);
-    };
-
-    fn reserveInternedCapacity(
-        self: *Store,
-        mark_: Mark,
-        interned_original: []const TypeId,
-        suffix_groups: *const std.AutoHashMap(DigestBucketKey, SuffixGroup),
-        group_next: []const u32,
-        representative_count: usize,
-    ) std.mem.Allocator.Error!void {
-        try self.full_digest_interned.ensureUnusedCapacity(@intCast(representative_count));
-        var groups = suffix_groups.iterator();
-        while (groups.next()) |entry| {
-            var needed: usize = 0;
-            var offset = entry.value_ptr.first;
-            while (offset != SuffixGroup.end) : (offset = group_next[offset]) {
-                const candidate: TypeId = @fromBackingInt(@intCast(@as(u32, @intCast(mark_.types_len + offset))));
-                if (interned_original[offset] == candidate) needed += 1;
-            }
-            if (needed == 0) continue;
-            const bucket = try self.full_digest_interned.getOrPut(entry.key_ptr.*);
-            if (!bucket.found_existing) bucket.value_ptr.* = .empty;
-            try bucket.value_ptr.ensureUnusedCapacity(self.allocator, needed);
-        }
-    }
-
     pub fn ownerHead(self: *const Store, root: TypeId) OwnerHead {
         var ty = root;
         while (true) return switch (self.get(ty)) {
@@ -2485,14 +2440,10 @@ pub const Store = struct {
     }
 
     pub fn verify(self: *const Store, name_store: *const names.NameStore) ?VerifyError {
-        if (self.specialization_digests.len() != self.types.len() or self.equality_digests.len() != self.types.len() or self.representation_digests.len() != self.types.len()) {
+        if ((self.specialization_digests.len() != 0 and self.specialization_digests.len() != self.types.len()) or self.equality_digests.len() != self.types.len() or self.representation_digests.len() != self.types.len()) {
             return .type_digest_count_mismatch;
         }
         return self.view().verify(name_store);
-    }
-
-    pub fn specializationDigestsView(self: *const Store) []const ?names.TypeDigest {
-        return self.specialization_digests.unsafeRawItemsForView();
     }
 
     /// `typeDigest` with optional cache statistics.
@@ -2583,11 +2534,8 @@ pub const Store = struct {
     ) std.mem.Allocator.Error!bool {
         self.requireConstructed(ty);
         const digest = try self.computeDigest(name_store, ty, .full, null);
-        const bucket = self.full_digest_interned.get(DigestBucketKey.from(digest)) orelse return false;
-        for (bucket.items) |existing| {
-            if (existing == ty) return true;
-        }
-        return false;
+        const existing = self.full_digest_interned.get(DigestBucketKey.from(digest)) orelse return false;
+        return existing == ty;
     }
 
     const DigestBucketKey = struct {
@@ -2903,44 +2851,25 @@ pub const Store = struct {
         };
     }
 
-    fn indexInterned(self: *Store, digest: names.TypeDigest, candidate: TypeId) std.mem.Allocator.Error!void {
-        const key = DigestBucketKey.from(digest);
-        if (self.full_digest_interned.getPtr(key)) |bucket| {
-            try bucket.append(self.allocator, candidate);
-            return;
-        }
-        var bucket = std.ArrayList(TypeId).empty;
-        errdefer bucket.deinit(self.allocator);
-        try bucket.append(self.allocator, candidate);
-        try self.full_digest_interned.put(key, bucket);
-    }
-
-    /// Decide whether one digest-bucket entry really is `candidate`.
-    ///
-    /// A bucket only groups digest-equal candidates: `typeEql` stays the sole
-    /// authority for collapsing two ids, because a digest collision must never
-    /// alias distinct types. The debug assertions check the index's own
-    /// invariants around a hit -- the entry carries the bucket's digest, and
-    /// structural equality is symmetric on the pair about to be collapsed --
-    /// so a corrupted bucket or an asymmetric comparison surfaces here instead
-    /// of as a mysteriously shared type downstream.
-    fn bucketHit(
+    /// Check, in safe builds, the index's own invariants around a hit on
+    /// `existing` for `candidate`: the entry carries the key's digest, and
+    /// structural equality is symmetric on the pair about to be collapsed. A
+    /// corrupted index or an asymmetric comparison surfaces here instead of
+    /// as a mysteriously shared type downstream.
+    fn assertInternedHit(
         self: *Store,
         name_store: *const names.NameStore,
         key: DigestBucketKey,
         existing: TypeId,
         candidate: TypeId,
         resolver: ?SuffixClasses,
-    ) std.mem.Allocator.Error!bool {
-        // The full digest is a cryptographic encoding of everything `typeEql`
-        // compares (design.md, "Type digests"), so a bucket entry is the type.
+    ) std.mem.Allocator.Error!void {
         if (std.debug.runtime_safety) {
             const existing_digest = try self.computeDigest(name_store, existing, .full, null);
             std.debug.assert(std.mem.eql(u8, &existing_digest.bytes, &key.bytes));
             std.debug.assert(try typeViewEql(self.view(), self.allocator, name_store, existing, candidate, .exact, resolver));
             std.debug.assert(try typeViewEql(self.view(), self.allocator, name_store, candidate, existing, .exact, resolver));
         }
-        return true;
     }
 
     fn internCandidate(self: *Store, name_store: *const names.NameStore, mark_: Mark, candidate: TypeId) std.mem.Allocator.Error!TypeId {
@@ -2949,18 +2878,13 @@ pub const Store = struct {
 
         const digest = try self.computeCommitDigest(name_store, candidate, .full);
         const key = DigestBucketKey.from(digest);
-        if (self.full_digest_interned.getPtr(key)) |bucket| {
-            for (bucket.items) |existing| {
-                if (try self.bucketHit(name_store, key, existing, candidate, null)) {
-                    self.restore(mark_);
-                    return existing;
-                }
-            }
-            try bucket.append(self.allocator, candidate);
-            return candidate;
+        if (self.full_digest_interned.get(key)) |existing| {
+            try self.assertInternedHit(name_store, key, existing, candidate, null);
+            self.restore(mark_);
+            return existing;
         }
 
-        try self.indexInterned(digest, candidate);
+        try self.full_digest_interned.put(key, candidate);
         return candidate;
     }
 
@@ -3016,7 +2940,7 @@ pub const Store = struct {
 
     /// Sole writer of the digest caches. Digests are content-addressed, so a
     /// re-write must agree with the existing entry.
-    fn setCachedDigest(self: *Store, ty: TypeId, mode: NamedDigestMode, digest: names.TypeDigest) void {
+    fn setCachedDigest(self: *Store, ty: TypeId, mode: NamedDigestMode, digest: names.TypeDigest) std.mem.Allocator.Error!void {
         if (self.borrowed_read_only) Common.invariant("borrowed Monotype digest cache cannot be mutated");
         if (self.cachedDigest(ty, mode)) |existing| {
             std.debug.assert(std.mem.eql(u8, &existing.bytes, &digest.bytes));
@@ -3024,7 +2948,13 @@ pub const Store = struct {
         const index = @backingInt(ty);
         switch (mode) {
             .full => self.type_digests.set(index, digest),
-            .identity_only => self.specialization_digests.set(index, digest),
+            .identity_only => {
+                if (self.specialization_digests.len() == 0) {
+                    try self.specialization_digests.ensureUnusedCapacity(self.allocator, self.types.len());
+                    for (0..self.types.len()) |_| self.specialization_digests.appendAssumeCapacity(null);
+                }
+                self.specialization_digests.set(index, digest);
+            },
             .equality => self.equality_digests.set(index, digest),
             .representation => self.representation_digests.set(index, digest),
         }
@@ -3071,7 +3001,7 @@ pub const Store = struct {
         const digest_ty = self.digestType(ty, mode);
         if (digest_ty != ty) {
             if (self.cachedDigest(digest_ty, mode)) |digest| {
-                self.setCachedDigest(ty, mode, digest);
+                try self.setCachedDigest(ty, mode, digest);
                 if (stats) |s| s.cache_hits += 1;
                 return digest;
             }
@@ -3081,7 +3011,7 @@ pub const Store = struct {
         const digest = try engine.run(digest_ty, mode);
         // Equality unwraps aliases; cache the answer on the original query
         // too, so repeated specialization requests need no alias traversal.
-        if (digest_ty != ty) self.setCachedDigest(ty, mode, digest);
+        if (digest_ty != ty) try self.setCachedDigest(ty, mode, digest);
         return digest;
     }
 
@@ -3726,15 +3656,15 @@ pub const Store = struct {
             if (self.store.recursive_digest_unfoldings.get(digest.bytes)) |member_digest| {
                 digest = member_digest;
             }
-            self.finalizeNode(index, digest);
+            try self.finalizeNode(index, digest);
         }
 
-        fn finalizeNode(self: *DigestEngine, index: u32, digest: names.TypeDigest) void {
+        fn finalizeNode(self: *DigestEngine, index: u32, digest: names.TypeDigest) std.mem.Allocator.Error!void {
             const node = &self.nodes.items[index];
             std.debug.assert(!node.resolved);
             node.digest = digest;
             node.resolved = true;
-            self.store.setCachedDigest(node.ty, node.mode, digest);
+            try self.store.setCachedDigest(node.ty, node.mode, digest);
         }
 
         /// Reduce one cyclic SCC by bisimulation refinement over content
@@ -3812,7 +3742,7 @@ pub const Store = struct {
                     std.debug.assert(!node.resolved);
                     node.digest = digests[rank];
                     node.resolved = true;
-                    self.store.setCachedDigest(node.ty, node.mode, node.digest);
+                    try self.store.setCachedDigest(node.ty, node.mode, node.digest);
                 }
                 return;
             }
@@ -3948,7 +3878,7 @@ pub const Store = struct {
             self.store.recursive_scc_digests.appendSliceAssumeCapacity(block_digest);
             for (members) |node_index| {
                 const node = self.nodes.items[node_index];
-                self.store.setCachedDigest(node.ty, node.mode, node.digest);
+                try self.store.setCachedDigest(node.ty, node.mode, node.digest);
             }
         }
     };
@@ -4942,8 +4872,7 @@ test "monotype cross-store import is atomic under allocation failure" {
             equality_digests: usize,
             representation_digests: usize,
             constructing: usize,
-            iterator_interface_cache: usize,
-            generated_private_cache: usize,
+            containment_cache: usize,
             iterator_interface_visit_epochs: usize,
             spans: usize,
             fields: usize,
@@ -4958,8 +4887,7 @@ test "monotype cross-store import is atomic under allocation failure" {
                     .equality_digests = store.equality_digests.len(),
                     .representation_digests = store.representation_digests.len(),
                     .constructing = store.constructing.len(),
-                    .iterator_interface_cache = store.iterator_interface_cache.len(),
-                    .generated_private_cache = store.generated_private_cache.len(),
+                    .containment_cache = store.containment_cache.len(),
                     .iterator_interface_visit_epochs = store.iterator_interface_visit_epochs.len(),
                     .spans = store.spans.len(),
                     .fields = store.fields.len(),
@@ -5044,11 +4972,11 @@ test "monotype type store acyclic interning reuses child-first function nodes" {
     try std.testing.expectEqual(first, second);
     try std.testing.expectEqual(@as(usize, 2), store.view().types.len);
     try std.testing.expect(store.view().type_digests[@backingInt(first)] != null);
-    try std.testing.expect(store.specializationDigestsView()[@backingInt(first)] == null);
+    try std.testing.expect(store.cachedDigest(first, .identity_only) == null);
     var stats: Store.DigestStats = .{};
     const digest = store.specializationDigestCached(&name_store, first, &stats);
     try std.testing.expect(stats.cache_misses > 0);
-    try std.testing.expectEqual(digest, store.specializationDigestsView()[@backingInt(first)].?);
+    try std.testing.expectEqual(digest, store.cachedDigest(first, .identity_only).?);
 }
 
 test "monotype type store function interning reuses an existing argument span" {
@@ -5090,11 +5018,11 @@ test "monotype type store recursive transaction interns equal SCC positions" {
     try std.testing.expectEqual(result.root, result.remap[0]);
     try std.testing.expectEqual(@as(usize, 1), store.view().types.len);
     try std.testing.expect(store.view().type_digests[@backingInt(result.root)] != null);
-    try std.testing.expect(store.specializationDigestsView()[@backingInt(result.root)] == null);
+    try std.testing.expect(store.cachedDigest(result.root, .identity_only) == null);
     var stats: Store.DigestStats = .{};
     const digest = store.specializationDigestCached(&name_store, result.root, &stats);
     try std.testing.expect(stats.cache_misses > 0);
-    try std.testing.expectEqual(digest, store.specializationDigestsView()[@backingInt(result.root)].?);
+    try std.testing.expectEqual(digest, store.cachedDigest(result.root, .identity_only).?);
 }
 
 test "monotype transaction retains full digests and counts only requested modes" {
@@ -5116,7 +5044,7 @@ test "monotype transaction retains full digests and counts only requested modes"
     const misses = stats.cache_misses;
     for (result.remap) |ty| {
         _ = store.typeDigestCached(&name_store, ty, null);
-        try std.testing.expect(store.specializationDigestsView()[@backingInt(ty)] == null);
+        try std.testing.expect(store.cachedDigest(ty, .identity_only) == null);
     }
     try std.testing.expectEqual(misses, stats.cache_misses);
     const default_requests = stats.root_requests;
@@ -5280,11 +5208,9 @@ test "monotype type store recursive transaction seals atomically under allocatio
             try std.testing.expectEqual(baseline_fields, store.fields.len());
             try std.testing.expectEqual(baseline_tags, store.tags.len());
             try std.testing.expectEqual(baseline_declared, store.declared_fields.len());
-            var buckets = store.full_digest_interned.valueIterator();
-            while (buckets.next()) |bucket| {
-                for (bucket.items) |indexed| {
-                    try std.testing.expect(@backingInt(indexed) < baseline_types);
-                }
+            var interned = store.full_digest_interned.valueIterator();
+            while (interned.next()) |indexed| {
+                try std.testing.expect(@backingInt(indexed.*) < baseline_types);
             }
             try std.testing.expect(store.verify(&name_store) == null);
             break :blk null;
@@ -5436,23 +5362,23 @@ test "monotype type store restores keep durable iterator containment answers" {
     const unit = try store.internZst(&name_store);
     const unit_index = @backingInt(unit);
     try std.testing.expect(!(try store.containsIteratorInterface(unit)));
-    try std.testing.expectEqual(@as(?bool, false), store.iterator_interface_cache.unsafeRawItemsForView()[unit_index]);
+    try std.testing.expectEqual(@as(?bool, false), store.cachedContainment(unit_index, .iterator_interface));
 
     // An interning hit restores the store to its pre-candidate mark.
     _ = try store.internZst(&name_store);
-    try std.testing.expectEqual(@as(?bool, false), store.iterator_interface_cache.unsafeRawItemsForView()[unit_index]);
+    try std.testing.expectEqual(@as(?bool, false), store.cachedContainment(unit_index, .iterator_interface));
 
     const transaction = store.beginTransaction();
     const recursive = try transaction.reserve(&store);
     transaction.fill(&store, recursive, .{ .list = recursive });
     var result = try store.commitTransaction(&name_store, transaction, recursive);
     defer result.deinit();
-    try std.testing.expectEqual(@as(?bool, false), store.iterator_interface_cache.unsafeRawItemsForView()[unit_index]);
+    try std.testing.expectEqual(@as(?bool, false), store.cachedContainment(unit_index, .iterator_interface));
 
     const aborted = store.beginTransaction();
     _ = try aborted.reserve(&store);
     aborted.abort(&store);
-    try std.testing.expectEqual(@as(?bool, false), store.iterator_interface_cache.unsafeRawItemsForView()[unit_index]);
+    try std.testing.expectEqual(@as(?bool, false), store.cachedContainment(unit_index, .iterator_interface));
 }
 
 test "monotype type store acyclic interning normalizes record and tag rows" {
@@ -6804,7 +6730,7 @@ test "frozen monotype clone owns fresh iterator traversal slots for uncached que
     };
     try Attempt.run(allocator, &source, recursive);
     try std.testing.checkAllAllocationFailures(allocator, Attempt.run, .{ &source, recursive });
-    try std.testing.expectEqual(@as(?bool, null), source.iterator_interface_cache.get(@backingInt(recursive)));
+    try std.testing.expectEqual(@as(?bool, null), source.cachedContainment(@backingInt(recursive), .iterator_interface));
 }
 
 test "monotype read sharing borrows prepared recursive and alias queries without allocation" {
@@ -6836,8 +6762,8 @@ test "monotype read sharing borrows prepared recursive and alias queries without
     defer std.testing.allocator.free(equality_before);
     const identity_before = try std.testing.allocator.dupe(?names.TypeDigest, store.specialization_digests.unsafeRawItemsForView());
     defer std.testing.allocator.free(identity_before);
-    const iterator_before = try std.testing.allocator.dupe(?bool, store.iterator_interface_cache.unsafeRawItemsForView());
-    defer std.testing.allocator.free(iterator_before);
+    const containment_before = try std.testing.allocator.dupe(Containment, store.containment_cache.unsafeRawItemsForView());
+    defer std.testing.allocator.free(containment_before);
     var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
     {
         var borrowed = store.borrowReadOnly(failing.allocator());
@@ -6859,7 +6785,7 @@ test "monotype read sharing borrows prepared recursive and alias queries without
     try std.testing.expectEqualDeep(full_before, store.type_digests.unsafeRawItemsForView());
     try std.testing.expectEqualDeep(equality_before, store.equality_digests.unsafeRawItemsForView());
     try std.testing.expectEqualDeep(identity_before, store.specialization_digests.unsafeRawItemsForView());
-    try std.testing.expectEqualDeep(iterator_before, store.iterator_interface_cache.unsafeRawItemsForView());
+    try std.testing.expectEqualDeep(containment_before, store.containment_cache.unsafeRawItemsForView());
     // Mutation after the borrow's lifetime invalidates preparation, and a
     // separately owned frozen clone must never inherit borrowed ownership.
     _ = try store.add(.{ .primitive = .str });
@@ -6893,7 +6819,7 @@ test "monotype read sharing explicit queries leave omitted caches cold and inval
     try store.prepareForReadSharingQueries(&name_store, .spec_constr);
     try std.testing.expectEqualDeep(Store.ReadSharingQueries.spec_constr, store.read_sharing_coverage);
     for (store.specialization_digests.unsafeRawItemsForView()) |digest| try std.testing.expect(digest == null);
-    for (store.iterator_interface_cache.unsafeRawItemsForView()) |answer| try std.testing.expect(answer == null);
+    for (store.containment_cache.unsafeRawItemsForView()) |answer| try std.testing.expect(answer.get(.iterator_interface) == null);
     try std.testing.expectEqual(@as(u32, 0), store.iterator_interface_visit_epoch);
     var stats: Store.DigestStats = .{};
     store.digest_stats = &stats;
@@ -6952,7 +6878,7 @@ test "monotype read sharing selected queries retry after every allocation failur
         };
         try std.testing.expectEqualDeep(Store.ReadSharingQueries.spec_constr, store.read_sharing_coverage);
         for (store.specialization_digests.unsafeRawItemsForView()) |digest| try std.testing.expect(digest == null);
-        for (store.iterator_interface_cache.unsafeRawItemsForView()) |answer| try std.testing.expect(answer == null);
+        for (store.containment_cache.unsafeRawItemsForView()) |answer| try std.testing.expect(answer.get(.iterator_interface) == null);
         failing.fail_index = failing.alloc_index;
         var borrowed = store.borrowReadOnly(failing.allocator());
         defer borrowed.deinit();
@@ -7041,7 +6967,7 @@ test "monotype read sharing preparation retries recursive digest publication aft
         try std.testing.expectEqualDeep(expected.type_digests.unsafeRawItemsForView(), store.type_digests.unsafeRawItemsForView());
         try std.testing.expectEqualDeep(expected.equality_digests.unsafeRawItemsForView(), store.equality_digests.unsafeRawItemsForView());
         try std.testing.expectEqualDeep(expected.specialization_digests.unsafeRawItemsForView(), store.specialization_digests.unsafeRawItemsForView());
-        try std.testing.expectEqualDeep(expected.iterator_interface_cache.unsafeRawItemsForView(), store.iterator_interface_cache.unsafeRawItemsForView());
+        try std.testing.expectEqualDeep(expected.containment_cache.unsafeRawItemsForView(), store.containment_cache.unsafeRawItemsForView());
         try std.testing.expectEqual(expected.recursive_digest_unfoldings.count(), store.recursive_digest_unfoldings.count());
         var unfoldings = expected.recursive_digest_unfoldings.iterator();
         while (unfoldings.next()) |entry| {

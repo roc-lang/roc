@@ -172,7 +172,6 @@ pub const Attributes = packed struct(u3) {
 /// An interner for identifier names.
 pub const Store = struct {
     interner: SmallStringInterner,
-    attributes: collections.SafeList(Attributes) = .{},
     next_unique_name: u32 = 0,
     /// Owned transient scratch, omitted from both serialized representations.
     /// Frozen views can own this scratch separately from their backing bytes.
@@ -197,7 +196,6 @@ pub const Store = struct {
     /// Uses extern struct to guarantee consistent field layout across optimization levels.
     pub const Serialized = extern struct {
         interner: SmallStringInterner.Serialized,
-        attributes: collections.SafeList(Attributes).Serialized,
         next_unique_name: u32,
 
         /// Serialize a Store into this Serialized struct, appending data to the writer
@@ -208,7 +206,6 @@ pub const Store = struct {
             writer: *CompactWriter,
         ) std.mem.Allocator.Error!void {
             try self.interner.serialize(&store.interner, allocator, writer);
-            try self.attributes.serialize(&store.attributes, allocator, writer);
             self.next_unique_name = store.next_unique_name;
         }
 
@@ -217,7 +214,6 @@ pub const Store = struct {
         pub fn deserializeInto(self: *const Serialized, base: usize) Store {
             return Store{
                 .interner = self.interner.deserializeInto(base),
-                .attributes = self.attributes.deserializeInto(base),
                 .next_unique_name = self.next_unique_name,
             };
             // Note: We don't register deserialized stores for debug tracking.
@@ -239,7 +235,6 @@ pub const Store = struct {
     pub fn deinit(self: *Store, gpa: std.mem.Allocator) void {
         self.deinitTextRanks();
         self.interner.deinit(gpa);
-        self.attributes.deinit(gpa);
     }
 
     /// Clone this store into fresh owned memory.
@@ -251,7 +246,6 @@ pub const Store = struct {
         return .{
             .text_rank = text_rank,
             .interner = interner,
-            .attributes = try self.attributes.clone(gpa),
             .next_unique_name = self.next_unique_name,
         };
     }
@@ -343,10 +337,6 @@ pub const Store = struct {
             .ignored = false,
             .reserved = false,
         };
-
-        const expected_idx = self.attributes.items.items.len;
-        const attributes_idx = try self.attributes.append(gpa, attributes);
-        std.debug.assert(@backingInt(attributes_idx) == expected_idx);
 
         const result = Idx{
             .attributes = attributes,
@@ -534,7 +524,6 @@ test "Ident.Store empty CompactWriter roundtrip" {
     // Verify empty - interner always has at least 1 byte (0) to ensure Idx.unused doesn't point to valid data
     try std.testing.expectEqual(@as(usize, 1), deserialized.interner.bytes.len());
     try std.testing.expectEqual(@as(u32, 0), deserialized.interner.entry_count);
-    try std.testing.expectEqual(@as(usize, 0), deserialized.attributes.len());
     try std.testing.expectEqual(@as(u32, 0), deserialized.next_unique_name);
 }
 

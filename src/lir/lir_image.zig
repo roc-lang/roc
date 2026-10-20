@@ -69,7 +69,7 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 ///      layouts are plain layout indices.
 /// v51: statements keep their rows out of line, and the store records its
 ///      lowering modules' keys.
-pub const FORMAT_VERSION: u32 = 51;
+pub const FORMAT_VERSION: u32 = 53;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
@@ -185,6 +185,7 @@ pub const LirStoreImage = extern struct {
     str_match_arms: ArrayRef,
     join_points: ArrayRef,
     locals: ArrayRef,
+    local_descs: ArrayRef,
     local_ids: ArrayRef,
     u64s: ArrayRef,
     u32s: ArrayRef,
@@ -200,8 +201,8 @@ pub const LirStoreImage = extern struct {
     source_file_qualified_ends: ArrayRef,
     source_file_identities: ArrayRef,
     lowering_module_keys: ArrayRef,
-    cf_stmt_locs: ArrayRef,
-    cf_stmt_regions: ArrayRef,
+    cf_stmt_sources: ArrayRef,
+    stmt_sources: ArrayRef,
     cf_stmt_inline_scopes: ArrayRef,
     cf_stmt_origin_kinds: ArrayRef,
     inline_scopes: ArrayRef,
@@ -219,6 +220,7 @@ pub const LirStoreImage = extern struct {
             .str_match_arms = try encoder.ref(store.str_match_arms.unsafeRawItemsForView()),
             .join_points = try encoder.ref(store.join_points.unsafeRawItemsForView()),
             .locals = try encoder.ref(store.locals.unsafeRawItemsForView()),
+            .local_descs = try encoder.ref(store.local_descs.unsafeRawItemsForView()),
             .local_ids = try encoder.ref(store.local_ids.unsafeRawItemsForView()),
             .u64s = try encoder.ref(store.u64s.unsafeRawItemsForView()),
             .u32s = try encoder.ref(store.u32s.unsafeRawItemsForView()),
@@ -234,8 +236,8 @@ pub const LirStoreImage = extern struct {
             .source_file_qualified_ends = try encoder.ref(store.source_file_qualified_ends.unsafeRawItemsForView()),
             .source_file_identities = try encoder.ref(store.source_file_identities.unsafeRawItemsForView()),
             .lowering_module_keys = try encoder.ref(store.lowering_module_keys.unsafeRawItemsForView()),
-            .cf_stmt_locs = try encoder.ref(store.cf_stmt_locs.unsafeRawItemsForView()),
-            .cf_stmt_regions = try encoder.ref(store.cf_stmt_regions.unsafeRawItemsForView()),
+            .cf_stmt_sources = try encoder.ref(store.cf_stmt_sources.unsafeRawItemsForView()),
+            .stmt_sources = try encoder.ref(store.stmt_sources.unsafeRawItemsForView()),
             .cf_stmt_inline_scopes = try encoder.ref(store.cf_stmt_inline_scopes.unsafeRawItemsForView()),
             .cf_stmt_origin_kinds = try encoder.ref(store.cf_stmt_origin_kinds.unsafeRawItemsForView()),
             .inline_scopes = try encoder.ref(store.inline_scopes.unsafeRawItemsForView()),
@@ -268,7 +270,8 @@ pub const LirStoreImage = extern struct {
             .str_match_steps = try guardedListFromRef(LIR.StrMatchStep, "LirStore.str_match_steps", base_ptr, image_size, self.str_match_steps),
             .str_match_arms = try guardedListFromRef(LIR.StrMatchArm, "LirStore.str_match_arms", base_ptr, image_size, self.str_match_arms),
             .join_points = try guardedListFromRef(LIR.JoinPoint, "LirStore.join_points", base_ptr, image_size, self.join_points),
-            .locals = try guardedListFromRef(LIR.Local, "LirStore.locals", base_ptr, image_size, self.locals),
+            .locals = try guardedListFromRef(LirStore.StoredLocal, "LirStore.locals", base_ptr, image_size, self.locals),
+            .local_descs = try guardedListFromRef(LIR.BoxyDescRef, "LirStore.local_descs", base_ptr, image_size, self.local_descs),
             .local_ids = try guardedListFromRef(LIR.LocalId, "LirStore.local_ids", base_ptr, image_size, self.local_ids),
             .u64s = try guardedListFromRef(u64, "LirStore.u64s", base_ptr, image_size, self.u64s),
             .u32s = try guardedListFromRef(u32, "LirStore.u32s", base_ptr, image_size, self.u32s),
@@ -287,8 +290,8 @@ pub const LirStoreImage = extern struct {
             .source_file_qualified_ends = try guardedListFromRef(u32, "LirStore.source_file_qualified_ends", base_ptr, image_size, self.source_file_qualified_ends),
             .source_file_identities = try guardedListFromRef([32]u8, "LirStore.source_file_identities", base_ptr, image_size, self.source_file_identities),
             .lowering_module_keys = try guardedListFromRef([32]u8, "LirStore.lowering_module_keys", base_ptr, image_size, self.lowering_module_keys),
-            .cf_stmt_locs = try guardedListFromRef(base.SourceLoc, "LirStore.cf_stmt_locs", base_ptr, image_size, self.cf_stmt_locs),
-            .cf_stmt_regions = try guardedListFromRef(base.Region, "LirStore.cf_stmt_regions", base_ptr, image_size, self.cf_stmt_regions),
+            .cf_stmt_sources = try guardedListFromRef(LirStore.StmtSourceId, "LirStore.cf_stmt_sources", base_ptr, image_size, self.cf_stmt_sources),
+            .stmt_sources = try guardedListFromRef(LirStore.StmtSource, "LirStore.stmt_sources", base_ptr, image_size, self.stmt_sources),
             .cf_stmt_inline_scopes = try guardedListFromRef(LIR.InlineScopeId, "LirStore.cf_stmt_inline_scopes", base_ptr, image_size, self.cf_stmt_inline_scopes),
             .cf_stmt_origin_kinds = try guardedListFromRef(LIR.OriginKind, "LirStore.cf_stmt_origin_kinds", base_ptr, image_size, self.cf_stmt_origin_kinds),
             .inline_scopes = try guardedListFromRef(LIR.InlineScope, "LirStore.inline_scopes", base_ptr, image_size, self.inline_scopes),
@@ -321,19 +324,19 @@ pub const StringLiteralStoreImage = extern struct {
 /// Portable Boxy names. The insertion index never enters an image.
 pub const BoxyNamesImage = extern struct {
     bytes: ArrayRef,
-    ranges: ArrayRef,
+    ends: ArrayRef,
 
     fn fromStore(encoder: anytype, names: *const core.BoxyNames) @TypeOf(encoder).Error!BoxyNamesImage {
         return .{
             .bytes = try encoder.ref(names.interner.bytes.items.items),
-            .ranges = try encoder.ref(names.interner.ranges.items.items),
+            .ends = try encoder.ref(names.interner.ends.items.items),
         };
     }
 
     fn view(self: BoxyNamesImage, base_ptr: [*]align(1) u8, image_size: usize) ImageError!core.BoxyNames {
         return .{ .interner = .{
             .bytes = try safeListFromRef(u8, base_ptr, image_size, self.bytes),
-            .ranges = try safeListFromRef(base.SerialStringInterner.Range, base_ptr, image_size, self.ranges),
+            .ends = try safeListFromRef(u32, base_ptr, image_size, self.ends),
             .supports_inserts = false,
         } };
     }
@@ -821,11 +824,11 @@ comptime {
     // the "LIR image round-trips every populated store field" test at the
     // bottom of this file, then update the expected field count below. A
     // same-build omission is otherwise silent, since `FORMAT_VERSION` only
-    // guards cross-version mismatches. `tail_call_builder`, `proc_rewrite` and
-    // `facts` are transient worker state, not serialized, and default to
-    // null or empty in views. The layout store's `digest_cache` is a memo
+    // guards cross-version mismatches. `tail_call_builder`, `proc_rewrite`,
+    // `stmt_source_rows`, `rc_effect_rows` and `facts` are transient worker state, not
+    // serialized, and default to null or empty in views. The layout store's `digest_cache` is a memo
     // each view starts empty.
-    std.debug.assert(@typeInfo(LirStore).@"struct".field_names.len == 37);
+    std.debug.assert(@typeInfo(LirStore).@"struct".field_names.len == 40);
     std.debug.assert(@typeInfo(layout_mod.Store).@"struct".field_names.len == 18);
     std.debug.assert(@typeInfo(base.StringLiteral.Store).@"struct".field_names.len == 1);
 
@@ -1501,7 +1504,7 @@ test "LIR image declarations are referenced" {
     std.testing.refAllDecls(@This());
 }
 
-/// The 24 `LirStore` array-backed lists serialized as `ArrayRef`s, in the order
+/// The 25 `LirStore` array-backed lists serialized as `ArrayRef`s, in the order
 /// they appear in `LirStoreImage`. `strings` (a sub-image) and the scalar
 /// `next_synthetic_symbol` are serialized too but exercised separately below.
 const serialized_guarded_fields = [_][]const u8{
@@ -1511,6 +1514,7 @@ const serialized_guarded_fields = [_][]const u8{
     "str_match_arms",
     "join_points",
     "locals",
+    "local_descs",
     "local_ids",
     "u64s",
     "u32s",
@@ -1522,8 +1526,8 @@ const serialized_guarded_fields = [_][]const u8{
     "source_file_qualified_ends",
     "source_file_identities",
     "lowering_module_keys",
-    "cf_stmt_locs",
-    "cf_stmt_regions",
+    "cf_stmt_sources",
+    "stmt_sources",
     "cf_stmt_inline_scopes",
     "cf_stmt_origin_kinds",
     "inline_scopes",
@@ -1784,7 +1788,7 @@ test "LIR image copies and round-trips every populated store field" {
     try std.testing.expectEqualStrings("étiquette", view.store.getBoxyName(unicode_name));
     try std.testing.expectEqualStrings("", view.store.getBoxyName(empty_name));
     try h.expectBytesEq(store.boxy_names.interner.bytes.items.items, view.store.boxy_names.interner.bytes.items.items);
-    try h.expectBytesEq(std.mem.sliceAsBytes(store.boxy_names.interner.ranges.items.items), std.mem.sliceAsBytes(view.store.boxy_names.interner.ranges.items.items));
+    try h.expectBytesEq(std.mem.sliceAsBytes(store.boxy_names.interner.ends.items.items), std.mem.sliceAsBytes(view.store.boxy_names.interner.ends.items.items));
     try std.testing.expectEqual(@as(usize, 0), view.store.boxy_names.interner.index.len());
     try std.testing.expect(!view.store.boxy_names.interner.supports_inserts);
 

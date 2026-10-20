@@ -4062,7 +4062,7 @@ const Lowerer = struct {
 
     fn finishTypeVar(self: *Lowerer, task: *TypeVarTask, content: Type.Content) Common.LowerError!TypeStep {
         const root = task.root;
-        self.types.set(task.reserved, content);
+        try self.types.set(task.reserved, content);
         const solved_content = self.solved.types.get(root);
         if (solved_content == .named and solved_content.named.backing != null) {
             const backing_root = self.solved.types.root(solved_content.named.backing.?.ty);
@@ -4367,7 +4367,7 @@ const Lowerer = struct {
         }
         const capture_items = self.captureSpan(task.captures);
         if (task.fields.items.len < capture_items.len) return typeVarStep(capture_items[task.fields.items.len].ty);
-        self.types.set(task.ty, .{ .capture_record = try self.types.addCaptureFields(task.fields.items) });
+        try self.types.set(task.ty, .{ .capture_record = try self.types.addCaptureFields(task.fields.items) });
         return .{ .ret = .{ .ty = task.ty } };
     }
 
@@ -4433,7 +4433,8 @@ const Lowerer = struct {
         types: SolvedType.Store.View,
         owners: *collections.DenseMap(SolvedType.TypeVarId, SolvedType.TypeVarId),
     ) Common.LowerError!void {
-        for (types.vars, 0..) |content, index| {
+        for (0..types.varCount()) |index| {
+            const content = types.get(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
             if (content != .named) continue;
             const named = content.named;
             if (named.kind == .alias or named.declared_order.len == 0) continue;
@@ -4752,7 +4753,7 @@ const Lowerer = struct {
 
     fn freeConstCallableEntry(allocator: Allocator, captures: []const LirProgram.CaptureSlot, template: LirProgram.FnTemplate) void {
         if (captures.len > 0) allocator.free(captures);
-        if (template.evidence.len > 0) allocator.free(template.evidence);
+        check.ConstStore.freeVector(allocator, template.evidence);
         if (template.evidence_frames.len > 0) allocator.free(template.evidence_frames);
     }
 
@@ -4936,9 +4937,9 @@ const Lowerer = struct {
         return .{ .call = .{ .ty = .{ .ty = ty } } };
     }
 
-    fn finishConstType(self: *Lowerer, task: *ConstTypeTask, stored: const_store.ConstType) ConstStep {
+    fn finishConstType(self: *Lowerer, task: *ConstTypeTask, stored: const_store.ConstType) Common.LowerError!ConstStep {
         const id = task.reserved.?;
-        self.result.const_types.fill(id, stored);
+        try self.result.const_types.fill(id, stored);
         task.reserved = null;
         task.ids.deinit(self.allocator);
         task.args.deinit(self.allocator);
@@ -4960,8 +4961,8 @@ const Lowerer = struct {
                 task.reserved = id;
                 task.cursor = ConstTypeCursor.components;
                 switch (content) {
-                    .primitive => |primitive| return self.finishConstType(task, .{ .primitive = constPrimitive(primitive) }),
-                    .zst => return self.finishConstType(task, .zst),
+                    .primitive => |primitive| return try self.finishConstType(task, .{ .primitive = constPrimitive(primitive) }),
+                    .zst => return try self.finishConstType(task, .zst),
                     .list, .box => |elem| return constTypeStep(elem),
                     // The solved source signature below is the durable authority for
                     // both callable shapes; runtime variant sets are irrelevant here
@@ -4980,8 +4981,8 @@ const Lowerer = struct {
             ConstTypeCursor.components => {
                 const component = input.?.get(.ty);
                 switch (content) {
-                    .list => return self.finishConstType(task, .{ .list = component }),
-                    .box => return self.finishConstType(task, .{ .box = component }),
+                    .list => return try self.finishConstType(task, .{ .list = component }),
+                    .box => return try self.finishConstType(task, .{ .box = component }),
                     .record => |fields| {
                         const field = self.types.fieldAt(fields, task.index);
                         task.fields.items[task.index].ty = component;
@@ -5015,7 +5016,7 @@ const Lowerer = struct {
             ConstTypeCursor.named_backing => {
                 const named = content.named;
                 const backing = named.backing.?;
-                return self.finishConstType(task, .{ .named = .{
+                return try self.finishConstType(task, .{ .named = .{
                     .named_type = .{
                         .module = named.named_type.module,
                         .ty = named.named_type.ty,
@@ -5034,7 +5035,7 @@ const Lowerer = struct {
             },
             ConstTypeCursor.callable_ret => {
                 // A callable's return type.
-                return self.finishConstType(task, .{ .func = .{
+                return try self.finishConstType(task, .{ .func = .{
                     .args = task.args_span,
                     .ret = input.?.get(.ty),
                 } });
@@ -5045,7 +5046,7 @@ const Lowerer = struct {
         switch (content) {
             .tuple => |items| {
                 if (task.ids.items.len < items.len) return constTypeStep(self.types.typeAt(items, task.ids.items.len));
-                return self.finishConstType(task, .{ .tuple = try self.result.const_types.appendTypeSpan(task.ids.items) });
+                return try self.finishConstType(task, .{ .tuple = try self.result.const_types.appendTypeSpan(task.ids.items) });
             },
             .record => |fields| {
                 if (task.index < fields.len) {
@@ -5058,7 +5059,7 @@ const Lowerer = struct {
                     });
                     return constTypeStep(field.ty);
                 }
-                return self.finishConstType(task, .{ .record = try self.result.const_types.appendFieldSpan(task.fields.items) });
+                return try self.finishConstType(task, .{ .record = try self.result.const_types.appendFieldSpan(task.fields.items) });
             },
             .tag_union => |tags| {
                 while (task.index < tags.len) {
@@ -5072,7 +5073,7 @@ const Lowerer = struct {
                     task.ids.clearRetainingCapacity();
                     task.index += 1;
                 }
-                return self.finishConstType(task, .{ .tag_union = try self.result.const_types.appendTagSpan(task.tags.items) });
+                return try self.finishConstType(task, .{ .tag_union = try self.result.const_types.appendTagSpan(task.tags.items) });
             },
             .named => |named| {
                 if (task.args.items.len < named.args.len) return constTypeStep(self.types.typeAt(named.args, task.args.items.len));
@@ -5094,7 +5095,7 @@ const Lowerer = struct {
                     task.cursor = ConstTypeCursor.named_backing;
                     return constTypeStep(backing.ty);
                 }
-                return self.finishConstType(task, .{ .named = .{
+                return try self.finishConstType(task, .{ .named = .{
                     .named_type = .{
                         .module = named.named_type.module,
                         .ty = named.named_type.ty,
@@ -14877,8 +14878,8 @@ fn constFnTemplateForFn(self: *Lowerer, fn_id: Type.FnId) std.mem.Allocator.Erro
     const spec = self.fn_entries.items[@backingInt(fn_id)].spec;
     requireConstFnEvidenceTopology(template);
     const lifted = self.solved.lifted.view();
-    const evidence = try self.allocator.dupe(check.ConstStore.ConstFnEvidence, lifted.const_fn_evidence[template.const_evidence.start..][0..template.const_evidence.len]);
-    errdefer self.allocator.free(evidence);
+    const evidence = try check.ConstStore.dupeVector(self.allocator, lifted.constFnEvidence(template.const_evidence));
+    errdefer check.ConstStore.freeVector(self.allocator, evidence);
     const evidence_frames = try self.allocator.dupe(check.ConstStore.ConstFnEvidenceFrame, lifted.const_fn_evidence_frames[template.const_evidence_frames.start..][0..template.const_evidence_frames.len]);
     return .{
         .frozen_fn = if (template.frozen_fn) |id| @backingInt(id) else null,
@@ -14950,6 +14951,8 @@ fn emptyLiftedProgramForTest(allocator: std.mem.Allocator) Lifted.Program {
         NameStore.init(allocator),
         MonoType.Store.init(allocator),
         .empty, // const_fn_evidence
+        .empty, // const_fn_evidence_targets
+        .empty, // const_fn_evidence_structurals
         .empty, // const_fn_evidence_frames
         .empty, // exprs
         .empty, // pats
@@ -15500,7 +15503,7 @@ test "named layout index reuses structurally equivalent recursive types" {
     const first_backing = try lowerer.types.add(.{ .record = first_fields });
     const equivalent_backing = try lowerer.types.add(.{ .record = equivalent_fields });
 
-    lowerer.types.set(first_ty, .{
+    try lowerer.types.set(first_ty, .{
         .named = .{
             .named_type = .{ .module = .{}, .ty = undefined },
             .def = .{ .module = module_identity, .type_name = first_name, .source_decl = 43 },
@@ -15509,7 +15512,7 @@ test "named layout index reuses structurally equivalent recursive types" {
             .backing = .{ .ty = first_backing, .use = .inspectable },
         },
     });
-    lowerer.types.set(equivalent_ty, .{
+    try lowerer.types.set(equivalent_ty, .{
         .named = .{
             .named_type = .{ .module = .{}, .ty = undefined },
             .def = .{ .module = module_identity, .type_name = equivalent_name, .source_decl = 43 },
@@ -15703,7 +15706,7 @@ test "layout lowering preserves recursive slots across cached children (issue 11
             .{ .name = first, .ty = union_ty, .default = null },
             .{ .name = second, .ty = union_ty, .default = null },
         });
-        lowerer.types.set(record, .{ .record = fields });
+        try lowerer.types.set(record, .{ .record = fields });
         const unrolled = try lowerer.types.add(.{ .record = fields });
 
         const first_layout = try lowerer.layoutOfType(if (unrolled_first) unrolled else record);

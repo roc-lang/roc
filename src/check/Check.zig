@@ -11270,7 +11270,7 @@ fn recordOpenLiteralVar(
                     try self.instantiated_interpolation_owners.append(self.gpa, .{
                         .fn_var = constraint.fn_var,
                         .owner = owner,
-                        .interpolation = constraint.interpolation,
+                        .interpolation = self.types.getInterpolationMetadata(constraint.interpolation),
                     });
                 },
                 .quote => {},
@@ -11358,7 +11358,7 @@ fn mkFlexWithFromNumeralConstraint(
     const constraint = types_mod.StaticDispatchConstraint{
         .fn_name = from_numeral_ident,
         .fn_var = fn_var,
-        .origin = .{ .from_literal = .{ .numeral = num_literal_info } },
+        .origin = .{ .from_literal = .{ .numeral = try self.types.appendNumeralInfo(num_literal_info) } },
     };
     if (source_node != null) {
         try self.recordCurrentExpectDispatchWatcher(fn_var);
@@ -34042,7 +34042,7 @@ fn mkInterpolationConstraint(
         .fn_var = constraint_fn_var,
         .origin = .{ .from_literal = .interpolation },
         .provenance = constraintProvenance(expr_idx),
-        .interpolation = try self.mkInterpolationMetadata(expr_idx, item_var),
+        .interpolation = try self.types.appendInterpolationMetadata(try self.mkInterpolationMetadata(expr_idx, item_var)),
     };
     try self.recordCurrentExpectDispatchWatcher(constraint_fn_var);
     try self.noteHoistDispatchDependency(dispatcher_var, method_name, constraint_fn_var);
@@ -34249,7 +34249,7 @@ fn copyImportedBindingSchemeCodecRequirements(
         // Generated codec requirements cannot carry either metadata shape;
         // both belong to other method families and would require their own
         // source-node/value-pool rebasing rules at this boundary.
-        std.debug.assert(source_constraint.derived_map_plan == null);
+        std.debug.assert(source_constraint.derived_map_plan == .none);
         std.debug.assert(!source_constraint.interpolation.isPresent());
 
         const receiver_var = try copy_import.copyVar(
@@ -34275,6 +34275,7 @@ fn copyImportedBindingSchemeCodecRequirements(
         );
         const method_text = source_env.getIdentStoreConst().getText(source_constraint.fn_name);
         constraint.fn_name = try self.cir.insertIdent(Ident.for_text(method_text));
+        constraint.origin = try self.types.internOrigin(source_env.types.resolveOrigin(source_constraint.origin));
         // Source expression indices are module-local. Every instantiated copy
         // records its destination use expression separately as `failure_expr`.
         constraint.provenance = .{};
@@ -37944,7 +37945,7 @@ fn collectInstanceRequirements(self: *Self, root: Var, out: *std.ArrayListUnmana
                 for (self.types.sliceStaticDispatchConstraints(range)) |constraint| {
                     try pending.append(self.gpa, constraint.fn_var);
                     if (!constraint.interpolation.isPresent()) continue;
-                    const parts = constraint.interpolation.interpolated_parts;
+                    const parts = self.types.getInterpolationMetadata(constraint.interpolation).interpolated_parts;
                     for (0..parts.len()) |part_index| {
                         try pending.append(self.gpa, self.types.getInterpolationPartAt(parts, @intCast(part_index)).var_);
                     }
@@ -38002,7 +38003,7 @@ fn instanceRequirementsAccept(
                 const accepted = switch (constraint.origin) {
                     .from_literal => |literal| switch (literal) {
                         .numeral => if (self.builtinNumKindFromNominalType(nominal)) |kind|
-                            literalInfoAcceptsBuiltinNumKind(literal, kind)
+                            self.literalInfoAcceptsBuiltinNumKind(literal, kind)
                         else
                             try self.staticDispatchConstraintAcceptsCandidate(probe, constraint, requirement.var_, env),
                         .quote, .interpolation => if (self.isBuiltinStrNominal(nominal))
@@ -38029,7 +38030,7 @@ fn instanceRequirementsAccept(
 /// `Str`, exactly as a call site's does.
 fn interpolatedPartsAreStr(self: *Self, probe: *CommitProbe, constraint: StaticDispatchConstraint, env: *Env) Allocator.Error!bool {
     if (!constraint.interpolation.isPresent()) return true;
-    const parts = constraint.interpolation.interpolated_parts;
+    const parts = self.types.getInterpolationMetadata(constraint.interpolation).interpolated_parts;
     for (0..parts.len()) |part_index| {
         const part = self.types.getInterpolationPartAt(parts, @intCast(part_index));
         const str_var = try self.freshStr(env, self.getRegionAt(part.var_));
@@ -38350,7 +38351,7 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
                 member_count += 1;
                 const member_range = self.types.resolveVar(member_root).desc.content.flex.constraints;
                 for (self.types.sliceStaticDispatchConstraints(member_range)) |constraint| {
-                    if (constraint.origin.numeralInfo()) |info| {
+                    if (self.types.constraintNumeralInfo(constraint)) |info| {
                         component_fits = component_fits.intersectWith(info.fits);
                     }
                 }
@@ -40770,7 +40771,7 @@ fn literalSourceRegion(self: *Self, var_: Var) ?Region {
     const resolved = self.types.resolveVar(var_);
     if (resolved.desc.content != .flex) return null;
     for (self.types.sliceStaticDispatchConstraints(resolved.desc.content.flex.constraints)) |constraint| {
-        if (constraint.origin.numeralInfo()) |info| return info.region;
+        if (self.types.constraintNumeralInfo(constraint)) |info| return info.region;
     }
     return null;
 }
@@ -40887,7 +40888,7 @@ fn recordInterpolationPartNumerals(self: *Self) Allocator.Error!void {
         const flex = self.types.resolveVar(root).desc.content.flex;
         for (self.types.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
             if (constraint.origin.literalKind() != .interpolation) continue;
-            const parts = constraint.interpolation.interpolated_parts;
+            const parts = self.types.getInterpolationMetadata(constraint.interpolation).interpolated_parts;
             for (0..parts.len()) |part_i| {
                 const part_var = self.types.resolveVar(self.types.getInterpolationPartAt(parts, @intCast(part_i)).var_).var_;
                 if (self.varLiteralKind(part_var) != .numeral) continue;
@@ -41118,7 +41119,7 @@ fn reportUndeterminedType(
         const shared_subject: problem.UndeterminedType.Subject, const literal_region: Region = switch (kind) {
             .numeral => .{
                 .number_literal_shared_with_string,
-                if (constraint.origin.numeralInfo()) |info|
+                if (self.types.constraintNumeralInfo(constraint)) |info|
                     info.region
                 else
                     self.undeterminedTypeUseRegion(dispatcher_var, constraint, owner_expr),
@@ -41241,8 +41242,8 @@ fn firstInterpolationRegion(self: *Self, constraints: []const StaticDispatchCons
     var first: ?Region = null;
     for (constraints) |constraint| {
         if (constraint.origin.literalKind() != .interpolation) continue;
-        const region = switch (constraint.interpolation.regions) {
-            .this_module => constraint.interpolation.expr_region.get() orelse
+        const region = switch (self.types.getInterpolationMetadata(constraint.interpolation).regions) {
+            .this_module => self.types.getInterpolationMetadata(constraint.interpolation).expr_region.get() orelse
                 base.invariant("an interpolation's literal conversion carries no interpolation metadata", .{}),
             .imported => self.cir.store.getExprRegion(self.instantiatedInterpolationOwner(constraint) orelse continue),
         };
@@ -41599,9 +41600,9 @@ fn tryCommitNumeralCandidate(
 /// Whether the concrete builtin numeric candidate of `num_kind` can represent
 /// the literal payload `lit`. The numeral arm validates the digits fit;
 /// future kinds fill in their own arm (compiler-enforced).
-fn literalInfoAcceptsBuiltinNumKind(lit: StaticDispatchConstraint.LiteralInfo, num_kind: CIR.NumKind) bool {
+fn literalInfoAcceptsBuiltinNumKind(self: *const Self, lit: StaticDispatchConstraint.LiteralInfo, num_kind: CIR.NumKind) bool {
     return switch (lit) {
-        .numeral => |info| validateBuiltinFromNumeralLiteral(num_kind, info) == null,
+        .numeral => |info| validateBuiltinFromNumeralLiteral(num_kind, self.types.getNumeralInfo(info)) == null,
         // A string or interpolation literal can never be represented by a builtin
         // numeric type; its sole candidate (Str) is not a builtin num kind.
         .quote, .interpolation => false,
@@ -41681,7 +41682,7 @@ fn rangeNumeralDigitsFit(
     for (self.types.sliceStaticDispatchConstraints(range)) |constraint| {
         switch (constraint.origin) {
             .from_literal => |lit| {
-                if (!literalInfoAcceptsBuiltinNumKind(lit, candidate_kind)) return false;
+                if (!self.literalInfoAcceptsBuiltinNumKind(lit, candidate_kind)) return false;
             },
             .desugared_binop, .desugared_unaryop, .method_call, .where_clause => {},
         }
@@ -47708,7 +47709,7 @@ fn satisfyBuiltinStrInterpolation(
     failure_expr: ?CIR.Expr.Idx,
     env: *Env,
 ) Allocator.Error!bool {
-    const metadata = constraint.interpolation;
+    const metadata = self.types.getInterpolationMetadata(constraint.interpolation);
     const expr_region = metadata.expr_region.get() orelse {
         if (builtin.mode == .debug) {
             base.invariant("type checker invariant violated: builtin Str interpolation constraint had no metadata", .{});
@@ -47754,7 +47755,7 @@ fn interpolationPartReportRegion(
     part: InterpolationPartMetadata,
     failure_expr: ?CIR.Expr.Idx,
 ) Region {
-    return switch (constraint.interpolation.regions) {
+    return switch (self.types.getInterpolationMetadata(constraint.interpolation).regions) {
         .this_module => part.region,
         .imported => if (failure_expr orelse self.instantiatedInterpolationOwner(constraint)) |owner|
             self.cir.store.getExprRegion(owner)
@@ -47782,7 +47783,7 @@ fn relateInterpolationPartsToItem(
     failure_expr: ?CIR.Expr.Idx,
     env: *Env,
 ) Allocator.Error!void {
-    const metadata = constraint.interpolation;
+    const metadata = self.types.getInterpolationMetadata(constraint.interpolation);
     if (!metadata.isPresent()) {
         if (builtin.mode == .debug) {
             base.invariant("type checker invariant violated: checked interpolation constraint had no generated item type", .{});
@@ -49880,7 +49881,7 @@ fn reportInvalidBuiltinFromNumeralLiteral(
     num_kind: CIR.NumKind,
     _: *Env,
 ) Allocator.Error!bool {
-    const num_literal = constraint.origin.numeralInfo() orelse return false;
+    const num_literal = self.types.constraintNumeralInfo(constraint) orelse return false;
     if (validateBuiltinFromNumeralLiteral(num_kind, num_literal) == null) return false;
 
     // Constraint merging retains aggregate fit facts, while this occurrence
@@ -49904,7 +49905,7 @@ fn firstRejectedOpenNumeral(
     var first_rejected: ?OpenNumeralLiteral = null;
     for (self.open_numeral_literals.items) |entry| {
         if (self.types.resolveVar(entry.var_).var_ != dispatcher_root) continue;
-        const info = entry.constraint.origin.numeralInfo() orelse continue;
+        const info = self.types.constraintNumeralInfo(entry.constraint) orelse continue;
         if (validateBuiltinFromNumeralLiteral(num_kind, info) != null) {
             // Raw constraint fn vars retain occurrence identity even when
             // unification puts several callables in one rejected class.
@@ -49952,7 +49953,7 @@ fn rejectInvalidBuiltinNumeralOccurrence(
     constraint: StaticDispatchConstraint,
     num_kind: CIR.NumKind,
 ) Allocator.Error!bool {
-    const num_literal = constraint.origin.numeralInfo() orelse return false;
+    const num_literal = self.types.constraintNumeralInfo(constraint) orelse return false;
     if (validateBuiltinFromNumeralLiteral(num_kind, num_literal) == null) return false;
     const failure_expr = constraintIntroExpr(constraint) orelse self.constraintSourceExpr(dispatcher_var, constraint);
     if (self.staticDispatchConstraintIsInactive(constraint)) {
@@ -49975,7 +49976,7 @@ fn reportUnmaterializableNumeralLiteral(
     constraint: StaticDispatchConstraint,
     _: *Env,
 ) Allocator.Error!bool {
-    const num_literal = constraint.origin.numeralInfo() orelse return false;
+    const num_literal = self.types.constraintNumeralInfo(constraint) orelse return false;
     if (num_literal.can_materialize_numeral) return false;
     const failure_expr = constraintIntroExpr(constraint) orelse self.constraintSourceExpr(dispatcher_var, constraint);
     if (self.staticDispatchConstraintIsInactive(constraint)) {
@@ -51998,11 +51999,12 @@ fn mappedStructuralTagUnion(
     return try self.freshFromContent(try self.types.mkTagUnion(mapped_tags, ext), env, region);
 }
 
-fn recordDerivedMapPlan(self: *Self, constraint_fn_var: Var, plan: types_mod.DerivedMapPlan) void {
+fn recordDerivedMapPlan(self: *Self, constraint_fn_var: Var, plan: types_mod.DerivedMapPlan) Allocator.Error!void {
     const fn_root = self.types.resolveVar(constraint_fn_var).var_;
+    const pooled = try self.types.appendDerivedMapPlan(plan);
     for (self.types.static_dispatch_constraints.items.items) |*constraint| {
         if (self.types.resolveVar(constraint.fn_var).var_ == fn_root) {
-            constraint.derived_map_plan = plan;
+            constraint.derived_map_plan = pooled;
         }
     }
 }
@@ -52082,7 +52084,7 @@ fn satisfyDerivedMapConstraint(
         return .unsupported;
     }
 
-    self.recordDerivedMapPlan(constraint.fn_var, analysis.plan);
+    try self.recordDerivedMapPlan(constraint.fn_var, analysis.plan);
     try self.recordSuccessfulStaticDispatch(constraint);
     return .satisfied;
 }
@@ -56519,7 +56521,7 @@ fn reportConstraintErrorAt(
                     .method_name = constraint.fn_name,
                     .origin = constraint.origin,
                     .owner_region = owner_region,
-                    .num_literal = constraint.origin.numeralInfo(),
+                    .num_literal = self.types.constraintNumeralInfo(constraint),
                     .quote_region = self.quoteLiteralRegionForDispatcher(constraint, dispatcher_var),
                     .str_conversion = if (constraint.origin.literalKind() == .numeral)
                         try self.numeralDispatcherStrConversion(dispatcher_var)

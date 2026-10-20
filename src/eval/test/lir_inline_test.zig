@@ -4378,8 +4378,7 @@ test "LIR statements and procs carry resolved source locations" {
     defer lowered_source.deinit(allocator);
 
     const store = &lowered_source.lowered.lir_result.store;
-    try std.testing.expectEqual(store.getCFStmts().len, store.cf_stmt_locs.unsafeRawItemsForView().len);
-    try std.testing.expectEqual(store.getCFStmts().len, store.cf_stmt_regions.unsafeRawItemsForView().len);
+    try std.testing.expectEqual(store.getCFStmts().len, store.cf_stmt_sources.unsafeRawItemsForView().len);
     try std.testing.expectEqual(store.getProcSpecs().len, store.proc_locs.unsafeRawItemsForView().len);
     try std.testing.expect(store.proc_debug_names.unsafeRawItemsForView().len > 0);
     for (store.proc_debug_names.unsafeRawItemsForView()) |entry| {
@@ -4388,7 +4387,10 @@ test "LIR statements and procs carry resolved source locations" {
     try std.testing.expect(store.sourceFileCount() >= 1);
 
     var located: usize = 0;
-    for (store.cf_stmt_locs.unsafeRawItemsForView(), store.cf_stmt_regions.unsafeRawItemsForView(), store.getCFStmts()) |loc, region, stmt| {
+    for (store.getCFStmts(), 0..) |stmt, stmt_index| {
+        const stmt_id: lir.LIR.CFStmtId = @fromBackingInt(@intCast(stmt_index));
+        const loc = store.stmtLoc(stmt_id);
+        const region = store.stmtRegion(stmt_id);
         const has_source = switch (stmt) {
             .incref,
             .decref,
@@ -4557,7 +4559,10 @@ test "LIR statements carry source locations under optimizing inline mode" {
 
     const store = &lowered_source.lowered.lir_result.store;
     var located: usize = 0;
-    for (store.cf_stmt_locs.unsafeRawItemsForView(), store.cf_stmt_regions.unsafeRawItemsForView()) |loc, region| {
+    for (0..store.getCFStmts().len) |stmt_index| {
+        const stmt_id: lir.LIR.CFStmtId = @fromBackingInt(@intCast(stmt_index));
+        const loc = store.stmtLoc(stmt_id);
+        const region = store.stmtRegion(stmt_id);
         if (loc.hasLocation()) located += 1;
         if (loc.hasLocation()) try std.testing.expect(!region.isEmpty());
     }
@@ -9086,7 +9091,8 @@ test "literal conversion ownership includes nested codec evidence" {
         try std.testing.expectEqual(@as(usize, 0), resources.checker.problems.problems.items.len);
         try std.testing.expect((try artifact.validateDispatchEvidence()) == null);
         var dependent_conversions: usize = 0;
-        for (artifact.checked_bodies.stored_exprs.items) |expr| {
+        for (artifact.checked_bodies.stored_exprs.items, 0..) |expr, expr_index| {
+            const expr_id: check.CheckedArtifact.CheckedExprId = @fromBackingInt(@intCast(expr_index));
             const plan_id = switch (expr.data) {
                 .numeral => |numeral| numeral.plan orelse continue,
                 .str_from_quote => |quote| quote.plan orelse continue,
@@ -9139,7 +9145,7 @@ test "literal conversion ownership includes nested codec evidence" {
             };
             const plan = artifact.static_dispatch_plans.plans[@backingInt(plan_id)];
             try std.testing.expect(plan.resolution == .direct_parametric);
-            try std.testing.expect(artifact.checked_bodies.literalConversionRoot(expr.id) == null);
+            try std.testing.expect(artifact.checked_bodies.literalConversionRoot(expr_id) == null);
             dependent_conversions += 1;
         }
         try std.testing.expectEqual(@as(usize, 1), dependent_conversions);
@@ -9466,10 +9472,10 @@ test "dispatch evidence boundary validator reports a removed dispatch plan by ex
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     var removed: ?check.CheckedArtifact.CheckedExprId = null;
-    for (resources.checked_artifact.checked_bodies.stored_exprs.items) |*expr| {
+    for (resources.checked_artifact.checked_bodies.stored_exprs.items, 0..) |*expr, expr_index| {
         if (std.meta.activeTag(expr.data) == .dispatch_call and expr.data.dispatch_call != null) {
             expr.data = .{ .dispatch_call = null };
-            removed = expr.id;
+            removed = @fromBackingInt(@intCast(expr_index));
             break;
         }
     }
