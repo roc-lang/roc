@@ -5859,7 +5859,7 @@ pub const BoxyRuntime = struct {
             .primitive => |stored| switch (self.layout_store.getLayout(stored.layout).getScalar().tag) {
                 .str => try self.appendQuotedInspectBytes(out, readRocStr(stored.value)),
                 .int, .frac, .opaque_ptr => try self.appendScalarInspect(out, stored.value, stored.layout),
-                .vector => unreachable,
+                .vector => unreachable, // inspectShape rejects a vector before yielding a primitive shape
             },
             .record => |record| {
                 var sink = InspectStructSink(@TypeOf(hooks)){ .runtime = self, .hooks = hooks, .out = out, .aggregate = record };

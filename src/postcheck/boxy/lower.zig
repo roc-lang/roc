@@ -29039,7 +29039,7 @@ const ProcBodyBuilder = struct {
             const destruct = ctx.fieldDestruct(pat, index);
             const child = switch (destruct.kind) {
                 .required, .sub_pattern => |child| child,
-                .rest => unreachable,
+                .rest => unreachable, // fieldDestruct returns only required and sub-pattern destructs
             };
             const access = ctx.b.recordFieldAccessInfo(ctx.b.repForType(record.ty), ctx.b.module, destruct.label);
             const child_ty = ctx.pattern(child).ty;
