@@ -71,6 +71,8 @@ pub const Program = struct {
     main_proc: LirProcSpecId,
     static_data: []const backend.StaticDataExport = &.{},
     static_data_value_count: usize = 0,
+    /// Executor wasm body generation runs on; null generates every body inline.
+    post_check_executor: ?base.post_check_task_executor.Executor = null,
 };
 
 /// Explicit dependency for platform-hosted calls during inspected execution.
@@ -464,6 +466,28 @@ fn runWasm(allocator: Allocator, program: Program) WasmError!Result {
 pub fn runWasmAt(allocator: Allocator, program: Program, cpu_level: roc_target.CpuLevel) WasmError!Result {
     if (comptime builtin.target.os.tag == .freestanding) return error.WasmExecFailed;
 
+    const wasm_result = try generateWasmModule(allocator, program, cpu_level);
+    defer allocator.free(wasm_result.wasm_bytes);
+
+    const result = try WasmRunner.runWasmOutcomeWithStats(
+        allocator,
+        wasm_result.wasm_bytes,
+        wasm_result.heap_base,
+        wasm_result.has_imports,
+    );
+    return .{
+        .outcome = switch (result.outcome) {
+            .returned => |output| .{ .returned = output },
+            .crashed => |message| .{ .crashed = message },
+        },
+        .events = result.events,
+        .allocation_count = result.allocation_count,
+    };
+}
+
+/// Generate the wasm module `runWasmAt` runs, with builtins and the Boxy
+/// runtime built for `cpu_level`. The caller owns the returned bytes.
+pub fn generateWasmModule(allocator: Allocator, program: Program, cpu_level: roc_target.CpuLevel) WasmError!backend.wasm.WasmCodeGen.GenerateResult {
     var codegen = backend.wasm.WasmCodeGen.init(
         allocator,
         program.store,
@@ -474,6 +498,7 @@ pub fn runWasmAt(allocator: Allocator, program: Program, cpu_level: roc_target.C
         cpu_level,
     );
     defer codegen.deinit();
+    codegen.executor = program.post_check_executor;
     const helpers = try backend.collectRequiredRcHelpers(allocator, program.static_data);
     defer allocator.free(helpers);
     codegen.static_data_rc_helpers = helpers;
@@ -495,25 +520,9 @@ pub fn runWasmAt(allocator: Allocator, program: Program, cpu_level: roc_target.C
         .default => wasm32_builtins.bytes,
         .v1 => wasm32v1_builtins.bytes,
     };
-    const wasm_result = codegen.generateModule(program.main_proc, proc.ret_layout, builtins_object, runtime_input) catch |err| switch (err) {
+    return codegen.generateModule(program.main_proc, proc.ret_layout, builtins_object, runtime_input) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.HostedFunctionTypeMismatch => return error.Internal,
-    };
-    defer allocator.free(wasm_result.wasm_bytes);
-
-    const result = try WasmRunner.runWasmOutcomeWithStats(
-        allocator,
-        wasm_result.wasm_bytes,
-        wasm_result.heap_base,
-        wasm_result.has_imports,
-    );
-    return .{
-        .outcome = switch (result.outcome) {
-            .returned => |output| .{ .returned = output },
-            .crashed => |message| .{ .crashed = message },
-        },
-        .events = result.events,
-        .allocation_count = result.allocation_count,
     };
 }
 
