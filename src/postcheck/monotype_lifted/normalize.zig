@@ -291,7 +291,7 @@ const Normalizer = struct {
                 .let_ => |*binding| binding.value = child,
                 .expr, .dbg, .expect => |*value| value.* = child,
                 .return_ => |*ret| ret.value = child,
-                .uninitialized, .crash, .checked_error => unreachable,
+                .uninitialized, .crash, .checked_error => unreachable, // frame.current holds only statements that requested a child, and these request none
             }
             const saved = current.saved;
             const stmt = current.stmt;
@@ -449,7 +449,7 @@ const Normalizer = struct {
             .comptime_exhaustiveness_failed,
             .expect_err,
             .literal_rejected,
-            => unreachable,
+            => unreachable, // finishOperand turns terminal operands into a terminated sink, where finishOperands stops before naming
             .lambda,
             .def_ref,
             .fn_def,
@@ -612,7 +612,7 @@ const Normalizer = struct {
                 hash.value = values[0];
                 hash.hasher = values[1];
             },
-            .local, .unit, .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .uninitialized, .uninitialized_payload, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .nominal, .let_, .field_access, .tuple_access, .match_, .if_, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .join_point, .comptime_branch_taken, .dbg, .expect, .@"unreachable", .break_, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .expect_err, .literal_rejected, .lambda, .def_ref, .fn_def => unreachable,
+            .local, .unit, .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .uninitialized, .uninitialized_payload, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .nominal, .let_, .field_access, .tuple_access, .match_, .if_, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .join_point, .comptime_branch_taken, .dbg, .expect, .@"unreachable", .break_, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .expect_err, .literal_rejected, .lambda, .def_ref, .fn_def => unreachable, // beginOperands groups none of these, so applyOperands never runs for them
         }
     }
 
@@ -646,7 +646,7 @@ const Normalizer = struct {
         }
         switch (frame.data) {
             .loop_ => |*loop| loop.body = delivered.?,
-            .list, .tuple, .record, .record_update, .tag, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .continue_, .jump, .local, .unit, .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .uninitialized, .uninitialized_payload, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .nominal, .let_, .field_access, .tuple_access, .match_, .if_, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .join_point, .comptime_branch_taken, .dbg, .expect, .@"unreachable", .break_, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .expect_err, .literal_rejected, .lambda, .def_ref, .fn_def => unreachable,
+            .list, .tuple, .record, .record_update, .tag, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .continue_, .jump, .local, .unit, .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .uninitialized, .uninitialized_payload, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .nominal, .let_, .field_access, .tuple_access, .match_, .if_, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .join_point, .comptime_branch_taken, .dbg, .expect, .@"unreachable", .break_, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .expect_err, .literal_rejected, .lambda, .def_ref, .fn_def => unreachable, // only .loop_ requests a child after its operand group, so only it is delivered here
         }
         return try self.finishExpr(frame);
     }
@@ -747,7 +747,7 @@ const Normalizer = struct {
                 return .{ .done = frame.source };
             },
             .local, .unit, .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .uninitialized, .uninitialized_payload, .crash, .checked_error, .comptime_exhaustiveness_failed => return .{ .done = frame.source },
-            .list, .tuple, .record, .record_update, .tag, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .loop_, .continue_, .jump => unreachable,
+            .list, .tuple, .record, .record_update, .tag, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .loop_, .continue_, .jump => unreachable, // beginOperands groups these, so stepExpr never hands them to stepStructured
         }
     }
 

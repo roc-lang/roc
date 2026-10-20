@@ -5,7 +5,6 @@
 //! chooses the dispatcher type variable explicitly.
 
 const std = @import("std");
-const builtin_config = @import("builtin");
 const base = @import("base");
 const can = @import("can");
 const types = @import("types");
@@ -834,13 +833,10 @@ pub const MethodRegistry = struct {
 
         const module_idx = module.moduleIndex();
         if (module_idx != local_templates.module_idx) {
-            if (@import("builtin").mode == .debug) {
-                base.invariant(
-                    "checked static dispatch registry invariant violated: template lookup module {d} does not match module {d}",
-                    .{ local_templates.module_idx, module_idx },
-                );
-            }
-            unreachable;
+            base.invariant(
+                "checked static dispatch registry invariant violated: template lookup module {d} does not match module {d}",
+                .{ local_templates.module_idx, module_idx },
+            );
         }
 
         const module_env = module.moduleEnvConst();
@@ -849,13 +845,10 @@ pub const MethodRegistry = struct {
 
         for (module.methodDefEntries()) |entry| {
             const method_ident = module_env.lookupMethodIdentForMethodOwnerConst(entry.key.ownerIdent(), entry.key.methodIdent()) orelse {
-                if (@import("builtin").mode == .debug) {
-                    base.invariant(
-                        "checked static dispatch registry invariant violated: method def for owner {d} method {d} has no method ident",
-                        .{ @backingInt(entry.key.owner), entry.key.method_ident_bits },
-                    );
-                }
-                unreachable;
+                base.invariant(
+                    "checked static dispatch registry invariant violated: method def for owner {d} method {d} has no method ident",
+                    .{ @backingInt(entry.key.owner), entry.key.method_ident_bits },
+                );
             };
             const def_idx = entry.value.def_idx;
             if (unsupportedGeneratedMethodBinding(module, entry.value)) continue;
@@ -988,7 +981,9 @@ fn methodTargetCallableVar(
             const raw_node = @backingInt(binding.type_node_idx);
             const statement: CIR.Statement.Idx = @fromBackingInt(@intCast(raw_node));
             const statement_data = module.getStatement(statement);
-            if (std.meta.activeTag(statement_data) != .s_decl) unreachable;
+            if (std.meta.activeTag(statement_data) != .s_decl) {
+                base.invariant("checked static dispatch registry invariant violated: local procedure method binding is not a declaration statement", .{});
+            }
             const decl = statement_data.s_decl;
             break :blk module.exprType(decl.expr);
         },
@@ -1020,13 +1015,10 @@ fn methodBindingExpr(
 ) ?CIR.Expr.Idx {
     const raw_node = @backingInt(binding.type_node_idx);
     if (raw_node >= module.nodeCount()) {
-        if (@import("builtin").mode == .debug) {
-            base.invariant(
-                "checked static dispatch registry invariant violated: method binding node {d} is outside the module node store",
-                .{raw_node},
-            );
-        }
-        unreachable;
+        base.invariant(
+            "checked static dispatch registry invariant violated: method binding node {d} is outside the module node store",
+            .{raw_node},
+        );
     }
 
     const node_tag = module.nodeTag(binding.type_node_idx);
@@ -1075,13 +1067,10 @@ fn localProcedureTargetForMethodBinding(
 ) ?LocalProcedureMethodTarget {
     const raw_node = @backingInt(binding.type_node_idx);
     if (raw_node >= module.nodeCount()) {
-        if (@import("builtin").mode == .debug) {
-            base.invariant(
-                "checked static dispatch registry invariant violated: method binding node {d} is outside the module node store",
-                .{raw_node},
-            );
-        }
-        unreachable;
+        base.invariant(
+            "checked static dispatch registry invariant violated: method binding node {d} is outside the module node store",
+            .{raw_node},
+        );
     }
     if (module.nodeTag(binding.type_node_idx) != .statement_decl) return null;
 
@@ -1094,23 +1083,17 @@ fn localProcedureTargetForMethodBinding(
 
     const expr = checked_bodies.exprIdForSource(decl.expr) orelse return null;
     const binder = checked_bodies.patternBinderForSource(decl.pattern) orelse {
-        if (@import("builtin").mode == .debug) {
-            base.invariant(
-                "checked static dispatch registry invariant violated: local method pattern {d} has no checked binder",
-                .{@backingInt(decl.pattern)},
-            );
-        }
-        unreachable;
+        base.invariant(
+            "checked static dispatch registry invariant violated: local method pattern {d} has no checked binder",
+            .{@backingInt(decl.pattern)},
+        );
     };
 
     const context_anchor = checked_bodies.statementIdForSource(owner_statement) orelse {
-        if (@import("builtin").mode == .debug) {
-            base.invariant(
-                "checked static dispatch registry invariant violated: local method owner statement {d} has no checked statement",
-                .{@backingInt(owner_statement)},
-            );
-        }
-        unreachable;
+        base.invariant(
+            "checked static dispatch registry invariant violated: local method owner statement {d} has no checked statement",
+            .{@backingInt(owner_statement)},
+        );
     };
 
     return .{
@@ -1257,23 +1240,17 @@ fn methodOwnerForRegistryEntry(
     }
 
     const identity_hash = owner_env.contentIdentityHash() orelse {
-        if (@import("builtin").mode == .debug) {
-            base.invariant(
-                "checked static dispatch registry invariant violated: module '{s}' has no content identity",
-                .{owner_env.module_name},
-            );
-        }
-        unreachable;
+        base.invariant(
+            "checked static dispatch registry invariant violated: module '{s}' has no content identity",
+            .{owner_env.module_name},
+        );
     };
     const stmt_tag = std.meta.activeTag(owner_env.store.getStatement(owner.owner));
     if (stmt_tag != .s_nominal_decl and stmt_tag != .s_alias_decl) {
-        if (@import("builtin").mode == .debug) {
-            base.invariant(
-                "checked static dispatch registry invariant violated: method owner statement {d} is not a type declaration",
-                .{@backingInt(owner.owner)},
-            );
-        }
-        unreachable;
+        base.invariant(
+            "checked static dispatch registry invariant violated: method owner statement {d} is not a type declaration",
+            .{@backingInt(owner.owner)},
+        );
     }
     return .{ .nominal = .{
         .module = try names.internModuleIdentity(identity_hash),
@@ -1296,13 +1273,10 @@ fn methodOwnerEnvForRegistryEntry(
         if (ownerEnvIdentityMatches(candidate, owner_hash)) return candidate;
     }
 
-    if (@import("builtin").mode == .debug) {
-        base.invariant(
-            "checked static dispatch registry invariant violated: could not find owner module for receiver method on declaration {d} of module '{s}'",
-            .{ @backingInt(owner.owner), module_env.module_name },
-        );
-    }
-    unreachable;
+    base.invariant(
+        "checked static dispatch registry invariant violated: could not find owner module for receiver method on declaration {d} of module '{s}'",
+        .{ @backingInt(owner.owner), module_env.module_name },
+    );
 }
 
 fn methodOwnerIdentityHashForRegistryEntry(
@@ -1311,13 +1285,10 @@ fn methodOwnerIdentityHashForRegistryEntry(
 ) *const base.ModuleIdentity.Hash {
     const owner_identity = owner.moduleIdentity() orelse {
         return module_env.contentIdentityHash() orelse {
-            if (@import("builtin").mode == .debug) {
-                base.invariant(
-                    "checked static dispatch registry invariant violated: local module '{s}' has no content identity",
-                    .{module_env.module_name},
-                );
-            }
-            unreachable;
+            base.invariant(
+                "checked static dispatch registry invariant violated: local module '{s}' has no content identity",
+                .{module_env.module_name},
+            );
         };
     };
     return module_env.moduleIdentityHash(owner_identity);
@@ -1405,10 +1376,7 @@ fn assertMethodRegistryKeysUnique(entries: []const MethodRegistryEntry) void {
     var i: usize = 1;
     while (i < entries.len) : (i += 1) {
         if (methodKeyOrder(entries[i - 1].key, entries[i].key) != .eq) continue;
-        if (@import("builtin").mode == .debug) {
-            base.invariant("checked static dispatch registry invariant violated: duplicate method registry key", .{});
-        }
-        unreachable;
+        base.invariant("checked static dispatch registry invariant violated: duplicate method registry key", .{});
     }
 }
 
@@ -2279,7 +2247,7 @@ pub const StaticDispatchPlanTable = struct {
             const checked_expr_data = checked_bodies.expr(checked_expr).data;
             const idents = module.identStoreConst();
             const plan_id: StaticDispatchPlanId = @fromBackingInt(@intCast(@as(u32, @intCast(plans.items.len))));
-            const dispatch_expr_tag = std.meta.stringToEnum(DispatchExprTag, @tagName(std.meta.activeTag(expr.data))) orelse unreachable;
+            const dispatch_expr_tag = std.meta.stringToEnum(DispatchExprTag, @tagName(std.meta.activeTag(expr.data))) orelse unreachable; // the node-tag filter above admits only nodes that decode to these expression tags
             switch (dispatch_expr_tag) {
                 .e_dispatch_call => {
                     const dispatch_call = expr.data.e_dispatch_call;
@@ -2311,8 +2279,10 @@ pub const StaticDispatchPlanTable = struct {
                     if (std.meta.activeTag(checked_expr_data) != .interpolation) continue;
                     const args = [_]StaticDispatchOperand{.{ .generated_interpolation_segments = checked_expr }};
                     const from_interpolation = try names.internMethodName("from_interpolation");
-                    const constraint_fn_var = interpolation.constraint_fn_var orelse unreachable;
-                    const dispatcher_var = interpolation.dispatcher_var orelse unreachable;
+                    const constraint_fn_var = interpolation.constraint_fn_var orelse
+                        base.invariant("checked static dispatch registry invariant violated: checked interpolation has no constraint function variable", .{});
+                    const dispatcher_var = interpolation.dispatcher_var orelse
+                        base.invariant("checked static dispatch registry invariant violated: checked interpolation has no dispatcher variable", .{});
                     const ar = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, &args);
 
                     try plans.append(allocator, .{
@@ -2484,9 +2454,7 @@ pub const StaticDispatchPlanTable = struct {
             switch (numeral_plan.dispatchResolution()) {
                 .builtin_direct, .checked_error => continue,
                 .custom_dispatch, .specialization_dispatch => {},
-                .unresolved => if (@import("builtin").mode == .debug) {
-                    base.invariant("unresolved numeral dispatch plan reached checked publication", .{});
-                } else unreachable,
+                .unresolved => base.invariant("unresolved numeral dispatch plan reached checked publication", .{}),
             }
             const node: CIR.Node.Idx = @fromBackingInt(@intCast(numeral_plan.node_idx));
             const checked_expr = checked_bodies.exprIdAtRawNode(numeral_plan.node_idx) orelse
@@ -2496,31 +2464,22 @@ pub const StaticDispatchPlanTable = struct {
             const checked_expr_tag = std.meta.activeTag(checked_expr_data);
             if (checked_expr_tag == .runtime_error) continue;
             if (checked_expr_tag != .numeral) {
-                if (@import("builtin").mode == .debug) {
-                    base.invariant(
-                        "checked static dispatch invariant violated: numeral dispatch plan {d} points at a non-numeric checked expression ({s})",
-                        .{ numeral_plan.node_idx, @tagName(checked_expr_tag) },
-                    );
-                }
-                unreachable;
+                base.invariant(
+                    "checked static dispatch invariant violated: numeral dispatch plan {d} points at a non-numeric checked expression ({s})",
+                    .{ numeral_plan.node_idx, @tagName(checked_expr_tag) },
+                );
             }
             const literal = module_env.numeralLiteralForNode(node) orelse {
-                if (@import("builtin").mode == .debug) {
-                    base.invariant(
-                        "checked static dispatch invariant violated: runtime from_numeral plan {d} has no exact literal",
-                        .{numeral_plan.node_idx},
-                    );
-                }
-                unreachable;
+                base.invariant(
+                    "checked static dispatch invariant violated: runtime from_numeral plan {d} has no exact literal",
+                    .{numeral_plan.node_idx},
+                );
             };
             if (!literal.isMaterialized()) {
-                if (@import("builtin").mode == .debug) {
-                    base.invariant(
-                        "checked static dispatch invariant violated: runtime from_numeral plan {d} has an unmaterialized literal",
-                        .{numeral_plan.node_idx},
-                    );
-                }
-                unreachable;
+                base.invariant(
+                    "checked static dispatch invariant violated: runtime from_numeral plan {d} has an unmaterialized literal",
+                    .{numeral_plan.node_idx},
+                );
             }
             var args = [_]StaticDispatchOperand{.{ .generated_numeral = literal }};
             const ar = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, &args);
@@ -2549,9 +2508,7 @@ pub const StaticDispatchPlanTable = struct {
             switch (quote_plan.dispatchResolution()) {
                 .builtin_direct, .checked_error => continue,
                 .custom_dispatch, .specialization_dispatch => {},
-                .unresolved => if (@import("builtin").mode == .debug) {
-                    base.invariant("unresolved quote dispatch plan reached checked publication", .{});
-                } else unreachable,
+                .unresolved => base.invariant("unresolved quote dispatch plan reached checked publication", .{}),
             }
             const node: CIR.Node.Idx = @fromBackingInt(@intCast(quote_plan.node_idx));
             const checked_expr = checked_bodies.exprIdAtRawNode(quote_plan.node_idx) orelse
@@ -2561,22 +2518,16 @@ pub const StaticDispatchPlanTable = struct {
             const checked_expr_tag = std.meta.activeTag(checked_expr_data);
             if (checked_expr_tag == .runtime_error) continue;
             if (checked_expr_tag == .str or checked_expr_tag == .str_segment) {
-                if (@import("builtin").mode == .debug) {
-                    base.invariant(
-                        "checked static dispatch invariant violated: non-builtin quote target {d} lost its from_quote expression",
-                        .{quote_plan.node_idx},
-                    );
-                }
-                unreachable;
+                base.invariant(
+                    "checked static dispatch invariant violated: non-builtin quote target {d} lost its from_quote expression",
+                    .{quote_plan.node_idx},
+                );
             }
             if (checked_expr_tag != .str_from_quote) {
-                if (@import("builtin").mode == .debug) {
-                    base.invariant(
-                        "checked static dispatch invariant violated: quote dispatch plan {d} points at a non-string checked expression ({s})",
-                        .{ quote_plan.node_idx, @tagName(checked_expr_tag) },
-                    );
-                }
-                unreachable;
+                base.invariant(
+                    "checked static dispatch invariant violated: quote dispatch plan {d} points at a non-string checked expression ({s})",
+                    .{ quote_plan.node_idx, @tagName(checked_expr_tag) },
+                );
             }
             const literal = checked_expr_data.str_from_quote.literal;
             var args = [_]StaticDispatchOperand{.{ .generated_quote = literal }};
@@ -2604,8 +2555,8 @@ pub const StaticDispatchPlanTable = struct {
         // Only custom/generalized literal patterns have these synthesized
         // guards. Builtin patterns produce neither a guard nor an equality plan.
         for (checked_bodies.literal_pattern_exprs.items) |literal| {
-            const source = module_env.store.literalDispatchPlanForNode(@fromBackingInt(@intCast(literal.raw_node))) orelse unreachable;
-            const context = source.patternContext(&module_env.store) orelse unreachable;
+            const source = module_env.store.literalDispatchPlanForNode(@fromBackingInt(@intCast(literal.raw_node))) orelse unreachable; // literalPatternGuard records only pattern nodes that carry a literal dispatch plan
+            const context = source.patternContext(&module_env.store) orelse unreachable; // recordLiteralDispatchPlan allocates a pattern context for every pattern node's plan
             std.debug.assert(context.equality_fn_var_plus_one != 0);
             const constraint_fn: Var = @fromBackingInt(@intCast(context.equality_fn_var_plus_one - 1));
             const args = [_]StaticDispatchOperand{
@@ -2748,10 +2699,7 @@ pub const StaticDispatchPlanTable = struct {
         const span = switch (node.nested) {
             .resolved => |resolved| resolved,
             .from_callable => {
-                if (builtin_config.mode == .debug) {
-                    base.invariant("callable-derived target evidence has no resolved checked-evidence span", .{});
-                }
-                unreachable;
+                base.invariant("callable-derived target evidence has no resolved checked-evidence span", .{});
             },
         };
         return self.evidence_refs[span.start .. span.start + span.len];
@@ -2761,22 +2709,13 @@ pub const StaticDispatchPlanTable = struct {
         const node = switch (call.resolution) {
             .callable => |node_id| self.evidenceNode(node_id),
             .pending => {
-                if (builtin_config.mode == .debug) {
-                    base.invariant("unlinked generated codec call had no checked evidence", .{});
-                }
-                unreachable;
+                base.invariant("unlinked generated codec call had no checked evidence", .{});
             },
             .checked_error => {
-                if (builtin_config.mode == .debug) {
-                    base.invariant("rejected generated codec call had no checked evidence", .{});
-                }
-                unreachable;
+                base.invariant("rejected generated codec call had no checked evidence", .{});
             },
             .structural => {
-                if (builtin_config.mode == .debug) {
-                    base.invariant("structural generated codec call had no callable evidence", .{});
-                }
-                unreachable;
+                base.invariant("structural generated codec call had no callable evidence", .{});
             },
         };
         return self.nestedEvidence(node);
@@ -3074,10 +3013,7 @@ fn sourceCallableHasEqualityShape(
 fn checkedTypeIsBuiltinBool(checked_types: anytype, ty: CheckedTypeId) bool {
     const raw = @backingInt(ty);
     if (raw >= checked_types.store.payloadCount()) {
-        if (@import("builtin").mode == .debug) {
-            base.invariant("checked static dispatch invariant violated: equality return type root was outside the checked type store", .{});
-        }
-        unreachable;
+        base.invariant("checked static dispatch invariant violated: equality return type root was outside the checked type store", .{});
     }
     const payload = checked_types.store.payload(ty);
     if (std.meta.activeTag(payload) != .nominal) return false;
@@ -3153,10 +3089,7 @@ fn checkedTypeThroughAliases(checked_types: anytype, ty: CheckedTypeId) CheckedT
         const payload = checked_types.store.payload(current);
         if (std.meta.activeTag(payload) != .alias) return current;
         if (remaining == 0) {
-            if (@import("builtin").mode == .debug) {
-                base.invariant("checked static dispatch invariant violated: checked type alias chain was cyclic", .{});
-            }
-            unreachable;
+            base.invariant("checked static dispatch invariant violated: checked type alias chain was cyclic", .{});
         }
         remaining -= 1;
         current = payload.alias.backing;
@@ -3194,7 +3127,7 @@ pub fn builtinOwnerForCheckedBuiltin(builtin: anytype) BuiltinOwner {
         .f32 => .f32,
         .f64 => .f64,
         .dec => .dec,
-        .try_ => unreachable,
+        .try_ => unreachable, // every caller routes Try to its nominal owner before asking for a builtin owner
         .u8x16 => .u8x16,
         .i8x16 => .i8x16,
         .u16x8 => .u16x8,
@@ -3272,10 +3205,7 @@ fn checkedTypeIdForVar(
     var_: Var,
 ) Allocator.Error!CheckedTypeId {
     return checked_types.rootForSourceVar(module, var_) orelse {
-        if (@import("builtin").mode == .debug) {
-            base.invariant("checked static dispatch invariant violated: dispatch type root was not published", .{});
-        }
-        unreachable;
+        base.invariant("checked static dispatch invariant violated: dispatch type root was not published", .{});
     };
 }
 
@@ -3302,13 +3232,10 @@ fn zeroPayloadTagIdent(module: TypedCIR.Module, expr_idx: CIR.Expr.Idx) ?Ident.I
 
 fn checkedExprIdForSource(checked_bodies: anytype, expr: CIR.Expr.Idx) CheckedExprId {
     return checked_bodies.exprIdForSource(expr) orelse {
-        if (@import("builtin").mode == .debug) {
-            base.invariant(
-                "checked static dispatch invariant violated: dispatch expression {d} has no checked expression id",
-                .{@backingInt(expr)},
-            );
-        }
-        unreachable;
+        base.invariant(
+            "checked static dispatch invariant violated: dispatch expression {d} has no checked expression id",
+            .{@backingInt(expr)},
+        );
     };
 }
 

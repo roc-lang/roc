@@ -1113,10 +1113,7 @@ fn builtinModuleIdent(idents: *const Ident.Store) Ident.Idx {
 }
 
 fn invariantViolation(comptime message: []const u8) noreturn {
-    if (builtin.mode == .debug) {
-        base.invariant(message, .{});
-    }
-    unreachable;
+    base.invariant(message, .{});
 }
 
 test "canonical type key declarations are referenced" {
@@ -1675,7 +1672,7 @@ test "scheme identity enumeration reuses scratch and recovers from every allocat
 /// First-encounter identity order for the test graphs below (tuples,
 /// functions, records whose tails are identities), traversed directly on the
 /// store in the key encoding's child order.
-fn referenceIdentityOrder(gpa: Allocator, store: *const TypeStore, env: *const ModuleEnv, roots: []const Var) Allocator.Error![]Var {
+fn referenceIdentityOrder(gpa: Allocator, store: *const TypeStore, env: *const ModuleEnv, roots: []const Var) (Allocator.Error || error{TestUnexpectedResult})![]Var {
     var visited = std.AutoHashMap(Var, void).init(gpa);
     defer visited.deinit();
     var order = std.ArrayList(Var).empty;
@@ -1714,9 +1711,9 @@ fn referenceIdentityOrder(gpa: Allocator, store: *const TypeStore, env: *const M
                         for (by_name[0..fields.len]) |field| try children.append(gpa, field.var_);
                         try children.append(gpa, record.ext);
                     },
-                    .empty_record, .empty_tag_union, .nominal_type, .fn_effectful, .fn_unbound, .tag_union => unreachable,
+                    .empty_record, .empty_tag_union, .nominal_type, .fn_effectful, .fn_unbound, .tag_union => return error.TestUnexpectedResult,
                 },
-                .alias, .err, .field_presence => unreachable,
+                .alias, .err, .field_presence => return error.TestUnexpectedResult,
             }
             // Visit children in order: push in reverse.
             var i = children.items.len;
@@ -1757,7 +1754,7 @@ test "inspection enumerates identities in first-encounter key order across share
                         .ext = try store.fresh(),
                     } } });
                 },
-                else => unreachable,
+                else => unreachable, // uintLessThan(u8, 3) yields only 0, 1, or 2
             }
         }
         var writer = TypeWriter.init(gpa, &store, &env);
@@ -2341,7 +2338,7 @@ const EqualityOracle = struct {
         self.pending.deinit(self.gpa);
     }
 
-    fn equal(self: *EqualityOracle, left: Var, right: Var) Allocator.Error!bool {
+    fn equal(self: *EqualityOracle, left: Var, right: Var) (Allocator.Error || error{TestUnexpectedResult})!bool {
         try self.pending.append(self.gpa, .{ left, right });
         while (self.pending.pop()) |pair| {
             if (!try self.step(pair[0], pair[1])) return false;
@@ -2349,7 +2346,7 @@ const EqualityOracle = struct {
         return true;
     }
 
-    fn step(self: *EqualityOracle, left_var: Var, right_var: Var) Allocator.Error!bool {
+    fn step(self: *EqualityOracle, left_var: Var, right_var: Var) (Allocator.Error || error{TestUnexpectedResult})!bool {
         const left = self.store.resolveVar(left_var);
         const right = self.store.resolveVar(right_var);
         if ((try self.assumed.getOrPut(.{ left.var_, right.var_ })).found_existing) return true;
@@ -2399,10 +2396,10 @@ const EqualityOracle = struct {
                         try self.pending.append(self.gpa, .{ left_union.ext, right_flat.tag_union.ext });
                         return true;
                     },
-                    .empty_record, .record, .nominal_type, .fn_effectful, .fn_unbound => unreachable,
+                    .empty_record, .record, .nominal_type, .fn_effectful, .fn_unbound => return error.TestUnexpectedResult,
                 }
             },
-            .rigid, .alias, .err, .field_presence => unreachable,
+            .rigid, .alias, .err, .field_presence => return error.TestUnexpectedResult,
         }
     }
 
@@ -2464,7 +2461,7 @@ test "keys are equal exactly when types are equal up to renaming, over random sh
                         .tags = try store.appendTags(&.{.{ .name = names[tag_choice[i]], .args = try store.appendVars(&.{ c0, c1 }) }}),
                         .ext = empty_union,
                     } } },
-                    else => unreachable,
+                    else => unreachable, // shapes[i] comes from uintLessThan(u8, 5), so it is 0 through 4
                 };
                 try store.setVarContent(self_var, content);
             }

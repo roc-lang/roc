@@ -170,6 +170,17 @@ user-facing failure (malformed source, a type error, a missing or unreadable
 file, allocation failure, a corrupt cache entry) is not a compiler invariant:
 it is reported or propagated as described for that failure, never asserted.
 
+Every `unreachable` keyword in the compiler's source carries a `//` comment
+at the end of its own line naming the upstream invariant that makes the case
+impossible: the pass that normalized the input away, the validation that
+rejected it, the enum variants handled above, the loop condition, the
+capacity reserved earlier. Only closing delimiters, `;`, and `,` may stand
+between the `unreachable` and that comment. A site whose invariant cannot be
+named calls `base.invariant` (or its stage's wrapper) with a message stating
+the expected invariant instead, so builds with runtime safety report which
+claim broke. `zig build run-check-unreachable-rationale` enforces this for
+every `.zig` file under `src/`.
+
 A test pins that an invariant fires with `base.death_test.expectPanic`, which
 re-runs the calling test in a child copy of the test binary, calls the
 violating trigger there, and passes when the child panics with the expected

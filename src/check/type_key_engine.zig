@@ -709,7 +709,7 @@ pub fn Engine(comptime Adapter: type) type {
                     }
                 },
                 .leaf => self.setClass(node, try self.internStep(node)),
-                .content => unreachable,
+                .content => unreachable, // both callers route content nodes to Tarjan classification instead
             }
         }
 

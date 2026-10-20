@@ -1830,7 +1830,7 @@ const Pass = struct {
             .record => |span| for (0..span.len) |i| try components.append(self.allocator, GuardedList.at(self.program.fieldExprSpan(span), i).value),
             .nominal => |backing| try components.append(self.allocator, backing),
             .fn_ref => |ref| for (0..ref.captures.len) |i| try components.append(self.allocator, self.program.captureOperandAt(ref.captures, i).value),
-            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .comptime_value, .typed_boundary, .row_widen, .list, .record_update, .let_, .lambda, .def_ref, .fn_def, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
+            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .comptime_value, .typed_boundary, .row_widen, .list, .record_update, .let_, .lambda, .def_ref, .fn_def, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable, // staticDataLeaf returns null, and so a frame is built, only for these constructor forms
         }
         const owned = try components.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(owned);
@@ -1879,7 +1879,7 @@ const Pass = struct {
                 }
                 break :blk try callableValue(self.program, self.allocator, expr.ty, ref.fn_id, captures, false);
             },
-            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .comptime_value, .typed_boundary, .row_widen, .list, .record_update, .let_, .lambda, .def_ref, .fn_def, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
+            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .comptime_value, .typed_boundary, .row_widen, .list, .record_update, .let_, .lambda, .def_ref, .fn_def, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable, // frames are built only for the constructor forms staticDataLeaf returns null for
         };
         return try self.storeStaticDataStructure(expr_id, value);
     }
@@ -3869,7 +3869,7 @@ const Pass = struct {
                 try stmts.append(self.allocator, try self.program.addStmt(.{ .expr = step }));
             }
         }
-        unreachable;
+        unreachable; // chain.items is nonempty here, so the final iteration returns
     }
 
     /// One application of the loop body: bind the item pattern to an appended
@@ -5037,7 +5037,7 @@ const Pass = struct {
                     .captures = capture_shapes,
                 } };
             },
-            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .let_, .lambda, .def_ref, .fn_def, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
+            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .let_, .lambda, .def_ref, .fn_def, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable, // enterConstructorShape returns components only for the constructor forms above
         };
     }
 
@@ -5132,7 +5132,7 @@ const Pass = struct {
             .tuple => |tuple| try components.appendSlice(self.allocator, tuple.items),
             .nominal => |nominal| try components.append(self.allocator, nominal.backing.*),
             .callable => |callable| for (callable.captures) |capture| try components.append(self.allocator, capture.value),
-            .expr, .runtime_anchor, .static_data_candidate => unreachable,
+            .expr, .runtime_anchor, .static_data_candidate => unreachable, // the wrapper loop above breaks only on composite values
         }
         const owned = try components.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(owned);
@@ -5199,7 +5199,7 @@ const Pass = struct {
                     .captures = captures,
                 } } };
             },
-            .expr, .runtime_anchor, .static_data_candidate => unreachable,
+            .expr, .runtime_anchor, .static_data_candidate => unreachable, // frames hold only the composite values enterShapeFromValue decomposed
         }
     }
 };
@@ -8016,7 +8016,7 @@ const Cloner = struct {
                     .tag, .tuple, .nominal => task.values[frame.index] = child,
                     .record => |record| task.fields[frame.index] = .{ .name = record.fields[frame.index].name, .value = child },
                     .callable => |callable| task.captures[frame.index] = .{ .id = callable.captures[frame.index].id, .value = child },
-                    .expr, .runtime_anchor, .static_data_candidate => unreachable,
+                    .expr, .runtime_anchor, .static_data_candidate => unreachable, // cursor 0 returns for leaf and wrapper values, so only composites reach cursor 2
                 }
                 frame.index += 1;
             },
@@ -8027,7 +8027,7 @@ const Cloner = struct {
             .tuple => |tuple| if (frame.index < tuple.items.len) tuple.items[frame.index] else null,
             .nominal => |nominal| if (frame.index < 1) nominal.backing.* else null,
             .callable => |callable| if (frame.index < callable.captures.len) callable.captures[frame.index].value else null,
-            .expr, .runtime_anchor, .static_data_candidate => unreachable,
+            .expr, .runtime_anchor, .static_data_candidate => unreachable, // cursor 0 returns for leaf and wrapper values, so only composites reach here
         };
         if (next_child) |child| {
             return .{ .call = .{ .make_reusable = .{ .value = child, .budget = task.budget, .bindings = bindings } } };
@@ -8042,7 +8042,7 @@ const Cloner = struct {
                 break :blk try nominalValue(self.pass.program, self.pass.allocator, nominal.ty, backing);
             },
             .callable => |callable| try callableValue(self.pass.program, self.pass.allocator, callable.ty, callable.fn_id, task.captures, callable.iterator_step),
-            .expr, .runtime_anchor, .static_data_candidate => unreachable,
+            .expr, .runtime_anchor, .static_data_candidate => unreachable, // cursor 0 returns for leaf and wrapper values, so only composites reach here
         });
     }
 
@@ -8136,7 +8136,7 @@ const Cloner = struct {
                         task.if_branches = try GuardedList.dupe(arena, Ast.IfBranch, self.pass.program.ifBranchSpan(if_.branches));
                         task.if_rewritten = try arena.alloc(Ast.IfBranch, task.if_branches.len);
                     },
-                    .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
+                    .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable, // cursor 0 returned unless the value is a match or if
                 }
                 frame.cursor = 1;
             },
@@ -8171,7 +8171,7 @@ const Cloner = struct {
                             } };
                         }
                     },
-                    .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
+                    .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable, // cursor 0 returned unless the value is a match or if
                 }
                 frame.index += 1;
             },
@@ -8226,7 +8226,7 @@ const Cloner = struct {
                     } } };
                 }
             },
-            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
+            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable, // cursor 0 returned unless the value is a match or if
         }
 
         // Different outer constructors cannot expose shared leaves to one continuation.
@@ -8362,7 +8362,7 @@ const Cloner = struct {
                     .final_else = final_else,
                 } } });
             },
-            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
+            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable, // let_of_case_shared is entered only from stepLetOfCase after its match/if check
         };
 
         return .{ .join_point = .{
@@ -8910,7 +8910,7 @@ const Cloner = struct {
                     .tuple => |first| task.children = try arena.alloc(Value, first.items.len),
                     .nominal => task.children = try arena.alloc(Value, 1),
                     .callable => |first| task.captures = try arena.alloc(CaptureValue, first.captures.len),
-                    .expr, .runtime_anchor, .static_data_candidate => unreachable,
+                    .expr, .runtime_anchor, .static_data_candidate => unreachable, // the structured path requires valuesShareOuterSkeleton, which accepts only composites
                 }
                 frame.cursor = 1;
             },
@@ -8921,7 +8921,7 @@ const Cloner = struct {
                     .tag, .tuple, .nominal => task.children[frame.index] = child,
                     .record => |first| task.fields[frame.index] = .{ .name = first.fields[frame.index].name, .value = child },
                     .callable => |first| task.captures[frame.index] = .{ .id = first.captures[frame.index].id, .value = child },
-                    .expr, .runtime_anchor, .static_data_candidate => unreachable,
+                    .expr, .runtime_anchor, .static_data_candidate => unreachable, // cursor 1 follows only the structured path, whose values[0] is a composite
                 }
                 frame.index += 1;
             },
@@ -8942,7 +8942,7 @@ const Cloner = struct {
             .tuple => |first| first.items.len,
             .nominal => 1,
             .callable => |first| first.captures.len,
-            .expr, .runtime_anchor, .static_data_candidate => unreachable,
+            .expr, .runtime_anchor, .static_data_candidate => unreachable, // the structured path requires valuesShareOuterSkeleton, which accepts only composites
         };
         if (frame.index < child_count) {
             const children = try arena.alloc(Value, values.len);
@@ -8952,7 +8952,7 @@ const Cloner = struct {
                 .tuple => |tuple| tuple.items[frame.index],
                 .nominal => |nominal| nominal.backing.*,
                 .callable => |callable| callable.captures[frame.index].value,
-                .expr, .runtime_anchor, .static_data_candidate => unreachable,
+                .expr, .runtime_anchor, .static_data_candidate => unreachable, // valuesShareOuterSkeleton gave every value the composite tag of values[0]
             };
             return .{ .call = .{ .rebuild_let_case_join_value = .{
                 .values = children,
@@ -8971,7 +8971,7 @@ const Cloner = struct {
                 break :blk try nominalValue(self.pass.program, self.pass.allocator, first.ty, backing);
             },
             .callable => |first| try callableValue(self.pass.program, self.pass.allocator, first.ty, first.fn_id, task.captures, task.iterator_step),
-            .expr, .runtime_anchor, .static_data_candidate => unreachable,
+            .expr, .runtime_anchor, .static_data_candidate => unreachable, // the structured path requires valuesShareOuterSkeleton, which accepts only composites
         });
     }
 
@@ -9109,7 +9109,7 @@ const Cloner = struct {
                     .body = body,
                 } } }) });
             },
-            LoopValueCursor.whole_body + 1...std.math.maxInt(u8) => unreachable,
+            LoopValueCursor.whole_body + 1...std.math.maxInt(u8) => unreachable, // frame.cursor is only ever set to a LoopValueCursor constant
         }
         if (frame.index < task.initial_values.len) {
             return .{ .call = .{ .demanding = .{ .expr = task.initial_values[frame.index], .bindings = task.bindings } } };
@@ -9425,7 +9425,7 @@ const Cloner = struct {
                 task.stmt_context = null;
                 return self.finishBlockValueTask(task, .{ .expr = input.?.get(.expr) });
             },
-            BlockValueCursor.finish + 1...std.math.maxInt(u8) => unreachable,
+            BlockValueCursor.finish + 1...std.math.maxInt(u8) => unreachable, // frame.cursor is only ever set to a BlockValueCursor constant
         }
         return try self.nextBlockStatementStep(frame, task);
     }
@@ -9820,7 +9820,7 @@ const Cloner = struct {
                 } } });
                 return retExpr(try self.wrapBindings(task.chain.*, residual));
             },
-            CallProcCursor.residual_captures + 1...std.math.maxInt(u8) => unreachable,
+            CallProcCursor.residual_captures + 1...std.math.maxInt(u8) => unreachable, // frame.cursor is only ever set to a CallProcCursor constant
         }
         const raw = @backingInt(Ast.localDirectCallee(call).?);
         if (frame.index < task.args.len) {
@@ -9915,7 +9915,7 @@ const Cloner = struct {
         }
         const index = frame.index;
         const child: ?AppendExprsTask = switch (task.shape) {
-            .any => unreachable,
+            .any => unreachable, // both cursor branches above return for an .any shape
             .tag => |tag| if (index < tag.payloads.len) .{ .shape = tag.payloads[index], .value = structural_value.tag.payloads[index], .out = task.out } else null,
             .record => |record| if (index < record.fields.len) .{ .shape = record.fields[index].shape, .value = structural_value.record.fields[index].value, .out = task.out } else null,
             .tuple => |tuple| if (index < tuple.items.len) .{ .shape = tuple.items[index], .value = structural_value.tuple.items[index], .out = task.out } else null,
@@ -10040,7 +10040,7 @@ const Cloner = struct {
                 switch (shape) {
                     .record => |record| task.fields[frame.index] = .{ .name = record.fields[frame.index].name, .shape = supplied.shape },
                     .tag, .tuple, .nominal, .callable => task.shapes[frame.index] = supplied.shape,
-                    .any => unreachable,
+                    .any => unreachable, // an .any shape takes the materialize_any mode, never structural
                 }
                 task.demoted = task.demoted or supplied.demoted;
                 frame.index += 1;
@@ -10048,7 +10048,7 @@ const Cloner = struct {
         }
         const index = frame.index;
         switch (shape) {
-            .any => unreachable,
+            .any => unreachable, // an .any shape returns from both cursor branches above
             .tag => |tag| if (index < tag.payloads.len) {
                 return .{ .call = .{ .supply_loop_slot = .{ .shape = tag.payloads[index], .value = value.tag.payloads[index], .out = task.out } } };
             } else return .{ .ret = .{ .supplied = .{ .shape = .{ .tag = .{ .ty = tag.ty, .name = tag.name, .payloads = task.shapes } }, .demoted = task.demoted } } },
@@ -10426,7 +10426,7 @@ const Cloner = struct {
                             task.fields[index] = .{ .name = record.fields[index].name, .value = prepared };
                         },
                         .tuple, .tag => task.values[index] = child.get(.maybe_value) orelse return .{ .ret = .{ .maybe_value = null } },
-                        .bind, .wildcard, .as, .list, .nominal, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => unreachable,
+                        .bind, .wildcard, .as, .list, .nominal, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => unreachable, // the children mode is set only for record, tuple, and tag patterns
                     }
                     frame.index += 1;
                 },
@@ -10606,7 +10606,7 @@ const Cloner = struct {
                 }
                 return .{ .call = .{ .bind_pat_to_match_value = .{ .pat = GuardedList.at(pats, index), .value = tag.payloads[index], .body = task.body, .bindings = bindings } } };
             },
-            .bind, .wildcard, .as, .list, .nominal, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => unreachable,
+            .bind, .wildcard, .as, .list, .nominal, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => unreachable, // the children modes are set only for record, tuple, and tag patterns
         }
     }
 
@@ -10733,7 +10733,7 @@ const Cloner = struct {
                     task.if_rewritten = try arena.alloc(Ast.IfBranch, task.if_branches.len);
                     task.values = try arena.alloc(Value, task.if_branches.len + 1);
                 },
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable, // the branch_work switch returned for every non-case scrutinee
             }
             frame.cursor = 1;
         } else {
@@ -10763,7 +10763,7 @@ const Cloner = struct {
                     try self.recordArmValues(distributed, task.values);
                     return .{ .ret = .{ .maybe_value = .{ .expr = distributed } } };
                 },
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable, // the branch_work switch returned for every non-case scrutinee
             }
             task.values[index] = arm.value;
             frame.index += 1;
@@ -10797,7 +10797,7 @@ const Cloner = struct {
                 .source_scope = null,
                 .outer_branches = task.outer_branches,
             } } },
-            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
+            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable, // the branch_work switch returned for every non-case scrutinee
         }
     }
 
@@ -11048,7 +11048,7 @@ const Cloner = struct {
                 return self.finishInlinedCall(task, inlined, callable.fn_id);
             },
             InlineCallableCursor.boundary => return self.finishInlinedCall(task, input.?.get(.value), callable.fn_id),
-            InlineCallableCursor.boundary + 1...std.math.maxInt(u8) => unreachable,
+            InlineCallableCursor.boundary + 1...std.math.maxInt(u8) => unreachable, // frame.cursor is only ever set to an InlineCallableCursor constant
         }
         if (frame.cursor == InlineCallableCursor.capture) {
             if (frame.index < task.source_captures.len) {
@@ -11200,7 +11200,7 @@ const Cloner = struct {
                 return self.finishInlinedCall(task, inlined, callee);
             },
             InlineDirectCursor.boundary => return self.finishInlinedCall(task, input.?.get(.value), callee),
-            InlineDirectCursor.boundary + 1...std.math.maxInt(u8) => unreachable,
+            InlineDirectCursor.boundary + 1...std.math.maxInt(u8) => unreachable, // frame.cursor is only ever set to an InlineDirectCursor constant
         }
         if (frame.cursor == InlineDirectCursor.capture_value) {
             if (frame.index < task.operands.len) {
@@ -11643,7 +11643,7 @@ const Cloner = struct {
                 .record => |record| record.fields[frame.index].value,
                 .tuple => |tuple| tuple.items[frame.index],
                 .nominal => |nominal| nominal.backing.*,
-                .expr, .runtime_anchor, .static_data_candidate, .callable => unreachable,
+                .expr, .runtime_anchor, .static_data_candidate, .callable => unreachable, // cursor 0 returned for leaf, wrapper, and callable values
             };
             return .{ .call = .{ .materialize = .{ .value = child } } };
         }
@@ -11670,7 +11670,7 @@ const Cloner = struct {
                 self.materialize_strip_depth -= 1;
                 return retExpr(materialized);
             },
-            .expr, .runtime_anchor, .static_data_candidate, .callable => unreachable,
+            .expr, .runtime_anchor, .static_data_candidate, .callable => unreachable, // cursor 0 returned for leaf, wrapper, and callable values
         }
     }
 
@@ -11757,7 +11757,7 @@ const Cloner = struct {
                     .tuple = rebuilt,
                     .elem_index = access.elem_index,
                 } } }),
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable, // the chain collected above holds only field and tuple accesses
             };
         }
         return rebuilt;
@@ -12686,7 +12686,7 @@ const Cloner = struct {
                     if (expr.data != .nominal or nominal.ty != expr.ty) return false;
                     try pending.append(self.pass.allocator, .{ .value = nominal.backing.*, .expr_id = expr.data.nominal, .depth = depth + 1 });
                 },
-                .expr => unreachable,
+                .expr => unreachable, // .expr values are compared and skipped before this switch
             }
         }
         return true;
@@ -13241,7 +13241,7 @@ const Cloner = struct {
                     self.pass.program.fieldAccessSegmentSpan(field.segments),
                 ),
                 .tuple_access => |access| itemFromValue(value, access.elem_index),
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable, // accessors collects only field and tuple accesses
             } orelse return null;
         }
         return value;
@@ -13404,7 +13404,7 @@ const Cloner = struct {
         const pat = self.pass.program.getPat(frame.pat_id);
         const value = frame.value;
         if (input) |answer| switch (frame.stage) {
-            .start => unreachable,
+            .start => unreachable, // an answer arrives only after a .child return, and every .child return moves the stage past .start
             .as_binding => {
                 if (answer != matched) return .{ .done = answer };
                 try self.subst.put(self.pass.program, pat.data.as.local, value);
@@ -13582,7 +13582,7 @@ const Cloner = struct {
                 // An anchor's structure is matched in its place.
                 while (frame.value == .runtime_anchor) frame.value = frame.value.runtime_anchor.structure.*;
                 switch (frame.value) {
-                    .runtime_anchor => unreachable,
+                    .runtime_anchor => unreachable, // the loop above strips every runtime_anchor
                     .expr => |receiver| {
                         if (!canReadFieldsFromExpr(self.pass.program, receiver)) return .unknown;
                         frame.stage = .from_receiver;
@@ -14131,7 +14131,7 @@ const Cloner = struct {
                             .record => |record| frame.fields = try arena.alloc(FieldValue, record.fields.len),
                             .tuple => |tuple| frame.values = try arena.alloc(Value, tuple.items.len),
                             .nominal => {},
-                            .expr, .runtime_anchor, .static_data_candidate, .tag, .callable => unreachable,
+                            .expr, .runtime_anchor, .static_data_candidate, .tag, .callable => unreachable, // enterReanchor returns .structure only for records, tuples, and nominals
                         }
                         try frames.append(self.pass.allocator, frame);
                     },
@@ -14149,7 +14149,7 @@ const Cloner = struct {
                     .tuple => frame.values[index] = delivered orelse
                         Common.invariant("tuple item with a runtime position could not be recursively anchored"),
                     .nominal => {},
-                    .expr, .runtime_anchor, .static_data_candidate, .tag, .callable => unreachable,
+                    .expr, .runtime_anchor, .static_data_candidate, .tag, .callable => unreachable, // frames hold only the records, tuples, and nominals enterReanchor returned
                 }
             }
             switch (frame.structure) {
@@ -14180,7 +14180,7 @@ const Cloner = struct {
                     request = .{ .value = nominal.backing.*, .runtime = frame.runtime, .has_value_type = false };
                     continue;
                 },
-                .expr, .runtime_anchor, .static_data_candidate, .tag, .callable => unreachable,
+                .expr, .runtime_anchor, .static_data_candidate, .tag, .callable => unreachable, // frames hold only the records, tuples, and nominals enterReanchor returned
             }
             const finished = frames.pop().?;
             const structure: Value = switch (finished.structure) {
@@ -14195,7 +14195,7 @@ const Cloner = struct {
                     backing.* = inner;
                     break :blk try nominalValue(self.pass.program, self.pass.allocator, nominal.ty, backing);
                 },
-                .expr, .runtime_anchor, .static_data_candidate, .tag, .callable => unreachable,
+                .expr, .runtime_anchor, .static_data_candidate, .tag, .callable => unreachable, // frames hold only the records, tuples, and nominals enterReanchor returned
             };
             delivered = if (finished.runtime_has_value_type) try self.runtimeAnchoredValue(structure, finished.runtime) else structure;
         }
@@ -14233,7 +14233,7 @@ const Cloner = struct {
                     !try initializer_bindings.referencedByExpr(self.pass.allocator, self.pass.program, expr)) return .{ .done = value };
                 return .{ .done = if (runtime_has_value_type) Value{ .expr = runtime } else null };
             },
-            .runtime_anchor => unreachable,
+            .runtime_anchor => unreachable, // the loop above strips every runtime_anchor
             .record, .tuple, .nominal => return .{ .structure = value },
             .static_data_candidate, .tag, .callable => {
                 if (try self.valueContainsNonReusableOrInitializerLocalExpr(initializer_bindings, value, budget)) {
@@ -15636,7 +15636,7 @@ fn recordUpdateBackingType(program: *const Ast.Program, ty: Type.TypeId) Type.Ty
 
 fn recordUpdateFieldSpan(program: *const Ast.Program, ty: Type.TypeId) Type.Span {
     const content = program.types.get(recordUpdateBackingType(program, ty));
-    if (content != .record) unreachable;
+    if (content != .record) unreachable; // recordUpdateBackingType returns only a record type
     return content.record;
 }
 

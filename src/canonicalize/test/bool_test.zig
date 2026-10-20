@@ -61,7 +61,7 @@ test "canonicalize True as Bool" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
 
     // Get the expression
     const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
@@ -83,7 +83,7 @@ test "canonicalize local nominal name as plain tag in expression position" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const expr = test_env.getCanonicalExpr(canonical_expr.get_idx());
 
     try testing.expectEqual(.e_block, std.meta.activeTag(expr));

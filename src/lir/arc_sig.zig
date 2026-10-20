@@ -188,10 +188,7 @@ pub const SigTable = struct {
         const start: usize = @intCast(sig.outcomes.start);
         const len: usize = @intCast(sig.outcomes.len);
         if (start > self.outcomes.len or len > self.outcomes.len - start) {
-            if (@import("builtin").mode == .debug) {
-                base.invariant("ARC signature outcome span exceeded its table", .{});
-            }
-            unreachable;
+            base.invariant("ARC signature outcome span exceeded its table", .{});
         }
         return self.outcomes[start..][0..len];
     }
@@ -200,10 +197,7 @@ pub const SigTable = struct {
         const start: usize = @intCast(sig.ret_conditions.start);
         const len: usize = @intCast(sig.ret_conditions.len);
         if (start > self.ret_conditions.len or len > self.ret_conditions.len - start) {
-            if (@import("builtin").mode == .debug) {
-                base.invariant("ARC signature return-condition span exceeded its table", .{});
-            }
-            unreachable;
+            base.invariant("ARC signature return-condition span exceeded its table", .{});
         }
         return self.ret_conditions[start..][0..len];
     }

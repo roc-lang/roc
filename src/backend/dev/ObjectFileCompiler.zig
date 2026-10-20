@@ -450,12 +450,8 @@ fn compileWithCodeGen(
     for (proc_specs, 0..) |_, i| {
         const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
         if (proc_specs[i].is_static_initializer) continue;
-        const proc_symbol = codegen.compiledProcSymbol(proc_id) orelse {
-            if (builtin.mode == .debug) {
-                invariant("ObjectFileCompiler invariant violated: LIR proc {d} was not compiled before symbol publication", .{i});
-            }
-            unreachable;
-        };
+        const proc_symbol = codegen.compiledProcSymbol(proc_id) orelse
+            invariant("ObjectFileCompiler invariant violated: LIR proc {d} was not compiled before symbol publication", .{i});
         const symbol_name = static_data_export.procSymbolName(allocator, proc_specs[i].identity) catch return CompilationError.OutOfMemory;
         if (seen_proc_symbol_names.contains(symbol_name)) {
             invariant("ObjectFileCompiler invariant violated: two LIR procs share the symbol {s}", .{symbol_name});
@@ -488,15 +484,10 @@ fn compileWithCodeGen(
         }) catch return CompilationError.OutOfMemory;
     }
     for (static_rc_helpers) |helper_key| {
-        const helper = codegen.compiledStaticDataRcHelperInfo(helper_key) orelse {
-            if (builtin.mode == .debug) {
-                invariant(
-                    "ObjectFileCompiler invariant violated: static RC helper {x} was not compiled before symbol publication",
-                    .{helper_key.encode()},
-                );
-            }
-            unreachable;
-        };
+        const helper = codegen.compiledStaticDataRcHelperInfo(helper_key) orelse invariant(
+            "ObjectFileCompiler invariant violated: static RC helper {x} was not compiled before symbol publication",
+            .{helper_key.encode()},
+        );
         const symbol_name = static_data_export.atomicRcHelperSymbolName(allocator, layout_store, helper_key) catch return CompilationError.OutOfMemory;
         owned_proc_symbol_names.append(allocator, symbol_name) catch {
             allocator.free(symbol_name);
@@ -759,16 +750,9 @@ pub fn spliceExternalProcs(
     for (external_procs) |proc_id| {
         const proc = proc_specs[@backingInt(proc_id)];
         if (!proc.external) invariant("procedure {d} was offered for splicing but is not an object-cache entry", .{@backingInt(proc_id)});
-        const key = proc.cache_key orelse {
-            if (builtin.mode == .debug) invariant("object-cache procedure {d} had no cache key", .{@backingInt(proc_id)});
-            unreachable;
-        };
-        const located = source.find(source.context, key) orelse {
-            if (builtin.mode == .debug) {
-                invariant("object cache served a specialization whose artifact {s} is not in any loaded pack", .{&proc.identity.symbolHex()});
-            }
-            unreachable;
-        };
+        const key = proc.cache_key orelse invariant("object-cache procedure {d} had no cache key", .{@backingInt(proc_id)});
+        const located = source.find(source.context, key) orelse
+            invariant("object cache served a specialization whose artifact {s} is not in any loaded pack", .{&proc.identity.symbolHex()});
         const gop = try packs.getOrPut(located.set);
         if (!gop.found_existing) gop.value_ptr.* = .{ .placed = std.AutoHashMap(u32, usize).init(allocator) };
         try ProcArtifact.splice(CodeGen, allocator, codegen, located.set, &.{located.index}, &procs_by_identity, &gop.value_ptr.placed, data_out);

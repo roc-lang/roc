@@ -183,7 +183,7 @@ pub const CaptureId = enum(u32) {
             0 => canonical(index),
             1 => generatedCheck(index),
             2 => generatedLift(index),
-            else => unreachable,
+            else => unreachable, // dense_index % 3 is 0, 1 or 2
         };
     }
 };

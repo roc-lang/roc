@@ -190,7 +190,7 @@ pub const JoinParamIndex = struct {
 /// an alias. Only aliases that copy the tracked value into a same-layout local
 /// are crossed.
 pub fn forwardLocalAliasChain(store: *const LirStore, source: LocalId, first_stmt: CFStmtId) ForwardedAlias {
-    return forwardLocalAliasChainImpl(store, undefined, source, first_stmt, null) catch unreachable;
+    return forwardLocalAliasChainImpl(store, undefined, source, first_stmt, null) catch unreachable; // with no chain list the walk never allocates
 }
 
 /// Like `forwardLocalAliasChain`, but also appends `source` and every crossed
@@ -1793,7 +1793,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                         return cloned;
                     },
                     .children => |children| {
-                        if (!@hasDecl(Rewriter, "finishIntercept")) unreachable;
+                        if (!@hasDecl(Rewriter, "finishIntercept")) base.invariant("body clone invariant violated: rewriter returned intercept children without defining finishIntercept", .{});
                         intercepted = children;
                     },
                 }
@@ -2630,7 +2630,7 @@ pub const InterceptChildren = struct {
 /// The `next` of a straight-line statement. Every other kind has no single
 /// successor, and asking for one is a compiler bug.
 pub fn linearNext(stmt: LIR.CFStmt) CFStmtId {
-    return linearNextOrNull(stmt) orelse unreachable;
+    return linearNextOrNull(stmt) orelse base.invariant("body clone invariant violated: linearNext asked for the successor of a {s} statement", .{@tagName(stmt)});
 }
 
 /// The `next` of a straight-line statement, or null for a statement with no
@@ -2643,7 +2643,8 @@ pub fn linearNextOrNull(stmt: LIR.CFStmt) ?CFStmtId {
 
 /// Replace the `next` of a straight-line statement; see `linearNext`.
 pub fn setLinearNext(stmt: *LIR.CFStmt, next: CFStmtId) void {
-    (linearNextPtr(stmt) orelse unreachable).* = next;
+    const next_ptr = linearNextPtr(stmt) orelse base.invariant("body clone invariant violated: setLinearNext asked to replace the successor of a {s} statement", .{@tagName(stmt.*)});
+    next_ptr.* = next;
 }
 
 /// The `next` field of a straight-line statement, or null for a statement

@@ -915,8 +915,10 @@ pub const BuildEnv = struct {
     /// retained lowering session rather than begin another specialization pass.
     pub fn runtimeProgramSession(self: *BuildEnv) ?*eval.CompileTimeFinalization.ProgramSession {
         if (self.runtime_lowering == null) return null;
-        const coordinator = self.coordinator orelse unreachable;
-        return if (coordinator.program_session) |*session| session else unreachable;
+        const coordinator = self.coordinator orelse
+            base.invariant("build env invariant violated: runtime lowering is configured before coordinator initialization", .{});
+        if (coordinator.program_session) |*session| return session;
+        base.invariant("build env invariant violated: runtime lowering is configured but the checked program retained no program session", .{});
     }
 
     /// The compile-time evaluation program this compilation lowered and
@@ -1273,9 +1275,10 @@ pub const BuildEnv = struct {
     }
 
     pub fn finishCheckedProgram(self: *BuildEnv) CompileDiscoveredError!void {
-        const coord = self.coordinator orelse unreachable;
+        const coord = self.coordinator orelse
+            base.invariant("build env invariant violated: checked program finished before coordinator initialization", .{});
         if (self.compile_time_object_cache_owner) |owner| owner.bind(owner.context, self);
-        const test_modules = try self.collectProgramTestModules(self.gpa);
+        const test_modules = try self.collectProgramTestModules(self.gpa, coord);
         defer self.gpa.free(test_modules);
         coord.program_test_modules = test_modules;
         defer coord.program_test_modules = &.{};
@@ -2507,7 +2510,7 @@ pub const BuildEnv = struct {
                 .present => .{ .hash = dep.content_hash },
                 .missing => .missing,
                 .unreadable => .unreadable,
-                .pending => unreachable,
+                .pending => base.invariant("build env invariant violated: file dependency {s} is still pending after canonicalization read it", .{relative_path}),
             };
             try self.appendWatchInputState(inputs, seen, full_path, state);
         }
@@ -2518,8 +2521,7 @@ pub const BuildEnv = struct {
     /// BuildEnv allocator and must be released with `freeWatchInputStates`.
     pub fn collectWatchInputStates(self: *BuildEnv) Allocator.Error![]const watch_inputs.Input {
         if (!self.track_watch_inputs) {
-            if (builtin.mode == .debug) base.invariant("collectWatchInputStates called without watch input tracking enabled", .{});
-            unreachable;
+            base.invariant("build env invariant violated: collectWatchInputStates called without watch input tracking enabled", .{});
         }
 
         var inputs = std.ArrayList(watch_inputs.Input).empty;
@@ -2534,10 +2536,8 @@ pub const BuildEnv = struct {
         while (build_pkg_it.next()) |entry| {
             const pkg = entry.value_ptr.*;
             if (pkg.url != null) continue;
-            const state = pkg.root_file_state orelse {
-                if (builtin.mode == .debug) base.invariant("build package {s} has root_file without root_file_state", .{entry.key_ptr.*});
-                unreachable;
-            };
+            const state = pkg.root_file_state orelse
+                base.invariant("build env invariant violated: build package {s} has root_file without root_file_state", .{entry.key_ptr.*});
             try self.appendWatchInputState(&inputs, &seen, pkg.root_file, state);
         }
 
@@ -2547,10 +2547,8 @@ pub const BuildEnv = struct {
                 const pkg = entry.value_ptr.*;
                 if (pkg.url != null) continue;
                 for (pkg.modules.items) |*mod| {
-                    const state = mod.source_file_state orelse {
-                        if (builtin.mode == .debug) base.invariant("coordinator module {s} has no source_file_state", .{mod.name});
-                        unreachable;
-                    };
+                    const state = mod.source_file_state orelse
+                        base.invariant("build env invariant violated: coordinator module {s} has no source_file_state", .{mod.name});
                     try self.appendWatchInputState(&inputs, &seen, mod.path, state);
                     const module_env = mod.moduleEnv() orelse continue;
                     try self.appendFileDependencyWatchInputStates(&inputs, &seen, mod.canonicalSourceDir(), module_env);
@@ -2835,8 +2833,8 @@ pub const BuildEnv = struct {
     fn collectProgramTestModules(
         self: *BuildEnv,
         allocator: Allocator,
+        coord: *Coordinator,
     ) Allocator.Error![]check.CheckedArtifact.CheckedModuleArtifactKey {
-        const coord = self.coordinator orelse unreachable;
         var test_owned_packages = try self.collectTestOwnedPackages(allocator);
         defer test_owned_packages.deinit(allocator);
 
@@ -3050,7 +3048,7 @@ pub const BuildEnv = struct {
                 const module_id = coord_package.getPublicModuleId(public_module.name) orelse continue;
                 const module_state = coord_package.getModule(module_id) orelse continue;
                 const semantic = module_state.semanticData() orelse continue;
-                const public_target = coord_package.getPublicModuleTarget(public_module.name) orelse unreachable;
+                const public_target = coord_package.getPublicModuleTarget(public_module.name) orelse unreachable; // getPublicModuleId above found this name in the same target map
                 const source_decl: ?CIR.Statement.Idx = switch (public_target.selection) {
                     .type_decl => |statement| statement,
                     .whole_module => null,
@@ -3249,18 +3247,10 @@ pub const BuildEnv = struct {
     }
 
     pub fn executableRootCheckedArtifact(self: *BuildEnv) *const check.CheckedArtifact.CheckedModuleArtifact {
-        const semantic = self.getExecutableRootSemanticData() orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("build env invariant violated: executable root semantic data is missing", .{});
-            }
-            unreachable;
-        };
-        return semantic.checked_artifact orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("build env invariant violated: executable root has no checked artifact", .{});
-            }
-            unreachable;
-        };
+        const semantic = self.getExecutableRootSemanticData() orelse
+            base.invariant("build env invariant violated: executable root semantic data is missing", .{});
+        return semantic.checked_artifact orelse
+            base.invariant("build env invariant violated: executable root has no checked artifact", .{});
     }
 
     /// How the object cache files a module's pack: `pkg` for a module of a
@@ -3347,10 +3337,8 @@ pub const BuildEnv = struct {
     }
 
     fn builtCoordinator(self: *BuildEnv) *Coordinator {
-        return self.coordinator orelse {
-            if (builtin.mode == .debug) base.invariant("build env invariant violated: artifact views requested before a build", .{});
-            unreachable;
-        };
+        return self.coordinator orelse
+            base.invariant("build env invariant violated: artifact views requested before a build", .{});
     }
 
     fn checkedArtifactKeysEqual(
@@ -3494,7 +3482,10 @@ pub const BuildEnv = struct {
                             line_starts.items.items,
                             mapped_region.start.offset,
                             mapped_region.end.offset,
-                        ) catch unreachable;
+                        ) catch |err| base.invariant(
+                            "build env invariant violated: a staged root region past its synthetic header does not map into the original source: {s}",
+                            .{@errorName(err)},
+                        );
 
                         const owned_path = try report.addOwnedString(original_path);
                         try report.document.addSourceRegion(

@@ -15,7 +15,7 @@ test "uninitialized var read becomes runtime error expression" {
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const block = test_env.module_env.store.getExpr(canonical_expr.get_idx());
     try testing.expectEqual(.e_block, std.meta.activeTag(block));
 
@@ -47,7 +47,7 @@ test "write occurrences retain each destructured target and exclude fresh binder
     ;
     var test_env = try TestEnv.init(source);
     defer test_env.deinit();
-    const result = try test_env.canonicalizeExpr() orelse unreachable;
+    const result = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     try testing.expect(!test_env.hasParseErrors());
     const store = &test_env.module_env.store;
     const block = store.getExpr(result.get_idx()).e_block;

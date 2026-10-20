@@ -7,7 +7,6 @@
 const std = @import("std");
 const invariant = @import("invariant.zig").invariant;
 const Allocator = std.mem.Allocator;
-const builtin = @import("builtin");
 const collections = @import("collections");
 
 const Ident = @import("Ident.zig");
@@ -253,11 +252,7 @@ pub fn getString(self: *const CommonEnv, idx: StringLiteral.Idx) []const u8 {
 
 fn assertStringsInsertable(self: *const CommonEnv) void {
     if (self.strings_insertable) return;
-
-    if (comptime builtin.mode == .debug) {
-        invariant("CommonEnv invariant violated: attempted to insert into frozen string literal store", .{});
-    }
-    unreachable;
+    invariant("CommonEnv invariant violated: attempted to insert into frozen string literal store", .{});
 }
 
 /// Adds an identifier to the exposed items list by its index.

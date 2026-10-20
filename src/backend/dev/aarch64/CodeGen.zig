@@ -606,12 +606,8 @@ pub fn CodeGen(comptime target: RocTarget) type {
         }
 
         fn branchSiteIndex(self: *Self, loc: usize) u32 {
-            return self.branch_site_index.get(loc) orelse {
-                if (builtin.mode == .debug) {
-                    invariant("AArch64 branch patch at 0x{x} names no registered branch site", .{loc});
-                }
-                unreachable;
-            };
+            return self.branch_site_index.get(loc) orelse
+                invariant("AArch64 branch patch at 0x{x} names no registered branch site", .{loc});
         }
 
         /// Emit unconditional jump (returns patch location for fixup)
@@ -790,7 +786,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
                         }
                     }
                 },
-                .extern_call => unreachable,
+                .extern_call => unreachable, // only patchJump and patchCall reach here, and they require jump or call sites; extern calls resolve through emitExternStub
             }
             self.markBranchSiteResolved(index, target_loc);
         }
@@ -994,10 +990,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
                     }
                     if (veneer_moved != target_moved) self.writePcRelSequence(veneer, target_loc, .IP0, .IP1);
                 } else if (loc_moved != target_moved) {
-                    if (builtin.mode == .debug) {
-                        invariant("AArch64 resolved branch at 0x{x} straddles the shifted body [0x{x}, 0x{x})", .{ site.loc, body_start, body_end });
-                    }
-                    unreachable;
+                    invariant("AArch64 resolved branch at 0x{x} straddles the shifted body [0x{x}, 0x{x})", .{ site.loc, body_start, body_end });
                 }
             }
         }
@@ -1040,20 +1033,17 @@ pub fn CodeGen(comptime target: RocTarget) type {
         fn assertBranchFits(offset_words: i64, comptime bits: u6, comptime kind: []const u8) void {
             if (fitsSignedBits(offset_words, bits)) return;
 
-            if (builtin.mode == .debug) {
-                invariant(
-                    "AArch64 {s} target out of range: word offset {d} does not fit in signed {d}-bit immediate",
-                    .{ kind, offset_words, bits },
-                );
-            }
-            unreachable;
+            invariant(
+                "AArch64 {s} target out of range: word offset {d} does not fit in signed {d}-bit immediate",
+                .{ kind, offset_words, bits },
+            );
         }
 
         fn encodeDirectBranch(kind: BranchSiteKind, offset_words: i64) u32 {
             return switch (kind) {
                 .jump => encodeB(offset_words),
                 .call => encodeBl(offset_words),
-                .cond_jump, .extern_call => unreachable,
+                .cond_jump, .extern_call => unreachable, // callers pass only jump or call kinds, mapping cond_jump and extern_call to those first
             };
         }
 

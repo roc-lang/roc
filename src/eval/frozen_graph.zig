@@ -212,6 +212,5 @@ pub fn boxyCaptureLocation(program: *const Program.Result, idx: layout.Idx, slot
 }
 
 fn invariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .debug) compilerInvariant("frozen graph invariant violated: {s}", .{message});
-    unreachable;
+    compilerInvariant("frozen graph invariant violated: {s}", .{message});
 }

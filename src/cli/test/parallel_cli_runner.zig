@@ -4311,7 +4311,7 @@ fn runInterpreterTest(
             argv_buf[argc] = io_spec;
             argc += 1;
         },
-        .cross_compile => unreachable,
+        .cross_compile => unreachable, // runSingleTest sends cross_compile cases to runCrossCompileTest instead
     }
 
     var run_timer = harness.Timer.start() catch return .{ .status = .infra_error, .phase = .run, .duration_ns = timer.read(), .message = "no clock" };
@@ -4415,7 +4415,7 @@ fn runCompiledTest(
             run_argv_buf[argc] = io_spec;
             argc += 1;
         },
-        .cross_compile => unreachable,
+        .cross_compile => unreachable, // runSingleTest sends cross_compile cases to runCrossCompileTest instead
     }
 
     var run_timer = harness.Timer.start() catch return .{ .status = .infra_error, .phase = .run, .duration_ns = timer.read(), .build_ns = build_ns, .message = "no clock" };
@@ -12862,7 +12862,7 @@ fn customIssue10015UrlRandomTestSize(
         \\}
         \\
     else
-        unreachable;
+        unreachable; // the target_dir_name check above skips every architecture except aarch64 and x86_64
 
     const cache_platform_dir = std.fs.path.join(allocator, &.{ env.dirs.roc_cache_dir, "roc", "packages", platform_hash }) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate cached platform path: {}", .{err});

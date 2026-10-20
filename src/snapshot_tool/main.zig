@@ -1079,7 +1079,7 @@ fn processSnapshotContent(
                 .dev_object,
                 .docs,
                 .reporting,
-                => unreachable,
+                => unreachable, // the enclosing prong handles only expr and statement snapshots
             }
             if (content.meta.include_canonicalize_diagnostics) {
                 try can_ir.publishScratchDiagnostics();
@@ -1158,7 +1158,7 @@ fn processSnapshotContent(
             // For file tests, canonicalization happens INSIDE canonicalizeAndTypeCheckModule,
             // so can_ir.imports is still empty at this point. We can't use builtin_modules
             // (which is built from can_ir.imports). Instead, just pass builtin_env directly.
-            const builtin_env = config.builtin_module orelse unreachable;
+            const builtin_env = config.builtin_module orelse return error.MissingBuiltinModule;
             // Cast from *const ModuleEnv to *ModuleEnv (function signature requires non-const pointer)
             const builtin_env_nonconst: *ModuleEnv = @constCast(builtin_env);
             const imported_envs_for_file: []const *ModuleEnv = &[_]*ModuleEnv{builtin_env_nonconst};
@@ -3481,7 +3481,10 @@ fn processDocsSnapshot(
         defer allocator.free(routing_modules);
         for (routing_modules) |mod| {
             const source_decl = mod.public_type_decl orelse continue;
-            const artifact = mod.semantic.checked_artifact orelse unreachable;
+            const artifact = mod.semantic.checked_artifact orelse {
+                std.log.err("Public module {s} has no checked artifact", .{mod.name});
+                return false;
+            };
             try public_type_projections.append(allocator, .{
                 .public_name = mod.name,
                 .package_name = build_env.displayNameForPackage(mod.package_name),
@@ -3500,13 +3503,19 @@ fn processDocsSnapshot(
         const display_pkg_name = build_env.displayNameForPackage(mod.package_name);
         var mod_docs = docs_mod.extract.extractModuleDocsWithOptions(allocator, mod.semantic.env, display_pkg_name, mod.path, .{
             .exposed_names = mod.docs_exposed_names,
-            .public_type = if (mod.public_type_decl) |source_decl| .{
-                .public_name = mod.name,
-                .package_name = display_pkg_name,
-                .source_env = mod.semantic.env,
-                .source_identity = &(mod.semantic.checked_artifact orelse unreachable).key.module_identity_hash,
-                .source_decl = source_decl,
-                .public_order = mod.public_order,
+            .public_type = if (mod.public_type_decl) |source_decl| public_type: {
+                const artifact = mod.semantic.checked_artifact orelse {
+                    std.log.err("Public module {s} has no checked artifact", .{mod.name});
+                    return false;
+                };
+                break :public_type .{
+                    .public_name = mod.name,
+                    .package_name = display_pkg_name,
+                    .source_env = mod.semantic.env,
+                    .source_identity = &artifact.key.module_identity_hash,
+                    .source_decl = source_decl,
+                    .public_order = mod.public_order,
+                };
             } else null,
             .public_types = public_type_projections.items,
             .checked_artifact = mod.semantic.checked_artifact,
@@ -3739,10 +3748,7 @@ fn snapshotRootRequestByOrder(
     for (root_artifact.root_requests.requests) |request| {
         if (request.order == order) return request;
     }
-    if (@import("builtin").mode == .debug) {
-        std.debug.panic("snapshot invariant violated: missing root request order {d}", .{order});
-    }
-    unreachable;
+    base.invariant("snapshot invariant violated: missing root request order {d}", .{order});
 }
 
 fn snapshotProvidedEntrypointName(
@@ -3752,17 +3758,11 @@ fn snapshotProvidedEntrypointName(
     const def_idx = switch (root.source) {
         .def => |def| def,
         .expr, .statement, .required_binding, .hoisted => {
-            if (@import("builtin").mode == .debug) {
-                std.debug.panic("snapshot invariant violated: exported platform root is not a definition", .{});
-            }
-            unreachable;
+            base.invariant("snapshot invariant violated: exported platform root is not a definition", .{});
         },
     };
     const top_level = root_artifact.top_level_values.lookupByDef(def_idx) orelse {
-        if (@import("builtin").mode == .debug) {
-            std.debug.panic("snapshot invariant violated: exported platform root has no published top-level value", .{});
-        }
-        unreachable;
+        base.invariant("snapshot invariant violated: exported platform root has no published top-level value", .{});
     };
 
     for (root_artifact.provides_requires.provides) |entry| {
@@ -3771,13 +3771,10 @@ fn snapshotProvidedEntrypointName(
         }
     }
 
-    if (@import("builtin").mode == .debug) {
-        std.debug.panic(
-            "snapshot invariant violated: exported platform root has no published FFI symbol",
-            .{},
-        );
-    }
-    unreachable;
+    base.invariant(
+        "snapshot invariant violated: exported platform root has no published FFI symbol",
+        .{},
+    );
 }
 
 fn snapshotNativeEntrypoints(
@@ -3788,13 +3785,10 @@ fn snapshotNativeEntrypoints(
     const root_procs = lowered.lir_result.root_procs.items;
     const root_metadata = lowered.lir_result.root_metadata.items;
     if (root_procs.len != root_metadata.len) {
-        if (@import("builtin").mode == .debug) {
-            std.debug.panic(
-                "snapshot invariant violated: root metadata mismatch roots={d} metadata={d}",
-                .{ root_procs.len, root_metadata.len },
-            );
-        }
-        unreachable;
+        base.invariant(
+            "snapshot invariant violated: root metadata mismatch roots={d} metadata={d}",
+            .{ root_procs.len, root_metadata.len },
+        );
     }
 
     var entrypoints = std.ArrayList(backend.Entrypoint).empty;

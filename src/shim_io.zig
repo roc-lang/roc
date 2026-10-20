@@ -296,7 +296,7 @@ fn posixPreadError(errno: anytype) std.Io.File.ReadPositionalError {
 /// Linux primitives for `Shim`, issued as raw syscalls.
 const linux_os = struct {
     fn futexWaitUncancelable(_: ?*anyopaque, ptr: *const u32, expected: u32) void {
-        if (builtin.single_threaded) unreachable;
+        if (builtin.single_threaded) unreachable; // a single-threaded build has no other thread that could wake this waiter
 
         const linux = std.os.linux;
         const errno = linux.errno(linux.futex_4arg(
@@ -306,7 +306,7 @@ const linux_os = struct {
             null,
         ));
         if (errno == .SUCCESS or errno == .INTR or errno == .AGAIN or errno == .INVAL or errno == .TIMEDOUT) return;
-        unreachable;
+        unreachable; // FUTEX_WAIT on a valid private word reports only the errnos accepted above
     }
 
     fn futexWake(_: ?*anyopaque, ptr: *const u32, max_waiters: u32) void {
@@ -319,7 +319,7 @@ const linux_os = struct {
             @min(max_waiters, std.math.maxInt(i32)),
         ));
         if (errno == .SUCCESS or errno == .INVAL or errno == .FAULT) return;
-        unreachable;
+        unreachable; // FUTEX_WAKE on a private word reports only the errnos accepted above
     }
 
     fn lockStderr() void {}
@@ -508,7 +508,7 @@ var windows_stderr_lock: win.SRWLOCK = .{};
 const windows_os = struct {
     // RtlWaitOnAddress is the Windows futex analogue (available since Win8).
     fn futexWaitUncancelable(_: ?*anyopaque, ptr: *const u32, expected: u32) void {
-        if (builtin.single_threaded) unreachable;
+        if (builtin.single_threaded) unreachable; // a single-threaded build has no other thread that could wake this waiter
         var compare = expected;
         _ = std.os.windows.ntdll.RtlWaitOnAddress(
             @ptrCast(ptr),
@@ -682,13 +682,13 @@ var macos_stderr_lock: std.c.os_unfair_lock = .{};
 /// Darwin primitives for `Shim`, issued through libc.
 const macos_os = struct {
     fn futexWaitUncancelable(_: ?*anyopaque, ptr: *const u32, expected: u32) void {
-        if (builtin.single_threaded) unreachable;
+        if (builtin.single_threaded) unreachable; // a single-threaded build has no other thread that could wake this waiter
         const flags: std.c.UL = .{ .op = .COMPARE_AND_WAIT, .NO_ERRNO = true };
         const status = std.c.__ulock_wait(flags, ptr, expected, 0);
         if (status >= 0) return;
         const errno: std.c.E = @fromBackingInt(@intCast(-status));
         if (errno == .INTR or errno == .FAULT or errno == .TIMEDOUT) return;
-        unreachable;
+        unreachable; // __ulock_wait on a valid word reports only the errnos accepted above
     }
 
     fn futexWake(_: ?*anyopaque, ptr: *const u32, max_waiters: u32) void {
@@ -704,7 +704,7 @@ const macos_os = struct {
             const errno: std.c.E = @fromBackingInt(@intCast(-status));
             if (errno == .INTR) continue;
             if (errno == .NOENT) return;
-            unreachable;
+            unreachable; // __ulock_wake on a valid word reports only the errnos handled above
         }
     }
 

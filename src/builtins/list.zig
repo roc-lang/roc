@@ -127,14 +127,11 @@ pub const RocList = extern struct {
         }
 
         const list = list_allocate(@alignOf(T), slice.len, @sizeOf(T), elements_refcounted, roc_ops);
+        const dest = list.bytes orelse unreachable; // list_allocate returns non-null bytes for the nonzero length checked above
+        const src = @as([*]const u8, @ptrCast(slice.ptr));
+        const num_bytes = slice.len * @sizeOf(T);
 
-        if (slice.len > 0) {
-            const dest = list.bytes orelse unreachable;
-            const src = @as([*]const u8, @ptrCast(slice.ptr));
-            const num_bytes = slice.len * @sizeOf(T);
-
-            @memcpy(dest[0..num_bytes], src[0..num_bytes]);
-        }
+        @memcpy(dest[0..num_bytes], src[0..num_bytes]);
 
         return list;
     }
@@ -160,8 +157,7 @@ pub const RocList = extern struct {
         // Only read from heap (-2) for seamless slices with refcounted elements.
         // The count is only written by setAllocationElementCount when elements_refcounted=true.
         if (self.isSeamlessSlice() and elements_refcounted) {
-            // Seamless slices always refer to an underlying allocation.
-            const alloc_ptr = self.getAllocationDataPtr(roc_ops) orelse unreachable;
+            const alloc_ptr = self.getAllocationDataPtr(roc_ops) orelse unreachable; // a seamless slice encodes the non-null pointer of the allocation it was cut from
             // - 1 is refcount.
             // - 2 is size on heap.
             const ptr: [*]usize = utils.alignedPtrCast([*]usize, alloc_ptr, @src());
@@ -279,8 +275,8 @@ pub const RocList = extern struct {
         std.debug.assert(self.isUnique(roc_ops));
 
         if (elements_refcounted) {
-            const alloc_ptr = self.getAllocationDataPtr(roc_ops) orelse unreachable;
-            const slice_ptr = self.bytes orelse unreachable;
+            const alloc_ptr = self.getAllocationDataPtr(roc_ops) orelse unreachable; // asserted seamless above, and a seamless slice encodes a non-null allocation pointer
+            const slice_ptr = self.bytes orelse utils.builtinInvariant(roc_ops, "decrefAfterMovingSliceElements on a seamless slice with null bytes");
             std.debug.assert(element_width > 0);
 
             const moved_start_bytes = @intFromPtr(slice_ptr) - @intFromPtr(alloc_ptr);
@@ -370,7 +366,7 @@ pub const RocList = extern struct {
             const ptr: [*]usize = utils.alignedPtrCast([*]usize, non_null_ptr, @src());
             return (ptr - 1)[0];
         } else {
-            unreachable;
+            unreachable; // a seamless slice or a list with nonzero capacity always points into an allocation
         }
     }
 
@@ -499,7 +495,7 @@ pub const RocList = extern struct {
 
         if (self.bytes) |source_ptr| {
             // transfer the memory
-            const dest_ptr = result.bytes orelse unreachable;
+            const dest_ptr = result.bytes orelse utils.builtinInvariant(roc_ops, "reallocateFresh of an allocated list requested a zero new_length");
 
             @memcpy(dest_ptr[0..(old_length * element_width)], source_ptr[0..(old_length * element_width)]);
 
@@ -1078,7 +1074,7 @@ pub fn listReleaseExcessCapacity(
         // This pattern is also like true in other locations like listConcat and listDropAt.
         const output = RocList.list_allocate(alignment, old_length, element_width, elements_refcounted, roc_ops);
         if (list.bytes) |source_ptr| {
-            const dest_ptr = output.bytes orelse unreachable;
+            const dest_ptr = output.bytes orelse unreachable; // old_length is nonzero in this branch, so list_allocate returns non-null bytes
 
             @memcpy(dest_ptr[0..(old_length * element_width)], source_ptr[0..(old_length * element_width)]);
             if (elements_refcounted) {
@@ -1150,8 +1146,8 @@ pub fn listPrepend(
     // slice's whole-allocation teardown would otherwise release, so it is
     // released here before being overwritten.
     if (list.isSeamlessSlice() and element_width > 0 and list.isExclusive(update_mode, roc_ops)) {
-        const window_ptr = list.bytes orelse unreachable;
-        const alloc_ptr = list.getAllocationDataPtr(roc_ops) orelse unreachable;
+        const window_ptr = list.bytes orelse utils.builtinInvariant(roc_ops, "listPrepend on a seamless slice with null bytes");
+        const alloc_ptr = list.getAllocationDataPtr(roc_ops) orelse unreachable; // a seamless slice encodes the non-null pointer of the allocation it was cut from
         if (@intFromPtr(window_ptr) - @intFromPtr(alloc_ptr) >= element_width) {
             const target = window_ptr - element_width;
             if (elements_refcounted) {
@@ -1514,7 +1510,7 @@ pub fn listDropAt(
             elements_refcounted,
             roc_ops,
         );
-        const target_ptr = output.bytes orelse unreachable;
+        const target_ptr = output.bytes orelse unreachable; // size >= 2 here, so list_allocate gets a nonzero length and returns non-null bytes
 
         const head_size = drop_index * element_width;
         @memcpy(target_ptr[0..head_size], source_ptr[0..head_size]);
@@ -1736,9 +1732,8 @@ pub fn listConcat(
         );
         resized_list_a.length = total_length;
 
-        // These must exist, otherwise, the lists would have been empty.
-        const source_a = resized_list_a.bytes orelse unreachable;
-        const source_b = list_b.bytes orelse unreachable;
+        const source_a = resized_list_a.bytes orelse unreachable; // both lists are non-empty past the isEmpty checks above, and non-empty lists have non-null bytes
+        const source_b = list_b.bytes orelse unreachable; // both lists are non-empty past the isEmpty checks above, and non-empty lists have non-null bytes
 
         // Use @memmove instead of @memcpy to handle potential aliasing
         const dest_slice = source_a[(list_a.len() * element_width)..(total_length * element_width)];
@@ -1773,9 +1768,8 @@ pub fn listConcat(
         );
         resized_list_b.length = total_length;
 
-        // These must exist, otherwise, the lists would have been empty.
-        const source_a = list_a.bytes orelse unreachable;
-        const source_b = resized_list_b.bytes orelse unreachable;
+        const source_a = list_a.bytes orelse unreachable; // both lists are non-empty past the isEmpty checks above, and non-empty lists have non-null bytes
+        const source_b = resized_list_b.bytes orelse unreachable; // both lists are non-empty past the isEmpty checks above, and non-empty lists have non-null bytes
 
         // This is a bit special, we need to first copy the elements of list_b to the end,
         // then copy the elements of list_a to the beginning.
@@ -1802,10 +1796,9 @@ pub fn listConcat(
 
     const output = RocList.list_allocate(alignment, total_length, element_width, elements_refcounted, roc_ops);
 
-    // These must exist, otherwise, the lists would have been empty.
-    const target = output.bytes orelse unreachable;
-    const source_a = list_a.bytes orelse unreachable;
-    const source_b = list_b.bytes orelse unreachable;
+    const target = output.bytes orelse unreachable; // total_length is nonzero because both lists are non-empty past the isEmpty checks above
+    const source_a = list_a.bytes orelse unreachable; // both lists are non-empty past the isEmpty checks above, and non-empty lists have non-null bytes
+    const source_b = list_b.bytes orelse unreachable; // both lists are non-empty past the isEmpty checks above, and non-empty lists have non-null bytes
 
     @memcpy(target[0..(list_a.len() * element_width)], source_a[0..(list_a.len() * element_width)]);
     @memcpy(target[(list_a.len() * element_width)..(total_length * element_width)], source_b[0..(list_b.len() * element_width)]);
@@ -1919,9 +1912,10 @@ pub fn listSet(
             roc_ops,
         );
 
-    const element_at_index = (output.bytes orelse unreachable) + (@as(usize, @intCast(index)) * element_width);
+    const output_bytes = output.bytes orelse unreachable; // List.set calls list_set_unsafe only after checking index < len, so the list is non-empty
+    const element_at_index = output_bytes + (@as(usize, @intCast(index)) * element_width);
     if (elements_refcounted) dec(dec_context, element_at_index);
-    copy(element_at_index, element orelse unreachable, element_width);
+    copy(element_at_index, element, element_width);
     return output;
 }
 
@@ -1934,13 +1928,14 @@ inline fn listReplaceInPlaceHelp(
     copy: CopyFallbackFn,
 ) RocList {
     // the element we will replace
-    const element_at_index = (list.bytes orelse unreachable) + (index * element_width);
+    const list_bytes = list.bytes orelse unreachable; // callers rely on the Roc-side bounds check, which makes the list non-empty
+    const element_at_index = list_bytes + (index * element_width);
 
     // copy out the old element
-    copy((out_element orelse unreachable), element_at_index, element_width);
+    copy(out_element, element_at_index, element_width);
 
     // copy in the new element
-    copy(element_at_index, (element orelse unreachable), element_width);
+    copy(element_at_index, element, element_width);
 
     return list;
 }
@@ -3391,12 +3386,12 @@ test "listSet releases displaced refcounted element after copy-on-write" {
         decrements: usize = 0,
 
         fn incref(context: ?*anyopaque, _: ?[*]u8) callconv(.c) void {
-            const self: *@This() = @ptrCast(@alignCast(context orelse unreachable));
+            const self: *@This() = @ptrCast(@alignCast(context orelse unreachable)); // this test passes &counters as the incref context
             self.increments += 1;
         }
 
         fn decref(context: ?*anyopaque, _: ?[*]u8) callconv(.c) void {
-            const self: *@This() = @ptrCast(@alignCast(context orelse unreachable));
+            const self: *@This() = @ptrCast(@alignCast(context orelse unreachable)); // this test passes &counters as the decref context
             self.decrements += 1;
         }
     };
@@ -4275,7 +4270,7 @@ test "listPrepend into a unique seamless slice releases the overwritten refcount
     const Counter = struct {
         fn dec(ctx: ?*anyopaque, elem: ?[*]u8) callconv(.c) void {
             const seen: *std.ArrayList(u8) = @ptrCast(@alignCast(ctx.?));
-            seen.append(std.testing.allocator, elem.?[0]) catch unreachable;
+            seen.appendAssumeCapacity(elem.?[0]);
         }
     };
 
@@ -4284,6 +4279,8 @@ test "listPrepend into a unique seamless slice releases the overwritten refcount
 
     var decremented: std.ArrayList(u8) = .empty;
     defer decremented.deinit(std.testing.allocator);
+    // Counter.dec runs as a C callback and cannot report allocation failure.
+    try decremented.ensureTotalCapacity(std.testing.allocator, 8);
 
     const data = [_]u8{ 1, 2, 3 };
     const list = RocList.fromSlice(u8, data[0..], true, test_env.getOps());

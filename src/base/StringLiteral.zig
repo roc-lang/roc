@@ -3,7 +3,6 @@
 const std = @import("std");
 const invariant = @import("invariant.zig").invariant;
 const Allocator = std.mem.Allocator;
-const builtin = @import("builtin");
 const collections = @import("collections");
 const testing = std.testing;
 
@@ -292,8 +291,7 @@ pub const Store = struct {
 
     fn requireAlignment(self: *Store, idx: Idx, required: u32) void {
         if (required == 0 or !std.math.isPowerOfTwo(required)) {
-            if (builtin.mode == .debug) invariant("string literal alignment must be a nonzero power of two", .{});
-            unreachable;
+            invariant("StringLiteral invariant violated: string literal alignment must be a nonzero power of two", .{});
         }
         const idx_usize: usize = @backingInt(idx);
         const alignment_start = idx_usize - alignment_size;
@@ -417,10 +415,7 @@ const StringLiteralPolicy = struct {
 
 fn checkedU32(value: usize, comptime invariant_name: []const u8) u32 {
     if (value > std.math.maxInt(u32)) {
-        if (comptime builtin.mode == .debug) {
-            invariant("{s} exceeded u32 storage invariant", .{invariant_name});
-        }
-        unreachable;
+        invariant("{s} exceeded u32 storage invariant", .{invariant_name});
     }
     return @intCast(value);
 }

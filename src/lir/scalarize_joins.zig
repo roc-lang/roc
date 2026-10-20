@@ -34,6 +34,7 @@
 //! their shape.
 
 const std = @import("std");
+const base = @import("base");
 const collections = @import("collections");
 const core = @import("lir_core");
 const layout_mod = @import("layout");
@@ -1284,13 +1285,13 @@ const Pass = struct {
         else if (old == .assign_ref)
             old.assign_ref.target
         else
-            unreachable;
+            base.invariant("scalarize joins invariant violated: tag forward {d} is a {s} statement, not set_local or assign_ref", .{ @backingInt(stmt_id), @tagName(old) });
         const next_after: LIR.CFStmtId = if (old == .set_local)
             old.set_local.next
         else if (old == .assign_ref)
             old.assign_ref.next
         else
-            unreachable;
+            unreachable; // the target lookup above admits only set_local and assign_ref
         const target_layout = self.store.getLocal(target).layout_idx;
         const rebuilt = try self.store.addLocal(.{ .layout_idx = target_layout });
         try self.new_locals.append(self.allocator, rebuilt);
@@ -1308,7 +1309,7 @@ const Pass = struct {
                 .next = next_after,
             } }, origin)
         else
-            unreachable;
+            unreachable; // the target lookup above admits only set_local and assign_ref
         try self.store.replaceCFStmt(stmt_id, .{ .assign_tag = .{
             .target = rebuilt,
             .variant_index = 0,
@@ -1611,13 +1612,13 @@ const Pass = struct {
         else if (old == .assign_ref)
             old.assign_ref.target
         else
-            unreachable;
+            base.invariant("scalarize joins invariant violated: struct forward {d} is a {s} statement, not set_local or assign_ref", .{ @backingInt(stmt_id), @tagName(old) });
         const next_after: LIR.CFStmtId = if (old == .set_local)
             old.set_local.next
         else if (old == .assign_ref)
             old.assign_ref.next
         else
-            unreachable;
+            unreachable; // the target lookup above admits only set_local and assign_ref
         const rebuilt = try self.store.addLocal(.{ .layout_idx = self.store.getLocal(target).layout_idx });
         try self.new_locals.append(self.allocator, rebuilt);
         const forward = if (old == .set_local)
@@ -1634,7 +1635,7 @@ const Pass = struct {
                 .next = next_after,
             } }, origin)
         else
-            unreachable;
+            unreachable; // the target lookup above admits only set_local and assign_ref
         try self.store.replaceCFStmt(stmt_id, .{ .assign_struct = .{
             .target = rebuilt,
             .fields = try self.store.addLocalSpan(fields),
