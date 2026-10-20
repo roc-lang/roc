@@ -939,10 +939,18 @@ pub const BuildEnv = struct {
     }
 
     /// Register a directory as a workspace root, skipping it if an existing root
-    /// already contains it. Takes ownership of nothing; copies `dir` when stored.
+    /// already contains it. The root is stored resolved, the form every sandbox
+    /// check resolves its candidate path into before comparing bytes, so the
+    /// spelling a caller found the directory under (a cache root taken from the
+    /// environment, say) never decides whether a path is inside it.
     fn addWorkspaceRoot(self: *BuildEnv, dir: []const u8) Allocator.Error!void {
-        if (PathUtils.isWithinRoot(dir, self.workspace_roots.items)) return;
-        try self.workspace_roots.append(try self.gpa.dupe(u8, dir));
+        const resolved = try std.fs.path.resolve(self.gpa, &.{dir});
+        errdefer self.gpa.free(resolved);
+        if (PathUtils.isWithinRoot(resolved, self.workspace_roots.items)) {
+            self.gpa.free(resolved);
+            return;
+        }
+        try self.workspace_roots.append(resolved);
     }
 
     /// Phase 1: Parse headers, create package entries, extract TargetsConfig, and populate
@@ -4219,6 +4227,38 @@ test "issue 9737: logicalModuleToPath frees its scratch path exactly once on the
     // it must free its `with_ext` scratch allocation exactly once; freeing it a
     // second time is a double free that the testing allocator detects.
     try std.testing.expectError(error.PathOutsideWorkspace, env.logicalModuleToPath("/tmp/roc-issue-9737", "Mod"));
+}
+
+test "issue 12374: a workspace root keeps paths inside it however its directory was spelled" {
+    const gpa = std.testing.allocator;
+
+    // addWorkspaceRoot and logicalModuleToPath only read `gpa` and
+    // `workspace_roots`, so a minimal BuildEnv with just those fields set is
+    // enough to exercise them.
+    var env: BuildEnv = undefined;
+    env.gpa = gpa;
+    env.workspace_roots = std.array_list.Managed([]const u8).init(gpa);
+    defer {
+        for (env.workspace_roots.items) |root| gpa.free(root);
+        env.workspace_roots.deinit();
+    }
+
+    // A URL package's directory is registered as the cache root was spelled in
+    // the environment joined with its hash. A doubled separator (or, on
+    // Windows, a `/` inside a `\` path) is the same directory, and the
+    // resolved module path inside it must count as inside the workspace.
+    try env.addWorkspaceRoot("/roc-issue-12374//packages/hash");
+    try std.testing.expectEqual(@as(usize, 1), env.workspace_roots.items.len);
+
+    const module_path = try env.logicalModuleToPath("/roc-issue-12374/packages/hash", "Mod");
+    defer gpa.free(module_path);
+    const expected = try std.fs.path.resolve(gpa, &.{"/roc-issue-12374/packages/hash/Mod.roc"});
+    defer gpa.free(expected);
+    try std.testing.expectEqualStrings(expected, module_path);
+
+    // Registering the same directory under another spelling adds nothing.
+    try env.addWorkspaceRoot("/roc-issue-12374/packages//hash/");
+    try std.testing.expectEqual(@as(usize, 1), env.workspace_roots.items.len);
 }
 
 // Regression test for https://github.com/roc-lang/roc/issues/11714

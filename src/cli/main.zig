@@ -18333,6 +18333,44 @@ test "check report recovery propagates terminal interpreter failures" {
     try requireReportableCheckFailure(error.FileNotFound);
 }
 
+/// Drains the reports of a check that failed with `err`. A failure one of
+/// them carries as an error is shown through that report alone; a failure no
+/// error report carries propagates instead, since the check would otherwise
+/// announce "No errors found" with nothing to say what went wrong.
+fn drainReportedCheckFailure(build_env: *BuildEnv, err: CheckFileWithBuildEnvPreservedError) CheckFileWithBuildEnvPreservedError![]const BuildEnv.DrainedModuleReports {
+    try requireReportableCheckFailure(err);
+    const drained = try build_env.drainReports();
+    if (!drainedReportsCarryError(drained)) {
+        build_env.freeDrainedReports(drained);
+        return err;
+    }
+    return drained;
+}
+
+/// Whether any drained report has error severity.
+fn drainedReportsCarryError(drained: []const BuildEnv.DrainedModuleReports) bool {
+    for (drained) |mod| {
+        for (mod.reports) |report| {
+            if (report.severity.isError()) return true;
+        }
+    }
+    return false;
+}
+
+test "a check failure is carried only by a report of error severity" {
+    const gpa = std.testing.allocator;
+    var warnings = [_]reporting.Report{try reporting.Report.init(gpa, "Unused Value", "unused", .warning)};
+    defer warnings[0].deinit();
+    var errors = [_]reporting.Report{try reporting.Report.init(gpa, "Type Mismatch", "mismatch", .runtime_error)};
+    defer errors[0].deinit();
+    try std.testing.expect(!drainedReportsCarryError(&.{}));
+    try std.testing.expect(!drainedReportsCarryError(&.{.{ .abs_path = "App.roc", .reports = &warnings }}));
+    try std.testing.expect(drainedReportsCarryError(&.{
+        .{ .abs_path = "App.roc", .reports = &warnings },
+        .{ .abs_path = "Dep.roc", .reports = &errors },
+    }));
+}
+
 /// Resolving dependencies can download packages, so it is reported as its own
 /// phase rather than as part of Type Checking.
 fn buildForCheckWithOptionalMain(
@@ -18390,8 +18428,7 @@ fn checkFileWithBuildEnvPreserved(
     applySyntheticDefaultAppMapping(&build_env, synthetic_default_app);
 
     buildForCheckWithOptionalMain(&build_env, filepath, main_filepath, reporter) catch |err| {
-        try requireReportableCheckFailure(err);
-        const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
+        const drained = try drainReportedCheckFailure(&build_env, err);
         return CheckResultWithBuildEnv{
             .check_result = try collectCheckResult(ctx, &build_env, drained, true),
             .build_env = build_env,
@@ -18441,8 +18478,7 @@ fn checkFileWithBuildEnv(
     applySyntheticDefaultAppMapping(&build_env, synthetic_default_app);
 
     buildForCheckWithOptionalMain(&build_env, filepath, main_filepath, reporter) catch |err| {
-        try requireReportableCheckFailure(err);
-        const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
+        const drained = try drainReportedCheckFailure(&build_env, err);
         return collectCheckResult(ctx, &build_env, drained, false);
     };
 
