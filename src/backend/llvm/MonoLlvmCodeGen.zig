@@ -1356,7 +1356,7 @@ pub const MonoLlvmCodeGen = struct {
                     builder.metadataTuple(frame.members.items) catch return error.OutOfMemory,
                 ) catch return error.OutOfMemory };
             },
-            .scalar, .box_of_zst, .erased_box, .list_of_zst, .tag_union, .closure, .erased_callable, .zst => return .{ .done = try self.buildDebugType(builder, frame.idx, null) },
+            .scalar, .box_of_zst, .erased_box, .list_of_zst, .tag_union, .closure, .erased_callable, .zst, .hole => return .{ .done = try self.buildDebugType(builder, frame.idx, null) },
         }
     }
 
@@ -1584,11 +1584,12 @@ pub const MonoLlvmCodeGen = struct {
                     builder.metadataTuple(members.items) catch return error.OutOfMemory,
                 ) catch return error.OutOfMemory;
             },
-            .closure, .erased_callable, .zst => {
+            .closure, .erased_callable, .zst, .hole => {
                 const name = switch (lay.tag) {
                     .closure => "Closure",
                     .erased_callable => "ErasedCallable",
                     .zst => "Unit",
+                    .hole => "hole",
                     .scalar, .box, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .tag_union, .ptr => unreachable,
                 };
                 return builder.debugStructType(
@@ -11749,7 +11750,7 @@ pub const MonoLlvmCodeGen = struct {
                 );
                 try self.storePointer(self.slot(target).ptr, result);
             },
-            .scalar, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => return error.CompilationFailed,
+            .scalar, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .hole, .tag_union, .ptr => return error.CompilationFailed,
         }
     }
 
@@ -12996,7 +12997,7 @@ pub const MonoLlvmCodeGen = struct {
                 .vector, .opaque_ptr, .str => false,
             },
             .tag_union, .box, .box_of_zst, .erased_box, .ptr => false,
-            .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst => direct_idx.isSigned(),
+            .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .hole => direct_idx.isSigned(),
         };
     }
 

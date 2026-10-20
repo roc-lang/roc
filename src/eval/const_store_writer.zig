@@ -522,6 +522,7 @@ pub const Writer = struct {
     ) Allocator.Error!void {
         const layout_value = self.program.layouts.getLayout(layout_idx);
         try out.append(self.allocator, switch (layout_value.tag) {
+            .hole => writerInvariant("a demand hole reached a compile-time value"),
             .box_of_zst => .{ .plan = elem_plan, .layout_idx = .zst, .value = Value.zst },
             .box => .{
                 .plan = elem_plan,
@@ -1017,6 +1018,7 @@ pub const Writer = struct {
     fn readTagDiscriminant(self: *Writer, layout_idx: layout.Idx, value: Value) u32 {
         const layout_value = self.program.layouts.getLayout(layout_idx);
         return switch (layout_value.tag) {
+            .hole => writerInvariant("a demand hole reached a compile-time value"),
             .zst => 0,
             .tag_union => self.program.layouts.getTagUnionData(layout_value.getTagUnion().idx).readDiscriminant(value.ptr, self.program.layouts.targetUsize()),
             .scalar,
@@ -1053,6 +1055,7 @@ pub const Writer = struct {
     fn resolveTagBase(self: *Writer, layout_idx: layout.Idx, value: Value) TagBase {
         const layout_value = self.program.layouts.getLayout(layout_idx);
         return switch (layout_value.tag) {
+            .hole => writerInvariant("a demand hole reached a compile-time value"),
             .zst, .tag_union => .{
                 .value = value,
                 .layout_idx = layout_idx,
@@ -1107,6 +1110,7 @@ pub const Writer = struct {
                 const roc_str: *const RocStr = @ptrCast(@alignCast(value.ptr));
                 break :blk @intFromPtr(roc_str.asSlice().ptr);
             } else null,
+            .hole => writerInvariant("a demand hole reached a compile-time value"),
             .box_of_zst,
             .erased_box,
             .list_of_zst,
@@ -1129,6 +1133,7 @@ pub const Writer = struct {
                     const roc_str: *const RocStr = @ptrCast(@alignCast(value.ptr));
                     break :blk roc_str.len();
                 } else 0,
+                .hole => writerInvariant("a demand hole reached a compile-time value"),
                 .box,
                 .box_of_zst,
                 .erased_box,

@@ -901,6 +901,7 @@ const Lifter = struct {
             .iterator_procedure = call.iterator_procedure,
             .captures = rewritten.captures,
             .is_cold = call.is_cold,
+            .demand_shaped = call.demand_shaped,
         } });
     }
 
@@ -1521,6 +1522,7 @@ const CaptureSet = struct {
             .iterator_procedure = call.iterator_procedure,
             .captures = finalized,
             .is_cold = call.is_cold,
+            .demand_shaped = call.demand_shaped,
         } });
     }
 
@@ -2236,6 +2238,7 @@ const CaptureDependencyGraph = struct {
                         .iterator_procedure = call.iterator_procedure,
                         .captures = try self.finalizedSpan(edge_id, expr_id),
                         .is_cold = call.is_cold,
+                        .demand_shaped = call.demand_shaped,
                     } });
                 },
             }

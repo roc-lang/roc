@@ -6108,6 +6108,7 @@ const ProcedureBuilder = struct {
             .tag_union,
             => true,
             .scalar => value_layout.getScalar().tag == .vector,
+            .hole => boxyLowerInvariant("a demand hole reached Boxy lowering"),
             .box_of_zst,
             .closure,
             .erased_callable,
@@ -24239,6 +24240,7 @@ const ProcBodyBuilder = struct {
         defer fields.deinit(self.parent.allocator);
 
         switch (layout_value.tag) {
+            .hole => boxyLowerInvariant("a demand hole reached Boxy lowering"),
             .zst => {},
             .struct_ => {
                 const struct_idx = layout_value.getStruct().idx;
@@ -31879,6 +31881,7 @@ const ProcBodyBuilder = struct {
             const tag_layout = switch (descriptor_layout_value.tag) {
                 .tag_union => descriptor_layout_value,
                 .box => self.parent.result.layouts.getLayout(descriptor_layout_value.getIdx()),
+                .hole => boxyLowerInvariant("a demand hole reached Boxy lowering"),
                 .zst => null,
                 .scalar, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => boxyLowerInvariant("boxy descriptor read_path tag had a non-tag payload layout"),
             };
@@ -33104,6 +33107,7 @@ const ProcBodyBuilder = struct {
         const tag_layout = switch (layout_value.tag) {
             .tag_union => layout_value,
             .box => self.parent.result.layouts.getLayout(layout_value.getIdx()),
+            .hole => boxyLowerInvariant("a demand hole reached Boxy lowering"),
             .scalar, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => return,
         };
         if (tag_layout.tag != .tag_union) return;
@@ -33516,6 +33520,7 @@ const ProcBodyBuilder = struct {
         const tag_layout = switch (layout_value.tag) {
             .tag_union => layout_value,
             .box => self.parent.result.layouts.getLayout(layout_value.getIdx()),
+            .hole => boxyLowerInvariant("a demand hole reached Boxy lowering"),
             .scalar, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => return null,
         };
         if (tag_layout.tag != .tag_union) return null;
@@ -37617,10 +37622,12 @@ const ProcBodyBuilder = struct {
         const source_layout = self.workerRuntimeLayoutForRep(source_rep).layoutIdx();
         const target_is_box = switch (self.parent.result.layouts.getLayout(target_layout).tag) {
             .box, .box_of_zst, .erased_box => true,
+            .hole => boxyLowerInvariant("a demand hole reached Boxy lowering"),
             .scalar, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => false,
         };
         return target_is_box and switch (self.parent.result.layouts.getLayout(source_layout).tag) {
             .box, .box_of_zst, .erased_box => true,
+            .hole => boxyLowerInvariant("a demand hole reached Boxy lowering"),
             .scalar, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => false,
         };
     }
@@ -38601,6 +38608,7 @@ const ProcBodyBuilder = struct {
 
             switch (a_layout.tag) {
                 .scalar => if (!std.meta.eql(a_layout.getScalar(), b_layout.getScalar())) return false,
+                .hole => boxyLowerInvariant("a demand hole reached Boxy lowering"),
                 .zst, .erased_box => {},
                 .box, .box_of_zst => try pending.append(allocator, .{
                     layouts.getBoxInfo(a_layout).elem_layout_idx,
@@ -39439,6 +39447,7 @@ const ProcBodyBuilder = struct {
         const boxed_source_layout_value = self.parent.result.layouts.getLayout(boxed_source_layout);
         const source_backing_is_box = switch (boxed_source_layout_value.tag) {
             .box, .box_of_zst, .erased_box => true,
+            .hole => boxyLowerInvariant("a demand hole reached Boxy lowering"),
             .scalar, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => false,
         };
         // A plan-dynamic record whose backing is concrete at this site (fully
@@ -40519,6 +40528,7 @@ const ProcBodyBuilder = struct {
                         .next = next,
                     } }, self.glueOrigin());
                 },
+                .hole => boxyLowerInvariant("a demand hole reached Boxy lowering"),
                 .box, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => return null,
             }
         }
@@ -40556,6 +40566,7 @@ const ProcBodyBuilder = struct {
                     if (!self.parent.result.layouts.isZeroSized(self.parent.result.layouts.getLayout(payload_layout))) return null;
                 }
             },
+            .hole => boxyLowerInvariant("a demand hole reached Boxy lowering"),
             .box, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => return null,
         }
 
@@ -42627,6 +42638,7 @@ const ProcBodyBuilder = struct {
                 aggregate.getStruct().idx,
                 @intCast(field_index),
             ),
+            .hole => boxyLowerInvariant("a demand hole reached Boxy lowering"),
             .zst => .zst,
             .scalar, .box, .box_of_zst, .erased_box, .list, .list_of_zst, .closure, .erased_callable, .tag_union, .ptr => boxyLowerInvariant("aggregate field layout requested for non-struct layout"),
         };
@@ -43329,6 +43341,7 @@ const ProcBodyBuilder = struct {
                 }
                 break :blk variants.get(@intCast(variant_index)).payload_layout;
             },
+            .hole => boxyLowerInvariant("a demand hole reached Boxy lowering"),
             .zst, .scalar => .zst,
             .box, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => boxyLowerInvariant("tag payload operation expected tag-union layout"),
         };
@@ -43339,6 +43352,7 @@ const ProcBodyBuilder = struct {
         const list_layout = self.parent.result.layouts.getLayout(list_layout_idx);
         return switch (list_layout.tag) {
             .list => list_layout.getIdx(),
+            .hole => boxyLowerInvariant("a demand hole reached Boxy lowering"),
             .list_of_zst => .zst,
             .scalar, .box, .box_of_zst, .erased_box, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => boxyLowerInvariant("list expression target was not a list layout"),
         };

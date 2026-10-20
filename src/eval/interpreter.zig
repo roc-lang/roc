@@ -1894,7 +1894,7 @@ pub const Interpreter = struct {
                     }
                 }
             },
-            .zst, .box_of_zst, .erased_box => return,
+            .zst, .hole, .box_of_zst, .erased_box => return,
             // Compiler-internal pointers (TRMC holes) are opaque here: the slot they
             // point at may be a not-yet-filled hole, so there is nothing to validate.
             .ptr => return,
@@ -3914,6 +3914,7 @@ pub const Interpreter = struct {
                     .closure,
                     .erased_callable,
                     .zst,
+                    .hole,
                     .tag_union,
                     .ptr,
                     => {
@@ -4734,7 +4735,7 @@ pub const Interpreter = struct {
     fn allocStructValue(self: *LirInterpreter, struct_layout: layout_mod.Idx) Error!AllocatedStruct {
         const struct_layout_val = self.layout_store.getLayout(struct_layout);
         switch (struct_layout_val.tag) {
-            .zst => return .{
+            .zst, .hole => return .{
                 .outer = Value.zst,
                 .base = Value.zst,
                 .base_layout = .zst,
@@ -7786,7 +7787,7 @@ pub const Interpreter = struct {
         const layout_val = self.layout_store.getLayout(arg_layout);
 
         if (op == .eq and switch (layout_val.tag) {
-            .zst, .struct_, .list, .list_of_zst, .tag_union => true,
+            .zst, .hole, .struct_, .list, .list_of_zst, .tag_union => true,
             .scalar => layout_val.getScalar().tag == .str,
             .box, .box_of_zst, .erased_box, .closure, .erased_callable, .ptr => false,
         }) {
@@ -8826,6 +8827,7 @@ pub const Interpreter = struct {
             .closure,
             .erased_callable,
             .zst,
+            .hole,
             .tag_union,
             .ptr,
             => self.invariantFailed(
@@ -8964,6 +8966,7 @@ pub const Interpreter = struct {
             .closure,
             .erased_callable,
             .zst,
+            .hole,
             .tag_union,
             .ptr,
             => return error.RuntimeError,

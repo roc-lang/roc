@@ -13,6 +13,7 @@ pub const Monotype = struct {
     pub const Lower = @import("monotype/lower.zig");
     pub const Solve = @import("monotype/solve.zig");
     pub const Specialize = @import("monotype/specialize.zig");
+    pub const LayoutKey = @import("monotype/layout_key.zig");
 };
 /// Monotype IR after nested function bodies are lifted.
 pub const MonotypeLifted = struct {
@@ -53,6 +54,7 @@ test "postcheck declarations are referenced" {
     std.testing.refAllDecls(@import("monotype/worker_inputs.zig"));
     std.testing.refAllDecls(@import("monotype/solve.zig"));
     std.testing.refAllDecls(@import("monotype/specialize.zig"));
+    std.testing.refAllDecls(@import("monotype/layout_key.zig"));
     std.testing.refAllDecls(@import("monotype_lifted/ast.zig"));
     std.testing.refAllDecls(@import("monotype_lifted/body_shard_test.zig"));
     std.testing.refAllDecls(@import("monotype_lifted/lift.zig"));

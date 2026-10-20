@@ -611,6 +611,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
                 break :blk queued;
             } else break;
             const spec = store.getProcSpecPtr(job.variant);
+            if (@import("builtin").mode == .debug) requireHoleParamsBorrowed(store, layouts, spec.args, job.sig);
             spec.rc_borrowed_params = job.sig.borrowed_params;
             spec.rc_ret_borrowed = job.sig.ret_mode == .borrowed;
             spec.rc_ret_lenders = job.sig.ret_lenders;
@@ -679,6 +680,18 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
 /// `callArgOwnership` consults before upgrading a borrowed position or
 /// seeding an owned one, and the outcome spans it can select). A body-less
 /// proc keeps the facts its cache entry supplied.
+/// A demand-shaped procedure never consumes a value holding a hole: its
+/// body demands nothing of the hole's type, so its signature borrows every
+/// such parameter (design.md "Specialization By Demand").
+fn requireHoleParamsBorrowed(store: *const LirStore, layouts: *const layout_mod.Store, args: LIR.LocalSpan, sig: arc_sig.RcSig) void {
+    const params = store.getLocalSpan(args);
+    for (0..params.len) |index| {
+        const param = GuardedList.at(params, index);
+        if (!layouts.layoutHoldsHole(store.getLocal(param).layout_idx)) continue;
+        if (sig.paramMode(index) != .borrowed) arcInvariant("a parameter holding a demand hole was not borrowed");
+    }
+}
+
 fn recordObjectCacheFacts(
     store: *LirStore,
     solution: *const arc_solve.Solution,
@@ -7497,6 +7510,10 @@ const Inserter = struct {
     }
 
     fn rcHelperForLayout(self: *const Inserter, root_op: layout_mod.RcOp, root_layout: layout_mod.Idx) layout_mod.RcHelper {
+        // A demand-shaped procedure borrows every value holding a hole, so
+        // no refcount operation ever reaches one (design.md "Specialization
+        // By Demand").
+        if (self.layouts.layoutHoldsHole(root_layout)) arcInvariant("ARC requested a refcount operation on a value holding a demand hole");
         var op = root_op;
         var layout_idx = root_layout;
         while (true) {

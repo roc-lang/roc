@@ -1046,6 +1046,14 @@ pub const CallProc = struct {
     /// may use this to avoid inlining and to attach backend cold-call metadata;
     /// they must not infer coldness from callee names or source paths.
     is_cold: bool = false,
+    /// The callee is the specialization this call's request shaped by its
+    /// template's demand (design.md "Specialization By Demand"): the
+    /// arguments and result keep this call's own types, while the callee's
+    /// parameters and result carry demand holes and layout representatives
+    /// where the call's types do not. The callee's signature holds no function
+    /// type, so no lambda set crosses the call: later stages relate nothing
+    /// across it, and accept the call's layouts at the callee's holes.
+    demand_shaped: bool = false,
 };
 
 /// Low-level builtin call.

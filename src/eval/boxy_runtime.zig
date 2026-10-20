@@ -745,6 +745,7 @@ pub const BoxyRuntime = struct {
                     return .{ .ptr = data_ptr };
                 }
             },
+            .hole => base.invariant("a demand hole reached the boxy runtime", .{}),
             .box_of_zst => if (expected_layout == .zst) return Value.zst,
             .erased_box,
             .scalar,
@@ -846,6 +847,7 @@ pub const BoxyRuntime = struct {
                 };
                 break :blk self.resolveTagUnionBaseValue(.{ .ptr = data_ptr }, source_desc.payload_layout);
             },
+            .hole => base.invariant("a demand hole reached the boxy runtime", .{}),
             .scalar,
             .box_of_zst,
             .list,
@@ -886,6 +888,7 @@ pub const BoxyRuntime = struct {
             .closure,
             .erased_callable,
             .zst,
+            .hole,
             .ptr,
             => .zst,
         };
@@ -1919,6 +1922,7 @@ pub const BoxyRuntime = struct {
         const layout_val = self.layout_store.getLayout(layout_idx);
         return switch (layout_val.tag) {
             .zst, .box_of_zst => true,
+            .hole => base.invariant("a demand hole reached the boxy runtime", .{}),
             .scalar => switch (layout_val.getScalar().tag) {
                 .str => builtins.str.strEqual(valueToRocStr(a), valueToRocStr(b)),
                 .frac => switch (self.helper.sizeOf(layout_idx)) {
@@ -2062,6 +2066,7 @@ pub const BoxyRuntime = struct {
             .scalar, .closure, .erased_callable => {
                 self.performConcreteRc(hooks, op, layout_idx, val, count, atomicity);
             },
+            .hole => base.invariant("a demand hole reached the boxy runtime", .{}),
             .box_of_zst, .zst, .ptr => {},
         }
     }
@@ -2291,6 +2296,7 @@ pub const BoxyRuntime = struct {
                     try self.performBoxyLayoutDrop(hooks, tag_base.value.offset(field_offset), field_layout, field_desc, op, count, atomicity);
                 }
             },
+            .hole => base.invariant("a demand hole reached the boxy runtime", .{}),
             .scalar,
             .box,
             .box_of_zst,
@@ -2726,6 +2732,7 @@ pub const BoxyRuntime = struct {
                     .layout = actual_field_layout,
                 };
             },
+            .hole => base.invariant("a demand hole reached the boxy runtime", .{}),
             .scalar,
             .box,
             .box_of_zst,
@@ -3150,6 +3157,7 @@ pub const BoxyRuntime = struct {
                         "LIR/interpreter invariant violated: borrowed erased target box lacked an allocation descriptor",
                         .{},
                     ),
+                    .hole => base.invariant("a demand hole reached the boxy runtime", .{}),
                     .scalar,
                     .list,
                     .list_of_zst,
@@ -3209,6 +3217,7 @@ pub const BoxyRuntime = struct {
                     "LIR/interpreter invariant violated: borrowed erased target box lacked an allocation descriptor",
                     .{},
                 ),
+                .hole => base.invariant("a demand hole reached the boxy runtime", .{}),
                 .scalar,
                 .list,
                 .list_of_zst,
@@ -3785,6 +3794,7 @@ pub const BoxyRuntime = struct {
                         );
                         return try self.boxBox(hooks, materialized_payload, expected_layout);
                     },
+                    .hole => base.invariant("a demand hole reached the boxy runtime", .{}),
                     .scalar,
                     .list,
                     .list_of_zst,
@@ -4978,6 +4988,7 @@ pub const BoxyRuntime = struct {
             },
             .record, .tuple => return try self.structEq(hooks, lhs, rhs, layout_idx, desc),
             .tag_union => switch (layout_val.tag) {
+                .hole => base.invariant("a demand hole reached the boxy runtime", .{}),
                 .zst => {
                     const variant = self.requireBoxyTagVariantByDiscriminant(desc, 0);
                     return try self.tagPayloadsEq(hooks, variant, Value.zst, Value.zst, .zst);
@@ -4994,6 +5005,7 @@ pub const BoxyRuntime = struct {
                 const payload_desc = try self.requireNestedBoxyDesc(hooks, desc, 0, "box payload");
                 return switch (layout_val.tag) {
                     .box => try self.layoutEq(hooks, self.boxedPayloadValue(lhs), self.boxedPayloadValue(rhs), layout_val.getIdx(), payload_desc),
+                    .hole => base.invariant("a demand hole reached the boxy runtime", .{}),
                     .box_of_zst => try self.layoutEq(hooks, Value.zst, Value.zst, .zst, payload_desc),
                     .scalar, .zst, .erased_box, .list, .list_of_zst, .struct_, .tag_union, .closure, .erased_callable, .ptr => return self.invariantFailedError(
                         "LIR/interpreter invariant violated: box boxy equality descriptor had layout {d} ({s})",
@@ -5042,6 +5054,7 @@ pub const BoxyRuntime = struct {
                 }
                 break :blk struct_idx;
             },
+            .hole => base.invariant("a demand hole reached the boxy runtime", .{}),
             .zst => null,
             .scalar, .box, .box_of_zst, .erased_box, .list, .list_of_zst, .tag_union, .closure, .erased_callable, .ptr => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: struct equality descriptor had layout {d} ({s})",
@@ -5101,6 +5114,7 @@ pub const BoxyRuntime = struct {
         const payload_layout_val = self.layout_store.getLayout(payload_layout);
         const struct_idx = switch (payload_layout_val.tag) {
             .struct_ => payload_layout_val.getStruct().idx,
+            .hole => base.invariant("a demand hole reached the boxy runtime", .{}),
             .zst => null,
             .scalar, .box, .box_of_zst, .erased_box, .list, .list_of_zst, .tag_union, .closure, .erased_callable, .ptr => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: multi-payload tag equality had payload layout {d} ({s})",
@@ -5299,6 +5313,7 @@ pub const BoxyRuntime = struct {
                 const payload_desc = try self.requireNestedBoxyDesc(hooks, desc, 0, "box payload");
                 return switch (layout_val.tag) {
                     .box => try self.layoutHash(hooks, self.boxedPayloadValue(value), layout_val.getIdx(), payload_desc, hasher),
+                    .hole => base.invariant("a demand hole reached the boxy runtime", .{}),
                     .box_of_zst => try self.layoutHash(hooks, Value.zst, .zst, payload_desc, hasher),
                     .scalar, .zst, .erased_box, .list, .list_of_zst, .struct_, .tag_union, .closure, .erased_callable, .ptr => return self.invariantFailedError(
                         "LIR/interpreter invariant violated: box boxy hash descriptor had layout {d} ({s})",
@@ -5387,6 +5402,7 @@ pub const BoxyRuntime = struct {
                 }
                 break :blk struct_idx;
             },
+            .hole => base.invariant("a demand hole reached the boxy runtime", .{}),
             .zst => null,
             .scalar, .box, .box_of_zst, .erased_box, .list, .list_of_zst, .tag_union, .closure, .erased_callable, .ptr => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: struct hash descriptor had layout {d} ({s})",
@@ -5453,6 +5469,7 @@ pub const BoxyRuntime = struct {
     ) Error!u64 {
         const layout_val = self.layout_store.getLayout(union_layout);
         switch (layout_val.tag) {
+            .hole => base.invariant("a demand hole reached the boxy runtime", .{}),
             .zst => {
                 const variant = self.requireBoxyTagVariantByDiscriminant(desc, 0);
                 const state = hashU64(hasher, .u64, self.rowTagIndex(row_names, variant.name), 8);
@@ -5510,6 +5527,7 @@ pub const BoxyRuntime = struct {
         const payload_layout_val = self.layout_store.getLayout(payload_layout);
         const struct_idx = switch (payload_layout_val.tag) {
             .struct_ => payload_layout_val.getStruct().idx,
+            .hole => base.invariant("a demand hole reached the boxy runtime", .{}),
             .zst => null,
             .scalar, .box, .box_of_zst, .erased_box, .list, .list_of_zst, .tag_union, .closure, .erased_callable, .ptr => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: multi-payload tag hash had payload layout {d} ({s})",
@@ -5662,6 +5680,7 @@ pub const BoxyRuntime = struct {
             },
             .record, .tuple => try self.appendStructInspect(hooks, out, value, layout_idx, desc),
             .tag_union => switch (layout_val.tag) {
+                .hole => base.invariant("a demand hole reached the boxy runtime", .{}),
                 .zst => try self.appendZstTagInspect(hooks, out, desc),
                 // A recursive tag union is stored behind a box pointer.
                 .tag_union, .box => try self.appendTagUnionInspect(hooks, out, value, layout_idx, desc),
@@ -5680,6 +5699,7 @@ pub const BoxyRuntime = struct {
                     } else {
                         try self.appendLayoutInspect(hooks, out, Value.zst, .zst, payload_desc);
                     },
+                    .hole => base.invariant("a demand hole reached the boxy runtime", .{}),
                     .box_of_zst => try self.appendLayoutInspect(hooks, out, Value.zst, .zst, payload_desc),
                     .scalar, .zst, .erased_box, .list, .list_of_zst, .struct_, .tag_union, .closure, .erased_callable, .ptr => return self.invariantFailedError(
                         "LIR/interpreter invariant violated: box boxy inspect descriptor had layout {d} ({s})",
@@ -5913,7 +5933,7 @@ pub const BoxyRuntime = struct {
                 break :blk struct_idx;
             },
             .zst => null,
-            .scalar, .box, .box_of_zst, .erased_box, .list, .list_of_zst, .tag_union, .closure, .erased_callable, .ptr => return self.invariantFailedError(
+            .scalar, .box, .box_of_zst, .erased_box, .list, .list_of_zst, .tag_union, .closure, .erased_callable, .ptr, .hole => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: struct inspect descriptor had layout {d} ({s})",
                 .{ @backingInt(struct_layout), @tagName(layout_val.tag) },
             ),
@@ -5986,6 +6006,7 @@ pub const BoxyRuntime = struct {
         const payload_layout_val = self.layout_store.getLayout(payload_layout);
         const struct_idx = switch (payload_layout_val.tag) {
             .struct_ => payload_layout_val.getStruct().idx,
+            .hole => base.invariant("a demand hole reached the boxy runtime", .{}),
             .zst => null,
             .scalar, .box, .box_of_zst, .erased_box, .list, .list_of_zst, .tag_union, .closure, .erased_callable, .ptr => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: multi-payload tag inspect had payload layout {d} ({s})",
@@ -6498,6 +6519,7 @@ pub const BoxyRuntime = struct {
                     .contains_rc = hooks.layoutContainsRc(elem_layout),
                 };
             },
+            .hole => base.invariant("a demand hole reached the boxy runtime", .{}),
             .box_of_zst => .{
                 .elem_layout = .zst,
                 .elem_size = 0,
@@ -6595,6 +6617,7 @@ pub const BoxyRuntime = struct {
                 "LIR/interpreter invariant violated: converting a RocList to erased box layout {d} requires a payload descriptor",
                 .{@backingInt(ret_layout)},
             ),
+            .hole => base.invariant("a demand hole reached the boxy runtime", .{}),
             .scalar,
             .list,
             .list_of_zst,
@@ -6637,6 +6660,7 @@ pub const BoxyRuntime = struct {
                 }
                 return boxed;
             },
+            .hole => base.invariant("a demand hole reached the boxy runtime", .{}),
             .scalar,
             .list,
             .list_of_zst,
@@ -7132,6 +7156,7 @@ pub const BoxyRuntime = struct {
                         break :elem_check elem == alloc_desc.payload_layout or
                             self.layout_store.getLayout(elem).tag == .erased_box;
                     },
+                    .hole => base.invariant("a demand hole reached the boxy runtime", .{}),
                     .scalar,
                     .box_of_zst,
                     .list,
@@ -7159,6 +7184,7 @@ pub const BoxyRuntime = struct {
                     .closure,
                     .erased_callable,
                     .zst,
+                    .hole,
                     .tag_union,
                     .ptr,
                     => false,
@@ -7209,6 +7235,7 @@ pub const BoxyRuntime = struct {
             .closure,
             .erased_callable,
             .zst,
+            .hole,
             .tag_union,
             .ptr,
             => try self.materializeBoxyPayloadToLayout(
@@ -7356,6 +7383,7 @@ pub const BoxyRuntime = struct {
                     self.layout_store.getLayout(target_layout_value.getIdx()).tag == .erased_box
             else
                 false,
+            .hole => base.invariant("a demand hole reached the boxy runtime", .{}),
             .scalar,
             .box_of_zst,
             .list,

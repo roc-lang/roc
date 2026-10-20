@@ -114,6 +114,10 @@ pub const Content = union(enum) {
         abi_fn: ?TypeVarId = null,
     },
     zst,
+    /// A demand-shaped specialization's stand-in for a quantified variable its
+    /// body demands none of (design.md "Specialization By Demand"). It holds
+    /// no callable, and unifies only with itself.
+    hole,
     /// Lazy leaf: this var's type is the referenced lifted Monotype, not yet
     /// materialized in this store. The solver expands a leaf one level the
     /// first time unification or a shape read touches it, and end-of-solve

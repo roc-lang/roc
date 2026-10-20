@@ -499,6 +499,7 @@ pub const Store = struct {
         switch (layout.tag) {
             .scalar => unreachable,
             .zst => try self.startInternKey(.zst),
+            .hole => try self.startInternKey(.hole),
             .box => {
                 try self.startInternKey(.box);
                 try self.appendInternKeyIdx(layout.getIdx());
@@ -2504,7 +2505,7 @@ pub const Store = struct {
         return switch (value_layout.tag) {
             .erased_box, .box, .list, .list_of_zst, .struct_, .tag_union => true,
             .scalar => value_layout.getScalar().tag == .vector,
-            .box_of_zst, .closure, .erased_callable, .zst, .ptr => false,
+            .box_of_zst, .closure, .erased_callable, .zst, .ptr, .hole => false,
         };
     }
 
@@ -2542,6 +2543,72 @@ pub const Store = struct {
         };
     }
 
+    /// Whether a value of layout `actual` can stand where layout `expected` is
+    /// required (design.md "Specialization By Demand"): the two are equal, or
+    /// `expected` is a list or box of holes and `actual` the same kind of
+    /// container, or both are structs or tag unions of the same shape whose
+    /// components accept pairwise. A demand-shaped procedure reads a list or
+    /// box of holes only as its header, which every element type shares, and
+    /// such headers have one size and alignment whatever their items are.
+    pub fn acceptsAtHoles(self: *const Self, allocator: std.mem.Allocator, actual: Idx, expected: Idx) std.mem.Allocator.Error!bool {
+        var pending: std.ArrayList([2]Idx) = .empty;
+        defer pending.deinit(allocator);
+        try pending.append(allocator, .{ actual, expected });
+        while (pending.pop()) |pair| {
+            if (pair[0] == pair[1]) continue;
+            const actual_layout = self.getLayout(pair[0]);
+            const expected_layout = self.getLayout(pair[1]);
+            switch (expected_layout.tag) {
+                .list => {
+                    if (self.getLayout(expected_layout.getIdx()).tag != .hole) return false;
+                    if (actual_layout.tag != .list and actual_layout.tag != .list_of_zst) return false;
+                },
+                .box => {
+                    if (self.getLayout(expected_layout.getIdx()).tag != .hole) return false;
+                    if (actual_layout.tag != .box and actual_layout.tag != .box_of_zst) return false;
+                },
+                .struct_ => {
+                    if (actual_layout.tag != .struct_) return false;
+                    const expected_fields = self.struct_fields.sliceRange(self.getStructData(expected_layout.getStruct().idx).getFields());
+                    const actual_fields = self.struct_fields.sliceRange(self.getStructData(actual_layout.getStruct().idx).getFields());
+                    if (expected_fields.len != actual_fields.len) return false;
+                    for (0..expected_fields.len) |index| {
+                        const expected_field = expected_fields.get(index);
+                        const actual_field = actual_fields.get(index);
+                        if (expected_field.index != actual_field.index or expected_field.is_padding != actual_field.is_padding) return false;
+                        try pending.append(allocator, .{ actual_field.layout, expected_field.layout });
+                    }
+                },
+                .tag_union => {
+                    if (actual_layout.tag != .tag_union) return false;
+                    const expected_data = self.getTagUnionData(expected_layout.getTagUnion().idx);
+                    const actual_data = self.getTagUnionData(actual_layout.getTagUnion().idx);
+                    const expected_variants = self.getTagUnionVariants(expected_data);
+                    const actual_variants = self.getTagUnionVariants(actual_data);
+                    if (expected_variants.len != actual_variants.len) return false;
+                    for (0..expected_variants.len) |index| {
+                        try pending.append(allocator, .{ actual_variants.get(index).payload_layout, expected_variants.get(index).payload_layout });
+                    }
+                },
+                .scalar, .box_of_zst, .list_of_zst, .closure, .erased_callable, .zst, .ptr, .erased_box, .hole => return false,
+            }
+        }
+        return true;
+    }
+
+    /// Whether a value of this layout carries a demand hole: the hole itself,
+    /// or a list or box of one. No refcount plan exists for such a value; the
+    /// procedures that hold one borrow it (design.md "Specialization By
+    /// Demand").
+    pub fn layoutHoldsHole(self: *const Self, layout_idx: Idx) bool {
+        const value = self.getLayout(layout_idx);
+        return switch (value.tag) {
+            .hole => true,
+            .list, .box => self.getLayout(value.getIdx()).tag == .hole,
+            .scalar, .box_of_zst, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr, .erased_box => false,
+        };
+    }
+
     pub fn runtimeRepresentationLayoutIdx(self: *const Self, layout_idx: Idx) Idx {
         var current = layout_idx;
         while (true) {
@@ -2555,7 +2622,8 @@ pub const Store = struct {
         const list_layout = self.getLayout(list_layout_idx);
         std.debug.assert(list_layout.tag == .list or list_layout.tag == .list_of_zst);
         const info = self.getListInfo(list_layout);
-        const runtime_elem_layout_idx = if (list_layout.tag == .list)
+        // A list of holes is a list header whose items no code reads.
+        const runtime_elem_layout_idx = if (list_layout.tag == .list and info.elem_layout.tag != .hole)
             self.runtimeRepresentationLayoutIdx(info.elem_layout_idx)
         else
             null;
@@ -2577,7 +2645,7 @@ pub const Store = struct {
         const box_layout = self.getLayout(box_layout_idx);
         std.debug.assert(box_layout.tag == .box or box_layout.tag == .box_of_zst);
         const info = self.getBoxInfo(box_layout);
-        const runtime_elem_layout_idx = if (box_layout.tag == .box)
+        const runtime_elem_layout_idx = if (box_layout.tag == .box and info.elem_layout.tag != .hole)
             self.runtimeRepresentationLayoutIdx(info.elem_layout_idx)
         else
             null;
@@ -2895,7 +2963,7 @@ pub const Store = struct {
                 break :blk offset + self.sizeAt(current, target_usize);
             },
             .tag_union => self.getTagUnionData(layout.getTagUnion().idx).size.get(target_usize),
-            .zst => 0,
+            .zst, .hole => 0,
         };
     }
 
@@ -2968,7 +3036,9 @@ pub const Store = struct {
     /// Check if a layout is zero-sized
     /// This simply checks if the layout has size 0
     pub fn isZeroSized(self: *const Self, l: Layout) bool {
-        return self.layoutSize(l) == 0;
+        // A hole occupies no bytes, but a list or box of holes is an ordinary
+        // list or box whose items no code reads, not a list of zero-sized items.
+        return l.tag != .hole and self.layoutSize(l) == 0;
     }
 
     /// Check if a layout contains any refcounted data (directly or transitively).
@@ -2991,6 +3061,8 @@ pub const Store = struct {
             // what keeps ARC from tracking hole/head locals.
             .ptr, .box_of_zst => false,
             .zst => false,
+            // A hole stands for an element no procedure body touches.
+            .hole => false,
             .struct_ => self.getStructData(l.getStruct().idx).contains_refcounted,
             .tag_union => self.getTagUnionData(l.getTagUnion().idx).contains_refcounted,
             .closure => blk: {

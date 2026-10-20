@@ -2592,7 +2592,12 @@ const Pass = struct {
                     .def_ref,
                     .fn_def,
                     => Common.invariant("pre-lift function expression reached call-pattern specialization"),
-                    .call_proc => |call| if (Ast.localDirectCallee(call)) |callee|
+                    // A demand-shaped call's operands keep the caller's types,
+                    // not the callee's, so its patterns cannot specialize the
+                    // callee.
+                    .call_proc => |call| if (call.demand_shaped)
+                        .descend
+                    else if (Ast.localDirectCallee(call)) |callee|
                         (if (@backingInt(callee) < visitor.pass.plans.len) .descend_then_exit else .descend)
                     else
                         .descend,
@@ -4246,6 +4251,7 @@ const Pass = struct {
                     .iterator_procedure = call.iterator_procedure,
                     .captures = try clone.captureOperandSpan(call.captures, children[call.args.len..]),
                     .is_cold = call.is_cold,
+                    .demand_shaped = call.demand_shaped,
                 } },
                 .call_value => .{ .call_value = .{
                     .callee = @fromBackingInt(@intCast(children[0])),
@@ -4712,6 +4718,7 @@ const Pass = struct {
     }
 
     fn rewriteCallProc(self: *Pass, expr_id: Ast.ExprId, call: @import("../monotype/ast.zig").CallProc) Allocator.Error!void {
+        if (call.demand_shaped) return;
         const callee = Ast.localDirectCallee(call) orelse return;
         const raw = @backingInt(callee);
         if (raw >= self.plans.len) return;
@@ -9762,7 +9769,7 @@ const Cloner = struct {
         switch (frame.cursor) {
             CallProcCursor.start => {
                 const rewrites = if (Ast.localDirectCallee(call)) |callee|
-                    !call.is_cold and self.rewrite_call_patterns and @backingInt(callee) < self.pass.plans.len
+                    !call.is_cold and !call.demand_shaped and self.rewrite_call_patterns and @backingInt(callee) < self.pass.plans.len
                 else
                     false;
                 if (!rewrites) {
@@ -9785,6 +9792,7 @@ const Cloner = struct {
                 .iterator_procedure = call.iterator_procedure,
                 .captures = input.?.get(.capture_span),
                 .is_cold = call.is_cold,
+                .demand_shaped = call.demand_shaped,
             } } })),
             CallProcCursor.analyzed_arg => {
                 task.analyzed[frame.index] = input.?.get(.cloned);
@@ -9817,6 +9825,7 @@ const Cloner = struct {
                     .iterator_procedure = call.iterator_procedure,
                     .captures = input.?.get(.capture_span),
                     .is_cold = call.is_cold,
+                    .demand_shaped = call.demand_shaped,
                 } } });
                 return retExpr(try self.wrapBindings(task.chain.*, residual));
             },
@@ -11131,7 +11140,12 @@ const Cloner = struct {
         switch (frame.cursor) {
             InlineDirectCursor.start => {
                 const source_fn = self.pass.program.getFn(callee);
-                task.result_ty = self.pass.program.getExpr(task.original_expr).ty;
+                const original = self.pass.program.getExpr(task.original_expr);
+                // A demand-shaped callee's body is typed at its holes and layout
+                // representatives, not at this call's types, so it stays a
+                // call (design.md "Specialization By Demand").
+                if (original.data == .call_proc and original.data.call_proc.demand_shaped) return plainDirectCall(frame, task);
+                task.result_ty = original.ty;
                 const source = try self.pass.inlineSourceBody(callee) orelse return plainDirectCall(frame, task);
                 if (!source.size.admits()) return plainDirectCall(frame, task);
                 if (try exprContainsReturn(self.pass.allocator, self.pass.program, source.expr) or

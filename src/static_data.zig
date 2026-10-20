@@ -803,6 +803,7 @@ const StaticInitializerMachine = struct {
     ) MaterializationError!AggregateTarget {
         const target = self.layoutValue(target_layout);
         return switch (target.tag) {
+            .hole => staticDataInvariant("a demand hole reached static data"),
             .zst => blk: {
                 const value = try self.newValue(target_layout);
                 break :blk .{ .outer = value, .base = value, .base_layout = target_layout };
@@ -879,6 +880,7 @@ const StaticInitializerMachine = struct {
         const outer = self.layoutValue(union_layout);
         const tag_layout = switch (outer.tag) {
             .tag_union => outer,
+            .hole => staticDataInvariant("a demand hole reached static data"),
             .box => self.layoutValue(self.layouts().builtinBoxAbi(union_layout).elem_layout_idx orelse .zst),
             .scalar,
             .box_of_zst,

@@ -44,6 +44,7 @@ pub const Plan = struct {
             const offset = next.offset;
             const value = layouts.getLayout(next.layout_idx);
             switch (value.tag) {
+                .hole => unreachable,
                 .zst => {},
                 .scalar => {
                     switch (value.getScalar().tag) {

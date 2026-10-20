@@ -564,7 +564,7 @@ const Solver = struct {
                     sorted_erased.members = span;
                     self.program.types.set(ty, .{ .erased = sorted_erased });
                 },
-                .link, .unbound, .forall, .primitive, .zst, .func, .list, .box, .tuple, .record, .tag_union, .named, .mono => {},
+                .link, .unbound, .forall, .primitive, .zst, .hole, .func, .list, .box, .tuple, .record, .tag_union, .named, .mono => {},
             }
         }
     }
@@ -629,7 +629,7 @@ const Solver = struct {
                     Common.invariant("callable-bearing Monotype leaf survived Lambda Solved unexpanded at an erasure boundary");
                 },
                 .link => Common.invariant("Lambda Solved root returned a link"),
-                .unbound, .forall, .primitive, .zst => {},
+                .unbound, .forall, .primitive, .zst, .hole => {},
                 .erased => |erased| try self.appendCallableCaptureTypes(erased.members, &pending),
                 .lambda_set => |members| try self.appendCallableCaptureTypes(members, &pending),
                 .func => |func| {
@@ -844,6 +844,7 @@ const Solver = struct {
                 .forall,
                 .primitive,
                 .zst,
+                .hole,
                 => {},
                 .func => |func| {
                     try self.closeCallableSlot(func.callable, pending);
@@ -893,6 +894,7 @@ const Solver = struct {
             .box,
             .func,
             .zst,
+            .hole,
             .mono,
             => Common.invariant("function callable slot resolved to a non-callable type"),
         }
@@ -1123,6 +1125,14 @@ const Solver = struct {
             },
             .call_proc => |call| {
                 const args = self.lifted.exprSpan(call.args);
+                // A demand-shaped callee's signature holds no function type, so
+                // no lambda set crosses the call: its operands and result keep
+                // the call's own types (design.md "Specialization By Demand").
+                if (call.demand_shaped) {
+                    if (call.captures.len != 0) Common.invariant("a demand-shaped call passed captures");
+                    if (cursor < args.len) return .{ .expr = .{ .id = args[cursor] } };
+                    return null;
+                }
                 switch (Lifted.directCallee(call)) {
                     .local => |callee| {
                         const func = try self.functionShape(self.program.fn_tys.items[@backingInt(callee)]);
@@ -1452,7 +1462,7 @@ const Solver = struct {
                     try work.append(self.allocator, .{ .first = source_fn.ret, .second = target_content.func.ret });
                 },
                 .named => |source_named| try self.appendSpanPairs(&work, source_named.args, target_content.named.args),
-                .link, .unbound, .forall, .primitive, .lambda_set, .erased, .zst, .mono => {},
+                .link, .unbound, .forall, .primitive, .lambda_set, .erased, .zst, .hole, .mono => {},
             }
         }
     }
@@ -1669,7 +1679,7 @@ const Solver = struct {
             self.localTy(expr.data.local)
         else if (tag == .fn_ref)
             self.program.fn_tys.items[@backingInt(expr.data.fn_ref.fn_id)]
-        else if (tag == .call_proc)
+        else if (tag == .call_proc and !expr.data.call_proc.demand_shaped)
             switch (Lifted.directCallee(expr.data.call_proc)) {
                 .local => |callee| (try self.functionShape(self.program.fn_tys.items[@backingInt(callee)])).ret,
             }
@@ -1830,7 +1840,7 @@ const Solver = struct {
             switch (resolved) {
                 .mono => Common.invariant("lazy Monotype leaf reached erased-callable marking unexpanded"),
                 .link => Common.invariant("Lambda Solved root returned a link"),
-                .unbound, .forall, .primitive, .zst => {},
+                .unbound, .forall, .primitive, .zst, .hole => {},
                 .erased => |erased| try self.appendCallableCaptureTypes(erased.members, &pending),
                 .func => |func| {
                     // An erased callable already has this marking's effect.
@@ -2009,7 +2019,7 @@ const Solver = struct {
                     const clone = try self.finalMonoClone(leaf.id);
                     self.program.types.set(root, .{ .link = self.program.types.rootCompressed(clone) });
                 },
-                .unbound, .forall, .primitive, .zst => {},
+                .unbound, .forall, .primitive, .zst, .hole => {},
                 .list, .box => |elem| try work.append(self.allocator, elem),
                 .tuple => |items| for (0..items.count()) |index| {
                     try work.append(self.allocator, self.program.types.spanItem(items, index));
@@ -2533,6 +2543,10 @@ const Solver = struct {
                 }
                 self.program.types.set(b, .{ .link = a });
             },
+            .hole => {
+                if (right != .hole) Common.invariant("a demand hole failed Lambda Solved unification");
+                self.program.types.set(b, .{ .link = a });
+            },
             .zst => {
                 if (right != .zst) Common.invariant("zero-sized type failed Lambda Solved unification");
                 self.program.types.set(b, .{ .link = a });
@@ -2982,6 +2996,7 @@ const Solver = struct {
                 if (public_primitive != private.primitive) Common.invariant("generated-private evidence relation received different primitive types");
             },
             .zst => if (private != .zst) Common.invariant("generated-private evidence relation received different type structure"),
+            .hole => if (private != .hole) Common.invariant("generated-private evidence relation received different type structure"),
             .list => |public_elem| {
                 if (private_content_tag != .list) Common.invariant("generated-private evidence relation received different type structure");
                 try self.pushRelate(stack, public_elem, private.list);
@@ -3645,6 +3660,7 @@ const Solver = struct {
                 try self.addDigestActions(actions, &.{ .{ .bytes = "primitive" }, .{ .bytes = @tagName(primitive) } });
             },
             .zst => try self.addDigestActions(actions, &.{.{ .bytes = "zst" }}),
+            .hole => try self.addDigestActions(actions, &.{.{ .bytes = "roc.monotype.hole" }}),
             .erased => |erased| try self.addDigestActions(actions, &.{ .{ .bytes = "erased" }, .{ .raw = erased.source_fn_ty.bytes } }),
             .func => |func| {
                 try self.addDigestActions(actions, &.{.{ .bytes = "func" }});
@@ -3787,7 +3803,7 @@ fn computeReachabilityMasks(allocator: Allocator, types: anytype) Allocator.Erro
     const Walk = struct {
         fn children(store: @TypeOf(types), content: MonoType.Content, callback: anytype) void {
             switch (content) {
-                .primitive, .zst, .erased => {},
+                .primitive, .zst, .hole, .erased => {},
                 .list, .box => |elem| callback.child(elem),
                 .tuple => |items| for (store.span(items)) |item| callback.child(item),
                 .record => |fields| for (store.fieldSpan(fields)) |field| {
@@ -4045,7 +4061,7 @@ const SolvedUninhabitedScan = struct {
                 try items.add(payload);
                 break :blk .{ .group = .any };
             },
-            .list, .func, .primitive, .lambda_set, .erased, .zst, .link, .unbound, .forall => .{ .value = false },
+            .list, .func, .primitive, .lambda_set, .erased, .zst, .hole, .link, .unbound, .forall => .{ .value = false },
         };
         if (expansion == .group) {
             try self.entry_marks.append(self.solver.allocator, .{
@@ -4118,7 +4134,7 @@ const MonoUninhabitedScan = struct {
                 try items.add(payload);
                 break :blk .{ .group = .any };
             },
-            .list, .func, .primitive, .erased, .zst => .{ .value = false },
+            .list, .func, .primitive, .erased, .zst, .hole => .{ .value = false },
         };
         if (expansion == .group) {
             try self.entry_stops.append(self.solver.allocator, self.solver.mono_uninhabited_path_stops);
@@ -4341,7 +4357,7 @@ const TypeCloner = struct {
         const types = self.solver.lifted.types;
         var start: usize = 0;
         switch (build.content) {
-            .primitive, .zst, .erased => {},
+            .primitive, .zst, .hole, .erased => {},
             .list, .box => |elem| try self.addClonePart(build, .{ .ty = elem }),
             .tuple => |items| try self.addCloneSpanParts(build, &start, items),
             .record => |fields| for (types.fieldSpan(fields)) |field| {
@@ -4414,6 +4430,7 @@ const TypeCloner = struct {
         return switch (build.content) {
             .primitive => |primitive| .{ .primitive = primitive },
             .zst => .zst,
+            .hole => .hole,
             .erased => |source_fn_ty| .{ .erased = .{ .source_fn_ty = source_fn_ty, .members = .empty() } },
             .list => .{ .list = reader.next() },
             .box => .{ .box = reader.next() },

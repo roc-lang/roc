@@ -15,6 +15,7 @@ const AnyAll = collections.AnyAll;
 const Ast = @import("ast.zig");
 const Type = @import("type.zig");
 const specialize = @import("specialize.zig");
+const LayoutKey = @import("layout_key.zig");
 const solve = @import("solve.zig");
 const WorkerInputs = @import("worker_inputs.zig");
 
@@ -2460,14 +2461,14 @@ fn appendMatchingRequestContainerOps(
                 try ops.append(gpa, .{ .pair = .{ .left = left_elem, .right = right_elem } });
                 return .join;
             },
-            .redirect, .leaf, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
+            .redirect, .leaf, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => {},
         },
         .box => |left_elem| switch (right_content) {
             .box => |right_elem| {
                 try ops.append(gpa, .{ .pair = .{ .left = left_elem, .right = right_elem } });
                 return .join;
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
+            .redirect, .leaf, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => {},
         },
         .tuple => |left_items| switch (right_content) {
             .tuple => |right_items| {
@@ -2479,7 +2480,7 @@ fn appendMatchingRequestContainerOps(
                 }
                 return .join;
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => {},
         },
         .func => |left_fn| switch (right_content) {
             .func => |right_fn| {
@@ -2492,21 +2493,21 @@ fn appendMatchingRequestContainerOps(
                 try ops.append(gpa, .{ .pair = .{ .left = left_fn.ret, .right = right_fn.ret } });
                 return .join;
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => {},
         },
         .tag_union => switch (right_content) {
             .tag_union => {
                 try relateOpaqueRequestComponentAtWidth(graph, left_node, right_node, row_width);
                 return .join;
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => {},
         },
         .record => switch (right_content) {
             .record => {
                 try relateOpaqueRequestComponentAtWidth(graph, left_node, right_node, row_width);
                 return .join;
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => {},
         },
         .named => |left_named| switch (right_content) {
             .named => |right_named| {
@@ -2520,9 +2521,9 @@ fn appendMatchingRequestContainerOps(
                 } });
                 return .named;
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => {},
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => {},
         },
-        .redirect, .leaf, .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
+        .redirect, .leaf, .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst, .hole => {},
     }
     return null;
 }
@@ -2559,7 +2560,7 @@ fn transparentAliasBacking(graph: *InstGraph, content: anytype) ?NodeId {
             if (backing.authority == .generated_private) return null;
             return graph.rootNode(backing.node);
         },
-        .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
+        .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => return null,
     }
 }
 
@@ -2643,11 +2644,11 @@ fn deferredTemplateTypeArgumentsStep(
         .unresolved => return,
         .list => |checked_elem| switch (request_content) {
             .list => |request_elem| try pending.append(gpa, .{ .argument = .{ .checked_node = checked_elem, .request_node = request_elem } }),
-            .redirect, .leaf, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return,
+            .redirect, .leaf, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return,
         },
         .box => |checked_elem| switch (request_content) {
             .box => |request_elem| try pending.append(gpa, .{ .argument = .{ .checked_node = checked_elem, .request_node = request_elem } }),
-            .redirect, .leaf, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return,
+            .redirect, .leaf, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return,
         },
         .named => |checked_named| switch (request_content) {
             .named => |request_named| {
@@ -2665,7 +2666,7 @@ fn deferredTemplateTypeArgumentsStep(
                 }
                 try pending.append(gpa, .{ .relate_named = .{ .checked_node = checked_root, .request_node = request_root } });
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => return,
         },
         .func => |checked_fn| switch (request_content) {
             .func => |request_fn| {
@@ -2677,7 +2678,7 @@ fn deferredTemplateTypeArgumentsStep(
                 }
                 try pending.append(gpa, .{ .at = .{ .checked_node = checked_fn.ret, .request_node = request_fn.ret } });
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return,
         },
         .tuple => |checked_items| switch (request_content) {
             .tuple => |request_items| {
@@ -2688,7 +2689,7 @@ fn deferredTemplateTypeArgumentsStep(
                     try pending.append(gpa, .{ .at = .{ .checked_node = checked_item, .request_node = request_item } });
                 }
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return,
         },
         .record => |checked_record| switch (request_content) {
             .record => |request_record| {
@@ -2709,7 +2710,7 @@ fn deferredTemplateTypeArgumentsStep(
                     try pending.append(gpa, .{ .argument = .{ .checked_node = checked_field.ty, .request_node = request_field.ty } });
                 }
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst => return,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return,
         },
         .tag_union => |checked_union| switch (request_content) {
             .tag_union => |request_union| {
@@ -2734,9 +2735,9 @@ fn deferredTemplateTypeArgumentsStep(
                     }
                 }
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return,
         },
-        .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
+        .primitive, .empty_tag_union, .empty_record, .erased, .zst, .hole => {},
         .redirect, .leaf => unreachable,
     }
 }
@@ -2747,7 +2748,7 @@ fn isGeneratedPrivateRootNode(graph: *InstGraph, node: NodeId) Allocator.Error!b
             backing.authority == .generated_private
         else
             false,
-        .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => false,
+        .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => false,
     };
 }
 
@@ -2899,7 +2900,7 @@ const try_error_type_arg_index: usize = 1;
 fn isFunctionNode(graph: *InstGraph, node: NodeId) Allocator.Error!bool {
     return switch ((try graph.content(node))) {
         .func => true,
-        .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => false,
+        .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => false,
     };
 }
 
@@ -2910,7 +2911,7 @@ fn isFunctionNode(graph: *InstGraph, node: NodeId) Allocator.Error!bool {
 fn isBareTagRowNode(graph: *InstGraph, node: NodeId) Allocator.Error!bool {
     return switch ((try graph.content(node))) {
         .tag_union, .empty_tag_union => true,
-        .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_record, .named, .erased, .zst => false,
+        .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_record, .named, .erased, .zst, .hole => false,
     };
 }
 
@@ -2954,11 +2955,11 @@ fn resultRowWideningOrNull(
     }
     const public_named = switch ((try graph.content(public_ret))) {
         .named => |named| named,
-        .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
+        .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => return null,
     };
     const request_named = switch ((try graph.content(request_ret))) {
         .named => |named| named,
-        .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
+        .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => return null,
     };
     // Only the `Try` nominal itself. An alias node's type arguments are not
     // the `Try` arguments the adapter reads, and crossing to its backing row
@@ -3304,7 +3305,7 @@ fn beginCheckedMonoRequestPair(
                 try ops.append(allocator, .{ .named_instances = roots });
                 break :structural true;
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => break :structural false,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => break :structural false,
         },
         .list => |checked_elem| switch (request_content) {
             .list => |request_elem| {
@@ -3312,7 +3313,7 @@ fn beginCheckedMonoRequestPair(
                 try ops.append(allocator, .{ .join_container = roots });
                 break :structural true;
             },
-            .redirect, .leaf, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :structural false,
+            .redirect, .leaf, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => break :structural false,
         },
         .box => |checked_elem| switch (request_content) {
             .box => |request_elem| {
@@ -3320,7 +3321,7 @@ fn beginCheckedMonoRequestPair(
                 try ops.append(allocator, .{ .join_container = roots });
                 break :structural true;
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :structural false,
+            .redirect, .leaf, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => break :structural false,
         },
         .tuple => |checked_items| switch (request_content) {
             .tuple => |request_items| {
@@ -3333,7 +3334,7 @@ fn beginCheckedMonoRequestPair(
                 try ops.append(allocator, .{ .join_container = roots });
                 break :structural true;
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :structural false,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => break :structural false,
         },
         .func => |checked_fn| switch (request_content) {
             .func => |request_fn| {
@@ -3347,7 +3348,7 @@ fn beginCheckedMonoRequestPair(
                 try ops.append(allocator, .{ .join_container = roots });
                 break :structural true;
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :structural false,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => break :structural false,
         },
         .record => |checked_row| switch (request_content) {
             .record => |request_row| {
@@ -3367,7 +3368,7 @@ fn beginCheckedMonoRequestPair(
                 try ops.append(allocator, .{ .join_container = roots });
                 break :structural true;
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst => break :structural false,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => break :structural false,
         },
         .tag_union => switch (request_content) {
             .tag_union => {
@@ -3391,9 +3392,9 @@ fn beginCheckedMonoRequestPair(
                 try ops.append(allocator, .{ .join_container = roots });
                 break :structural true;
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :structural false,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => break :structural false,
         },
-        .redirect, .leaf, .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => break :structural false,
+        .redirect, .leaf, .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst, .hole => break :structural false,
     };
     if (!structural) try ops.append(allocator, .{ .unify = roots });
     frames.appendAssumeCapacity(.{
@@ -3756,7 +3757,7 @@ fn shapeContent(types: *const Type.Store, ty: Type.TypeId) Type.Content {
             } else {
                 return types.get(current);
             },
-            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return types.get(current),
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => return types.get(current),
         }
     }
 }
@@ -3764,14 +3765,14 @@ fn shapeContent(types: *const Type.Store, ty: Type.TypeId) Type.Content {
 fn functionShape(types: *const Type.Store, ty: Type.TypeId, comptime message: []const u8) FunctionShape {
     return switch (shapeContent(types, ty)) {
         .func => |func| .{ .args = func.args, .ret = func.ret },
-        .primitive, .named, .record, .tuple, .tag_union, .list, .box, .erased, .zst => Common.invariant(message),
+        .primitive, .named, .record, .tuple, .tag_union, .list, .box, .erased, .zst, .hole => Common.invariant(message),
     };
 }
 
 fn recordFieldsSpan(types: *const Type.Store, ty: Type.TypeId) Type.Span {
     return switch (shapeContent(types, ty)) {
         .record => |fields| fields,
-        .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("record operation had a non-record type"),
+        .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("record operation had a non-record type"),
     };
 }
 
@@ -3782,28 +3783,28 @@ fn recordFields(types: *const Type.Store, ty: Type.TypeId) Type.StoreSpanBorrow(
 fn tupleItemTypes(types: *const Type.Store, ty: Type.TypeId) Type.StoreSpanBorrow(Type.TypeId, "spans") {
     return types.span(switch (shapeContent(types, ty)) {
         .tuple => |items| items,
-        .primitive, .named, .record, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("tuple operation had a non-tuple type"),
+        .primitive, .named, .record, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("tuple operation had a non-tuple type"),
     });
 }
 
 fn listElemType(types: *const Type.Store, ty: Type.TypeId) Type.TypeId {
     return switch (shapeContent(types, ty)) {
         .list => |elem| elem,
-        .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst => Common.invariant("list operation had a non-list type"),
+        .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst, .hole => Common.invariant("list operation had a non-list type"),
     };
 }
 
 fn boxPayloadType(types: *const Type.Store, ty: Type.TypeId) Type.TypeId {
     return switch (shapeContent(types, ty)) {
         .box => |payload| payload,
-        .primitive, .named, .record, .tuple, .tag_union, .list, .func, .erased, .zst => Common.invariant("box operation had a non-box type"),
+        .primitive, .named, .record, .tuple, .tag_union, .list, .func, .erased, .zst, .hole => Common.invariant("box operation had a non-box type"),
     };
 }
 
 fn tagUnionTags(types: *const Type.Store, ty: Type.TypeId) Type.StoreSpanBorrow(Type.Tag, "tags") {
     return switch (shapeContent(types, ty)) {
         .tag_union => |tags| types.tagSpan(tags),
-        .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => Common.invariant("tag operation had a non-tag-union type"),
+        .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst, .hole => Common.invariant("tag operation had a non-tag-union type"),
     };
 }
 
@@ -3832,7 +3833,7 @@ fn tagPayloadTypes(types: *const Type.Store, name_store: *const names.NameStore,
 fn namedBackingType(types: *const Type.Store, ty: Type.TypeId) ?Type.TypeId {
     return switch (types.get(ty)) {
         .named => |named| if (named.backing) |backing| backing.ty else null,
-        .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => null,
+        .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => null,
     };
 }
 
@@ -3844,7 +3845,7 @@ fn nominalExprBackingType(types: *const Type.Store, ty: Type.TypeId) ?Type.TypeI
             .alias => null,
             .nominal, .@"opaque" => if (named.backing) |backing| backing.ty else null,
         },
-        .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => null,
+        .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => null,
     };
 }
 
@@ -3873,7 +3874,7 @@ fn nominalConstructionLayer(types: *const Type.Store, ty: Type.TypeId) ?NominalC
                     .nominal, .@"opaque" => return .{ .named = current, .backing = backing.ty },
                 }
             },
-            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return null,
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => return null,
         }
     }
 }
@@ -7181,6 +7182,7 @@ const Builder = struct {
                 .primitive,
                 .erased,
                 .zst,
+                .hole,
                 => {},
             }
             std.mem.reverse(Step, pending.items[start..]);
@@ -7198,7 +7200,7 @@ const Builder = struct {
                 if (backing.use != .inspectable) return false;
                 current = backing.ty;
             },
-            .primitive, .tuple, .list, .box, .func, .erased, .zst => return false,
+            .primitive, .tuple, .list, .box, .func, .erased, .zst, .hole => return false,
         };
     }
 
@@ -8316,7 +8318,7 @@ const Builder = struct {
                 for (types.span(func.args)) |arg| if (try self.monoTypeMentionsFunction(arg)) return true;
                 return try self.monoTypeMentionsFunction(func.ret);
             },
-            .primitive, .zst, .erased, .named, .record, .tuple, .tag_union, .list, .box => return try self.monoTypeMentionsFunction(fn_ty),
+            .primitive, .zst, .hole, .erased, .named, .record, .tuple, .tag_union, .list, .box => return try self.monoTypeMentionsFunction(fn_ty),
         }
     }
 
@@ -8418,7 +8420,7 @@ const Builder = struct {
     fn functionContent(content: Type.Content) bool {
         return switch (content) {
             .func => true,
-            .primitive, .zst, .erased, .named, .record, .tuple, .tag_union, .list, .box => false,
+            .primitive, .zst, .hole, .erased, .named, .record, .tuple, .tag_union, .list, .box => false,
         };
     }
 
@@ -8435,7 +8437,7 @@ const Builder = struct {
         const start = children.items.len;
         switch (types.get(ty)) {
             // Everything a box holds is erased.
-            .primitive, .zst, .erased, .func, .box => {},
+            .primitive, .zst, .hole, .erased, .func, .box => {},
             .named => |named| {
                 try children.appendSlice(self.allocator, types.span(named.args));
                 if (named.backing) |backing| try children.append(self.allocator, backing.ty);
@@ -9137,7 +9139,7 @@ const Builder = struct {
         while (pending.pop()) |ty| {
             if ((try seen.getOrPut(ty)).found_existing) continue;
             switch (types.get(ty)) {
-                .zst, .erased => {},
+                .zst, .erased, .hole => {},
                 .primitive => flags = flags.merge(demand.builtinFlags()),
                 .named => |named| {
                     // An alias is transparent: its backing carries its reach.
@@ -11453,7 +11455,7 @@ const Builder = struct {
                     const next = named.backing orelse return current;
                     current = next.ty;
                 },
-                .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return current,
+                .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => return current,
             }
         }
     }
@@ -13266,6 +13268,7 @@ const Builder = struct {
                 allocator.destroy(maps);
             }
             allocator.free(self.ids.fn_slots);
+            allocator.free(self.ids.fn_demand_shaped);
             allocator.free(self.ids.def_ids);
             allocator.free(self.emit_fns);
             allocator.free(self.emit_defs);
@@ -14195,19 +14198,30 @@ const Builder = struct {
         body_scheduling: TemplateBodyScheduling,
         codec_contract: ?SealedCodecContractContext,
         demand: Demand,
-    ) Allocator.Error!Ast.FnSlot {
+    ) Allocator.Error!ResolvedTemplateSpec {
         const draft_fn = &body_draft.fns.items[@backingInt(spec.fn_id)];
         draft_fn.source.mono_fn_ty = .{ .sealed = draft_fn_ty };
         const signature_relation = draft_fn.signature_relation;
 
+        // Only a request every use of which is a direct call, and whose
+        // identity is its template, its evidence, and its types alone, is
+        // shaped by demand.
+        const shaped: ?ShapedRequest = if (!spec.value_used and !spec.requires_local and
+            !spec.local_context_dependent and codec_contract == null and !spec.widened_result_row)
+            try self.demandShapedRequest(spec.template_ref, coordinator_fn_ty, coordinator_subst)
+        else
+            null;
+        const request_fn_ty = if (shaped) |request| request.fn_ty else coordinator_fn_ty;
+        const request_subst = if (shaped) |request| request.subst else coordinator_subst;
+
         const requested_evidence = draftFnEvidence(body_draft, draft_fn.source);
-        const request_digest = self.specializationTypeDigest(coordinator_fn_ty);
+        const request_digest = self.specializationTypeDigest(request_fn_ty);
         const identity = self.templateSpecIdentity(
             spec.template_ref,
             spec.method_scope,
             draft_fn.source.evidence_digest,
             self.codecContractIdentity(codec_contract),
-            coordinator_fn_ty,
+            request_fn_ty,
             request_digest,
         );
 
@@ -14227,9 +14241,9 @@ const Builder = struct {
                 self.moduleForId(spec.method_scope),
                 spec.source_fn_ty,
                 spec.source_fn_key,
-                coordinator_fn_ty,
+                request_fn_ty,
                 spec.evidence,
-                coordinator_subst,
+                request_subst,
                 signature_relation,
                 .already_counted,
                 request_digest,
@@ -14241,7 +14255,116 @@ const Builder = struct {
             );
             break :blk .{ .local = self.defFnId(def) };
         };
-        return resolved_slot;
+        return .{ .slot = resolved_slot, .demand_shaped = shaped != null };
+    }
+
+    /// Mark each sealed template request whose function the draft body uses
+    /// as a value: a function value or a reference to its definition.
+    fn markValueUsedTemplateSpecs(allocator: Allocator, body_draft: *BodyDraftStore) Allocator.Error!void {
+        if (body_draft.sealed_template_specs.items.len == 0) return;
+        var used = collections.DenseMap(DraftFnId, void).init(allocator);
+        defer used.deinit();
+        for (body_draft.exprs.items) |expr| {
+            const value_fn: ?DraftFnTarget = if (expr.data == .fn_def)
+                expr.data.fn_def.fn_id
+            else if (expr.data == .def_ref and expr.data.def_ref == .draft)
+                body_draft.defs.items[@backingInt(expr.data.def_ref.draft)].fn_id
+            else
+                null;
+            if (value_fn) |fn_id| if (fn_id == .draft) try used.put(fn_id.draft, {});
+        }
+        for (body_draft.sealed_template_specs.items) |*spec| spec.value_used = used.contains(spec.fn_id);
+    }
+
+    const ResolvedTemplateSpec = struct {
+        slot: Ast.FnSlot,
+        demand_shaped: bool,
+    };
+
+    /// A request shaped by its template's demand.
+    const ShapedRequest = struct {
+        fn_ty: Type.TypeId,
+        subst: SealedSubstitution,
+    };
+
+    /// The request a call to `template_ref` at `fn_ty` and `subst` makes once
+    /// shaped by the template's demand (design.md "Specialization By
+    /// Demand"), or null when shaping changes nothing or does not apply. A
+    /// variable the body demands nothing of becomes the hole, one whose layout
+    /// alone it demands becomes its layout representative, and the template's
+    /// checked root instantiated at that substitution is the request type. A
+    /// variable whose type has no layout representative keeps its type, and a
+    /// request whose shaped signature would hold a function is not shaped:
+    /// its lambda sets would have to cross the call.
+    fn demandShapedRequest(
+        self: *Builder,
+        template_ref: names.ProcTemplate,
+        fn_ty: Type.TypeId,
+        subst: SealedSubstitution,
+    ) Allocator.Error!?ShapedRequest {
+        if (!demandSpecializationEnabled()) return null;
+        const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
+        const template = view.templates.get(template_ref.template);
+        const demands = view.templates.templateDemands(&template);
+        if (demands.len != subst.len) Common.invariant("specialization substitution length differed from its template's demand vector");
+        const types_ = &self.program.types;
+        const name_store = &self.program.names;
+        var changed = false;
+        const shaped = try self.evidence_arena.allocator().alloc(SealedSubstSlot, subst.len);
+        for (subst, demands, shaped) |slot, demand, *out| {
+            const ty = switch (slot) {
+                .checked_error => return null,
+                .ty => |ty| ty,
+            };
+            const shaped_ty = switch (demand) {
+                .full => ty,
+                .none => try types_.internHole(name_store),
+                .layout => (try LayoutKey.layoutRepresentative(self.allocator, types_, name_store, ty)) orelse ty,
+            };
+            if (shaped_ty != ty) changed = true;
+            out.* = .{ .ty = shaped_ty };
+        }
+        if (!changed) return null;
+        const shaped_fn_ty = try self.instantiateTemplateRootAt(view, template_ref, &template, shaped);
+        if (try self.monoFnTypeMentionsFunction(shaped_fn_ty)) return null;
+        if (try types_.typeEql(name_store, shaped_fn_ty, fn_ty)) return null;
+        return .{ .fn_ty = shaped_fn_ty, .subst = shaped };
+    }
+
+    /// A template's checked root instantiated at a sealed substitution.
+    fn instantiateTemplateRootAt(
+        self: *Builder,
+        view: ModuleView,
+        template_ref: names.ProcTemplate,
+        template: *const checked.CheckedProcedureTemplate,
+        subst: SealedSubstitution,
+    ) Allocator.Error!Type.TypeId {
+        const types_ = &self.program.types;
+        const name_store = &self.program.names;
+        const graph = try self.createGraphForStores(types_, name_store);
+        defer graph.destroy();
+        const saved_graph = self.active_graph;
+        const saved_body_draft = self.active_body_draft;
+        self.active_graph = graph;
+        defer self.active_graph = saved_graph;
+        var body_draft = BodyDraftStore.init(self.allocator);
+        body_draft.mutable_graph_names = name_store;
+        self.active_body_draft = &body_draft;
+        defer self.active_body_draft = saved_body_draft;
+        defer body_draft.deinit();
+        var ctx = try BodyContext.init(self.allocator, self, view, template_ref, graph, &body_draft);
+        defer ctx.deinit();
+        const live = try ctx.substitutionFromSealed(subst);
+        try ctx.seedSubstitution(templateSchemaIn(view, template), live);
+        const root = try ctx.instNode(template.checked_fn_root);
+        try graph.freezeRelations();
+        const finished = try self.allocator.alloc(Type.TypeId, subst.len);
+        defer self.allocator.free(finished);
+        for (subst, finished) |slot, *out| out.* = switch (slot) {
+            .ty => |ty| ty,
+            .checked_error => Common.invariant("a demand-shaped substitution kept a checked error"),
+        };
+        return try graph.sealNodeOverFinished(root, finished);
     }
 
     fn resolveSealedTemplateSpecAtType(
@@ -14260,7 +14383,7 @@ const Builder = struct {
         }
         const spec = body_draft.sealed_template_specs.items[spec_index];
         if (spec.state != .deferred) return;
-        const resolved_slot = try self.resolveDeferredTemplateSpecValueAtType(
+        const resolved = try self.resolveDeferredTemplateSpecValueAtType(
             body_draft,
             spec,
             draft_fn_ty,
@@ -14270,7 +14393,8 @@ const Builder = struct {
             codec_contract,
             demand,
         );
-        body_draft.sealed_template_specs.items[spec_index].resolved_slot = resolved_slot;
+        body_draft.sealed_template_specs.items[spec_index].resolved_slot = resolved.slot;
+        body_draft.sealed_template_specs.items[spec_index].demand_shaped = resolved.demand_shaped;
         body_draft.sealed_template_specs.items[spec_index].state = .resolved;
     }
 
@@ -14289,6 +14413,7 @@ const Builder = struct {
             if (body_draft.demand_owner) |owner| try self.upgradeDiscoverySpec(owner);
         }
         const draft_evaluates = self.draftEvaluates(body_draft);
+        try markValueUsedTemplateSpecs(self.allocator, body_draft);
         var spec_index: usize = 0;
         while (spec_index < body_draft.sealed_template_specs.items.len) : (spec_index += 1) {
             const state = body_draft.sealed_template_specs.items[spec_index].state;
@@ -14373,6 +14498,13 @@ const Builder = struct {
         const fn_slots = try self.allocator.alloc(?Ast.FnSlot, body_draft.fns.items.len);
         errdefer self.allocator.free(fn_slots);
         @memset(fn_slots, null);
+        var any_demand_shaped = false;
+        for (body_draft.sealed_template_specs.items) |spec| {
+            if (spec.state == .resolved and spec.demand_shaped) any_demand_shaped = true;
+        }
+        const fn_demand_shaped = try self.allocator.alloc(bool, if (any_demand_shaped) body_draft.fns.items.len else 0);
+        errdefer self.allocator.free(fn_demand_shaped);
+        @memset(fn_demand_shaped, false);
         const def_ids = try self.allocator.alloc(?Ast.DefId, body_draft.defs.items.len);
         errdefer self.allocator.free(def_ids);
         const emit_fns = try self.allocator.alloc(bool, body_draft.fns.items.len);
@@ -14440,6 +14572,7 @@ const Builder = struct {
                 if (spec.state == .resolved) {
                     fn_slots[raw_index] = spec.resolved_slot orelse
                         Common.invariant("resolved draft template demand had no specialization slot");
+                    if (any_demand_shaped) fn_demand_shaped[raw_index] = spec.demand_shaped;
                     emit_fns[raw_index] = false;
                     continue;
                 }
@@ -14642,6 +14775,7 @@ const Builder = struct {
             self.allocator.destroy(core_maps);
         }
         ids.fn_slots = fn_slots;
+        ids.fn_demand_shaped = fn_demand_shaped;
         ids.def_ids = def_ids;
         ids.core_id_mode = .{ .remapped = core_maps };
         return .{
@@ -14939,6 +15073,7 @@ const Builder = struct {
         self.markDiscoveryFns(body_draft, commit_extent);
         var returned_ids = body_ids;
         returned_ids.fn_slots = &.{};
+        returned_ids.fn_demand_shaped = &.{};
         returned_ids.def_ids = &.{};
         const retained_core_maps = commit_map.core_maps orelse
             Common.invariant("body draft commit map lost its core remapping before handoff");
@@ -14999,6 +15134,7 @@ const Builder = struct {
         self.markDiscoveryFns(body_draft, commit_extent);
         var returned_ids = body_ids;
         returned_ids.fn_slots = &.{};
+        returned_ids.fn_demand_shaped = &.{};
         returned_ids.def_ids = &.{};
         const retained_core_maps = commit_map.core_maps orelse
             Common.invariant("sealed body draft commit map lost its core remapping before handoff");
@@ -15910,7 +16046,7 @@ const Builder = struct {
                     const backing = named.backing orelse return null;
                     current = backing.ty;
                 },
-                .primitive, .record, .tuple, .list, .box, .func, .erased, .zst => return null,
+                .primitive, .record, .tuple, .list, .box, .func, .erased, .zst, .hole => return null,
             }
         }
     }
@@ -16199,7 +16335,7 @@ const Builder = struct {
         while (remaining > 0) : (remaining -= 1) {
             const named = switch (self.program.types.get(current)) {
                 .named => |named| named,
-                .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return null,
+                .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => return null,
             };
             if (sameTypeDef(named.def, capability.def)) return named;
             if (named.kind != .alias) return null;
@@ -16259,7 +16395,7 @@ const Builder = struct {
             Common.invariant("Try template type had no backing");
         const template_tags = switch (shapeContent(self.coordinatorTypes(), template_backing.ty)) {
             .tag_union => |span| self.program.types.tagSpan(span),
-            .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => Common.invariant("Try template backing type was not a tag union"),
+            .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst, .hole => Common.invariant("Try template backing type was not a tag union"),
         };
         const transaction = self.program.types.beginTransaction();
         errdefer transaction.abort(&self.program.types);
@@ -16355,7 +16491,7 @@ fn optionalFieldSlotForType(
 ) ?Builder.OptionalSlotInfo {
     const tags = switch (types_.get(slot_ty)) {
         .tag_union => |span_| types_.tagSpan(span_),
-        .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => return null,
+        .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst, .hole => return null,
     };
     if (tags.len != 2) return null;
     // Tag normalization gives #Missing index 0 and #Present index 1.
@@ -17612,6 +17748,13 @@ const SealedTemplateSpec = struct {
     committed_request_fn_ty: ?Type.TypeId = null,
     committed_codec_contract: ?Ast.CodecContractIdentity = null,
     demand: Demand = .evaluation,
+    /// Whether the resolved specialization is this request shaped by its
+    /// template's demand, so every call to it is demand-shaped.
+    demand_shaped: bool = false,
+    /// Whether the draft body uses this request's function as a value rather
+    /// than only calling it. A value's type is the program's, so such a
+    /// request is never shaped.
+    value_used: bool = false,
 };
 
 /// Seal a draft request's substitution with the graph sealer that seals its
@@ -20902,6 +21045,7 @@ const BodyDraftStore = struct {
                 .iterator_procedure = call.iterator_procedure,
                 .captures = try self.sealCallCaptureOperandSpan(program, ids, call.captures),
                 .is_cold = call.is_cold,
+                .demand_shaped = ids.callDemandShaped(call.callee),
             } },
             .low_level => |call| .{ .low_level = .{
                 .op = call.op,
@@ -21097,6 +21241,10 @@ const FinalIdOffsets = struct {
     branch_start: u32,
     if_branch_start: u32,
     fn_slots: []const ?Ast.FnSlot = &.{},
+    /// Per draft function, whether its slot is a demand-shaped
+    /// specialization, so every call to it is demand-shaped. Empty when no
+    /// draft function resolved to one.
+    fn_demand_shaped: []const bool = &.{},
     def_ids: []const ?Ast.DefId = &.{},
     /// Literal root definitions this draft converts at a type an earlier
     /// commit already owns a root for, mapped to that root's definition.
@@ -21249,6 +21397,20 @@ const FinalIdOffsets = struct {
         return switch (body) {
             .roc => |body_expr| .{ .roc = self.expr(body_expr) },
             .hosted => .hosted,
+        };
+    }
+
+    /// Whether a call to `callee` is demand-shaped.
+    fn callDemandShaped(self: FinalIdOffsets, callee: DraftProcCallee) bool {
+        if (self.fn_demand_shaped.len == 0) return false;
+        return switch (callee) {
+            .func => |slot| switch (slot) {
+                .local => |fn_id| switch (fn_id) {
+                    .draft => |draft| self.fn_demand_shaped[@backingInt(draft)],
+                    .final => false,
+                },
+            },
+            .lifted => false,
         };
     }
 
@@ -22625,7 +22787,7 @@ const BodyContext = struct {
                     }
                 }
             },
-            .primitive, .named, .func, .erased => {},
+            .primitive, .named, .func, .erased, .hole => {},
         }
     }
 
@@ -23454,7 +23616,7 @@ const BodyContext = struct {
                     try layers.append(self.allocator, representation_node);
                     current = backing.node;
                 },
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => break,
+                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => break,
             }
         }
         var expr = try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(current), data);
@@ -24434,6 +24596,7 @@ const BodyContext = struct {
             .list => |elem_ty| .{ .tail = .{ .list = .{ .value = value, .elem_ty = elem_ty } } },
             .func, .erased => .{ .done = .{ .expr = try self.stringExpr("<function>", str_ty) } },
             .zst => .{ .done = .{ .expr = try self.stringExpr("{}", str_ty) } },
+            .hole => Common.invariant("Str.inspect reached a demand hole"),
             .box => |elem_ty| .{ .tail = .{ .box = .{ .value = value, .elem_ty = elem_ty } } },
         };
     }
@@ -24548,6 +24711,7 @@ const BodyContext = struct {
                 .empty_record,
                 .erased,
                 .zst,
+                .hole,
                 => {},
             }
             std.mem.reverse(NodeId, pending.items[mark..]);
@@ -25756,7 +25920,7 @@ const BodyContext = struct {
                 const backing = named.backing orelse break :blk null;
                 break :blk backing.ty;
             } else null,
-            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => null,
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => null,
         };
     }
 
@@ -28184,7 +28348,7 @@ const BodyContext = struct {
             // that signature graph-native so unresolved child cells survive
             // until the owning draft is sealed once.
             .func, .erased => try self.stringExpr("<function>", ret_ty),
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .zst => if (try self.graph.typeIsResolved(arg_node))
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .zst, .hole => if (try self.graph.typeIsResolved(arg_node))
                 try self.inspectCall(local_expr, try self.activeTypeFromNode(arg_node), ret_ty)
             else
                 try self.deferInspectAtNode(local_expr, arg_node, ret_ty),
@@ -28479,21 +28643,21 @@ const BodyContext = struct {
                         try ops.append(gpa, .{ .child = .{ .checked = checked_backing.node, .produced = produced_backing.node } });
                         break :matched true;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => break :matched false,
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => break :matched false,
                 },
                 .list => |checked_elem| switch (produced_content) {
                     .list => |produced_elem| {
                         try ops.append(gpa, .{ .child = .{ .checked = checked_elem, .produced = produced_elem } });
                         break :matched true;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :matched false,
+                    .redirect, .leaf, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => break :matched false,
                 },
                 .box => |checked_elem| switch (produced_content) {
                     .box => |produced_elem| {
                         try ops.append(gpa, .{ .child = .{ .checked = checked_elem, .produced = produced_elem } });
                         break :matched true;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :matched false,
+                    .redirect, .leaf, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => break :matched false,
                 },
                 .tuple => |checked_items| switch (produced_content) {
                     .tuple => |produced_items| {
@@ -28503,14 +28667,14 @@ const BodyContext = struct {
                         }
                         break :matched true;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :matched false,
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => break :matched false,
                 },
                 .func => |checked_fn| switch (produced_content) {
                     .func => |produced_fn| {
                         if (checked_fn.args.len != produced_fn.args.len) break :matched false;
                         return checked_node;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :matched false,
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => break :matched false,
                 },
                 .record => |checked_row| switch (produced_content) {
                     .record => |produced_row| {
@@ -28522,7 +28686,7 @@ const BodyContext = struct {
                         }
                         break :matched true;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst => break :matched false,
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => break :matched false,
                 },
                 .tag_union => |checked_row| switch (produced_content) {
                     .tag_union => |produced_row| {
@@ -28542,9 +28706,9 @@ const BodyContext = struct {
                         }
                         break :matched true;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => break :matched false,
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => break :matched false,
                 },
-                .redirect, .leaf, .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => break :matched false,
+                .redirect, .leaf, .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst, .hole => break :matched false,
             }
         };
         if (!matched) {
@@ -28657,7 +28821,7 @@ const BodyContext = struct {
                     .ext = self.graph.rootNode(produced_row.ext),
                 } });
             },
-            .redirect, .leaf, .unresolved, .primitive, .func, .empty_tag_union, .empty_record, .erased, .zst => unreachable,
+            .redirect, .leaf, .unresolved, .primitive, .func, .empty_tag_union, .empty_record, .erased, .zst, .hole => unreachable,
         }
     }
 
@@ -28708,25 +28872,25 @@ const BodyContext = struct {
                         try items.add(.{ .request = checked_backing.node, .produced = produced_backing.node });
                         children += 1;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return .{ .value = false },
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => return .{ .value = false },
                 },
                 .func => |checked_fn| switch (produced_content) {
                     .func => |produced_fn| return .{ .value = checked_fn.args.len == produced_fn.args.len },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return .{ .value = false },
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return .{ .value = false },
                 },
                 .list => |checked_elem| switch (produced_content) {
                     .list => |produced_elem| {
                         try items.add(.{ .request = checked_elem, .produced = produced_elem });
                         children += 1;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return .{ .value = false },
+                    .redirect, .leaf, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return .{ .value = false },
                 },
                 .box => |checked_elem| switch (produced_content) {
                     .box => |produced_elem| {
                         try items.add(.{ .request = checked_elem, .produced = produced_elem });
                         children += 1;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return .{ .value = false },
+                    .redirect, .leaf, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return .{ .value = false },
                 },
                 .tuple => |checked_items| switch (produced_content) {
                     .tuple => |produced_items| {
@@ -28737,7 +28901,7 @@ const BodyContext = struct {
                             children += 1;
                         }
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return .{ .value = false },
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return .{ .value = false },
                 },
                 .record => |checked_row| switch (produced_content) {
                     .record => |produced_row| {
@@ -28750,7 +28914,7 @@ const BodyContext = struct {
                             children += 1;
                         }
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst => return .{ .value = false },
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return .{ .value = false },
                 },
                 .tag_union => |checked_row| switch (produced_content) {
                     .tag_union => |produced_row| {
@@ -28767,9 +28931,9 @@ const BodyContext = struct {
                             }
                         }
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return .{ .value = false },
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return .{ .value = false },
                 },
-                .redirect, .leaf, .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => return .{ .value = false },
+                .redirect, .leaf, .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst, .hole => return .{ .value = false },
             }
             if (children == 0) return .{ .value = false };
             try self.visiting.put(root_pair, {});
@@ -28791,7 +28955,7 @@ const BodyContext = struct {
         return switch ((try self.graph.content(checked_root))) {
             .empty_record => kind == .record and (try self.graph.content(produced_root)) == .empty_record,
             .empty_tag_union => kind == .tag_union and (try self.graph.content(produced_root)) == .empty_tag_union,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .named, .erased, .zst => false,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .named, .erased, .zst, .hole => false,
         };
     }
 
@@ -28947,21 +29111,21 @@ const BodyContext = struct {
             break :relation switch ((try self.graph.content(request_root))) {
                 .primitive => |request_primitive| switch ((try self.graph.content(produced_root))) {
                     .primitive => |produced_primitive| if (request_primitive == produced_primitive) .unchanged else .mismatch,
-                    .redirect, .leaf, .unresolved, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => .mismatch,
+                    .redirect, .leaf, .unresolved, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => .mismatch,
                 },
                 .list => |request_elem| switch ((try self.graph.content(produced_root))) {
                     .list => |produced_elem| blk: {
                         try ops.append(gpa, .{ .request = request_elem, .produced = produced_elem, .combine = .fold });
                         break :blk null;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => .mismatch,
+                    .redirect, .leaf, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => .mismatch,
                 },
                 .box => |request_elem| switch ((try self.graph.content(produced_root))) {
                     .box => |produced_elem| blk: {
                         try ops.append(gpa, .{ .request = request_elem, .produced = produced_elem, .combine = .fold });
                         break :blk null;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => .mismatch,
+                    .redirect, .leaf, .unresolved, .primitive, .list, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => .mismatch,
                 },
                 .tuple => |request_items| switch ((try self.graph.content(produced_root))) {
                     .tuple => |produced_items| blk: {
@@ -28971,7 +29135,7 @@ const BodyContext = struct {
                         }
                         break :blk null;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => .mismatch,
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => .mismatch,
                 },
                 .func => |request_fn| switch ((try self.graph.content(produced_root))) {
                     .func => |produced_fn| blk: {
@@ -28982,7 +29146,7 @@ const BodyContext = struct {
                         try ops.append(gpa, .{ .request = request_fn.ret, .produced = produced_fn.ret, .combine = .fold });
                         break :blk null;
                     },
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => .mismatch,
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => .mismatch,
                 },
                 .tag_union => |request_row| switch ((try self.graph.content(produced_root))) {
                     .tag_union => |produced_row| blk: {
@@ -28997,7 +29161,7 @@ const BodyContext = struct {
                         }
                         break :blk null;
                     },
-                    .empty_tag_union, .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_record, .named, .erased, .zst => .mismatch,
+                    .empty_tag_union, .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_record, .named, .erased, .zst, .hole => .mismatch,
                 },
                 .record => |request_row| switch ((try self.graph.content(produced_root))) {
                     .record => |produced_row| blk: {
@@ -29009,23 +29173,27 @@ const BodyContext = struct {
                         }
                         break :blk null;
                     },
-                    .empty_record, .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .named, .erased, .zst => .mismatch,
+                    .empty_record, .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .named, .erased, .zst, .hole => .mismatch,
                 },
                 .empty_tag_union => switch ((try self.graph.content(produced_root))) {
                     .empty_tag_union => .unchanged,
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_record, .named, .erased, .zst => .mismatch,
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_record, .named, .erased, .zst, .hole => .mismatch,
                 },
                 .empty_record => switch ((try self.graph.content(produced_root))) {
                     .empty_record => .unchanged,
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .named, .erased, .zst => .mismatch,
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .named, .erased, .zst, .hole => .mismatch,
                 },
                 .erased => |request_digest| switch ((try self.graph.content(produced_root))) {
                     .erased => |produced_digest| if (std.mem.eql(u8, request_digest.bytes[0..], produced_digest.bytes[0..])) .unchanged else .mismatch,
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .zst => .mismatch,
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .zst, .hole => .mismatch,
                 },
                 .zst => switch ((try self.graph.content(produced_root))) {
                     .zst => .unchanged,
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased => .mismatch,
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .hole => .mismatch,
+                },
+                .hole => switch ((try self.graph.content(produced_root))) {
+                    .hole => .unchanged,
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => .mismatch,
                 },
                 .named,
                 .unresolved,
@@ -29045,7 +29213,7 @@ const BodyContext = struct {
     fn checkedPublicInspectableBacking(self: *BodyContext, node: NodeId) Allocator.Error!?InstBacking {
         const named = switch ((try self.graph.content(node))) {
             .named => |named| named,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => return null,
         };
         const backing = named.backing orelse return null;
         if (backing.authority != .checked_public or backing.use != .inspectable) return null;
@@ -30247,7 +30415,7 @@ const BodyContext = struct {
                         const representation_node = (try self.constructorRepresentationNode(request_node));
                         const named = switch ((try self.graph.content(representation_node))) {
                             .named => |value| value,
-                            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("nominal value evidence had no nominal graph representation"),
+                            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => Common.invariant("nominal value evidence had no nominal graph representation"),
                         };
                         const backing = named.backing orelse
                             Common.invariant("nominal value evidence graph node had no backing");
@@ -30447,7 +30615,7 @@ const BodyContext = struct {
             task.call_ctx = null;
             return .{ .ret = .{ .node = switch ((try self.graph.content(callable_node))) {
                 .func => |function| function.ret,
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("checked dispatch plan had a non-function graph node"),
+                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => Common.invariant("checked dispatch plan had a non-function graph node"),
             } } };
         }
 
@@ -30504,7 +30672,7 @@ const BodyContext = struct {
                 task.call_ctx = null;
                 return .{ .ret = .{ .node = switch ((try self.graph.content(fn_node))) {
                     .func => |function| function.ret,
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("checked indirect call instantiated a non-function graph node"),
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => Common.invariant("checked indirect call instantiated a non-function graph node"),
                 } } };
             },
             // A direct call's request interface.
@@ -30646,7 +30814,7 @@ const BodyContext = struct {
             task.fn_node = (try self.calleeValueInstance(task)) orelse try self.instNode(task.source_fn_ty);
             const fn_graph = switch ((try self.graph.content(task.fn_node))) {
                 .func => |func| func,
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("checked direct call had a non-function instantiation node"),
+                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => Common.invariant("checked direct call had a non-function instantiation node"),
             };
             if (fn_graph.args.len != task.checked_args.len) {
                 Common.invariant("checked direct call graph arity differed from its argument span");
@@ -30751,7 +30919,7 @@ const BodyContext = struct {
             task.fn_node = try self.instNode(source_fn_ty);
             const fn_graph = switch ((try self.graph.content(task.fn_node))) {
                 .func => |func| func,
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("checked dispatch plan had a non-function instantiation node"),
+                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => Common.invariant("checked dispatch plan had a non-function instantiation node"),
             };
             if (fn_graph.args.len != operands.len) {
                 Common.invariant("checked dispatch plan graph arity differed from its operand span");
@@ -34246,7 +34414,7 @@ const BodyContext = struct {
                 // its own signature fixes it.
                 const item_node = switch (try self.graph.content(assembler_fn.args[0])) {
                     .list => |elem| elem,
-                    .redirect, .leaf, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("interpolation assembler did not take a values list"),
+                    .redirect, .leaf, .unresolved, .primitive, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => Common.invariant("interpolation assembler did not take a values list"),
                 };
                 const interpolation = switch (self.view.bodies.expr(task.expr).data) {
                     .interpolation => |value| value,
@@ -34700,7 +34868,7 @@ const BodyContext = struct {
                     // A custom target converts through its checked conversion
                     // plan at this node; the target's own arguments may still
                     // resolve through later relations in this body.
-                    .named, .record, .tuple, .tag_union, .empty_tag_union, .empty_record, .list, .box, .func, .erased, .zst => return self.exprInnerDone(task, try self.lowerSpecializedLiteralConversion(expr_id, expr_node)),
+                    .named, .record, .tuple, .tag_union, .empty_tag_union, .empty_record, .list, .box, .func, .erased, .zst, .hole => return self.exprInnerDone(task, try self.lowerSpecializedLiteralConversion(expr_id, expr_node)),
                     .redirect, .leaf => Common.invariant("literal type node was not a class root"),
                 }
                 const expr_ty = try self.resolvedTypeViewForNode(expr_node);
@@ -34723,7 +34891,7 @@ const BodyContext = struct {
                             .{ .crash = try self.addStringLiteral("invalid string literal") },
                         ));
                     },
-                    .redirect, .leaf, .unresolved, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
+                    .redirect, .leaf, .unresolved, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => {},
                 }
                 try self.graph.unify(expr_node, try self.graph.importMono(try self.primitiveType(.str)));
                 frame.cursor = 1;
@@ -35240,7 +35408,7 @@ const BodyContext = struct {
         }
         const callable_graph = switch ((try self.graph.content(callable_node))) {
             .func => |function| function,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("checked dispatch plan had a non-function graph node"),
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => Common.invariant("checked dispatch plan had a non-function graph node"),
         };
         task.callable_node = callable_node;
         task.callable_args = callable_graph.args;
@@ -35897,7 +36065,7 @@ const BodyContext = struct {
                 .at_nodes => if (exprs.len != task.nodes.len) Common.invariant("checked call argument count differed from graph function arity"),
                 .list_elements => task.elem_ty = switch (shapeContent(self.typeStore(), task.list_ty)) {
                     .list => |elem| elem,
-                    .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst => Common.invariant("list expression had a non-list monotype"),
+                    .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst, .hole => Common.invariant("list expression had a non-list monotype"),
                 },
             }
             task.reserved = try self.reserveExprSpan(exprs.len);
@@ -38192,7 +38360,7 @@ const BodyContext = struct {
         const item_fields = switch (shapeContent(self.typeStore(), items_field.ty)) {
             .record => |span| self.typeStore().fieldSpan(span),
             .zst => self.typeStore().fieldSpan(.empty()),
-            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased => return null,
+            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .hole => return null,
         };
         return .{
             .items_field = items_field,
@@ -38226,11 +38394,11 @@ const BodyContext = struct {
         if (self.sameType(left_ty, right_ty)) return true;
         const left = switch (self.typeStore().get(left_ty)) {
             .named => |named| named,
-            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return false,
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => return false,
         };
         const right = switch (self.typeStore().get(right_ty)) {
             .named => |named| named,
-            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return false,
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => return false,
         };
         if (!sameTypeDef(left.def, right.def)) return false;
         const left_args = self.typeStore().span(left.args);
@@ -38270,7 +38438,7 @@ const BodyContext = struct {
         return switch (shapeContent(self.typeStore(), spec_backing_ty)) {
             .record => |span| self.typeStore().fieldSpan(span),
             .zst => self.typeStore().fieldSpan(.empty()),
-            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased => Common.invariant("generated tag-union spec backing was not a record"),
+            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .hole => Common.invariant("generated tag-union spec backing was not a record"),
         };
     }
 
@@ -38283,14 +38451,14 @@ const BodyContext = struct {
                     false,
                 .none => false,
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => false,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => false,
         };
     }
 
     fn isForcedDynamicIteratorNode(self: *BodyContext, node: NodeId) Allocator.Error!bool {
         return switch ((try self.graph.content(node))) {
             .named => |named| named.def.iterator_representation == .forced_dynamic,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => false,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => false,
         };
     }
 
@@ -38569,7 +38737,7 @@ const BodyContext = struct {
     ) Allocator.Error![]const NodeId {
         const named = switch ((try self.graph.content(iterator))) {
             .named => |named| named,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator component nodes requested for a non-named type"),
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => Common.invariant("generated iterator component nodes requested for a non-named type"),
         };
         if (named.args.len != expected_components + 1) {
             Common.invariant("generated iterator producer did not contain its component count");
@@ -38635,7 +38803,7 @@ const BodyContext = struct {
     ) Allocator.Error!NodeId {
         const public_named = switch ((try self.graph.content(public_iterator))) {
             .named => |named| named,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator requested a non-named public type"),
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => Common.invariant("generated iterator requested a non-named public type"),
         };
         if (public_named.args.len == 0) {
             Common.invariant("generated iterator requested a public type without an item argument");
@@ -38659,7 +38827,7 @@ const BodyContext = struct {
     ) Allocator.Error!NodeId {
         const public_named = switch ((try self.graph.content(public_iterator))) {
             .named => |named| named,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator requested a non-named public type"),
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => Common.invariant("generated iterator requested a non-named public type"),
         };
         const owner = public_named.builtin_owner orelse
             Common.invariant("generated iterator requested an Iter type without producer-owned builtin identity");
@@ -38723,7 +38891,7 @@ const BodyContext = struct {
         for (components) |component| {
             const named = switch ((try self.graph.content(component))) {
                 .named => |named| named,
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => continue,
+                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => continue,
             };
             switch (named.def.iterator_representation) {
                 .forced_dynamic => return null,
@@ -39566,7 +39734,7 @@ const BodyContext = struct {
                 if (args.len != 1) Common.invariant("FieldNames nominal did not have one type argument");
                 break :blk GuardedList.at(args, 0);
             },
-            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("FieldNames value was not a named type"),
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("FieldNames value was not a named type"),
         };
     }
 
@@ -39574,7 +39742,7 @@ const BodyContext = struct {
         return switch (shapeContent(self.typeStore(), shape_ty)) {
             .record => |span| self.typeStore().fieldSpan(span),
             .zst => self.typeStore().fieldSpan(.empty()),
-            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased => Common.invariant("FieldNames metadata requested for a non-record shape"),
+            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .hole => Common.invariant("FieldNames metadata requested for a non-record shape"),
         };
     }
 
@@ -39673,7 +39841,7 @@ const BodyContext = struct {
                     for (payload_tys) |payload_ty| try pending.append(self.allocator, .{ .ty = payload_ty });
                 }
             },
-            .primitive, .named, .func, .erased => {},
+            .primitive, .named, .func, .erased, .hole => {},
         }
         std.mem.reverse(CodecShapeStep, pending.items[start..]);
     }
@@ -39769,7 +39937,7 @@ const BodyContext = struct {
                         str_ty,
                     ),
                 },
-                .list, .box, .tuple, .tag_union, .primitive, .named, .func, .erased => {},
+                .list, .box, .tuple, .tag_union, .primitive, .named, .func, .erased, .hole => {},
             }
             try self.pushCodecShapeComponents(&pending, shape_ty, switch (kind) {
                 .parser => .ty,
@@ -39938,7 +40106,7 @@ const BodyContext = struct {
                 .record, .zst => if (plan == null or self.parserPlanContains(plan.?, shape_ty)) {
                     try shapes.append(self.allocator, shape_ty);
                 },
-                .list, .box, .tuple, .tag_union, .primitive, .named, .func, .erased => {},
+                .list, .box, .tuple, .tag_union, .primitive, .named, .func, .erased, .hole => {},
             }
             try self.pushCodecShapeComponents(&pending, shape_ty, .ty);
         }
@@ -40267,7 +40435,7 @@ const BodyContext = struct {
         const record_fields = try GuardedList.dupe(self.allocator, Type.Field, switch (shapeContent(self.typeStore(), shape_ty)) {
             .record => |span| self.typeStore().fieldSpan(span),
             .zst => self.typeStore().fieldSpan(.empty()),
-            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased => Common.invariant("record parser requested for a non-record shape"),
+            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .hole => Common.invariant("record parser requested for a non-record shape"),
         });
         defer self.allocator.free(record_fields);
 
@@ -41459,7 +41627,7 @@ const BodyContext = struct {
                 return try self.lowerParseTupleFromState(item_tys, shape_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan);
             },
             .box => |payload_ty| return try self.lowerParseBoxFromState(payload_ty, shape_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan),
-            .primitive, .named, .record, .tag_union, .func, .erased, .zst => {},
+            .primitive, .named, .record, .tag_union, .func, .erased, .zst, .hole => {},
         }
         return try self.lowerParseShapeFromState(shape_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan);
     }
@@ -42716,7 +42884,7 @@ const BodyContext = struct {
         self.assertSameType(source_ret_info.ok_ty, target_ret_info.ok_ty, "custom parser result Ok type differed from derived parser result Ok type");
         const parse_ok_fields = switch (shapeContent(self.typeStore(), source_ret_info.ok_ty)) {
             .record => |span| self.typeStore().fieldSpan(span),
-            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("custom parser result Ok type was not a parse result record"),
+            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("custom parser result Ok type was not a parse result record"),
         };
         var found_value = false;
         for (0..GuardedList.borrowLen(parse_ok_fields)) |index| {
@@ -43018,7 +43186,7 @@ const BodyContext = struct {
         const record_fields = try GuardedList.dupe(self.allocator, Type.Field, switch (shapeContent(self.typeStore(), record_ty)) {
             .record => |span| self.typeStore().fieldSpan(span),
             .zst => self.typeStore().fieldSpan(.empty()),
-            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased => Common.invariant("record finish Ok type was not a record"),
+            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .hole => Common.invariant("record finish Ok type was not a record"),
         });
         defer self.allocator.free(record_fields);
         if (record_fields.len != record_slots.fieldCount()) Common.invariant("record parse state arity did not match finish record field count");
@@ -43123,7 +43291,7 @@ const BodyContext = struct {
         return switch (shapeContent(self.typeStore(), shape_ty)) {
             .record, .zst => .{ .tag_text = "Record" },
             .tag_union => .{ .tag_text = "TagUnion" },
-            .primitive, .named, .tuple, .list, .box, .func, .erased => Common.invariant("parser shape was not supported"),
+            .primitive, .named, .tuple, .list, .box, .func, .erased, .hole => Common.invariant("parser shape was not supported"),
         };
     }
 
@@ -43141,7 +43309,7 @@ const BodyContext = struct {
         const value_ty = self.recordFieldType(ret_info.ok_ty, value_name);
         const tag_span = switch (shapeContent(self.typeStore(), value_ty)) {
             .tag_union => |span| span,
-            .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => Common.invariant("ParseTagUnionSpec.parse value type was not a tag union"),
+            .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst, .hole => Common.invariant("ParseTagUnionSpec.parse value type was not a tag union"),
         };
         const spec_ty = arg_tys[0];
         const spec_value = lowered_args[0];
@@ -46661,7 +46829,7 @@ const BodyContext = struct {
                 const record_node = switch ((try self.graph.content(request_node))) {
                     .named => |named| (named.backing orelse
                         Common.invariant("ConstStore record restored through a named graph node without a backing")).node,
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => request_node,
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => request_node,
                 };
                 const graph_fields = (try self.graph.recordNodes(record_node)).fields;
                 if (graph_fields.len != items.len) Common.invariant("ConstStore record length differs from checked graph type");
@@ -48028,7 +48196,7 @@ const BodyContext = struct {
     fn recordFieldByName(self: *BodyContext, ty: Type.TypeId, name: names.RecordFieldNameId) Type.Field {
         const fields = switch (shapeContent(self.typeStore(), ty)) {
             .record => |span| self.typeStore().fieldSpan(span),
-            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("expected record field belonged to a non-record monotype type"),
+            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("expected record field belonged to a non-record monotype type"),
         };
         for (0..GuardedList.borrowLen(fields)) |index| {
             const field = GuardedList.at(fields, index);
@@ -48042,7 +48210,7 @@ const BodyContext = struct {
     fn recordFieldByTextOptional(self: *BodyContext, ty: Type.TypeId, text: []const u8) ?Type.Field {
         const fields = switch (shapeContent(self.typeStore(), ty)) {
             .record => |span| self.typeStore().fieldSpan(span),
-            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return null,
+            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => return null,
         };
         for (0..GuardedList.borrowLen(fields)) |index| {
             const field = GuardedList.at(fields, index);
@@ -48058,7 +48226,7 @@ const BodyContext = struct {
                 if (args.len != 1) Common.invariant("Iter nominal did not have one type argument");
                 break :blk GuardedList.at(args, 0);
             },
-            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("generated interpolation iterator expected named Iter type"),
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("generated interpolation iterator expected named Iter type"),
         };
     }
 
@@ -48346,6 +48514,7 @@ const BodyContext = struct {
                 },
                 .erased => |erased| return actual_content == .erased and std.mem.eql(u8, erased.bytes[0..], actual_content.erased.bytes[0..]),
                 .zst => return actual_content == .zst,
+                .hole => return actual_content == .hole,
             }
         }
     };
@@ -48470,7 +48639,7 @@ const BodyContext = struct {
     ) ?Type.FieldDefault {
         const span = switch (shapeContent(self.typeStore(), record_ty)) {
             .record => |span| span,
-            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return null,
+            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => return null,
         };
         const fields = self.typeStore().fieldSpan(span);
         for (0..GuardedList.borrowLen(fields)) |index| {
@@ -49063,7 +49232,7 @@ const BodyContext = struct {
         } else {
             const target_fields = switch (shapeContent(self.typeStore(), ty)) {
                 .record => |fields| fields,
-                .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("record expression had a non-record monotype"),
+                .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("record expression had a non-record monotype"),
             };
             const target_field_list = try GuardedList.dupe(self.allocator, Type.Field, self.typeStore().fieldSpan(target_fields));
             defer self.allocator.free(target_field_list);
@@ -49191,7 +49360,7 @@ const BodyContext = struct {
 
         const target_fields = switch (shapeContent(self.typeStore(), ty)) {
             .record => |fields| fields,
-            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("record expression had a non-record monotype"),
+            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("record expression had a non-record monotype"),
         };
         const target_field_count: usize = @intCast(target_fields.len);
         const lowered = try self.allocator.alloc(DraftFieldExpr, target_field_count);
@@ -50322,7 +50491,7 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const primitive = switch (shapeContent(self.typeStore(), target_ty)) {
             .primitive => |p| p,
-            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return try self.lowerSpecializedLiteralConversion(expr_id, try self.graph.importMono(target_ty)),
+            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => return try self.lowerSpecializedLiteralConversion(expr_id, try self.graph.importMono(target_ty)),
         };
         const data = (try self.numeralBits(numeral.literal, primitive)) orelse blk: {
             // A value that does not fit its concrete integer or Dec target (a
@@ -50358,7 +50527,7 @@ const BodyContext = struct {
                 }
                 return try self.lowerQuoteValue(quote.literal, target_ty);
             },
-            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return try self.lowerSpecializedLiteralConversion(expr_id, try self.graph.importMono(target_ty)),
+            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => return try self.lowerSpecializedLiteralConversion(expr_id, try self.graph.importMono(target_ty)),
         }
     }
 
@@ -50490,7 +50659,7 @@ const BodyContext = struct {
         };
         const str_ty = switch (shapeContent(self.typeStore(), list_ty)) {
             .list => |elem| elem,
-            .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst => Common.invariant("interpolation segments operand had a non-list monotype"),
+            .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst, .hole => Common.invariant("interpolation segments operand had a non-list monotype"),
         };
         const segments = try self.allocator.alloc(DraftExprId, interpolation.segments.len);
         defer self.allocator.free(segments);
@@ -50557,7 +50726,7 @@ const BodyContext = struct {
         }
         const field_span = switch (shapeContent(self.typeStore(), ty)) {
             .record => |span| span,
-            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("Numeral Literal payload was not a record"),
+            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("Numeral Literal payload was not a record"),
         };
         const field_count: usize = @intCast(field_span.len);
         const lowered = try self.allocator.alloc(DraftFieldExpr, field_count);
@@ -50596,7 +50765,7 @@ const BodyContext = struct {
     ) Allocator.Error!DraftExprId {
         const elem_ty = switch (shapeContent(self.typeStore(), ty)) {
             .list => |elem| elem,
-            .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst => Common.invariant("Numeral digit field was not a List(U8)"),
+            .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst, .hole => Common.invariant("Numeral digit field was not a List(U8)"),
         };
         const items = try self.allocator.alloc(DraftExprId, values.len);
         defer self.allocator.free(items);
@@ -50616,7 +50785,7 @@ const BodyContext = struct {
     fn monoTagByName(self: *BodyContext, ty: Type.TypeId, name: names.TagNameId) Type.Tag {
         const tags = switch (shapeContent(self.typeStore(), ty)) {
             .tag_union => |span| self.typeStore().tagSpan(span),
-            .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => Common.invariant("expected tag belonged to a non-union monotype type"),
+            .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst, .hole => Common.invariant("expected tag belonged to a non-union monotype type"),
         };
         for (0..GuardedList.borrowLen(tags)) |index| {
             const tag = GuardedList.at(tags, index);
@@ -50635,7 +50804,7 @@ const BodyContext = struct {
                 }
                 return null;
             },
-            .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => null,
+            .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst, .hole => null,
         };
     }
 
@@ -50652,7 +50821,7 @@ const BodyContext = struct {
         if (!self.typeHasBuiltinOwner(ty, .set)) return null;
         const named = switch (self.typeStore().get(ty)) {
             .named => |named| named,
-            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("builtin Set type was not a named monotype"),
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("builtin Set type was not a named monotype"),
         };
         const args = self.typeStore().span(named.args);
         if (args.len != 1) Common.invariant("builtin Set type had an unexpected arity");
@@ -50668,7 +50837,7 @@ const BodyContext = struct {
         if (!self.typeHasBuiltinOwner(ty, .dict)) return null;
         const named = switch (self.typeStore().get(ty)) {
             .named => |named| named,
-            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("builtin Dict type was not a named monotype"),
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("builtin Dict type was not a named monotype"),
         };
         const args = self.typeStore().span(named.args);
         if (args.len != 2) Common.invariant("builtin Dict type had an unexpected arity");
@@ -50860,11 +51029,11 @@ const BodyContext = struct {
     fn dictKeyUnitTags(self: *BodyContext, ty: Type.TypeId) ?Type.Span {
         switch (self.typeStore().get(ty)) {
             .named => |named| if (named.kind != .alias) return null,
-            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => {},
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => {},
         }
         const tags_span = switch (shapeContent(self.typeStore(), ty)) {
             .tag_union => |span| span,
-            .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => return null,
+            .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst, .hole => return null,
         };
         const tags = self.typeStore().tagSpan(tags_span);
         if (tags.len == 0) return null;
@@ -51396,11 +51565,11 @@ const BodyContext = struct {
                     if (step.data >= function.args.len) return null;
                     return function.args[step.data];
                 },
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
+                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return null,
             },
             .fn_ret => switch (content) {
                 .func => |function| return function.ret,
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
+                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return null,
             },
             .alias_arg, .nominal_arg => switch (content) {
                 .named => |named| {
@@ -51411,26 +51580,26 @@ const BodyContext = struct {
                     if (step.data != 0) return null;
                     return payload;
                 },
-                .redirect, .leaf, .unresolved, .primitive, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
+                .redirect, .leaf, .unresolved, .primitive, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => return null,
             },
             .alias_backing, .nominal_backing => switch (content) {
                 .named => |named| return (named.backing orelse return null).node,
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
+                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => return null,
             },
             .tuple_elem => switch (content) {
                 .tuple => |items| {
                     if (step.data >= items.len) return null;
                     return items[step.data];
                 },
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
+                .redirect, .leaf, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return null,
             },
             .record_field => switch (content) {
                 .record => return try self.graph.recordFieldValueNode(node, try recordFieldName(self.nameStoreMut(), view, @fromBackingInt(step.data))),
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
+                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return null,
             },
             .tag_payload_tag => switch (content) {
                 .tag_union => return node,
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
+                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return null,
             },
             .tag_payload_index => {
                 const tag_node = path_nodes[path_node].parent;
@@ -51443,7 +51612,7 @@ const BodyContext = struct {
                         try tagName(self.nameStoreMut(), view, @fromBackingInt(@intCast(tag_step.data))),
                         step.data,
                     ),
-                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => null,
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => null,
                 };
             },
         }
@@ -52784,7 +52953,7 @@ const BodyContext = struct {
         const default_phase: ?checked.NumericDefaultPhase = switch ((try self.graph.content(node))) {
             .redirect, .leaf => unreachable,
             .unresolved => |variable| variable.numeric_default_phase,
-            .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => null,
+            .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => null,
         };
         if (default_phase) |phase| {
             if (checked.literal_defaulting.defaultTargetForPhase(phase)) |target| {
@@ -53677,7 +53846,7 @@ const BodyContext = struct {
                     .row_extension, .placeholder => false,
                 };
             },
-            .redirect, .leaf, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => false,
+            .redirect, .leaf, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => false,
         };
     }
 
@@ -53711,6 +53880,7 @@ const BodyContext = struct {
             .empty_record,
             .erased,
             .zst,
+            .hole,
             => return null,
         };
     }
@@ -54635,7 +54805,7 @@ const BodyContext = struct {
                         break :blk;
                     },
                     .zst => {},
-                    .primitive, .named, .func, .erased => Common.invariant("structural parser dispatcher was not a supported structural type"),
+                    .primitive, .named, .func, .erased, .hole => Common.invariant("structural parser dispatcher was not a supported structural type"),
                 }
             }
         }
@@ -55673,7 +55843,7 @@ const BodyContext = struct {
                 unboxed.value_expr = try self.lowLevelExpr(.box_unbox, &.{value.value_expr}, payload_ty);
                 return .{ .tail = .{ .shape = .{ .inputs = task.inputs, .value = unboxed } } };
             },
-            .primitive, .named, .record, .tag_union, .func, .erased, .zst => {},
+            .primitive, .named, .record, .tag_union, .func, .erased, .zst, .hole => {},
         }
         if (self.scalarCodecMethodName(shape_ty, "encode_")) |method_name| {
             return encodeExpr(try self.lowerEncodeFormatMethod(method_name, &.{ value.value_expr, value.state_expr }, &.{ shape_ty, value.state_ty }, shape_ty, value.ret_ty));
@@ -55693,7 +55863,7 @@ const BodyContext = struct {
         return switch (shapeContent(self.typeStore(), shape_ty)) {
             .record, .zst => .{ .tail = .{ .record = .{ .inputs = task.inputs, .value = value } } },
             .tag_union => |tags_span| .{ .tail = .{ .tag_union = .{ .inputs = task.inputs, .value = value, .tags_span = tags_span } } },
-            .primitive, .named, .tuple, .list, .box, .func, .erased => Common.invariant("encoder_for selected an unsupported shape"),
+            .primitive, .named, .tuple, .list, .box, .func, .erased, .hole => Common.invariant("encoder_for selected an unsupported shape"),
         };
     }
 
@@ -55857,7 +56027,7 @@ const BodyContext = struct {
             task.record_fields = try GuardedList.dupe(self.allocator, Type.Field, switch (shapeContent(self.typeStore(), value.shape_ty)) {
                 .record => |span| self.typeStore().fieldSpan(span),
                 .zst => self.typeStore().fieldSpan(.empty()),
-                .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased => Common.invariant("encoder_for record requested for a non-record shape"),
+                .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .hole => Common.invariant("encoder_for record requested for a non-record shape"),
             });
 
             const str_ty = try self.primitiveType(.str);
@@ -56400,7 +56570,7 @@ const BodyContext = struct {
     ) Allocator.Error!Type.TypeId {
         const template = switch (self.typeStore().get(template_ty)) {
             .named => |named| named,
-            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("compiler helper expected a named template type"),
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("compiler helper expected a named template type"),
         };
         return try self.cloneNamedTypeWithBackingAuthority(
             template_ty,
@@ -56419,7 +56589,7 @@ const BodyContext = struct {
     ) Allocator.Error!Type.TypeId {
         const template = switch (self.typeStore().get(template_ty)) {
             .named => |named| named,
-            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("compiler helper expected a named template type"),
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("compiler helper expected a named template type"),
         };
         // The clone owns fresh declared-order rows rather than aliasing the
         // template's span: digests and equality are content-addressed either
@@ -56596,7 +56766,7 @@ const BodyContext = struct {
         const template_backing = namedBackingType(self.typeStore(), template_try_ty) orelse Common.invariant("Try template type had no backing");
         const template_tags = switch (shapeContent(self.typeStore(), template_backing)) {
             .tag_union => |span| try GuardedList.dupe(self.allocator, Type.Tag, self.typeStore().tagSpan(span)),
-            .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => Common.invariant("Try template backing type was not a tag union"),
+            .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst, .hole => Common.invariant("Try template backing type was not a tag union"),
         };
         defer self.allocator.free(template_tags);
         const tags = try self.allocator.alloc(Type.Store.TagInput, template_tags.len);
@@ -56801,7 +56971,7 @@ const BodyContext = struct {
                 current = backing.ty;
             },
             .tag_union => |span| return self.typeStore().tagSpan(span).len == 0,
-            .primitive, .record, .tuple, .list, .box, .func, .erased, .zst => return false,
+            .primitive, .record, .tuple, .list, .box, .func, .erased, .zst, .hole => return false,
         };
     }
 
@@ -56884,7 +57054,7 @@ const BodyContext = struct {
                 }
                 Common.invariant("record field was absent from monotype record");
             },
-            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("record field operation expected a record type"),
+            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("record field operation expected a record type"),
         };
     }
 
@@ -57024,7 +57194,7 @@ const BodyContext = struct {
             },
             .tag_union => |tags_span| return try self.pushCodecSupportPayloads(pending, tags_span),
             .zst => {},
-            .primitive, .named, .func, .erased => return false,
+            .primitive, .named, .func, .erased, .hole => return false,
         }
         return true;
     }
@@ -57037,7 +57207,7 @@ const BodyContext = struct {
     fn graphTryPayloads(self: *BodyContext, try_node: NodeId) Allocator.Error!GraphTryPayloads {
         const named = switch ((try self.graph.content(try_node))) {
             .named => |named| named,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("codec method result was not a named Try type"),
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => Common.invariant("codec method result was not a named Try type"),
         };
         const backing = named.backing orelse Common.invariant("codec Try type had no checked backing");
         const ok_name = try self.nameStoreMut().internTagLabel("Ok");
@@ -57430,7 +57600,7 @@ const BodyContext = struct {
         const body_shape_node = if (source_has_distinct_body_shape) blk: {
             const named = switch ((try self.graph.content(shape_node))) {
                 .named => |named| named,
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated codec declared a distinct body shape for a non-nominal boundary"),
+                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => Common.invariant("generated codec declared a distinct body shape for a non-nominal boundary"),
             };
             break :blk (named.backing orelse
                 Common.invariant("generated codec nominal boundary had no body-shape backing")).node;
@@ -57667,7 +57837,7 @@ const BodyContext = struct {
                 try self.isNestedCodecBoundary(root, nested_boundaries.items)) continue;
             switch (try self.graph.content(root)) {
                 .redirect, .leaf => unreachable,
-                .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
+                .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst, .hole => {},
                 .list, .box => |child| try pending.append(self.allocator, child),
                 .tuple => |items| try pending.appendSlice(self.allocator, items),
                 .func => |function| {
@@ -57702,7 +57872,7 @@ const BodyContext = struct {
                 // own identity (see `sameCodecSubject`).
                 switch (try self.graph.content(subject)) {
                     .primitive, .named => continue,
-                    .redirect, .leaf, .unresolved, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => {},
+                    .redirect, .leaf, .unresolved, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => {},
                 }
                 if (!read_roots.contains(self.graph.rootNode(subject))) {
                     base.invariant(
@@ -57906,10 +58076,10 @@ const BodyContext = struct {
         switch (checked_content) {
             .primitive => |checked_primitive| return switch (requested_content) {
                 .primitive => |requested_primitive| checked_primitive == requested_primitive,
-                .redirect, .leaf, .unresolved, .named, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => false,
+                .redirect, .leaf, .unresolved, .named, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => false,
             },
             .named => return (try self.graph.sameRelatedNamedInstance(checked_subject, requested_subject)),
-            .redirect, .leaf, .unresolved, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return self.graph.sameClass(checked_subject, requested_subject),
+            .redirect, .leaf, .unresolved, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => return self.graph.sameClass(checked_subject, requested_subject),
         }
     }
 
@@ -58259,7 +58429,7 @@ const BodyContext = struct {
     fn graphBuiltinContainerShapeNodes(self: *BodyContext, node: NodeId, buf: *[2]NodeId) Allocator.Error![]const NodeId {
         const named = switch ((try self.graph.content(node))) {
             .named => |named| named,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return &.{},
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => return &.{},
         };
         const owner = named.builtin_owner orelse return &.{};
         switch (owner) {
@@ -58296,14 +58466,14 @@ const BodyContext = struct {
                     .list, .box, .dict, .set, .fields, .field, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .parse_tag_union_spec, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher, .iter, .stream => false,
                 };
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .erased, .zst => return false,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => return false,
         }
     }
 
     fn graphNodeIsBuiltinTry(self: *BodyContext, node: NodeId) Allocator.Error!bool {
         const named = switch ((try self.graph.content(node))) {
             .named => |named| named,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return false,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => return false,
         };
         return self.builder.isBuiltinTryDef(self.nameStore(), named.def);
     }
@@ -58316,7 +58486,7 @@ const BodyContext = struct {
                     node = backing.node;
                     continue;
                 },
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => {},
+                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => {},
             }
             return node;
         }
@@ -58406,7 +58576,7 @@ const BodyContext = struct {
                     }
                 },
                 .redirect, .leaf => unreachable,
-                .unresolved, .primitive, .empty_tag_union, .empty_record, .func, .erased, .zst => {},
+                .unresolved, .primitive, .empty_tag_union, .empty_record, .func, .erased, .zst, .hole => {},
             }
             std.mem.reverse(GraphParserShapeStep, pending.items[children_start..]);
         }
@@ -58453,7 +58623,7 @@ const BodyContext = struct {
     ) Allocator.Error!NodeId {
         const template = switch ((try self.graph.content(template_node))) {
             .named => |named| named,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated codec protocol template was not a named graph node"),
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => Common.invariant("generated codec protocol template was not a named graph node"),
         };
         return try self.graph.newNode(try self.graph.namedContent(.{
             .named_type = template.named_type,
@@ -58607,7 +58777,7 @@ const BodyContext = struct {
         const record_fields = switch ((try self.graph.content((try self.graphShapeNode(shape_node))))) {
             .zst, .empty_record => &.{},
             .record => (try self.graph.recordNodes((try self.graphShapeNode(shape_node)))).fields,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .named, .empty_tag_union, .erased => Common.invariant("generated parse tag-union specification shape was not a record"),
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .named, .empty_tag_union, .erased, .hole => Common.invariant("generated parse tag-union specification shape was not a record"),
         };
         const item_fields = try self.graph.arena().alloc(InstField, record_fields.len);
         for (item_fields, 0..) |*field, index| {
@@ -58736,7 +58906,7 @@ const BodyContext = struct {
     ) Allocator.Error!bool {
         switch ((try self.graph.content(node))) {
             .tag_union, .named => {},
-            .unresolved, .empty_tag_union, .redirect, .leaf, .primitive, .list, .box, .tuple, .func, .record, .empty_record, .erased, .zst => return false,
+            .unresolved, .empty_tag_union, .redirect, .leaf, .primitive, .list, .box, .tuple, .func, .record, .empty_record, .erased, .zst, .hole => return false,
         }
         if (!try self.graph.tagRowIsClosed(node)) return false;
         const tags = (try self.graph.tagRowNodes(node)).tags;
@@ -58760,7 +58930,7 @@ const BodyContext = struct {
     fn graphDerivedCodecLayerBackingNode(self: *BodyContext, node: NodeId, comptime prefix: []const u8) Allocator.Error!?NodeId {
         const backing = switch ((try self.graph.content(node))) {
             .named => |named| named.backing orelse return null,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => return null,
         };
         if ((try self.graphScalarCodecMethodName(backing.node, prefix)) != null) return backing.node;
         return switch ((try self.methodOwnerFromNode(backing.node)) orelse return null) {
@@ -59387,6 +59557,7 @@ const BodyContext = struct {
                 .func,
                 .erased,
                 .zst,
+                .hole,
                 => {},
             }
         }
@@ -59397,7 +59568,7 @@ const BodyContext = struct {
         const node = (try self.graphShapeNode(raw_node));
         switch ((try self.graph.content(node))) {
             .tag_union, .named => {},
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .erased, .zst => return false,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => return false,
         }
         if (!try self.graph.tagRowIsClosed(node)) return false;
         const tags = (try self.graph.tagRowNodes(node)).tags;
@@ -59548,7 +59719,7 @@ const BodyContext = struct {
                 },
                 .list, .box, .fields, .field, .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .parse_tag_union_spec, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher, .iter, .stream => {},
             },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => {},
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => {},
         }
 
         // A dict's and a set's own backings are private representation that no
@@ -59616,10 +59787,10 @@ const BodyContext = struct {
                     added = try self.prepareCustomCodecCallsAtNode(boundary_expr, kind, item, boundary_callable_node, seen) or added;
                 }
             },
-            .record, .zst, .empty_record => {
+            .record, .zst, .hole, .empty_record => {
                 const fields = switch ((try self.graph.content(structural_node))) {
                     .record => (try self.graph.recordNodes(structural_node)).fields,
-                    .zst, .empty_record => &.{},
+                    .zst, .hole, .empty_record => &.{},
                     .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .named, .empty_tag_union, .erased => Common.invariant("record codec preparation reached a non-record shape"),
                 };
                 if (kind == .encoder) {
@@ -59751,7 +59922,7 @@ const BodyContext = struct {
     fn typeIsExactUnitTagUnion(self: *BodyContext, ty: Type.TypeId, tag_text: []const u8) bool {
         const tags = switch (shapeContent(self.typeStore(), ty)) {
             .tag_union => |span| self.typeStore().tagSpan(span),
-            .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => return false,
+            .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst, .hole => return false,
         };
         if (tags.len != 1) return false;
         const tag = GuardedList.at(tags, 0);
@@ -60282,6 +60453,7 @@ const BodyContext = struct {
                 .box,
                 .erased,
                 .zst,
+                .hole,
                 => {},
             }
             std.mem.reverse(NodeId, pending.items[children_start..]);
@@ -60324,7 +60496,7 @@ const BodyContext = struct {
         return switch (shape) {
             .record, .tuple, .tag_union => true,
             .named => |named| named.backing != null,
-            .primitive, .list, .box, .func, .erased, .zst => false,
+            .primitive, .list, .box, .func, .erased, .zst, .hole => false,
         };
     }
 
@@ -60580,7 +60752,7 @@ const BodyContext = struct {
         return switch (self.typeStore().get(backing_ty)) {
             .record => |fields| try self.derivationRecordTask(D, fields, operand),
             .tuple => |items| try self.derivationTupleTask(D, items, operand),
-            .primitive, .named, .tag_union, .list, .box, .func, .erased, .zst => .{ .named = .{
+            .primitive, .named, .tag_union, .list, .box, .func, .erased, .zst, .hole => .{ .named = .{
                 .named_ty = named_ty,
                 .backing_ty = backing_ty,
                 .operand = operand,
@@ -60647,7 +60819,7 @@ const BodyContext = struct {
                             }
                         }
                     },
-                    .primitive, .record, .tuple, .tag_union, .box, .func, .erased, .zst => {},
+                    .primitive, .record, .tuple, .tag_union, .box, .func, .erased, .zst, .hole => {},
                 }
                 return .{ .tail = .{ .expansion = .{ .ty = ty, .operand = derive.operand } } };
             },
@@ -60673,6 +60845,7 @@ const BodyContext = struct {
                     .tag_union => |tags| .{ .tag_union = .{ .ty = ty, .tags_span = tags, .operand = operand } },
                     .named => |named| if (named.backing) |backing| try self.derivationNamedTask(D, ty, backing.ty, operand) else null,
                     .primitive, .zst, .func, .erased, .box => null,
+                    .hole => Common.invariant("structural derivation reached a demand hole"),
                 };
                 if (body) |component| return .{ .child = component };
                 const leaf = try D.leaf(self, operand, ctx);
@@ -65666,7 +65839,7 @@ const BodyContext = struct {
     ) Allocator.Error!BodyPatData {
         return switch (shapeContent(self.typeStore(), ty)) {
             .primitive => try self.numeralPatBits(numeral.literal, ty),
-            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => if (numeral.guard) |guard|
+            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => if (numeral.guard) |guard|
                 try self.bindLiteralGuardPattern(pattern_id, guard, ty)
             else
                 Common.invariant("custom numeral pattern had no checked conversion"),
@@ -65687,7 +65860,7 @@ const BodyContext = struct {
                 .{ .str_lit = try self.lowerStringLiteral(str.literal) }
             else
                 try self.bindNeverMatchPattern(ty),
-            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => if (str.guard) |guard|
+            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => if (str.guard) |guard|
                 try self.bindLiteralGuardPattern(pattern_id, guard, ty)
             else
                 Common.invariant("custom string pattern had no checked conversion"),
@@ -65798,7 +65971,7 @@ const BodyContext = struct {
     fn numeralPatBits(self: *BodyContext, literal: can.ModuleEnv.NumeralLiteral, ty: Type.TypeId) Allocator.Error!BodyPatData {
         const primitive = switch (shapeContent(self.typeStore(), ty)) {
             .primitive => |p| p,
-            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("numeric literal pattern at a non-primitive Monotype type without a conversion"),
+            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("numeric literal pattern at a non-primitive Monotype type without a conversion"),
         };
         const bits = (try self.numeralScalarBits(literal, primitive)) orelse
             return try self.bindNeverMatchPattern(ty);
@@ -68248,6 +68421,25 @@ fn packTraceEnabled() bool {
 /// `ROC_SPEC_CENSUS` is set: print every closed specialization key. Closed
 /// requests are frequent on every lane, so the environment is read once per
 /// process instead of scanned per request.
+/// Whether Monotype shapes specialization requests by their templates'
+/// demand (design.md "Specialization By Demand"), set by
+/// `ROC_DEMAND_SPECIALIZATION` while the shaping stabilizes.
+fn demandSpecializationEnabled() bool {
+    if (!@import("builtin").link_libc) return false;
+    const State = struct {
+        /// 0 = not yet read, 1 = unset, 2 = set.
+        var value: std.atomic.Value(u8) = .init(0);
+    };
+    switch (State.value.load(.acquire)) {
+        1 => return false,
+        2 => return true,
+        else => {},
+    }
+    const enabled = std.c.getenv("ROC_DEMAND_SPECIALIZATION") != null;
+    State.value.store(if (enabled) 2 else 1, .release);
+    return enabled;
+}
+
 fn specCensusEnabled() bool {
     const State = struct {
         /// 0 = not yet read, 1 = unset, 2 = set.
@@ -68403,6 +68595,7 @@ const NodeUninhabitedScan = struct {
             .empty_record,
             .erased,
             .zst,
+            .hole,
             => .{ .value = false },
         };
         if (expansion == .group) {
@@ -69943,7 +70136,7 @@ test "specialization workspace retains bidirectional type relocation across seri
             );
             const committed_workspace_fields = program.types.fieldSpan(switch (program.types.get(committed_record)) {
                 .record => |fields| fields,
-                .primitive, .named, .tuple, .tag_union, .box, .list, .func, .erased, .zst => return error.TestExpectedEqual,
+                .primitive, .named, .tuple, .tag_union, .box, .list, .func, .erased, .zst, .hole => return error.TestExpectedEqual,
             });
             committed_workspace_field = GuardedList.at(committed_workspace_fields, 0).name;
 
@@ -69953,7 +70146,7 @@ test "specialization workspace retains bidirectional type relocation across seri
             committed_name_count_after_first_epoch = committed.namesRelocation().mappedCount();
             const workspace_program_fields = workspace.types.fieldSpan(switch (workspace.types.get(workspace_record)) {
                 .record => |fields| fields,
-                .primitive, .named, .tuple, .tag_union, .box, .list, .func, .erased, .zst => return error.TestExpectedEqual,
+                .primitive, .named, .tuple, .tag_union, .box, .list, .func, .erased, .zst, .hole => return error.TestExpectedEqual,
             });
             const workspace_program_field = GuardedList.at(workspace_program_fields, 0).name;
             try std.testing.expectEqualStrings(
@@ -70007,16 +70200,16 @@ test "specialization workspace retains bidirectional type relocation across seri
     // Coordinator output remains self-contained after the persistent workspace dies.
     const committed_bool = switch (program.types.get(committed_list)) {
         .list => |element| element,
-        .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst => return error.TestExpectedEqual,
+        .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst, .hole => return error.TestExpectedEqual,
     };
     const committed_primitive = switch (program.types.get(committed_bool)) {
         .primitive => |primitive| primitive,
-        .named, .record, .tuple, .tag_union, .box, .list, .func, .erased, .zst => return error.TestExpectedEqual,
+        .named, .record, .tuple, .tag_union, .box, .list, .func, .erased, .zst, .hole => return error.TestExpectedEqual,
     };
     try std.testing.expectEqual(.bool, committed_primitive);
     const committed_fields = program.types.fieldSpan(switch (program.types.get(committed_record)) {
         .record => |fields| fields,
-        .primitive, .named, .tuple, .tag_union, .box, .list, .func, .erased, .zst => return error.TestExpectedEqual,
+        .primitive, .named, .tuple, .tag_union, .box, .list, .func, .erased, .zst, .hole => return error.TestExpectedEqual,
     });
     try std.testing.expectEqual(@as(usize, 1), GuardedList.borrowLen(committed_fields));
     try std.testing.expectEqual(committed_workspace_field, GuardedList.at(committed_fields, 0).name);
@@ -70084,7 +70277,7 @@ test "specialization store epochs are read in place while the workspace grows" {
     ));
     const private_fields = commit_domain.types.fieldSpan(switch (commit_domain.types.get(private_record)) {
         .record => |fields| fields,
-        .primitive, .named, .tuple, .tag_union, .box, .list, .func, .erased, .zst => return error.TestExpectedEqual,
+        .primitive, .named, .tuple, .tag_union, .box, .list, .func, .erased, .zst, .hole => return error.TestExpectedEqual,
     });
     try std.testing.expectEqualStrings(
         "epoch_value",
@@ -70114,7 +70307,7 @@ test "specialization store epochs are read in place while the workspace grows" {
     ));
     const private_tags = commit_domain.types.tagSpan(switch (commit_domain.types.get(private_union)) {
         .tag_union => |tags| tags,
-        .primitive, .named, .record, .tuple, .box, .list, .func, .erased, .zst => return error.TestExpectedEqual,
+        .primitive, .named, .record, .tuple, .box, .list, .func, .erased, .zst, .hole => return error.TestExpectedEqual,
     });
     const private_tag = GuardedList.at(private_tags, 0);
     try std.testing.expectEqualStrings(
@@ -70150,7 +70343,7 @@ test "specialization store epochs are read in place while the workspace grows" {
 
     const committed_tags = program.types.tagSpan(switch (program.types.get(committed_union)) {
         .tag_union => |tags| tags,
-        .primitive, .named, .record, .tuple, .box, .list, .func, .erased, .zst => return error.TestExpectedEqual,
+        .primitive, .named, .record, .tuple, .box, .list, .func, .erased, .zst, .hole => return error.TestExpectedEqual,
     });
     const committed_tag = GuardedList.at(committed_tags, 0);
     try std.testing.expectEqualStrings(
@@ -70416,7 +70609,7 @@ test "body draft commit relocates core type and name fields out of private store
     // Program storage must remain self-contained after all private owners die.
     const sealed_unit = switch (program.types.get(sealed_list)) {
         .list => |element| element,
-        .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst => return error.TestExpectedEqual,
+        .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst, .hole => return error.TestExpectedEqual,
     };
     try std.testing.expectEqual(.zst, program.types.get(sealed_unit));
     try std.testing.expectEqual(sealed_list, program.getPatAt(0).ty);

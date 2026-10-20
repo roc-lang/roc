@@ -120,6 +120,10 @@ pub const Content = union(enum) {
     },
     erased_capture_ptr,
     zst,
+    /// A demand-shaped specialization's stand-in for a quantified variable its
+    /// body demands none of (design.md "Specialization By Demand"). Its layout
+    /// is the hole layout.
+    hole,
 };
 
 /// Store for Lambda Mono types and their shared spans.
@@ -435,6 +439,7 @@ pub const Store = struct {
             },
             .erased_capture_ptr => writeBytes(hasher, "erased_capture_ptr"),
             .zst => writeBytes(hasher, "zst"),
+            .hole => writeBytes(hasher, "hole"),
         }
         scratch.graph.setScalar(scratch.node_by_type.get(ty).?, hasher.finalResult());
     }
