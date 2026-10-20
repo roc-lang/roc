@@ -467,9 +467,9 @@ jobs:
         include:
           - minici_shard: linux-core
             valgrind: true
-          - minici_shard: linux-differential
-            valgrind: false
           - minici_shard: linux-eval
+            valgrind: false
+          - minici_shard: linux-differential
             valgrind: false
           - minici_shard: linux-simd
             valgrind: false
@@ -661,9 +661,9 @@ jobs:
         include:
           - minici_shard: macos-core
             valgrind: false
-          - minici_shard: macos-differential
-            valgrind: false
           - minici_shard: macos-eval
+            valgrind: false
+          - minici_shard: macos-differential
             valgrind: false
           - minici_shard: macos-harness
             valgrind: false
@@ -685,9 +685,9 @@ jobs:
             valgrind: false
           - minici_shard: windows-zig
             valgrind: false
-          - minici_shard: windows-differential
-            valgrind: false
           - minici_shard: windows-eval
+            valgrind: false
+          - minici_shard: windows-differential
             valgrind: false
           - minici_shard: windows-simd
             valgrind: false
