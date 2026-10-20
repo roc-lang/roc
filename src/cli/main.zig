@@ -17457,7 +17457,7 @@ test "post-check diagnostics preserve labeled SpecConstr counts" {
     for (specConstrParallelCounters(.{})) |row| try std.testing.expectEqual(@as(u64, 0), row.count);
 }
 
-fn arcParallelCounters(parallel: lir.CheckedPipeline.ArcParallelMetrics) [19]progress.Counter {
+fn arcParallelCounters(parallel: lir.CheckedPipeline.ArcParallelMetrics) [21]progress.Counter {
     return .{
         .{ .name = "Dismantle tasks submitted", .count = parallel.dismantle_tasks_submitted },
         .{ .name = "Dismantle tasks committed", .count = parallel.dismantle_tasks_committed },
@@ -17474,6 +17474,8 @@ fn arcParallelCounters(parallel: lir.CheckedPipeline.ArcParallelMetrics) [19]pro
         .{ .name = "Uniqueness component runs", .count = parallel.uniqueness.component_runs },
         .{ .name = "Uniqueness tasks submitted", .count = parallel.uniqueness.task_submitted },
         .{ .name = "Uniqueness tasks committed", .count = parallel.uniqueness.task_committed },
+        .{ .name = "Uniqueness topology tasks submitted", .count = parallel.uniqueness.topology_tasks_submitted },
+        .{ .name = "Uniqueness topology tasks committed", .count = parallel.uniqueness.topology_tasks_committed },
         .{ .name = "Uniqueness signature waves", .count = parallel.uniqueness.signature_waves },
         .{ .name = "Uniqueness signature changes", .count = parallel.uniqueness.signature_changes },
         .{ .name = "Uniqueness statement rows", .count = parallel.uniqueness.statement_visits },
@@ -17499,10 +17501,12 @@ test "post-check diagnostics preserve labeled ARC counts" {
             .component_runs = 13,
             .task_submitted = 14,
             .task_committed = 15,
-            .signature_waves = 16,
-            .signature_changes = 17,
-            .statement_visits = 18,
-            .local_visits = 19,
+            .topology_tasks_submitted = 16,
+            .topology_tasks_committed = 17,
+            .signature_waves = 18,
+            .signature_changes = 19,
+            .statement_visits = 20,
+            .local_visits = 21,
         },
     });
     const names = [_][]const u8{
@@ -17521,6 +17525,8 @@ test "post-check diagnostics preserve labeled ARC counts" {
         "Uniqueness component runs",
         "Uniqueness tasks submitted",
         "Uniqueness tasks committed",
+        "Uniqueness topology tasks submitted",
+        "Uniqueness topology tasks committed",
         "Uniqueness signature waves",
         "Uniqueness signature changes",
         "Uniqueness statement rows",
