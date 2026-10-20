@@ -41,7 +41,7 @@ pub const Reader = struct {
     /// The bytes before the next `terminator`, consuming the terminator.
     pub fn until(self: *Reader, terminator: u8) ?[]const u8 {
         const rest = self.bytes[self.pos..];
-        const end = std.mem.indexOfScalar(u8, rest, terminator) orelse return null;
+        const end = std.mem.findScalar(u8, rest, terminator) orelse return null;
         self.pos += end + 1;
         return rest[0..end];
     }
