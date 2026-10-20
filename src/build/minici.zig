@@ -282,6 +282,7 @@ const jobs = [_]Job{
     // limit; this catches growth before the website's nightly bump does.
     .{ .name = "run-check-echo-wasm-size", .placement = .primary_host },
     .{ .name = "run-test-eval-host-effects", .kind = .harness },
+    .{ .name = "run-test-strategy-differential", .kind = .harness },
     .{ .name = "run-test-playground", .kind = .harness },
     .{ .name = "run-test-cli", .kind = .harness },
     .{ .name = "run-test-serialization-sizes" },
