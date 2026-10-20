@@ -832,9 +832,8 @@ const Analysis = struct {
 
     /// A complete read canonicalized to a dominating representative. If the
     /// representative commits a plan, the read is materialized as a pure
-    /// alias of it and is scanned as that alias now: a target emitted owned
-    /// is a whole use of the representative (an owned-demanded borrowed
-    /// target joins it once demand is closed), and a borrowed target reads
+    /// alias of it and is scanned as that alias now: a target solved owned
+    /// is a whole use of the representative, and a borrowed target reads
     /// through it.
     /// The root defers the read until the representative's plan is known;
     /// the representative's plan never depends on the root's, so solving
@@ -1418,7 +1417,6 @@ test "future field observations agree with per-read traversal across joins rebin
     const receipts = [_]FieldRestitution{.{
         .call_arg = .{ .stmt = read, .position = 0 },
         .projection = read,
-        .consumer = read,
         .switch_stmt = branch,
         .field_mask = 1,
         .outcomes = .{ .start = 0, .len = 4 },
@@ -1528,18 +1526,11 @@ const OperandSite = struct {
     next: LIR.CFStmtId,
     position: u8,
     bit: u64,
-    /// The field read whose binding the operand consumes.
-    read: LIR.CFStmtId,
-    /// The operand is the only mention of the read's binding.
-    sole: bool = false,
 };
 
 const FieldRestitution = struct {
     call_arg: CallArg,
     projection: LIR.CFStmtId,
-    /// Where the field leaves its container: the projection itself for a
-    /// read solved owned, or the call for an operand take.
-    consumer: LIR.CFStmtId,
     switch_stmt: LIR.CFStmtId,
     field_mask: u64,
     outcomes: arc_sig.OutcomeSpan,
@@ -2238,11 +2229,11 @@ const OperandUse = struct {
     next: LIR.CFStmtId,
 };
 
-/// The argument position at which `stmt` consumes exactly one member of a
-/// borrowed read's forest: an owned direct-call position, a borrowed one
-/// whose owned variant takes a field, or a consumed or retained low-level
-/// position. Any other mention, or a second mention in the same statement,
-/// only observes the field.
+/// Where `stmt` consumes exactly one member of a borrowed read's forest: an
+/// owned direct-call position, a borrowed one whose owned variant takes a
+/// field, a consumed low-level position, or a retained one whose result can
+/// hold the operand. Any other mention, or a second mention in the same
+/// statement, only observes the field.
 fn operandSiteUse(
     store: *const LirStore,
     solution: *const arc_solve.Solution,
@@ -2281,7 +2272,11 @@ fn operandSiteUse(
                 const arg = GuardedList.at(args, position);
                 if (!forest_mark[@backingInt(arg)]) continue;
                 if (found != null or position >= 64 or !rc_local[@backingInt(arg)]) return null;
-                if ((mask & (@as(u64, 1) << @intCast(position))) == 0) return null;
+                const bit = @as(u64, 1) << @intCast(position);
+                if ((mask & bit) == 0) return null;
+                // A retained operand moves into the result only when the
+                // result can hold it.
+                if ((effect.consume_args & bit) == 0 and !rc_local[@backingInt(stmt.target)]) return null;
                 found = .{ .position = @intCast(position), .next = stmt.next };
             }
             return found;
@@ -3411,7 +3406,6 @@ pub fn compute(
                     try field_restitutions.append(gpa, .{
                         .call_arg = .{ .stmt = call_stmt_id, .position = position },
                         .projection = read.stmt,
-                        .consumer = read.stmt,
                         .switch_stmt = refinement,
                         .field_mask = bit,
                         .outcomes = outcomes,
@@ -3440,8 +3434,6 @@ pub fn compute(
                     if (bit == 0) continue;
                     if (!solution.isBorrowed(read.target)) continue;
                     forest.clearRetainingCapacity();
-                    const read_sites_start = operand_sites.items.len;
-                    var mention_count: usize = 0;
                     borrow_stack.clearRetainingCapacity();
                     try borrow_stack.append(gpa, @backingInt(read.target));
                     var borrow_steps: usize = 0;
@@ -3466,19 +3458,18 @@ pub fn compute(
                         while (mention != no_index) {
                             const edge = analysis.mention_edges.items[mention];
                             mention = edge.next;
-                            mention_count += 1;
                             const stmt: LIR.CFStmtId = @fromBackingInt(@intCast(edge.stmt));
                             const site_use = operandSiteUse(store, solution, operand_benefits, rc_local, forest_mark, stmt);
                             const slot = try read_kinds.getOrPut(stmt);
                             if (site_use) |use| {
                                 if (!slot.found_existing) {
                                     slot.value_ptr.* = .{ .bit = bit, .consuming = true, .site = true };
-                                    try operand_sites.append(gpa, .{ .stmt = stmt, .next = use.next, .position = use.position, .bit = bit, .read = read.stmt });
+                                    try operand_sites.append(gpa, .{ .stmt = stmt, .next = use.next, .position = use.position, .bit = bit });
                                 } else if (slot.value_ptr.site and slot.value_ptr.consuming and (slot.value_ptr.bit & bit) == 0) {
                                     // Another field of this container consumed
                                     // at a different position of the same statement.
                                     slot.value_ptr.bit |= bit;
-                                    try operand_sites.append(gpa, .{ .stmt = stmt, .next = use.next, .position = use.position, .bit = bit, .read = read.stmt });
+                                    try operand_sites.append(gpa, .{ .stmt = stmt, .next = use.next, .position = use.position, .bit = bit });
                                 } else {
                                     slot.value_ptr.consuming = false;
                                     slot.value_ptr.site = false;
@@ -3496,36 +3487,6 @@ pub fn compute(
                         }
                     }
                     for (forest.items) |borrower| forest_mark[borrower] = false;
-                    if (mention_count == 1) {
-                        for (operand_sites.items[read_sites_start..]) |*site| site.sole = true;
-                    }
-                }
-
-                // An operand take that is its binding's only mention, at an
-                // owned position of a direct call whose result is refined by
-                // the explicit alias/discriminant/switch continuation, gets
-                // the same closed field-place restitution as a consuming read.
-                for (operand_sites.items) |site| {
-                    if (!site.sole) continue;
-                    const call_stmt = store.getCFStmtImmediate(site.stmt);
-                    if (call_stmt.* != .assign_call) continue;
-                    if (solution.sigOf(call_stmt.assign_call.proc).paramMode(site.position) != .owned) continue;
-                    const outcomes = solution.availableOutcomeSpanOf(call_stmt.assign_call.proc);
-                    const refinement = (try arc_solve.findOutcomeRefinement(gpa, store, call_stmt.assign_call.target, call_stmt.assign_call.next, outcomes)) orelse continue;
-                    const position_bit = arc_sig.paramBit(site.position).?;
-                    var any_restitution = false;
-                    for (solution.sigTable().outcomesOf(.{ .outcomes = outcomes })) |outcome| {
-                        any_restitution = any_restitution or (outcome.restituted_params & position_bit) != 0;
-                    }
-                    if (!any_restitution) continue;
-                    try field_restitutions.append(gpa, .{
-                        .call_arg = .{ .stmt = site.stmt, .position = site.position },
-                        .projection = site.read,
-                        .consumer = site.stmt,
-                        .switch_stmt = refinement,
-                        .field_mask = site.bit,
-                        .outcomes = outcomes,
-                    });
                 }
 
                 var candidate_mask: u64 = 0;
@@ -3764,7 +3725,7 @@ pub fn compute(
                 }
                 for (field_restitutions.items) |receipt| {
                     if ((receipt.field_mask & taken_mask) == 0) continue;
-                    if (!(read_kinds.get(receipt.consumer) orelse continue).consuming) continue;
+                    if (!(read_kinds.get(receipt.projection) orelse continue).consuming) continue;
                     const slot = try result.field_restitution_args.getOrPut(gpa, receipt.call_arg);
                     if (slot.found_existing) {
                         if (slot.value_ptr.place.root != local or

@@ -6202,22 +6202,10 @@ const Inserter = struct {
             unchecked_outcome_positions &= ~bit;
             const local = GuardedList.at(locals, position);
             if (call_stmt) |stmt_id| {
-                if (self.operandTakeForEmission(stmt_id, position)) |take| {
-                    // The operand carries its container's stored field unit;
-                    // only a receipt for this refinement can return it there.
-                    const receipt = self.fieldRestitutionForEmission(stmt_id, position) orelse {
-                        outcome_admissible = false;
-                        continue;
-                    };
-                    if (callee_sig.paramMode(position) != .owned or
-                        outcome_refinement == null or
-                        receipt.refinement != outcome_refinement.? or
-                        !self.operandTakeAvailable(owned, take))
-                    {
-                        outcome_admissible = false;
-                        continue;
-                    }
-                    outcome_required = true;
+                if (self.operandTakeForEmission(stmt_id, position) != null) {
+                    // The operand carries its container's stored field unit,
+                    // and no receipt returns it to that place.
+                    outcome_admissible = false;
                     continue;
                 }
             }
@@ -6278,23 +6266,13 @@ const Inserter = struct {
             if (call_stmt) |stmt_id| {
                 if (try self.applyOperandTake(owned, stmt_id, position)) {
                     // The operand carries its container's stored field unit.
-                    const bit = arc_sig.paramBit(position).?;
                     if (callee_sig.paramMode(position) == .borrowed) {
+                        const bit = arc_sig.paramBit(position).?;
                         demanded.borrowed_params &= ~bit;
                         if (callee_sig.ret_mode == .borrowed and (callee_sig.ret_lenders & bit) != 0) {
                             demanded.ret_mode = .owned;
                             demanded.ret_lenders = 0;
                         }
-                    } else if (outcome_admissible and (outcome_mask & bit) != 0) {
-                        // Restoring outcomes hand the field back to its place.
-                        const receipt = self.fieldRestitutionForEmission(stmt_id, position) orelse
-                            arcInvariant("ARC admitted an outcome convention for an operand take without a field receipt");
-                        try self.setOutcomeRestoration(.{
-                            .refinement = receipt.refinement,
-                            .sig = outcome_sig,
-                            .position = position,
-                            .resource = .{ .field = receipt.place },
-                        }, true);
                     }
                     continue;
                 }
@@ -7268,17 +7246,11 @@ const Inserter = struct {
     /// retain.
     fn applyOperandTake(self: *Inserter, owned: *OwnedSet, stmt: LIR.CFStmtId, position: usize) ResourceError!bool {
         const take = self.operandTakeForEmission(stmt, position) orelse return false;
-        if (!self.operandTakeAvailable(owned, take)) return false;
-        try owned.takeResidualField(self.unitOf(take.root), take.field_mask);
-        return true;
-    }
-
-    /// Whether the path still holds the field unit a committed operand take
-    /// would move.
-    fn operandTakeAvailable(self: *const Inserter, owned: *const OwnedSet, take: arc_dismantle.Take) bool {
         const root = self.unitOf(take.root);
         if (!owned.contains(root)) return false;
-        return (owned.residualMask(root) & take.field_mask) == take.field_mask;
+        if ((owned.residualMask(root) & take.field_mask) != take.field_mask) return false;
+        try owned.takeResidualField(root, take.field_mask);
+        return true;
     }
 
     fn fieldRestitutionForEmission(self: *const Inserter, stmt: LIR.CFStmtId, position: usize) ?arc_dismantle.FieldRestitutionArg {
