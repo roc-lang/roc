@@ -703,6 +703,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Registry of compiled RC helpers keyed by canonical RC helper identity.
         compiled_rc_helpers: std.AutoHashMap(u64, usize),
+        /// Every helper offset recorded in `compiled_rc_helpers`, with the
+        /// code length when it was recorded, in recording order. An offset is
+        /// only ever recorded once its code is emitted, so every helper inside
+        /// a body appears at or after the first entry recorded once the code
+        /// reached the body's start.
+        compiled_rc_helper_log: std.ArrayListUnmanaged(CompiledRcHelperLogEntry),
+        /// The distinct helpers a shift visits.
+        shifted_rc_helpers: std.ArrayListUnmanaged(u64),
 
         /// Generated callable ranges with Windows unwind metadata.
         unwind_functions: std.ArrayListUnmanaged(coff.FunctionInfo),
@@ -1278,6 +1286,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .proc_registry = collections.DenseMap(u32, CompiledProc).init(allocator),
                 .boxy_dict_thunks = std.AutoHashMap(u32, usize).init(allocator),
                 .compiled_rc_helpers = std.AutoHashMap(u64, usize).init(allocator),
+                .compiled_rc_helper_log = .empty,
+                .shifted_rc_helpers = .empty,
                 .unwind_functions = .empty,
                 .rc_helper_worklist = std.ArrayList(RcHelperVariant).empty,
                 .rc_helper_scheduled = std.AutoHashMap(u64, void).init(allocator),
@@ -1354,6 +1364,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.proc_registry.deinit();
             self.boxy_dict_thunks.deinit();
             self.compiled_rc_helpers.deinit();
+            self.compiled_rc_helper_log.deinit(self.allocator);
+            self.shifted_rc_helpers.deinit(self.allocator);
             self.assembled_symbolic_refs.deinit(self.allocator);
             self.assembled_thunks.deinit(self.allocator);
             self.binding_data_cells.deinit(self.allocator);
@@ -1406,6 +1418,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.proc_registry.clearRetainingCapacity();
             self.boxy_dict_thunks.clearRetainingCapacity();
             self.compiled_rc_helpers.clearRetainingCapacity();
+            self.compiled_rc_helper_log.clearRetainingCapacity();
             self.line_entries.clearRetainingCapacity();
             self.fragment_mode = false;
             self.fragment_source_mode = .native_execution;
@@ -1677,7 +1690,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             // Root-body direct calls and nested helper offsets shift with the prepended prologue.
-            self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size, std.math.maxInt(u64));
+            try self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size, std.math.maxInt(u64));
             self.shiftPendingPatches(body_start, body_end, prologue_size);
             self.shiftPendingMessageAddrs(body_start, body_end, prologue_size);
             self.shiftPendingRcRefs(body_start, body_end, prologue_size);
@@ -12052,6 +12065,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
+        const CompiledRcHelperLogEntry = struct { emitted: usize, key: u64 };
+
+        fn recordCompiledRcHelper(self: *Self, key: u64, offset: usize) Allocator.Error!void {
+            try self.compiled_rc_helpers.put(key, offset);
+            const emitted = self.codegen.currentOffset();
+            const log = self.compiled_rc_helper_log.items;
+            std.debug.assert(log.len == 0 or log[log.len - 1].emitted <= emitted);
+            try self.compiled_rc_helper_log.append(self.allocator, .{ .emitted = emitted, .key = key });
+        }
+
         /// When a lambda body is shifted forward by prepending a prologue, nested lambdas
         /// compiled inside that body also move. Keep the lambda caches in final coordinates.
         fn shiftNestedCompiledRcHelperOffsets(
@@ -12060,15 +12083,28 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             body_end: usize,
             prologue_size: usize,
             current_key: u64,
-        ) void {
+        ) Allocator.Error!void {
             if (prologue_size == 0) return;
 
-            var iter = self.compiled_rc_helpers.iterator();
-            while (iter.next()) |entry| {
-                if (entry.key_ptr.* == current_key) continue;
-                const offset = entry.value_ptr.*;
-                if (offset > body_start and offset < body_end) {
-                    entry.value_ptr.* = offset + prologue_size;
+            const log = self.compiled_rc_helper_log.items;
+            var low: usize = 0;
+            var high: usize = log.len;
+            while (low < high) {
+                const mid = low + (high - low) / 2;
+                if (log[mid].emitted < body_start) low = mid + 1 else high = mid;
+            }
+            const keys = &self.shifted_rc_helpers;
+            keys.clearRetainingCapacity();
+            for (log[low..]) |entry| try keys.append(self.allocator, entry.key);
+            std.mem.sort(u64, keys.items, {}, std.sort.asc(u64));
+            var previous: ?u64 = null;
+            for (keys.items) |key| {
+                if (previous == key) continue;
+                previous = key;
+                if (key == current_key) continue;
+                const offset = self.compiled_rc_helpers.getPtr(key) orelse continue;
+                if (offset.* > body_start and offset.* < body_end) {
+                    offset.* += prologue_size;
                 }
             }
 
@@ -12964,7 +13000,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const body_start = self.codegen.currentOffset();
             const relocs_before = self.codegen.relocations.items.len;
-            try self.compiled_rc_helpers.put(cache_key, body_start);
+            try self.recordCompiledRcHelper(cache_key, body_start);
 
             errdefer {
                 _ = self.compiled_rc_helpers.remove(cache_key);
@@ -13052,7 +13088,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 reloc.adjustOffset(prologue_size);
             }
 
-            self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size, cache_key);
+            try self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size, cache_key);
             self.shiftPendingRcRefs(body_start, body_end, prologue_size);
             if (comptime target.toCpuArch() == .aarch64) try self.codegen.shiftBranchSites(body_start, body_end, prologue_size);
             self.repatchInternalCalls(body_start, body_end, prologue_size, body_start);
@@ -18375,7 +18411,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 // Nested lambdas compiled while generating this proc body move along with it.
                 // Keep the lambda caches in final coordinates so later call sites resolve correctly.
-                self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size, std.math.maxInt(u64));
+                try self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size, std.math.maxInt(u64));
                 self.shiftPendingPatches(body_start, body_end, prologue_size);
                 self.shiftPendingMessageAddrs(body_start, body_end, prologue_size);
                 self.shiftPendingRcRefs(body_start, body_end, prologue_size);
@@ -21771,7 +21807,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     reloc.adjustOffset(prologue_size_val);
                 }
 
-                self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size_val, std.math.maxInt(u64));
+                try self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size_val, std.math.maxInt(u64));
                 self.shiftPendingPatches(body_start, body_end, prologue_size_val);
                 self.shiftPendingMessageAddrs(body_start, body_end, prologue_size_val);
                 self.shiftPendingRcRefs(body_start, body_end, prologue_size_val);
@@ -21854,7 +21890,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     reloc.adjustOffset(prologue_size_x86);
                 }
 
-                self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size_x86, std.math.maxInt(u64));
+                try self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size_x86, std.math.maxInt(u64));
                 self.shiftPendingPatches(body_start, body_end, prologue_size_x86);
                 self.shiftPendingMessageAddrs(body_start, body_end, prologue_size_x86);
                 self.shiftPendingRcRefs(body_start, body_end, prologue_size_x86);
@@ -21982,7 +22018,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
                     reloc.adjustOffset(prologue_size_val);
                 }
-                self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size_val, std.math.maxInt(u64));
+                try self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size_val, std.math.maxInt(u64));
                 self.shiftPendingPatches(body_start, body_end, prologue_size_val);
                 self.shiftPendingMessageAddrs(body_start, body_end, prologue_size_val);
                 self.repatchInternalCalls(body_start, body_end, prologue_size_val, body_start);
@@ -22040,7 +22076,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 for (self.codegen.relocations.items[relocs_before..]) |*reloc| {
                     reloc.adjustOffset(prologue_size_x86);
                 }
-                self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size_x86, std.math.maxInt(u64));
+                try self.shiftNestedCompiledRcHelperOffsets(body_start, body_end, prologue_size_x86, std.math.maxInt(u64));
                 self.shiftPendingPatches(body_start, body_end, prologue_size_x86);
                 self.shiftPendingMessageAddrs(body_start, body_end, prologue_size_x86);
                 self.repatchInternalCalls(body_start, body_end, prologue_size_x86, body_start);
@@ -22977,7 +23013,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .uses_frame_pointer = frame_info.uses_frame_pointer,
                     });
                 },
-                .rc_helper => |key| try self.compiled_rc_helpers.put(key, start + entry),
+                .rc_helper => |key| try self.recordCompiledRcHelper(key, start + entry),
                 .boxy_thunk => |proc_id| try self.boxy_dict_thunks.put(@backingInt(proc_id), start + entry),
                 .entrypoint, .message_pool_run, .branch_island, .hosted_stub, .spliced_proc, .spliced_boxy_thunk, .spliced_helper => {},
             }
@@ -23151,7 +23187,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const name = try compiledRcHelperSymbolName(self.allocator, self.layout_store, cache_key);
             defer self.allocator.free(name);
             const offset = self.spliced_helper_offsets.get(name) orelse return null;
-            try self.compiled_rc_helpers.put(cache_key, offset);
+            try self.recordCompiledRcHelper(cache_key, offset);
             return offset;
         }
 

@@ -5731,10 +5731,11 @@ const Inserter = struct {
         /// By component, the place leaders used by some statement the
         /// component reaches, itself included.
         places_used_from: []Row,
-        /// By root, one more than the highest-numbered component of a
-        /// statement that rebinds it, or zero when none does. No statement
-        /// rebinding the root is reachable from a component at or above it.
-        rebind_component_end: []u32,
+        /// By rebound root, one more than the highest-numbered component of
+        /// a statement that rebinds it; a root no statement rebinds has no
+        /// entry. No statement rebinding the root is reachable from a
+        /// component at or above it.
+        rebind_component_end: collections.DenseMapUnmanaged(LIR.LocalId, u32),
         /// The place-use region of each solved root.
         solved_regions: collections.DenseMapUnmanaged(LIR.LocalId, PlaceUseRegion) = .empty,
         /// Units waiting while a region is solved, kept between solves.
@@ -5833,12 +5834,11 @@ const Inserter = struct {
                 }
             }
         }
-        const rebind_component_end = try allocator.alloc(u32, local_count);
-        @memset(rebind_component_end, 0);
+        var rebind_component_end = collections.DenseMapUnmanaged(LIR.LocalId, u32).empty;
         for (rebinds, components.component_of) |root, component| {
             if (root == no_rebind) continue;
-            const end = &rebind_component_end[@backingInt(root)];
-            end.* = @max(end.*, component + 1);
+            const end = try rebind_component_end.getOrPut(allocator, root);
+            end.value_ptr.* = if (end.found_existing) @max(end.value_ptr.*, component + 1) else component + 1;
         }
 
         // Statements from which some statement using every place is reachable.
@@ -6013,7 +6013,7 @@ const Inserter = struct {
         const facts = try self.placeUseFacts();
         const start_node = self.source_liveness.nodeIndex(start);
         const start_component = facts.component[start_node];
-        if (facts.rebind_component_end[@backingInt(root)] <= start_component) {
+        if ((facts.rebind_component_end.get(root) orelse 0) <= start_component) {
             // No statement that rebinds `root` is reachable from `start`, so
             // no path is cut short: the place is used later exactly when
             // `start` reaches a use of it or a statement using every place.

@@ -4053,6 +4053,12 @@ pub const CheckedTypeStore = struct {
     /// path (`fillSyntheticTypeRoot`). Each must declare its origin in
     /// `identity_origins`; `identityOrigin` refuses one that has not.
     synthetic_variable_roots: collections.DenseMapUnmanaged(CheckedTypeId, void) = .empty,
+    /// Build-only keys of identity-free roots by their full walk, shared by
+    /// every substitution so that keying a substituted root reads each
+    /// identity-free component once per store rather than once per
+    /// substitution. The store only appends roots and replaces a payload only
+    /// with one of the same key, so the keys stay valid as it grows.
+    closed_type_keys: ?*CheckedTypeKeys = null,
     roots: std.ArrayList(CheckedTypeRoot) = .empty,
     schemes: std.ArrayList(CheckedTypeScheme) = .empty,
     /// Serialized probing buckets contain scheme IDs, with zero denoting an
@@ -4127,6 +4133,7 @@ pub const CheckedTypeStore = struct {
         "structural_root_entries",
         "identity_origins",
         "synthetic_variable_roots",
+        "closed_type_keys",
     };
 
     /// Text of a stored variable name id, or null when absent.
@@ -5134,6 +5141,10 @@ pub const CheckedTypeStore = struct {
 
         self.identity_origins.deinit(allocator);
         self.synthetic_variable_roots.deinit(allocator);
+        if (self.closed_type_keys) |keys| {
+            keys.deinit();
+            allocator.destroy(keys);
+        }
         if (!self.serialized) {
             inline for (@typeInfo(BorrowedColumn).@"enum".field_names) |field_name| {
                 if (!self.borrowed_columns.contains(@field(BorrowedColumn, field_name))) @field(self, field_name).deinit(allocator);
@@ -5184,6 +5195,7 @@ pub const CheckedTypeStore = struct {
         substitution: *CheckedTypeSubstitution,
     ) Allocator.Error!CheckedTypeId {
         std.debug.assert(substitution.keys.adapter.store == self);
+        substitution.keys.adapter.closed_keys = try self.closedTypeKeys(allocator, substitution.keys.adapter.names);
         const Frame = struct {
             target: CheckedTypeId,
             snapshot: CheckedTypePayloadBuild,
@@ -5244,6 +5256,24 @@ pub const CheckedTypeStore = struct {
             if (frames.items.len == 0) return finished.target;
             try results.append(allocator, @backingInt(finished.target));
         }
+    }
+
+    /// The store's keys of identity-free roots, pointed at the store where
+    /// it now lives.
+    fn closedTypeKeys(
+        self: *CheckedTypeStore,
+        allocator: Allocator,
+        names: *const canonical.CanonicalNameStore,
+    ) Allocator.Error!*CheckedTypeKeys {
+        if (self.closed_type_keys) |keys| {
+            keys.digester.adapter.store = self;
+            keys.digester.adapter.names = names;
+            return keys;
+        }
+        const keys = try allocator.create(CheckedTypeKeys);
+        keys.* = CheckedTypeKeys.init(allocator, names, self);
+        self.closed_type_keys = keys;
+        return keys;
     }
 
     fn cloneCheckedTypeIdSliceSubstituting(
@@ -7231,6 +7261,7 @@ const CheckedTypeKeyDigester = struct {
     fn keyInfo(self: *CheckedTypeKeyDigester, source: CheckedTypeId) Allocator.Error!canonical_type_keys.TypeKeyInfo {
         // A failed request can leave partial classes behind.
         errdefer self.engine.reset();
+        std.debug.assert(self.adapter.closed_keys == null or self.adapter.store.rootContainsIdentityVariables(source));
         return keyInfoOf(try self.engine.summarize(&self.adapter, @backingInt(source)));
     }
 
@@ -7313,6 +7344,14 @@ const CheckedTypeKeyAdapter = struct {
     formals: []const CheckedTypeId,
     actuals: []const CheckedTypeId,
     build: ?struct { node: u32, payload: CheckedTypePayloadBuild } = null,
+    /// When set, every stored identity-free root is described by its key
+    /// from these keys. Such a root defines no variable and cannot reach the
+    /// walked node, so the walk writes it as exactly a reference to its key;
+    /// writing those bytes as a leaf keeps every key the same without
+    /// describing the root's structure again. Requests through this adapter
+    /// must then only summarize roots with identity variables, whose own
+    /// description is never replaced.
+    closed_keys: ?*CheckedTypeKeys = null,
     field_rank_scratch: base.TextRankCache,
     tag_rank_scratch: base.TextRankCache,
     field_ranks: []const u32 = &.{},
@@ -7380,6 +7419,17 @@ const CheckedTypeKeyAdapter = struct {
         return @backingInt(self.substitutedRoot(@fromBackingInt(@intCast(node))));
     }
 
+    /// Whether `node` is known to reach no identity variable. A stored root
+    /// records that exactly for its own graph, which is the graph this
+    /// adapter describes when it substitutes nothing.
+    pub fn identityFree(self: *const CheckedTypeKeyAdapter, node: u32) bool {
+        if (self.formals.len != 0) return false;
+        if (self.build) |build| {
+            if (node == build.node) return false;
+        }
+        return !self.store.rootContainsIdentityVariables(@fromBackingInt(@intCast(node)));
+    }
+
     fn storedPayload(self: *const CheckedTypeKeyAdapter, id: CheckedTypeId) CheckedTypePayload {
         const raw: usize = @backingInt(id);
         if (raw >= self.store.payloadCount()) {
@@ -7401,6 +7451,11 @@ const CheckedTypeKeyAdapter = struct {
             if (node == build.node) return try self.describeBuild(sink, build.payload);
         }
         const id: CheckedTypeId = @fromBackingInt(@intCast(node));
+        if (self.closed_keys) |keys| if (!self.store.rootContainsIdentityVariables(id)) {
+            try sink.byte(canonical_type_keys.key_engine_tags.child_key);
+            try sink.bytes(&(try keys.key(id)).bytes);
+            return .leaf;
+        };
         return switch (self.storedPayload(id)) {
             .flex => |variable| try self.describeIdentity(sink, .flex, variable),
             .rigid => |variable| try self.describeIdentity(sink, .rigid, variable),
