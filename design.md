@@ -623,7 +623,13 @@ each constant as weak readonly data under its `roc__h` content name, so two
 objects carrying one constant share a single copy in the link. It exports,
 for each entry it offers, a weak C-ABI entry `roc__c{hash}`, the procedure's
 arguments and result classified by `layout.abi` exactly as for a hosted
-call. Two such objects may export one entry; the link keeps one. Not every
+call. Two such objects may export one entry; the link keeps one. Each weak
+definition sits in an `any` COMDAT of its own name on every object format
+that has COMDATs, so the link keeps one copy and discards the others whole;
+COFF can express a coalescing definition only this way, since a weak
+definition without one lowers to a strong `.weak.*` default that every
+object defining it also defines. Mach-O has no COMDATs, and its linker
+coalesces weak definitions without one. Not every
 object format can place a weak symbol inside a datum, so a constant's symbol
 in an object pack marks its first byte: a constant whose symbol sits some
 bytes into its data is named as the datum anchored at its first byte, with
@@ -714,18 +720,21 @@ Direct LIR looks it up. Code whose identity names it never holds a copy of
 site-identified code: an entry whose body inlined one
 (`LIR.InlineScope.copies_site_code`) is not offered by identity, and its
 calls to one are extracted as symbolic references by identity rather than as
-references into the pack. A program that takes an entry lowers and retains
-every lambda-set member the entry's signature mentions
-(`Result.retained_procs`), and a splice never follows a symbolic reference
-to a procedure the program compiles itself, so the entry calls the program's
-current code of each closure it receives. Because such code was compiled
+references into the pack. A program that takes an entry lowers every
+lambda-set member the entry's signature mentions and records each as a
+served callee of that entry (`Result.served_callees`). The entry's procedure
+is body-less, so these are its outgoing edges: every reachability walk,
+runtime compaction and compile-time code demand alike, reaches a served
+callee exactly when it reaches the entry. A splice never follows a symbolic
+reference to a procedure the program compiles itself, so the entry calls the
+program's current code of each closure it receives. Because such code was compiled
 against an earlier body of the procedures it calls by identity, ARC pins
 every procedure with a code key to the signature its types determine (all
 parameters and the return owned, no return uniqueness). An entry whose code reaches the
 app from outside it (`Lifted.Program.appCalleesReachedBy`) is offered under
 its identity only, never under a reservation-time key, and a program that
-takes it lowers and retains every app function it reaches, so the entry
-calls that code's current version too.
+takes it lowers every app function it reaches as a served callee of the
+entry, so the entry calls that code's current version too.
 
 A package function that dispatches to a method of an app type records that
 method in its evidence. The evidence digest it is keyed by
@@ -2150,6 +2159,14 @@ Coordinator commits follow demand order, independently of completion order;
 helper closure, final placement, branch veneers, and object/image linking remain
 explicit coordinator responsibilities. Null-executor execution uses the same
 native procedure code ownership boundary, not a separate monolithic implementation.
+
+Explicit ARC helpers run through the same pipeline after the procedures, in
+frontier waves. A wave takes only helpers already in the helper queue when it
+starts, and its fragments commit in queue order, each appending its own helper
+demands to the end of the queue. The queue, and so every helper's placement,
+is therefore exactly the one a one-helper-at-a-time drain produces, at every
+worker count; helper calls into a later wave resolve through the symbolic
+references that every producer's placement settles.
 
 The compilation session retains owned relocatable native procedure code after
 compile-time evaluation, never its JIT image. Reuse requires the same producer LIR
@@ -3755,7 +3772,11 @@ The annotation root's type variable is also the static-dispatch constraint's
 callable variable. Checking declares that identity before completing owned
 constraints, then generates its type through ordinary annotation generation and
 unification. It allocates no second callable placeholder or bridging relation.
-Inference holes retain the existing body-checking and generalization rules, and
+A callable written through a function type alias is therefore an alias view
+whose backing carries the function structure, so every reader of a
+requirement's function structure resolves the callable through its aliases.
+A written type that is not a function through its aliases, or a bare type
+variable, is reported at its where clause. Inference holes retain the existing body-checking and generalization rules, and
 the named method's static-dispatch constraint is preserved even when its type
 is incomplete.
 
@@ -13448,6 +13469,30 @@ frame stack, and an argument's evidence computation that reaches such an
 operand stops, lets the loop draft it, and resumes. A nested function never
 starts a lowering run of its own inside its parent's.
 
+### Lowering Scopes Share One Helper Layer
+
+Monotype lowering keeps its state in two scopes: the coordinator `Builder`,
+whose ids belong to the program or to the active specialization workspace, and
+each body's `BodyContext`, whose ids belong to its instantiation graph's
+stores. Boxy lowering has the same split between `ProcedureBuilder` and each
+`ProcBodyBuilder`. A question asked of either scope's data has one definition,
+which takes the stores it reads as parameters: type-shape queries take a type
+store (and the name store a tag label belongs to), name imports take the
+destination name store, and method lookup takes the name store its owner's ids
+belong to and memoizes only owners in the program's domain. Each scope passes
+its own stores, so the scope a helper is called from never changes which store
+it reads. Tag lookup within one name store is label identity, which there is
+id equality; a label from another domain is imported before it is looked up.
+
+Coordinator work whose inputs are program ids, such as result-row widening
+adapters, reads the program store explicitly and only under a program
+destination. Where the two scopes genuinely differ, such as the store a
+restored constant is emitted into or how a node's reuse is cached, a generic
+walker takes the scope as a comptime-duck-typed parameter (`runConstRestore`)
+or a policy struct (`RuntimeImpossibilityProofEvaluation`). A source-text test
+fails when either lowerer defines one name twice with near-identical bodies
+outside an explicit list of such per-scope interface methods.
+
 ### Monotype Types
 
 Monotype types contain no lambda sets.
@@ -20514,15 +20559,40 @@ consumed read through it takes those slots from the container, and its
 other uses observe its whole range. Its definition copies only the
 container's representation, which may name slots the container has already
 given away on that path; ARC writes those slots on the definition as the
-view's residual shell, numbered in the view's own layout. A view whose value
-reaches an owned operand reads its whole range there, so any take through it
-is rejected. This is what lets
+view's residual shell, numbered in the view's own layout. This is what lets
 `{ cursor, builder: { nodes, children }, node }` returned from one call
 hand `builder.nodes` to the next append without a retain: the builder is
 read as a view each time the source names it, and each list leaves the dying
 result by a take. A residual release reads a struct field whose slots are
 only partly residual as a view marked with its absent slots and releases the
 residual slots through it.
+
+A view whose value reaches an owned operand is first solved as a take of its
+whole range at its definition. While it is, it holds those slots: reads
+through it, through its aliases, and through views nested in it are reads of
+the view, not of its container, and once the take is committed the view is a
+container in its own right, solved right after the container it was taken
+from, with its own field takes, whole uses, and residual release. Only an
+observation of its slots that does not go through it can reject that take.
+So when the view is lent whole and then a field is moved out of it, the view
+leaves the dying record intact, is lent, and gives up the field by a take of
+its own, and when a field is passed along before the view is moved whole, the
+field is read from the view without a take and the view itself still moves.
+A view whose take is rejected is a borrowed view again, and every read through
+it is solved as a read of its container. The innermost view whose definition
+is a take decides, per emission, where every view nested in it reads its
+slots: in an emission where that take applies, the view holding the slots is
+no view, and a view nested in it reads that view's own container.
+
+Every read of a borrowed binding with an owned demand is solved as a take
+first. A read that the solve does not commit as a take leaves its binding
+borrowed from the container, so the binding and every binding borrowed onward
+from it observe its slots at each later mention, exactly like a read solved
+borrowed. Those mentions can reject other takes, including the take of a view
+that held the read, so the container is solved again with them until every
+read solved as a take is committed. Each round only rejects more reads, so
+this terminates, and a container with no rejected owned-demanded read solves
+once.
 
 An owned same-value binding (`ref.local` solved owned) is bound exactly once
 and holds the unit its definition gave it, whether that definition moved the
@@ -21921,6 +21991,50 @@ cost, and it is paid once for the module. The same rule forbids reintroducing
 that search at the producer: a whole-module finalization pass whose only
 consumer is wasm local binding trades one redundant traversal for another.
 
+## Wasm Body Generation
+
+`WasmCodeGen` generates procedure and RC helper bodies on the post-check
+executor and commits them on one owner, in an order that depends only on the
+program. Registration fixes every index a body may read before any body is
+generated: procedure function indices, symbols, and table slots, hosted,
+runtime, Boxy, and linked-entry imports, tail drivers and the tail area, and
+Boxy dictionary thunks. A body worker is a private `WasmCodeGen` that reads
+those through its owner (`tables()`), owns its function-local emission state,
+and borrows its lane's binding column (see "Wasm Local Binding").
+
+A worker never creates a module entity. Each entity that is created the first
+time some body names it—an RC helper function, an RC helper or Boxy
+capture-drop table slot, a string-backing or runtime-message data segment, a
+static-data symbol, a PIC base global—is recorded in the body's entity list
+in first-use order, keyed by its content identity (the helper cache key, the
+string backing id, the capture-drop key, the static-data id; every message
+is its own segment), and each operand naming it is a deferred operand or a
+relocation against a placeholder symbol. A padded operand keeps its width; an
+operand the module encodes as a minimal LEB128 is inserted when it is filled
+in, and every later relocation moves with the bytes it names. No import is
+ever created by a commit, so imports cannot shift a defined function index.
+
+The owner commits procedure bodies in spec-id order. Committing a body creates,
+in list order, each listed entity the module does not have yet, through the
+same functions that create it for a body emitted directly against the module,
+and then fills in the body's operands. An RC helper is created by reserving
+its whole child-helper closure in pre-order and then committing each newly
+reserved helper's body, which may create entities of its own; the order in
+which commits create entities is therefore the order on-demand creation during
+serial emission would produce, and every module index is a function of that
+order and the bodies' contents. Helper bodies are generated before the
+commits that reserve them: after each procedure wave, the helpers its commits
+can create (the named helpers, the child helpers their reservations reach, and
+the helpers those bodies name in turn, minus those the module already has) are
+generated in frontier waves and wait for the commit that reserves them; every
+one is committed before the next wave starts.
+
+Waves are bounded, admission stops on the first allocation failure, and every
+accepted callback drains before any owner state is touched, as for native
+procedure code. Without an executor every body is generated inline on a
+persistent sequential lane through the same callback, so `--jobs=1` and a
+multi-worker build emit the same bytes.
+
 ## Compile-Time Constants
 
 Compile-time constants use checked finalization after the coordinator's
@@ -23148,7 +23262,8 @@ functions; object symbol discovery must never enlarge that set.
 
 Compiled Roc code references each hosted symbol (and the fixed runtime set:
 roc_alloc, roc_dealloc, roc_realloc, roc_dbg, roc_expect_failed, roc_crashed)
-as a weak extern and calls it directly with the natural C ABI for its types.
+as a weak extern (a plain extern on COFF, below) and calls it directly with
+the natural C ABI for its types.
 Entrypoints are exported under their `provides` strings with natural C ABI
 signatures. No context pointer is threaded through compiled code: hosts that
 need per-call context (for example an arena) own its delivery out of band

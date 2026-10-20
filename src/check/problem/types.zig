@@ -85,6 +85,7 @@ pub const Problem = union(enum) {
     where_alias_in_type_position: WhereAliasInTypePosition,
     recursive_where_alias: RecursiveWhereAlias,
     where_clause_receiver_not_introduced: WhereClauseReceiverNotIntroduced,
+    where_requirement_not_function: WhereRequirementNotFunction,
     redundant_open_tag_union: RedundantOpenTagUnion,
     invalid_nominal_decl_recursion: InvalidNominalDeclRecursion,
     infinite_recursion: VarWithSnapshot,
@@ -1058,6 +1059,12 @@ pub const RecursiveWhereAlias = struct {
 /// variable introduced by a different annotation.
 pub const WhereClauseReceiverNotIntroduced = struct {
     type_var_name: base.Ident.Idx,
+    method_name: base.Ident.Idx,
+    region: base.Region,
+};
+
+/// Error when a where clause requires a method whose type is not a function.
+pub const WhereRequirementNotFunction = struct {
     method_name: base.Ident.Idx,
     region: base.Region,
 };
