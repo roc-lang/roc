@@ -720,18 +720,21 @@ Direct LIR looks it up. Code whose identity names it never holds a copy of
 site-identified code: an entry whose body inlined one
 (`LIR.InlineScope.copies_site_code`) is not offered by identity, and its
 calls to one are extracted as symbolic references by identity rather than as
-references into the pack. A program that takes an entry lowers and retains
-every lambda-set member the entry's signature mentions
-(`Result.retained_procs`), and a splice never follows a symbolic reference
-to a procedure the program compiles itself, so the entry calls the program's
-current code of each closure it receives. Because such code was compiled
+references into the pack. A program that takes an entry lowers every
+lambda-set member the entry's signature mentions and records each as a
+served callee of that entry (`Result.served_callees`). The entry's procedure
+is body-less, so these are its outgoing edges: every reachability walk,
+runtime compaction and compile-time code demand alike, reaches a served
+callee exactly when it reaches the entry. A splice never follows a symbolic
+reference to a procedure the program compiles itself, so the entry calls the
+program's current code of each closure it receives. Because such code was compiled
 against an earlier body of the procedures it calls by identity, ARC pins
 every procedure with a code key to the signature its types determine (all
 parameters and the return owned, no return uniqueness). An entry whose code reaches the
 app from outside it (`Lifted.Program.appCalleesReachedBy`) is offered under
 its identity only, never under a reservation-time key, and a program that
-takes it lowers and retains every app function it reaches, so the entry
-calls that code's current version too.
+takes it lowers every app function it reaches as a served callee of the
+entry, so the entry calls that code's current version too.
 
 A package function that dispatches to a method of an app type records that
 method in its evidence. The evidence digest it is keyed by
@@ -3769,7 +3772,11 @@ The annotation root's type variable is also the static-dispatch constraint's
 callable variable. Checking declares that identity before completing owned
 constraints, then generates its type through ordinary annotation generation and
 unification. It allocates no second callable placeholder or bridging relation.
-Inference holes retain the existing body-checking and generalization rules, and
+A callable written through a function type alias is therefore an alias view
+whose backing carries the function structure, so every reader of a
+requirement's function structure resolves the callable through its aliases.
+A written type that is not a function through its aliases, or a bare type
+variable, is reported at its where clause. Inference holes retain the existing body-checking and generalization rules, and
 the named method's static-dispatch constraint is preserved even when its type
 is incomplete.
 
@@ -20552,15 +20559,40 @@ consumed read through it takes those slots from the container, and its
 other uses observe its whole range. Its definition copies only the
 container's representation, which may name slots the container has already
 given away on that path; ARC writes those slots on the definition as the
-view's residual shell, numbered in the view's own layout. A view whose value
-reaches an owned operand reads its whole range there, so any take through it
-is rejected. This is what lets
+view's residual shell, numbered in the view's own layout. This is what lets
 `{ cursor, builder: { nodes, children }, node }` returned from one call
 hand `builder.nodes` to the next append without a retain: the builder is
 read as a view each time the source names it, and each list leaves the dying
 result by a take. A residual release reads a struct field whose slots are
 only partly residual as a view marked with its absent slots and releases the
 residual slots through it.
+
+A view whose value reaches an owned operand is first solved as a take of its
+whole range at its definition. While it is, it holds those slots: reads
+through it, through its aliases, and through views nested in it are reads of
+the view, not of its container, and once the take is committed the view is a
+container in its own right, solved right after the container it was taken
+from, with its own field takes, whole uses, and residual release. Only an
+observation of its slots that does not go through it can reject that take.
+So when the view is lent whole and then a field is moved out of it, the view
+leaves the dying record intact, is lent, and gives up the field by a take of
+its own, and when a field is passed along before the view is moved whole, the
+field is read from the view without a take and the view itself still moves.
+A view whose take is rejected is a borrowed view again, and every read through
+it is solved as a read of its container. The innermost view whose definition
+is a take decides, per emission, where every view nested in it reads its
+slots: in an emission where that take applies, the view holding the slots is
+no view, and a view nested in it reads that view's own container.
+
+Every read of a borrowed binding with an owned demand is solved as a take
+first. A read that the solve does not commit as a take leaves its binding
+borrowed from the container, so the binding and every binding borrowed onward
+from it observe its slots at each later mention, exactly like a read solved
+borrowed. Those mentions can reject other takes, including the take of a view
+that held the read, so the container is solved again with them until every
+read solved as a take is committed. Each round only rejects more reads, so
+this terminates, and a container with no rejected owned-demanded read solves
+once.
 
 An owned same-value binding (`ref.local` solved owned) is bound exactly once
 and holds the unit its definition gave it, whether that definition moved the

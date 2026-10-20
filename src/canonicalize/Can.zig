@@ -7998,6 +7998,7 @@ fn introduceExposedItems(
 
         try self.scopeIntroduceExposedItem(local_ident, Scope.ExposedItemInfo{
             .module_name = module_name,
+            .import_idx = module_import_idx,
             .original_name = exposed_item.name,
             .target = null,
         }, import_region);
@@ -8039,6 +8040,7 @@ fn introduceImportAliasBinding(
 
     try self.scopeIntroduceExposedItem(module_alias, Scope.ExposedItemInfo{
         .module_name = module_name,
+        .import_idx = module_import_idx,
         .original_name = module_alias,
         .target = null,
         .names_import_main_type = true,
@@ -8953,7 +8955,7 @@ fn canonicalizeUnqualifiedIdentExpr(
         },
         .not_found => {
             if (self.scopeLookupExposedItem(ident)) |exposed_info| {
-                const import_idx = self.scopeLookupImportedModule(exposed_info.module_name) orelse unreachable;
+                const import_idx = exposed_info.import_idx;
                 if (exposed_info.target) |target| {
                     if (target.valueDefNode()) |target_node_idx| {
                         return try self.canonicalizedExternalLookup(import_idx, target_node_idx, exposed_info.original_name, region);
@@ -15291,11 +15293,7 @@ fn resolveNominalTypePath(
 
         if (self.scopeLookupExposedItem(final_type_ident)) |exposed_info| {
             const module_name = exposed_info.module_name;
-            const import_idx = self.scopeLookupImportedModule(module_name) orelse
-                return Target{ .malformed = Diagnostic{ .module_not_imported = .{
-                    .module_name = module_name,
-                    .region = region,
-                } } };
+            const import_idx = exposed_info.import_idx;
             return Target{ .deferred = .{
                 .import_idx = import_idx,
                 .kind = kind,
@@ -15525,17 +15523,7 @@ fn finishTagExprWithArgs(
         // Not found in auto-imports, check if it's an imported type from exposed_items
         if (self.scopeLookupExposedItem(type_tok_ident)) |exposed_info| {
             const module_name = exposed_info.module_name;
-            // Check if this module is imported in the current scope
-            const import_idx = self.scopeLookupImportedModule(module_name) orelse {
-                return CanonicalizedExpr{
-                    .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .module_not_imported = .{
-                        .module_name = module_name,
-                        .region = region,
-                    } }),
-                    .free_vars = DataSpan.empty(),
-                    .diverges = false,
-                };
-            };
+            const import_idx = exposed_info.import_idx;
 
             // The qualifier is the import's own alias when the import binds
             // it, so which declaration owns this tag is the import's to say.
@@ -19420,21 +19408,19 @@ fn resolveTypePath(
 
             // Not in type_decls, check if it's an exposed item from an imported module
             if (self.scopeLookupExposedItem(type_name_ident)) |exposed_info| {
-                if (self.scopeLookupImportedModule(exposed_info.module_name)) |import_idx| {
-                    return .{ .name = type_name_ident, .target = .{ .deferred = .{
-                        .import_idx = import_idx,
-                        .kind = .type_anno_lookup,
-                        .path = exposed_info.original_name,
-                        .module_name = exposed_info.module_name,
-                        .item_name = type_name_ident,
-                        .parent_name = exposed_info.module_name,
-                        .qualified_name = type_name_ident,
-                        .missing_module_failure = .type_from_missing_module,
-                        .not_found_failure = .type_not_exposed,
-                        .names_import_main_type = exposed_info.names_import_main_type,
-                        .diagnostic_region = type_name_region,
-                    } } };
-                }
+                return .{ .name = type_name_ident, .target = .{ .deferred = .{
+                    .import_idx = exposed_info.import_idx,
+                    .kind = .type_anno_lookup,
+                    .path = exposed_info.original_name,
+                    .module_name = exposed_info.module_name,
+                    .item_name = type_name_ident,
+                    .parent_name = exposed_info.module_name,
+                    .qualified_name = type_name_ident,
+                    .missing_module_failure = .type_from_missing_module,
+                    .not_found_failure = .type_not_exposed,
+                    .names_import_main_type = exposed_info.names_import_main_type,
+                    .diagnostic_region = type_name_region,
+                } } };
             }
 
             // Check if this is a type variable in scope (e.g., R1, R2 from requires { R1, R2 })

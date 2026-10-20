@@ -23322,6 +23322,7 @@ fn stepRigidAnnoGen(self: *Self, frame: *AnnoGenFrame, rigid: std.meta.fieldInfo
                 return annoGenChild(method.anno, whereMethodCtx(ctx), .pos);
             },
             else => {
+                try self.reportNonFunctionWhereRequirement(scratch_constraint, method);
                 self.scratch_static_dispatch_constraints.items.items[scratch_index].state = .completed;
                 state.method_stage = 0;
                 state.completing += 1;
@@ -23329,6 +23330,50 @@ fn stepRigidAnnoGen(self: *Self, frame: *AnnoGenFrame, rigid: std.meta.fieldInfo
         }
     }
     return anno_gen_done;
+}
+
+/// A where clause requires methods, so a written requirement's type must be
+/// a function, directly or through aliases. A hole (`_`) becomes a function
+/// through the body's uses, a type variable never is one, and an erroneous
+/// type was already reported. Other type variables in the signature may not
+/// be resolved yet, so a variable is judged by how it was written.
+fn reportNonFunctionWhereRequirement(
+    self: *Self,
+    scratch_constraint: ScratchStaticDispatchConstraint,
+    method: std.meta.fieldInfo(CIR.WhereClause, .w_method).type,
+) std.mem.Allocator.Error!void {
+    var anno_idx = method.anno;
+    const written_variable = while (true) switch (self.cir.store.getTypeAnno(anno_idx)) {
+        .parens => |parens| anno_idx = parens.anno,
+        .underscore => return,
+        .rigid_var, .rigid_var_lookup => break true,
+        .apply, .lookup, .tag_union, .tag, .tuple, .record, .@"fn", .malformed => break false,
+    };
+    if (!written_variable) {
+        var content = self.types.resolveVar(scratch_constraint.constraint.fn_var).desc.content;
+        while (content == .alias) {
+            content = self.types.resolveVar(self.types.getAliasBackingVar(content.alias)).desc.content;
+        }
+        switch (content) {
+            .structure => |flat_type| switch (flat_type) {
+                .fn_pure, .fn_effectful, .fn_unbound => return,
+                .record,
+                .tuple,
+                .nominal_type,
+                .empty_record,
+                .tag_union,
+                .empty_tag_union,
+                => {},
+            },
+            .err => return,
+            .flex, .rigid, .field_presence => {},
+            .alias => unreachable,
+        }
+    }
+    _ = try self.problems.appendProblem(.{ .where_requirement_not_function = .{
+        .method_name = method.method_name,
+        .region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(scratch_constraint.where_clause)),
+    } });
 }
 
 /// A where-method signature is a SCHEME the constrained body instantiates
@@ -39842,9 +39887,9 @@ fn codecInputsAreBoundaryLocal(
     interface: *const collections.DenseMap(Var, void),
     rank: Rank,
 ) Allocator.Error!bool {
-    const factory = self.types.resolveVar(constraint.fn_var).desc.content.unwrapFunc() orelse return false;
+    const factory = self.types.resolveThroughAliases(constraint.fn_var).desc.content.unwrapFunc() orelse return false;
     for (self.types.sliceVars(factory.args)) |arg| try self.collectReachableVars(arg, inputs);
-    const runtime = self.types.resolveVar(factory.ret).desc.content.unwrapFunc() orelse return false;
+    const runtime = self.types.resolveThroughAliases(factory.ret).desc.content.unwrapFunc() orelse return false;
     for (self.types.sliceVars(runtime.args)) |arg| try self.collectReachableVars(arg, inputs);
     if (self.refinableVarsIntersect(inputs, interface)) return false;
 
@@ -40541,7 +40586,7 @@ fn deferredConstraintWaitsOnDerivedCodec(self: *Self, direction: DerivedCodecDir
 }
 
 fn encoderForConstraintEncodingVar(self: *Self, constraint: StaticDispatchConstraint) ?Var {
-    const resolved_constraint = self.types.resolveVar(constraint.fn_var);
+    const resolved_constraint = self.types.resolveThroughAliases(constraint.fn_var);
     const resolved_func = resolved_constraint.desc.content.unwrapFunc() orelse return null;
     const args = self.types.sliceVars(resolved_func.args);
     if (args.len != 1) return null;
@@ -41416,7 +41461,7 @@ fn numeralCandidateStructurallyRefuted(
         // From here on, refutation needs the closed-world structural walk;
         // any uncertainty falls through to the probe (return false).
         const method_func = method_types.resolveVar(def_var).desc.content.unwrapFunc() orelse return false;
-        const constraint_func = self.types.resolveVar(constraint.fn_var).desc.content.unwrapFunc() orelse return false;
+        const constraint_func = self.types.resolveThroughAliases(constraint.fn_var).desc.content.unwrapFunc() orelse return false;
         if (method_func.args.len() != constraint_func.args.len()) return true;
 
         const method_args = method_types.sliceVars(method_func.args);
@@ -44228,7 +44273,7 @@ fn encodeDispatchReplayShape(
     try appendReplayWord(out, self.gpa, @bitCast(constraint.fn_name));
     // The receiver is normally the callable's first argument; it is encoded
     // separately only when it is not.
-    const receiver_is_first_arg = if (self.types.resolveVar(constraint.fn_var).desc.content.unwrapFunc()) |func| blk: {
+    const receiver_is_first_arg = if (self.types.resolveThroughAliases(constraint.fn_var).desc.content.unwrapFunc()) |func| blk: {
         const args = self.types.sliceVars(func.args);
         break :blk args.len != 0 and self.types.resolveVar(args[0]).var_ == self.types.resolveVar(dispatcher_var).var_;
     } else false;
@@ -46963,7 +47008,7 @@ inline fn processDeferredDispatchEntry(
                 self.active_scheme_root = self.dispatchRelationOwner(constraint.fn_var);
                 const failure_expr = try self.enterDeferredEntryConstraint(env, &ownership, constraint);
                 if (self.staticDispatchConstraintIsInactive(constraint)) continue;
-                const constraint_fn_resolved = self.types.resolveVar(constraint.fn_var).desc.content;
+                const constraint_fn_resolved = self.types.resolveThroughAliases(constraint.fn_var).desc.content;
                 if (constraint_fn_resolved == .err) {
                     // An erroneous method signature was already reported and
                     // can never be discharged, so the obligation is rejected.
@@ -47108,7 +47153,8 @@ inline fn processDeferredDispatchEntry(
                     failure_expr,
                 )) orelse continue;
 
-                // Unwrap the constraint type
+                // A requirement whose type is not a function was reported
+                // at its where clause (`reportNonFunctionWhereRequirement`).
                 if (constraint_fn_resolved.unwrapFunc() == null) {
                     _ = try self.unifyInContext(method_var, constraint.fn_var, env, .{
                         .method_type = .{
@@ -47246,7 +47292,7 @@ inline fn processDeferredDispatchEntry(
                 self.active_scheme_root = self.dispatchRelationOwner(constraint.fn_var);
                 const failure_expr = try self.enterDeferredEntryConstraint(env, &ownership, constraint);
                 if (self.staticDispatchConstraintIsInactive(constraint)) continue;
-                const constraint_fn_resolved = self.types.resolveVar(constraint.fn_var).desc.content;
+                const constraint_fn_resolved = self.types.resolveThroughAliases(constraint.fn_var).desc.content;
                 if (constraint_fn_resolved == .err) {
                     // An erroneous method signature was already reported and
                     // can never be discharged, so the obligation is rejected.
@@ -47351,6 +47397,8 @@ inline fn processDeferredDispatchEntry(
                     failure_expr,
                 )) orelse continue;
 
+                // A requirement whose type is not a function was reported
+                // at its where clause (`reportNonFunctionWhereRequirement`).
                 if (constraint_fn_resolved.unwrapFunc() == null) {
                     _ = try self.unifyInContext(method_var, constraint.fn_var, env, .{
                         .method_type = .{
@@ -48491,7 +48539,7 @@ fn mkDerivedComponentConstraint(
         // the hasher argument from the parent's `to_hash : _, Hasher -> Hasher`
         // signature when it has one, so the child contract is the real one.
         .hash => blk: {
-            const resolved_parent = self.types.resolveVar(parent_constraint.fn_var);
+            const resolved_parent = self.types.resolveThroughAliases(parent_constraint.fn_var);
             if (resolved_parent.desc.content.unwrapFunc()) |parent_func| {
                 const parent_args = self.types.sliceVars(parent_func.args);
                 if (parent_args.len == 2) break :blk parent_args[1];
@@ -51837,7 +51885,7 @@ fn satisfyDerivedStructuralConstraint(
     region: Region,
     failure_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!void {
-    const resolved_constraint = self.types.resolveVar(constraint_fn_var);
+    const resolved_constraint = self.types.resolveThroughAliases(constraint_fn_var);
     const resolved_func = resolved_constraint.desc.content.unwrapFunc() orelse {
         try self.markStaticDispatchRejected(constraint);
         return;
@@ -51941,7 +51989,7 @@ fn relateDerivedParserShape(
     region: Region,
     failure_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!?DerivedCodecShape {
-    const resolved_constraint = self.types.resolveVar(constraint.fn_var);
+    const resolved_constraint = self.types.resolveThroughAliases(constraint.fn_var);
     const resolved_func = resolved_constraint.desc.content.unwrapFunc() orelse {
         try self.reportConstraintErrorAt(dispatcher_var, constraint, .not_nominal, env, failure_expr, failure_expr);
         return null;
@@ -52121,7 +52169,7 @@ fn relateDerivedEncoderShape(
     region: Region,
     owner_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!?DerivedCodecShape {
-    const resolved_constraint = self.types.resolveVar(constraint.fn_var);
+    const resolved_constraint = self.types.resolveThroughAliases(constraint.fn_var);
     const resolved_func = resolved_constraint.desc.content.unwrapFunc() orelse {
         try self.reportConstraintError(dispatcher_var, constraint, .not_nominal, env, owner_expr);
         return null;

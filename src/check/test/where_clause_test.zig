@@ -211,6 +211,59 @@ test "where clause - detached receiver cannot introduce itself" {
     );
 }
 
+test "where clause - non-function requirement is reported at its where clause" {
+    // `U8.highest` is an associated value, so the call satisfies nothing a
+    // method could; the requirement itself is the error.
+    const source =
+        \\f : a -> Str where [a.highest : a, a.to_str : a -> Str]
+        \\f = |n| n.to_str()
+        \\
+        \\main = f(12.U8)
+    ;
+    var test_env = try TestEnv.init("NonFunctionWhereRequirement", source);
+    defer test_env.deinit();
+
+    // Columns 21-34 span `a.highest : a`.
+    try test_env.assertOneTypeErrorHighlightsWithin("Where Requirement Not A Function", .{
+        .line = 1,
+        .start_column = 21,
+        .end_column = 34,
+    });
+}
+
+test "where clause - non-function requirement in a where alias is reported" {
+    const source =
+        \\a.HasHighest : where [a.highest : a]
+        \\
+        \\f : a -> Str where [a.HasHighest, a.to_str : a -> Str]
+        \\f = |n| n.to_str()
+    ;
+    var test_env = try TestEnv.init("NonFunctionWhereAliasRequirement", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Where Requirement Not A Function");
+}
+
+test "where clause - zero-argument and inferred requirements are functions" {
+    const source =
+        \\make : {} -> thing where [thing.default : () -> thing]
+        \\make = |_| {
+        \\    Thing : thing
+        \\
+        \\    Thing.default()
+        \\}
+        \\
+        \\show : a -> Str where [a.to_str : _]
+        \\show = |n| n.to_str()
+        \\
+        \\main = show(12.U8)
+    ;
+    var test_env = try TestEnv.init("FunctionWhereRequirements", source);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
 test "where clause - multiple constraints on same variable" {
     const source_a =
         \\A := [D(Str, U64)].{
@@ -708,6 +761,46 @@ test "where clause - function type aliases retain their meaning" {
     try test_env.assertDefType("helper", "a -> Str where [a.render : Render(a)]");
 }
 
+test "where clause - aliased method signatures are satisfied at call sites" {
+    const source =
+        \\Render(a) : a -> Str
+        \\
+        \\Thing := [T(Str)].{
+        \\    render : Thing -> Str
+        \\    render = |T(s)| s
+        \\}
+        \\
+        \\helper : a -> Str where [a.render : Render(a)]
+        \\helper = |value| value.render()
+        \\
+        \\main = helper(Thing.T("ok"))
+    ;
+    var test_env = try TestEnv.init("AliasedMethodCall", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("helper", "a -> Str where [a.render : Render(a)]");
+}
+
+test "where clause - aliased and plain method signatures forward to each other" {
+    const source =
+        \\Render(a) : a -> Str
+        \\
+        \\aliased : a -> Str where [a.to_str : Render(a)]
+        \\aliased = |value| plain(value)
+        \\
+        \\plain : a -> Str where [a.to_str : a -> Str]
+        \\plain = |value| nested(value)
+        \\
+        \\nested : a -> Str where [a.to_str : Render(a)]
+        \\nested = |value| value.to_str()
+        \\
+        \\main = aliased(1.U8)
+    ;
+    var test_env = try TestEnv.init("AliasedMethodForwarding", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
 test "where clause - whole method hole accepts a nullary effectful implementation" {
     const source =
         \\Nom := [Nom].{
@@ -825,7 +918,8 @@ test "where clause - a bare result type is not an implicit nullary function" {
     ;
     var test_env = try TestEnv.init("BareResultMethod", source);
     defer test_env.deinit();
-    try test_env.assertFirstTypeError("Type Mismatch");
+    try test_env.assertHasTypeError("Where Requirement Not A Function");
+    try test_env.assertHasTypeError("Type Mismatch");
 }
 
 test "where clause - a bare type variable method signature is not a callable" {
@@ -835,8 +929,9 @@ test "where clause - a bare type variable method signature is not a callable" {
     // (`types/instantiate.zig:733-740`), so per-use instantiation of such a
     // signature copies nothing; `Check.recordWhereMethodUse` used to panic
     // with "where-method use instantiation produced no callable copy" on the
-    // empty map. The body dispatch must get an ordinary type error instead,
-    // like the bare `Str` signature in the test above.
+    // empty map. The requirement is reported where it is declared, and the
+    // body dispatch gets an ordinary type error, like the bare `Str`
+    // signature in the test above.
     const source =
         \\Probe := {}
         \\
@@ -845,7 +940,8 @@ test "where clause - a bare type variable method signature is not a callable" {
     ;
     var test_env = try TestEnv.init("BareTypeVarMethod", source);
     defer test_env.deinit();
-    try test_env.assertFirstTypeError("Type Mismatch");
+    try test_env.assertHasTypeError("Where Requirement Not A Function");
+    try test_env.assertHasTypeError("Type Mismatch");
 }
 
 test "where clause - partial method result hole preserves explicit purity" {
