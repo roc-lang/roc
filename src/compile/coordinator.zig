@@ -77,7 +77,6 @@ const CompactWriter = collections.CompactWriter;
 const Report = reporting.Report;
 const AST = parse.AST;
 const BuiltinModules = eval.BuiltinModules;
-const CheckedModules = check.TypedCIR.Modules;
 
 const WorkerTask = messages.WorkerTask;
 const WorkerResult = messages.WorkerResult;
@@ -5120,7 +5119,7 @@ pub const Coordinator = struct {
 
     /// Index of `env` in the type-check environment list, appending it if this
     /// is the first import that names it. Registering by environment keeps the
-    /// list one entry per source module, which is what `CheckedModules` keys on.
+    /// list one entry per source module, which is what `check.TypedCIR.Modules` keys on.
     fn resolveImportedEnvIndex(
         allocator: Allocator,
         imported_envs: *std.ArrayList(*ModuleEnv),
@@ -8153,7 +8152,7 @@ const TestTaskOrder = enum { oldest_first, newest_first };
 /// Drive the coordinator on this thread, always running the queued task that
 /// `order` selects. Two orders give two different module discovery and
 /// completion orders for the same program.
-fn runCoordinatorInTaskOrder(coord: *Coordinator, order: TestTaskOrder) !void {
+fn runCoordinatorInTaskOrder(coord: *Coordinator, order: TestTaskOrder) (Allocator.Error || CoordinatorError || error{ TestUnexpectedResult, TestExpectedEqual })!void {
     var held = std.ArrayList(WorkerTask).empty;
     defer held.deinit(std.testing.allocator);
     while (!coord.isComplete()) {
@@ -8176,7 +8175,7 @@ fn runCoordinatorInTaskOrder(coord: *Coordinator, order: TestTaskOrder) !void {
 /// The app's method lookup scope, as copies of the names of the modules whose
 /// artifacts it lists, in search order. A key no package module owns is the
 /// builtin module's.
-fn appMethodLookupScopeNames(coord: *Coordinator, allocator: Allocator) ![]const []const u8 {
+fn appMethodLookupScopeNames(coord: *Coordinator, allocator: Allocator) Allocator.Error![]const []const u8 {
     const scope = coord.appRootCheckedArtifact().method_lookup_scope.module_ids;
     const names = try allocator.alloc([]const u8, scope.len);
     for (scope, names) |key, *name| {

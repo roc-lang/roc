@@ -281,7 +281,31 @@ test "powerOfTwo matches repeated doubling" {
     }
 }
 
-test "integer decimal text matches std formatting across chunk boundaries" {
+/// `value` in decimal, written into the end of `buf`.
+fn decimalText(buf: []u8, value: u128) []const u8 {
+    var end = buf.len;
+    var rest = value;
+    while (true) {
+        end -= 1;
+        buf[end] = @intCast('0' + rest % 10);
+        rest /= 10;
+        if (rest == 0) break;
+    }
+    return buf[end..];
+}
+
+/// `value` in decimal with a leading `-` when negative, written into the end
+/// of `buf`.
+fn signedDecimalText(buf: []u8, value: i128) []const u8 {
+    if (value >= 0) return decimalText(buf, @intCast(value));
+    const magnitude = @as(u128, @intCast(-(value + 1))) + 1;
+    const digits = decimalText(buf, magnitude);
+    const start = buf.len - digits.len - 1;
+    buf[start] = '-';
+    return buf[start..];
+}
+
+test "integer decimal text matches digit-by-digit formatting across chunk boundaries" {
     const samples = [_]u128{
         0,                                                   1,                         9,                                   10,                         12345,
         std.math.maxInt(u64) - 1,                            std.math.maxInt(u64),      @as(u128, std.math.maxInt(u64)) + 1, 10_000_000_000_000_000_000, 10_000_000_000_000_000_000 * 10,
@@ -291,12 +315,12 @@ test "integer decimal text matches std formatting across chunk boundaries" {
     var expected: [40]u8 = undefined;
     for (samples) |value| {
         try std.testing.expectEqualStrings(
-            try std.fmt.bufPrint(&expected, "{d}", .{value}),
+            decimalText(&expected, value),
             i128h.u128_to_str(&buf, value).str,
         );
         const signed: i128 = @bitCast(value);
         try std.testing.expectEqualStrings(
-            try std.fmt.bufPrint(&expected, "{d}", .{signed}),
+            signedDecimalText(&expected, signed),
             i128h.i128_to_str(&buf, signed).str,
         );
     }

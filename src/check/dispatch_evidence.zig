@@ -28,7 +28,6 @@
 
 const std = @import("std");
 const collections = @import("collections");
-const Ident = @import("base").Ident;
 const types_mod = @import("types");
 
 const Allocator = std.mem.Allocator;

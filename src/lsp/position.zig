@@ -2,7 +2,6 @@
 
 const std = @import("std");
 const document_symbol_handler = @import("handlers/document_symbol.zig");
-const base = @import("base");
 const can = @import("can");
 const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;

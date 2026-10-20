@@ -9467,7 +9467,7 @@ rewrites the declaration itself, so a later use of the same alias sees the
 closed row. Rigid extensions are never closed: a polymorphic open row may
 hold tags no derivation was checked for, so it stays rejected.
 
-The selected payload is a fact about the equivalence class of the relation's
+The selected payload belongs to the equivalence class of the relation's
 callable, which the type store keeps in a table keyed by class
 (`Store.derived_map_plans`): a merge keeps it, a member detached from the class
 keeps it, and a copy of a relation's callable, by instantiation or by

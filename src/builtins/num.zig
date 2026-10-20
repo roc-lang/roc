@@ -1288,7 +1288,27 @@ test "numeric prefix parse properties over generated token compositions" {
     }
 }
 
-test "radix integer tokens convert like std.fmt.parseInt" {
+/// The exact value a signed radix integer token denotes, wide enough for
+/// forty hexadecimal digits, or null when `text` is not such a token.
+fn radixTokenValue(text: []const u8) ?i256 {
+    var rest = text;
+    var negative = false;
+    if (rest.len != 0 and (rest[0] == '-' or rest[0] == '+')) {
+        negative = rest[0] == '-';
+        rest = rest[1..];
+    }
+    if (rest.len < 3 or rest[0] != '0') return null;
+    const radix: u8 = if (rest[1] == 'b') 2 else if (rest[1] == 'o') 8 else if (rest[1] == 'x') 16 else return null;
+    var magnitude: i256 = 0;
+    for (rest[2..]) |c| {
+        const digit: u8 = if (c >= '0' and c <= '9') c - '0' else if (c >= 'a' and c <= 'f') c - 'a' + 10 else return null;
+        if (digit >= radix) return null;
+        magnitude = magnitude * radix + digit;
+    }
+    return if (negative) -magnitude else magnitude;
+}
+
+test "radix integer tokens convert to their exact value when it fits" {
     var prng = std.Random.DefaultPrng.init(0x0bad_5eed_0123);
     const random = prng.random();
     const prefixes = [_][]const u8{ "0b", "0o", "0x" };
@@ -1320,7 +1340,8 @@ test "radix integer tokens convert like std.fmt.parseInt" {
         }
         const text = buf[0..len];
         inline for (.{ u8, i8, u16, i32, u64, i64, u128, i128 }) |T| {
-            const expected: ?T = std.fmt.parseInt(T, text, 0) catch null;
+            const value = radixTokenValue(text).?;
+            const expected: ?T = if (value >= std.math.minInt(T) and value <= std.math.maxInt(T)) @as(T, @intCast(value)) else null;
             try std.testing.expectEqual(expected, parseIntSlice(T, text));
             const prefix = parseIntPrefix(T, text);
             try std.testing.expectEqual(@as(u64, len), prefix.consumed);

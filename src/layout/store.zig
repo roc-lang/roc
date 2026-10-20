@@ -1918,7 +1918,8 @@ pub const Store = struct {
             }
         }
 
-        const has_cycle = std.mem.indexOfScalar(bool, reaches_cycle, true) != null;
+        var has_cycle = false;
+        for (reaches_cycle) |reaches| has_cycle = has_cycle or reaches;
         if (has_cycle) {
             // Size cycles are cycles, so only a graph with a cycle can have them.
             @memset(visit_index, -1);

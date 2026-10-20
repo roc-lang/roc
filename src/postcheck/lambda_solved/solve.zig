@@ -3473,7 +3473,7 @@ const Solver = struct {
     ) Allocator.Error!?[]const Index.Entry {
         if (span.count() <= row_scan_limit) return null;
         const gop = try indexes.getOrPut(self.allocator, span.start);
-        // A fresh index owns no run, so its rebuild never reuses the pool's
+        // A fresh index owns no run, so filling it never reuses the pool's
         // last run.
         if (!gop.found_existing) gop.value_ptr.* = .{ .len = 0, .entries_start = std.math.maxInt(u32), .entries_len = 0 };
         if (gop.value_ptr.len != span.len) try gop.value_ptr.rebuild(self.allocator, pool, &self.program.types, span);

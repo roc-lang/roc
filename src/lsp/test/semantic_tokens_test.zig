@@ -947,14 +947,14 @@ fn extractOnSmallStack(source: []const u8, result: *Allocator.Error![]SemanticTo
 
 /// Extract the tokens of `source` on a thread whose stack is far smaller than
 /// `nesting_depth` recursive frames.
-fn extractTokensOnSmallStack(source: []const u8) ![]SemanticToken {
+fn extractTokensOnSmallStack(source: []const u8) (std.Thread.SpawnError || Allocator.Error)![]SemanticToken {
     var result: Allocator.Error![]SemanticToken = error.OutOfMemory;
     const thread = try std.Thread.spawn(.{ .stack_size = small_stack_bytes }, extractOnSmallStack, .{ source, &result });
     thread.join();
     return result;
 }
 
-fn expectTokenAt(tokens: []const SemanticToken, start_char: u32, expected: SemanticType) !void {
+fn expectTokenAt(tokens: []const SemanticToken, start_char: u32, expected: SemanticType) error{ TokenNotFound, TestExpectedEqual }!void {
     for (tokens) |token| {
         if (token.line == 0 and token.start_char == start_char) {
             try std.testing.expectEqual(expected, @as(SemanticType, @fromBackingInt(@intCast(token.token_type))));
