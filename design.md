@@ -729,18 +729,21 @@ Direct LIR looks it up. Code whose identity names it never holds a copy of
 site-identified code: an entry whose body inlined one
 (`LIR.InlineScope.copies_site_code`) is not offered by identity, and its
 calls to one are extracted as symbolic references by identity rather than as
-references into the pack. A program that takes an entry lowers and retains
-every lambda-set member the entry's signature mentions
-(`Result.retained_procs`), and a splice never follows a symbolic reference
-to a procedure the program compiles itself, so the entry calls the program's
-current code of each closure it receives. Because such code was compiled
+references into the pack. A program that takes an entry lowers every
+lambda-set member the entry's signature mentions and records each as a
+served callee of that entry (`Result.served_callees`). The entry's procedure
+is body-less, so these are its outgoing edges: every reachability walk,
+runtime compaction and compile-time code demand alike, reaches a served
+callee exactly when it reaches the entry. A splice never follows a symbolic
+reference to a procedure the program compiles itself, so the entry calls the
+program's current code of each closure it receives. Because such code was compiled
 against an earlier body of the procedures it calls by identity, ARC pins
 every procedure with a code key to the signature its types determine (all
 parameters and the return owned, no return uniqueness). An entry whose code reaches the
 app from outside it (`Lifted.Program.appCalleesReachedBy`) is offered under
 its identity only, never under a reservation-time key, and a program that
-takes it lowers and retains every app function it reaches, so the entry
-calls that code's current version too.
+takes it lowers every app function it reaches as a served callee of the
+entry, so the entry calls that code's current version too.
 
 A package function that dispatches to a method of an app type records that
 method in its evidence. The evidence digest it is keyed by
@@ -3836,7 +3839,11 @@ The annotation root's type variable is also the static-dispatch constraint's
 callable variable. Checking declares that identity before completing owned
 constraints, then generates its type through ordinary annotation generation and
 unification. It allocates no second callable placeholder or bridging relation.
-Inference holes retain the existing body-checking and generalization rules, and
+A callable written through a function type alias is therefore an alias view
+whose backing carries the function structure, so every reader of a
+requirement's function structure resolves the callable through its aliases.
+A written type that is not a function through its aliases, or a bare type
+variable, is reported at its where clause. Inference holes retain the existing body-checking and generalization rules, and
 the named method's static-dispatch constraint is preserved even when its type
 is incomplete.
 
