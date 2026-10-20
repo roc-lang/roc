@@ -332,3 +332,135 @@ test "derived map!: zero-sized sibling payloads, direct and generic (lss)" {
 test "derived map!: zero-sized sibling payloads, direct and generic (boxy)" {
     try expectRunsWith(.boxy, effectful_program);
 }
+
+const replayed_zero_sized_siblings_program =
+    \\status : U64 -> [Ready({}, U64), Waiting({}), Done]
+    \\status = |n| if n == 0 Done else if n == 1 Waiting({}) else Ready({}, n)
+    \\
+    \\double = |w| w.map(|n| n * 2)
+    \\
+    \\main! = |_args| {
+    \\    out = match (double(status(21)), double(status(1)), double(status(0)), double(status(4))) {
+    \\        (Ready(_, a), Waiting(_), Done, Ready(_, b)) => a + b
+    \\        _ => 0
+    \\    }
+    \\    if out == 50 { Ok({}) } else { Err(Exit(1)) }
+    \\}
+    \\
+;
+
+test "derived map: replayed uses of a generic function over zero-sized sibling payloads (lss)" {
+    try expectRunsWith(.lss, replayed_zero_sized_siblings_program);
+}
+
+test "derived map: replayed uses of a generic function over zero-sized sibling payloads (boxy)" {
+    try expectRunsWith(.boxy, replayed_zero_sized_siblings_program);
+}
+
+const replayed_several_payload_tags_program =
+    \\pick : U64 -> [Empty({}), Full(U64), Pair({}, {})]
+    \\pick = |n| if n == 0 Empty({}) else if n == 1 Pair({}, {}) else Full(n)
+    \\
+    \\stringify = |w| w.map(U64.to_str)
+    \\
+    \\main! = |_args| {
+    \\    out = match (stringify(pick(42)), stringify(pick(0)), stringify(pick(1)), stringify(pick(7))) {
+    \\        (Full(s), Empty(_), Pair(_, _), Full(t)) => Str.concat(s, t)
+    \\        _ => "wrong"
+    \\    }
+    \\    if out == "427" { Ok({}) } else { Err(Exit(1)) }
+    \\}
+    \\
+;
+
+test "derived map: replayed uses over several tags with zero-sized payloads (lss)" {
+    try expectRunsWith(.lss, replayed_several_payload_tags_program);
+}
+
+test "derived map: replayed uses over several tags with zero-sized payloads (boxy)" {
+    try expectRunsWith(.boxy, replayed_several_payload_tags_program);
+}
+
+const replayed_with_local_method_program =
+    \\pick : U64 -> [Empty({}), Full(U64), Pair({}, {})]
+    \\pick = |n| if n == 0 Empty({}) else if n == 1 Pair({}, {}) else Full(n)
+    \\
+    \\stringify = |w| w.map(U64.to_str)
+    \\
+    \\count = |n| {
+    \\    Counter := { count : U64 }.{
+    \\        value = |counter| counter.count + 1
+    \\    }
+    \\    Counter.{ count: n }.value()
+    \\}
+    \\
+    \\main! = |_args| {
+    \\    out = match (stringify(pick(42)), stringify(pick(0)), stringify(pick(1)), stringify(pick(count(6)))) {
+    \\        (Full(s), Empty(_), Pair(_, _), Full(t)) => Str.concat(s, t)
+    \\        _ => "wrong"
+    \\    }
+    \\    if out == "427" { Ok({}) } else { Err(Exit(1)) }
+    \\}
+    \\
+;
+
+test "derived map: replayed uses in a module declaring a local method (lss)" {
+    try expectRunsWith(.lss, replayed_with_local_method_program);
+}
+
+test "derived map: replayed uses in a module declaring a local method (boxy)" {
+    try expectRunsWith(.boxy, replayed_with_local_method_program);
+}
+
+const replayed_nominal_program =
+    \\Maybe(a) := [Just(a), Nothing].{
+    \\    map : _
+    \\}
+    \\
+    \\bump = |m| m.map(|n| n + 1)
+    \\
+    \\main! = |_args| {
+    \\    just : Maybe(U64)
+    \\    just = Just(41)
+    \\    nothing : Maybe(U64)
+    \\    nothing = Nothing
+    \\    out = match (bump(just), bump(nothing), bump(bump(just))) {
+    \\        (Just(a), Nothing, Just(b)) => a + b
+    \\        _ => 0
+    \\    }
+    \\    if out == 85 { Ok({}) } else { Err(Exit(1)) }
+    \\}
+    \\
+;
+
+test "derived map: replayed uses over a nominal union (lss)" {
+    try expectRunsWith(.lss, replayed_nominal_program);
+}
+
+test "derived map: replayed uses over a nominal union (boxy)" {
+    try expectRunsWith(.boxy, replayed_nominal_program);
+}
+
+const replayed_effectful_program =
+    \\status : U64 -> [Ready({}, U64), Waiting({}), Done]
+    \\status = |n| if n == 0 Done else if n == 1 Waiting({}) else Ready({}, n)
+    \\
+    \\double! = |w| w.map!(|n| n * 2)
+    \\
+    \\main! = |_args| {
+    \\    out = match (double!(status(21)), double!(status(1)), double!(status(0)), double!(status(4))) {
+    \\        (Ready(_, a), Waiting(_), Done, Ready(_, b)) => a + b
+    \\        _ => 0
+    \\    }
+    \\    if out == 50 { Ok({}) } else { Err(Exit(1)) }
+    \\}
+    \\
+;
+
+test "derived map!: replayed uses of an effectful generic function (lss)" {
+    try expectRunsWith(.lss, replayed_effectful_program);
+}
+
+test "derived map!: replayed uses of an effectful generic function (boxy)" {
+    try expectRunsWith(.boxy, replayed_effectful_program);
+}

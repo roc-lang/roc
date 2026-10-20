@@ -45447,7 +45447,8 @@ fn recordUseReplaySource(self: *Self, use_idx: u32) Allocator.Error!void {
 /// Freeze a copy of a use replay source's instance—its copy of the scheme
 /// root, every variable its substitution names, and every requirement its
 /// relations derived—and restate over that copy its substitution, in
-/// `scheme_use_pairs`, and the dispatch-target records its relations wrote.
+/// `scheme_use_pairs`, the dispatch-target records its relations wrote, and
+/// the payloads its derived `map`/`map!` relations selected.
 fn freezeUseReplaySource(self: *Self, source: *UseReplaySource, env: *Env) Allocator.Error!void {
     source.freeze = .unusable;
     const use = self.use_instances.items[source.use];
@@ -45535,6 +45536,7 @@ fn freezeUseReplaySource(self: *Self, source: *UseReplaySource, env: *Env) Alloc
         }
         try self.cir.recordSchemeUse(written.node_idx, .dispatch_target, @backingInt(edge_var), @fromBackingInt(@intCast(written.scheme_root)), self.scratch_replay_pairs.items);
     }
+    try self.restateFrozenDerivedMapPlans();
     const tree_start: u32 = @intCast(self.use_replay_trees.items.len);
     if (std.debug.runtime_safety) {
         try self.appendReplayTree(frozen_root, &self.use_replay_trees);
@@ -45553,6 +45555,26 @@ fn freezeUseReplaySource(self: *Self, source: *UseReplaySource, env: *Env) Alloc
         .tree_start = tree_start,
         .tree_len = @as(u32, @intCast(self.use_replay_trees.items.len)) - tree_start,
     };
+}
+
+/// Give the frozen copy of each derived `map`/`map!` relation's callable,
+/// among the classes `freezeTypeGraphRoots` just froze, a copy of that
+/// relation's requirement, so the copy selects the payload the relation
+/// selected: a replayed use's substitution names the frozen callable, and
+/// checked evidence reads the payload by the callable's class
+/// (`recordDerivedMapPlan`).
+fn restateFrozenDerivedMapPlans(self: *Self) Allocator.Error!void {
+    // Restated requirements are appended past the ones read here.
+    const count: usize = @intCast(self.types.static_dispatch_constraints.len());
+    var index: usize = 0;
+    while (index < count) : (index += 1) {
+        const constraint = self.types.static_dispatch_constraints.items.items[index];
+        if (constraint.derived_map_plan == null) continue;
+        const frozen = self.scratch_freeze_map.get(self.types.resolveVar(constraint.fn_var).var_) orelse continue;
+        var restated = constraint;
+        restated.fn_var = frozen;
+        _ = try self.types.appendStaticDispatchConstraints(&.{restated});
+    }
 }
 
 /// The frozen variable standing for `var_` in a use replay source's frozen

@@ -11194,8 +11194,9 @@ a copy of the source's instance, as concrete dispatch replay does: the root's
 parts, every variable the source's scheme-use substitution names, and every
 requirement its relations derived. Functions whose effect is still open may
 be frozen there, because those classes are reached only through relations no
-later relation revisits. The source's substitution and the dispatch-target
-records its relations wrote are restated over the copy. The replayed use
+later relation revisits. The source's substitution, the dispatch-target
+records its relations wrote, and the payload each of its derived `map`/`map!`
+relations selected are restated over the copy. The replayed use
 then relates its root's parts, and every variable of its own substitution
 that carries a relation, to the frozen node at the same position. Its own
 relations are skipped, and its scheme-use record names the source's restated
