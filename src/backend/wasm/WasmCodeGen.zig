@@ -5941,7 +5941,7 @@ fn generateBody(self: *const Self, unit: BodyUnit, worker: tasks.Worker) Allocat
     const local = switch (unit) {
         .proc => |proc_id| local: {
             try body_worker.compileProcSpecBody(proc_id, self.store.getProcSpec(proc_id));
-            break :local self.localFunctionIndexFromGlobal(self.registered_procs.get(@backingInt(proc_id)) orelse unreachable);
+            break :local self.localFunctionIndexFromGlobal(self.registered_procs.get(@backingInt(proc_id)) orelse unreachable); // pass 1 of compileAllProcSpecs registered every proc that pass 2 compiles
         },
         .rc_helper => |cache_key| local: {
             const helper = decodeRcHelperCacheKey(cache_key);
