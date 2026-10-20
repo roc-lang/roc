@@ -1682,15 +1682,16 @@ fn lowerCheckedRootWithViews(
     const shm_allocator = shm.allocator();
     const image_header = try shm_allocator.create(LirImage.Header);
 
-    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
-        allocator,
-        .{
-            .root = check.CheckedArtifact.loweringView(root_module),
-            .imports = import_views,
-        },
-        .{ .requests = root_module.root_requests.runtime_requests },
-        lowerToLirTarget(target_usize, options),
-    );
+    const modules: lir.CheckedPipeline.CheckedModuleSet = .{
+        .root = check.CheckedArtifact.loweringView(root_module),
+        .imports = import_views,
+    };
+    const roots: lir.CheckedPipeline.RootRequestSet = .{ .requests = root_module.root_requests.runtime_requests };
+    const target = lowerToLirTarget(target_usize, options);
+    var lowered = switch (target.specialization_strategy) {
+        .lss => try lir.CheckedPipeline.lowerCheckedModulesToLir(allocator, modules, roots, target),
+        .boxy => try CompileTimeFinalization.lowerBoxyRuntime(allocator, modules, roots, target),
+    };
     defer lowered.deinit();
 
     const image_data = try @import("static_data").buildStaticDataForWidth(allocator, .{
@@ -3018,7 +3019,24 @@ pub fn llvmEvalBoolRootModules(
 }
 
 fn legacyInspectedRun(allocator: Allocator, comptime backend_kind: InspectedRun.Backend, lowered: *const LoweredProgram) Error!EvalRunResult {
-    const result = try InspectedRun.run(allocator, backend_kind, .{
+    const result = try inspectedRunResult(allocator, backend_kind, lowered);
+    result.deinitEvents(allocator);
+    return switch (result.outcome) {
+        .returned => |output| .{
+            .output = output,
+            .allocation_count = result.allocation_count,
+        },
+        .crashed => |message| {
+            allocator.free(message);
+            return error.Crash;
+        },
+    };
+}
+
+/// Execute an inspect-wrapped program, returning its semantic outcome and the
+/// host events it produced in order.
+pub fn inspectedRunResult(allocator: Allocator, comptime backend_kind: InspectedRun.Backend, lowered: *const LoweredProgram) Error!InspectedRun.Result {
+    return try InspectedRun.run(allocator, backend_kind, .{
         .store = &lowered.view.store,
         .layouts = &lowered.view.layouts,
         .boxy_tables = boxy_runtime.BoxyTables.fromImageView(&lowered.view),
@@ -3031,17 +3049,6 @@ fn legacyInspectedRun(allocator: Allocator, comptime backend_kind: InspectedRun.
         .interpreter => .reject,
         .dev, .wasm, .llvm => {},
     });
-    result.deinitEvents(allocator);
-    return switch (result.outcome) {
-        .returned => |output| .{
-            .output = output,
-            .allocation_count = result.allocation_count,
-        },
-        .crashed => |message| {
-            allocator.free(message);
-            return error.Crash;
-        },
-    };
 }
 
 /// Evaluate a lowered program via the LIR interpreter and return the output string.
