@@ -7017,7 +7017,11 @@ That interned identity is local to one checked module, so each class also
 carries a content digest that is its identity across modules. The digest is a
 SHA-256 of a fixed-order depth-first encoding of the class's first member's proof
 graph. Contracts and evidence nodes are numbered by first visit, so shared and
-cyclic references encode as back-references. Each type encodes as its type
+cyclic references encode as back-references. A nested contract outside the
+encoded contract's strongly connected component of nested-contract references
+encodes as its own digest, so digests are computed one component at a time,
+each after every component it reaches, and a chain of nested contracts encodes
+each contract once rather than once per contract above it. Each type encodes as its type
 key followed by the joint first-visit numbers of its variables in key order, so
 cross-root sharing is part of the digest. Methods encode by name. A procedure
 target encodes by its owning checked module's refs, a local procedure target by

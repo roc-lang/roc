@@ -351,7 +351,8 @@ pub fn describe(
 
 /// Append the identity nodes reachable from `root` in depth-first
 /// first-encounter order over description children, entering each
-/// identity's constraints.
+/// identity's constraints. A node the adapter knows reaches no identity
+/// (`identityFree`) is not entered, since nothing below it is appended.
 pub fn appendIdentityOrder(
     comptime Adapter: type,
     adapter: *Adapter,
@@ -371,7 +372,7 @@ pub fn appendIdentityOrder(
     while (true) {
         if (next) |node| {
             next = null;
-            if (!(try visited.getOrPut(gpa, node)).found_existing) {
+            if (!adapter.identityFree(node) and !(try visited.getOrPut(gpa, node)).found_existing) {
                 const desc = try describe(Adapter, adapter, gpa, &store, node, false);
                 if (desc.kind == .identity) try out.append(gpa, node);
                 if (desc.kind != .leaf) try frames.append(gpa, .{ .desc = desc, .item = 0 });

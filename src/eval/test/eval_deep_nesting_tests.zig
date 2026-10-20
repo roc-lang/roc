@@ -25,9 +25,9 @@ const shallow_stack_bytes = 2 * 1024 * 1024;
 /// state, so its ownership facts cost the square of its depth.
 const loop_depth = 300;
 
-/// Each level of a custom-parser chain asks for the parser of a record holding
-/// the next level, and keying each level's checked types walks every level
-/// inside it, so the chain's compilation costs the square of its depth.
+/// Each level of a custom-parser chain compiles a complete derived record
+/// parser. Compilation is linear in the depth, but that per-level cost is far
+/// higher than any other case's, so the chain nests less deeply.
 const codec_chain_depth = 100;
 
 fn repeat(comptime text: []const u8, comptime count: usize) []const u8 {
