@@ -2854,10 +2854,6 @@ const RequestNodePair = struct {
     request: NodeId,
 };
 
-/// Type-argument index of `Builtin.Try`'s error row, the cell
-/// `closedResultRowOrNull` names as the closed row.
-const try_error_type_arg_index: usize = 1;
-
 /// Whether a node is directly function-shaped.
 fn isFunctionNode(graph: *InstGraph, node: NodeId) Allocator.Error!bool {
     return switch ((try graph.content(node))) {
@@ -35408,13 +35404,15 @@ const BodyContext = struct {
     /// than at its own: every value it ends in is a direct call whose callee
     /// takes the row (`directCallWidensClosedResult`), a construction, or a
     /// divergence, reached through blocks and branches. Anything else—a read
-    /// of a value, a call through a function value—keeps its own row, which
-    /// every use of that value shares, and is widened into the coercion's.
+    /// of a value, a restored compile-time constant, a call through a
+    /// function value—keeps its own row, which every use of that value
+    /// shares, and is widened into the coercion's.
     fn coercedValueTakesRow(self: *BodyContext, value: checked.CheckedExprId, expected_node: NodeId) Allocator.Error!bool {
         var pending: std.ArrayListUnmanaged(checked.CheckedExprId) = .empty;
         defer pending.deinit(self.allocator);
         try pending.append(self.allocator, value);
         while (pending.pop()) |expr_id| {
+            if (self.restoredHoistedConstEntry(expr_id) != null) return false;
             const expr = self.view.bodies.expr(expr_id);
             switch (expr.data) {
                 .call => |call| if (!try self.directCallWidensClosedResult(expr_id, call, expected_node)) return false,
