@@ -23,6 +23,7 @@ const initialize_handler_mod = @import("handlers/initialize.zig");
 const shutdown_handler_mod = @import("handlers/shutdown.zig");
 const did_open_handler_mod = @import("handlers/did_open.zig");
 const did_change_handler_mod = @import("handlers/did_change.zig");
+const did_close_handler_mod = @import("handlers/did_close.zig");
 const semantic_tokens_handler_mod = @import("handlers/semantic_tokens.zig");
 const hover_handler_mod = @import("handlers/hover.zig");
 const definition_handler_mod = @import("handlers/definition.zig");
@@ -111,9 +112,11 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
         });
         const DidOpenHandler = did_open_handler_mod.handler(Self);
         const DidChangeHandler = did_change_handler_mod.handler(Self);
+        const DidCloseHandler = did_close_handler_mod.handler(Self);
         const notification_handlers = std.StaticStringMap(NotificationPtr).initComptime(.{
             .{ "textDocument/didOpen", &DidOpenHandler.call },
             .{ "textDocument/didChange", &DidChangeHandler.call },
+            .{ "textDocument/didClose", &DidCloseHandler.call },
         });
 
         allocator: std.mem.Allocator,
