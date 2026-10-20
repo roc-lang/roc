@@ -589,7 +589,20 @@ const dev_diagnostics_cases = [_]CustomCase{
     .check_compile_time_pack,
     .optimized_multi_module_compiles_once,
     .glue_plugin_cache_hit,
+    .proc_identity_object_cache,
+    .tier2_object_cache,
+    .edited_lambda_object_cache,
+    .edited_method_object_cache,
+    .edited_nominal_object_cache,
+    .linked_object_pack,
+    .run_object_cache,
+    .spliced_procedure_debug_lines,
+    .boxed_closure_object_cache,
 };
+
+/// Cases that check a compiler without developer diagnostics ignores their
+/// environment variables run only against such a compiler.
+const without_dev_diagnostics_skip: Skip = if (build_options.dev_diagnostics) .{ .always = "requires a compiler without developer diagnostics (a non-Debug build without -Ddev-diagnostics)" } else .never;
 
 fn devDiagnosticsSkip(custom: CustomCase) ?[]const u8 {
     if (comptime build_options.dev_diagnostics) return null;
@@ -3084,6 +3097,8 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 12241: writing to a list read from a top-level constant allocates the same in cold, warm, and uncached builds", .timeout_ms = 600_000, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .custom = .issue_12241_cached_constant_insert } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12294: reading a top-level list of boxed capturing closures allocates the same in cold, warm, and uncached builds", .timeout_ms = 600_000, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .custom = .issue_12294_cached_capturing_closures } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11627: cached procedure keeps its own constant after the app is edited", .timeout_ms = 600_000, .body = .{ .custom = .issue_11627_static_data_names_cache } },
+    // repro for https://github.com/roc-lang/roc/issues/12400: a compiler without developer diagnostics must not print pack statistics for ROC_PACK_STATS.
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12400: roc run --opt=dev ignores ROC_PACK_STATS without developer diagnostics", .backend = .dev, .skip = without_dev_diagnostics_skip, .body = .{ .command = .{ .args = &.{"--opt=dev"}, .roc_file = "test/fx/hello_world.roc", .env = &.{.{ .name = "ROC_PACK_STATS", .value = "1" }}, .stdout_exact = "Hello, world!\n", .not_contains = &.{.{ .stream = .stderr, .text = "pack hits:" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev serves closed specializations from a previous build's packs", .timeout_ms = 600_000, .body = .{ .custom = .native_build_pack_hits } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build early CTFE cache skips Monotype bodies on an app-only rebuild", .timeout_ms = 600_000, .body = .{ .custom = .early_ctfe_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check reuses the compile-time pack an earlier check published", .timeout_ms = 600_000, .body = .{ .custom = .check_compile_time_pack } },
@@ -4058,7 +4073,8 @@ fn buildCaseEnv(io: std.Io, allocator: Allocator) CliRunnerError!CaseEnv {
     try env_map.put("ZIG_LOCAL_CACHE_DIR", dirs.zig_local_cache_dir);
     try env_map.put("ROC_INSTALL_DIR", dirs.install_dir);
     // A dev build's detached tier 2 object build would outlive its case;
-    // the case that covers it waits for it.
+    // the case that covers it waits for it. Only a compiler with developer
+    // diagnostics honors this.
     try env_map.put("ROC_BACKGROUND_OBJECTS", "off");
     try util.putIsolatedTempEnv(&env_map, dirs.temp_dir);
 

@@ -3455,6 +3455,22 @@ fn processDocsSnapshot(
         return false;
     };
 
+    // Documentation is generated only for builds without errors, as in `roc docs`.
+    const drained = try build_env.drainReports();
+    defer build_env.freeDrainedReports(drained);
+    var error_count: usize = 0;
+    for (drained) |module| {
+        for (module.reports) |report| {
+            if (!report.severity.isError()) continue;
+            error_count += 1;
+            std.log.err("{s}: {s}", .{ module.abs_path, report.title });
+        }
+    }
+    if (error_count > 0) {
+        std.log.err("Docs snapshot {s} has {d} compile error(s)", .{ output_path, error_count });
+        return false;
+    }
+
     // 2. Get documentable modules and extract docs
     const modules = build_env.getDocumentationModules(allocator) catch |err| {
         std.log.err("Failed to get documentable modules: {}", .{err});
@@ -3481,12 +3497,11 @@ fn processDocsSnapshot(
         defer allocator.free(routing_modules);
         for (routing_modules) |mod| {
             const source_decl = mod.public_type_decl orelse continue;
-            const artifact = mod.semantic.checked_artifact orelse unreachable;
             try public_type_projections.append(allocator, .{
                 .public_name = mod.name,
                 .package_name = build_env.displayNameForPackage(mod.package_name),
-                .source_env = mod.semantic.env,
-                .source_identity = &artifact.key.module_identity_hash,
+                .source_env = mod.checked.env,
+                .source_identity = &mod.checked.checked_artifact.module_identity.stable_hash,
                 .source_decl = source_decl,
                 .public_order = mod.public_order,
             });
@@ -3498,18 +3513,17 @@ fn processDocsSnapshot(
         // Docs show display names (root alias, or "app"/"module" for the
         // root itself), never internal identity keys (URLs, absolute paths).
         const display_pkg_name = build_env.displayNameForPackage(mod.package_name);
-        var mod_docs = docs_mod.extract.extractModuleDocsWithOptions(allocator, mod.semantic.env, display_pkg_name, mod.path, .{
+        var mod_docs = docs_mod.extract.extractModuleDocsWithOptions(allocator, mod.checked.env, display_pkg_name, mod.path, .{
             .exposed_names = mod.docs_exposed_names,
             .public_type = if (mod.public_type_decl) |source_decl| .{
                 .public_name = mod.name,
                 .package_name = display_pkg_name,
-                .source_env = mod.semantic.env,
-                .source_identity = &(mod.semantic.checked_artifact orelse unreachable).key.module_identity_hash,
+                .source_env = mod.checked.env,
+                .source_identity = &mod.checked.checked_artifact.module_identity.stable_hash,
                 .source_decl = source_decl,
                 .public_order = mod.public_order,
             } else null,
             .public_types = public_type_projections.items,
-            .checked_artifact = mod.semantic.checked_artifact,
         }) catch |err| {
             std.log.err("Failed to extract docs from module {s}: {}", .{ mod.name, err });
             continue;
