@@ -43,6 +43,7 @@ const Ident = base.Ident;
 const GuardedList = collections.GuardedList;
 const TypeFieldSpanBorrow = Type.StoreSpanBorrow(Type.Field, "fields");
 const PatternRefutability = can.PatternRefutability;
+const value_rules = @import("value_rules");
 
 /// Whether a dispatch instantiation replays a template's checked relations
 /// or serves an expression. Result-type queries serve expressions: they
@@ -12397,14 +12398,14 @@ const Builder = struct {
     /// The checked `to_inspect` override that inspection calls for `owner`,
     /// or null when inspection renders the owner's default form. Memoized
     /// under the same name-domain rule as `lookupMethodTargetByName`.
-    fn lookupInspectOverride(
+    fn inspectOverrideFor(
         self: *Builder,
         scope: ModuleView,
         owner_names: *const names.NameStore,
         owner: static_dispatch.MethodOwner,
     ) Allocator.Error!?MethodLookup {
         if (owner_names != &self.program.names) {
-            return self.findInspectOverrideFromStore(scope, owner_names, owner);
+            return self.inspectOverrideFromStore(scope, owner_names, owner);
         }
         if (self.activeNameStore() != &self.program.names) {
             Common.invariant("program-domain method owner was looked up under a private name destination");
@@ -12413,49 +12414,59 @@ const Builder = struct {
         const address = ScopedMethodDispatch.init(scope.key, owner, method);
         if (self.scoped_inspect_overrides.get(address)) |resolution| return resolution;
 
-        const resolution = self.findInspectOverrideFromStore(scope, owner_names, owner);
+        const resolution = self.inspectOverrideFromStore(scope, owner_names, owner);
         try self.scoped_inspect_overrides.put(self.allocator, address, resolution);
         return resolution;
     }
 
     /// Selects the view that declares `owner.to_inspect` exactly as method
-    /// dispatch does; that declaration's checked eligibility is the answer.
-    fn findInspectOverrideFromStore(
+    /// dispatch does: the scope, then its method lookup scope.
+    fn inspectOverrideFromStore(
         self: *Builder,
         scope: ModuleView,
         owner_names: *const names.NameStore,
         owner: static_dispatch.MethodOwner,
     ) ?MethodLookup {
-        if (inspectOverrideInViewFromStore(scope, owner_names, owner, true)) |decision| return decision.target;
-        for (scope.method_lookup_scope) |module_id| {
-            const candidate = self.moduleForId(module_id);
-            if (inspectOverrideInViewFromStore(candidate, owner_names, owner, false)) |decision| return decision.target;
-        }
-        return null;
+        return value_rules.lookupInspectOverride(InspectOverrideViews{
+            .builder = self,
+            .scope = scope,
+            .owner_names = owner_names,
+            .owner = owner,
+        });
     }
 
-    const InspectOverrideDecision = struct {
-        target: ?MethodLookup,
-    };
-
-    fn inspectOverrideInViewFromStore(
-        view: ModuleView,
+    /// The views inspection searches for an owner's `to_inspect`.
+    const InspectOverrideViews = struct {
+        builder: *Builder,
+        scope: ModuleView,
         owner_names: *const names.NameStore,
         owner: static_dispatch.MethodOwner,
-        allow_local_proc: bool,
-    ) ?InspectOverrideDecision {
-        const view_owner = static_dispatch.methodOwnerInImportedStore(owner_names, view.names, owner) orelse return null;
-        const view_method = view.names.lookupMethodName("to_inspect") orelse return null;
-        const key: static_dispatch.MethodKey = .{ .owner = view_owner, .method = view_method };
-        switch (view.method_registry.lookup(key) orelse return null) {
-            // The registry records no inspect override for a rejected
-            // declaration, so inspection renders the default form below.
-            .rejected => {},
-            .target => |target| if (!allow_local_proc and target.kind == .local_proc) return null,
+
+        pub const Found = MethodLookup;
+
+        pub fn viewCount(views: InspectOverrideViews) usize {
+            return 1 + views.scope.method_lookup_scope.len;
         }
-        const override = view.method_registry.lookupInspectOverride(key) orelse return .{ .target = null };
-        return .{ .target = .{ .view = view, .target = override.target } };
-    }
+
+        pub fn view(views: InspectOverrideViews, index: usize) ModuleView {
+            if (index == 0) return views.scope;
+            return views.builder.moduleForId(views.scope.method_lookup_scope[index - 1]);
+        }
+
+        pub fn inspectKey(views: InspectOverrideViews, candidate: ModuleView) ?static_dispatch.MethodKey {
+            const view_owner = static_dispatch.methodOwnerInImportedStore(views.owner_names, candidate.names, views.owner) orelse return null;
+            const view_method = candidate.names.lookupMethodName("to_inspect") orelse return null;
+            return .{ .owner = view_owner, .method = view_method };
+        }
+
+        pub fn registry(_: InspectOverrideViews, candidate: ModuleView) *const static_dispatch.MethodRegistry {
+            return candidate.method_registry;
+        }
+
+        pub fn found(_: InspectOverrideViews, candidate: ModuleView, _: static_dispatch.MethodKey, override: static_dispatch.InspectOverride) MethodLookup {
+            return .{ .view = candidate, .target = override.target };
+        }
+    };
 
     fn findMethodTargetByNameFromStore(
         self: *Builder,
@@ -16041,9 +16052,6 @@ const Builder = struct {
     /// Kinds". Sorting fixes Missing at index 0 and Present at index 1.
     const optional_slot_missing_tag = "#Missing";
     const optional_slot_present_tag = "#Present";
-
-    /// `Str.inspect`'s non-value marker for a missing optional field.
-    const optional_field_missing_render = "<missing>";
 
     const OptionalSlotInfo = struct {
         payload_ty: Type.TypeId,
@@ -24192,10 +24200,15 @@ const BodyContext = struct {
         body: struct { value: DraftExprId, value_ty: Type.TypeId, shape_ty: Type.TypeId },
         box: struct { value: DraftExprId, elem_ty: Type.TypeId, out: DraftExprId = undefined },
         field_slot: struct { value: DraftExprId, slot_ty: Type.TypeId, present_pat: DraftPatId = undefined, slot: Builder.OptionalSlotInfo = undefined },
-        /// Field, item, tag, and payload spans belong to the graph's type
-        /// store and are read afresh as each component is reached.
-        record: struct { value: DraftExprId, fields: Type.Span, index: usize = 0, out: DraftExprId = undefined },
-        tuple: struct { value: DraftExprId, items: Type.Span, index: usize = 0, out: DraftExprId = undefined },
+        /// A rendering concatenated from `parts` in order, waiting on a
+        /// frame for each component part.
+        parts: struct {
+            value: DraftExprId,
+            parts: []InspectPart,
+            source: InspectPartSource,
+            index: usize = 0,
+            out: ?DraftExprId = null,
+        },
         tag_union: struct {
             value: DraftExprId,
             value_ty: Type.TypeId,
@@ -24205,13 +24218,6 @@ const BodyContext = struct {
             pending_pat: DraftPatId = undefined,
             payload_tys: Type.Span = .empty(),
             payload_exprs: []DraftExprId = &.{},
-        },
-        tag_body: struct {
-            name: names.TagNameId,
-            payload_exprs: []const DraftExprId,
-            payload_tys: Type.Span,
-            index: usize = 0,
-            out: DraftExprId = undefined,
         },
         list: struct {
             value: DraftExprId,
@@ -24241,6 +24247,109 @@ const BodyContext = struct {
         started: bool = false,
     };
 
+    const InspectRules = value_rules.InspectSpec(InspectShapes);
+    const inspect_text = value_rules.inspect.text;
+
+    /// A record field's label or a variant's name, resolved to text only
+    /// when its part is emitted: the name store can grow while the parts
+    /// before it render.
+    const InspectLabel = union(enum) {
+        field: names.RecordFieldNameId,
+        tag: names.TagNameId,
+    };
+
+    const InspectPart = union(enum) {
+        literal: []const u8,
+        label: InspectLabel,
+        /// The component at this index of the part source.
+        child: u32,
+    };
+
+    /// What a parts rendering's component parts read. Field, item, and
+    /// payload type spans belong to the graph's type store and are read
+    /// afresh as each part is reached.
+    const InspectPartSource = union(enum) {
+        record: Type.Span,
+        tuple: Type.Span,
+        /// A variant's bound payloads; the expressions are owned by the
+        /// tag-union frame.
+        payloads: struct { exprs: []const DraftExprId, tys: Type.Span },
+    };
+
+    /// Monotype types as the shared inspect rules read them.
+    const InspectShapes = struct {
+        body: *BodyContext,
+
+        pub const Ty = Type.TypeId;
+        pub const Primitive = Type.Primitive;
+        pub const Record = Type.Span;
+        pub const Tuple = Type.Span;
+        pub const TagUnion = Type.Span;
+        pub const PresenceSlot = Type.TypeId;
+        pub const Override = void;
+        pub const Child = u32;
+        pub const Label = InspectLabel;
+
+        pub fn recordSlotCount(shapes: InspectShapes, record: Type.Span) u32 {
+            return @intCast(shapes.body.typeStore().fieldSpan(record).len);
+        }
+
+        pub fn recordField(shapes: InspectShapes, record: Type.Span, slot: u32) ?value_rules.inspect.RecordField(InspectShapes) {
+            return .{ .label = .{ .field = GuardedList.at(shapes.body.typeStore().fieldSpan(record), slot).name }, .child = slot };
+        }
+
+        pub fn tupleElemCount(shapes: InspectShapes, tuple: Type.Span) u32 {
+            return @intCast(shapes.body.typeStore().span(tuple).len);
+        }
+
+        pub fn tupleElem(_: InspectShapes, _: Type.Span, index: u32) u32 {
+            return index;
+        }
+
+        pub fn variantCount(shapes: InspectShapes, tags: Type.Span) u32 {
+            return @intCast(shapes.body.typeStore().tagSpan(tags).len);
+        }
+
+        pub fn variantName(shapes: InspectShapes, tags: Type.Span, variant: u32) InspectLabel {
+            return .{ .tag = GuardedList.at(shapes.body.typeStore().tagSpan(tags), variant).name };
+        }
+
+        pub fn payloadCount(shapes: InspectShapes, tags: Type.Span, variant: u32) u32 {
+            return @intCast(shapes.body.typeStore().span(GuardedList.at(shapes.body.typeStore().tagSpan(tags), variant).payloads).len);
+        }
+
+        pub fn payload(_: InspectShapes, _: Type.Span, _: u32, index: u32) u32 {
+            return index;
+        }
+    };
+
+    /// Collects a rendering's parts.
+    const InspectPartList = struct {
+        allocator: Allocator,
+        parts: std.ArrayList(InspectPart) = .empty,
+
+        pub const PartsError = Allocator.Error;
+
+        pub fn literal(list: *InspectPartList, bytes: []const u8) Allocator.Error!void {
+            try list.parts.append(list.allocator, .{ .literal = bytes });
+        }
+
+        pub fn label(list: *InspectPartList, name: InspectLabel) Allocator.Error!void {
+            try list.parts.append(list.allocator, .{ .label = name });
+        }
+
+        pub fn child(list: *InspectPartList, index: u32) Allocator.Error!void {
+            try list.parts.append(list.allocator, .{ .child = index });
+        }
+    };
+
+    fn inspectLabelText(self: *BodyContext, name: InspectLabel) []const u8 {
+        return switch (name) {
+            .field => |field| self.nameStore().recordFieldLabelText(field),
+            .tag => |tag| self.nameStore().tagLabelText(tag),
+        };
+    }
+
     const InspectResult = union(enum) {
         expr: DraftExprId,
         def: DraftDefId,
@@ -24256,12 +24365,43 @@ const BodyContext = struct {
 
     fn releaseInspectFrame(self: *BodyContext, frame: *InspectFrame) void {
         switch (frame.task) {
+            .parts => |*parts| self.allocator.free(parts.parts),
             .tag_union => |*tag_union| {
                 tag_union.branches.deinit(self.allocator);
                 self.allocator.free(tag_union.payload_exprs);
             },
-            .call, .def, .body, .box, .field_slot, .record, .tuple, .tag_body, .list, .list_step => {},
+            .call, .def, .body, .box, .field_slot, .list, .list_step => {},
         }
+    }
+
+    /// The task that renders `value` from `list`'s parts, taking ownership
+    /// of the list.
+    fn inspectPartsTask(self: *BodyContext, value: DraftExprId, source: InspectPartSource, list: *InspectPartList) Allocator.Error!InspectTask {
+        return .{ .parts = .{
+            .value = value,
+            .parts = try list.parts.toOwnedSlice(self.allocator),
+            .source = source,
+        } };
+    }
+
+    /// The component a parts rendering's child part renders.
+    fn inspectPartChild(self: *BodyContext, value: DraftExprId, source: InspectPartSource, index: u32) Allocator.Error!InspectTask {
+        return switch (source) {
+            .record => |fields| blk: {
+                const field = self.spanFieldAt(fields, index);
+                const field_value = try self.addFieldAccessExpr(value, field.name, field.ty);
+                break :blk .{ .field_slot = .{ .value = field_value, .slot_ty = field.ty } };
+            },
+            .tuple => |items| blk: {
+                const item_ty = self.spanTypeAt(items, index);
+                const item = try self.addExpr(.{
+                    .ty = item_ty,
+                    .data = .{ .tuple_access = .{ .tuple = value, .elem_index = index } },
+                });
+                break :blk .{ .call = .{ .value = item, .value_ty = item_ty } };
+            },
+            .payloads => |payloads| .{ .call = .{ .value = payloads.exprs[index], .value_ty = self.spanTypeAt(payloads.tys, index) } },
+        };
     }
 
     fn inspectCall(self: *BodyContext, value: DraftExprId, value_ty: Type.TypeId, str_ty: Type.TypeId) Allocator.Error!DraftExprId {
@@ -24350,11 +24490,11 @@ const BodyContext = struct {
             .box => |*box| {
                 if (!started) {
                     const unboxed = try self.lowLevelExpr(.box_unbox, &.{box.value}, box.elem_ty);
-                    box.out = try self.stringExpr("Box(", str_ty);
+                    box.out = try self.stringExpr(inspect_text.box_open, str_ty);
                     return .{ .child = .{ .call = .{ .value = unboxed, .value_ty = box.elem_ty } } };
                 }
                 const out = try self.concatExpr(box.out, input.?.expr, str_ty);
-                return .{ .done = .{ .expr = try self.concatExpr(out, try self.stringExpr(")", str_ty), str_ty) } };
+                return .{ .done = .{ .expr = try self.concatExpr(out, try self.stringExpr(inspect_text.box_close, str_ty), str_ty) } };
             },
             .field_slot => |*field_slot| {
                 // An inline (required/defaulted) slot renders as the value
@@ -24362,7 +24502,7 @@ const BodyContext = struct {
                 // Missing/Present encoding: a present slot renders its
                 // payload exactly as a required field's value would, and a
                 // missing slot renders the literal `<missing>` marker. Twin
-                // of `Builder.inspectFieldSlot` for draft-body inspect
+                // of the shared presence-slot rendering for draft-body inspect
                 // expansion.
                 if (!started) {
                     field_slot.slot = self.optionalFieldSlot(field_slot.slot_ty) orelse
@@ -24383,7 +24523,7 @@ const BodyContext = struct {
                     .name = field_slot.slot.missing_tag.name,
                     .payloads = .empty(),
                 } } });
-                const missing_body = try self.stringExpr(Builder.optional_field_missing_render, str_ty);
+                const missing_body = try self.stringExpr(inspect_text.missing, str_ty);
 
                 const branches = [_]DraftBranch{
                     .{ .pat = field_slot.present_pat, .body = input.?.expr },
@@ -24394,41 +24534,22 @@ const BodyContext = struct {
                     .branches = try self.addBranchSpan(&branches),
                 } } }) } };
             },
-            .record => |*record| {
-                if (!started) {
-                    record.out = try self.stringExpr("{ ", str_ty);
-                } else {
-                    record.out = try self.concatExpr(record.out, input.?.expr, str_ty);
+            .parts => |*parts| {
+                if (started) {
+                    if (input) |rendered| parts.out = try self.concatExpr(parts.out.?, rendered.expr, str_ty);
                 }
-                if (record.index == record.fields.len) {
-                    return .{ .done = .{ .expr = try self.concatExpr(record.out, try self.stringExpr(" }", str_ty), str_ty) } };
+                while (parts.index < parts.parts.len) {
+                    const part = parts.parts[parts.index];
+                    parts.index += 1;
+                    const text = switch (part) {
+                        .literal => |text| text,
+                        .label => |name| self.inspectLabelText(name),
+                        .child => |index| return .{ .child = try self.inspectPartChild(parts.value, parts.source, index) },
+                    };
+                    const piece = try self.stringExpr(text, str_ty);
+                    parts.out = if (parts.out) |out| try self.concatExpr(out, piece, str_ty) else piece;
                 }
-                const field = self.spanFieldAt(record.fields, record.index);
-                if (record.index != 0) record.out = try self.concatExpr(record.out, try self.stringExpr(", ", str_ty), str_ty);
-                record.index += 1;
-                record.out = try self.concatExpr(record.out, try self.stringExpr(self.nameStore().recordFieldLabelText(field.name), str_ty), str_ty);
-                record.out = try self.concatExpr(record.out, try self.stringExpr(": ", str_ty), str_ty);
-                const field_value = try self.addFieldAccessExpr(record.value, field.name, field.ty);
-                return .{ .child = .{ .field_slot = .{ .value = field_value, .slot_ty = field.ty } } };
-            },
-            .tuple => |*tuple| {
-                if (!started) {
-                    tuple.out = try self.stringExpr("(", str_ty);
-                } else {
-                    tuple.out = try self.concatExpr(tuple.out, input.?.expr, str_ty);
-                }
-                if (tuple.index == tuple.items.len) {
-                    return .{ .done = .{ .expr = try self.concatExpr(tuple.out, try self.stringExpr(")", str_ty), str_ty) } };
-                }
-                const i = tuple.index;
-                tuple.index += 1;
-                const item_ty = self.spanTypeAt(tuple.items, i);
-                if (i != 0) tuple.out = try self.concatExpr(tuple.out, try self.stringExpr(", ", str_ty), str_ty);
-                const item = try self.addExpr(.{
-                    .ty = item_ty,
-                    .data = .{ .tuple_access = .{ .tuple = tuple.value, .elem_index = @intCast(i) } },
-                });
-                return .{ .child = .{ .call = .{ .value = item, .value_ty = item_ty } } };
+                return .{ .done = .{ .expr = parts.out.? } };
             },
             .tag_union => |*tag_union| {
                 if (started) {
@@ -24468,11 +24589,14 @@ const BodyContext = struct {
                             .payloads = try self.addPatSpan(payload_pats),
                         } },
                     });
-                    return .{ .child = .{ .tag_body = .{
-                        .name = tag.name,
-                        .payload_exprs = tag_union.payload_exprs,
-                        .payload_tys = tag_union.payload_tys,
-                    } } };
+                    var list = InspectPartList{ .allocator = self.allocator };
+                    errdefer list.parts.deinit(self.allocator);
+                    try InspectRules.variantParts(InspectShapes{ .body = self }, tag_union.tags, @intCast(tag_union.index - 1), &list);
+                    return .{ .child = try self.inspectPartsTask(
+                        tag_union.value,
+                        .{ .payloads = .{ .exprs = tag_union.payload_exprs, .tys = tag_union.payload_tys } },
+                        &list,
+                    ) };
                 }
                 if (tag_union.branches.items.len == 0) return .{ .done = .{ .expr = try self.uninhabitedInspect(tag_union.value, str_ty) } };
 
@@ -24484,25 +24608,9 @@ const BodyContext = struct {
                     } },
                 }) } };
             },
-            .tag_body => |*tag_body| {
-                if (!started) {
-                    tag_body.out = try self.stringExpr(self.nameStore().tagLabelText(tag_body.name), str_ty);
-                    if (tag_body.payload_exprs.len == 0) return .{ .done = .{ .expr = tag_body.out } };
-                    tag_body.out = try self.concatExpr(tag_body.out, try self.stringExpr("(", str_ty), str_ty);
-                } else {
-                    tag_body.out = try self.concatExpr(tag_body.out, input.?.expr, str_ty);
-                }
-                if (tag_body.index == tag_body.payload_exprs.len) {
-                    return .{ .done = .{ .expr = try self.concatExpr(tag_body.out, try self.stringExpr(")", str_ty), str_ty) } };
-                }
-                const i = tag_body.index;
-                tag_body.index += 1;
-                if (i != 0) tag_body.out = try self.concatExpr(tag_body.out, try self.stringExpr(", ", str_ty), str_ty);
-                return .{ .child = .{ .call = .{ .value = tag_body.payload_exprs[i], .value_ty = self.spanTypeAt(tag_body.payload_tys, i) } } };
-            },
             .list => |*list| {
                 if (!started) {
-                    if (try self.typeIsProvenUninhabited(list.elem_ty)) return .{ .done = .{ .expr = try self.stringExpr("[]", str_ty) } };
+                    if (try self.typeIsProvenUninhabited(list.elem_ty)) return .{ .done = .{ .expr = try self.stringExpr(inspect_text.empty_list, str_ty) } };
                     list.u64_ty = try self.primitiveType(.u64);
                     const bool_ty = try self.primitiveType(.bool);
 
@@ -24519,7 +24627,7 @@ const BodyContext = struct {
                     list.done_cond = try self.lowLevelExpr(.num_is_eq, &.{ index_expr, len_expr }, bool_ty);
                     list.finish = try self.addExpr(.{
                         .ty = str_ty,
-                        .data = .{ .break_ = try self.concatExpr(out_expr, try self.stringExpr("]", str_ty), str_ty) },
+                        .data = .{ .break_ = try self.concatExpr(out_expr, try self.stringExpr(inspect_text.list_close, str_ty), str_ty) },
                     });
                     return .{ .child = .{ .list_step = .{
                         .value = list.value,
@@ -24536,7 +24644,7 @@ const BodyContext = struct {
                 };
                 const initial_values = [_]DraftExprId{
                     try self.intLiteralExpr(0, list.u64_ty),
-                    try self.stringExpr("[", str_ty),
+                    try self.stringExpr(inspect_text.list_open, str_ty),
                 };
                 const loop = try self.addExpr(.{
                     .ty = str_ty,
@@ -24563,7 +24671,7 @@ const BodyContext = struct {
                     step.out_expr = try self.localExpr(step.out_local, str_ty);
 
                     const first_cond = try self.lowLevelExpr(.num_is_eq, &.{ step.index_expr, try self.intLiteralExpr(0, step.u64_ty) }, bool_ty);
-                    step.sep = try self.ifExpr(first_cond, try self.stringExpr("", str_ty), try self.stringExpr(", ", str_ty), str_ty);
+                    step.sep = try self.ifExpr(first_cond, try self.stringExpr(InspectRules.listSeparator(0), str_ty), try self.stringExpr(InspectRules.listSeparator(1), str_ty), str_ty);
                     const elem = try self.lowLevelExpr(.list_get_unsafe, &.{ step.value, step.index_expr }, step.elem_ty);
                     return .{ .child = .{ .call = .{ .value = elem, .value_ty = step.elem_ty } } };
                 }
@@ -24587,47 +24695,77 @@ const BodyContext = struct {
         shape_ty: Type.TypeId,
         str_ty: Type.TypeId,
     ) Allocator.Error!InspectStep {
-        return switch (self.typeStore().get(shape_ty)) {
+        const shapes = InspectShapes{ .body = self };
+        return switch (InspectRules.actionForShape(shapes, try self.inspectShapeOf(value_ty, shape_ty))) {
+            .literal => |text| .{ .done = .{ .expr = try self.stringExpr(text, str_ty) } },
             .primitive => |primitive| .{ .done = .{ .expr = switch (Common.primitiveInspectLowering(primitive)) {
                 .low_level => |op| try self.lowLevelExpr(op, &.{value}, str_ty),
                 .builtin_method => try self.inspectPrimitiveMethod(value, value_ty, shape_ty, str_ty),
                 .bool_tag_union => Common.invariant("Bool must lower as an ordinary tag union before Str.inspect"),
             } } },
-            .named => |named| blk: {
-                if (named.builtin_owner) |owner| {
-                    switch (owner) {
-                        .list => {
-                            const args = self.typeStore().span(named.args);
-                            if (args.len != 1) Common.invariant("List type reached Monotype inspect lowering without one type argument");
-                            break :blk .{ .tail = .{ .list = .{ .value = value, .elem_ty = GuardedList.at(args, 0) } } };
-                        },
-                        .box, .dict, .set, .fields, .field, .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .parse_tag_union_spec, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher, .iter, .stream => {},
-                    }
-                }
-                if (try self.toInspectCall(value, value_ty, str_ty)) |method_call| break :blk .{ .done = .{ .expr = method_call } };
-                const backing = named.backing orelse Common.invariant("Str.inspect reached opaque named type without checked inspect authority");
-                if (backing.use != .inspectable) {
-                    break :blk .{ .done = .{ .expr = try self.stringExpr("<opaque>", str_ty) } };
-                }
-                break :blk .{ .tail = .{ .body = .{ .value = value, .value_ty = value_ty, .shape_ty = backing.ty } } };
-            },
+            .override => .{ .done = .{ .expr = (try self.toInspectCall(value, value_ty, str_ty)) orelse
+                Common.invariant("Monotype inspect override disappeared between its lookup and its call") } },
+            .backing => |backing_ty| .{ .tail = .{ .body = .{ .value = value, .value_ty = value_ty, .shape_ty = backing_ty } } },
             .record => |fields| blk: {
-                if (fields.len == 0) break :blk .{ .done = .{ .expr = try self.stringExpr("{}", str_ty) } };
-                break :blk .{ .tail = .{ .record = .{ .value = value, .fields = fields } } };
+                var list = InspectPartList{ .allocator = self.allocator };
+                errdefer list.parts.deinit(self.allocator);
+                try InspectRules.recordParts(shapes, fields, &list);
+                break :blk .{ .tail = try self.inspectPartsTask(value, .{ .record = fields }, &list) };
             },
             .tuple => |items| blk: {
-                if (items.len == 0) break :blk .{ .done = .{ .expr = try self.stringExpr("()", str_ty) } };
-                break :blk .{ .tail = .{ .tuple = .{ .value = value, .items = items } } };
+                var list = InspectPartList{ .allocator = self.allocator };
+                errdefer list.parts.deinit(self.allocator);
+                try InspectRules.tupleParts(shapes, items, &list);
+                break :blk .{ .tail = try self.inspectPartsTask(value, .{ .tuple = items }, &list) };
             },
-            .tag_union => |tags| blk: {
-                if (tags.len == 0) break :blk .{ .done = .{ .expr = try self.uninhabitedInspect(value, str_ty) } };
-                break :blk .{ .tail = .{ .tag_union = .{ .value = value, .value_ty = value_ty, .tags = tags } } };
-            },
+            .tag_union => |tags| .{ .tail = .{ .tag_union = .{
+                .value = value,
+                .value_ty = value_ty,
+                .tags = tags,
+            } } },
+            .uninhabited => .{ .done = .{ .expr = try self.uninhabitedInspect(value, str_ty) } },
             .list => |elem_ty| .{ .tail = .{ .list = .{ .value = value, .elem_ty = elem_ty } } },
-            .func, .erased => .{ .done = .{ .expr = try self.stringExpr("<function>", str_ty) } },
-            .zst => .{ .done = .{ .expr = try self.stringExpr("{}", str_ty) } },
             .box => |elem_ty| .{ .tail = .{ .box = .{ .value = value, .elem_ty = elem_ty } } },
+            // A field slot renders where its record field is read, and
+            // Monotype types carry no other form of these shapes.
+            .presence_slot => Common.invariant("Monotype inspect reached a presence slot outside a record field"),
+            .bool => Common.invariant("Bool must lower as an ordinary tag union before Str.inspect"),
+            .transparent => Common.invariant("Monotype types carry no transparent names"),
+            .descriptor => Common.invariant("Monotype inspect reached a runtime-described value"),
         };
+    }
+
+    /// How inspection reads `shape_ty`, which is `value_ty` or an inspectable
+    /// backing reached through it.
+    fn inspectShapeOf(self: *BodyContext, value_ty: Type.TypeId, shape_ty: Type.TypeId) Allocator.Error!InspectRules.Shape {
+        return switch (self.typeStore().get(shape_ty)) {
+            .primitive => |primitive| .{ .primitive = primitive },
+            .named => |named| blk: {
+                if (named.builtin_owner == .list) {
+                    const args = self.typeStore().span(named.args);
+                    if (args.len != 1) Common.invariant("List type reached Monotype inspect lowering without one type argument");
+                    break :blk .{ .list = GuardedList.at(args, 0) };
+                }
+                if (try self.hasInspectOverride(value_ty)) break :blk .{ .nominal = .{ .override = {}, .backing = null } };
+                const backing = named.backing orelse Common.invariant("Str.inspect reached opaque named type without checked inspect authority");
+                break :blk .{ .nominal = .{
+                    .override = null,
+                    .backing = if (backing.use == .inspectable) backing.ty else null,
+                } };
+            },
+            .record => |fields| .{ .record = fields },
+            .tuple => |items| .{ .tuple = items },
+            .tag_union => |tags| .{ .tag_union = tags },
+            .list => |elem_ty| .{ .list = elem_ty },
+            .func, .erased => .function,
+            .zst => .empty_record,
+            .box => |elem_ty| .{ .box = elem_ty },
+        };
+    }
+
+    fn hasInspectOverride(self: *BodyContext, value_ty: Type.TypeId) Allocator.Error!bool {
+        const owner = methodOwnerFromType(self.typeStore(), value_ty) orelse return false;
+        return (try self.builder.inspectOverrideFor(self.method_scope, self.nameStore(), owner)) != null;
     }
 
     fn uninhabitedInspect(self: *BodyContext, value: DraftExprId, str_ty: Type.TypeId) Allocator.Error!DraftExprId {
@@ -24668,7 +24806,7 @@ const BodyContext = struct {
 
     fn toInspectCall(self: *BodyContext, value: DraftExprId, value_ty: Type.TypeId, str_ty: Type.TypeId) Allocator.Error!?DraftExprId {
         const owner = methodOwnerFromType(self.typeStore(), value_ty) orelse return null;
-        const lookup = try self.withLocalProcContext((try self.builder.lookupInspectOverride(self.method_scope, self.nameStore(), owner)) orelse return null);
+        const lookup = try self.withLocalProcContext((try self.builder.inspectOverrideFor(self.method_scope, self.nameStore(), owner)) orelse return null);
         const callee = if (self.frozen_inspect_method_calls) |prepared|
             prepared.get(value_ty) orelse
                 Common.invariant("deferred inspect method was not reserved before relation freeze")
@@ -24755,7 +24893,7 @@ const BodyContext = struct {
         str_ty: Type.TypeId,
         owner: static_dispatch.MethodOwner,
     ) Allocator.Error!?bool {
-        const raw_lookup = (try self.builder.lookupInspectOverride(self.method_scope, self.nameStore(), owner)) orelse return null;
+        const raw_lookup = (try self.builder.inspectOverrideFor(self.method_scope, self.nameStore(), owner)) orelse return null;
         const lookup = try self.withLocalProcContext(raw_lookup);
         for (self.draft.prepared_inspect_methods.items) |prepared| {
             if (self.graph.sameClass(prepared.value_node, node)) return false;
@@ -28386,7 +28524,7 @@ const BodyContext = struct {
             // Rendering a function never inspects its nested signature. Keep
             // that signature graph-native so unresolved child cells survive
             // until the owning draft is sealed once.
-            .func, .erased => try self.stringExpr("<function>", ret_ty),
+            .func, .erased => try self.stringExpr(inspect_text.function, ret_ty),
             .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .zst => if (try self.graph.typeIsResolved(arg_node))
                 try self.inspectCall(local_expr, try self.activeTypeFromNode(arg_node), ret_ty)
             else
@@ -37643,7 +37781,7 @@ const BodyContext = struct {
 
         try self.constrainTypeToMono(checked_ret_ty, str_ty);
         if (self.view.bodies.exprEvaluationMayBeElidedForInspect(call.args[0])) {
-            return loweredExprStep(try self.stringExpr("<function>", str_ty));
+            return loweredExprStep(try self.stringExpr(inspect_text.function, str_ty));
         }
         return requestLowerTask(self, .{ .inspect_only = .{ .arg = call.args[0], .str_ty = str_ty } });
     }
@@ -37659,7 +37797,7 @@ const BodyContext = struct {
         const evaluation = try self.addStmt(.{ .expr = evaluated });
         return loweredExprStep(try self.addExpr(.{ .ty = task.str_ty, .data = .{ .block = .{
             .statements = try self.addStmtSpan(&.{evaluation}),
-            .final_expr = try self.stringExpr("<function>", task.str_ty),
+            .final_expr = try self.stringExpr(inspect_text.function, task.str_ty),
         } } }));
     }
 

@@ -1792,6 +1792,31 @@ test "hoist-preserving iterator producers are reachable through their method nam
     }
 }
 
+test "value rules have one definition site" {
+    // Inspection, structural equality and hashing, and `to_inspect` override
+    // selection are defined once, in `value_rules/`, for both lowering
+    // strategies and the Boxy runtime; no lowerer holds a copy of them.
+    const lowerers = [_][]const u8{
+        @embedFile("monotype/lower.zig"),
+        @embedFile("solved_lir_lower.zig"),
+        @embedFile("boxy/lower.zig"),
+        @embedFile("boxy/plan.zig"),
+    };
+    const literals = [_][]const u8{ "\"<missing>\"", "\"<function>\"", "\"<opaque>\"", "\"Box(\"", "\"{ \"", "\" }\"" };
+    for (lowerers) |source| {
+        for (literals) |literal| try expectNotContains(source, literal);
+        try expectNotContains(source, "fn lookupInspectOverride(");
+        try expectNotContains(source, "fn beginEq(");
+        try expectNotContains(source, "fn beginHash(");
+    }
+    const inspect = @embedFile("value_rules/inspect.zig");
+    for (literals) |literal| try expectContains(inspect, literal);
+    try expectContains(@embedFile("value_rules/inspect_override.zig"), "pub fn lookupInspectOverride(");
+    const structural = @embedFile("value_rules/structural.zig");
+    try expectContains(structural, "fn beginEq(");
+    try expectContains(structural, "fn beginHash(");
+}
+
 /// One function definition found in a source file: its name and the token
 /// text of its body, braces included.
 const SourceFn = struct {
@@ -2061,6 +2086,22 @@ test "post-check lowerers define no helper twice with near-identical bodies" {
         "namedEnter",
         "tagPayloadOperand",
         "tagUnionExit",
+        // The callbacks `value_rules`' structural equality and hashing walks
+        // call on Boxy's lowering contexts (`EqLowering` / `HashLowering`):
+        // one context struct per rule, each forwarding to the procedure
+        // body builder.
+        "allocator",
+        "boolSwitch",
+        "componentLocal",
+        "discriminantLocal",
+        "discriminantSwitch",
+        "isZstLocal",
+        "payloadCount",
+        "readDiscriminant",
+        "readField",
+        "releaseWrap",
+        "variantCount",
+        "wrapRequest",
         // Conventional method names on unrelated types (sort orders,
         // lifecycle, map access, timing scopes, worker task entry points).
         "lessThan",
@@ -2173,7 +2214,7 @@ test "Monotype lowering scopes share one definition of each type-shape, name-imp
     }
     // Method lookup takes the name store its owner belongs to; `BodyContext`
     // calls the `Builder` implementation with its own.
-    const lookups = [_][]const u8{ "lookupMethodTarget", "lookupMethodTargetByName", "lookupInspectOverride" };
+    const lookups = [_][]const u8{ "lookupMethodTarget", "lookupMethodTargetByName", "inspectOverrideFor" };
     inline for (lookups) |name| {
         try std.testing.expectEqual(@as(usize, 1), countDefinitions(source, "fn " ++ name ++ "("));
         try expectContains(source, "    fn " ++ name ++ "(\n        self: *Builder,\n        scope: ModuleView,\n        owner_names: *const names.NameStore,");
