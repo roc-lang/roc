@@ -10,7 +10,7 @@ app [main] { pf: platform "./platform.roc" }
 
 import Counter
 
-main = Num.to_str(Counter.value(Counter.increment(Counter.new())))
+main = Counter.value(Counter.increment(Counter.new({}))).to_str()
 ~~~
 ## Counter.roc
 ~~~roc

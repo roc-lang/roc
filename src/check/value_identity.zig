@@ -45,9 +45,18 @@ pub const Inputs = struct {
     types: CheckedTypeStoreView,
     roots: []const CompileTimeRoot,
     top_level_values: *const checked_artifact.TopLevelValueTable,
-    key: checked_artifact.CheckedModuleArtifactKey,
+    /// The checked artifact key's inputs outside the module's own source:
+    /// the compiler, the checking context, and the direct imports' keys.
+    context: ContextHashes,
     /// The module's own content identity, which names its own declarations.
     own_identity: [32]u8,
+};
+
+/// The artifact-key inputs a module's value context hashes.
+pub const ContextHashes = struct {
+    compiler_artifact: [32]u8,
+    checking_context: [32]u8,
+    direct_import_keys: [32]u8,
 };
 
 const domain = "roc.compile_time_value_identity.v1";
@@ -335,13 +344,13 @@ const State = struct {
     /// kind, and the files it imports.
     fn moduleContext(self: *const State) [32]u8 {
         const env = self.inputs.env;
-        const key = self.inputs.key;
+        const context = self.inputs.context;
         var hasher = Sha256.init(.{});
         hashTag(&hasher, domain);
         hashTag(&hasher, "context");
-        hasher.update(&key.compiler_artifact_hash);
-        hasher.update(&key.checking_context_identity_hash);
-        hasher.update(&key.direct_import_module_keys_hash);
+        hasher.update(&context.compiler_artifact);
+        hasher.update(&context.checking_context);
+        hasher.update(&context.direct_import_keys);
         // A type module's main type is named after the module, so the name
         // covers it; a type module whose declaration is missing names no
         // main type at all.

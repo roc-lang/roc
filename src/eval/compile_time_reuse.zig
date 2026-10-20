@@ -20,12 +20,10 @@ const ConstStore = check.ConstStore.ConstStore;
 const ConstTypeId = check.ConstStore.ConstTypeId;
 const ComptimeRootId = checked.ComptimeRootId;
 
-const trace_available = @import("builtin").link_libc and @import("build_options").dev_diagnostics;
-
 /// `ROC_CTFE_REUSE_TRACE` is set: report each module's reuse. Inline, so a
 /// compiler without developer diagnostics compiles no trace.
 pub inline fn traceEnabled() bool {
-    return trace_available and std.c.getenv("ROC_CTFE_REUSE_TRACE") != null;
+    return base.dev_diagnostics.isSet(.ctfe_reuse_trace);
 }
 
 /// The evaluation columns of a module's previous checked cache entry,
