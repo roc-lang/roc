@@ -730,6 +730,19 @@ pub const ModuleState = struct {
         };
     }
 
+    /// The output of a module that completed successfully, or null for a module
+    /// that is pending or completed with failure. Successful completion is only
+    /// reached after the module's checked artifact is installed.
+    pub fn checkedModule(self: *ModuleState) ?compile_package.CheckedModuleData {
+        if (!self.completedSuccessfully()) return null;
+        const artifact = self.checkedArtifact() orelse
+            base.invariant("compile.coordinator.ModuleState.checkedModule successful module {s} had no checked artifact", .{self.name});
+        return .{
+            .env = artifact.moduleEnv(),
+            .checked_artifact = artifact,
+        };
+    }
+
     pub fn completedSuccessfully(self: *const ModuleState) bool {
         return self.phase == .Done and self.completion == .succeeded;
     }

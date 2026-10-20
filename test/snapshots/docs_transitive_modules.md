@@ -10,7 +10,7 @@ app [main] { pf: platform "./platform.roc" }
 
 import Geometry
 
-main = Geometry.describe(Geometry.unit())
+main = Geometry.describe(Geometry.unit({}))
 ~~~
 ## Geometry.roc
 ~~~roc
@@ -37,7 +37,7 @@ Geometry := { width: U64, height: U64 }.{
 Helpers := {}.{
     ## Show a number as a string.
     show : U64 -> Str
-    show = |n| Num.to_str(n)
+    show = |n| n.to_str()
 }
 ~~~
 ## platform.roc

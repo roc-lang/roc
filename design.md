@@ -3989,6 +3989,16 @@ diagnostic or a module `Failure` value. A compiler invariant violation is
 neither: it is a debug-only assertion and unreachable in release builds, as
 stated above.
 
+A module completes with failure only where no checked output can exist for it
+(rejected source, an invalid root module path, an import cycle, or a dependency
+that completed with failure), and the module where that failure originates
+always carries an error-severity report. A build without error reports has
+therefore completed every module successfully, and successful completion always
+includes the module's checked artifact. Post-build consumers of checked modules
+(documentation, public API extraction) run only for builds without error
+reports, and they read checked modules through `ModuleState.checkedModule`,
+whose artifact is not optional.
+
 Workers carry source-read and type-check operational errors through the existing
 result channel as explicit stage/error data. The coordinator preserves the
 failing module's observed file state and records the failure for reporting, then
