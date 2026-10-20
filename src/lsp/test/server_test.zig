@@ -401,6 +401,35 @@ test "server tracks documents on didOpen/didChange" {
     try std.testing.expectEqual(@as(i64, 2), doc.version);
 }
 
+test "server forgets documents on didClose" {
+    const allocator = std.testing.allocator;
+    const file_uri = "file:///tmp/closed.roc";
+
+    const open_msg = try frame(allocator,
+        \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/closed.roc","version":1,"text":"app main = 0"}}}
+    );
+    defer allocator.free(open_msg);
+    const close_msg = try frame(allocator,
+        \\{"jsonrpc":"2.0","method":"textDocument/didClose","params":{"textDocument":{"uri":"file:///tmp/closed.roc"}}}
+    );
+    defer allocator.free(close_msg);
+    const combined = try std.mem.concat(allocator, u8, &.{ open_msg, close_msg });
+    defer allocator.free(combined);
+
+    const reader_stream: std.Io.Reader = .fixed(combined);
+    var writer_buffer: [8192]u8 = undefined;
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
+
+    var server = try TestServer(std.Io.Reader, std.Io.Writer).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
+    defer server.deinit();
+    server.state = .running;
+    server.client.trusted_workspace = true;
+    try server.run();
+
+    try std.testing.expectEqual(@as(usize, 1), server.syntax_checker.close_calls);
+    try std.testing.expect(server.getDocumentForTesting(file_uri) == null);
+}
+
 test "server applies sequential incremental changes in a single didChange" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
