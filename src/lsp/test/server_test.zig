@@ -431,7 +431,6 @@ test "server forgets documents on didClose" {
     try std.testing.expectEqual(@as(usize, 1), server.syntax_checker.forget_calls);
 }
 
-||||||| bd1cfe509d
 test "server applies sequential incremental changes in a single didChange" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
