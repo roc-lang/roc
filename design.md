@@ -693,8 +693,8 @@ app module in the optimized store, named by its requests. A later dev build
 loads the root module's object packs too and links such an entry in place of
 its dev code. `roc check` never starts one, and `roc run` links only its URL
 packages' objects, so a hot reload session keeps one host program.
-`ROC_BACKGROUND_OBJECTS=off` disables the build and `wait` makes the dev
-build wait for it.
+In a compiler that honors developer diagnostics, `ROC_BACKGROUND_OBJECTS=off`
+disables the build and `wait` makes the dev build wait for it.
 
 A specialization whose request mentions a function type has no
 reservation-time key: which closures it receives is decided by lambda
@@ -23909,12 +23909,18 @@ each phase's report.
 The compiler's developer-only environment variables (`ROC_LIR_DUMP`,
 `ROC_SPEC_CENSUS`, `ROC_PACK_TRACE`, `ROC_PACK_STATS`, `ROC_CTFE_DEMAND_TRACE`,
 `ROC_DEV_PACK_OBJECTS`, `ROC_DEV_PACK_HITS`, the object-compile round-trip
-variable and `ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE`) are honored only by a
+variable, `ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE` and
+`ROC_BACKGROUND_OBJECTS`) are honored only by a
 compiler for which `build_options.dev_diagnostics` is true: every Debug compiler, and any
-other build made with `-Ddev-diagnostics`. Every site tests that constant at
-compile time, so a release compiler neither reads these variables nor
-carries the code they enable, and an end user's environment cannot change
-what it does. The constant reads each compiler binary's own optimize mode,
+other build made with `-Ddev-diagnostics`. Every read goes through
+`base.dev_diagnostics`, whose `Var` enum names exactly these variables and
+whose `get` and `isSet` are compile-time null and false in any other compiler,
+so a release compiler neither reads these variables nor carries the code they
+enable, and an end user's environment cannot change what it does. The Zig
+lints reject a string literal naming one of them anywhere else outside test
+code. A compiler that honors them reads each one from the environment once
+per process, since it never changes its own environment, so a check on a hot
+path costs a load rather than an environment scan. The constant reads each compiler binary's own optimize mode,
 since the release compiler binary shares its modules with the development one. CLI
 cases that set one of these variables skip against a compiler without them.
 Performance work that needs them on an optimized compiler builds it with
