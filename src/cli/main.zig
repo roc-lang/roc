@@ -19365,11 +19365,10 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
         const public_modules = try build_env.getPublicRootModules(ctx.gpa);
         defer ctx.gpa.free(public_modules);
         for (public_modules) |module| {
-            const artifact = module.semantic.checked_artifact orelse return error.Internal;
             try inputs.append(ctx.gpa, .{
                 .exposed_name = module.name,
-                .module_env = module.semantic.env,
-                .artifact = artifact,
+                .module_env = module.checked.env,
+                .artifact = module.checked.checked_artifact,
                 .public_type_decl = module.public_type_decl,
             });
         }
@@ -19377,12 +19376,13 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
 
     if (root_pkg.kind == .platform and root_pkg.public_surface.root_names.items.len > 0) {
         const root_module = build_env.rootModule(root_name) orelse return error.Internal;
-        const root_data = root_module.semanticData() orelse return error.Internal;
-        const root_artifact = root_data.checked_artifact orelse return error.Internal;
+        const root_data = root_module.checkedModule() orelse {
+            base.invariant("bump invariant violated: platform root module did not complete successfully", .{});
+        };
         try inputs.append(ctx.gpa, .{
             .exposed_name = root_module.name,
             .module_env = root_data.env,
-            .artifact = root_artifact,
+            .artifact = root_data.checked_artifact,
             .exposed_names = root_pkg.public_surface.root_names.items,
         });
     }
@@ -19394,11 +19394,10 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
         for (routing_modules) |module| {
             if (std.mem.eql(u8, module.package_name, root_name)) continue;
             if (module.public_type_decl == null) continue;
-            const artifact = module.semantic.checked_artifact orelse return error.Internal;
             try inputs.append(ctx.gpa, .{
                 .exposed_name = module.name,
-                .module_env = module.semantic.env,
-                .artifact = artifact,
+                .module_env = module.checked.env,
+                .artifact = module.checked.checked_artifact,
                 .public_type_decl = module.public_type_decl,
             });
         }
@@ -19777,12 +19776,11 @@ fn generateDocs(
         defer ctx.gpa.free(routing_modules);
         for (routing_modules) |module_info| {
             const source_decl = module_info.public_type_decl orelse continue;
-            const artifact = module_info.semantic.checked_artifact orelse unreachable;
             try public_type_projections.append(ctx.gpa, .{
                 .public_name = module_info.name,
                 .package_name = build_env.displayNameForPackage(module_info.package_name),
-                .source_env = module_info.semantic.env,
-                .source_identity = &artifact.module_identity.stable_hash,
+                .source_env = module_info.checked.env,
+                .source_identity = &module_info.checked.checked_artifact.module_identity.stable_hash,
                 .source_decl = source_decl,
                 .public_order = module_info.public_order,
             });
@@ -19796,13 +19794,13 @@ fn generateDocs(
         const sched_pkg_name = build_env.displayNameForPackage(module_info.package_name);
         modules_seen += 1;
 
-        var mod_docs = extract.extractModuleDocsWithOptions(ctx.gpa, module_info.semantic.env, sched_pkg_name, module_info.path, .{
+        var mod_docs = extract.extractModuleDocsWithOptions(ctx.gpa, module_info.checked.env, sched_pkg_name, module_info.path, .{
             .exposed_names = module_info.docs_exposed_names,
             .public_type = if (module_info.public_type_decl) |source_decl| .{
                 .public_name = module_info.name,
                 .package_name = sched_pkg_name,
-                .source_env = module_info.semantic.env,
-                .source_identity = &(module_info.semantic.checked_artifact orelse unreachable).module_identity.stable_hash,
+                .source_env = module_info.checked.env,
+                .source_identity = &module_info.checked.checked_artifact.module_identity.stable_hash,
                 .source_decl = source_decl,
                 .public_order = module_info.public_order,
             } else null,
