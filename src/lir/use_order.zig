@@ -740,8 +740,7 @@ pub const UseOrder = struct {
     };
 
     fn topologyInvariant(comptime message: []const u8) noreturn {
-        if (builtin.mode == .debug) invariant(message, .{});
-        unreachable;
+        invariant(message, .{});
     }
 
     /// Predecessor rows over the successor edges of every member, and the
