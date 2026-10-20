@@ -10,7 +10,7 @@ app [main] { pf: platform "./platform.roc" }
 
 import Color
 
-main = Color.to_str(Color.red())
+main = Color.to_str(Color.red({}))
 ~~~
 ## Color.roc
 ~~~roc

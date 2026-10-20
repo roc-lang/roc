@@ -108,19 +108,17 @@ pub const ModuleEnvStorage = union(enum) {
     }
 };
 
-/// Public `CheckedModuleArtifactKey` declaration. `extern` so it can be a POD
-/// inline field of `CheckedModuleArtifact.Serialized` (all fields are byte
-/// arrays, so the extern layout is identical to the auto layout).
+/// Public `CheckedModuleArtifactKey` declaration: the checked module's
+/// identity hash and nothing else, so its bits are its identity and every
+/// keyed container agrees with `eql`. The hash inputs live on the artifact
+/// (`CheckedModuleArtifact.source_hash`, `module_identity`,
+/// `checking_context_identity`, `direct_import_artifact_keys`). `extern` so it
+/// can be a POD inline field of `CheckedModuleArtifact.Serialized`.
 pub const CheckedModuleArtifactKey = extern struct {
-    source_hash: [32]u8 = @as([32]u8, @splat(0)),
-    compiler_artifact_hash: [32]u8 = @as([32]u8, @splat(0)),
-    module_identity_hash: [32]u8 = @as([32]u8, @splat(0)),
-    checking_context_identity_hash: [32]u8 = @as([32]u8, @splat(0)),
-    direct_import_artifact_keys_hash: [32]u8 = @as([32]u8, @splat(0)),
     bytes: [32]u8 = @as([32]u8, @splat(0)),
 
-    /// Integer equality over the key's identity bytes, which name the key
-    /// wholly: a single 256-bit compare, never a byte-wise comparison.
+    /// Integer equality over the key's identity bytes: a single 256-bit
+    /// compare, never a byte-wise comparison.
     pub fn eql(a: CheckedModuleArtifactKey, b: CheckedModuleArtifactKey) bool {
         return @as(u256, @bitCast(a.bytes)) == @as(u256, @bitCast(b.bytes));
     }
@@ -145,12 +143,7 @@ pub const CheckedModuleArtifactKey = extern struct {
         checking_context_identity: CheckingContextIdentity,
         direct_import_artifact_keys: []const CheckedModuleArtifactKey,
     ) CheckedModuleArtifactKey {
-        return computeFromIdentityHash(
-            source_hash,
-            hashModuleIdentity(module_identity),
-            checking_context_identity,
-            direct_import_artifact_keys,
-        );
+        return computeFromIdentityHash(source_hash, hashModuleIdentity(module_identity), checking_context_identity, direct_import_artifact_keys);
     }
 
     pub fn computeFromIdentityHash(
@@ -159,24 +152,13 @@ pub const CheckedModuleArtifactKey = extern struct {
         checking_context_identity: CheckingContextIdentity,
         direct_import_artifact_keys: []const CheckedModuleArtifactKey,
     ) CheckedModuleArtifactKey {
-        const compiler_artifact_hash = build_options.compiler_artifact_hash;
-        const checking_context_identity_hash = hashCheckingContextIdentity(checking_context_identity);
-        const direct_import_artifact_keys_hash = hashDirectImportArtifactKeys(direct_import_artifact_keys);
-
-        return .{
-            .source_hash = source_hash,
-            .compiler_artifact_hash = compiler_artifact_hash,
-            .module_identity_hash = module_identity_hash,
-            .checking_context_identity_hash = checking_context_identity_hash,
-            .direct_import_artifact_keys_hash = direct_import_artifact_keys_hash,
-            .bytes = computeCheckedArtifactKeyBytes(
-                source_hash,
-                compiler_artifact_hash,
-                module_identity_hash,
-                checking_context_identity_hash,
-                direct_import_artifact_keys_hash,
-            ),
-        };
+        return .{ .bytes = computeCheckedArtifactKeyBytes(
+            source_hash,
+            build_options.compiler_artifact_hash,
+            module_identity_hash,
+            hashCheckingContextIdentity(checking_context_identity),
+            hashDirectImportArtifactKeys(direct_import_artifact_keys),
+        ) };
     }
 };
 
@@ -221,6 +203,15 @@ test "checked artifact key final bytes include compiler artifact hash" {
     );
 
     try std.testing.expect(!std.meta.eql(first, second));
+}
+
+test "checked artifact key rebuilt from an artifact ref is the same map entry" {
+    const key = CheckedModuleArtifactKey{ .bytes = @as([32]u8, @splat(7)) };
+    var keys: std.AutoHashMapUnmanaged(CheckedModuleArtifactKey, void) = .empty;
+    defer keys.deinit(std.testing.allocator);
+    try keys.put(std.testing.allocator, key, {});
+    try keys.put(std.testing.allocator, checkedArtifactKeyFromArtifactRef(artifactRef(key)), {});
+    try std.testing.expectEqual(@as(u32, 1), keys.count());
 }
 
 /// Public `ModuleIdentity` declaration.
@@ -9401,6 +9392,86 @@ test "nested closed record canonical keys agree across solver and checked repres
     try std.testing.expectEqualSlices(u8, &source_key.bytes, &checked_store.roots.items[@backingInt(checked_outer)].key.bytes);
     const substituted = try substitutedCheckedTypeKeyInfo(allocator, &names, &checked_store, checked_outer, &.{}, &.{});
     try std.testing.expectEqualSlices(u8, &source_key.bytes, &substituted.key.bytes);
+}
+
+test "published closed roots compose three deep and a closed cyclic root does not" {
+    const testing = std.testing;
+    const TestEnv = @import("test/TestEnv.zig");
+    const allocator = testing.allocator;
+
+    var test_env = try TestEnv.init("Main", "value = {}");
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    const types_store = &test_env.module_env.types;
+    const inner_name = try test_env.module_env.insertIdent(Ident.for_text("inner"));
+    const middle_name = try test_env.module_env.insertIdent(Ident.for_text("middle"));
+    const outer_name = try test_env.module_env.insertIdent(Ident.for_text("outer"));
+    const Build = struct {
+        fn record(store: *types.Store, name: Ident.Idx, field: Var) Allocator.Error!Var {
+            return try store.freshFromContent(.{ .structure = .{ .record = .{
+                .fields = try store.appendRecordFields(&.{.{ .name = name, .presence = .required(field) }}),
+                .ext = try store.freshFromContent(.{ .structure = .empty_record }),
+            } } });
+        }
+    };
+    const leaf = try types_store.freshFromContent(.{ .structure = .empty_record });
+    const inner = try Build.record(types_store, inner_name, leaf);
+    const middle = try Build.record(types_store, middle_name, inner);
+    const outer = try Build.record(types_store, outer_name, middle);
+    // A closed recursive tuple and a parent that holds it beside `inner`.
+    const cyclic = try types_store.fresh();
+    try types_store.setVarContent(cyclic, .{ .structure = .{ .tuple = .{ .elems = try types_store.appendVars(&.{ cyclic, leaf }) } } });
+    const holder = try types_store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try types_store.appendVars(&.{ cyclic, inner }) } } });
+
+    const source_modules = [_]TypedCIR.Modules.SourceModule{
+        .{ .precompiled = test_env.module_env },
+    };
+    var modules = try TypedCIR.Modules.init(allocator, &source_modules);
+    defer modules.deinit();
+    const module = modules.module(0);
+    const imports = CheckedImportViews{ .current_owner = testCheckedModuleKey(1), .direct = &.{} };
+
+    const fresh_outer = try canonical_type_keys.fromVarInfo(allocator, module.typeStoreConst(), module.moduleEnvConst(), outer);
+    const fresh_holder = try canonical_type_keys.fromVarInfo(allocator, module.typeStoreConst(), module.moduleEnvConst(), holder);
+    const fresh_cyclic = try canonical_type_keys.fromVarInfo(allocator, module.typeStoreConst(), module.moduleEnvConst(), cyclic);
+    try testing.expect(fresh_outer.composable);
+    // The cyclic root's own encoding writes a cycle reference, so it is not
+    // composable; its parent refers to it by key and is.
+    try testing.expect(!fresh_cyclic.composable);
+    try testing.expect(!fresh_cyclic.contains_identity_variables);
+    try testing.expect(fresh_holder.composable);
+
+    // Publish children first, so each parent's key is composed from its
+    // children's stored keys, and then publish only the outermost roots.
+    for ([_]bool{ true, false }) |children_first| {
+        var names = canonical.CanonicalNameStore.init(allocator);
+        defer names.deinit();
+        var store = CheckedTypeStore{};
+        defer store.deinit(allocator);
+        var active = try CheckedSourceTypeRoots.init(allocator, module);
+        defer active.deinit();
+
+        if (children_first) {
+            for ([_]Var{ leaf, inner, middle, cyclic }) |child| {
+                _ = try appendCheckedTypeRoot(allocator, module, &names, imports, &store, &active, child);
+            }
+        }
+        const checked_outer = try appendCheckedTypeRoot(allocator, module, &names, imports, &store, &active, outer);
+        const checked_holder = try appendCheckedTypeRoot(allocator, module, &names, imports, &store, &active, holder);
+        const checked_cyclic = try appendCheckedTypeRoot(allocator, module, &names, imports, &store, &active, cyclic);
+
+        try testing.expectEqualSlices(u8, &fresh_outer.key.bytes, &store.roots.items[@backingInt(checked_outer)].key.bytes);
+        try testing.expectEqualSlices(u8, &fresh_holder.key.bytes, &store.roots.items[@backingInt(checked_holder)].key.bytes);
+        try testing.expectEqualSlices(u8, &fresh_cyclic.key.bytes, &store.roots.items[@backingInt(checked_cyclic)].key.bytes);
+        try testing.expect(store.rootIsComposable(checked_outer));
+        try testing.expect(!store.rootIsComposable(checked_cyclic));
+        try testing.expect(store.rootIsComposable(checked_holder));
+        for ([_]CheckedTypeId{ checked_outer, checked_holder, checked_cyclic }, [_]canonical.CanonicalTypeKey{ fresh_outer.key, fresh_holder.key, fresh_cyclic.key }) |root, expected| {
+            const substituted = try substitutedCheckedTypeKeyInfo(allocator, &names, &store, root, &.{}, &.{});
+            try testing.expectEqualSlices(u8, &expected.bytes, &substituted.key.bytes);
+        }
+    }
 }
 
 test "a synthetic function over composed roots shares the source function root" {
@@ -27026,6 +27097,7 @@ pub const PlatformPairing = struct {
             .owner_only_fields = &.{
                 // Platform identity and source: borrowed from the platform.
                 "key",
+                "source_hash",
                 "module_identity",
                 "direct_import_artifact_keys",
                 "public_api_dependencies",
@@ -33134,6 +33206,9 @@ pub const CompileTimeRootReadTable = struct {
 /// Checked module publication, including typed stores and compile-time observations.
 pub const CheckedModuleArtifact = struct {
     key: CheckedModuleArtifactKey,
+    /// Hash of the module's source inputs: the one `key` input not otherwise
+    /// held by the artifact.
+    source_hash: [32]u8,
     canonical_names: canonical.CanonicalNameStore,
     module_identity: ModuleIdentity,
     checking_context_identity: CheckingContextIdentity,
@@ -33203,7 +33278,7 @@ pub const CheckedModuleArtifact = struct {
     /// app binding environment. Local checked IDs retain the module's key.
     pub fn codeGenerationKey(self: *const CheckedModuleArtifact) CheckedModuleArtifactKey {
         if (self.pairing_arena == null) return self.key;
-        return CheckedModuleArtifactKey.computeFromSourceHash(self.key.source_hash, self.module_identity, self.checking_context_identity, self.direct_import_artifact_keys);
+        return CheckedModuleArtifactKey.computeFromSourceHash(self.source_hash, self.module_identity, self.checking_context_identity, self.direct_import_artifact_keys);
     }
 
     pub fn moduleEnv(self: *CheckedModuleArtifact) *ModuleEnv {
@@ -33358,14 +33433,15 @@ pub const CheckedModuleArtifact = struct {
     /// sub-store contributes its own `Serialized` form in a fixed field order;
     /// the buffer write order matches this field order. `module_env` is NOT
     /// serialized here (transform E): the env relocates as its own blob and is
-    /// injected by the caller at `deserialize` time. `key` and `module_identity`
-    /// are relocation-invariant POD stored inline.
+    /// injected by the caller at `deserialize` time. `key`, `source_hash`, and
+    /// `module_identity` are relocation-invariant POD stored inline.
     pub const Serialized = extern struct {
         // No field defaults: `Serialized` is only ever produced by `serialize`,
         // which sets every field. Some nested `Serialized` forms (those carrying
         // a `NameInterner`/`SafeList` header) are not default-constructible, so a
         // uniform "no defaults" rule keeps this struct valid.
         key: CheckedModuleArtifactKey,
+        source_hash: [32]u8,
         module_identity: ModuleIdentitySerialized,
         direct_import_artifact_keys: SerializedSlice(CheckedModuleArtifactKey),
         canonical_names: canonical.CanonicalNameStore.Serialized,
@@ -33427,7 +33503,7 @@ pub const CheckedModuleArtifact = struct {
             // + the recursive sum of every sub-store, now including the `SafeList`/
             // interner base pointers (`canonical_names` = 22 via its 7 interners +
             // `proc_bases`; `checked_types` includes its `var_names` interner = 3).
-            // POD inline `key`/`module_identity` contribute 0. Fixed at compile time,
+            // POD inline `key`/`source_hash`/`module_identity` contribute 0. Fixed at compile time,
             // independent of stored data size. The optional-field body tables
             // add three pointers beyond the current-main count, and the
             // record-unset label pool one more. Ordered debug entries and their
@@ -33439,13 +33515,14 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 234);
         }
 
-        /// Every field but the inline POD `key` and `module_identity`: the
-        /// sub-stores, in buffer write order.
-        const sub_store_fields = @typeInfo(Serialized).@"struct".field_names[2..];
+        /// Every field but the inline POD `key`, `source_hash`, and
+        /// `module_identity`: the sub-stores, in buffer write order.
+        const sub_store_fields = @typeInfo(Serialized).@"struct".field_names[3..];
 
         comptime {
             std.debug.assert(artifact_serialize.comptimeStrEq(@typeInfo(Serialized).@"struct".field_names[0], "key"));
-            std.debug.assert(artifact_serialize.comptimeStrEq(@typeInfo(Serialized).@"struct".field_names[1], "module_identity"));
+            std.debug.assert(artifact_serialize.comptimeStrEq(@typeInfo(Serialized).@"struct".field_names[1], "source_hash"));
+            std.debug.assert(artifact_serialize.comptimeStrEq(@typeInfo(Serialized).@"struct".field_names[2], "module_identity"));
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -33460,6 +33537,7 @@ pub const CheckedModuleArtifact = struct {
             if (artifact.pairing_arena != null) checkedArtifactInvariant("pairing session cannot be cached as a module", .{});
             if (artifact.evaluation_state != .finalized) checkedArtifactInvariant("cannot serialize prepared checked module", .{});
             self.key = artifact.key;
+            self.source_hash = artifact.source_hash;
             self.module_identity = ModuleIdentitySerialized.encode(artifact.module_identity);
             inline for (sub_store_fields) |name| {
                 // `SerializedSlice.serialize` takes its slice by value; every other
@@ -33528,6 +33606,7 @@ pub const CheckedModuleArtifact = struct {
             // (`assertBidirectionalFieldSet` pins that partition).
             var artifact: CheckedModuleArtifact = undefined;
             artifact.key = self.key;
+            artifact.source_hash = self.source_hash;
             artifact.module_identity = self.module_identity.decode();
             artifact.module_env = module_env;
             artifact.serialized_backing = backing;
@@ -34863,7 +34942,14 @@ pub const CheckedModuleArtifact = struct {
             }
         }
 
-        std.debug.assert(std.meta.eql(self.key.direct_import_artifact_keys_hash, hashDirectImportArtifactKeys(self.direct_import_artifact_keys)));
+        if (self.pairing_arena == null) {
+            std.debug.assert(CheckedModuleArtifactKey.eql(self.key, CheckedModuleArtifactKey.computeFromSourceHash(
+                self.source_hash,
+                self.module_identity,
+                self.checking_context_identity,
+                self.direct_import_artifact_keys,
+            )));
+        }
 
         for (self.hosted_procs.procs, 0..) |proc, i| {
             std.debug.assert(proc.deterministic_index == i);
@@ -36690,8 +36776,9 @@ pub fn publishFromTypedModule(
 
     const direct_import_artifact_keys = try directImportArtifactKeysFromModule(allocator, module_env, inputs.imports);
     errdefer allocator.free(direct_import_artifact_keys);
+    const source_hash = hashModuleSourceInputs(module_env);
     const artifact_key = CheckedModuleArtifactKey.computeFromSourceHash(
-        hashModuleSourceInputs(module_env),
+        source_hash,
         module_identity,
         checking_context_identity,
         direct_import_artifact_keys,
@@ -37277,6 +37364,7 @@ pub fn publishFromTypedModule(
 
     var artifact = CheckedModuleArtifact{
         .key = artifact_key,
+        .source_hash = source_hash,
         .canonical_names = canonical_names,
         .module_identity = module_identity,
         .checking_context_identity = checking_context_identity,
@@ -37960,6 +38048,7 @@ test "relation projection preserves anonymous row identity and provenance" {
     defer module_env.deinit();
     var source_artifact = CheckedModuleArtifact{
         .key = testCheckedModuleKey(70),
+        .source_hash = @as([32]u8, @splat(0)),
         .canonical_names = source_names,
         .module_identity = .{
             .module_idx = 1,
@@ -38210,6 +38299,7 @@ test "artifact views are read-only projections" {
 
     var artifact = CheckedModuleArtifact{
         .key = .{},
+        .source_hash = @as([32]u8, @splat(0)),
         .canonical_names = names,
         .module_identity = .{
             .module_idx = 0,
@@ -39120,6 +39210,7 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
 
     const artifact = CheckedModuleArtifact{
         .key = key,
+        .source_hash = @as([32]u8, @splat(0x5c)),
         .canonical_names = canonical_names_src,
         .module_identity = identity,
         .checking_context_identity = .{},
@@ -39167,6 +39258,7 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
 
     // POD inline fields survive byte-identically.
     try std.testing.expectEqualSlices(u8, &key.bytes, &loaded.key.bytes);
+    try std.testing.expectEqualSlices(u8, &artifact.source_hash, &loaded.source_hash);
     try std.testing.expectEqualSlices(u8, &identity.stable_hash, &loaded.module_identity.stable_hash);
     try std.testing.expectEqual(identity.module_idx, loaded.module_identity.module_idx);
     try std.testing.expectEqual(identity.module_name, loaded.module_identity.module_name);
@@ -39587,8 +39679,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x66, 0x43, 0x81, 0xC2, 0x0A, 0x13, 0xDE, 0x22, 0x56, 0x01, 0xDB, 0x2D, 0xDA, 0xE0, 0x6C, 0x3B,
-        0xE1, 0xD8, 0x5D, 0x0A, 0xA0, 0xC8, 0x73, 0x36, 0x36, 0x6F, 0x3E, 0x4B, 0xE5, 0x70, 0x3A, 0x35,
+        0xFB, 0xD2, 0xBC, 0x16, 0x04, 0x13, 0x03, 0x8E, 0xB7, 0x83, 0x44, 0xFF, 0x5D, 0xCC, 0xB0, 0xF0,
+        0x3A, 0xC3, 0xFD, 0xE8, 0x03, 0xD3, 0xBE, 0x38, 0x39, 0x2B, 0x30, 0x6E, 0x68, 0x45, 0xD9, 0x79,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
