@@ -37,6 +37,53 @@ pub fn layoutRepresentative(
     return builder.representative(root);
 }
 
+/// Whether every value of `root` occupies at least one byte, decided from
+/// structure alone. A list or box of zero-sized items has a runtime
+/// representation of its own, so a demand hole, whose list stands for any
+/// ordinary list, stands only for items known to be sized. False when the
+/// structure does not decide it: a function, whose lambda set the program
+/// decides, a recursive type, and a builtin whose representation follows its
+/// arguments.
+pub fn knownSized(allocator: Allocator, store: *const Type.Store, root: Type.TypeId) Allocator.Error!bool {
+    var visiting = std.AutoHashMapUnmanaged(Type.TypeId, void).empty;
+    defer visiting.deinit(allocator);
+    var pending: std.ArrayList(Type.TypeId) = .empty;
+    defer pending.deinit(allocator);
+    // A type is sized when some one of its components is; walk components
+    // until one decides it.
+    try pending.append(allocator, root);
+    while (pending.pop()) |ty| {
+        if ((try visiting.getOrPut(allocator, ty)).found_existing) continue;
+        switch (store.get(ty)) {
+            .primitive, .list, .box, .erased => return true,
+            .func, .zst, .hole => {},
+            .record => |fields| {
+                const span = store.fieldSpan(fields);
+                for (0..span.len) |index| try pending.append(allocator, GuardedList.at(span, index).ty);
+            },
+            .tuple => |items| {
+                const span = store.span(items);
+                for (0..span.len) |index| try pending.append(allocator, GuardedList.at(span, index));
+            },
+            .tag_union => |tags| {
+                const tag_span = store.tagSpan(tags);
+                // More than one tag needs a discriminant.
+                if (tag_span.len > 1) return true;
+                for (0..tag_span.len) |tag_index| {
+                    const payloads = store.span(GuardedList.at(tag_span, tag_index).payloads);
+                    for (0..payloads.len) |index| try pending.append(allocator, GuardedList.at(payloads, index));
+                }
+            },
+            .named => |named| switch (Builder.namedLayout(named)) {
+                .itself => return true,
+                .none => {},
+                .backing => |backing| try pending.append(allocator, backing),
+            },
+        }
+    }
+    return false;
+}
+
 const Builder = struct {
     allocator: Allocator,
     store: *Type.Store,
@@ -132,8 +179,9 @@ const Builder = struct {
     fn namedLayout(named: Type.NamedContent) NamedLayout {
         if (named.builtin_owner) |owner| switch (owner) {
             .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => return .itself,
-            .iter, .stream => return .none,
-            .list, .box, .dict, .set, .parse_tag_union_spec, .fields, .field, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => {},
+            // These representations follow their arguments' structure.
+            .iter, .stream, .parse_tag_union_spec, .fields, .field => return .none,
+            .list, .box, .dict, .set, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => {},
         };
         if (named.declared_order.len != 0) return .none;
         const backing = named.backing orelse return .none;
@@ -260,4 +308,34 @@ test "a type holding a function has no layout representative" {
     const holder = try store.internTuple(&name_store, &.{ u64_ty, funcs });
     try testing.expectEqual(@as(?Type.TypeId, null), try layoutRepresentative(testing.allocator, &store, &name_store, func));
     try testing.expectEqual(@as(?Type.TypeId, null), try layoutRepresentative(testing.allocator, &store, &name_store, holder));
+}
+
+test "only structurally sized types are known sized" {
+    var name_store = names.NameStore.init(testing.allocator);
+    defer name_store.deinit();
+    var store = Type.Store.init(testing.allocator);
+    defer store.deinit();
+
+    const a_tag = try name_store.internTagLabel("A");
+    const b_tag = try name_store.internTagLabel("B");
+    const unit = try store.internZst(&name_store);
+    const u8_ty = try store.internPrimitive(&name_store, .u8);
+    const units = try store.internTuple(&name_store, &.{ unit, unit });
+    const mixed = try store.internTuple(&name_store, &.{ unit, u8_ty });
+    const one_empty_tag = try store.internTagUnion(&name_store, &.{.{ .name = a_tag, .checked_name = a_tag, .payloads = &.{} }});
+    const two_empty_tags = try store.internTagUnion(&name_store, &.{
+        .{ .name = a_tag, .checked_name = a_tag, .payloads = &.{} },
+        .{ .name = b_tag, .checked_name = b_tag, .payloads = &.{} },
+    });
+    const func = try store.internFunc(&name_store, &.{u8_ty}, u8_ty);
+    const empty_list = try store.internList(&name_store, unit);
+
+    try testing.expect(try knownSized(testing.allocator, &store, u8_ty));
+    try testing.expect(try knownSized(testing.allocator, &store, mixed));
+    try testing.expect(try knownSized(testing.allocator, &store, two_empty_tags));
+    try testing.expect(try knownSized(testing.allocator, &store, empty_list));
+    try testing.expect(!try knownSized(testing.allocator, &store, unit));
+    try testing.expect(!try knownSized(testing.allocator, &store, units));
+    try testing.expect(!try knownSized(testing.allocator, &store, one_empty_tag));
+    try testing.expect(!try knownSized(testing.allocator, &store, func));
 }

@@ -2253,6 +2253,9 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc repl multiline string definition retains every line", .body = .{ .command = .{ .args = &.{"repl"}, .stdin = "str =\n  \\\\first line\n  \\\\second line\nstr\n", .stdout_exact = "assigned `str`\n\"first line\nsecond line\"\n", .stderr_exact = "" } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc repl multiline string expression at EOF retains spaces", .body = .{ .command = .{ .args = &.{"repl"}, .stdin = "\\\\first  \n\\\\second  ", .stdout_exact = "\"first  \nsecond  \"\n", .stderr_exact = "" } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc repl blank line submits multiline string", .body = .{ .command = .{ .args = &.{"repl"}, .stdin = "\\\\first\n\\\\second\n\n42\n", .stdout_exact = "\"first\nsecond\"\n42.0\n", .stderr_exact = "" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "demand-shaped specializations behave like their element types (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/DemandSpecialization.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (10) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "demand-shaped specializations behave like their element types (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/DemandSpecialization.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (10) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "demand-shaped specializations behave like their element types (size)", .backend = .size, .body = .{ .command = .{ .args = &.{ "test", "--opt=size", "--no-cache" }, .roc_file = "test/cli/DemandSpecialization.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (10) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11917: append_le_bytes decoded capacity (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/AppendLeBytesCapacity.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11917: append_le_bytes decoded capacity (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/AppendLeBytesCapacity.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11917: append_le_bytes decoded capacity (size)", .backend = .size, .body = .{ .command = .{ .args = &.{ "test", "--opt=size", "--no-cache" }, .roc_file = "test/cli/AppendLeBytesCapacity.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }} } } },
@@ -7854,6 +7857,13 @@ fn customNativeBuildThreadCountReproducible(
         defer for (outputs) |bytes| allocator.free(bytes);
 
         if (!std.mem.eql(u8, outputs[0], outputs[1])) {
+            // A differing set of procedures is the more useful report: it
+            // names a specialization only one schedule emitted.
+            const difference = procSymbolDifference(allocator, outputs[0], outputs[1]) catch |err|
+                return customInfraFailure(allocator, timer, "failed to compare procedure symbols: {}", .{err});
+            if (difference) |symbol| {
+                return customFailure(allocator, timer, "{s}: procedure symbol {s} is emitted by only one of --jobs=1 and the default worker count", .{ roc_file, symbol });
+            }
             return customFailure(allocator, timer, "{s}: native dev build bytes differ between --jobs=1 and the default worker count", .{roc_file});
         }
         if (!std.mem.eql(u8, outputs[1], outputs[2])) {
@@ -7861,6 +7871,36 @@ fn customNativeBuildThreadCountReproducible(
         }
     }
     return null;
+}
+
+/// A procedure symbol name (`roc__p{hash}`, design.md "Object Symbol Names")
+/// that occurs in exactly one of two build outputs, or null when both name
+/// the same procedures.
+fn procSymbolDifference(allocator: Allocator, left: []const u8, right: []const u8) Allocator.Error!?[]const u8 {
+    var left_symbols = try procSymbols(allocator, left);
+    defer left_symbols.deinit();
+    var right_symbols = try procSymbols(allocator, right);
+    defer right_symbols.deinit();
+    var left_iter = left_symbols.keyIterator();
+    while (left_iter.next()) |symbol| if (!right_symbols.contains(symbol.*)) return symbol.*;
+    var right_iter = right_symbols.keyIterator();
+    while (right_iter.next()) |symbol| if (!left_symbols.contains(symbol.*)) return symbol.*;
+    return null;
+}
+
+/// Every procedure symbol name in a build output, as slices of it.
+fn procSymbols(allocator: Allocator, bytes: []const u8) Allocator.Error!std.StringHashMap(void) {
+    const prefix = "roc__p";
+    var symbols = std.StringHashMap(void).init(allocator);
+    errdefer symbols.deinit();
+    var index: usize = 0;
+    while (std.mem.indexOfPos(u8, bytes, index, prefix)) |start| {
+        var end = start + prefix.len;
+        while (end < bytes.len and std.ascii.isHex(bytes[end])) end += 1;
+        if (end != start + prefix.len) try symbols.put(bytes[start..end], {});
+        index = end;
+    }
+    return symbols;
 }
 
 /// Apps whose cold dev builds must write the same object-cache packs, with

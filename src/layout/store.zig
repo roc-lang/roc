@@ -2545,8 +2545,8 @@ pub const Store = struct {
 
     /// Whether a value of layout `actual` can stand where layout `expected` is
     /// required (design.md "Specialization By Demand"): the two are equal, or
-    /// `expected` is a list or box of holes and `actual` the same kind of
-    /// container, or both are structs or tag unions of the same shape whose
+    /// `expected` is a list or box of holes and `actual` a list or box of
+    /// sized items, or both are structs or tag unions of the same shape whose
     /// components accept pairwise. A demand-shaped procedure reads a list or
     /// box of holes only as its header, which every element type shares, and
     /// such headers have one size and alignment whatever their items are.
@@ -2559,13 +2559,15 @@ pub const Store = struct {
             const actual_layout = self.getLayout(pair[0]);
             const expected_layout = self.getLayout(pair[1]);
             switch (expected_layout.tag) {
+                // A list or box of zero-sized items has a runtime
+                // representation of its own, which a hole never stands for.
                 .list => {
                     if (self.getLayout(expected_layout.getIdx()).tag != .hole) return false;
-                    if (actual_layout.tag != .list and actual_layout.tag != .list_of_zst) return false;
+                    if (actual_layout.tag != .list) return false;
                 },
                 .box => {
                     if (self.getLayout(expected_layout.getIdx()).tag != .hole) return false;
-                    if (actual_layout.tag != .box and actual_layout.tag != .box_of_zst) return false;
+                    if (actual_layout.tag != .box) return false;
                 },
                 .struct_ => {
                     if (actual_layout.tag != .struct_) return false;
@@ -4360,4 +4362,46 @@ test "tag union discriminant offsets beyond 16 bits are committed exactly" {
     });
     const with_str = try store.putTagUnion(&[_]Idx{ .zst, payload_with_str });
     try expectTagUnionMetrics(&store, with_str, 65_552, 65_560, 65_560, 65_568);
+}
+
+test "a list or box of holes accepts any list or box, alone or inside a struct" {
+    const testing = std.testing;
+
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    const hole = try store.insertLayout(Layout.hole());
+    const list_of_holes = try store.insertList(hole);
+    const box_of_holes = try store.insertBox(hole);
+    const list_of_strs = try store.insertList(.str);
+    const box_of_u64 = try store.insertBox(.u64);
+    const list_of_zsts = try store.insertLayout(Layout.listOfZst());
+
+    // A list of holes is an ordinary list, not a list of zero-sized items.
+    try testing.expectEqual(LayoutTag.list, store.getLayout(list_of_holes).tag);
+    try testing.expectEqual(@as(?Idx, null), store.builtinListAbi(list_of_holes).elem_layout_idx);
+    try testing.expect(store.layoutHoldsHole(list_of_holes));
+    try testing.expect(!store.layoutHoldsHole(list_of_strs));
+
+    try testing.expect(try store.acceptsAtHoles(testing.allocator, list_of_strs, list_of_holes));
+    try testing.expect(!try store.acceptsAtHoles(testing.allocator, list_of_zsts, list_of_holes));
+    try testing.expect(try store.acceptsAtHoles(testing.allocator, box_of_u64, box_of_holes));
+    try testing.expect(!try store.acceptsAtHoles(testing.allocator, box_of_u64, list_of_holes));
+    try testing.expect(!try store.acceptsAtHoles(testing.allocator, list_of_holes, list_of_strs));
+    try testing.expect(!try store.acceptsAtHoles(testing.allocator, .u64, list_of_holes));
+
+    const shaped = try store.putStructFields(&.{
+        .{ .index = 0, .layout = list_of_holes },
+        .{ .index = 1, .layout = .u64 },
+    });
+    const concrete = try store.putStructFields(&.{
+        .{ .index = 0, .layout = list_of_strs },
+        .{ .index = 1, .layout = .u64 },
+    });
+    const mismatched = try store.putStructFields(&.{
+        .{ .index = 0, .layout = list_of_strs },
+        .{ .index = 1, .layout = .u32 },
+    });
+    try testing.expect(try store.acceptsAtHoles(testing.allocator, concrete, shaped));
+    try testing.expect(!try store.acceptsAtHoles(testing.allocator, mismatched, shaped));
 }

@@ -15321,6 +15321,8 @@ only that much of each variable's substitution. `List.len` reads a length at a
 fixed offset whatever its element type is, so every program has one `List.len`
 specialization, not one per element type.
 
+#### Demand
+
 The demand of a variable is one of three values, the same scale
 `LowLevel.elementDemand` places on a low-level operation's arguments:
 
@@ -15351,6 +15353,67 @@ demands at least its layout, because it sizes the parameter. A body that is
 not a checked Roc body (an intrinsic, an entry wrapper, a hosted procedure, or
 an unimplemented declaration, whose crash body still returns at its declared
 type) demands all of every variable.
+
+#### Shaped requests
+
+A request Monotype resolves at seal time (`resolveDeferredTemplateSpecs`)
+whose every use in the requesting body is a direct call is shaped by its
+template's demand (`demandShapedRequest`): a `none` slot becomes the hole type,
+a `layout` slot becomes the layout representative of its substitution
+(`layout_key.zig`), and a `full` slot keeps its type. The template's checked
+root instantiated at that substitution is the request type, so the request's
+identity digest, its lookup, and its body all follow the shaped type, and two
+requests that agree on everything their body demands reuse one
+specialization. A request is not shaped when a slot is a checking error, when
+its function is also used as a value (a value's type is the program's), when
+its identity depends on its lexical context or a codec contract, when it is a
+result-row widening adapter, or when the shaped signature would hold a
+function type. The last rule means no lambda set ever crosses a shaped call.
+
+The layout representative of a type drops what layout selection ignores: a
+record becomes the tuple of its fields in their row order, and a nominal type
+its backing's representative. Scalars, `Str`, and the builtins with fixed
+layouts are their own representatives, and lists, boxes, tuples, and tag
+unions keep their structure with representative components. A type holding a
+function, a recursive type, an iterator, and a nominal record that declares
+its own field order have no representative; such a slot keeps its type. Tag
+names are kept, so two tag unions share a representative only when their tags
+agree as well as their payloads.
+
+Every call to a shaped specialization records it (`CallProc.demand_shaped`).
+Its arguments and result keep the call's types, while the callee's parameters
+and result carry holes and representatives. Lambda Solved relates nothing
+across such a call; SpecConstr neither specializes nor inlines through it, and
+lifting preserves the mark.
+
+#### Holes through the pipeline
+
+The hole is a type of its own in Monotype, Monotype's instantiation graph,
+Lambda Solved, and Lambda Mono, and a layout of its own (`LayoutTag.hole`):
+zero-sized, never refcounted, equal only to itself. Analysis places it only
+as a `List` or `Box` element in a parameter type, so a hole-holding value is
+always a list or box header, which every element type shares. A list or box of
+holes is an ordinary list or box layout, distinct from the zero-sized-element
+forms, and `builtinListAbi`/`builtinBoxAbi` report no element for it.
+
+`layout.Store.acceptsAtHoles` is the one relation later stages use where a
+value meets a hole: a layout accepts another when they are equal, when the
+expected one is a list or box of holes and the actual one is a list or box,
+or when both are structs or tag unions of one shape whose components accept
+pairwise. Direct LIR lowers a shaped call's arguments at their own types, and
+its local assignments and representation boundaries accept a value at a
+hole-holding layout; an inlined shaped body binds its parameters to the
+caller's locals directly.
+
+No refcount plan exists for a value holding a hole. ARC borrows every such
+parameter, because the body never consumes it, and two invariants pin this:
+requesting a refcount operation on such a value fails, and so does a
+procedure signature that owns such a parameter.
+
+A shaped specialization's procedure identity renders its holes as holes, so
+the object cache keys it by its demand-shaped types with no further change,
+and the specialization set stays a function of the source tree: the demand
+vector comes from the checked artifact and the substitution from the request.
 
 ### Procedure Aliases
 

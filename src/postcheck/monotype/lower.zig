@@ -14316,10 +14316,13 @@ const Builder = struct {
                 .checked_error => return null,
                 .ty => |ty| ty,
             };
-            const shaped_ty = switch (demand) {
+            // A hole stands for sized items only (`LayoutKey.knownSized`); a
+            // type not known to be sized keeps its layout.
+            const shaped_ty = if (demand == .none and try LayoutKey.knownSized(self.allocator, types_, ty))
+                try types_.internHole(name_store)
+            else switch (demand) {
                 .full => ty,
-                .none => try types_.internHole(name_store),
-                .layout => (try LayoutKey.layoutRepresentative(self.allocator, types_, name_store, ty)) orelse ty,
+                .none, .layout => (try LayoutKey.layoutRepresentative(self.allocator, types_, name_store, ty)) orelse ty,
             };
             if (shaped_ty != ty) changed = true;
             out.* = .{ .ty = shaped_ty };

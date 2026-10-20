@@ -6682,6 +6682,10 @@ pub const BoxyRuntime = struct {
         expected_layout: layout_mod.Idx,
     ) Error!Value {
         if (actual_layout == expected_layout) return value;
+        // A demand-shaped procedure reads a list or box of holes only as its
+        // header, which the value already is (design.md "Specialization By
+        // Demand").
+        if (try self.layout_store.acceptsAtHoles(self.scratch, actual_layout, expected_layout)) return value;
 
         const actual_layout_val = self.layout_store.getLayout(actual_layout);
         const expected_layout_val = self.layout_store.getLayout(expected_layout);

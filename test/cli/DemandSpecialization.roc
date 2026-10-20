@@ -60,3 +60,35 @@ expect {
 	applied = List.map(fns, |f| f(10))
 	applied == [11, 20] and List.len(fns) == 2
 }
+
+# A list of zero-sized items has a representation of its own, so it never
+# shares a specialization with lists of sized items.
+expect {
+	units : List({})
+	units = [{}, {}, {}]
+	strs = ["a", "b"]
+	List.len(units) == 3 and List.capacity(units) == 0 and List.len(strs) == 2 and List.capacity(strs) >= 2
+}
+
+expect {
+	units : List({})
+	units = [{}, {}, {}]
+	more = List.concat(units, [{}, {}])
+	List.len(more) == 5 and List.capacity(more) == 0
+}
+
+# A parser's field-name table follows its shape's field names, not just
+# its layout.
+Item : U64
+
+count_items : Str -> U64
+count_items = |json| {
+	parsed : Try({ items : List(Item) }, _)
+	parsed = Json.parse(json)
+	match parsed {
+		Ok(record) => record.items.len()
+		Err(_) => 0
+	}
+}
+
+expect count_items("{\"items\":[1,2]}") == 2

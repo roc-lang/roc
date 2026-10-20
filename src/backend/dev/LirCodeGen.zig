@@ -11559,6 +11559,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return loc;
         }
 
+        /// A call argument at its parameter's layout. A demand-shaped callee's
+        /// parameter accepts any list or box where its layout holds a hole
+        /// (design.md "Specialization By Demand"); every other argument must
+        /// match exactly.
+        fn requireArgumentLocationToLayout(
+            self: *Self,
+            loc: ValueLocation,
+            actual_layout: layout.Idx,
+            expected_layout: layout.Idx,
+            comptime site: []const u8,
+        ) Allocator.Error!ValueLocation {
+            if (actual_layout != expected_layout and try self.layout_store.acceptsAtHoles(self.allocator, actual_layout, expected_layout)) return loc;
+            return self.requireExactValueLocationToLayout(loc, actual_layout, expected_layout, site);
+        }
+
         fn requireExactValueLocationToLayout(
             self: *Self,
             loc: ValueLocation,
@@ -13817,7 +13832,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const actual_layout = self.localLayout(arg_ref);
                 const expected_layout = self.localLayout(param_ref);
                 const raw_arg_loc = try self.emitValueLocal(arg_ref);
-                arg_locs[i] = self.requireExactValueLocationToLayout(raw_arg_loc, actual_layout, expected_layout, "direct_call.arg");
+                arg_locs[i] = try self.requireArgumentLocationToLayout(raw_arg_loc, actual_layout, expected_layout, "direct_call.arg");
                 arg_layouts[i] = expected_layout;
             }
 
@@ -13884,7 +13899,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const arg_ref = GuardedList.at(arg_refs, i);
                 const expected_layout = self.localLayout(GuardedList.at(param_refs, i));
                 const raw_arg_loc = try self.emitValueLocal(arg_ref);
-                const exact = self.requireExactValueLocationToLayout(raw_arg_loc, self.localLayout(arg_ref), expected_layout, "tail_call.arg");
+                const exact = try self.requireArgumentLocationToLayout(raw_arg_loc, self.localLayout(arg_ref), expected_layout, "tail_call.arg");
                 const arg_loc = self.coerceImmediateToLayout(exact, expected_layout);
                 try self.scratch_arg_infos.append(.{
                     .loc = arg_loc,

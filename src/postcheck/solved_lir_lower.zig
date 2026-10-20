@@ -8028,6 +8028,34 @@ const Lowerer = struct {
         } } };
     }
 
+    /// A demand-shaped call's layouts agree with its callee's: each argument's
+    /// layout is accepted at its parameter's, and the result's layout is the
+    /// callee's (design.md "Specialization By Demand"). A layout
+    /// representative commits exactly the layout of the type it stands for,
+    /// so this checks that agreement at every shaped call.
+    fn requireDemandShapedCallLayouts(self: *Lowerer, callee: Type.FnId, arg_tys: []const Type.TypeId, result_ty: Type.TypeId) Common.LowerError!void {
+        const param_tys = try self.lowerFnSpecArgTypes(callee);
+        defer self.allocator.free(param_tys);
+        if (param_tys.len != arg_tys.len) Common.invariant("a demand-shaped call's arity differed from its callee's");
+        for (arg_tys, param_tys) |arg_ty, param_ty| {
+            const arg_layout = try self.layoutOfType(arg_ty);
+            const param_layout = try self.layoutOfType(param_ty);
+            if (!try self.result.layouts.acceptsAtHoles(self.allocator, arg_layout, param_layout) and !try self.layoutsEquivalent(arg_layout, param_layout)) {
+                Common.invariantFmt("a demand-shaped call's argument layout {d} ({s}) was not accepted by its callee's parameter layout {d} ({s})", .{
+                    @backingInt(arg_layout),
+                    @tagName(self.result.layouts.getLayout(arg_layout).tag),
+                    @backingInt(param_layout),
+                    @tagName(self.result.layouts.getLayout(param_layout).tag),
+                });
+            }
+        }
+        const callee_ret_layout = try self.layoutOfType(self.fn_entries.items[@backingInt(callee)].ret);
+        const result_layout = try self.layoutOfType(result_ty);
+        if (callee_ret_layout != result_layout and !try self.layoutsEquivalent(callee_ret_layout, result_layout)) {
+            Common.invariant("a demand-shaped call's result layout differed from its callee's");
+        }
+    }
+
     fn stepKnownCall(self: *Lowerer, frame: *LowerFrame, task: *KnownCallTask, input: ?LIR.CFStmtId) Common.LowerError!LowerStep {
         if (frame.cursor == 1) {
             const lowered = task.lowered.?;
@@ -8043,6 +8071,7 @@ const Lowerer = struct {
             task.arg_tys = try self.allocator.alloc(Type.TypeId, task.args.len);
             for (task.args, task.arg_tys) |arg, *ty| ty.* = try self.lowerExprTy(arg);
             task.lowered = try self.lowerExprsToTempsAtTypes(task.args, task.arg_tys);
+            if (@import("builtin").mode == .debug) try self.requireDemandShapedCallLayouts(callee, task.arg_tys, task.result_ty);
         } else if (capture_count == 0) {
             task.arg_tys = try self.lowerFnSpecArgTypes(callee);
             task.lowered = try self.lowerExprsToTempsAtTypes(task.args, task.arg_tys);

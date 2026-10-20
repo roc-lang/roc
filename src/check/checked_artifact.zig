@@ -28732,7 +28732,13 @@ const TypeVarMentionFlags = packed struct(u8) {
     outside_container: bool = false,
     /// The variable is the extension of a record or tag-union row.
     row_extension: bool = false,
-    _padding: u5 = 0,
+    /// A path passes through an argument of a builtin nominal whose runtime
+    /// representation that argument's structure decides, not just its layout:
+    /// the field-name tables of `FieldNames`, `FieldName`, and
+    /// `ParseTagUnionSpec`, and the iterator representation of `Iter` and
+    /// `Stream`.
+    decides_representation: bool = false,
+    _padding: u4 = 0,
 
     fn merge(left: TypeVarMentionFlags, right: TypeVarMentionFlags) TypeVarMentionFlags {
         return @bitCast(@as(u8, @bitCast(left)) | @as(u8, @bitCast(right)));
@@ -28790,7 +28796,8 @@ const TypeVarMentions = struct {
                     var arg_flags = step.flags;
                     if (nominal.builtin) |builtin_nominal| switch (builtin_nominal) {
                         .list, .box => arg_flags.outside_container = false,
-                        else => {},
+                        .fields, .field, .parse_tag_union_spec, .iter, .stream => arg_flags.decides_representation = true,
+                        .bool, .try_, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .dict, .set, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => {},
                     };
                     for (nominal.args) |arg| try self.push(arg, arg_flags);
                     for (nominal.padding_field_types) |padding| try self.push(padding, step.flags);
@@ -28986,7 +28993,7 @@ const TemplateDemandPass = struct {
                 demand.* = .full;
                 continue;
             };
-            if (flags.row_extension or flags.under_function) {
+            if (flags.row_extension or flags.under_function or flags.decides_representation) {
                 demand.* = .full;
             } else if (flags.outside_container) {
                 demand.* = maxSchemeVarDemand(demand.*, .layout);
@@ -29046,19 +29053,25 @@ const TemplateDemandPass = struct {
     }
 
     /// Raise every quantified variable `ty` mentions to `demand`, and every one
-    /// it mentions inside a function type to `full`.
+    /// whose exact type it needs (see `exactMention`) to `full`.
     fn raiseMentions(self: *TemplateDemandPass, ty: CheckedTypeId, demand: SchemeVarDemand) Allocator.Error!void {
         for (try self.mentions.of(ty)) |mention| {
             const slot = self.slotOf(mention.var_ty) orelse continue;
-            self.raiseSlot(slot, if (mention.flags.under_function) .full else demand);
+            self.raiseSlot(slot, if (exactMention(mention.flags)) .full else demand);
         }
     }
 
-    /// Raise every quantified variable `ty` mentions inside a function type
-    /// to `full`: lambda-set solving needs the exact type of every function.
+    /// Whether a type needs the exact type of a variable it mentions this
+    /// way: lambda-set solving needs the exact type of every function, and a
+    /// representation-deciding builtin argument decides more than a layout.
+    fn exactMention(flags: TypeVarMentionFlags) bool {
+        return flags.under_function or flags.decides_representation;
+    }
+
+    /// Raise every quantified variable whose exact type `ty` needs to `full`.
     fn raiseFunctionMentions(self: *TemplateDemandPass, ty: CheckedTypeId) Allocator.Error!void {
         for (try self.mentions.of(ty)) |mention| {
-            if (!mention.flags.under_function) continue;
+            if (!exactMention(mention.flags)) continue;
             const slot = self.slotOf(mention.var_ty) orelse continue;
             self.raiseSlot(slot, .full);
         }
@@ -29450,7 +29463,7 @@ const TemplateDemandPass = struct {
             for (subst, 0..) |slot_ty, callee_slot| {
                 for (try self.mentions.of(slot_ty)) |mention| {
                     const caller_slot = self.slotOf(mention.var_ty) orelse continue;
-                    if (mention.flags.under_function) {
+                    if (exactMention(mention.flags)) {
                         self.raiseSlot(caller_slot, .full);
                         continue;
                     }
