@@ -250,6 +250,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_12376_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12039_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12393_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12434_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11471_test.zig"));
     std.testing.refAllDecls(@import("test/interface_summary_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11525_test.zig"));
@@ -286,4 +287,6 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_11732_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12230_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12147_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12455_test.zig"));
+    std.testing.refAllDecls(@import("test/import_cycle_checked_test.zig"));
 }
