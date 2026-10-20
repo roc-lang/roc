@@ -804,6 +804,15 @@ pub const GeneratedFieldIteratorSource = struct {
     size_type: ?CheckedTypeIdentity = null,
 };
 
+/// The compiler-derived `map` or `map!` of one tag union at one checked
+/// callable type `(union, transform) -> union`, transforming the payload slot
+/// checking selected. The plan's tag name belongs to the callable type's
+/// module.
+pub const DerivedMapSource = struct {
+    callable_type: CheckedTypeIdentity,
+    plan: static_dispatch.DerivedMapPlan,
+};
+
 /// First generated step worker selected for a FieldNames intrinsic wrapper.
 pub const GeneratedFieldIteratorLink = struct {
     intrinsic: WorkerPlanId,
@@ -829,6 +838,7 @@ fn isGeneratedEncoderCallback(source: WorkerSource) bool {
         .procedure_use,
         .nested_expr,
         .generated_field_iterator,
+        .derived_map,
         => false,
     };
 }
@@ -930,6 +940,7 @@ pub const WorkerSource = union(enum) {
     nested_expr: CheckedExprIdentity,
     generated_codec: GeneratedCodecSource,
     generated_field_iterator: GeneratedFieldIteratorSource,
+    derived_map: DerivedMapSource,
 };
 
 /// What selects one planned worker: its source and, except for a nested
@@ -5034,7 +5045,7 @@ const Builder = struct {
                 const worker = self.plan_worker_result;
                 switch (self.plan.workers.items[@backingInt(worker)].source) {
                     .nested_expr => |site| try self.analyzeUseSchemeSubstitution(worker, site),
-                    .procedure_template, .procedure_binding, .procedure_use, .generated_codec, .generated_field_iterator => {},
+                    .procedure_template, .procedure_binding, .procedure_use, .generated_codec, .generated_field_iterator, .derived_map => {},
                 }
                 for (self.plan.static_fns.items) |planned| {
                     if (moduleKeyEqual(planned.store_module, state.store_view.key) and planned.fn_id == state.fn_id and planned.rep == state.requested_rep) {
@@ -5081,6 +5092,7 @@ const Builder = struct {
             .procedure_use,
             .nested_expr,
             .generated_field_iterator,
+            .derived_map,
             => .{ .source = self.workerSourceForCallableEvalSource(source), .checked_type = checked_type },
         };
         if (!workerSourceEql(selected.source, source) or !typeRefEql(selected.checked_type, checked_type)) {
@@ -5113,7 +5125,8 @@ const Builder = struct {
         errdefer _ = self.worker_ids.remove(identity);
         const body = if (self.root_module != null and
             source != .generated_codec and
-            source != .generated_field_iterator)
+            source != .generated_field_iterator and
+            source != .derived_map)
             self.rootWorkerBody(source)
         else
             null;
@@ -5220,7 +5233,7 @@ const Builder = struct {
                 .encoder_dict_key_thunk,
                 => {},
             },
-            .generated_field_iterator => {},
+            .generated_field_iterator, .derived_map => {},
             .procedure_template,
             .procedure_binding,
             .procedure_use,
@@ -6742,11 +6755,11 @@ const Builder = struct {
         // dispatcher's dictionaries are those of its alias-unwrapped
         // representation.
         const dictionary_rep = self.repQuery().dictionaryArgumentIdentityRep(dispatcher_rep);
-        if (structuralCodecDispatchWorker(view, dispatch)) |codec| {
-            // The checked plan selected the compiler-generated codec for this
-            // structural dispatcher; the call runs that codec's constructor.
+        if (structuralDispatchWorker(view, dispatch)) |generated| {
+            // The checked plan selected a compiler-generated implementation
+            // for this structural dispatcher; the call runs its worker.
             try self.pushPlanActions(actions, &.{
-                .{ .ensure_worker = .{ .source = codec.source, .checked_type = codec.worker_type, .root_request = null } },
+                .{ .ensure_worker = .{ .source = generated.source, .checked_type = generated.worker_type, .root_request = null } },
                 .{ .dispatch_call_after_worker = site },
             });
             return;
@@ -6813,7 +6826,7 @@ const Builder = struct {
         const worker = self.plan_worker_result;
         const view = site.view;
         const dispatch = view.static_dispatch_plans.plans[@backingInt(site.plan.?)];
-        const source_fn_type = if (structuralCodecDispatchWorker(view, dispatch) != null)
+        const source_fn_type = if (structuralDispatchWorker(view, dispatch) != null)
             typeRef(view, dispatch.callable_ty)
         else blk: {
             const selected = directDispatchEvidence(view.static_dispatch_plans, dispatch.resolution).?;
@@ -6844,18 +6857,20 @@ const Builder = struct {
         try self.analyzeDirectCallSchemeSubstitution(self.plan.direct_calls.items[self.plan.direct_calls.items.len - 1]);
     }
 
-    const StructuralCodecDispatchWorker = struct {
+    const StructuralDispatchWorker = struct {
         source: WorkerSource,
         worker_type: CheckedTypeIdentity,
     };
 
-    /// The generated codec constructor a checked structural `parser_for` or
-    /// `encoder_for` call runs, declared at its checked derivation's source
-    /// roles, or null for any other resolution.
-    fn structuralCodecDispatchWorker(
+    /// The compiler-generated worker a checked structural dispatch runs: the
+    /// codec constructor of a structural `parser_for` or `encoder_for`,
+    /// declared at its checked derivation's source roles, or the derived
+    /// `map`/`map!` at the call's checked callable type. Null for any other
+    /// resolution.
+    fn structuralDispatchWorker(
         view: ModuleView,
         dispatch: static_dispatch.StaticDispatchCallPlan,
-    ) ?StructuralCodecDispatchWorker {
+    ) ?StructuralDispatchWorker {
         const derivation = switch (dispatch.resolution) {
             .structural => |derivation| derivation,
             .direct_pending, .direct_closed, .direct_parametric, .evidence_dependent, .checked_error, .@"unreachable" => return null,
@@ -6863,7 +6878,11 @@ const Builder = struct {
         const derivation_kind = derivation.kind();
         switch (derivation_kind) {
             .parser, .encoder => {},
-            .equality, .hash, .map, .map_effectful => return null,
+            .map, .map_effectful => return .{
+                .source = derivedMapWorkerSource(view, derivation, dispatch.callable_ty),
+                .worker_type = typeRef(view, dispatch.callable_ty),
+            },
+            .equality, .hash => return null,
         }
         const derivation_id = dispatch.generated_codec_derivation orelse
             boxyPlanInvariant("structural codec dispatch had no checked derivation reference");
@@ -6871,6 +6890,23 @@ const Builder = struct {
             .source = structuralCodecWorkerSource(view, derivation_kind, derivation_id, dispatch.dispatcher_ty, dispatch.callable_ty),
             .worker_type = structuralCodecWorkerType(view, derivation_id),
         };
+    }
+
+    /// The worker source of a checked derived `map`/`map!` at the checked
+    /// callable type of the use that selected it. A direct call and callable
+    /// dictionary evidence of the same derivation at the same callable type
+    /// key the same worker (`stepEnsureWorker` dedupes on the exact source
+    /// and type).
+    fn derivedMapWorkerSource(
+        view: ModuleView,
+        derivation: static_dispatch.StructuralDerivation,
+        callable_ty: checked.CheckedTypeId,
+    ) WorkerSource {
+        const plan = switch (derivation) {
+            .map, .map_effectful => |plan| plan,
+            .equality, .hash, .parser, .encoder => boxyPlanInvariant("a non-map structural derivation reached derived map worker keying"),
+        };
+        return .{ .derived_map = .{ .callable_type = typeRef(view, callable_ty), .plan = plan } };
     }
 
     /// The one worker source of a checked structural codec derivation. A
@@ -7385,6 +7421,7 @@ const Builder = struct {
             .procedure_binding,
             .procedure_use,
             .generated_field_iterator,
+            .derived_map,
             => unreachable,
         };
         try self.pushPlanActions(actions, &.{
@@ -7565,6 +7602,7 @@ const Builder = struct {
             .procedure_use,
             .nested_expr,
             .generated_field_iterator,
+            .derived_map,
             => boxyPlanInvariant("generated stored capture referenced a non-codec worker"),
         };
         if (capture_id == checked.CaptureId.generatedCheck(0)) {
@@ -8522,6 +8560,7 @@ const Builder = struct {
             .procedure_use,
             .nested_expr,
             .generated_field_iterator,
+            .derived_map,
             => boxyPlanInvariant("generated codec call was planned outside a generated worker"),
         };
         const contract_worker = if (codec.contract_worker) |root|
@@ -8535,6 +8574,7 @@ const Builder = struct {
             .procedure_use,
             .nested_expr,
             .generated_field_iterator,
+            .derived_map,
             => boxyPlanInvariant("generated codec callback contract did not reference a generated worker"),
         };
         const expected_kind: static_dispatch.GeneratedCodecDerivationKind = switch (codec.kind) {
@@ -8880,6 +8920,7 @@ const Builder = struct {
             .procedure_use,
             .nested_expr,
             .generated_field_iterator,
+            .derived_map,
             => boxyPlanInvariant("generated codec contract worker was not generated"),
         };
     }
@@ -11433,6 +11474,7 @@ const Builder = struct {
         return switch (source) {
             .generated_codec,
             .generated_field_iterator,
+            .derived_map,
             .nested_expr,
             => null,
             .procedure_template,
@@ -12208,7 +12250,7 @@ const Builder = struct {
                         .intrinsic_wrapper, .hosted_proc, .unimplemented, .const_crash => continue,
                     }
                 },
-                .generated_codec, .generated_field_iterator => continue,
+                .generated_codec, .generated_field_iterator, .derived_map => continue,
             };
             const templates = view.checked_procedure_templates;
             for (templates.dispatch_scopes, 0..) |*scope, scope_index| {
@@ -12258,6 +12300,7 @@ const Builder = struct {
                 .procedure_use,
                 .nested_expr,
                 .generated_field_iterator,
+                .derived_map,
                 => continue,
             };
             switch (codec.kind) {
@@ -12384,6 +12427,7 @@ const Builder = struct {
                 .procedure_use,
                 .nested_expr,
                 .generated_field_iterator,
+                .derived_map,
                 => {},
             }
 
@@ -12534,6 +12578,7 @@ const Builder = struct {
             },
             .generated_codec,
             .generated_field_iterator,
+            .derived_map,
             => null,
         };
     }
@@ -12718,6 +12763,7 @@ const Builder = struct {
             },
             .generated_codec,
             .generated_field_iterator,
+            .derived_map,
             => null,
         };
     }
@@ -12904,7 +12950,8 @@ const Builder = struct {
         for (self.plan.workers.items, 0..) |worker, worker_index| {
             if (self.workerResolvesToHosted(worker.source) or
                 worker.source == .generated_codec or
-                worker.source == .generated_field_iterator)
+                worker.source == .generated_field_iterator or
+                worker.source == .derived_map)
             {
                 self.plan.workers.items[worker_index].hidden_dicts = .{};
                 continue;
@@ -12999,6 +13046,7 @@ const Builder = struct {
                 .procedure_template,
                 .procedure_binding,
                 .procedure_use,
+                .derived_map,
                 => {},
                 .generated_codec => |codec| switch (codec.kind) {
                     .parser_constructor,
@@ -13354,6 +13402,7 @@ const Builder = struct {
             .procedure_use,
             .nested_expr,
             .generated_field_iterator,
+            .derived_map,
             => boxyPlanInvariant("non-codec callable had an unpersisted stored capture"),
         };
         const contract_expr = codec.contract_expr orelse
@@ -13376,6 +13425,7 @@ const Builder = struct {
     fn workerResolvesToHosted(self: *Builder, source: WorkerSource) bool {
         if (source == .generated_codec or
             source == .generated_field_iterator or
+            source == .derived_map or
             source == .nested_expr)
         {
             return false;
@@ -13790,9 +13840,9 @@ const Builder = struct {
                     .default_root => false,
                 };
             },
-            // Generated workers take their types from checked contracts
-            // rather than from a lexical scheme chain.
-            .generated_codec, .generated_field_iterator => return true,
+            // Generated workers take their types from checked contracts or
+            // checked callable types rather than from a lexical scheme chain.
+            .generated_codec, .generated_field_iterator, .derived_map => return true,
         }
     }
 
@@ -14264,6 +14314,7 @@ const Builder = struct {
         const worker = self.plan.workers.items[@backingInt(worker_id)];
         if (worker.source == .generated_codec or
             worker.source == .generated_field_iterator or
+            worker.source == .derived_map or
             worker.source == .nested_expr)
         {
             return false;
@@ -14628,7 +14679,7 @@ const Builder = struct {
                 .procedure_binding => |binding| if (self.storedFnSourceForTopLevelBinding(binding)) |stored_fn| {
                     try self.storedFnCaptureDescriptorSubstitutions(stored_fn, &stored_capture_substitutions);
                 },
-                .procedure_template, .procedure_use, .nested_expr, .generated_codec, .generated_field_iterator => {},
+                .procedure_template, .procedure_use, .nested_expr, .generated_codec, .generated_field_iterator, .derived_map => {},
             }
             const hidden_desc_args = try self.materializeWorkerCallHiddenDescriptorArgsWithStoredSubstitution(root.worker, arg_types, arg_types, ret_type, null, null, null, null, stored_capture_substitutions.items, root.hidden_dict_args);
             self.plan.roots.items[root_index].hidden_desc_args = hidden_desc_args;
@@ -14661,6 +14712,7 @@ const Builder = struct {
             .procedure_use,
             .generated_codec,
             .generated_field_iterator,
+            .derived_map,
             => null,
         };
     }
@@ -17025,7 +17077,11 @@ const Builder = struct {
                                 null,
                             ) };
                         },
-                        .map, .map_effectful => boxyPlanInvariant("derived map evidence reached runtime dictionary planning"),
+                        .map, .map_effectful => .{ .worker = try self.ensureWorker(
+                            derivedMapWorkerSource(view, structural.derivation, structural.callable_ty),
+                            callable_type,
+                            null,
+                        ) },
                     };
                     break :blk .{
                         .requirement_type = requirement.fn_ty,
@@ -17150,7 +17206,7 @@ const Builder = struct {
                     .structural => |kind| switch (kind) {
                         .equality, .hash => true,
                         .parser, .encoder => boxyPlanInvariant("structural codec dictionary evidence had no generated worker"),
-                        .map, .map_effectful => boxyPlanInvariant("derived map evidence reached static dictionary worker planning"),
+                        .map, .map_effectful => boxyPlanInvariant("derived map dictionary evidence had no generated worker"),
                     },
                     .constraint => false,
                 };
@@ -18746,6 +18802,7 @@ const Builder = struct {
                 .procedure_use,
                 .nested_expr,
                 .generated_field_iterator,
+                .derived_map,
                 => null,
             };
             var call_source: ?u32 = null;
@@ -19521,6 +19578,7 @@ const Builder = struct {
             .nested_expr => |expr_ref| self.nestedExprWorkerBody(expr_ref),
             .generated_codec => boxyPlanInvariant("generated codec worker has no checked procedure body"),
             .generated_field_iterator => boxyPlanInvariant("generated FieldNames iterator worker has no checked procedure body"),
+            .derived_map => boxyPlanInvariant("derived map worker has no checked procedure body"),
         };
     }
 
@@ -19636,6 +19694,7 @@ const Builder = struct {
             .nested_expr,
             .generated_codec,
             .generated_field_iterator,
+            .derived_map,
             => return null,
         };
         const root_id = self.callableEvalTemplate(view, template_id).root;
@@ -20703,7 +20762,7 @@ const Builder = struct {
                 .hosted => requested_type,
             },
             .nested_expr => |expr_ref| self.nestedExprDefinitionType(expr_ref),
-            .generated_codec, .generated_field_iterator => requested_type,
+            .generated_codec, .generated_field_iterator, .derived_map => requested_type,
         };
     }
 
@@ -20817,6 +20876,7 @@ const Builder = struct {
             .nested_expr,
             .generated_codec,
             .generated_field_iterator,
+            .derived_map,
             => source,
         };
     }
@@ -20847,6 +20907,7 @@ fn workerSourceIsHosted(source: WorkerSource) bool {
         .nested_expr,
         .generated_codec,
         .generated_field_iterator,
+        .derived_map,
         => false,
     };
 }

@@ -13353,6 +13353,17 @@ function, the caller supplies the exact static dictionary for the concrete
 checked type. If a higher-order function captures a polymorphic function, the
 erased callable capture stores the hidden dictionary it needs.
 
+A derived `map`/`map!` has no declared procedure. Its implementation is a
+generated worker keyed by the checked callable type of the use that selected
+it and the payload slot checking recorded for that use
+(`WorkerSource.derived_map`). A direct structural call is planned as a direct
+call to that worker, and structural evidence for a dictionary slot resolves to
+the same worker, so a generic function's `map` dispatch calls it through the
+dictionary its caller supplies. The worker branches on the input union's
+variants, passes the selected payload slot through the transform, and moves
+every other payload into the same variant of the output union. It never
+re-judges eligibility or selects a payload itself.
+
 LIR exposes indirect dictionary calls as ordinary explicit indirect calls with
 a known LIR call shape. The LIR statement names the dictionary local or static
 dictionary id, the method slot, the explicit Roc arguments, and every hidden
