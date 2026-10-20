@@ -29489,7 +29489,7 @@ const ProcBodyBuilder = struct {
             errdefer ctx.dropScopes(&entered);
             var local_state: MatchLocalState = .{ .scopes = scopes };
             const local = switch (ty.read) {
-                .root, .nominal_same => unreachable,
+                .root, .nominal_same => unreachable, // the root has no parent, and a nominal_same occurrence returned its parent above
                 .record_field, .record_rest, .list_elem, .nominal_boundary => try b.addFrameLocalForRep(ty.rep),
                 .tuple_elem => |elem| local: {
                     const field_local = try b.addFrameLocalForRepWithFreshDescriptor(ty.rep);
@@ -30053,7 +30053,7 @@ const ProcBodyBuilder = struct {
                 const ctx = BoxyMatchCtx{ .b = self, .state = &tree.state };
                 return try ctx.bindLiteralBinder(guard.pat, guard.value, lowered);
             },
-            .bindings => unreachable,
+            .bindings => unreachable, // a bindings request is answered in place by lowerMatchTree, never left pending
         }
     }
 
