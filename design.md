@@ -24058,9 +24058,8 @@ x86-64, `x64v1*` means the psABI x86-64-v1 floor (SSE2 and no later
 extensions). On AArch64, `arm64v1*` means Armv8.0-A; Apple Silicon has no v1
 twin because every supported Mac already implements the macOS floor. On wasm,
 `wasm32v1` means the WebAssembly 1.0 core instruction set without simd128.
-Operations unavailable at v1 use exact alternate instruction sequences or the
-target-independent builtin implementation; the source-level result is
-unchanged.
+Operations unavailable at v1 use exact alternate instruction sequences; the
+source-level result is unchanged.
 
 A default-level target and its v1 twin are separate platform target names with
 separate host inputs. A compiler must never link the default target's host into
@@ -24354,7 +24353,15 @@ tests. Both native dev backends instead dispatch exhaustively on the static LIR
 operation and its explicit source/destination lane kinds and emit native
 packed-integer instruction sequences. There is no compiled scalar evaluator,
 runtime operation descriptor, or fallback call. Missing native coverage is a
-compile-time exhaustiveness failure. A Lambda Mono value that does not have an
+compile-time exhaustiveness failure. At the `v1` level the x86-64 dev backend
+emits SSE2 sequences, in the legacy encoding, for every operation whose
+default-level instructions are SSSE3 or later (byte shuffles, 64-bit lane
+compares, the SSE4.1 min/max, multiply, and extension forms, horizontal adds,
+`pext`, and carryless multiply). Permutations use fixed dword and word
+shuffles, shifts, and packs; a runtime-indexed lane read and `table_lookup`
+read through a stack spill. Carryless multiply on both x86-64 and AArch64
+`v1` is a fixed 64-step shift-and-xor loop in general-purpose registers,
+because PCLMULQDQ and 64-bit PMULL both come from crypto extensions. A Lambda Mono value that does not have an
 integer bit representation is rejected explicitly rather than being replaced
 with zero. Wasm emits `v128` operations and exact helper sequences, including
 software carryless multiplication where simd128 has no instruction.
@@ -24402,7 +24409,11 @@ and verifies direct and nested vector values in both call directions.
 
 `zig build run-test-simd-differential` owns the shared proof source and runs the
 standalone dev and LLVM programs, optimized compile-time tests, every evaluator
-backend, and the Lambda Mono comparison in sequence. The corpus contains 294
+backend, and the Lambda Mono comparison in sequence. On Linux x86-64 and
+AArch64 hosts it also builds and runs the corpus as a dev program for the host
+architecture's `v1` musl target, and requires that binary to contain no
+instruction above the architecture baseline, with the default-level build of
+the same corpus as the scan's positive control. The corpus contains 294
 operation/type cases, fixed boundary values, algebraic properties, and at least
 64 deterministic generated inputs per applicable case. Every generated input
 checks each shift operation directly against the scalar oracle at its generated
