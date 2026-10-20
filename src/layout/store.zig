@@ -2491,7 +2491,8 @@ pub const Store = struct {
         // Raw slots changed after layouts reaching them were reserved, so
         // every layout this phase reserved resolves its list layout from
         // the finished contents.
-        for (layouts_start..self.layouts.len()) |i| {
+        const layouts_end: usize = @intCast(self.layouts.len());
+        for (@as(usize, @intCast(layouts_start))..layouts_end) |i| {
             const idx: Idx = @fromBackingInt(@intCast(i));
             self.resolved_list_layouts.items[i] = self.computeResolvedListLayoutIdx(idx) orelse .none;
         }
