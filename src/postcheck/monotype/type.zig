@@ -3156,7 +3156,7 @@ pub const Store = struct {
                     },
                     .equality => if (specializationUsesBacking(named.backing)) {
                         try sink.writeBytes("equality-generated-backing");
-                        const backing = named.backing orelse unreachable;
+                        const backing = named.backing orelse unreachable; // specializationUsesBacking returned true only for a present backing
                         try sink.writeBytes(@tagName(backing.use));
                         try sink.writeBytes(@tagName(backing.authority));
                         try sink.child(backing.ty, .equality);
@@ -3862,7 +3862,7 @@ pub const Store = struct {
                 }
             }.lessThan);
             for (sorted_labels, 0..) |label, rank| {
-                const slot = distinct_labels.getPtr(label) orelse unreachable;
+                const slot = distinct_labels.getPtr(label) orelse unreachable; // sorted_labels holds exactly the keys of distinct_labels
                 slot.* = @intCast(rank);
             }
             const rank_of_member = try self.gpa.alloc(u32, member_count);
@@ -3871,7 +3871,7 @@ pub const Store = struct {
             defer self.gpa.free(block_rep);
             @memset(block_rep, no_scc_position);
             for (members, 0..) |node_index, pos| {
-                const rank = distinct_labels.get(labels[pos]) orelse unreachable;
+                const rank = distinct_labels.get(labels[pos]) orelse unreachable; // the final refinement round put every labels[pos] into distinct_labels
                 rank_of_member[pos] = rank;
                 // The partition is stable, so any member represents its
                 // position.

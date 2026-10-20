@@ -66,7 +66,7 @@ pub const PathStep = extern struct {
     }
 
     pub fn stepKind(self: PathStep) Kind {
-        return self.kindOrNull() orelse unreachable;
+        return self.kindOrNull() orelse unreachable; // PathStep construction writes only Kind values, and artifact validation rejects any other discriminant
     }
 };
 
@@ -504,7 +504,7 @@ fn walkRowContinuation(
                 .fn_unbound,
                 .tag_union,
                 .empty_tag_union,
-                => unreachable,
+                => unreachable, // a record row extension unifies only with record rows
             },
             .tag => switch (flat_type) {
                 .tag_union => |tag_union| try pushTagChildren(gpa, scratch, entry, store, tag_union),
@@ -516,9 +516,9 @@ fn walkRowContinuation(
                 .fn_effectful,
                 .fn_unbound,
                 .empty_record,
-                => unreachable,
+                => unreachable, // a tag union row extension unifies only with tag union rows
             },
-            .none => unreachable,
+            .none => unreachable, // the caller routes only row continuations (row_context != .none) here
         },
         // A presence variable carries no static-dispatch constraints and has no
         // children; it is a leaf like `.err`.

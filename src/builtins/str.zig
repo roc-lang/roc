@@ -283,8 +283,7 @@ pub const RocStr = extern struct {
         // Verify the computed allocation pointer is properly aligned
         if (comptime builtin.mode == .debug) {
             if (alloc_ptr != 0 and alloc_ptr % @alignOf(usize) != 0) {
-                // This indicates memory corruption - the allocation pointer should always be aligned
-                unreachable;
+                unreachable; // allocateWithRefcount returns usize-aligned data pointers, so only a corrupted RocStr is misaligned
             }
         }
 
@@ -616,7 +615,7 @@ pub const RocStr = extern struct {
         if (self.isSmallStr()) {
             return self.asArray()[index];
         } else {
-            const bytes = self.bytes orelse unreachable;
+            const bytes = self.bytes orelse unreachable; // callers index below the length, and a non-small string with a nonzero length has non-null bytes
 
             return bytes[index];
         }
@@ -672,8 +671,7 @@ pub const RocStr = extern struct {
             const ptr: [*]usize = utils.alignedPtrCast([*]usize, non_null_ptr, @src());
             return (ptr - 1)[0];
         } else {
-            // This should never happen - indicates corrupted RocStr structure
-            unreachable;
+            unreachable; // a seamless slice or a non-small string with nonzero capacity always points into an allocation
         }
     }
 
@@ -1664,7 +1662,7 @@ fn codepointSeqLengthLossy(c: u32) u3 {
             // fallthrough
         }
     }
-    return unicode.utf8CodepointSequenceLength(UNICODE_REPLACEMENT) catch unreachable;
+    return unicode.utf8CodepointSequenceLength(UNICODE_REPLACEMENT) catch unreachable; // U+FFFD is a valid scalar value
 }
 
 fn utf8EncodeLossy(c: u32, out: []u8) u3 {
@@ -1675,7 +1673,7 @@ fn utf8EncodeLossy(c: u32, out: []u8) u3 {
             // fallthrough
         }
     }
-    return unicode.utf8Encode(UNICODE_REPLACEMENT, out) catch unreachable;
+    return unicode.utf8Encode(UNICODE_REPLACEMENT, out) catch unreachable; // U+FFFD is a valid scalar value
 }
 
 /// Borrows bytes whose producer guarantees valid UTF-8. No validation scan is
@@ -1726,9 +1724,9 @@ fn fromWideUtfShort(comptime Unit: type, comptime endian: std.builtin.Endian, li
                 scalar = @intCast(unit);
             }
         }
-        const width = unicode.utf8CodepointSequenceLength(scalar) catch unreachable;
+        const width = unicode.utf8CodepointSequenceLength(scalar) catch unreachable; // scalar is U+FFFD or a decoded value at most 0x10FFFF outside the surrogate range
         std.debug.assert(buffer.len - written >= width);
-        written += unicode.utf8Encode(scalar, buffer[written..]) catch unreachable;
+        written += unicode.utf8Encode(scalar, buffer[written..]) catch unreachable; // scalar is U+FFFD or a decoded value at most 0x10FFFF outside the surrogate range
     }
     return RocStr.init(&buffer, written, roc_ops);
 }
@@ -1874,7 +1872,7 @@ pub fn fromUtf8(
             .problem_code = Utf8ByteProblem.InvalidStartByte,
         };
     } else {
-        const temp = errorToProblem(bytes);
+        const temp = errorToProblem(bytes) orelse utils.builtinInvariant(roc_ops, "fromUtf8: errorToProblem found no problem in bytes isValidUnicode rejected");
 
         return FromUtf8Try{
             .is_ok = false,
@@ -1893,7 +1891,7 @@ fn fromValidUtf8List(list: RocList, update_mode: UpdateMode, roc_ops: *RocOps) R
     return RocStr.fromSubListUnsafe(list, 0, list.len(), update_mode, roc_ops);
 }
 
-fn errorToProblem(bytes: []const u8) struct { index: usize, problem: Utf8ByteProblem } {
+fn errorToProblem(bytes: []const u8) ?struct { index: usize, problem: Utf8ByteProblem } {
     const len = bytes.len;
     var index: usize = 0;
 
@@ -1913,7 +1911,7 @@ fn errorToProblem(bytes: []const u8) struct { index: usize, problem: Utf8BytePro
         index += nextNumBytes;
     }
 
-    unreachable;
+    return null;
 }
 
 /// Returns true if the given buffer contains valid Unicode data.
@@ -2017,8 +2015,9 @@ pub fn sliceHelp(
     length: usize,
     roc_ops: *RocOps,
 ) RocList {
+    if (length == 0) return RocList.empty();
     var list = RocList.list_allocate(RocStr.alignment, length, @sizeOf(u8), false, roc_ops);
-    var list_bytes = list.bytes orelse unreachable;
+    var list_bytes = list.bytes orelse unreachable; // list_allocate returns non-null bytes for the nonzero length checked above
     @memcpy(list_bytes[0..length], bytes[0..length]);
     list.length = length;
 
@@ -2557,7 +2556,7 @@ const ReverseUtf8Iterator = struct {
                 i -= 1;
             }
 
-            const cp_len = unicode.utf8ByteSequenceLength(it.bytes[i]) catch unreachable;
+            const cp_len = unicode.utf8ByteSequenceLength(it.bytes[i]) catch unreachable; // RocStr bytes are valid UTF-8 and the loop above stopped on a start byte
             const slice = it.bytes[i .. i + cp_len];
 
             it.i = if (i == 0) null else i - 1;
@@ -2573,10 +2572,10 @@ const ReverseUtf8Iterator = struct {
 
         return switch (slice.len) {
             1 => @as(u21, slice[0]),
-            2 => unicode.utf8Decode2([2]u8{ slice[0], slice[1] }) catch unreachable,
-            3 => unicode.utf8Decode3([3]u8{ slice[0], slice[1], slice[2] }) catch unreachable,
-            4 => unicode.utf8Decode4([4]u8{ slice[0], slice[1], slice[2], slice[3] }) catch unreachable,
-            else => unreachable,
+            2 => unicode.utf8Decode2([2]u8{ slice[0], slice[1] }) catch unreachable, // RocStr bytes are valid UTF-8
+            3 => unicode.utf8Decode3([3]u8{ slice[0], slice[1], slice[2] }) catch unreachable, // RocStr bytes are valid UTF-8
+            4 => unicode.utf8Decode4([4]u8{ slice[0], slice[1], slice[2], slice[3] }) catch unreachable, // RocStr bytes are valid UTF-8
+            else => unreachable, // utf8ByteSequenceLength returns only lengths 1 through 4
         };
     }
 };

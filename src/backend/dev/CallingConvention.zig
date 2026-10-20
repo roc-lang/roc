@@ -20,6 +20,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const layout = @import("layout");
+const invariant = @import("base").invariant;
 const builtins = @import("builtins");
 const RocStr = builtins.str.RocStr;
 const RocList = builtins.list.RocList;
@@ -48,12 +49,12 @@ pub const Promotion = enum {
             .zero => switch (piece.size) {
                 1 => .zero_byte,
                 2 => .zero_halfword,
-                else => unreachable,
+                else => invariant("dev backend invariant violated: zero-extended register piece has size {d}, expected 1 or 2", .{piece.size}),
             },
             .sign => switch (piece.size) {
                 1 => .sign_byte,
                 2 => .sign_halfword,
-                else => unreachable,
+                else => invariant("dev backend invariant violated: sign-extended register piece has size {d}, expected 1 or 2", .{piece.size}),
             },
         };
     }
@@ -65,12 +66,12 @@ pub const Promotion = enum {
             .zero => switch (stack_value.size) {
                 1 => .zero_byte,
                 2 => .zero_halfword,
-                else => unreachable,
+                else => invariant("dev backend invariant violated: zero-extended stack value has size {d}, expected 1 or 2", .{stack_value.size}),
             },
             .sign => switch (stack_value.size) {
                 1 => .sign_byte,
                 2 => .sign_halfword,
-                else => unreachable,
+                else => invariant("dev backend invariant violated: sign-extended stack value has size {d}, expected 1 or 2", .{stack_value.size}),
             },
         };
     }
@@ -483,20 +484,20 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     4 => try self.emit.fldrRegMemSoff(.single, dst, base_reg, offset),
                     8 => try self.emit.fldrRegMemSoff(.double, dst, base_reg, offset),
                     16 => try self.emit.ldrQRegMemSoff(dst, base_reg, offset),
-                    else => unreachable,
+                    else => invariant("dev backend invariant violated: float argument load of size {d}, expected 4, 8, or 16", .{size}),
                 }
             } else if (comptime @hasDecl(EmitType, "fldrRegMemUoff")) {
                 switch (size) {
                     4 => try self.emit.fldrRegMemUoff(.single, dst, base_reg, @intCast(offset)),
                     8 => try self.emit.fldrRegMemUoff(.double, dst, base_reg, @intCast(offset)),
-                    else => unreachable,
+                    else => invariant("dev backend invariant violated: float argument load of size {d}, expected 4 or 8", .{size}),
                 }
             } else {
                 switch (size) {
                     4 => try self.emit.movssRegMem(dst, base_reg, offset),
                     8 => try self.emit.movsdRegMem(dst, base_reg, offset),
                     16 => try self.emit.movdquRegMem(dst, base_reg, offset),
-                    else => unreachable,
+                    else => invariant("dev backend invariant violated: float argument load of size {d}, expected 4, 8, or 16", .{size}),
                 }
             }
         }
@@ -580,7 +581,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
                 2 => try self.emit.strhRegMemSoff(reg, CC_EMIT.STACK_PTR, stack_offset),
                 4 => try self.emit.strRegMemSoff(.w32, reg, CC_EMIT.STACK_PTR, stack_offset),
                 8 => try self.emit.strRegMemSoff(.w64, reg, CC_EMIT.STACK_PTR, stack_offset),
-                else => unreachable,
+                else => unreachable, // every StackArg size is 1, 2, 4, or 8, asserted by addStackArg and packStackArgsForCAbi
             }
         }
 
@@ -649,7 +650,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
                             try self.emit.ldrRegMemSoff(.w64, CC_EMIT.SCRATCH_REG, mem.base, mem.offset);
                             try self.emit.strRegMemSoff(.w64, CC_EMIT.SCRATCH_REG, CC_EMIT.STACK_PTR, stack_offset);
                         },
-                        else => unreachable,
+                        else => unreachable, // every StackArg size is 1, 2, 4, or 8, asserted by addStackArg and packStackArgsForCAbi
                     }
                 },
             }
@@ -662,7 +663,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
                 2 => .w16,
                 4 => .w32,
                 8 => .w64,
-                else => unreachable,
+                else => unreachable, // every StackArg size is 1, 2, 4, or 8, asserted by addStackArg and packStackArgsForCAbi
             };
             switch (arg.src) {
                 .from_reg => |reg| {

@@ -778,7 +778,7 @@ fn relocateBodyValue(comptime T: type, value: T, prefix: BodyPrefix, bases: Body
                 return @unionInit(T, field_name, relocateBodyValue(field_type, payload, prefix, bases));
             }
         }
-        unreachable;
+        unreachable; // the inline loop covers every union field, so one of them matches the active tag
     }
     return value;
 }
@@ -1481,12 +1481,7 @@ pub fn insertStringAligned(self: *Self, text: []const u8, alignment: u32) Alloca
         u32,
         self.body_prefix.string_bytes,
         @backingInt(local),
-    ) catch {
-        if (builtin.mode == .debug) {
-            base.invariant("LirStore invariant violated: worker string identity overflow", .{});
-        }
-        unreachable;
-    }));
+    ) catch base.invariant("LirStore invariant violated: worker string identity overflow", .{})));
 }
 
 /// Interns string backing bytes and returns a literal view into them.
@@ -1511,10 +1506,7 @@ pub fn insertStringViewAligned(
     const offset_usize: usize = offset;
     const len_usize: usize = len;
     if (offset_usize > backing.len or len_usize > backing.len - offset_usize) {
-        if (builtin.mode == .debug) {
-            base.invariant("LirStore invariant violated: string literal view exceeded backing bytes", .{});
-        }
-        unreachable;
+        base.invariant("LirStore invariant violated: string literal view exceeded backing bytes", .{});
     }
 
     return .{
@@ -1540,10 +1532,7 @@ pub fn getStringLiteral(self: *const Self, literal: lir_defs.StrLiteral) []const
     const offset: usize = literal.offset;
     const len: usize = literal.len;
     if (offset > backing.len or len > backing.len - offset) {
-        if (builtin.mode == .debug) {
-            base.invariant("LirStore invariant violated: string literal view exceeded stored backing bytes", .{});
-        }
-        unreachable;
+        base.invariant("LirStore invariant violated: string literal view exceeded stored backing bytes", .{});
     }
     return backing[offset..][0..len];
 }
@@ -1555,18 +1544,12 @@ pub fn getStringLiteralBacking(self: *const Self, literal: lir_defs.StrLiteral) 
 
 fn assertStringsInsertable(self: *const Self) void {
     if (self.strings_insertable) return;
-    if (comptime builtin.mode == .debug) {
-        base.invariant("LirStore invariant violated: attempted to insert into frozen string literal store", .{});
-    }
-    unreachable;
+    base.invariant("LirStore invariant violated: attempted to insert into frozen string literal store", .{});
 }
 
 fn assertBodyMetadataImmutable(self: *const Self) void {
     if (self.body_coordinator == null) return;
-    if (comptime builtin.mode == .debug) {
-        base.invariant("LirStore invariant violated: attempted to mutate coordinator metadata from body worker", .{});
-    }
-    unreachable;
+    base.invariant("LirStore invariant violated: attempted to mutate coordinator metadata from body worker", .{});
 }
 
 /// Registers one LIR local and returns its id.
@@ -2612,7 +2595,7 @@ test "body shard relocates nonzero local and body suffixes" {
 
 test "body shard append preserves destination on every reserve-stage allocation failure" {
     const Helper = struct {
-        fn run(fail_index: usize) (Allocator.Error || error{TestExpectedEqual})!bool {
+        fn run(fail_index: usize) (Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!bool {
             var source = Self.init(std.testing.allocator);
             defer source.deinit();
             const source_prefix = source.captureBodyPrefix();
@@ -2711,7 +2694,7 @@ test "body shard append preserves destination on every reserve-stage allocation 
             const destination_string_bytes = destination.ownStringByteCount();
             const destination_inline_scopes = destination.inline_scopes.len();
 
-            const shard = source.captureBodyShard(source_prefix) catch unreachable;
+            const shard = source.captureBodyShard(source_prefix) catch return error.TestUnexpectedResult;
             var failing_allocator = std.testing.FailingAllocator.init(std.testing.allocator, .{
                 .fail_index = fail_index,
             });

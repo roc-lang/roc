@@ -460,10 +460,7 @@ const Pass = struct {
 };
 
 fn tagReachabilityInvariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .debug) {
-        base.invariant("tag reachability invariant violated: {s}", .{message});
-    }
-    unreachable;
+    base.invariant("tag reachability invariant violated: {s}", .{message});
 }
 
 test "tag reachability declarations are referenced" {

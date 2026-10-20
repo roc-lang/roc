@@ -382,8 +382,7 @@ test "procedure rewrite ownership includes statements reached through shared met
 }
 
 fn invariant(comptime message: []const u8) noreturn {
-    if (builtin.mode == .debug) @panic(message);
-    unreachable;
+    base.invariant("{s}", .{message});
 }
 
 test "issue 11325 procedure counting reuses lane storage across distant local IDs" {

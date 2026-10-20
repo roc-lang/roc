@@ -112,12 +112,10 @@ pub const CacheManager = struct {
     /// Build a cache entry's path using a caller-supplied allocator, so a worker
     /// thread never allocates from the manager's own allocator.
     pub fn computeCacheFilePathIn(allocator: Allocator, cache_key: [32]u8, entries_dir: []const u8) Allocator.Error![]u8 {
-        var subdir_buf: [2]u8 = undefined;
-        _ = std.fmt.bufPrint(&subdir_buf, "{x}", .{cache_key[0..1]}) catch unreachable;
+        const subdir_buf = std.fmt.bytesToHex(cache_key[0..1], .lower);
         const subdir = subdir_buf[0..];
 
-        var filename_buf: [62]u8 = undefined;
-        _ = std.fmt.bufPrint(&filename_buf, "{x}", .{cache_key[1..32]}) catch unreachable;
+        const filename_buf = std.fmt.bytesToHex(cache_key[1..32], .lower);
         const filename = filename_buf[0..];
 
         const cache_subdir = try std.fs.path.join(allocator, &.{ entries_dir, subdir });
@@ -133,8 +131,7 @@ pub const CacheManager = struct {
         cache_key: [32]u8,
         entries_dir: []const u8,
     ) (Allocator.Error || CoreCtx.MakePathError)!void {
-        var subdir_buf: [2]u8 = undefined;
-        _ = std.fmt.bufPrint(&subdir_buf, "{x}", .{cache_key[0..1]}) catch unreachable;
+        const subdir_buf = std.fmt.bytesToHex(cache_key[0..1], .lower);
         const subdir = subdir_buf[0..];
         const full_subdir = try std.fs.path.join(allocator, &.{ entries_dir, subdir });
         defer allocator.free(full_subdir);

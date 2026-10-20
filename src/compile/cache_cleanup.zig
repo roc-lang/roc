@@ -253,9 +253,9 @@ const persistent_families = [_]struct { name: []const u8, nested_directory_depth
 const object_pack_nested_directory_depth = 3;
 
 /// Writes the namespace of pack format `format_version` into `buf`.
-fn objectPackNamespaceName(buf: []u8, format_version: u32) []const u8 {
+fn objectPackNamespaceName(buf: *[cache_config.object_pack_namespace_prefix.len + 10]u8, format_version: u32) []const u8 {
     return std.fmt.bufPrint(buf, cache_config.object_pack_namespace_prefix ++ "{d}", .{format_version}) catch
-        unreachable;
+        unreachable; // buf holds the prefix plus 10 digits, the most a u32 prints
 }
 
 /// Clean up object-cache packs.
@@ -647,18 +647,18 @@ test "deleteTempDir deletes directory and coordination file" {
     defer tmp_dir.cleanup();
 
     // Create a subdirectory simulating a temp runtime dir
-    tmp_dir.dir.createDir(std.testing.io, "test_temp_dir", .default_dir) catch unreachable;
+    try tmp_dir.dir.createDir(std.testing.io, "test_temp_dir", .default_dir);
 
     // Create a file inside the directory
-    const inner_file = tmp_dir.dir.createFile(std.testing.io, "test_temp_dir/executable", .{}) catch unreachable;
+    const inner_file = try tmp_dir.dir.createFile(std.testing.io, "test_temp_dir/executable", .{});
     inner_file.close(std.testing.io);
 
     // Create the coordination file (.txt)
-    const coord_file = tmp_dir.dir.createFile(std.testing.io, "test_temp_dir.txt", .{}) catch unreachable;
+    const coord_file = try tmp_dir.dir.createFile(std.testing.io, "test_temp_dir.txt", .{});
     coord_file.close(std.testing.io);
 
     // Get the full path to the temp dir
-    const temp_dir_path = std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp_dir.sub_path, "test_temp_dir" }) catch unreachable;
+    const temp_dir_path = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp_dir.sub_path, "test_temp_dir" });
     defer allocator.free(temp_dir_path);
 
     // Verify both exist
@@ -688,19 +688,19 @@ test "cleanupCacheSubdir deletes old files and keeps new files" {
     defer tmp_dir.cleanup();
 
     // Create a cache subdir structure
-    tmp_dir.dir.createDir(std.testing.io, "cache_subdir", .default_dir) catch unreachable;
-    tmp_dir.dir.createDir(std.testing.io, "cache_subdir/bucket1", .default_dir) catch unreachable;
-    tmp_dir.dir.createDir(std.testing.io, "cache_subdir/bucket2", .default_dir) catch unreachable;
+    try tmp_dir.dir.createDir(std.testing.io, "cache_subdir", .default_dir);
+    try tmp_dir.dir.createDir(std.testing.io, "cache_subdir/bucket1", .default_dir);
+    try tmp_dir.dir.createDir(std.testing.io, "cache_subdir/bucket2", .default_dir);
 
     // Create files in buckets
-    const file1 = tmp_dir.dir.createFile(std.testing.io, "cache_subdir/bucket1/old_file.rcache", .{}) catch unreachable;
+    const file1 = try tmp_dir.dir.createFile(std.testing.io, "cache_subdir/bucket1/old_file.rcache", .{});
     file1.close(std.testing.io);
 
-    const file2 = tmp_dir.dir.createFile(std.testing.io, "cache_subdir/bucket2/new_file.rcache", .{}) catch unreachable;
+    const file2 = try tmp_dir.dir.createFile(std.testing.io, "cache_subdir/bucket2/new_file.rcache", .{});
     file2.close(std.testing.io);
 
     // Get the full path
-    const subdir_path = std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp_dir.sub_path, "cache_subdir" }) catch unreachable;
+    const subdir_path = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp_dir.sub_path, "cache_subdir" });
     defer allocator.free(subdir_path);
 
     // Get current time - files will be very recent (age ~0)
@@ -709,7 +709,7 @@ test "cleanupCacheSubdir deletes old files and keeps new files" {
     // Run cleanup with current time - nothing should be deleted (files are too new)
     var stats = CleanupStats{};
     {
-        var subdir = Dir.cwd().openDir(std.testing.io, subdir_path, .{ .iterate = true }) catch unreachable;
+        var subdir = try Dir.cwd().openDir(std.testing.io, subdir_path, .{ .iterate = true });
         defer subdir.close(std.testing.io);
         cleanupCacheSubdir(std.testing.io, subdir, now_ns, &stats, 1);
     }
@@ -728,7 +728,7 @@ test "cleanupCacheSubdir deletes old files and keeps new files" {
     const far_future_ns: i128 = now_ns + Config.PERSISTENT_MAX_AGE_NS + std.time.ns_per_s;
     var stats2 = CleanupStats{};
     {
-        var subdir = Dir.cwd().openDir(std.testing.io, subdir_path, .{ .iterate = true }) catch unreachable;
+        var subdir = try Dir.cwd().openDir(std.testing.io, subdir_path, .{ .iterate = true });
         defer subdir.close(std.testing.io);
         cleanupCacheSubdir(std.testing.io, subdir, far_future_ns, &stats2, 1);
     }
@@ -748,43 +748,43 @@ test "cleanupPersistentCache deletes old cache files at each family depth" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const cache_base = std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp_dir.sub_path, "roc-cache" }) catch unreachable;
+    const cache_base = try std.fs.path.join(allocator, &.{ ".zig-cache", "tmp", &tmp_dir.sub_path, "roc-cache" });
     defer allocator.free(cache_base);
 
-    const glue_dir = std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "glue-plugin", "x64mac", "dev" }) catch unreachable;
+    const glue_dir = try std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "glue-plugin", "x64mac", "dev" });
     defer allocator.free(glue_dir);
 
-    const mod_dir = std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "mod", "aa" }) catch unreachable;
+    const mod_dir = try std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "mod", "aa" });
     defer allocator.free(mod_dir);
-    const pair_dir = std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "pair", "cc" }) catch unreachable;
+    const pair_dir = try std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "pair", "cc" });
     defer allocator.free(pair_dir);
-    const wasm_host_dir = std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "wasm-host", "bb" }) catch unreachable;
+    const wasm_host_dir = try std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "wasm-host", "bb" });
     defer allocator.free(wasm_host_dir);
 
-    Dir.cwd().createDirPath(std.testing.io, glue_dir) catch unreachable;
-    Dir.cwd().createDirPath(std.testing.io, mod_dir) catch unreachable;
-    Dir.cwd().createDirPath(std.testing.io, pair_dir) catch unreachable;
-    Dir.cwd().createDirPath(std.testing.io, wasm_host_dir) catch unreachable;
+    try Dir.cwd().createDirPath(std.testing.io, glue_dir);
+    try Dir.cwd().createDirPath(std.testing.io, mod_dir);
+    try Dir.cwd().createDirPath(std.testing.io, pair_dir);
+    try Dir.cwd().createDirPath(std.testing.io, wasm_host_dir);
 
-    const glue_file = std.fs.path.join(allocator, &.{ glue_dir, "old.o" }) catch unreachable;
+    const glue_file = try std.fs.path.join(allocator, &.{ glue_dir, "old.o" });
     defer allocator.free(glue_file);
-    const glue_tmp = std.fs.path.join(allocator, &.{ glue_dir, "old.o.1.0.tmp" }) catch unreachable;
+    const glue_tmp = try std.fs.path.join(allocator, &.{ glue_dir, "old.o.1.0.tmp" });
     defer allocator.free(glue_tmp);
-    const mod_file = std.fs.path.join(allocator, &.{ mod_dir, "old.rcache" }) catch unreachable;
+    const mod_file = try std.fs.path.join(allocator, &.{ mod_dir, "old.rcache" });
     defer allocator.free(mod_file);
-    const pair_file = std.fs.path.join(allocator, &.{ pair_dir, "old-pairing" }) catch unreachable;
+    const pair_file = try std.fs.path.join(allocator, &.{ pair_dir, "old-pairing" });
     defer allocator.free(pair_file);
-    const wasm_host_file = std.fs.path.join(allocator, &.{ wasm_host_dir, "old-host" }) catch unreachable;
+    const wasm_host_file = try std.fs.path.join(allocator, &.{ wasm_host_dir, "old-host" });
     defer allocator.free(wasm_host_file);
-    const wasm_host_lock = std.fs.path.join(allocator, &.{ wasm_host_dir, "old-host.lock" }) catch unreachable;
+    const wasm_host_lock = try std.fs.path.join(allocator, &.{ wasm_host_dir, "old-host.lock" });
     defer allocator.free(wasm_host_lock);
 
-    (Dir.cwd().createFile(std.testing.io, glue_file, .{}) catch unreachable).close(std.testing.io);
-    (Dir.cwd().createFile(std.testing.io, glue_tmp, .{}) catch unreachable).close(std.testing.io);
-    (Dir.cwd().createFile(std.testing.io, mod_file, .{}) catch unreachable).close(std.testing.io);
-    (Dir.cwd().createFile(std.testing.io, pair_file, .{}) catch unreachable).close(std.testing.io);
-    (Dir.cwd().createFile(std.testing.io, wasm_host_file, .{}) catch unreachable).close(std.testing.io);
-    (Dir.cwd().createFile(std.testing.io, wasm_host_lock, .{}) catch unreachable).close(std.testing.io);
+    (try Dir.cwd().createFile(std.testing.io, glue_file, .{})).close(std.testing.io);
+    (try Dir.cwd().createFile(std.testing.io, glue_tmp, .{})).close(std.testing.io);
+    (try Dir.cwd().createFile(std.testing.io, mod_file, .{})).close(std.testing.io);
+    (try Dir.cwd().createFile(std.testing.io, pair_file, .{})).close(std.testing.io);
+    (try Dir.cwd().createFile(std.testing.io, wasm_host_file, .{})).close(std.testing.io);
+    (try Dir.cwd().createFile(std.testing.io, wasm_host_lock, .{})).close(std.testing.io);
 
     const now_ns = nowNs(std.testing.io);
     const far_future_ns: i128 = now_ns + Config.PERSISTENT_MAX_AGE_NS + std.time.ns_per_s;

@@ -374,18 +374,13 @@ fn projectContent(self: *Self, content: types.Content, environment: u32) Allocat
                 try self.tags.append(self.gpa, .{ .name = source.items(.name), .args = projected });
                 break :blk .{ .tag_union = .{ .tags = tags, .ext = try self.view(tag_union.ext, environment) } };
             },
-            .fn_pure, .fn_effectful, .fn_unbound => |func| blk: {
+            inline .fn_pure, .fn_effectful, .fn_unbound => |func, tag| blk: {
                 const projected: @TypeOf(func) = .{
                     .args = try self.projectVars(func.args, environment),
                     .ret = try self.view(func.ret, environment),
                     .effect_deps = try self.projectVars(func.effect_deps, environment),
                 };
-                break :blk switch (flat) {
-                    .fn_pure => .{ .fn_pure = projected },
-                    .fn_effectful => .{ .fn_effectful = projected },
-                    .fn_unbound => .{ .fn_unbound = projected },
-                    .record, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => unreachable,
-                };
+                break :blk @unionInit(@TypeOf(flat), @tagName(tag), projected);
             },
         } },
     };

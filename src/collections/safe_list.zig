@@ -508,7 +508,7 @@ pub fn SafeMultiList(comptime T: type) type {
                     if (candidate == field_index) break :blk total;
                     total += @sizeOf(@typeInfo(T).@"struct".field_types[candidate]);
                 }
-                unreachable;
+                @compileError("column_order must list every field index of " ++ @typeName(T));
             };
         }
 

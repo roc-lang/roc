@@ -9,6 +9,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const invariant = @import("base").invariant;
 const DataRelocationKind = @import("../Relocation.zig").DataRelocationKind;
 const object = @import("mod.zig");
 const DebugReloc = object.DebugReloc;
@@ -312,20 +313,20 @@ pub const ElfWriter = struct {
             .rel32 => .{
                 .kind = switch (self.arch) {
                     .x86_64 => ELF.R_X86_64_PC32,
-                    .aarch64 => unreachable,
+                    .aarch64 => invariant("ELF invariant violated: rel32 data relocation in aarch64 code, which emits page21 and pageoff12", .{}),
                 },
                 .addend = @as(i64, -4),
             },
             .page21 => .{
                 .kind = switch (self.arch) {
-                    .x86_64 => unreachable,
+                    .x86_64 => invariant("ELF invariant violated: page21 data relocation in x86_64 code, which emits rel32", .{}),
                     .aarch64 => ELF.R_AARCH64_ADR_PREL_PG_HI21,
                 },
                 .addend = @as(i64, 0),
             },
             .pageoff12 => .{
                 .kind = switch (self.arch) {
-                    .x86_64 => unreachable,
+                    .x86_64 => invariant("ELF invariant violated: pageoff12 data relocation in x86_64 code, which emits rel32", .{}),
                     .aarch64 => ELF.R_AARCH64_ADD_ABS_LO12_NC,
                 },
                 .addend = @as(i64, 0),

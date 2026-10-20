@@ -41,7 +41,6 @@
 //! subsequent unification runs.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const base = @import("base");
 const tracy = @import("tracy");
 const collections = @import("collections");
@@ -1757,10 +1756,7 @@ const Unifier = struct {
             if (nominal.sourceDecl().present) {
                 // Invariant: every keyed nominal application in a store can
                 // resolve its declaration in that store.
-                if (builtin.mode == .debug) {
-                    base.invariant("unify invariant violated: nominal application has a source declaration but no declaration table entry", .{});
-                }
-                unreachable;
+                base.invariant("unify invariant violated: nominal application has a source declaration but no declaration table entry", .{});
             }
             return .no_decl;
         };
@@ -2317,7 +2313,7 @@ const Unifier = struct {
             .b_is_nominal => vars.a.var_,
         };
         const evidence: RawTypePair = switch (self.nominal_record_mismatch_role) {
-            .none => unreachable,
+            .none => unreachable, // the early return above handles .none
             .expected => .{ .expected = opened_backing, .actual = anonymous_var },
             .actual => .{ .expected = anonymous_var, .actual = opened_backing },
         };
@@ -2390,12 +2386,12 @@ const Unifier = struct {
         var iter = self.types_store.iterRecordFields(fields);
         while (iter.next()) |field| {
             const unknown = switch (field.presence.decode()) {
-                .required => unreachable,
+                .required => unreachable, // validateAbsorbableRecordRow rejects required fields before recording
                 .unknown => |unknown| unknown,
             };
             const presence = switch (self.types_store.resolveVar(unknown.presence).desc.content) {
                 .field_presence => |presence| presence,
-                .flex, .rigid, .alias, .structure, .err => unreachable,
+                .flex, .rigid, .alias, .structure, .err => unreachable, // validateAbsorbableRecordRow rejects unresolved field presences before recording
             };
             switch (presence) {
                 .optional => {},
@@ -2407,7 +2403,7 @@ const Unifier = struct {
                         .enclosing_records = self.enclosing_records,
                     });
                 },
-                .required => unreachable,
+                .required => unreachable, // validateAbsorbableRecordRow rejects required presences before recording
             }
         }
     }
@@ -2440,9 +2436,9 @@ const Unifier = struct {
                     .fn_unbound,
                     .tag_union,
                     .empty_tag_union,
-                    => unreachable,
+                    => unreachable, // validateAbsorbableRecordRow rejects non-record row extensions before recording
                 },
-                .rigid, .field_presence, .err => unreachable,
+                .rigid, .field_presence, .err => unreachable, // validateAbsorbableRecordRow rejects these row extensions before recording
             }
         }
     }
@@ -3015,9 +3011,7 @@ const Unifier = struct {
                     .empty_tag_union,
                     => return,
                 },
-                // An effect dependency is recorded from a call, which has
-                // already given the callee a function shape.
-                .flex, .rigid, .field_presence => unreachable,
+                .flex, .rigid, .field_presence => unreachable, // effect dependencies are recorded from calls, which already gave the callee a function shape
                 .err => return,
             }
         }
@@ -4879,5 +4873,5 @@ fn writeActiveVariant(comptime U: type, dest: *U, src: U) void {
             return;
         }
     }
-    unreachable;
+    unreachable; // the loop covers every field of U, one of which is active
 }

@@ -83,6 +83,9 @@ pub const UniquenessMetrics = struct {
     component_runs: u64 = 0,
     task_submitted: u64 = 0,
     task_committed: u64 = 0,
+    /// Row-table tasks of the use-order topology built on the executor's lanes.
+    topology_tasks_submitted: u64 = 0,
+    topology_tasks_committed: u64 = 0,
     signature_waves: u64 = 0,
     signature_changes: u64 = 0,
     statement_visits: u64 = 0,
@@ -2630,18 +2633,15 @@ fn noteDef(solver: *Solver, local: LIR.LocalId, kind: DefKind) void {
 fn noteBorrowDef(solver: *Solver, target: LIR.LocalId, source: LIR.LocalId) void {
     const source_index = solver.domain.indexOf(source) orelse {
         if (solver.domain.indexOf(target) != null) {
-            if (@import("builtin").mode == .debug) {
-                invariant(
-                    "ARC borrow source was outside the ARC-local domain: target={d} source={d} target_rc={} source_rc={}",
-                    .{
-                        @backingInt(target),
-                        @backingInt(source),
-                        solver.rc_local[@backingInt(target)],
-                        solver.rc_local[@backingInt(source)],
-                    },
-                );
-            }
-            unreachable;
+            invariant(
+                "ARC borrow source was outside the ARC-local domain: target={d} source={d} target_rc={} source_rc={}",
+                .{
+                    @backingInt(target),
+                    @backingInt(source),
+                    solver.rc_local[@backingInt(target)],
+                    solver.rc_local[@backingInt(source)],
+                },
+            );
         }
         return;
     };
@@ -4644,7 +4644,15 @@ const UniquenessStructure = struct {
     stmt_to_dense: []u32,
     topology: UseOrder.Topology,
 
-    fn build(allocator: Allocator, store: *const LirStore, rc_local: []const bool) SolveError!*UniquenessStructure {
+    /// The topology's tables may be built on the executor's lanes, so they
+    /// never come from the structure's single-threaded arena.
+    fn build(
+        allocator: Allocator,
+        store: *const LirStore,
+        rc_local: []const bool,
+        executor: ?*const task_executor.Executor,
+        metrics: ?*UniquenessMetrics,
+    ) SolveError!*UniquenessStructure {
         const self = try allocator.create(UniquenessStructure);
         errdefer allocator.destroy(self);
         self.* = .{
@@ -4723,7 +4731,14 @@ const UniquenessStructure = struct {
             local_to_dense[raw] = @intCast(component.locals.items.len);
             try component.locals.append(arena, @intCast(raw));
         }
-        const topology = try UseOrder.initTopology(arena, store, lists, .{ .owned = .without_marks });
+        var topology_tasks: UseOrder.TopologyTaskMetrics = .{};
+        const built_topology = UseOrder.initTopology(allocator, store, lists, .{ .owned = .without_marks }, executor, &topology_tasks);
+        if (metrics) |counts| {
+            counts.topology_tasks_submitted += topology_tasks.submitted;
+            counts.topology_tasks_committed += topology_tasks.committed;
+        }
+        var topology = try built_topology;
+        errdefer topology.deinit(allocator);
         const stmt_to_dense = try arena.alloc(u32, store.cfStmtCount());
         @memset(stmt_to_dense, no_local);
         // Ascending statement ids reproduce the legacy whole-store deduplication.
@@ -4751,6 +4766,7 @@ const UniquenessStructure = struct {
     fn destroy(self: *UniquenessStructure) void {
         for (self.components.items) |component| if (component.result) |result| result.deinit();
         const allocator = self.memory.child_allocator;
+        self.topology.deinit(allocator);
         self.memory.deinit();
         allocator.destroy(self);
     }
@@ -4975,7 +4991,8 @@ const UniquenessComponentTask = struct {
                 if (callee_seeds == 0) continue;
                 const args = self.store.getLocalSpan(assign.args);
                 for (0..@min(GuardedList.borrowLen(args), arc_sig.tracked_param_count)) |position| {
-                    if ((callee_seeds & (arc_sig.paramBit(position) orelse unreachable)) == 0) continue;
+                    const param_bit = arc_sig.paramBit(position) orelse unreachable; // the loop bound keeps position below tracked_param_count
+                    if ((callee_seeds & param_bit) == 0) continue;
                     const dense = self.domain.indexOf(GuardedList.at(args, position)) orelse continue;
                     if (!uniqueness.born_unique.isSet(dense) or uniqueness.destroyed.isSet(dense)) continue;
                     seeds |= uniqueness.conds[dense];
@@ -5071,7 +5088,7 @@ pub fn settleUniquenessWithOptions(
     const arena = memory.allocator();
     const proc_count = store.procSpecCount();
     const structure = solution.uniqueness_structure orelse blk: {
-        const built = try UniquenessStructure.build(allocator, store, rc_local);
+        const built = try UniquenessStructure.build(allocator, store, rc_local, options.executor, options.metrics);
         solution.uniqueness_structure = built;
         break :blk built;
     };
@@ -5376,7 +5393,8 @@ fn settleUniquenessOracle(
                     if (callee_seeds == 0) continue;
                     const args = store.getLocalSpan(assign.args);
                     for (0..@min(GuardedList.borrowLen(args), arc_sig.tracked_param_count)) |position| {
-                        if ((callee_seeds & (arc_sig.paramBit(position) orelse unreachable)) == 0) continue;
+                        const param_bit = arc_sig.paramBit(position) orelse unreachable; // the loop bound keeps position below tracked_param_count
+                        if ((callee_seeds & param_bit) == 0) continue;
                         const raw = @backingInt(GuardedList.at(args, position));
                         if (raw >= rc_local.len or !rc_local[raw]) continue;
                         if (!uniqueness.born_unique.isSet(raw) or uniqueness.destroyed.isSet(raw)) continue;
@@ -5816,7 +5834,8 @@ fn computeUniquenessDetailed(
                     const args_start: u32 = @intCast(call_args.items.len);
                     var complete = true;
                     for (0..arc_sig.tracked_param_count) |position| {
-                        if ((row.params & (arc_sig.paramBit(position) orelse unreachable)) == 0) continue;
+                        const param_bit = arc_sig.paramBit(position) orelse unreachable; // the loop bound keeps position below tracked_param_count
+                        if ((row.params & param_bit) == 0) continue;
                         const arg_index = if (position < GuardedList.borrowLen(args)) marks.indexOf(GuardedList.at(args, position)) else null;
                         const index = arg_index orelse {
                             complete = false;
@@ -6614,7 +6633,8 @@ fn computeUniquenessDetailed(
                     if (callee_seeds == 0) continue;
                     const args = store.getLocalSpan(assign.args);
                     for (0..@min(GuardedList.borrowLen(args), arc_sig.tracked_param_count)) |position| {
-                        if ((callee_seeds & (arc_sig.paramBit(position) orelse unreachable)) == 0) continue;
+                        const param_bit = arc_sig.paramBit(position) orelse unreachable; // the loop bound keeps position below tracked_param_count
+                        if ((callee_seeds & param_bit) == 0) continue;
                         result.noteNeededIfBorn(marks.indexOf(GuardedList.at(args, position)));
                     }
                 },
@@ -6712,8 +6732,7 @@ fn computeSccs(solver: *Solver) SolveError!void {
 }
 
 fn solveInvariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .debug) invariant(message, .{});
-    unreachable;
+    invariant(message, .{});
 }
 
 test "solve declarations are referenced" {

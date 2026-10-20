@@ -154,7 +154,7 @@ fn findCandidate(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LI
             else if (forwarding == .set_local)
                 forwarding.set_local.next
             else
-                unreachable;
+                unreachable; // forwardsToJoin accepted inner.body only as an assign_ref or set_local
             // Replacing only the inner join's body must make the forwarding
             // chain unreachable. LIR permits shared statement tails, so a
             // statement-occurrence count is insufficient: require both nodes

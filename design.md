@@ -170,6 +170,17 @@ user-facing failure (malformed source, a type error, a missing or unreadable
 file, allocation failure, a corrupt cache entry) is not a compiler invariant:
 it is reported or propagated as described for that failure, never asserted.
 
+Every `unreachable` keyword in the compiler's source carries a `//` comment
+at the end of its own line naming the upstream invariant that makes the case
+impossible: the pass that normalized the input away, the validation that
+rejected it, the enum variants handled above, the loop condition, the
+capacity reserved earlier. Only closing delimiters, `;`, and `,` may stand
+between the `unreachable` and that comment. A site whose invariant cannot be
+named calls `base.invariant` (or its stage's wrapper) with a message stating
+the expected invariant instead, so builds with runtime safety report which
+claim broke. `zig build run-check-unreachable-rationale` enforces this for
+every `.zig` file under `src/`.
+
 A test pins that an invariant fires with `base.death_test.expectPanic`, which
 re-runs the calling test in a child copy of the test binary, calls the
 violating trigger there, and passes when the child panics with the expected
@@ -654,6 +665,20 @@ offers an entry whose code reaches a linked entry, so a program that splices
 dev code never needs an object it did not ask for. A build whose store lacks
 a URL-package module's object pack builds it once the module is checked and
 before the program lowers, so that build already links it.
+
+After version resolution selects the final package versions and checking
+publishes their constants, caching check, run, and build commands prepare the URL
+packages' host dev packs under `<host>-dev/pkg/`. This includes `roc check`,
+so a package checked when downloaded already has its dev packs when its first
+app build starts. Preparation compiles each module's closed exports with the
+ordinary dev pack policy; it neither writes local-module packs nor starts
+background optimization. Existing packs are left alone, and missing or evicted
+packs are rebuilt from the checked modules. A command with errors or
+`--no-cache` prepares none.
+New packs are also offered directly to the command's cache providers, so
+runtime lowering can use them even if compile-time evaluation already loaded
+the store. Decoded packs retain stable addresses as new offers arrive; artifacts
+already handed to evaluation remain valid.
 
 The wasm32 dev backend cannot splice dev code, so a wasm32 dev build
 reads and writes no dev packs and takes only object packs' entries
@@ -21380,7 +21405,11 @@ use (otherwise the callee holds a retained copy). The signature bits and
 rows settle to a fixpoint with the analysis, since a new row only adds
 edges. One settlement retains the immutable statement inventory, control-flow
 topology, and exact ordered-use answers while rebuilding signature-dependent
-lattice state when its inputs change. Procedures sharing reachable statement
+lattice state when its inputs change. The topology's read, definition, and
+predecessor row tables depend only on the statement inventory and the jump
+targets, so with several worker lanes they are built as one executor session
+of three tasks; each table belongs to the output allocator of the lane that
+built it. Procedures sharing reachable statement
 identities or ownership-relevant locals form one analysis component, preserving
 the base solver's combined definition and use constraints. Direct calls establish
 directed signature dependencies between components rather than merging a call

@@ -601,21 +601,23 @@ pub const OpenRows = struct {
         std.debug.assert(self.builtin_owner);
         const qualified = for (CIR.builtin_type_specs) |spec| {
             if (spec.auto_import and std.mem.eql(u8, spec.display_name, name)) break spec.qualified_name;
-        } else unreachable;
+        } else unreachable; // candidates reports builtin only for a name matching an auto-imported builtin_type_specs entry
         var path = std.mem.splitScalar(u8, qualified, '.');
         var statements = self.ast.store.statementSlice(self.ast.store.getFile().statements);
         while (path.next()) |part| {
             const statement = for (statements) |index| {
                 const node = self.ast.store.getStatement(index);
                 if (node != .type_decl) continue;
-                const header = self.ast.store.getTypeHeader(node.type_decl.header) catch unreachable;
+                const header = self.ast.store.getTypeHeader(node.type_decl.header) catch
+                    base.invariant("fmt invariant violated: a Builtin type declaration has a malformed header", .{});
                 if (std.mem.eql(u8, self.tokenName(header.name), part)) break index;
-            } else unreachable;
+            } else base.invariant("fmt invariant violated: Builtin source declares no type `{s}` on the path `{s}`", .{ part, qualified });
             if (path.peek() == null) return statement;
-            const associated = self.ast.store.getStatement(statement).type_decl.associated orelse unreachable;
+            const associated = self.ast.store.getStatement(statement).type_decl.associated orelse
+                base.invariant("fmt invariant violated: Builtin type `{s}` on the path `{s}` has no associated block", .{ part, qualified });
             statements = self.ast.store.statementSlice(associated.statements);
         }
-        unreachable;
+        unreachable; // splitScalar yields at least one part, and the loop returns at the last one
     }
 
     fn declarationPositions(self: *OpenRows, statement: AST.Statement.Idx) Allocator.Error!?[]const Positions {

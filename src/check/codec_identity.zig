@@ -217,13 +217,13 @@ const ContentDigester = struct {
         self.evidence_ordinals.clearRetainingCapacity();
         self.tasks.clearRetainingCapacity();
         for (self.table.generated_codec_derivations[codec].callsSlice(self.table)) |call| switch (call.resolution) {
-            .pending => unreachable,
+            .pending => unreachable, // every codec call is resolved before identities are digested
             .checked_error => {},
             .callable => |node| try self.tasks.append(self.allocator, .{ .evidence = @backingInt(node) }),
             .structural => |nested| try self.appendNestedCodec(@backingInt(nested)),
         };
         while (self.tasks.pop()) |task| switch (task) {
-            .codec => unreachable,
+            .codec => unreachable, // this walk queues only evidence and refs tasks; nested codecs go through appendNestedCodec
             .evidence => |id| {
                 if ((try self.evidence_ordinals.getOrPut(self.allocator, id)).found_existing) continue;
                 const node = self.table.evidence_nodes[id];
@@ -308,7 +308,7 @@ const ContentDigester = struct {
             try self.writeOptionalType(call.subject_ty);
             self.writeU8(@backingInt(std.meta.activeTag(call.resolution)));
             switch (call.resolution) {
-                .pending => unreachable,
+                .pending => unreachable, // EvidencePass.linkGeneratedCodecCalls resolves every call before codec identities are computed
                 .checked_error => {},
                 .callable => |node| try self.children.append(self.allocator, .{ .evidence = @backingInt(node) }),
                 .structural => |nested| try self.children.append(self.allocator, .{ .codec = @backingInt(nested) }),
@@ -479,7 +479,7 @@ pub fn callsEquivalent(
     try comparer.typesPair(left.callable_ty, right.callable_ty);
     if (!try comparer.optionalTypes(left.subject_ty, right.subject_ty)) return false;
     switch (left.resolution) {
-        .pending => unreachable,
+        .pending => unreachable, // EvidencePass.linkGeneratedCodecCalls resolves every call before calls are compared
         .checked_error => {},
         .callable => |id| try comparer.work.append(allocator, .{ .kind = .evidence, .left = @backingInt(id), .right = @backingInt(right.resolution.callable) }),
         .structural => |id| if (!try comparer.codecs(id, right.resolution.structural)) return false,
@@ -604,7 +604,7 @@ const Comparer = struct {
                         try self.typesPair(ac.callable_ty, bc.callable_ty);
                         if (!try self.optionalTypes(ac.subject_ty, bc.subject_ty)) return false;
                         switch (ac.resolution) {
-                            .pending => unreachable,
+                            .pending => unreachable, // EvidencePass.linkGeneratedCodecCalls resolves every call before codec identities are computed
                             .checked_error => {},
                             .callable => |id| try self.work.append(self.allocator, .{ .kind = .evidence, .left = @backingInt(id), .right = @backingInt(bc.resolution.callable) }),
                             .structural => |id| if (!try self.codecs(id, bc.resolution.structural)) return false,

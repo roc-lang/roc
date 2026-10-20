@@ -337,8 +337,7 @@ const Builder = struct {
     }
 };
 fn invariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .debug) compilerInvariant("frozen root transcode invariant violated: {s}", .{message});
-    unreachable;
+    compilerInvariant("frozen root transcode invariant violated: {s}", .{message});
 }
 
 fn sameErasedFunction(source: Program.ErasedFn, target: Program.ErasedFn) bool {
@@ -360,9 +359,9 @@ fn testSlot(program: *Program.Result, idx: layout.Idx) Allocator.Error!lir.LIR.S
     return id;
 }
 
-fn testRootSymbol(exports: []const static_data.StaticDataExport) SymbolId {
+fn testRootSymbol(exports: []const static_data.StaticDataExport) error{TestUnexpectedResult}!SymbolId {
     for (exports, 0..) |item, index| if (item.value_id != null) return @fromBackingInt(@intCast(index));
-    unreachable;
+    return error.TestUnexpectedResult;
 }
 
 // These graph-only tests do not read request provenance or solved return types.
@@ -395,7 +394,7 @@ test "frozen root transcode preserves shared list strings across pointer widths"
     // addends are relative to that symbol, not the image's first byte.
     native[2].symbol_offset = 4;
     for (@constCast(native[1].relocations)) |*rel| rel.addend -= 4;
-    const converted = try transcodeRoot(allocator, &source, testRoot(list_plan, source_list), native, testRootSymbol(native), &target, testRoot(list_plan, target_list), try testSlot(&target, target_list));
+    const converted = try transcodeRoot(allocator, &source, testRoot(list_plan, source_list), native, try testRootSymbol(native), &target, testRoot(list_plan, target_list), try testSlot(&target, target_list));
     defer static_data.deinitStaticData(allocator, converted);
     try std.testing.expectEqual(@as(usize, 3), converted.len);
     try std.testing.expectEqual(@as(usize, 12), converted[0].bytes.len);
@@ -438,7 +437,7 @@ test "frozen root transcode of a list of many string pointers stays proportional
     var list_value = builtins.list.RocList{ .bytes = @ptrCast(items.ptr), .length = count, .capacity_or_alloc_ptr = builtins.list.RocList.encodeCapacity(count) };
     const native = try @import("native_root_export.zig").freezeRoot(allocator, &source, try testSlot(&source, source_list), testRoot(list_plan, source_list), .{ .ptr = @ptrCast(&list_value) }, .{});
     defer static_data.deinitStaticData(allocator, native);
-    const converted = try transcodeRoot(allocator, &source, testRoot(list_plan, source_list), native, testRootSymbol(native), &target, testRoot(list_plan, target_list), try testSlot(&target, target_list));
+    const converted = try transcodeRoot(allocator, &source, testRoot(list_plan, source_list), native, try testRootSymbol(native), &target, testRoot(list_plan, target_list), try testSlot(&target, target_list));
     defer static_data.deinitStaticData(allocator, converted);
     try std.testing.expectEqual(@as(usize, 3), converted.len);
     const list_export = converted[@backingInt(converted[0].relocations[0].target.data_symbol)];
@@ -460,7 +459,7 @@ test "frozen root transcode promotes inline strings when target width shrinks" {
     var value = builtins.str.RocStr.fromSliceSmall(text);
     const native = try @import("native_root_export.zig").freezeRoot(allocator, &source, try testSlot(&source, .str), testRoot(plan, .str), .{ .ptr = @ptrCast(&value) }, .{});
     defer static_data.deinitStaticData(allocator, native);
-    const converted = try transcodeRoot(allocator, &source, testRoot(plan, .str), native, testRootSymbol(native), &target, testRoot(plan, .str), try testSlot(&target, .str));
+    const converted = try transcodeRoot(allocator, &source, testRoot(plan, .str), native, try testRootSymbol(native), &target, testRoot(plan, .str), try testSlot(&target, .str));
     defer static_data.deinitStaticData(allocator, converted);
     try std.testing.expectEqual(@as(usize, 2), converted.len);
     try std.testing.expectEqual(@as(u32, text.len), std.mem.readInt(u32, converted[0].bytes[8..12], .little));
@@ -490,7 +489,7 @@ test "frozen root transcode preserves fixed U64 values on 32-bit targets" {
     var value: u64 = 0x123456789abcdef0;
     const native = try @import("native_root_export.zig").freezeRoot(allocator, &source, try testSlot(&source, .u64), testRoot(plan, .u64), .{ .ptr = @ptrCast(&value) }, .{});
     defer static_data.deinitStaticData(allocator, native);
-    const converted = try transcodeRoot(allocator, &source, testRoot(plan, .u64), native, testRootSymbol(native), &target, testRoot(plan, .u64), try testSlot(&target, .u64));
+    const converted = try transcodeRoot(allocator, &source, testRoot(plan, .u64), native, try testRootSymbol(native), &target, testRoot(plan, .u64), try testSlot(&target, .u64));
     defer static_data.deinitStaticData(allocator, converted);
     try std.testing.expectEqual(value, std.mem.readInt(u64, converted[0].bytes[0..8], .little));
 }
@@ -522,7 +521,7 @@ test "frozen root transcode closes recursive callable graphs at target pointer w
     recursive_capture = @intFromPtr(&recursive_capture);
     const native = try @import("native_root_export.zig").freezeRoot(allocator, &source, try testSlot(&source, source_layout), testRoot(plan, source_layout), .{ .ptr = @ptrCast(&recursive_capture) }, .{});
     defer static_data.deinitStaticData(allocator, native);
-    const converted = try transcodeRoot(allocator, &source, testRoot(plan, source_layout), native, testRootSymbol(native), &target, testRoot(plan, target_layout), try testSlot(&target, target_layout));
+    const converted = try transcodeRoot(allocator, &source, testRoot(plan, source_layout), native, try testRootSymbol(native), &target, testRoot(plan, target_layout), try testSlot(&target, target_layout));
     defer static_data.deinitStaticData(allocator, converted);
     try std.testing.expectEqual(@as(usize, 2), converted.len);
     try std.testing.expectEqual(@as(usize, 4), converted[0].bytes.len);
@@ -576,7 +575,7 @@ test "frozen root transcode maps erased worker and drop identities across target
     var resolver_proc = source_proc;
     const native = try @import("native_root_export.zig").freezeRoot(allocator, &source, try testSlot(&source, source_layout), testRoot(fn_plan, source_layout), .{ .ptr = @ptrCast(&pointer) }, .{ .context = &resolver_proc, .resolve = Resolver.resolve });
     defer static_data.deinitStaticData(allocator, native);
-    const converted = try transcodeRoot(allocator, &source, testRoot(fn_plan, source_layout), native, testRootSymbol(native), &target, testRoot(fn_plan, target_layout), try testSlot(&target, target_layout));
+    const converted = try transcodeRoot(allocator, &source, testRoot(fn_plan, source_layout), native, try testRootSymbol(native), &target, testRoot(fn_plan, target_layout), try testSlot(&target, target_layout));
     defer static_data.deinitStaticData(allocator, converted);
     const root_pointer = converted[0].relocations[0];
     const payload = converted[@backingInt(root_pointer.target.data_symbol)];
@@ -619,7 +618,7 @@ test "frozen root transcode preserves failure flag and message using explicit fi
     var message = builtins.str.RocStr.fromSliceSmall("failed value");
     @memcpy(bytes[fields.message_offset..][0..@sizeOf(builtins.str.RocStr)], std.mem.asBytes(&message));
     const source_exports = [_]static_data.StaticDataExport{.{ .symbol_name = "failure", .value_id = source_id, .bytes = bytes, .alignment = 8, .is_global = false, .is_exported = false }};
-    const converted = try transcodeFailure(allocator, &source, slot, &source_exports, testRootSymbol(&source_exports), &target, target_id);
+    const converted = try transcodeFailure(allocator, &source, slot, &source_exports, try testRootSymbol(&source_exports), &target, target_id);
     defer static_data.deinitStaticData(allocator, converted);
     const target_fields = target.static_data_values.items[0].compile_time_root.?.role.failure_message;
     try std.testing.expectEqual(@as(u8, 1), converted[0].bytes[target_fields.failed_offset]);
@@ -665,7 +664,7 @@ test "frozen root transcode selects target callable discriminant by frozen origi
     source.layouts.getTagUnionData(source.layouts.getLayout(source_layout).getTagUnion().idx).writeDiscriminant(bytes.ptr, 1, source.layouts.targetUsize());
     const native = try @import("native_root_export.zig").freezeRoot(allocator, &source, try testSlot(&source, source_layout), testRoot(plan, source_layout), .{ .ptr = bytes.ptr }, .{});
     defer static_data.deinitStaticData(allocator, native);
-    const converted = try transcodeRoot(allocator, &source, testRoot(plan, source_layout), native, testRootSymbol(native), &target, testRoot(plan, target_layout), try testSlot(&target, target_layout));
+    const converted = try transcodeRoot(allocator, &source, testRoot(plan, source_layout), native, try testRootSymbol(native), &target, testRoot(plan, target_layout), try testSlot(&target, target_layout));
     defer static_data.deinitStaticData(allocator, converted);
     const data = target.layouts.getTagUnionData(target.layouts.getLayout(target_layout).getTagUnion().idx);
     try std.testing.expectEqual(@as(u32, 0), data.readDiscriminant(converted[0].bytes.ptr, target.layouts.targetUsize()));
@@ -704,7 +703,7 @@ test "frozen root transcode distinguishes zero-sized capture contexts of one fun
     var selected: u8 = 1;
     const native = try @import("native_root_export.zig").freezeRoot(allocator, &source, try testSlot(&source, .bool), testRoot(plans[0], .bool), .{ .ptr = @ptrCast(&selected) }, .{});
     defer static_data.deinitStaticData(allocator, native);
-    const converted = try transcodeRoot(allocator, &source, testRoot(plans[0], .bool), native, testRootSymbol(native), &target, testRoot(plans[1], .bool), try testSlot(&target, .bool));
+    const converted = try transcodeRoot(allocator, &source, testRoot(plans[0], .bool), native, try testRootSymbol(native), &target, testRoot(plans[1], .bool), try testSlot(&target, .bool));
     defer static_data.deinitStaticData(allocator, converted);
     try std.testing.expectEqual(@as(u8, 0), converted[0].bytes[0]);
 }
@@ -781,7 +780,7 @@ test "frozen root transcode re-points a boxed slot at its payload across pointer
         &source,
         source.static_data_values.items[@backingInt(source_slot_id)],
         native,
-        testRootSymbol(native),
+        try testRootSymbol(native),
         &target,
         target_slot_id,
     );
@@ -884,7 +883,7 @@ test "frozen root transcode preserves Boxy recipe identity and generic boxed cap
     defer static_data.deinitStaticData(allocator, native);
     const native_pointer = native[0].relocations[0];
     try std.testing.expectEqual(@as(u32, 1), native[@backingInt(native_pointer.target.data_symbol)].relocations[0].boxy_recipe.?);
-    const converted = try transcodeRoot(allocator, &source, testRoot(source_fixture.plan, source_fixture.callable), native, testRootSymbol(native), &target, testRoot(target_fixture.plan, target_fixture.callable), try testSlot(&target, target_fixture.callable));
+    const converted = try transcodeRoot(allocator, &source, testRoot(source_fixture.plan, source_fixture.callable), native, try testRootSymbol(native), &target, testRoot(target_fixture.plan, target_fixture.callable), try testSlot(&target, target_fixture.callable));
     defer static_data.deinitStaticData(allocator, converted);
     const root_pointer = converted[0].relocations[0];
     const closure = converted[@backingInt(root_pointer.target.data_symbol)];

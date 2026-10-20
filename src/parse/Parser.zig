@@ -2468,7 +2468,7 @@ fn CurrentStack(comptime State: type) type {
         }
 
         inline fn leave(self: *Self) State {
-            const state = self.current orelse unreachable;
+            const state = self.current orelse base.invariant("parser invariant violated: left a parse-state stack with no active state", .{});
             self.current = self.stack.pop();
             return state;
         }
@@ -3057,9 +3057,9 @@ const OpenSyntaxStack = struct {
     }
 
     inline fn popPayloadWithKind(self: *OpenSyntaxStack, comptime Kind: type, kind_stack: *std.ArrayList(Kind), expected: Kind, comptime Payload: type) Payload {
-        const kind = kind_stack.pop() orelse unreachable;
+        const kind = kind_stack.pop() orelse base.invariant("parser invariant violated: popped an empty {s} stack", .{@typeName(Kind)});
         std.debug.assert(kind == expected);
-        return self.payloadStack(Payload).pop() orelse unreachable;
+        return self.payloadStack(Payload).pop() orelse base.invariant("parser invariant violated: popped an empty {s} payload stack", .{@typeName(Payload)});
     }
 
     inline fn popExprPayload(self: *OpenSyntaxStack, expected: ExprParentKind, comptime Payload: type) Payload {
@@ -3087,7 +3087,7 @@ const OpenSyntaxStack = struct {
     }
 
     inline fn popMarkerWithKind(comptime Kind: type, kind_stack: *std.ArrayList(Kind), expected: Kind) void {
-        const kind = kind_stack.pop() orelse unreachable;
+        const kind = kind_stack.pop() orelse base.invariant("parser invariant violated: popped an empty {s} stack", .{@typeName(Kind)});
         std.debug.assert(kind == expected);
     }
 
@@ -4323,7 +4323,7 @@ fn runExprStatementKernel(
             continue :expr_kernel .complete;
         },
         .complete => {
-            const completed = last_expr orelse unreachable;
+            const completed = last_expr orelse unreachable; // every transition into .complete sets last_expr first
             if (open_syntax.peekExpr()) |kind| {
                 switch (kind) {
                     .expr_collection_item => {
@@ -4803,10 +4803,7 @@ fn runExprStatementKernel(
             if (root == .expr) {
                 return completed;
             }
-            if (root == .pattern) {
-                unreachable;
-            }
-            unreachable;
+            base.invariant("parser invariant violated: expression completed with no open parent under a {s} root", .{@tagName(root)});
         },
         .arrow_app_next => {
             if (self.peek() == .NoSpaceOpenRound) {
@@ -4855,7 +4852,8 @@ fn runExprStatementKernel(
                         .tuple => {
                             const expr = try self.store.addExpr(.{ .tuple = .{ .items = span, .region = .{ .start = state.start, .end = self.pos } } });
                             self.store.setCollectionLayout(expr, layout);
-                            expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp orelse unreachable, .expr = expr };
+                            const tuple_min_bp = state.min_bp orelse unreachable; // prefix parsing enters tuple collections with expr_state.min_bp, which is never null
+                            expr_finish_state = .{ .start = state.start, .min_bp = tuple_min_bp, .expr = expr };
                             continue :expr_kernel .suffix;
                         },
                         .apply => |apply_state| {
@@ -5340,7 +5338,7 @@ fn runExprStatementKernel(
             continue :expr_kernel .type_complete;
         },
         .type_complete => {
-            const completed = last_type_anno orelse unreachable;
+            const completed = last_type_anno orelse base.invariant("parser invariant violated: reached type_complete without a completed type annotation", .{});
             if (open_syntax.peekType()) |kind| {
                 switch (kind) {
                     .type_apply => {
@@ -5618,7 +5616,7 @@ fn runExprStatementKernel(
             if (root == .type_anno) {
                 return completed;
             }
-            unreachable;
+            base.invariant("parser invariant violated: type annotation completed with no open parent under a {s} root", .{@tagName(root)});
         },
         .type_apply_next => {
             if (self.peek() == .CloseRound) {
@@ -6037,7 +6035,7 @@ fn runExprStatementKernel(
             continue :expr_kernel .where_complete;
         },
         .where_complete => {
-            const completed = last_where orelse unreachable;
+            const completed = last_where orelse base.invariant("parser invariant violated: reached where_complete without a completed where clause", .{});
             last_where = null;
             if (open_syntax.peekWhere()) |kind| {
                 switch (kind) {
@@ -6082,7 +6080,7 @@ fn runExprStatementKernel(
                     },
                 }
             }
-            unreachable;
+            base.invariant("parser invariant violated: where clause completed with no open parent", .{});
         },
         .statement_type_decl_finish => {
             const state = statement_type_decl_ready_state;
@@ -6479,7 +6477,7 @@ fn runExprStatementKernel(
             continue :expr_kernel .prefix;
         },
         .statement_complete => {
-            const completed = last_statement orelse unreachable;
+            const completed = last_statement orelse base.invariant("parser invariant violated: reached statement_complete without a completed statement", .{});
             last_statement = null;
             if (open_syntax.peekStatement() == .statement_type_associated_statement and
                 open_syntax.peekPayload(StatementAssociatedStatementState).expr_block_depth == expr_blocks.depth())
@@ -6814,7 +6812,7 @@ fn runExprStatementKernel(
             continue :expr_kernel .pattern_complete;
         },
         .pattern_complete => {
-            const completed = last_pattern orelse unreachable;
+            const completed = last_pattern orelse base.invariant("parser invariant violated: reached pattern_complete without a completed pattern", .{});
             if (open_syntax.peekPattern()) |kind| {
                 switch (kind) {
                     .expr_for_pattern => {
@@ -7045,7 +7043,7 @@ fn runExprStatementKernel(
                     },
                 }
             }
-            unreachable;
+            base.invariant("parser invariant violated: pattern completed with no open parent under a {s} root", .{@tagName(root)});
         },
         .pattern_tag_args_next => {
             if (self.peek() == .CloseRound) {

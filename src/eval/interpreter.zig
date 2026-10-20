@@ -662,13 +662,10 @@ pub const Interpreter = struct {
 
         fn slotIndex(self: *const Frame, local_id: LocalId) usize {
             if (self.findSlotIndex(local_id)) |index| return index;
-            if (builtin.mode == .debug) {
-                debugPrint(
-                    "LIR/interpreter invariant violated: proc {d} frame does not contain local {d}\n",
-                    .{ @backingInt(self.proc_id), @backingInt(local_id) },
-                );
-            }
-            unreachable;
+            base.invariant(
+                "LIR/interpreter invariant violated: proc {d} frame does not contain local {d}",
+                .{ @backingInt(self.proc_id), @backingInt(local_id) },
+            );
         }
 
         fn isAssigned(self: *const Frame, local_id: LocalId) bool {
@@ -1241,12 +1238,7 @@ pub const Interpreter = struct {
     }
 
     fn invariantFailed(_: *const LirInterpreter, comptime fmt: []const u8, args: anytype) noreturn {
-        if (builtin.mode == .debug) {
-            debugPrint(fmt, args);
-            debugPrint("\n", .{});
-            std.debug.assert(false);
-        }
-        unreachable;
+        base.invariant(fmt, args);
     }
 
     fn invariantFailedError(self: *const LirInterpreter, comptime fmt: []const u8, args: anytype) Error {
@@ -1498,7 +1490,7 @@ pub const Interpreter = struct {
             .@"4" => self.evalAllocator().alignedAlloc(u8, .@"4", size),
             .@"8" => self.evalAllocator().alignedAlloc(u8, .@"8", size),
             .@"16" => self.evalAllocator().alignedAlloc(u8, .@"16", size),
-            _ => unreachable,
+            _ => self.invariantFailed("LIR/interpreter invariant violated: layout alignment {d} exceeds 16 bytes", .{alignment.toByteUnits()}),
         } catch return error.OutOfMemory;
     }
 
@@ -4000,10 +3992,9 @@ pub const Interpreter = struct {
     fn evalProcRefLiteral(self: *LirInterpreter, proc_id: LIR.LirProcSpecId) Error!Value {
         const val = try self.alloc(.opaque_ptr);
         const encoded: usize = @backingInt(proc_id) + 1;
-        switch (self.layout_store.targetUsize().size()) {
-            4 => val.write(u32, @intCast(encoded)),
-            8 => val.write(usize, encoded),
-            else => unreachable,
+        switch (self.layout_store.targetUsize()) {
+            .u32 => val.write(u32, @intCast(encoded)),
+            .u64 => val.write(usize, encoded),
         }
         return val;
     }
@@ -4062,7 +4053,9 @@ pub const Interpreter = struct {
     }
 
     pub fn erasedCallableInterpreterContextFromCapture(capture_ptr: ?[*]u8) *ErasedCallableInterpreterContext {
-        return @ptrCast(@alignCast(capture_ptr orelse unreachable));
+        const non_null_capture = capture_ptr orelse
+            base.invariant("LIR/interpreter invariant violated: interpreter erased callable had no capture address", .{});
+        return @ptrCast(@alignCast(non_null_capture));
     }
 
     pub fn erasedCallableInterpreterContextFromPayload(data_ptr: [*]u8) *ErasedCallableInterpreterContext {
@@ -4088,12 +4081,13 @@ pub const Interpreter = struct {
         out_desc: *?*const anyopaque,
     ) callconv(.c) void {
         const context = erasedCallableInterpreterContextFromCapture(capture);
+        const capture_ptr = capture orelse unreachable; // erasedCallableInterpreterContextFromCapture rejected a null capture above
         const owner = context.owner;
         if (owner) |retained| {
             retained.retain();
             retained.enter();
         }
-        context.interpreter.callInterpreterErasedCallable(.{ .proc = @fromBackingInt(@intCast(context.proc_id)), .capture_ptr = (capture orelse unreachable) + context.capture_value_offset, .result_desc = context.result_desc }, ops, ret, args, reuse, out_desc) catch |err| context.interpreter.crashErasedCallable(owner, ops, err, .call);
+        context.interpreter.callInterpreterErasedCallable(.{ .proc = @fromBackingInt(@intCast(context.proc_id)), .capture_ptr = capture_ptr + context.capture_value_offset, .result_desc = context.result_desc }, ops, ret, args, reuse, out_desc) catch |err| context.interpreter.crashErasedCallable(owner, ops, err, .call);
         leaveAndReleaseErasedCallableOwner(owner);
     }
 
@@ -4118,9 +4112,7 @@ pub const Interpreter = struct {
             error.DivisionByZero => prefix ++ "hit division by zero",
             error.UnsupportedHostedFunction => prefix ++ "reached an unsupported hosted function",
             error.InvalidHostedFunctionSignature => prefix ++ "reached an invalid hosted function signature",
-            // expect_err statements only occur in top-level expect test
-            // roots, never in callable bodies.
-            error.ExpectErr => unreachable,
+            error.ExpectErr => unreachable, // expect_err statements occur only in top-level expect test roots, not callable bodies
         };
         leaveAndReleaseErasedCallableOwner(owner);
         ops.crash(message);
@@ -4159,9 +4151,10 @@ pub const Interpreter = struct {
             )
         else
             @fromBackingInt(@intCast(context.drop_layout_plus_one - 1));
-        const capture_value_ptr = (capture orelse unreachable) + context.capture_value_offset;
+        const capture_ptr = capture orelse unreachable; // interpreterErasedCallableOnDrop derived context from this capture, which rejects null
+        const capture_value_ptr = capture_ptr + context.capture_value_offset;
         switch (drop_kind) {
-            .none => unreachable,
+            .none => unreachable, // the .none drop kind returned above
             .rc_helper => self.performRcHelperRequired(
                 .{ .op = .decref, .layout_idx = capture_layout },
                 .{ .ptr = capture_value_ptr },
@@ -4713,7 +4706,10 @@ pub const Interpreter = struct {
         };
 
         if (capture_value) |value| {
-            const capture_layout = assign.capture_layout orelse unreachable;
+            const capture_layout = assign.capture_layout orelse self.invariantFailed(
+                "LIR/interpreter invariant violated: erased callable proc {d} has a capture but no capture layout",
+                .{@backingInt(assign.proc)},
+            );
             const capture_ptr = erasedCallableInterpreterCaptureValuePtr(data_ptr);
             const size = self.helper.sizeOf(capture_layout);
             if (size > 0) {
@@ -5707,7 +5703,7 @@ pub const Interpreter = struct {
 
     fn listElementIncref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
         if (element == null) return;
-        const ctx_ptr = context orelse unreachable;
+        const ctx_ptr = context orelse unreachable; // every list op that passes this callback passes its ListElementRcContext with it
         const ctx: *const ListElementRcContext = @ptrCast(@alignCast(ctx_ptr));
         const value = Value{ .ptr = element.? };
         if (ctx.elem_desc) |desc| {
@@ -5720,7 +5716,7 @@ pub const Interpreter = struct {
 
     fn listElementDecref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
         if (element == null) return;
-        const ctx_ptr = context orelse unreachable;
+        const ctx_ptr = context orelse unreachable; // every list op that passes this callback passes its ListElementRcContext with it
         const ctx: *const ListElementRcContext = @ptrCast(@alignCast(ctx_ptr));
         const value = Value{ .ptr = element.? };
         if (ctx.elem_desc) |desc| {
@@ -5887,9 +5883,8 @@ pub const Interpreter = struct {
             ll.ret_layout;
 
         return switch (ll.op) {
-            .num_plus, .num_minus, .num_times => unreachable,
-            // LIR lowering splits this into an alias and `list_prefetch`.
-            .list_prefetched => unreachable,
+            .num_plus, .num_minus, .num_times => unreachable, // lowering resolves source-policy arithmetic to a family member, and verifyArithmeticBoundary rejects it in LIR
+            .list_prefetched => unreachable, // LIR lowering splits this into an alias and `list_prefetch`
             // ── String ops ──
             .str_is_eq => blk: {
                 const result = builtins.str.strEqual(valueToRocStr(args[0]), valueToRocStr(args[1]));
@@ -7554,7 +7549,8 @@ pub const Interpreter = struct {
         for (0..@min(ll.args.len, operands.len)) |i| {
             operands[i] = self.readLowBits(ll.args[i], try self.lowLevelArgLayout(ll, i));
         }
-        const simd_op: builtins.simd.Op = @fromBackingInt(@intCast(ll.op.simdOpIndex() orelse unreachable));
+        const simd_index = ll.op.simdOpIndex() orelse unreachable; // evalLowLevel dispatches evalSimd only for simd_* ops, which form simdOpIndex's contiguous range
+        const simd_op: builtins.simd.Op = @fromBackingInt(@intCast(simd_index));
         const result_bits = builtins.simd.eval(simd_op, source_kind, destination_kind, operands[0], operands[1], operands[2]);
         const result = try self.alloc(ll.ret_layout);
         const result_size = @min(self.helper.sizeOf(ll.ret_layout), @sizeOf(u128));
@@ -7712,7 +7708,7 @@ pub const Interpreter = struct {
         ret_layout: layout_mod.Idx,
         arg_layout: layout_mod.Idx,
     ) Error!Value {
-        const entry = CheckedArithmetic.classify(low_level) orelse unreachable;
+        const entry = CheckedArithmetic.classify(low_level) orelse unreachable; // evalLowLevel dispatches here only for integer family ops
         if (entry.mode == .overflows) {
             return self.evalIntegerOverflows(a, b, ret_layout, arg_layout, entry.operation);
         }
@@ -7995,7 +7991,7 @@ pub const Interpreter = struct {
                 .asin => builtins.dec.asinC(a, roc_ops),
                 .acos => builtins.dec.acosC(a, roc_ops),
                 .atan => builtins.dec.atanC(a, roc_ops),
-                .floor, .ceiling => unreachable,
+                .floor, .ceiling => unreachable, // evalFracMath returns before calling dec for ops whose hasDec is false
             };
         }
 
@@ -8264,16 +8260,16 @@ pub const Interpreter = struct {
                 else
                     self.numTruncateWiden(Src, @Int(.signed, spec.dst.bits()), spec.dst.ZigType(), arg, ret_layout),
                 .@"try" => self.numTry(Src, spec.dst.ZigType(), arg, ret_layout),
-                .trunc, .try_unsafe => unreachable,
+                .trunc, .try_unsafe => unreachable, // no LowLevel int-to-int conversion op has these modes
             },
             .float => switch (comptime spec.mode) {
                 .exact => self.intToFloat(Src, arg, ret_layout),
-                .wrap, .trunc, .@"try", .try_unsafe => unreachable,
+                .wrap, .trunc, .@"try", .try_unsafe => unreachable, // every LowLevel int-to-float conversion op is exact
             },
             .dec => switch (comptime spec.mode) {
                 .exact => self.intToDec(Src, arg, ret_layout),
                 .try_unsafe => self.intToDecTry(Src, arg, ret_layout),
-                .wrap, .trunc, .@"try" => unreachable,
+                .wrap, .trunc, .@"try" => unreachable, // no LowLevel int-to-Dec conversion op has these modes
             },
         };
     }
@@ -8284,15 +8280,15 @@ pub const Interpreter = struct {
             .int => switch (comptime spec.mode) {
                 .trunc => self.floatToInt(Src, spec.dst.ZigType(), arg, ret_layout),
                 .try_unsafe => self.floatToIntTry(Src, spec.dst.ZigType(), arg, ret_layout),
-                .exact, .wrap, .@"try" => unreachable,
+                .exact, .wrap, .@"try" => unreachable, // no LowLevel float-to-int conversion op has these modes
             },
             .float => switch (comptime spec.mode) {
                 .exact => self.floatWiden(Src, spec.dst.ZigType(), arg, ret_layout),
                 .wrap => self.floatNarrow(Src, spec.dst.ZigType(), arg, ret_layout),
                 .try_unsafe => self.floatNarrowTry(Src, spec.dst.ZigType(), arg, ret_layout),
-                .trunc, .@"try" => unreachable,
+                .trunc, .@"try" => unreachable, // no LowLevel float-to-float conversion op has these modes
             },
-            .dec => unreachable,
+            .dec => unreachable, // no LowLevel conversion op converts a float to Dec
         };
     }
 
@@ -8301,14 +8297,14 @@ pub const Interpreter = struct {
             .int => switch (comptime spec.mode) {
                 .trunc => self.decToInt(spec.dst.ZigType(), arg, ret_layout),
                 .try_unsafe => self.decToIntTry(spec.dst.ZigType(), arg, ret_layout),
-                .exact, .wrap, .@"try" => unreachable,
+                .exact, .wrap, .@"try" => unreachable, // no LowLevel Dec-to-int conversion op has these modes
             },
             .float => switch (comptime spec.mode) {
                 .exact, .wrap => self.decToFloat(spec.dst.ZigType(), arg, ret_layout),
                 .try_unsafe => self.decToFloatTry(spec.dst.ZigType(), arg, ret_layout),
-                .trunc, .@"try" => unreachable,
+                .trunc, .@"try" => unreachable, // no LowLevel Dec-to-float conversion op has these modes
             },
-            .dec => unreachable,
+            .dec => unreachable, // no LowLevel conversion op converts Dec to Dec
         };
     }
 
@@ -8334,9 +8330,8 @@ pub const Interpreter = struct {
 
     fn numToStr(self: *LirInterpreter, comptime T: type, arg: Value, _: layout_mod.Idx) Error!Value {
         comptime std.debug.assert(@typeInfo(T) == .int and @bitSizeOf(T) <= 128);
-        // A 128-bit integer has at most 39 digits and a sign.
         var buffer: [40]u8 = undefined;
-        const formatted = std.fmt.bufPrint(&buffer, "{d}", .{arg.read(T)}) catch unreachable;
+        const formatted = std.fmt.bufPrint(&buffer, "{d}", .{arg.read(T)}) catch unreachable; // an integer of at most 128 bits has at most 39 digits and a sign
         return try self.makeRocStr(formatted);
     }
 
@@ -8525,7 +8520,7 @@ pub const Interpreter = struct {
             .negate => -%av,
             .abs => blk: {
                 if (checked_op != null and av == std.math.minInt(i128)) {
-                    const message = CheckedArithmetic.overflowMessageForLayout(checked_op.?, .dec) orelse unreachable;
+                    const message = CheckedArithmetic.overflowMessageForLayout(checked_op.?, .dec) orelse unreachable; // the only checked abs op is num_abs_checked, which has a Dec overflow message
                     return self.triggerCrash(message);
                 }
                 break :blk if (av < 0) -%av else av;
