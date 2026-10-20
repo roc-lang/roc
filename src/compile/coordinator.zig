@@ -1964,7 +1964,7 @@ pub const Coordinator = struct {
     /// checked artifact, so the build has no program; every checked module
     /// still finishes its independent compile-time work and every report is
     /// still emitted.
-    fn appRootChecked(self: *Coordinator) bool {
+    pub fn appRootChecked(self: *Coordinator) bool {
         const app_root = self.findRootModule(.app) orelse self.findRootModule(.default_app) orelse return false;
         return app_root.mod.checkedArtifact() != null;
     }
