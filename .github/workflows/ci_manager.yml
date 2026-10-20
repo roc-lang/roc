@@ -18,9 +18,9 @@ name: CI Manager
 #
 #   static-checks ────────────────────────────┐ (gates macOS + Windows)
 #   check-changes ─┬─> linux-extra-checks     │
-#                  ├─> minici-build-linux ───>│ minici-linux   (4 shards)
-#                  ├─> minici-build-macos <───┤ minici-macos   (3 shards)
-#                  └─> minici-build-windows <─┘ minici-windows (5 shards)
+#                  ├─> minici-build-linux ───>│ minici-linux   (5 shards)
+#                  ├─> minici-build-macos <───┤ minici-macos   (4 shards)
+#                  └─> minici-build-windows <─┘ minici-windows (6 shards)
 #   everything above ─> finish (the only required check)
 #
 # `static-checks` runs on every PR, including docs-only ones. The MiniCI lanes
@@ -473,6 +473,8 @@ jobs:
             valgrind: false
           - minici_shard: linux-harness
             valgrind: false
+          - minici_shard: linux-strategy
+            valgrind: false
     steps: &minici_shard_steps
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
@@ -663,6 +665,8 @@ jobs:
             valgrind: false
           - minici_shard: macos-harness
             valgrind: false
+          - minici_shard: macos-strategy
+            valgrind: false
     steps: *minici_shard_steps
 
   minici-windows:
@@ -686,6 +690,8 @@ jobs:
           - minici_shard: windows-simd
             valgrind: false
           - minici_shard: windows-harness
+            valgrind: false
+          - minici_shard: windows-strategy
             valgrind: false
     steps: *minici_shard_steps
 
