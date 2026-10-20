@@ -5921,6 +5921,14 @@ const AliasExpansionContext = struct {
 
 const AliasExpansions = std.HashMapUnmanaged(AliasExpansionKey, CheckedTypeId, AliasExpansionContext, std.hash_map.default_max_load_percentage);
 
+fn checkedRecordFieldLabelLessThan(names: *const canonical.CanonicalNameStore, lhs: CheckedRecordField, rhs: CheckedRecordField) bool {
+    return names.recordFieldLabelTextLessThan(lhs.name, rhs.name);
+}
+
+fn checkedTagBuildLabelLessThan(names: *const canonical.CanonicalNameStore, lhs: CheckedTagBuild, rhs: CheckedTagBuild) bool {
+    return names.tagLabelTextLessThan(lhs.name, rhs.name);
+}
+
 const DeclarationAnnoWalk = struct {
     allocator: Allocator,
     module: TypedCIR.Module,
@@ -6155,6 +6163,10 @@ const DeclarationAnnoWalk = struct {
                         slot.name = @fromBackingInt(@intCast(results.take()));
                         slot.args = try results.typeIds(gpa, module_env.store.sliceTypeAnnos(tag.args).len);
                     }
+                    // A checked row is in lexicographic label order (design.md
+                    // "Row, Nominal, Alias, And Opaque Authority"); the
+                    // annotation lists its tags in source order.
+                    std.sort.pdq(CheckedTagBuild, out, @as(*const canonical.CanonicalNameStore, self.names), checkedTagBuildLabelLessThan);
                     break :blk out;
                 };
                 // The payload owns `tags` and releases it on failure.
@@ -6193,6 +6205,12 @@ const DeclarationAnnoWalk = struct {
                         };
                         out_index += 1;
                     }
+                    // A checked row is in lexicographic label order; the
+                    // annotation lists its fields in source order. A nominal
+                    // declaration's source order is published separately as
+                    // its declared fields (design.md "Nominal Record Field
+                    // Order").
+                    std.sort.pdq(CheckedRecordField, out, @as(*const canonical.CanonicalNameStore, self.names), checkedRecordFieldLabelLessThan);
                     break :blk out;
                 };
                 // The payload owns `fields` and releases it on failure.
@@ -9930,11 +9948,12 @@ test "optional record fields publish through the declaration annotation path" {
     );
     const fields = store.payload(record_root).record.fields;
 
+    // The published row is in lexicographic label order, not source order.
     try testing.expectEqual(@as(usize, 2), fields.len);
-    try testing.expectEqualStrings("world", names.recordFieldLabelText(fields[0].name));
-    try testing.expectEqual(CheckedFieldKind.Tag.optional, fields[0].kind.tag);
-    try testing.expectEqualStrings("req", names.recordFieldLabelText(fields[1].name));
-    try testing.expectEqual(CheckedFieldKind.Tag.required, fields[1].kind.tag);
+    try testing.expectEqualStrings("req", names.recordFieldLabelText(fields[0].name));
+    try testing.expectEqual(CheckedFieldKind.Tag.required, fields[0].kind.tag);
+    try testing.expectEqualStrings("world", names.recordFieldLabelText(fields[1].name));
+    try testing.expectEqual(CheckedFieldKind.Tag.optional, fields[1].kind.tag);
 }
 
 /// A nominal declaration backing published by declaration output, with the
@@ -10009,6 +10028,41 @@ fn checkPublishedNominalBacking(
         backing_anno,
     );
     try check(.{ .store = &store, .names = &names, .active = &active, .root = backing_root });
+}
+
+test "nominal declaration backing row is in label order regardless of source order" {
+    // The declaration lists `n` before `m`; the checked backing row is sorted
+    // by label (design.md "Nominal Record Field Order"), so a consumer of a
+    // single checked row may rely on its order without re-sorting.
+    try checkPublishedNominalBacking(
+        \\Px := { n : {}, m ?: {} }
+    , "Px", struct {
+        fn check(published: PublishedNominalBacking) PublishedNominalBackingCheckError!void {
+            const testing = std.testing;
+            const fields = published.store.payload(published.root).record.fields;
+            try testing.expectEqual(@as(usize, 2), fields.len);
+            try testing.expectEqualStrings("m", published.names.recordFieldLabelText(fields[0].name));
+            try testing.expectEqual(CheckedFieldKind.Tag.optional, fields[0].kind.tag);
+            try testing.expectEqualStrings("n", published.names.recordFieldLabelText(fields[1].name));
+            try testing.expectEqual(CheckedFieldKind.Tag.required, fields[1].kind.tag);
+        }
+    }.check);
+}
+
+test "nominal declaration backing tag row is in label order regardless of source order" {
+    try checkPublishedNominalBacking(
+        \\Dir := [Up, Down, Left({})]
+    , "Dir", struct {
+        fn check(published: PublishedNominalBacking) PublishedNominalBackingCheckError!void {
+            const testing = std.testing;
+            const tags = published.store.payload(published.root).tag_union.tags;
+            try testing.expectEqual(@as(usize, 3), tags.len);
+            try testing.expectEqualStrings("Down", published.names.tagLabelText(tags[0].name));
+            try testing.expectEqualStrings("Left", published.names.tagLabelText(tags[1].name));
+            try testing.expectEqual(@as(u32, 1), tags[1].args_len);
+            try testing.expectEqualStrings("Up", published.names.tagLabelText(tags[2].name));
+        }
+    }.check);
 }
 
 test "nominal declaration backing closes a referenced alias's tag union row" {
