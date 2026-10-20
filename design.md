@@ -20559,7 +20559,10 @@ consumed read through it takes those slots from the container, and its
 other uses observe its whole range. Its definition copies only the
 container's representation, which may name slots the container has already
 given away on that path; ARC writes those slots on the definition as the
-view's residual shell, numbered in the view's own layout. This is what lets
+view's residual shell, numbered in the view's own layout. A view whose shell
+names every refcounted slot of its layout carries nothing but that
+representation, so it is readable after the container has given every slot
+away. This is what lets
 `{ cursor, builder: { nodes, children }, node }` returned from one call
 hand `builder.nodes` to the next append without a retain: the builder is
 read as a view each time the source names it, and each list leaves the dying

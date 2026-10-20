@@ -6102,6 +6102,23 @@ const Certifier = struct {
             _ = try self.requireAggregateRepresentation(state, source);
             return;
         }
+        // A struct view whose residual shell names every refcounted slot of
+        // its layout holds no unit: it copies only its container's inline
+        // representation, which stays readable after every stored unit has
+        // left (design.md "Residual Shells").
+        if (shell.len != 0 and try self.shellCoversLayout(self.store.getLocal(target).layout_idx, shell)) {
+            std.debug.assert(take_kind == .none);
+            const representation = try self.requireAggregateRepresentation(state, source);
+            const value = if (representation == no_value)
+                try self.bindBorrowedFromImplicitLive(state, target)
+            else
+                try self.bindFresh(state, target, 0, &.{representation});
+            const info = &self.values.items[value];
+            info.payload_source = representation;
+            info.payload_projection = projection;
+            info.payload_taken = false;
+            return;
+        }
         const source_value = try self.requireLive(state, source);
         // Reading a variant's payload proves the container holds that variant
         // on this path; anything else is already undefined.
@@ -6132,6 +6149,17 @@ const Certifier = struct {
         info.payload_source = source_value;
         info.payload_projection = projection;
         info.payload_taken = take_kind == .take;
+    }
+
+    /// Whether `shell`, already validated against `layout_idx` by
+    /// `validateResidualShellFields`, names every refcounted slot of it.
+    fn shellCoversLayout(self: *Certifier, layout_idx: layout_mod.Idx, shell: anytype) Allocator.Error!bool {
+        const required = try self.requiredClaimsForLayout(layout_idx) orelse return false;
+        var listed: ClaimSet = .{};
+        for (0..shell.len) |index| {
+            listed = try listed.withField(self.state_arena.allocator(), @intCast(GuardedList.at(shell, index)));
+        }
+        return listed.eql(required);
     }
 
     /// An RC-bearing projection read observes the stored unit behind the
@@ -9991,6 +10019,55 @@ test "certify flags a nested field a view dismantle leaves unspent" {
     try buildNestedViewTakes(&f, &.{1}, false);
     try testing.expectError(error.Certification, f.certify());
     try testing.expect(std.mem.find(u8, f.diag.message(), "unspent") != null);
+}
+
+/// `outer = { 0: { 0: I64, 1: Str }, 1: Str }` as a parameter, both of whose
+/// stored units are taken and released, then field 0 read again as a view
+/// (marked with `view_shell`) and the scalar inside it read through that view.
+fn buildScalarReadThroughSpentView(f: *CertifyTest, view_shell: []const u32) Allocator.Error!void {
+    const inner_layout = try f.layouts.putStructFields(&.{
+        .{ .index = 0, .layout = .i64 },
+        .{ .index = 1, .layout = .str },
+    });
+    const outer_layout = try f.layouts.putStructFields(&.{
+        .{ .index = 0, .layout = inner_layout },
+        .{ .index = 1, .layout = .str },
+    });
+    const outer = try f.local(outer_layout);
+    const inner = try f.local(inner_layout);
+    const other = try f.local(.str);
+    const view = try f.local(inner_layout);
+    const scalar = try f.local(.i64);
+    const ret = try f.ret(scalar);
+    const read_scalar = try fieldReadStmt(f, scalar, view, 0, ret);
+    const read_view = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = view,
+        .op = .field(outer, 0),
+        .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
+            .residual_shell_absent_fields = try f.store.addU32Span(view_shell),
+        }),
+        .next = read_scalar,
+    } }, .test_fixture);
+    const release_other = try f.decrefStmt(other, .str, read_view);
+    const take_other = try takeFieldStmt(f, other, outer, 1, release_other);
+    const release_inner = try f.decrefStmt(inner, inner_layout, take_other);
+    const body = try takeFieldStmt(f, inner, outer, 0, release_inner);
+    _ = try f.addProc(&.{outer}, body, .i64);
+}
+
+test "certify accepts a scalar read through a view of a dismantled record whose shell names every slot" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildScalarReadThroughSpentView(&f, &.{1});
+    try f.certify();
+}
+
+test "certify flags a view of a dismantled record that leaves its taken slot unnamed" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildScalarReadThroughSpentView(&f, &.{});
+    try testing.expectError(error.Certification, f.certify());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "use of dead refcounted local") != null);
 }
 
 test "certify flags a double take of one field" {
