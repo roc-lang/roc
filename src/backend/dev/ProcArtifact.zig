@@ -1331,7 +1331,9 @@ pub fn canonicalize(allocator: Allocator, set: *const Set, host_visible: []const
     var visible = std.StringHashMap(void).init(allocator);
     defer visible.deinit();
     for (host_visible) |item| {
-        try visible.put(item.name, {});
+        // A constant the program named for itself is named by content, so
+        // no host can name it.
+        if (!item.program_local_name) try visible.put(item.name, {});
         if ((try collected.getOrPut(item.name)).found_existing) continue;
         try all_items.append(allocator, item);
     }
