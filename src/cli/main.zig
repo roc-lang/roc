@@ -8519,7 +8519,9 @@ fn preparePackageDevPacks(ctx: *CliCtx, build_env: *BuildEnv, runtime_packs: ?*p
     if (!build_env.executable_artifacts_finalized) {
         if (devDiagnosticEnv("ROC_PACK_TRACE") != null) {
             const checked_program = if (build_env.coordinator) |coord| coord.hasCheckedProgram() else false;
-            std.debug.print("package dev packs skipped: checked program not finalized (mode={s} deferred={} checked_program={})\n", .{ @tagName(build_env.post_check_publication_mode), build_env.defer_post_check, checked_program });
+            const app_root_found = if (build_env.coordinator) |coord| coord.hasAppRoot() else false;
+            const app_root_checked = if (build_env.coordinator) |coord| coord.appRootChecked() else false;
+            std.debug.print("package dev packs skipped: checked program not finalized (mode={s} deferred={} checked_program={} app_root_found={} app_root_checked={} packages={d})\n", .{ @tagName(build_env.post_check_publication_mode), build_env.defer_post_check, checked_program, app_root_found, app_root_checked, build_env.packages.count() });
         }
         return;
     }
