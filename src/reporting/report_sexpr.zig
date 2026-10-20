@@ -73,6 +73,7 @@ pub fn pushReportToSExprTree(report: *const Report, tree: *SExprTree) Allocator.
         try pushLineColNode(tree, "end", region_info.end_line_idx, region_info.end_col_idx);
         try tree.endNodeWithoutChildren(region_begin);
     }
+    if (report.file) |file| try pushEscapedStringPair(tree, "file", sanitisePathForSnapshots(file));
 
     try pushElementsNode(tree, "headline", report.headline.elements.items);
     try pushElementsNode(tree, "document", report.document.elements.items);

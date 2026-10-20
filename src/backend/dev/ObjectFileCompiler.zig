@@ -1149,7 +1149,7 @@ test "ObjectFileCompiler runtime static-root pack owns only reachable canonical 
             const ret = try store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
             const body = try store.addCFStmt(.{ .assign_literal = .{
                 .target = local,
-                .value = .{ .static_data = @fromBackingInt(@intCast(7)) },
+                .value = .{ .static_data = .{ .id = @fromBackingInt(@intCast(7)) } },
                 .next = ret,
             } }, .test_fixture);
             _ = try store.addProcSpec(.{

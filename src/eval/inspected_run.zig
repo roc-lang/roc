@@ -15,6 +15,8 @@ const layout = @import("layout");
 const roc_target = @import("roc_target");
 const wasm32_boxy_runtime = @import("wasm32_boxy_runtime");
 const wasm32_builtins = @import("wasm32_builtins");
+const wasm32v1_boxy_runtime = @import("wasm32v1_boxy_runtime");
+const wasm32v1_builtins = @import("wasm32v1_builtins");
 
 const Allocator = std.mem.Allocator;
 const object_image = @import("object_image.zig");
@@ -454,6 +456,12 @@ fn runDev(allocator: Allocator, program: Program) DevError!Result {
 }
 
 fn runWasm(allocator: Allocator, program: Program) WasmError!Result {
+    return runWasmAt(allocator, program, .default);
+}
+
+/// Run on the wasm backend for a CPU level, with builtins and the Boxy
+/// runtime built for that level.
+pub fn runWasmAt(allocator: Allocator, program: Program, cpu_level: roc_target.CpuLevel) WasmError!Result {
     if (comptime builtin.target.os.tag == .freestanding) return error.WasmExecFailed;
 
     var codegen = backend.wasm.WasmCodeGen.init(
@@ -463,7 +471,7 @@ fn runWasm(allocator: Allocator, program: Program) WasmError!Result {
         program.boxy_tables.erased_arg_desc_offsets,
         program.boxy_tables.erased_arg_desc_params,
         program.boxy_tables.worker_procs,
-        .default,
+        cpu_level,
     );
     defer codegen.deinit();
     const helpers = try backend.collectRequiredRcHelpers(allocator, program.static_data);
@@ -476,11 +484,18 @@ fn runWasm(allocator: Allocator, program: Program) WasmError!Result {
 
     const proc = program.store.getProcSpec(program.main_proc);
     const runtime_input: ?backend.wasm.WasmCodeGen.BoxyRuntimeInput = if (program.boxy_tables.needsRuntimeForStore(program.store)) .{
-        .runtime_object = wasm32_boxy_runtime.bytes[0..],
+        .runtime_object = switch (cpu_level) {
+            .default => wasm32_boxy_runtime.bytes[0..],
+            .v1 => wasm32v1_boxy_runtime.bytes[0..],
+        },
         .sidecar_blob = program.boxy_sidecar_blob orelse return error.Internal,
         .sidecar_desc = program.boxy_sidecar_desc orelse return error.Internal,
     } else null;
-    const wasm_result = codegen.generateModule(program.main_proc, proc.ret_layout, wasm32_builtins.bytes, runtime_input) catch |err| switch (err) {
+    const builtins_object = switch (cpu_level) {
+        .default => wasm32_builtins.bytes,
+        .v1 => wasm32v1_builtins.bytes,
+    };
+    const wasm_result = codegen.generateModule(program.main_proc, proc.ret_layout, builtins_object, runtime_input) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.HostedFunctionTypeMismatch => return error.Internal,
     };

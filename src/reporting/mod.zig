@@ -18,6 +18,7 @@ pub const RenderTarget = @import("renderer.zig").RenderTarget;
 pub const RenderTargetPreference = @import("config.zig").RenderTargetPreference;
 
 pub const source_region = @import("source_region.zig");
+pub const suggestion = @import("suggestion.zig");
 
 pub const renderReport = @import("renderer.zig").renderReport;
 pub const renderReportWithConfig = @import("renderer.zig").renderReportWithConfig;
@@ -49,4 +50,5 @@ test {
     std.testing.refAllDecls(@import("common_misspellings.zig"));
     std.testing.refAllDecls(@import("report_sexpr.zig"));
     std.testing.refAllDecls(@import("severity.zig"));
+    std.testing.refAllDecls(@import("suggestion.zig"));
 }

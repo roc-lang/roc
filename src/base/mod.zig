@@ -73,6 +73,7 @@ pub const source_utils = @import("source_utils.zig");
 pub const read_file_failure = @import("read_file_failure.zig");
 pub const module_path = @import("module_path.zig");
 pub const url = @import("url.zig");
+pub const typo = @import("typo.zig");
 /// Default expanded-size cap for platform and CLI URL bundles.
 pub const max_bundle_expanded_bytes: u64 = 512 * 1024 * 1024;
 pub const roc_version = @import("roc_version.zig");
@@ -115,6 +116,7 @@ test {
     std.testing.refAllDecls(@import("sha256.zig"));
     std.testing.refAllDecls(module_path_mod);
     std.testing.refAllDecls(@import("roc_version.zig"));
+    std.testing.refAllDecls(@import("typo.zig"));
 }
 
 /// Whether a function calls itself.

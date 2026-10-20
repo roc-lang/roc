@@ -10,33 +10,32 @@ poly = || { crash "x" }
 result = poly().to_i128()
 ~~~
 # EXPECTED
-TYPE NOT DETERMINED - static_dispatch_unresolved_method.md:3:10:3:16
+MISSING METHOD - static_dispatch_unresolved_method.md:3:10:3:16
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
-		(title "Type Not Determined")
+		(title "Missing Method")
 		(region (start 3 10) (end 3 16))
 		(headline
-			(reflow "Nothing in this program determines the type this")
+			(reflow "This")
 			(reflow " ")
 			(annotated code "to_i128")
 			(reflow " ")
-			(reflow "method is called on."))
+			(reflow "call is on")
+			(reflow " ")
+			(reflow "a value whose type never resolved to a concrete type,")
+			(reflow " ")
+			(reflow "so it has no")
+			(reflow " ")
+			(annotated code "to_i128")
+			(reflow " ")
+			(reflow "method."))
 		(document
 			(source-region (file "static_dispatch_unresolved_method.md") (start 3 10) (end 3 16) (annotation error) (line-text "result = poly().to_i128()"))
 			(line-break)
-			(reflow "Without knowing which type it is, there's no way to tell which")
-			(reflow " ")
-			(annotated code "to_i128")
-			(reflow " ")
-			(reflow "method to use.")
-			(line-break)
-			(line-break)
-			(annotated emphasis "Hint:")
-			(reflow " ")
-			(reflow "Add a type annotation saying which type it should be."))))
+			(reflow "Using the value somewhere that requires a specific type, or annotating it, will give it one."))))
 ~~~
 # TOKENS
 ~~~zig

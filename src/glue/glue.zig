@@ -1596,15 +1596,13 @@ const TypeTable = struct {
     };
 
     const ActiveOpen = struct {
-        decl_artifact_key: CheckedArtifact.CheckedModuleArtifactKey,
-        source_statement: u32,
+        decl: NominalDeclIdentity,
         arg_keys: []const TypeTableKey,
         entry_idx: u64,
     };
 
     const OpenCtxEntry = struct {
-        decl_artifact_key: CheckedArtifact.CheckedModuleArtifactKey,
-        source_statement: u32,
+        decl: NominalDeclIdentity,
         arg_keys: []const TypeTableKey,
         ctx: u32,
     };
@@ -1648,13 +1646,11 @@ const TypeTable = struct {
     /// Find or assign a stable open-context id for an open identity.
     fn ctxForOpen(
         self: *TypeTable,
-        decl_artifact_key: CheckedArtifact.CheckedModuleArtifactKey,
-        source_statement: u32,
+        decl: NominalDeclIdentity,
         arg_keys: []const TypeTableKey,
     ) Allocator.Error!u32 {
         for (self.open_ctxs.items) |entry| {
-            if (!checkedArtifactKeysEqual(entry.decl_artifact_key, decl_artifact_key)) continue;
-            if (entry.source_statement != source_statement) continue;
+            if (!entry.decl.eql(decl)) continue;
             if (!typeTableKeysEqual(entry.arg_keys, arg_keys)) continue;
             return entry.ctx;
         }
@@ -1663,8 +1659,7 @@ const TypeTable = struct {
         const owned = try self.gpa.dupe(TypeTableKey, arg_keys);
         errdefer self.gpa.free(owned);
         try self.open_ctxs.append(self.gpa, .{
-            .decl_artifact_key = decl_artifact_key,
-            .source_statement = source_statement,
+            .decl = decl,
             .arg_keys = owned,
             .ctx = ctx,
         });
@@ -2054,7 +2049,7 @@ const TypeTable = struct {
         self: *TypeTable,
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
         checked_type: CheckedArtifact.CheckedTypeId,
-    ) Allocator.Error!?struct { decl_artifact_key: CheckedArtifact.CheckedModuleArtifactKey, source_statement: u32, arg_keys: []TypeTableKey } {
+    ) Allocator.Error!?struct { decl: NominalDeclIdentity, arg_keys: []TypeTableKey } {
         const payload = checkedTypePayload(artifact, checked_type);
         if (payload != .nominal) return null;
         const nominal = payload.nominal;
@@ -2067,8 +2062,7 @@ const TypeTable = struct {
             arg_key.* = .{ .artifact_key = resolved.artifact.key, .checked_type = resolved.checked_type };
         }
         return .{
-            .decl_artifact_key = lookup.artifact.key,
-            .source_statement = lookup.declaration.source_statement,
+            .decl = lookup.identity(),
             .arg_keys = arg_keys,
         };
     }
@@ -2313,8 +2307,7 @@ const TypeTable = struct {
         defer if (open_arg_keys) |keys| self.gpa.free(keys);
         if (open_identity) |ident| {
             for (self.active_opens.items) |open| {
-                if (!checkedArtifactKeysEqual(open.decl_artifact_key, ident.decl_artifact_key)) continue;
-                if (open.source_statement != ident.source_statement) continue;
+                if (!open.decl.eql(ident.decl)) continue;
                 if (!typeTableKeysEqual(open.arg_keys, ident.arg_keys)) continue;
                 return open.entry_idx;
             }
@@ -2352,8 +2345,7 @@ const TypeTable = struct {
         var pushed_open = false;
         if (open_identity) |ident| {
             try self.active_opens.append(self.gpa, .{
-                .decl_artifact_key = ident.decl_artifact_key,
-                .source_statement = ident.source_statement,
+                .decl = ident.decl,
                 .arg_keys = ident.arg_keys,
                 .entry_idx = idx,
             });
@@ -3295,7 +3287,7 @@ const TypeTable = struct {
             }
 
             const prev_ctx = self.open_ctx;
-            self.open_ctx = try self.ctxForOpen(lookup.artifact.key, decl.source_statement, resolved_arg_keys);
+            self.open_ctx = try self.ctxForOpen(lookup.identity(), resolved_arg_keys);
             defer self.open_ctx = prev_ctx;
 
             // The backing may itself be a formal (`Wrapper(a) := a`), which the
@@ -3330,6 +3322,26 @@ const TypeTable = struct {
     const NominalDeclarationLookup = struct {
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
         declaration: CheckedArtifact.CheckedNominalDeclaration,
+
+        fn identity(self: NominalDeclarationLookup) NominalDeclIdentity {
+            return .{
+                .module = self.artifact.canonical_names.moduleIdentityBytes(self.declaration.nominal.module).*,
+                .source_decl = self.declaration.nominal.source_decl,
+            };
+        }
+    };
+
+    /// Artifact-independent identity of a nominal declaration: its declaring
+    /// module's content identity plus its source declaration. The artifact a
+    /// lookup resolves through is not part of it, since self-contained
+    /// artifacts embed copies of the imported declarations they use.
+    const NominalDeclIdentity = struct {
+        module: [32]u8,
+        source_decl: u32,
+
+        fn eql(a: NominalDeclIdentity, b: NominalDeclIdentity) bool {
+            return a.source_decl == b.source_decl and std.mem.eql(u8, &a.module, &b.module);
+        }
     };
 
     fn nominalDeclarationFor(

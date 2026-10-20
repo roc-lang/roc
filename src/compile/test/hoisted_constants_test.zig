@@ -943,7 +943,7 @@ fn expectIntLiteralPresent(result: *const lir.Program.Result, value: i128) Hoist
     for (result.store.getCFStmts()) |stmt| {
         if (stmt != .assign_literal) continue;
         switch (stmt.assign_literal.value) {
-            .i128_literal => |literal| if (literal.value == value) return,
+            .i128_literal => |id| if (result.store.stmtRow(id).value == value) return,
             .i64_literal => |literal| if (literal.value == value) return,
             .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => {},
         }

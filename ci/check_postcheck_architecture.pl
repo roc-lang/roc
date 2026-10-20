@@ -305,8 +305,6 @@ sub check_body_context_output_access {
     my %allowed_global_name_access = map { $_ => 1 } qw(
         importProgramType
         commitGraphType
-        lookupMethodTargetByName
-        lookupInspectOverride
         programSummaryDomain
     );
     my %allowed_graph_type_egress = map { $_ => 1 } qw(
@@ -317,7 +315,11 @@ sub check_body_context_output_access {
     my $global_type_access = qr/(?:\.builder\.program\.(?:fnSource|types)|self\.builder\.(?:constBoxPayloadType|constListElemType|constRecordFields|errorRowIsIncludedIn|functionShape|namedBackingType|nominalConstructionLayer|nominalExprBackingType|optionalFieldSlot|optionalSlotInfo|recordField|recordFieldByTextOptional|recordFieldType|recordFieldsSpan|shapeContent|singleTypeArg|specializationTypeDigest|tagByName|tagPayloadTypes|tagUnionTags|tupleItemTypes|typeHasBuiltinOwner|typeIsProvenUninhabited))\b/;
     my $global_type_ingress = qr/self\.builder\.(?:lowerType|primitiveType)\b/;
     my $global_type_cache = qr/\.builder\.(?:type_cache|parse_result_ok_types|generated_try_types|uninhabited_type_cache)\.(?:get|getPtr|getOrPut|put|remove)\b/;
-    my $global_name_access = qr/(?:self\.builder\.program\.names|self\.builder\.(?:moduleIdentity|recordFieldName|tagName|typeName|typeDef|lookupMethodTarget|lookupMethodTargetByName))\b/;
+    my $global_name_access = qr/self\.builder\.program\.names\b/;
+    # Method lookup lives on `Builder` and resolves an owner in the name store
+    # it is given; a body passes its graph's.
+    my $method_lookup = qr/self\.builder\.(?:lookupMethodTarget|lookupMethodTargetByName|lookupInspectOverride)\(/;
+    my $graph_method_lookup = qr/self\.builder\.(?:lookupMethodTarget|lookupMethodTargetByName|lookupInspectOverride)\(self\.method_scope, self\.nameStore\(\),/;
     my $graph_type_egress = qr/self\.commitGraphType\b/;
     my $coordinator_static_data = qr/self\.builder\.commitStaticDataValue\b/;
 
@@ -361,6 +363,9 @@ sub check_body_context_output_access {
         }
         if ($code =~ $global_name_access && !$allowed_global_name_access{$current_fn // ''}) {
             push @violations, "$rel:$line_no: body-context-global-name-store: $line";
+        }
+        if ($code =~ $method_lookup && $code !~ $graph_method_lookup) {
+            push @violations, "$rel:$line_no: body-context-method-lookup-name-store: $line";
         }
         if ($code =~ $graph_type_egress && !$allowed_graph_type_egress{$current_fn // ''}) {
             push @violations, "$rel:$line_no: body-context-global-type-egress: $line";

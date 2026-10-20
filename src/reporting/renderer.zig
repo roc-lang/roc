@@ -398,15 +398,13 @@ pub fn writeLowercased(writer: *std.Io.Writer, s: []const u8) error{WriteFailed}
     }
 }
 
-/// Write a `path/to/Scalar.roc:141:1` location, with the filename itself in the
-/// cyan so it stands out from the dim directories, `:line:col`, and horizontal
-/// rule around it. Leaves the writer in the secondary color.
-fn writeLocation(
+/// Write a `path/to/Scalar.roc` path, with the filename itself in the cyan so
+/// it stands out from the dim directories and horizontal rule around it.
+/// Leaves the writer in the secondary color.
+fn writePath(
     writer: *std.Io.Writer,
     palette: ColorPalette,
     path: []const u8,
-    line: u32,
-    column: u32,
 ) error{WriteFailed}!void {
     const start = filenameStart(path);
     if (start > 0) {
@@ -416,8 +414,28 @@ fn writeLocation(
     try writer.writeAll(palette.primary);
     try bidi.writeVisible(writer, path[start..]);
     try writer.writeAll(palette.secondary);
+}
+
+/// Write a `path/to/Scalar.roc:141:1` location: the path as `writePath` writes
+/// it, followed by `:line:col`. Leaves the writer in the secondary color.
+fn writeLocation(
+    writer: *std.Io.Writer,
+    palette: ColorPalette,
+    path: []const u8,
+    line: u32,
+    column: u32,
+) error{WriteFailed}!void {
+    try writePath(writer, palette, path);
     try writer.print(":{d}:{d}", .{ line, column });
 }
+
+/// What a report's header line names as the report's location: a position in
+/// a file, a whole file, or nothing.
+const HeaderLocation = union(enum) {
+    none,
+    file: []const u8,
+    position: struct { path: []const u8, line: u32, column: u32 },
+};
 
 fn renderHeaderLine(
     writer: *std.Io.Writer,
@@ -425,19 +443,17 @@ fn renderHeaderLine(
     config: ReportingConfig,
     icon_info: IconAndColor,
     title: []const u8,
-    filename: ?[]const u8,
-    start_line: u32,
-    start_column: u32,
+    location: HeaderLocation,
 ) error{WriteFailed}!void {
     const total_w = @min(config.getMaxLineWidth(), 120);
     const icon_w: usize = icon_info.width;
     const prefix_w = 3 + icon_w + 1 + source_region.displayWidth(title) + 1;
 
-    var loc_len: usize = 0;
-    const fname = filename;
-    if (fname) |f| {
-        loc_len = 1 + source_region.displayWidth(f) + 1 + source_region.calculateLineNumberWidth(start_line) + 1 + source_region.calculateLineNumberWidth(start_column);
-    }
+    const loc_len: usize = switch (location) {
+        .none => 0,
+        .file => |path| 1 + source_region.displayWidth(path),
+        .position => |position| 1 + source_region.displayWidth(position.path) + 1 + source_region.calculateLineNumberWidth(position.line) + 1 + source_region.calculateLineNumberWidth(position.column),
+    };
 
     const dashes = @max(total_w -| prefix_w -| loc_len, 1);
 
@@ -450,9 +466,16 @@ fn renderHeaderLine(
     try writer.writeByte(' ');
     try writer.writeAll(palette.secondary);
     try writer.splatBytesAll("─", dashes);
-    if (fname) |f| {
-        try writer.writeByte(' ');
-        try writeLocation(writer, palette, f, start_line, start_column);
+    switch (location) {
+        .none => {},
+        .file => |path| {
+            try writer.writeByte(' ');
+            try writePath(writer, palette, path);
+        },
+        .position => |position| {
+            try writer.writeByte(' ');
+            try writeLocation(writer, palette, position.path, position.line, position.column);
+        },
     }
     try writer.writeAll(palette.reset);
     try writer.writeByte('\n');
@@ -468,6 +491,7 @@ fn renderReportToTerminalLayout(report: *const Report, writer: *std.Io.Writer, p
         try renderReportPlainFallback(report, writer, palette, config);
         return;
     };
+    std.debug.assert(report.file == null);
 
     var summary_buf = std.array_list.Managed(u8).init(gpa);
     defer summary_buf.deinit();
@@ -494,7 +518,8 @@ fn renderReportToTerminalLayout(report: *const Report, writer: *std.Io.Writer, p
 
     const path = if (region.filename) |filename| try displayPath(gpa, filename, config.source_path_base) else null;
     defer if (path) |p| gpa.free(p);
-    try renderHeaderLine(writer, palette, config, icon_info, title, path, region.start_line, region.start_column);
+    const location: HeaderLocation = if (path) |p| .{ .position = .{ .path = p, .line = region.start_line, .column = region.start_column } } else .none;
+    try renderHeaderLine(writer, palette, config, icon_info, title, location);
 
     if (summary.len > 0) {
         try writer.writeByte('\n');
@@ -662,10 +687,15 @@ fn wrapAndEmitBelowLine(
     }
 }
 
-/// Fallback for reports with no source region: title line then the body.
+/// Layout for reports with no source region: title line, naming the file the
+/// report is about if it has one, then the body.
 fn renderReportPlainFallback(report: *const Report, writer: *std.Io.Writer, palette: ColorPalette, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
+    const gpa = report.document.allocator;
     const icon_info = getSeverityIcon(report.severity, report.title, palette);
-    try renderHeaderLine(writer, palette, config, icon_info, report.title, null, 0, 0);
+    const path = if (report.file) |file| try displayPath(gpa, file, config.source_path_base) else null;
+    defer if (path) |p| gpa.free(p);
+    const location: HeaderLocation = if (path) |p| .{ .file = p } else .none;
+    try renderHeaderLine(writer, palette, config, icon_info, report.title, location);
     if (report.headline.elementCount() > 0) {
         try writer.writeByte('\n');
         var hbuf = std.Io.Writer.Allocating.init(report.document.allocator);
@@ -677,12 +707,8 @@ fn renderReportPlainFallback(report: *const Report, writer: *std.Io.Writer, pale
             try wrapAndEmitBelowLine(writer, ln, 0, width);
         }
     }
-    if (!report.document.isEmpty()) {
-        try writer.writeByte('\n');
-        try renderDocumentToTerminal(&report.document, writer, palette, config);
-        try writer.writeByte('\n');
-    }
-    try writer.writeByte('\n');
+    const elements = report.document.elements.items;
+    try renderBelowContent(writer, palette, config, icon_info.color, elements, 0, elements.len, gpa);
 }
 
 /// Render a report to HTML.

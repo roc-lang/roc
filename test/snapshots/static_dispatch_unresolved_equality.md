@@ -10,29 +10,36 @@ poly = || { crash "x" }
 result = poly() == poly()
 ~~~
 # EXPECTED
-TYPE NOT DETERMINED - static_dispatch_unresolved_equality.md:3:10:3:16
+MISSING METHOD - static_dispatch_unresolved_equality.md:3:10:3:16
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
-		(title "Type Not Determined")
+		(title "Missing Method")
 		(region (start 3 10) (end 3 16))
 		(headline
-			(reflow "Nothing in this program determines the type of the values this")
+			(reflow "This")
 			(reflow " ")
 			(annotated code "==")
 			(reflow " ")
-			(reflow "compares."))
+			(reflow "compares")
+			(reflow " ")
+			(reflow "values whose type never resolved to a concrete type,")
+			(reflow " ")
+			(reflow "so they have no")
+			(reflow " ")
+			(annotated code "is_eq")
+			(reflow " ")
+			(reflow "method for")
+			(reflow " ")
+			(annotated code "==")
+			(reflow " ")
+			(reflow "to call."))
 		(document
 			(source-region (file "static_dispatch_unresolved_equality.md") (start 3 10) (end 3 16) (annotation error) (line-text "result = poly() == poly()"))
 			(line-break)
-			(reflow "Without knowing which type it is, there's no way to tell how to compare them.")
-			(line-break)
-			(line-break)
-			(annotated emphasis "Hint:")
-			(reflow " ")
-			(reflow "Add a type annotation saying which type it should be."))))
+			(reflow "Using the values somewhere that requires a specific type, or annotating them, will give them one."))))
 ~~~
 # TOKENS
 ~~~zig

@@ -356,6 +356,16 @@ pub const TagUnionIdx = packed struct {
     int_idx: @Int(.unsigned, layout_bit_size - @bitSizeOf(LayoutTag) - @bitSizeOf(SortKey)),
 };
 
+/// A variant's position in its tag union. Discriminant values number a tag
+/// union's variants the same way, so a discriminant has this type too. The
+/// layout store rejects a tag union with more than `max_tag_union_variants`
+/// variants, so every variant index and discriminant of a committed layout
+/// fits.
+pub const VariantIndex = u30;
+
+/// The most variants a tag union layout can have.
+pub const max_tag_union_variants: usize = 1 << @bitSizeOf(VariantIndex);
+
 /// Tag union data stored in the layout Store
 pub const TagUnionData = struct {
     /// Size of the tag union in bytes (max payload + discriminant, aligned),

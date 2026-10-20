@@ -153,24 +153,31 @@ fn assertBuiltinIterExtremum(
         found_plan = true;
         const plan_root = env.types.resolveVar(expr.e_dispatch_call.constraint_fn_var).var_;
 
-        var body_use_count: usize = 0;
+        var plan_signature: ?types.Var = null;
         for (env.scheme_uses.items.items) |record| {
             if (record.slot_kind != @backingInt(Slot.where_method_use)) continue;
             const pairs = env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
-            var reaches_plan_class = false;
             for (pairs) |pair| {
                 if (env.types.resolveVar(@as(types.Var, @fromBackingInt(@intCast(pair.fresh_var)))).var_ == plan_root) {
-                    reaches_plan_class = true;
+                    try std.testing.expect(plan_signature == null);
+                    plan_signature = env.types.resolveVar(@fromBackingInt(@intCast(record.scheme_root))).var_;
                     break;
                 }
             }
-            if (reaches_plan_class) body_use_count += 1;
         }
-        // Per-use instantiation copies the signature at EVERY body use, so a
-        // method used twice in one body leaves two records reaching the plan's
-        // class. `>= 1` would pass even if per-use copying silently collapsed
-        // to sharing, which is the property this whole branch exists to
-        // establish.
+        const signature = plan_signature orelse return error.TestUnexpectedResult;
+
+        var body_use_count: usize = 0;
+        for (env.scheme_uses.items.items) |record| {
+            if (record.slot_kind != @backingInt(Slot.where_method_use)) continue;
+            if (env.types.resolveVar(@fromBackingInt(@intCast(record.scheme_root))).var_ == signature) body_use_count += 1;
+        }
+        // Per-use instantiation copies the signature at EVERY body use: the
+        // dot call and the recursive call's own requirement each leave a
+        // record of the where-method signature, and only the dot call's copy
+        // reaches the plan's class. `>= 1` would pass even if per-use copying
+        // silently collapsed to sharing, which is the property this whole
+        // branch exists to establish.
         try std.testing.expect(body_use_count >= 2);
 
         const plan = artifact.static_dispatch_plans.plans[entry.val];

@@ -10593,11 +10593,11 @@ fn recordFieldReadCounts(
     while (steps < 4096) : (steps += 1) {
         switch (store.getCFStmtImmediate(cursor).*) {
             .assign_ref => |stmt| {
-                switch (stmt.op) {
-                    .local => |src| if (aliases.contains(src)) try aliases.put(stmt.target, {}),
-                    .field => |ref| if (aliases.contains(ref.source)) {
-                        try total.put(ref.field_idx, {});
-                        if (!seen_call) try before.put(ref.field_idx, {});
+                switch (stmt.op.kind) {
+                    .local => if (aliases.contains(stmt.op.source)) try aliases.put(stmt.target, {}),
+                    .field => if (aliases.contains(stmt.op.source)) {
+                        try total.put(stmt.op.index, {});
+                        if (!seen_call) try before.put(stmt.op.index, {});
                     },
                     .discriminant,
                     .tag_payload,
@@ -10717,9 +10717,9 @@ fn fieldReadRetainCount(
             if (seen.found_existing) continue;
             switch (store.getCFStmtImmediate(cursor).*) {
                 .assign_ref => |stmt| {
-                    switch (stmt.op) {
+                    switch (stmt.op.kind) {
                         .field => try read_targets.put(stmt.target, {}),
-                        .local => |src| if (read_targets.contains(src)) {
+                        .local => if (read_targets.contains(stmt.op.source)) {
                             try read_targets.put(stmt.target, {});
                         },
                         .discriminant,
@@ -11021,6 +11021,109 @@ test "a field take assigned into a join result cell keeps a loop list unique" {
     try std.testing.expectEqual(@as(usize, 0), main_sets.?.checked);
 }
 
+// Repro for https://github.com/roc-lang/roc/issues/12420
+//
+// Each loop passes `at_pos`'s fresh, dying record result straight into `add`,
+// so the call must select `add`'s owned field-take variant: that variant takes
+// `items` from the record instead of retaining it before `List.append`'s
+// uniqueness check, so the append grows the list in place. A string-pattern
+// `match` elsewhere in the loop body is unrelated to the record and must not
+// change that choice; the `==` form of the same loops is the control. Two
+// loops give `add` and `at_pos` two call sites, so neither is inlined.
+test "issue 12420 a string match in a loop keeps dying call arguments on the owned variant" {
+    const allocator = std.testing.allocator;
+    const cases = [_]struct { name: []const u8, k: []const u8 }{
+        .{ .name = "equality", .k = "        k = if $s.name == \"a\" 1 else 3\n" },
+        .{ .name = "string match", .k =
+        \\        k = match $s.name {
+        \\            "a" => 1
+        \\            _ => 3
+        \\        }
+        \\
+        },
+    };
+
+    for (cases) |case| {
+        const fill_head =
+            \\ = |n| {
+            \\    var $s = { name: "a", pos: 0, items: [] }
+            \\    var $i = 0
+            \\    while $i < n {
+            \\
+        ;
+        const fill_tail =
+            \\        $s = add(at_pos($s, $i), k)
+            \\        $i = $i + 1
+            \\    }
+            \\    $s.items
+            \\}
+            \\
+            \\
+        ;
+        const source = try std.mem.concat(allocator, u8, &.{
+            \\State : { name : Str, pos : U64, items : List(U64) }
+            \\
+            \\add : State, U64 -> State
+            \\add = |{ name, pos, items }, x| { name, pos, items: items.append(x) }
+            \\
+            \\at_pos : State, U64 -> State
+            \\at_pos = |{ name, pos: _, items }, pos| { name, pos, items }
+            \\
+            \\fill_a : U64 -> List(U64)
+            \\fill_a
+            ,
+            fill_head,
+            case.k,
+            fill_tail,
+            \\fill_b : U64 -> List(U64)
+            \\fill_b
+            ,
+            fill_head,
+            case.k,
+            fill_tail,
+            \\main : U64 -> U64
+            \\main = |n| fill_a(n).len() + fill_b(n + 1).len()
+            ,
+        });
+        defer allocator.free(source);
+
+        var lowered = try lowerModuleWithOptions(allocator, source, .wrappers, .{ .proc_debug_names = true });
+        defer lowered.deinit(allocator);
+
+        const store = &lowered.lowered.lir_result.store;
+        var work = std.ArrayList(LIR.LirProcSpecId).empty;
+        defer work.deinit(allocator);
+        try work.append(allocator, try rootProc(&lowered.lowered));
+        var visited = collections.DenseMap(LIR.LirProcSpecId, void).init(allocator);
+        defer visited.deinit();
+
+        // Every reachable `add` procedure is one the loops actually call.
+        var add_count: usize = 0;
+        var add_retained: usize = 0;
+        while (work.pop()) |proc_id| {
+            const visited_entry = try visited.getOrPut(proc_id);
+            if (visited_entry.found_existing) continue;
+
+            if (store.procDebugName(proc_id)) |name| {
+                if (std.mem.eql(u8, name, "add") and store.getProcSpecImmediate(proc_id).body != null) {
+                    add_count += 1;
+                    add_retained += try fieldReadRetainCount(allocator, &lowered.lowered, proc_id);
+                }
+            }
+
+            const calls = try collectAssignCallProcs(allocator, &lowered.lowered, proc_id);
+            defer allocator.free(calls);
+            for (calls) |call| try work.append(allocator, call);
+        }
+
+        if (add_retained != 0) {
+            std.debug.print("{s}: reachable `add` procedures retain {d} field read(s)\n", .{ case.name, add_retained });
+        }
+        try std.testing.expect(add_count >= 1);
+        try std.testing.expectEqual(@as(usize, 0), add_retained);
+    }
+}
+
 // A record result built past a loop whose body rebinds list state in an `if`
 // statement and a `match` statement. Every arm of those statements ends in a
 // jump to the rebinding join, so neither statement has a value to join.
@@ -11237,7 +11340,7 @@ fn listSetCounts(store: *const lir.LirStore, proc_id: LIR.LirProcSpecId) ListSet
         switch (store.getCFStmtImmediate(cursor).*) {
             .assign_low_level => |stmt| {
                 if (stmt.op == .list_set) {
-                    if (stmt.unique_args == 0) counts.checked += 1 else counts.check_free += 1;
+                    if (store.stmtRowOrDefault(stmt.extra).unique_args == 0) counts.checked += 1 else counts.check_free += 1;
                 }
                 if (top < cursor_stack.len) {
                     cursor_stack[top] = stmt.next;

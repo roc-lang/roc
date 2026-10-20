@@ -345,7 +345,9 @@ pub const Constants = struct {
     /// 156: Type stores keep each derived map payload selection in a table
     ///      keyed by its callable's class instead of on every static
     ///      dispatch constraint.
-    pub const CACHE_VERSION = 156;
+    /// 157: canonical diagnostics drop `execution_requires_app_or_default_app`,
+    ///      and file-level diagnostics store no region.
+    pub const CACHE_VERSION = 157;
 };
 
 /// Configuration for the Roc cache system.

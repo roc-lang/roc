@@ -65,9 +65,11 @@ fn lowLevelStmtWithUnique(store: *LirStore, target: LocalId, op: LowLevel, args:
     return try store.addCFStmt(.{ .assign_low_level = .{
         .target = target,
         .op = op,
-        .rc_effect = op.rcEffect(),
+        .rc_effect = try store.addRcEffect(op.rcEffect()),
         .args = try store.addLocalSpan(args),
-        .unique_args = unique_args,
+        .extra = try store.addOptionalStmtRow(LIR.LowLevelExtra, .{
+            .unique_args = unique_args,
+        }),
         .next = next,
     } }, .test_fixture);
 }
@@ -157,7 +159,7 @@ test "box_prepare_update reuses a statically unique box" {
     const ret = try store.addCFStmt(.{ .ret = .{ .value = loaded } }, .test_fixture);
     const drop_prepared = try store.addCFStmt(.{ .decref = .{
         .value = prepared,
-        .rc = .{ .concrete = .{ .op = .decref, .layout_idx = box_u64 } },
+        .rc = try store.addRcHelperRef(.{ .concrete = .{ .op = .decref, .layout_idx = box_u64 } }),
         .next = ret,
     } }, .test_fixture);
     const load = try lowLevelStmt(&store, loaded, .ptr_load, &.{p}, drop_prepared);
@@ -210,12 +212,12 @@ test "box_prepare_update copies a shared box and leaves the original unchanged" 
     const ret = try store.addCFStmt(.{ .ret = .{ .value = sum } }, .test_fixture);
     const drop_boxed = try store.addCFStmt(.{ .decref = .{
         .value = boxed,
-        .rc = .{ .concrete = .{ .op = .decref, .layout_idx = box_u64 } },
+        .rc = try store.addRcHelperRef(.{ .concrete = .{ .op = .decref, .layout_idx = box_u64 } }),
         .next = ret,
     } }, .test_fixture);
     const drop_prepared = try store.addCFStmt(.{ .decref = .{
         .value = prepared,
-        .rc = .{ .concrete = .{ .op = .decref, .layout_idx = box_u64 } },
+        .rc = try store.addRcHelperRef(.{ .concrete = .{ .op = .decref, .layout_idx = box_u64 } }),
         .next = drop_boxed,
     } }, .test_fixture);
     const add = try lowLevelStmt(&store, sum, .num_int_add_wrap, &.{ old_value, new_value }, drop_prepared);
@@ -232,7 +234,7 @@ test "box_prepare_update copies a shared box and leaves the original unchanged" 
     const prepare = try lowLevelStmt(&store, prepared, .box_prepare_update, &.{boxed}, cast_old);
     const incref_boxed = try store.addCFStmt(.{ .incref = .{
         .value = boxed,
-        .rc = .{ .concrete = .{ .op = .incref, .layout_idx = box_u64 } },
+        .rc = try store.addRcHelperRef(.{ .concrete = .{ .op = .incref, .layout_idx = box_u64 } }),
         .count = 1,
         .next = prepare,
     } }, .test_fixture);
@@ -280,18 +282,18 @@ test "ptr ops round trip a multi-word payload through a heap cell" {
     const ret = try store.addCFStmt(.{ .ret = .{ .value = sum } }, .test_fixture);
     const drop_cell = try store.addCFStmt(.{ .decref = .{
         .value = cell,
-        .rc = .{ .concrete = .{ .op = .decref, .layout_idx = box_pair } },
+        .rc = try store.addRcHelperRef(.{ .concrete = .{ .op = .decref, .layout_idx = box_pair } }),
         .next = ret,
     } }, .test_fixture);
     const add = try lowLevelStmt(&store, sum, .num_int_add_wrap, &.{ f0, f1 }, drop_cell);
     const get_f1 = try store.addCFStmt(.{ .assign_ref = .{
         .target = f1,
-        .op = .{ .field = .{ .source = loaded, .field_idx = 1 } },
+        .op = .field(loaded, 1),
         .next = add,
     } }, .test_fixture);
     const get_f0 = try store.addCFStmt(.{ .assign_ref = .{
         .target = f0,
-        .op = .{ .field = .{ .source = loaded, .field_idx = 0 } },
+        .op = .field(loaded, 0),
         .next = get_f1,
     } }, .test_fixture);
     const load_pair = try lowLevelStmt(&store, loaded, .ptr_load, &.{p}, get_f0);
@@ -403,7 +405,7 @@ fn buildRepeatProc(
     const def_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const alias = try store.addCFStmt(.{ .assign_ref = .{
         .target = res,
-        .op = .{ .local = t },
+        .op = .local(t),
         .next = def_jump,
     } }, .test_fixture);
     const mk_tag = try store.addCFStmt(.{ .assign_tag = .{
@@ -923,7 +925,7 @@ test "mixed construct and plain-tail branches both become jumps" {
     const cons_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const alias = try store.addCFStmt(.{ .assign_ref = .{
         .target = res,
-        .op = .{ .local = t },
+        .op = .local(t),
         .next = cons_jump,
     } }, .test_fixture);
     const mk_tag = try store.addCFStmt(.{ .assign_tag = .{
@@ -1421,12 +1423,14 @@ test "tail-call proof consumes the explicit boxy adapter operation" {
         builder.adapters = adapters.items;
         const ret = try store.addCFStmt(.{ .ret = .{ .value = forwarded } }, .test_fixture);
         const adapt = try store.addCFStmt(.{ .assign_boxy_adapt = .{
-            .source = result,
             .target = forwarded,
-            .source_desc = null,
-            .target_desc = null,
-            .source_mode = .move,
-            .adapter = adapter_id,
+            .data = try store.addStmtRow(LIR.BoxyAdaptData, .{
+                .source = result,
+                .source_desc = null,
+                .target_desc = null,
+                .source_mode = .move,
+                .adapter = adapter_id,
+            }),
             .next = ret,
         } }, .test_fixture);
         const call = try store.addCFStmt(.{ .assign_call = .{

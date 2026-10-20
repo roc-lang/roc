@@ -319,7 +319,7 @@ test "Discarded unpinned arithmetic specialization validates the default method 
     // `plus` cannot discharge the `a, U64 -> a` constraint, so checking owns
     // the diagnostic instead of publishing incompatible dispatch evidence.
     // Nothing determines that receiver, so it is reported as undetermined.
-    try test_env.assertOneTypeError("Type Not Determined");
+    try test_env.assertOneTypeError("Missing Method");
 }
 
 test "qualified literal suffix follows a re-exported alias to its declaring module" {

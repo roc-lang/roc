@@ -13,5 +13,6 @@ main! = |args| {
 	n = List.len(args) + 9
 	Stdout.line!(Numeric.describe(n))
 	Stdout.line!(Numeric.sum_squares(n + 1).to_str())
+	Stdout.line!(Numeric.weighted(n).to_str())
 	Ok({})
 }
