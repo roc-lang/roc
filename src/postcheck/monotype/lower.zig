@@ -14302,7 +14302,6 @@ const Builder = struct {
         fn_ty: Type.TypeId,
         subst: SealedSubstitution,
     ) Allocator.Error!?ShapedRequest {
-        if (!demandSpecializationEnabled()) return null;
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = view.templates.get(template_ref.template);
         const demands = view.templates.templateDemands(&template);
@@ -14329,7 +14328,12 @@ const Builder = struct {
         }
         if (!changed) return null;
         const shaped_fn_ty = try self.instantiateTemplateRootAt(view, template_ref, &template, shaped);
-        if (try self.monoFnTypeMentionsFunction(shaped_fn_ty)) return null;
+        const shaped_fn = functionShape(types_, shaped_fn_ty, "a demand-shaped request type was not a function");
+        const shaped_args = types_.span(shaped_fn.args);
+        for (0..shaped_args.len) |index| {
+            if (try LayoutKey.holdsFunction(self.allocator, types_, GuardedList.at(shaped_args, index))) return null;
+        }
+        if (try LayoutKey.holdsFunction(self.allocator, types_, shaped_fn.ret)) return null;
         if (try types_.typeEql(name_store, shaped_fn_ty, fn_ty)) return null;
         return .{ .fn_ty = shaped_fn_ty, .subst = shaped };
     }
@@ -68424,25 +68428,6 @@ fn packTraceEnabled() bool {
 /// `ROC_SPEC_CENSUS` is set: print every closed specialization key. Closed
 /// requests are frequent on every lane, so the environment is read once per
 /// process instead of scanned per request.
-/// Whether Monotype shapes specialization requests by their templates'
-/// demand (design.md "Specialization By Demand"), set by
-/// `ROC_DEMAND_SPECIALIZATION` while the shaping stabilizes.
-fn demandSpecializationEnabled() bool {
-    if (!@import("builtin").link_libc) return false;
-    const State = struct {
-        /// 0 = not yet read, 1 = unset, 2 = set.
-        var value: std.atomic.Value(u8) = .init(0);
-    };
-    switch (State.value.load(.acquire)) {
-        1 => return false,
-        2 => return true,
-        else => {},
-    }
-    const enabled = std.c.getenv("ROC_DEMAND_SPECIALIZATION") != null;
-    State.value.store(if (enabled) 2 else 1, .release);
-    return enabled;
-}
-
 fn specCensusEnabled() bool {
     const State = struct {
         /// 0 = not yet read, 1 = unset, 2 = set.

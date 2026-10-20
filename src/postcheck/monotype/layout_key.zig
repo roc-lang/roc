@@ -42,7 +42,8 @@ pub fn layoutRepresentative(
 /// representation of its own, so a demand hole, whose list stands for any
 /// ordinary list, stands only for items known to be sized. False when the
 /// structure does not decide it: a function, whose lambda set the program
-/// decides, a recursive type, and a builtin whose representation follows its
+/// decides, an erased callable, which a box holds as a layout of its own,
+/// a recursive type, and a builtin whose representation follows its
 /// arguments.
 pub fn knownSized(allocator: Allocator, store: *const Type.Store, root: Type.TypeId) Allocator.Error!bool {
     var visiting = std.AutoHashMapUnmanaged(Type.TypeId, void).empty;
@@ -55,8 +56,9 @@ pub fn knownSized(allocator: Allocator, store: *const Type.Store, root: Type.Typ
     while (pending.pop()) |ty| {
         if ((try visiting.getOrPut(allocator, ty)).found_existing) continue;
         switch (store.get(ty)) {
-            .primitive, .list, .box, .erased => return true,
-            .func, .zst, .hole => {},
+            .primitive, .list, .box => return true,
+            // A boxed erased callable is a layout of its own, not a box.
+            .erased, .func, .zst, .hole => {},
             .record => |fields| {
                 const span = store.fieldSpan(fields);
                 for (0..span.len) |index| try pending.append(allocator, GuardedList.at(span, index).ty);
@@ -78,6 +80,55 @@ pub fn knownSized(allocator: Allocator, store: *const Type.Store, root: Type.Typ
                 .itself => return true,
                 .none => {},
                 .backing => |backing| try pending.append(allocator, backing),
+            },
+        }
+    }
+    return false;
+}
+
+/// Whether `root` holds a function anywhere, a boxed erased callable included.
+/// Lambda solving relates the members of every callable a type holds, so a
+/// demand-shaped signature, whose call relates nothing, must hold none.
+pub fn holdsFunction(allocator: Allocator, store: *const Type.Store, root: Type.TypeId) Allocator.Error!bool {
+    var visited = std.AutoHashMapUnmanaged(Type.TypeId, void).empty;
+    defer visited.deinit(allocator);
+    var pending: std.ArrayList(Type.TypeId) = .empty;
+    defer pending.deinit(allocator);
+    try pending.append(allocator, root);
+    while (pending.pop()) |ty| {
+        if ((try visited.getOrPut(allocator, ty)).found_existing) continue;
+        switch (store.get(ty)) {
+            .func, .erased => return true,
+            .primitive, .zst, .hole => {},
+            .list, .box => |elem| try pending.append(allocator, elem),
+            .record => |fields| {
+                const span = store.fieldSpan(fields);
+                for (0..span.len) |index| {
+                    const field = GuardedList.at(span, index);
+                    try pending.append(allocator, field.ty);
+                    if (field.value_ty) |value_ty| try pending.append(allocator, value_ty);
+                }
+            },
+            .tuple => |items| {
+                const span = store.span(items);
+                for (0..span.len) |index| try pending.append(allocator, GuardedList.at(span, index));
+            },
+            .tag_union => |tags| {
+                const tag_span = store.tagSpan(tags);
+                for (0..tag_span.len) |tag_index| {
+                    const payloads = store.span(GuardedList.at(tag_span, tag_index).payloads);
+                    for (0..payloads.len) |index| try pending.append(allocator, GuardedList.at(payloads, index));
+                }
+            },
+            .named => |named| {
+                const args = store.span(named.args);
+                for (0..args.len) |index| try pending.append(allocator, GuardedList.at(args, index));
+                if (named.backing) |backing| try pending.append(allocator, backing.ty);
+                const declared = store.declaredFieldSpan(named.declared_order);
+                for (0..declared.len) |index| switch (GuardedList.at(declared, index)) {
+                    .named => {},
+                    .padding => |padding| try pending.append(allocator, padding),
+                };
             },
         }
     }
