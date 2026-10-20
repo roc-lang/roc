@@ -242,6 +242,7 @@ pub const Store = struct {
                     .where_alias_in_type_position,
                     .recursive_where_alias,
                     .where_clause_receiver_not_introduced,
+                    .where_requirement_not_function,
                     .invalid_nominal_decl_recursion,
                     .infinite_recursion,
                     .anonymous_recursion,
