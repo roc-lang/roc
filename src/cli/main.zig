@@ -86,6 +86,7 @@ const build_options = @import("build_options");
 const shim_symbols = @import("builtins").shim_symbols;
 const Sha256Rounds = @import("builtins").sha256.Rounds;
 const base = @import("base");
+const dev_diagnostics = base.dev_diagnostics;
 const collections = @import("collections");
 const reporting = @import("reporting");
 const parse = @import("parse");
@@ -2870,7 +2871,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                 if (run_object_cache) |cache| {
                     run_package_objects = try RunPackageObjects.collect(ctx.arena, cache);
                     // Cache statistics are diagnostic output, printed only on request.
-                    if (std.c.getenv("ROC_PACK_STATS") != null) {
+                    if (dev_diagnostics.isSet(.pack_stats)) {
                         var external_procs: usize = 0;
                         var linked_procs: usize = 0;
                         for (result.lowered.lir_result.store.getProcSpecs()) |proc| {
@@ -8278,15 +8279,6 @@ fn defaultBuildTarget(args: cli_args.BuildArgs) RocTarget {
     return RocTarget.detectNative().defaultCpuTarget();
 }
 
-/// Read one of the developer-diagnostic environment variables. A compiler
-/// built without developer diagnostics (see `build_options.dev_diagnostics`)
-/// reads none of them: every call is a compile-time null, so the code it
-/// guards is not compiled in.
-inline fn devDiagnosticEnv(comptime name: [:0]const u8) ?[*:0]u8 {
-    if (comptime !build_options.dev_diagnostics) return null;
-    return std.c.getenv(name);
-}
-
 /// Build using the dev backend to generate native machine code.
 /// This produces truly compiled executables without an interpreter.
 /// `ROC_DEV_PACK_OBJECTS` makes a native dev build also lower every visible
@@ -8305,7 +8297,7 @@ fn writePackObjects(
     target: RocTarget,
     final_output_path: []const u8,
 ) CliMainError!void {
-    if (devDiagnosticEnv("ROC_DEV_PACK_OBJECTS") == null) return;
+    if (!dev_diagnostics.isSet(.dev_pack_objects)) return;
     {
         // The app program's own procedures, in the same shape as a pack
         // manifest, so identities can be compared across the two lowerings.
@@ -8497,7 +8489,7 @@ fn writePacksToStore(
     args: cli_args.BuildArgs,
     target: RocTarget,
 ) CliMainError!void {
-    if (devDiagnosticEnv("ROC_PACK_TRACE") != null) {
+    if (dev_diagnostics.isSet(.pack_trace)) {
         // What this program lowered from source: every procedure by identity,
         // for comparison with another build of the same source, and every
         // specialization by the key a pack serves it by, for comparison with
@@ -8546,7 +8538,7 @@ fn writePacksToStore(
         const roots = try lir.PackProgram.closedExportRoots(ctx.gpa, artifact);
         defer ctx.gpa.free(roots);
         if (roots.len == 0) continue;
-        if (devDiagnosticEnv("ROC_PACK_TRACE") != null) {
+        if (dev_diagnostics.isSet(.pack_trace)) {
             std.debug.print("module pack {s}\n", .{artifact.canonical_names.moduleNameText(artifact.module_identity.module_name)});
         }
         var pack = try compileModulePack(ctx, build_env, root_artifact, app_imports, app_relations, artifact, roots, args, target, false);
@@ -8636,13 +8628,14 @@ fn compileModuleObjectPack(
     return try objectPackBytes(ctx, &lowered, pack.static_data_exports, candidates.items, target);
 }
 
-/// How a dev build compiles its tier 2 entries with LLVM, from
-/// `ROC_BACKGROUND_OBJECTS`: `off` never, `wait` before the build returns,
-/// and otherwise in a detached process the build does not wait for.
+/// How a dev build compiles its tier 2 entries with LLVM: `off` never, `wait`
+/// before the build returns, and `detached` in a process the build does not
+/// wait for. Only a compiler that reads developer diagnostics takes `off` or
+/// `wait`, from `ROC_BACKGROUND_OBJECTS`; every other compiler is `detached`.
 const Tier2ObjectMode = enum { off, wait, detached };
 
 fn tier2ObjectMode() Tier2ObjectMode {
-    const value = std.mem.span(std.c.getenv("ROC_BACKGROUND_OBJECTS") orelse return .detached);
+    const value = dev_diagnostics.get(.background_objects) orelse return .detached;
     if (std.mem.eql(u8, value, "off")) return .off;
     if (std.mem.eql(u8, value, "wait")) return .wait;
     return .detached;
@@ -8733,7 +8726,7 @@ fn spawnTier2ObjectBuild(
         .stdin = .ignore,
         .stdout = .ignore,
         // Tracing shows what the build compiled.
-        .stderr = if (std.c.getenv("ROC_PACK_TRACE") != null) .inherit else .ignore,
+        .stderr = if (dev_diagnostics.isSet(.pack_trace)) .inherit else .ignore,
         // Its own process group, so interrupting this build leaves it running.
         .pgid = if (builtin.os.tag == .windows) null else 0,
     }) catch return;
@@ -8810,7 +8803,7 @@ fn buildTier2Objects(ctx: *CliCtx, args: cli_args.BuildArgs, requests_path: []co
             .reads = comptime_reads.fnReads(source_fn),
         });
     }
-    if (std.c.getenv("ROC_PACK_TRACE") != null) {
+    if (dev_diagnostics.isSet(.pack_trace)) {
         std.debug.print("tier2 requested {d} lowered {d}\n", .{ requested.count(), candidates.items.len });
         for (candidates.items) |candidate| std.debug.print("tier2 candidate key={x} {s}\n", .{ candidate.key[0..8], lowered.lir_result.store.procDebugName(candidate.proc) orelse "" });
     }
@@ -8918,7 +8911,7 @@ fn objectPackBytes(
             .rc_ret_conditions = try GuardedList.dupe(arena, u32, store.getU32Span(proc.rc_ret_conditions)),
         });
     }
-    if (std.c.getenv("ROC_PACK_TRACE") != null) {
+    if (dev_diagnostics.isSet(.pack_trace)) {
         for (specs.items) |spec| std.debug.print("object-offer {x}\n", .{spec.key[0..8]});
     }
     if (specs.items.len == 0) return null;
@@ -9123,7 +9116,7 @@ fn publishCompileTimePack(ctx: *CliCtx, build_env: *BuildEnv, root_artifact: *co
     };
     const bytes = try packFileBytesOfPrograms(ctx.gpa, &combined, stages, comptime_reads);
     defer ctx.gpa.free(bytes);
-    if (devDiagnosticEnv("ROC_PACK_TRACE") != null) std.debug.print("compile-time pack {d} bytes\n", .{bytes.len});
+    if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("compile-time pack {d} bytes\n", .{bytes.len});
     store.write(placement.origin, placement.identity, key, bytes) catch |err| {
         std.log.warn("object cache could not store the compile-time pack: {}", .{err});
     };
@@ -9202,7 +9195,7 @@ fn packFileBytesOfPrograms(
     defer specs.deinit(allocator);
     var conditions_arena = base.SingleThreadArena.init(allocator);
     defer conditions_arena.deinit();
-    const trace = devDiagnosticEnv("ROC_PACK_TRACE") != null;
+    const trace = dev_diagnostics.isSet(.pack_trace);
     var withheld: usize = 0;
     var literal_converters = std.AutoHashMap(lir.ProcIdentity, void).init(allocator);
     defer literal_converters.deinit();
@@ -11501,9 +11494,9 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     var own_packs: ?pack_store.LoadedPacks = null;
     defer if (own_packs) |*packs| packs.deinit();
     var loaded_packs: ?*pack_store.LoadedPacks = null;
-    if (devDiagnosticEnv("ROC_DEV_PACK_HITS")) |dir_z| {
-        own_packs = pack_store.LoadedPacks.loadDir(ctx.gpa, ctx.io.std_io, std.mem.span(dir_z)) catch |err| {
-            std.log.err("failed to load packs from {s}: {}", .{ std.mem.span(dir_z), err });
+    if (dev_diagnostics.get(.dev_pack_hits)) |dir| {
+        own_packs = pack_store.LoadedPacks.loadDir(ctx.gpa, ctx.io.std_io, dir) catch |err| {
+            std.log.err("failed to load packs from {s}: {}", .{ dir, err });
             return error.NativeCompilationFailed;
         };
         loaded_packs = &own_packs.?;
@@ -11567,7 +11560,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     }
     runtime_lowering.target.code_provision = nativeObjectCodeProvision(target, args.opt, loaded_packs != null, linked_store != null);
     // This program's specializations go into packs.
-    runtime_lowering.target.spec_comptime_reads = object_store != null or devDiagnosticEnv("ROC_DEV_PACK_OBJECTS") != null;
+    runtime_lowering.target.spec_comptime_reads = object_store != null or dev_diagnostics.isSet(.dev_pack_objects);
     build_env.setRuntimeLowering(runtime_lowering);
     // A build of a program whose runtime output is recorded links that output
     // and lowers no runtime program. Debug pack emission reads the lowering.
@@ -11622,7 +11615,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     defer lowered.deinit();
     // Cache statistics are diagnostic output. Ordinary successful builds must
     // leave stderr empty so build runners do not report false warnings.
-    if (loaded_packs != null and devDiagnosticEnv("ROC_PACK_STATS") != null) {
+    if (loaded_packs != null and dev_diagnostics.isSet(.pack_stats)) {
         const packs = loaded_packs.?.*;
         var external_procs: usize = 0;
         for (lowered.lir_result.store.getProcSpecs()) |proc| {
@@ -19682,11 +19675,10 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
         const public_modules = try build_env.getPublicRootModules(ctx.gpa);
         defer ctx.gpa.free(public_modules);
         for (public_modules) |module| {
-            const artifact = module.semantic.checked_artifact orelse return error.Internal;
             try inputs.append(ctx.gpa, .{
                 .exposed_name = module.name,
-                .module_env = module.semantic.env,
-                .artifact = artifact,
+                .module_env = module.checked.env,
+                .artifact = module.checked.checked_artifact,
                 .public_type_decl = module.public_type_decl,
             });
         }
@@ -19694,12 +19686,13 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
 
     if (root_pkg.kind == .platform and root_pkg.public_surface.root_names.items.len > 0) {
         const root_module = build_env.rootModule(root_name) orelse return error.Internal;
-        const root_data = root_module.semanticData() orelse return error.Internal;
-        const root_artifact = root_data.checked_artifact orelse return error.Internal;
+        const root_data = root_module.checkedModule() orelse {
+            base.invariant("bump invariant violated: platform root module did not complete successfully", .{});
+        };
         try inputs.append(ctx.gpa, .{
             .exposed_name = root_module.name,
             .module_env = root_data.env,
-            .artifact = root_artifact,
+            .artifact = root_data.checked_artifact,
             .exposed_names = root_pkg.public_surface.root_names.items,
         });
     }
@@ -19711,11 +19704,10 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
         for (routing_modules) |module| {
             if (std.mem.eql(u8, module.package_name, root_name)) continue;
             if (module.public_type_decl == null) continue;
-            const artifact = module.semantic.checked_artifact orelse return error.Internal;
             try inputs.append(ctx.gpa, .{
                 .exposed_name = module.name,
-                .module_env = module.semantic.env,
-                .artifact = artifact,
+                .module_env = module.checked.env,
+                .artifact = module.checked.checked_artifact,
                 .public_type_decl = module.public_type_decl,
             });
         }
@@ -20094,12 +20086,11 @@ fn generateDocs(
         defer ctx.gpa.free(routing_modules);
         for (routing_modules) |module_info| {
             const source_decl = module_info.public_type_decl orelse continue;
-            const artifact = module_info.semantic.checked_artifact orelse unreachable;
             try public_type_projections.append(ctx.gpa, .{
                 .public_name = module_info.name,
                 .package_name = build_env.displayNameForPackage(module_info.package_name),
-                .source_env = module_info.semantic.env,
-                .source_identity = &artifact.key.module_identity_hash,
+                .source_env = module_info.checked.env,
+                .source_identity = &module_info.checked.checked_artifact.module_identity.stable_hash,
                 .source_decl = source_decl,
                 .public_order = module_info.public_order,
             });
@@ -20113,18 +20104,17 @@ fn generateDocs(
         const sched_pkg_name = build_env.displayNameForPackage(module_info.package_name);
         modules_seen += 1;
 
-        var mod_docs = extract.extractModuleDocsWithOptions(ctx.gpa, module_info.semantic.env, sched_pkg_name, module_info.path, .{
+        var mod_docs = extract.extractModuleDocsWithOptions(ctx.gpa, module_info.checked.env, sched_pkg_name, module_info.path, .{
             .exposed_names = module_info.docs_exposed_names,
             .public_type = if (module_info.public_type_decl) |source_decl| .{
                 .public_name = module_info.name,
                 .package_name = sched_pkg_name,
-                .source_env = module_info.semantic.env,
-                .source_identity = &(module_info.semantic.checked_artifact orelse unreachable).key.module_identity_hash,
+                .source_env = module_info.checked.env,
+                .source_identity = &module_info.checked.checked_artifact.module_identity.stable_hash,
                 .source_decl = source_decl,
                 .public_order = module_info.public_order,
             } else null,
             .public_types = public_type_projections.items,
-            .checked_artifact = module_info.semantic.checked_artifact,
         }) catch |err| {
             std.debug.print("Warning: failed to extract docs for module {s}: {}\n", .{ module_info.name, err });
             extract_failed += 1;
@@ -20199,9 +20189,7 @@ fn generateBuiltinDocs(ctx: *CliCtx, base_output_dir: []const u8, with_lang_ref:
         errdefer ctx.gpa.free(modules);
         // The builtin is documented as a standalone root type module, whose
         // display package name is `module` (see `BuildEnv.displayNameForPackage`).
-        modules[0] = try docs.extract.extractModuleDocsWithOptions(ctx.gpa, builtin_modules.builtin_module.env, "module", "Builtin.roc", .{
-            .checked_artifact = &builtin_modules.checked_artifact,
-        });
+        modules[0] = try docs.extract.extractModuleDocsWithOptions(ctx.gpa, builtin_modules.builtin_module.env, "module", "Builtin.roc", .{});
         errdefer modules[0].deinit(ctx.gpa);
         break :package_docs docs.DocModel.PackageDocs{ .name = try ctx.gpa.dupe(u8, "Builtin"), .modules = modules };
     };

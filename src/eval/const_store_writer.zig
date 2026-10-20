@@ -1223,6 +1223,7 @@ fn initTestArtifact(allocator: Allocator, module_env: *can.ModuleEnv) Allocator.
     const module_name = try names.internModuleName("Test");
     return .{
         .key = .{},
+        .source_hash = @as([32]u8, @splat(0)),
         .canonical_names = names,
         .module_identity = .{
             .module_idx = 0,
