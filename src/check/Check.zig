@@ -23279,7 +23279,7 @@ fn reportNonFunctionWhereRequirement(
             },
             .err => return,
             .flex, .rigid, .field_presence => {},
-            .alias => unreachable,
+            .alias => unreachable, // the loop above follows alias backings until the content is not an alias
         }
     }
     _ = try self.problems.appendProblem(.{ .where_requirement_not_function = .{
