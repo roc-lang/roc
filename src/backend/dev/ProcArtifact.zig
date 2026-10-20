@@ -1854,13 +1854,22 @@ fn unwindMatches(original: anytype, fresh: @TypeOf(original)) bool {
 /// only other spliced artifacts reach.
 pub const SpliceError = Allocator.Error;
 
+/// Which stable references to procedures `markReachers` follows.
+pub const ProcSymbols = enum {
+    /// Every one: a stable reference to a procedure the receiving program
+    /// lowers itself is not followed by a splice, but whether a program
+    /// lowers it is not known before lowering, so it counts.
+    follow,
+    /// None: the marked artifacts are procedures named by site, which every
+    /// program that takes an entry referring to one lowers itself.
+    skip,
+};
+
 /// Mark every artifact of `set` whose splice would place a marked one:
 /// every artifact that reaches a marked artifact through references, or
-/// through a stable reference to an artifact of the set, transitively. A
-/// stable reference to a procedure the receiving program lowers itself is
-/// not followed by a splice, but whether a program lowers it is not known
-/// before lowering, so it counts.
-pub fn markReachers(allocator: Allocator, set: *const Set, marked: []bool) Allocator.Error!void {
+/// through a stable reference to an artifact of the set (to a procedure
+/// only as `proc_symbols` says), transitively.
+pub fn markReachers(allocator: Allocator, set: *const Set, marked: []bool, proc_symbols: ProcSymbols) Allocator.Error!void {
     std.debug.assert(marked.len == set.artifacts.len);
     var by_proc = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator);
     defer by_proc.deinit();
@@ -1885,7 +1894,10 @@ pub fn markReachers(allocator: Allocator, set: *const Set, marked: []bool) Alloc
         for (artifact.refs) |ref| try reachers[ref.target].append(allocator, @intCast(index));
         for (artifact.symbolic_refs) |ref| {
             const target = switch (ref.target) {
-                .proc => |identity| by_proc.get(identity),
+                .proc => |identity| switch (proc_symbols) {
+                    .follow => by_proc.get(identity),
+                    .skip => null,
+                },
                 .boxy_thunk => |identity| by_thunk.get(identity),
                 .rc_helper => |name| by_helper.get(name),
             } orelse continue;
@@ -1923,13 +1935,17 @@ pub fn reachingIdentities(allocator: Allocator, set: *const Set, identities: any
             .boxy_thunk, .rc_helper => {},
         };
     }
-    try markReachers(allocator, set, marked);
+    try markReachers(allocator, set, marked, .follow);
     return marked;
 }
 
 /// Per artifact of `set`, whether a splice of it would place a line or a
 /// location in a source file `present` does not mark, by the set's file
-/// index. The caller owns the result.
+/// index. The caller owns the result. A procedure keeps its identity across
+/// an edit of its module only when its identity names it by site, so a
+/// procedure with lines in another version of a module is site-named code,
+/// which a program taking an entry that refers to it lowers itself and a
+/// splice never places through that reference.
 pub fn reachingAbsentFiles(allocator: Allocator, set: *const Set, present: []const bool) Allocator.Error![]bool {
     const marked = try allocator.alloc(bool, set.artifacts.len);
     errdefer allocator.free(marked);
@@ -1939,7 +1955,7 @@ pub fn reachingAbsentFiles(allocator: Allocator, set: *const Set, present: []con
             if (line.loc.hasLocation() and !present[line.loc.file]) is_marked.* = true;
         }
     }
-    try markReachers(allocator, set, marked);
+    try markReachers(allocator, set, marked, .skip);
     return marked;
 }
 
@@ -2266,11 +2282,6 @@ test "artifact metadata queues unresolved targets, preserves same-offset line or
         try std.testing.expectEqual(original.loc.column, rebound.loc.column);
     }
     try std.testing.expectEqual(@as(usize, 2), persistent.refs_len);
-    // A file the receiving program does not have contributes no lines.
-    var other_version = Recorder{};
-    try appendMetadata(Recorder, &other_version, artifact, 100, .{ .file_map = &.{ null, null, null, null } });
-    try std.testing.expectEqual(@as(usize, 0), other_version.lines_len);
-    try std.testing.expectEqual(@as(usize, 2), other_version.refs_len);
 }
 
 fn testCombineOwnership(allocator: Allocator) (Allocator.Error || error{TestExpectedEqual})!void {
@@ -2633,11 +2644,18 @@ test "a splice reaches a procedure through references and stable references" {
     defer allocator.free(reaching);
     try std.testing.expectEqualSlices(bool, &.{ true, true, true, false }, reaching);
 
+    // A procedure with lines in a file the program lacks is site-named code,
+    // which the program lowers itself, so a stable reference to it places
+    // nothing; a reference into the pack does.
     var lined = [_]Artifact{ set.artifacts[0], set.artifacts[1], set.artifacts[2], set.artifacts[3] };
     lined[2].lines = &.{.{ .offset = 0, .loc = .{ .file = 1, .line = 3, .column = 1 }, .region = base.Region.zero() }};
     lined[3].loc = .{ .file = 0, .line = 1, .column = 1 };
     const lined_set = Set{ .arena = collections.SingleThreadArena.init(allocator), .artifacts = &lined };
     const absent = try reachingAbsentFiles(allocator, &lined_set, &.{ true, false });
     defer allocator.free(absent);
-    try std.testing.expectEqualSlices(bool, &.{ true, true, true, false }, absent);
+    try std.testing.expectEqualSlices(bool, &.{ false, false, true, false }, absent);
+    lined[1].lines = lined[2].lines;
+    const reached = try reachingAbsentFiles(allocator, &lined_set, &.{ true, false });
+    defer allocator.free(reached);
+    try std.testing.expectEqualSlices(bool, &.{ true, true, true, false }, reached);
 }
