@@ -30053,7 +30053,7 @@ const ProcBodyBuilder = struct {
                 const ctx = BoxyMatchCtx{ .b = self, .state = &tree.state };
                 return try ctx.bindLiteralBinder(guard.pat, guard.value, lowered);
             },
-            .bindings => unreachable, // a bindings request is answered in place by lowerMatchTree, never left pending
+            .bindings => unreachable, // advancePatternTree answers a bindings request in place, never leaving it pending
         }
     }
 
