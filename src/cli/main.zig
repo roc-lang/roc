@@ -8516,7 +8516,13 @@ fn compileModulePack(
 fn preparePackageDevPacks(ctx: *CliCtx, build_env: *BuildEnv, runtime_packs: ?*pack_store.LoadedPacks) (Allocator.Error || error{NativeCompilationFailed})!void {
     if (comptime !backend.host_lir_codegen_available) return;
     const owner = build_env.compile_time_object_cache_owner orelse return tracePackageDevPacksSkipped("no object cache");
-    if (!build_env.executable_artifacts_finalized) return tracePackageDevPacksSkipped("checked program not finalized");
+    if (!build_env.executable_artifacts_finalized) {
+        if (devDiagnosticEnv("ROC_PACK_TRACE") != null) {
+            const checked_program = if (build_env.coordinator) |coord| coord.hasCheckedProgram() else false;
+            std.debug.print("package dev packs skipped: checked program not finalized (mode={s} deferred={} checked_program={})\n", .{ @tagName(build_env.post_check_publication_mode), build_env.defer_post_check, checked_program });
+        }
+        return;
+    }
     const has_url_package = found: {
         var packages = build_env.packages.valueIterator();
         while (packages.next()) |package| {
