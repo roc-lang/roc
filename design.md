@@ -617,10 +617,18 @@ A pack's line entries index the pack's own source-file table, which names
 each file by its module's content identity in the order the lines first use
 it. Splicing binds each to the receiving program's file for the same module
 identity, so DWARF line programs cover spliced procedures exactly as they do
-compiled ones. A procedure can be served across an edit of its module, since
-its identity does not depend on where it sits in the file; its lines then name
-a module version the program does not have, and they are not emitted rather
-than misattributed.
+compiled ones. Each procedure artifact also carries its procedure's location
+(`Artifact.loc`, `LirStore.procLoc`) in the same table, which names the
+procedure's debug entry wherever it lands. A procedure's identity does not
+depend on where it sits in its file, so an entry could be served across an
+edit of a module its code was lowered from; its lines would then name a module
+version the program does not have, while the program's own compile of the
+procedure would carry its current lines. Such an entry is not offered:
+loading the packs for a program whose modules are known (`LoadedPacks`), an
+entry whose splice would place a line or location in a file the program's
+modules do not include is left out of the index, and the program compiles the
+procedure. A splice therefore binds every line, and a line it could not bind
+is an invariant violation.
 
 A URL-package module also gets an optimized object pack, filed in the same
 layout under `<target>-speed/pkg/` for a native target and
@@ -658,9 +666,18 @@ entry of the same procedure and lets the linked consumer switch to the
 object's entry in Direct LIR. Such a procedure is `external` with
 `c_abi_entry` set: the dev backend calls its C-ABI entry like a hosted
 function and compiles a local body that forwards to it for every other use,
-and the build links the objects whose entries it took. A dev pack never
-offers an entry whose code reaches a linked entry, so a program that splices
-dev code never needs an object it did not ask for. A build whose store lacks
+and the build links exactly the objects that define the entries its
+lowered program took (`LoadedPacks.settleLinkedObjects`), whatever it looked
+up along the way. Direct LIR switches a dev hit to the linked entry of the
+same procedure whether the object offers it under the specialization's key
+or under the procedure's identity key. A dev pack never offers an entry whose
+code reaches a linked entry, so a program that splices dev code never needs
+an object it did not ask for; and a consumer whose code is linked, or a
+producer it shares (`CodeProvision.host_dev_objects_beside_linked`), never
+takes a dev entry whose splice would place dev code for a procedure an
+object offers, as an entry compile-time evaluation filed can. Which of a
+program's procedures link an object's entry is then a function of the
+object packs alone, never of which dev packs exist. A build whose store lacks
 a URL-package module's object pack builds it once the module is checked and
 before the program lowers, so that build already links it.
 
@@ -758,6 +775,38 @@ and source digests, and procedure identities) name it by its declaration and
 the structure of its backing rather than by its module's content, so a
 package specialization at an app type keeps its identity across edits that
 leave the type's structure alone.
+
+
+### Canonical Dev Images
+
+A build's executable is a function of its source, its command line, and its
+optimization state (the object packs it links); which dev packs the object
+cache holds, and in which order or on which worker a procedure was compiled,
+must change nothing in it. The dev backend's object is therefore laid out
+canonically (`ObjectFileCompiler.compileWithCodeGen`). The code generated for
+the program, compiled now or spliced from dev packs, is lifted into artifacts
+(`ProcArtifact.extract`); a linked program keeps only the artifacts its roots
+reach, the procedures its entry wrappers call and the host-visible constants
+with what they name (`retainReachable`), since a program that took an entry
+lowers some procedures (the members of an entry's lambda sets) only so the
+entry could call them; and the remaining set is placed again into the code
+generator the object is encoded from (`canonicalize`, `assembleCanonical`):
+
+- procedures in identity order, then Boxy thunks, then refcount helpers by
+  name, each message pool run right after the one artifact whose code
+  addresses it;
+- every constant code names, and every constant a host-visible constant
+  names, under its content name (`ContentNames`), so a constant this program
+  named for itself (`roc__d{N}`) and the same constant carried by a spliced
+  entry are one symbol, in name order; host-visible constants keep their
+  names and only they are global;
+- a symbol and a debug entry for every procedure (`roc__p{identity}`, with its
+  artifact's location) and every helper with a frame, whether the program
+  declares it or only spliced code reaches it.
+
+A procedure's artifact is the same whether this program compiled it or a
+pack carried it, so the object is the same however each procedure was
+provided.
 
 ### Read-Only Type Analysis
 

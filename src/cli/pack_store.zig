@@ -545,8 +545,21 @@ pub const LoadedPacks = struct {
     /// Object packs, whose entries only a consumer whose code is linked takes.
     object_packs: std.ArrayList(PackFile.ObjectPack) = .empty,
     linked_specs: std.AutoHashMap([32]u8, LinkedOffer),
-    /// Per object pack, whether an entry of it served a specialization, so
-    /// the program links its object.
+    /// The object pack that defines each procedure some object pack offers,
+    /// by identity: the procedures whose code a consumer whose code is
+    /// linked takes from an object rather than from a dev pack.
+    linked_identities: std.AutoHashMapUnmanaged(lir.ProcIdentity, u32) = .empty,
+    /// Per dev pack, by its artifact set, whether a splice of each artifact
+    /// would place code for a procedure an object pack offers
+    /// (`linked_identities`).
+    dev_reaches_linked: std.AutoHashMapUnmanaged(*const backend.dev.ProcArtifact.Set, []bool) = .empty,
+    /// The module content identities of the program's source files, once the
+    /// program's modules are known: an entry whose lines name any other
+    /// module version is not offered (`indexPacksUnrecorded`).
+    program_modules: ?std.AutoHashMapUnmanaged([32]u8, void) = null,
+    /// Per object pack, whether the program takes one of its entries, so it
+    /// links the pack's object; settled from the lowered program
+    /// (`settleLinkedObjects`).
     object_packs_used: std.ArrayList(bool) = .empty,
     /// Object packs load at the first lookup that takes a linked entry,
     /// which comes after checking, so a build that writes a module's object
@@ -769,7 +782,24 @@ pub const LoadedPacks = struct {
 
     fn indexPacksUnrecorded(self: *LoadedPacks) LoadError!void {
         for (self.packs.items) |*pack| {
+            // An entry whose lines or procedure locations name a module
+            // version this program does not have would place lines that
+            // differ from the procedure's own, which the program would
+            // attribute to its current version; the program compiles it.
+            var absent: ?[]bool = null;
+            defer if (absent) |marks| self.allocator.free(marks);
+            if (self.program_modules) |modules| {
+                const present = try self.allocator.alloc(bool, pack.set.source_files.len);
+                defer self.allocator.free(present);
+                var all_present = true;
+                for (pack.set.source_files, present) |identity, *is_present| {
+                    is_present.* = modules.contains(identity);
+                    all_present = all_present and is_present.*;
+                }
+                if (!all_present) absent = try backend.dev.ProcArtifact.reachingAbsentFiles(self.allocator, &pack.set, present);
+            }
             for (pack.specs) |spec| {
+                if (absent) |marks| if (marks[spec.artifact]) continue;
                 const root = pack.set.artifacts[spec.artifact];
                 const identity = switch (root.kind) {
                     .proc => |identity| identity,
@@ -799,6 +829,8 @@ pub const LoadedPacks = struct {
     fn indexObjectPacks(self: *LoadedPacks) LoadError!void {
         for (self.object_packs.items, 0..) |pack, pack_index| {
             for (pack.specs) |spec| {
+                const linked = try self.linked_identities.getOrPut(self.allocator, pack.identities[spec.artifact]);
+                if (!linked.found_existing) linked.value_ptr.* = @intCast(pack_index);
                 const gop = try self.linked_specs.getOrPut(spec.key);
                 if (!gop.found_existing) gop.value_ptr.* = .{
                     .hit = .{
@@ -914,6 +946,12 @@ pub const LoadedPacks = struct {
     }
 
     fn loadPending(self: *LoadedPacks, pending: Pending, root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact) LoadError!void {
+        var modules = std.AutoHashMapUnmanaged([32]u8, void).empty;
+        errdefer modules.deinit(self.allocator);
+        try modules.put(self.allocator, root_artifact.key.module_identity_hash, {});
+        for (root_artifact.lowering_visibility.module_ids) |key| try modules.put(self.allocator, key.module_identity_hash, {});
+        if (self.program_modules) |*previous| previous.deinit(self.allocator);
+        self.program_modules = modules;
         const store = pending.store orelse return;
         if (pending.build_env.packPlacementForArtifactKey(root_artifact.key)) |placement| {
             try store.loadIdentity(pending.io, self, placement.origin, placement.identity);
@@ -932,6 +970,11 @@ pub const LoadedPacks = struct {
         self.discovery.deinit(self.allocator);
         self.discovery_arena.deinit();
         self.linked_specs.deinit();
+        self.linked_identities.deinit(self.allocator);
+        var reaching = self.dev_reaches_linked.valueIterator();
+        while (reaching.next()) |marks| self.allocator.free(marks.*);
+        self.dev_reaches_linked.deinit(self.allocator);
+        if (self.program_modules) |*modules| modules.deinit(self.allocator);
         for (self.object_packs.items) |*pack| pack.deinit();
         self.object_packs.deinit(self.allocator);
         self.object_packs_used.deinit(self.allocator);
@@ -990,15 +1033,59 @@ pub const LoadedPacks = struct {
         if (takes.takesLinkedObjects()) {
             self.ensureLinkedLoaded();
             if (self.linked_specs.get(key)) |offer| {
-                self.object_packs_used.items[offer.pack] = true;
                 self.hits += 1;
                 return offer.hit;
             }
         }
         if (!takes.takesDevCode()) return null;
         const hit = self.specs.get(key) orelse return null;
+        // A consumer whose code is linked takes every procedure an object
+        // offers from the object. A dev entry whose splice would place dev
+        // code for such a procedure, as an entry compile-time evaluation
+        // filed does, is not taken, so which procedures link an object's
+        // entry depends on the object packs alone, never on which dev packs
+        // happen to exist.
+        if (takes.refusesDevCodeOfLinkedProcs()) {
+            self.ensureLinkedLoaded();
+            if (self.devEntryReachesLinked(key)) return null;
+        }
         self.hits += 1;
         return hit;
+    }
+
+    /// Whether the code a splice of the dev entry under `key` places
+    /// includes a procedure some object pack offers: the entry's own
+    /// procedure, or one its code reaches through the pack.
+    fn devEntryReachesLinked(self: *LoadedPacks, key: [32]u8) bool {
+        if (self.linked_identities.count() == 0) return false;
+        const located = self.artifacts.get(key) orelse return false;
+        const marks = self.dev_reaches_linked.get(located.set) orelse marks: {
+            // Refusing the entry is always sound: the program compiles the
+            // procedure itself.
+            const computed = backend.dev.ProcArtifact.reachingIdentities(self.allocator, located.set, &self.linked_identities) catch return true;
+            self.dev_reaches_linked.put(self.allocator, located.set, computed) catch {
+                const reaches = computed[located.index];
+                self.allocator.free(computed);
+                return reaches;
+            };
+            break :marks computed;
+        };
+        return marks[located.index];
+    }
+
+    /// Mark the object packs that define the procedures `proc_specs` take
+    /// from objects (`LIR.LirProcSpec.c_abi_entry`): exactly the objects the
+    /// program links.
+    pub fn settleLinkedObjects(self: *LoadedPacks, proc_specs: []const lir.LIR.LirProcSpec) void {
+        @memset(self.object_packs_used.items, false);
+        for (proc_specs) |proc| {
+            if (!proc.c_abi_entry) continue;
+            const pack = self.linked_identities.get(proc.identity) orelse {
+                if (@import("builtin").mode == .debug) std.debug.panic("a program took a linked entry no object pack offers", .{});
+                unreachable;
+            };
+            self.object_packs_used.items[pack] = true;
+        }
     }
 
     fn findDiscovery(context: *anyopaque, key: [32]u8) []const Common.DiscoverySettlement {
@@ -1055,4 +1142,54 @@ test "discovery summaries round-trip and a file of another version is no offer" 
     try std.testing.expectEqual(@as(u32, 0), skipped.discovery.count());
 
     try std.testing.expectError(error.MalformedPack, skipped.appendDiscovery(bytes[0 .. bytes.len - 1]));
+}
+
+test "loaded packs offer no entry whose lines name a missing module version or that places code a linked object provides" {
+    const allocator = std.testing.allocator;
+    const base_mod = @import("base");
+    const present_module: [32]u8 = @splat(0xa1);
+    const edited_module: [32]u8 = @splat(0xb2);
+    const caller = lir.ProcIdentity.forTest(61);
+    const callee = lir.ProcIdentity.forTest(62);
+    const stale = lir.ProcIdentity.forTest(63);
+    const frame: backend.dev.ProcArtifact.Frame = .{ .prologue_size = 1, .stack_alloc = 0, .frame_size = 0, .callee_saved_mask = 0, .epilogue_offset = 1, .uses_frame_pointer = true };
+    const set = backend.dev.ProcArtifact.Set{
+        .arena = base_mod.SingleThreadArena.init(allocator),
+        .artifacts = &.{
+            .{ .kind = .{ .proc = caller }, .code = "\xe8\x00\x00\x00\x00\xc3", .entry = 0, .frame = frame, .refs = &.{.{ .site = 0, .form = .call, .target = 1, .delta = 0 }}, .relocations = &.{}, .data = &.{}, .loc = .{ .file = 0, .line = 1, .column = 1 } },
+            .{ .kind = .{ .proc = callee }, .code = "\xc3", .entry = 0, .frame = frame, .refs = &.{}, .relocations = &.{}, .data = &.{}, .loc = .{ .file = 0, .line = 2, .column = 1 } },
+            .{ .kind = .{ .proc = stale }, .code = "\xc3", .entry = 0, .frame = frame, .refs = &.{}, .relocations = &.{}, .data = &.{}, .lines = &.{.{ .offset = 0, .loc = .{ .file = 1, .line = 7, .column = 1 }, .region = base_mod.Region.zero() }} },
+        },
+        .source_files = &.{ present_module, edited_module },
+    };
+    const Spec = PackFile.SpecEntry;
+    const spec = struct {
+        fn of(key: u8, artifact: u32) Spec {
+            return .{ .key = @splat(key), .artifact = artifact, .rc_borrowed_params = 0, .rc_ret_borrowed = false, .rc_ret_lenders = 0, .rc_read_only_params = 0, .rc_ret_unique = false, .rc_ret_unique_fields = 0, .rc_ret_conditions = &.{} };
+        }
+    }.of;
+    const bytes = try PackFile.write(allocator, &set, &.{ spec(1, 0), spec(2, 1), spec(3, 2) });
+    defer allocator.free(bytes);
+
+    var packs = LoadedPacks.init(allocator);
+    defer packs.deinit();
+    try packs.appendPack(bytes);
+    var modules = std.AutoHashMapUnmanaged([32]u8, void).empty;
+    try modules.put(allocator, present_module, {});
+    packs.program_modules = modules;
+    try packs.indexPacks();
+    const lookup = packs.specCacheLookup();
+    try std.testing.expect(lookup.lookup(@splat(1), .dev_code) != null);
+    try std.testing.expect(lookup.lookup(@splat(2), .dev_code) != null);
+    // Its lines name a version of a module this program does not have.
+    try std.testing.expect(lookup.lookup(@splat(3), .dev_code) == null);
+
+    // Once an object offers the callee, a consumer whose program links
+    // objects takes neither the callee's dev code nor the caller's, whose
+    // splice places it; a consumer that links nothing still takes both.
+    packs.linked_state = .unavailable;
+    try packs.linked_identities.put(allocator, callee, 0);
+    try std.testing.expect(lookup.lookup(@splat(1), .dev_code) != null);
+    try std.testing.expect(lookup.lookup(@splat(1), .dev_code_beside_linked_objects) == null);
+    try std.testing.expect(lookup.lookup(@splat(2), .dev_code_and_linked_objects) == null);
 }

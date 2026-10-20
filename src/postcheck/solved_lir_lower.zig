@@ -5329,7 +5329,17 @@ const Lowerer = struct {
         if (monotype_hit.c_abi_entry or !self.spec_cache_takes.takesLinkedObjects()) return monotype_hit;
         const cache = self.spec_cache orelse return monotype_hit;
         const key = template.spec_key orelse return monotype_hit;
-        const linked = cache.lookup(key.bytes, self.spec_cache_takes) orelse return monotype_hit;
+        if (cache.lookup(key.bytes, self.spec_cache_takes)) |linked| {
+            if (linked.c_abi_entry and std.mem.eql(u8, &linked.identity, &monotype_hit.identity)) return linked;
+        }
+        // A linked object may offer the procedure under its identity alone,
+        // the key a lowering that found no entry under the specialization's
+        // key looks it up by. Whether the program links the entry must not
+        // depend on whether a dev pack happened to serve the specialization
+        // key first.
+        const identity: LIR.ProcIdentity = .{ .bytes = monotype_hit.identity };
+        const identity_key = Common.procIdentityCacheKey(if (procCodeKey(template, identity)) |code| code else identity.bytes);
+        const linked = cache.lookup(identity_key, self.spec_cache_takes) orelse return monotype_hit;
         if (!linked.c_abi_entry or !std.mem.eql(u8, &linked.identity, &monotype_hit.identity)) return monotype_hit;
         return linked;
     }

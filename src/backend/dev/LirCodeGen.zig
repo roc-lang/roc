@@ -718,6 +718,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Region starts of procedures spliced from object-cache entries, by
         /// identity; a second pack holding the same procedure splices nothing.
         spliced_proc_starts: std.AutoHashMap(lir.ProcIdentity, usize),
+        /// The source location each procedure placed from an artifact set
+        /// carries (`ProcArtifact.Artifact.loc`), in this program's
+        /// source-file domain, by identity.
+        assembled_proc_locs: std.AutoHashMapUnmanaged(lir.ProcIdentity, base.SourceLoc) = .empty,
 
         /// Map from JoinPointId to list of jumps that target it (for patching)
         join_point_jumps: std.AutoHashMap(u32, std.ArrayList(JumpRecord)),
@@ -1348,6 +1352,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.spliced_helper_offsets.deinit();
             }
             self.spliced_proc_starts.deinit();
+            self.assembled_proc_locs.deinit(self.allocator);
             self.pending_message_addrs.deinit(self.allocator);
             self.message_pool_runs.deinit(self.allocator);
             self.message_pool_index.deinit(self.allocator);
@@ -22844,6 +22849,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         pub fn registerAssembledProc(self: *Self, identity: lir.ProcIdentity, entry: usize) Allocator.Error!void {
             const gop = try self.spliced_proc_starts.getOrPut(identity);
             if (!gop.found_existing) gop.value_ptr.* = entry;
+        }
+
+        /// Remember the source location a procedure placed from an artifact
+        /// set carries; the first placement of an identity wins, as for its
+        /// code.
+        pub fn registerAssembledProcLoc(self: *Self, identity: lir.ProcIdentity, loc: base.SourceLoc) Allocator.Error!void {
+            const gop = try self.assembled_proc_locs.getOrPut(self.allocator, identity);
+            if (!gop.found_existing) gop.value_ptr.* = loc;
+        }
+
+        /// The source location a procedure placed from an artifact set
+        /// carries, when one was placed.
+        pub fn assembledProcLoc(self: *const Self, identity: lir.ProcIdentity) ?base.SourceLoc {
+            return self.assembled_proc_locs.get(identity);
         }
 
         pub fn registerAssembledThunk(self: *Self, identity: lir.ProcIdentity, entry: usize) Allocator.Error!void {

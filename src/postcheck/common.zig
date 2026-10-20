@@ -443,6 +443,10 @@ pub const DiscoverySettlement = struct {
 pub const SpecCacheTakes = enum {
     /// Dev code only: the consumer splices code and links nothing.
     dev_code,
+    /// Dev code only, for a producer shared with a consumer whose code is
+    /// linked: no dev entry whose code includes a procedure a linked object
+    /// provides, since that consumer takes the procedure from the object.
+    dev_code_beside_linked_objects,
     /// A linked object's entry (`SpecCacheHit.c_abi_entry`) ahead of the dev
     /// code of the same specialization: the consumer splices code and
     /// its output is linked.
@@ -452,7 +456,21 @@ pub const SpecCacheTakes = enum {
     linked_objects,
 
     pub fn takesLinkedObjects(self: SpecCacheTakes) bool {
-        return self != .dev_code;
+        return switch (self) {
+            .dev_code, .dev_code_beside_linked_objects => false,
+            .dev_code_and_linked_objects, .linked_objects => true,
+        };
+    }
+
+    /// Whether a dev entry is refused when its code includes a procedure a
+    /// linked object provides: the program's linked output takes that
+    /// procedure from the object, so dev code for it must not reach the
+    /// program through a splice.
+    pub fn refusesDevCodeOfLinkedProcs(self: SpecCacheTakes) bool {
+        return switch (self) {
+            .dev_code, .linked_objects => false,
+            .dev_code_beside_linked_objects, .dev_code_and_linked_objects => true,
+        };
     }
 
     pub fn takesDevCode(self: SpecCacheTakes) bool {

@@ -11620,6 +11620,9 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     if (diag.errors == 0) try publishCompileTimeResults(ctx, &build_env, root_artifact, .{ .command = .build, .opt = @tagName(args.opt) });
     var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .linked_output, target, args.synthetic_default_platform, if (loaded_packs) |packs| packs.specCacheLookup() else null, nativeObjectCodeProvision(target, args.opt, loaded_packs != null, linked_store != null));
     defer lowered.deinit();
+    // The program links the objects defining the entries it took, and no
+    // other.
+    if (loaded_packs) |packs| packs.settleLinkedObjects(lowered.lir_result.store.getProcSpecs());
     // Cache statistics are diagnostic output. Ordinary successful builds must
     // leave stderr empty so build runners do not report false warnings.
     if (loaded_packs != null and devDiagnosticEnv("ROC_PACK_STATS") != null) {

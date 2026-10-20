@@ -23,7 +23,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RPCK";
 /// Format version; bump whenever the encoding or artifact contents change.
-pub const format_version: u32 = 9;
+pub const format_version: u32 = 10;
 
 /// One specialization the pack can serve: its reservation-time key, the
 /// artifact holding its procedure, and the ownership signature and
@@ -84,6 +84,10 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
     var used_files = std.ArrayList([32]u8).empty;
     defer used_files.deinit(allocator);
     for (set.artifacts) |artifact| {
+        if (artifact.loc.hasLocation() and file_map[artifact.loc.file] == std.math.maxInt(u32)) {
+            file_map[artifact.loc.file] = @intCast(used_files.items.len);
+            try used_files.append(allocator, set.source_files[artifact.loc.file]);
+        }
         for (artifact.lines) |line| {
             if (!line.loc.hasLocation() or file_map[line.loc.file] != std.math.maxInt(u32)) continue;
             file_map[line.loc.file] = @intCast(used_files.items.len);
@@ -160,6 +164,10 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
                 },
             }
         }
+        const loc = ProcArtifact.rebindLoc(artifact.loc, file_map);
+        try writer.word(loc.file);
+        try writer.word(loc.line);
+        try writer.word(loc.column);
         try writer.word(@intCast(artifact.lines.len));
         for (artifact.lines) |line| {
             try writer.word(line.offset);
@@ -331,6 +339,8 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
                 },
             };
         }
+        const loc: base.SourceLoc = .{ .file = try reader.word(), .line = try reader.word(), .column = try reader.word() };
+        if (loc.hasLocation() and loc.file >= source_files.len) return error.MalformedPack;
         const lines = try arena_allocator.alloc(ProcArtifact.LineEntry, try reader.word());
         for (lines) |*line| {
             line.* = .{
@@ -435,6 +445,7 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
             .failure_sites = failure_sites,
             .relocations = relocations,
             .data = data,
+            .loc = loc,
         };
         for (refs) |ref| {
             if (ref.target >= artifact_count) return error.MalformedPack;
@@ -702,6 +713,7 @@ test "pack bytes round-trip every artifact field and spec entry" {
                     }),
                 },
             }),
+            .loc = .{ .file = 1, .line = 10, .column = 2 },
         },
         .{
             .kind = .{ .rc_helper = try a.dupe(u8, "roc__rc_decref_abc") },
@@ -714,8 +726,9 @@ test "pack bytes round-trip every artifact field and spec entry" {
         },
         .{ .kind = .message_pool_run, .code = try a.dupe(u8, "hello"), .entry = 0, .frame = null, .refs = &.{}, .relocations = &.{}, .data = &.{} },
     });
-    // Lines use file 3 of the writing program's table, which the pack keeps
-    // as its own first file.
+    // The procedure's location uses file 1 of the writing program's table and
+    // its lines file 3, which the pack keeps as its own two files in that
+    // order.
     const source_files = try a.dupe([32]u8, &.{ @as([32]u8, @splat(0x30)), @as([32]u8, @splat(0x31)), @as([32]u8, @splat(0x32)), @as([32]u8, @splat(0x33)) });
     var set = ProcArtifact.Set{ .arena = arena, .artifacts = artifacts, .source_files = source_files };
     defer set.deinit();
@@ -768,7 +781,11 @@ test "pack bytes round-trip every artifact field and spec entry" {
         try testing.expectEqual(written.loc.column, read_back.loc.column);
         try testing.expectEqualSlices(u8, &source_files[written.loc.file], &pack.set.source_files[read_back.loc.file]);
     }
-    try testing.expectEqual(@as(usize, 1), pack.set.source_files.len);
+    try testing.expectEqual(@as(usize, 2), pack.set.source_files.len);
+    try testing.expectEqual(@as(u32, 10), proc.loc.line);
+    try testing.expectEqual(@as(u32, 2), proc.loc.column);
+    try testing.expectEqualSlices(u8, &source_files[1], &pack.set.source_files[proc.loc.file]);
+    try testing.expect(!pack.set.artifacts[1].loc.hasLocation());
     try testing.expectEqual(ProcArtifact.Form.addr, proc.refs[1].form);
     try testing.expectEqual(@as(u32, 9), proc.relocations[1].offset);
     try testing.expectEqualStrings("roc__d1", proc.relocations[1].name);
