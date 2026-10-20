@@ -20972,10 +20972,9 @@ container no longer holds, and retaining at the read instead would retain on
 paths that never consume the binding and force owned variants on calls that
 only borrow it, such as the lookup inside `Dict.insert`. When `use(next,
 use(next, 0))` reads a dying record's field twice, the inner call retains and
-the outer call takes the field. An operand take that is its binding's only
-mention, at an owned position of a direct call whose result is refined by an
-outcome switch, carries the same field receipt as a consuming read, so the
-restoring outcomes return the field to its place.
+the outer call takes the field. No field receipt names a use-point take, so
+its call does not admit the outcome convention, and a restoring branch that
+observes the field again leaves the operand retaining instead.
 
 Which remaining consuming reads become takes is decided per field by a forward
 dataflow from the container's definition over the control-flow graph,
