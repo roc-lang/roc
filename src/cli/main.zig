@@ -8457,7 +8457,7 @@ fn preparePackageDevPacks(ctx: *CliCtx, build_env: *BuildEnv, runtime_packs: ?*p
     if (comptime !backend.host_lir_codegen_available) return;
     const owner = build_env.compile_time_object_cache_owner orelse return tracePackageDevPacksSkipped("no object cache");
     if (!build_env.executable_artifacts_finalized) {
-        if (devDiagnosticEnv("ROC_PACK_TRACE") != null) {
+        if (dev_diagnostics.isSet(.pack_trace)) {
             const checked_program = if (build_env.coordinator) |coord| coord.hasCheckedProgram() else false;
             const app_root_found = if (build_env.coordinator) |coord| coord.hasAppRoot() else false;
             const app_root_checked = if (build_env.coordinator) |coord| coord.appRootChecked() else false;
@@ -8489,7 +8489,7 @@ fn preparePackageDevPacks(ctx: *CliCtx, build_env: *BuildEnv, runtime_packs: ?*p
 }
 
 fn tracePackageDevPacksSkipped(reason: []const u8) void {
-    if (devDiagnosticEnv("ROC_PACK_TRACE") != null) std.debug.print("package dev packs skipped: {s}\n", .{reason});
+    if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("package dev packs skipped: {s}\n", .{reason});
 }
 
 fn writePackageDevPacksToStore(
@@ -8511,7 +8511,7 @@ fn writePackageDevPacksToStore(
         const artifact = if (index == artifacts.len) root_artifact else artifacts[index];
         if (app_artifact) |app| if (std.meta.eql(artifact.key, app.key)) continue;
         const placement = build_env.packPlacementForArtifactKey(artifact.key) orelse continue;
-        if (devDiagnosticEnv("ROC_PACK_TRACE") != null) {
+        if (dev_diagnostics.isSet(.pack_trace)) {
             std.debug.print("dev pack candidate {s} ({s})\n", .{ artifact.canonical_names.moduleNameText(artifact.module_identity.module_name), @tagName(placement.origin) });
         }
         if (placement.origin != .pkg) continue;
@@ -8519,7 +8519,7 @@ fn writePackageDevPacksToStore(
         const roots = try lir.PackProgram.closedExportRoots(ctx.gpa, artifact);
         defer ctx.gpa.free(roots);
         if (roots.len == 0) continue;
-        if (devDiagnosticEnv("ROC_PACK_TRACE") != null) {
+        if (dev_diagnostics.isSet(.pack_trace)) {
             std.debug.print("package dev pack {s}\n", .{artifact.canonical_names.moduleNameText(artifact.module_identity.module_name)});
         }
         var pack = try compileModulePack(ctx, build_env, root_artifact, imports, relations, artifact, roots, .dev, .lss, RocTarget.detectNative());
