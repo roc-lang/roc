@@ -260,9 +260,13 @@ test "a build evaluates and materializes only the compile-time values its progra
     }
     try std.testing.expectEqual(@as(usize, 1), unevaluated);
 
+    // The runtime program restores the completed table from Helper's store
+    // (design.md "Runtime Programs Read Stored Values"), so it reads nothing
+    // of the evaluation's frozen image.
+    try std.testing.expect(session.runtime_stages == .respecialized);
     var runtime = try session.takeRuntime(allocator, session.runtime_roots, target);
     defer runtime.deinit();
-    try std.testing.expect(runtime.frozen_static_data != null);
+    try std.testing.expect(runtime.frozen_static_data == null);
 }
 
 test "one evaluated root has one completed-value slot however many places read it" {
@@ -372,15 +376,12 @@ test "one evaluated root has one completed-value slot however many places read i
         );
     }
 
-    // Transcoding rejects a root with ambiguous source slots, so this also
-    // fails if the demands stopped sharing one slot.
+    // The runtime program restores every completed value from Helper's
+    // store, so it declares no slot for any of them.
+    try std.testing.expect(session.runtime_stages == .respecialized);
     var runtime = try session.takeRuntime(allocator, session.runtime_roots, target);
     defer runtime.deinit();
-    var value_exports: usize = 0;
-    for ((runtime.frozen_static_data orelse return error.TestUnexpectedResult).exports) |item| {
-        if (item.value_id != null) value_exports += 1;
-    }
-    try std.testing.expect(value_exports > 0);
+    try std.testing.expect(runtime.frozen_static_data == null);
 }
 
 test "a separate compile-time consumer lowers no runtime-only procedure" {
@@ -455,8 +456,11 @@ test "a separate compile-time consumer lowers no runtime-only procedure" {
     // Asserted while the compile-time programs are still whole, before any
     // consumer has taken the runtime continuation or released this code.
     try std.testing.expect(session.runtime_prepared != null);
-    try std.testing.expectEqual(@as(u32, 1), metrics.monotype_runs);
-    try std.testing.expectEqual(@as(u32, 1), metrics.solved_runs);
+    // Evaluation completed `answer`, so the runtime program was specialized
+    // again from its stored value.
+    try std.testing.expect(session.runtime_stages == .respecialized);
+    try std.testing.expectEqual(@as(u32, 2), metrics.monotype_runs);
+    try std.testing.expectEqual(@as(u32, 2), metrics.solved_runs);
     try std.testing.expectEqual(@as(u32, @intCast(stages.programs().len)), metrics.lir_continuations);
     for (stages.programs()) |program| {
         const host = &program.lir_result.store;
@@ -562,10 +566,11 @@ test "a separate runtime consumer keeps the producer's root order and test-plan 
 
     var runtime = try session.takeRuntime(allocator, requests, target);
     defer runtime.deinit();
-    // One specialization serves both consumers: the runtime consumer
-    // continues the Solved program compile-time evaluation ran in.
-    try std.testing.expectEqual(@as(u32, 1), metrics.monotype_runs);
-    try std.testing.expectEqual(@as(u32, 1), metrics.solved_runs);
+    // Evaluation completed `answer`, so the runtime consumer continues the
+    // program specialized again from its stored value, keeping the
+    // producer's root order and test-plan metadata just the same.
+    try std.testing.expectEqual(@as(u32, 2), metrics.monotype_runs);
+    try std.testing.expectEqual(@as(u32, 2), metrics.solved_runs);
     try std.testing.expectEqual(@as(usize, 2), runtime.lir_result.root_metadata.items.len);
     for (expects.items, plan_metadata.items, runtime.lir_result.root_metadata.items) |request, declared, metadata| {
         try std.testing.expectEqual(request.order, metadata.order);

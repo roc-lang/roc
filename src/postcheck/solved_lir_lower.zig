@@ -5793,6 +5793,15 @@ const Lowerer = struct {
             if (values.constructionFor(root.module, root.root, layout_idx)) |construction| {
                 if (try self.lowerConstructionInto(where, target, construction, next)) |built| return built;
             }
+            // A string too short for target storage is its literal, as a
+            // read restoring the stored string lowers.
+            if (layout_idx == .str) if (values.shortStringFor(root.module, root.root)) |bytes| {
+                return try self.result.store.addCFStmt(.{ .assign_literal = .{
+                    .target = target,
+                    .value = .{ .str_literal = try self.result.store.insertStringView(bytes, 0, @intCast(bytes.len)) },
+                    .next = next,
+                } }, where.source());
+            };
         }
         const id = try self.comptimeValueSlot(root, ty, layout_idx);
         // A list of copies keeps its slot and also names its fresh form and

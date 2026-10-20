@@ -1814,9 +1814,10 @@ no ownership transfers. The pass extends each affected procedure's sorted frame
 local inventory and recomputes its stack-probe requirement. Backends consume
 only these explicit ordinary LIR operations.
 
-A runtime program continued from the shared producer program after the
-compile-time consumer completed, rather than reusing that consumer's own
-program, receives the completed values in two forms. Its lowering carries the host's completed
+A program continued from the shared producer program after a compile-time
+consumer completed, rather than reusing that consumer's own program (a later
+evaluation level, or a runtime program reading completed literal roots),
+receives the completed values in two forms. Its lowering carries the host's completed
 successful scalar roots, decoded from the host's frozen image and keyed by
 checked root identity as transcoding matches slots, and emits each such read
 as the scalar literal rather than a slot read, so range proving, loop
@@ -1835,7 +1836,13 @@ keeps each empty list's evaluated capacity on the root's export, keyed by
 its byte offset within the image, and the runtime rebuilds the request so
 the first append goes in place. A list with items keeps its slot however
 uniform its contents, so the constructions are the scalars, the empty
-string, the empty list, and records, tuples and tags of those. A list of
+string, the empty list, and records, tuples and tags of those. A completed
+string shorter than three target words, the threshold below which a
+restored string needs no target storage, lowers as its literal, as a read
+restoring the stored string does, so a procedure's code is the same whether
+it reads the string completed or restored. A restored string is its own
+bytes, never a view into a longer stored backing, so whether it needs
+target storage depends on the string alone. A list of
 copies of one construction—what `List.repeat` and a constant fill loop
 complete to—additionally names, on each read, the argument-free procedure
 that builds the same list fresh (`assign_literal.fresh_alternative`), and
@@ -1956,8 +1963,11 @@ no LSS runtime consumer continues that program, as in `roc check`, the
 program roots in that union are discovery roots and only the bodies that can
 register a literal root are specialized (see "Demand-Driven Compile-Time
 Specialization" below). An
-LSS runtime consumer continues that program and borrows it: none copies it,
-none reruns any of those stages, and callable correspondence compares ids
+LSS runtime consumer continues that program and borrows it, unless the
+evaluation completed a compile-time root the program demands, when it
+continues the program specialized again from the stored values instead
+(see "Runtime Programs Read Stored Values"): none copies it,
+none reruns any of those stages for it, and callable correspondence compares ids
 from one producer domain, never ids allocated by separate solver runs. A
 consumer continuing it chooses its target width, the explicitly shared
 expect consumer mode, its LIR policy, and the completed compile-time values
@@ -6318,8 +6328,10 @@ Every live literal-origin record leaves checking with one explicit resolution:
   dispatch-call lowering and unwraps the result once. Its checked result type,
   shared value slot, and stored constant all describe the validated `Ok` payload.
   `Err` lowers to a `literal_rejected` terminal carrying the literal's source site.
-  Every use restores the root's stored payload, or, while its module is
-  still finalizing, reads the root's declared compile-time value. A root no
+  Every use restores the root's stored payload, or, in a program lowered
+  before the root has completed, reads the root's declared compile-time
+  value; a runtime program always restores it (see "Runtime Programs Read
+  Stored Values"). A root no
   evaluation requests (its type holds a callable, so the root is
   specialization-owned) is hoisted per program instead, as a literal root
   (see `specialization_dispatch` below). No use re-runs the conversion. A root whose conversion returns `Err` records the
@@ -22948,8 +22960,40 @@ are zero-sized; its source template or layout alone cannot identify which member
 was evaluated. Solved LIR lowering records `FrozenCallableContext` alongside the frozen
 Monotype function and generated worker identity. Transcoding consumes that
 complete identity and requires one exact target member. These identities are
-positions in one Solved program, which is why every LSS runtime consumer
-continues evaluation's Solved program rather than preparing its own.
+positions in one Solved program, which is why an LSS runtime consumer reads
+completed literal roots only from the Solved program that evaluated them,
+continuing that program rather than preparing its own.
+
+### Runtime Programs Read Stored Values
+
+A build's executable is a function of its source, its command line, and its
+optimization state; whether the checked module cache already held a
+module's compile-time values is none of these. A compilation that evaluates
+a compile-time root stores the completed value in its module's constant
+store, which is exactly where a later compilation finding the module in the
+checked cache reads it from, so the runtime program reads every completed
+compile-time root from there in both: each use restores the stored value as
+a constant (static data named by content, a short string as its literal, a
+construction as its parts), and no runtime program declares a slot, a
+failure record, or a guard for a compile-time root that completed.
+
+The point at which this holds is explicit: the end of the program's
+evaluation (`finalizeProgram`). The specialization evaluation made declared
+each pending root's read as a slot read, because the value did not exist
+yet, so when that evaluation completed any compile-time root the program
+demands, its Solved program is not the one a runtime consumer continues.
+The program is specialized again from the checked modules, now holding
+every demanded value stored, exactly as a compilation that found them all
+in the cache specializes it (`ProgramSession.RuntimeStages.respecialized`).
+That specialization demands no compile-time root; it registers the
+program's literal roots again and evaluates them, and their outcomes, which
+the first evaluation already reported, report nowhere. A literal root is
+not stored by any compilation, so both kinds of compilation read literal
+roots' completed values from the stages that evaluated them, the same way.
+The evaluation's own stages, with their specializations' compile-time
+reads, are what the compile-time object pack publishes. A compilation that
+evaluated no compile-time root its program demands continues its one
+specialization, which is already that program.
 
 ### Dependency-Ordered Compile-Time Evaluation
 
@@ -22973,14 +23017,14 @@ dictionary call, comparison, hash, inspection, or adaptation is a value call
 that may run any of the program's Boxy workers.
 
 Each level is lowered as its own consumer of the Solved program once every
-level before it has run, so its code is lowered the way a build lowers code
-after evaluation: a completed value that lowers as a construction is
+level before it has run: a completed value that lowers as a construction is
 folded, any other completed value is read from a slot whose frozen bytes are
 transcoded from the stage that evaluated it (`CompletedStages`), and only a
 read of a value that failed is guarded. A read of a value the level evaluates
 itself, which only a group that reads itself makes, keeps its guard. The
 stages' programs and their frozen values are retained until the runtime
-consumer, which reads every completed value the same way, has been lowered.
+consumer has been lowered; a runtime consumer reads them only for literal
+roots (see "Runtime Programs Read Stored Values").
 
 Producers are grouped into the strongly connected groups of that graph, and
 each group gets a level one past the deepest level it reads. The roots of one

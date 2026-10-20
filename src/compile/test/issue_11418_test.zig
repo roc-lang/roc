@@ -115,8 +115,12 @@ test "issue 11418: shared LIR generation leaves runtime-only procedures to the r
     const session = &coord.program_session.?;
     try std.testing.expect(session.completed != null);
     try std.testing.expect(session.runtime_prepared != null);
-    try std.testing.expectEqual(@as(u32, 1), metrics.monotype_runs);
-    try std.testing.expectEqual(@as(u32, 1), metrics.solved_runs);
+    // Evaluation completed `Helper.answer`, so the runtime program is
+    // specialized again from its stored value (design.md "Runtime Programs
+    // Read Stored Values").
+    try std.testing.expect(session.runtime_stages == .respecialized);
+    try std.testing.expectEqual(@as(u32, 2), metrics.monotype_runs);
+    try std.testing.expectEqual(@as(u32, 2), metrics.solved_runs);
 
     var runtime = try session.takeRuntime(allocator, session.runtime_roots, target);
     defer runtime.deinit();
@@ -125,10 +129,10 @@ test "issue 11418: shared LIR generation leaves runtime-only procedures to the r
     for ([_][]const u8{ "runtime_only_a", "runtime_only_b" }) |name| {
         try std.testing.expectEqual(@as(usize, 1), countNamedProcs(&runtime.lir_result.store, name));
     }
-    // One specialization serves both consumers: the runtime consumer
-    // continues the Solved program compile-time evaluation ran in.
-    try std.testing.expectEqual(@as(u32, 1), metrics.monotype_runs);
-    try std.testing.expectEqual(@as(u32, 1), metrics.solved_runs);
+    // The runtime consumer continues the second specialization and runs no
+    // stage of its own.
+    try std.testing.expectEqual(@as(u32, 2), metrics.monotype_runs);
+    try std.testing.expectEqual(@as(u32, 2), metrics.solved_runs);
     for (session.completed.?.programs()) |program| {
         const host_store = &program.lir_result.store;
         const runtime_only_count = countNamedProcs(host_store, "runtime_only_a") + countNamedProcs(host_store, "runtime_only_b");

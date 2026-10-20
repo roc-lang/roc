@@ -161,6 +161,11 @@ pub const CompletedScalarValues = struct {
     /// The completed successful roots that are lists of copies of one
     /// construction, keyed like `entries`.
     uniform_lists: UniformMap,
+    /// The completed successful roots whose value is a string too short to
+    /// need target storage (`Common.StaticDataStorage.needsTargetStorage`),
+    /// with its bytes: a read lowers as the string's literal, exactly as a
+    /// read restoring the stored string does.
+    short_strings: StrMap,
     /// Owns the nested constructions the entries point into.
     arena: collections.SingleThreadArena,
 
@@ -184,10 +189,11 @@ pub const CompletedScalarValues = struct {
 
     const Map = std.HashMapUnmanaged(Key, Construction, Context, std.hash_map.default_max_load_percentage);
     const UniformMap = std.HashMapUnmanaged(Key, UniformList, Context, std.hash_map.default_max_load_percentage);
+    const StrMap = std.HashMapUnmanaged(Key, []const u8, Context, std.hash_map.default_max_load_percentage);
 
     /// No completed values yet.
     pub fn initEmpty(allocator: Allocator) CompletedScalarValues {
-        return .{ .entries = .empty, .uniform_lists = .empty, .arena = collections.SingleThreadArena.init(allocator) };
+        return .{ .entries = .empty, .uniform_lists = .empty, .short_strings = .empty, .arena = collections.SingleThreadArena.init(allocator) };
     }
 
     /// Collects every completed successful root of `program` whose frozen
@@ -218,6 +224,10 @@ pub const CompletedScalarValues = struct {
             if (!slotSucceeded(program, frozen, slot)) continue;
             const data_export = exportOf(frozen, slot) orelse continue;
             const key = Key{ .module = root.module, .root = root.root };
+            if (decoder.decodeShortString(data_export, data_export.bytes[data_export.symbol_offset..], data_export.symbol_offset, root.role.value.plan, entry.layout_idx)) |bytes| {
+                try self.short_strings.put(allocator, key, try self.arena.allocator().dupe(u8, bytes));
+                continue;
+            }
             const construction = try decoder.decode(data_export, data_export.bytes[data_export.symbol_offset..], data_export.symbol_offset, root.role.value.plan, entry.layout_idx) orelse {
                 if (try decoder.decodeUniformList(data_export, data_export.bytes[data_export.symbol_offset..], data_export.symbol_offset, root.role.value.plan, entry.layout_idx)) |uniform| {
                     try self.uniform_lists.put(allocator, key, uniform);
@@ -231,7 +241,13 @@ pub const CompletedScalarValues = struct {
     pub fn deinit(self: *CompletedScalarValues, allocator: Allocator) void {
         self.entries.deinit(allocator);
         self.uniform_lists.deinit(allocator);
+        self.short_strings.deinit(allocator);
         self.arena.deinit();
+    }
+
+    /// The bytes of the short string a root completed to, when it did.
+    pub fn shortStringFor(self: *const CompletedScalarValues, module: checked.ModuleId, root: LIR.ComptimeProducer) ?[]const u8 {
+        return self.short_strings.get(.{ .module = module, .root = root });
     }
 
     /// The list of copies a root completed to, when it did.
@@ -555,6 +571,45 @@ pub const Decoder = struct {
                 .pending, .layout_only, .box, .boxy_box, .fn_value, .erased_fn => .{ .done = null },
             };
         }
+    }
+
+    /// The bytes of a non-empty string value shorter than three target
+    /// words, the target storage threshold of
+    /// `Common.StaticDataStorage.needsTargetStorage`; null for any other
+    /// value. A small string holds its bytes in its descriptor; any other
+    /// string's bytes live behind the descriptor's first-word relocation,
+    /// past the backing's allocation header, which the relocation's addend
+    /// skips.
+    pub fn decodeShortString(self: *Decoder, data_export: *const Program.StaticDataExport, bytes: []const u8, offset: usize, plan_id: Program.ConstPlanId, layout_idx: layout.Idx) ?[]const u8 {
+        var plan = self.program.const_plans.items[@backingInt(plan_id)];
+        while (plan == .named) plan = self.program.const_plans.items[@backingInt(plan.named.backing)];
+        switch (plan) {
+            .str => {},
+            .zst, .scalar, .list, .named, .tuple, .record, .tag_union, .pending, .layout_only, .box, .boxy_box, .fn_value, .erased_fn => return null,
+        }
+        if (layout_idx != .str) return null;
+        const size = self.word();
+        if (bytes.len < 3 * size) return null;
+        const length_word = self.readWord(bytes, 2) orelse return null;
+        const small = switch (size) {
+            4 => @as(i32, @bitCast(@as(u32, @intCast(length_word)))) < 0,
+            8 => @as(i64, @bitCast(length_word)) < 0,
+            else => return null,
+        };
+        if (small) {
+            const len = bytes[3 * size - 1] & 0x7f;
+            if (len == 0) return null;
+            return bytes[0..len];
+        }
+        if (length_word == 0 or length_word >= 3 * size) return null;
+        const len: usize = @intCast(length_word);
+        const frozen = self.frozen orelse return null;
+        const relocation = relocationAt(data_export, offset) orelse return null;
+        const backing = exportNamed(frozen, relocation.target_symbol_name) orelse return null;
+        if (relocation.addend < 0) return null;
+        const start = backing.symbol_offset + @as(usize, @intCast(relocation.addend));
+        if (start > backing.bytes.len or backing.bytes.len - start < len) return null;
+        return backing.bytes[start..][0..len];
     }
 
     fn word(self: *const Decoder) usize {

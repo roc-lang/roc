@@ -4976,8 +4976,11 @@ const StaticDataUse = struct {
     ty: Type.TypeId,
 };
 
+/// A restored string lowers as its own bytes (see `finishConstAtNode`), so
+/// whether it needs target storage is a function of the string alone, as it
+/// is for a string read from a completed evaluation.
 fn constStringBackingLength(view: ModuleView, str: check.ConstStore.ConstStr) u64 {
-    return @max(view.const_store.strBytes(str).len, view.const_store.blobData(str.data).len);
+    return view.const_store.strBytes(str).len;
 }
 
 fn constStaticDataStorage(view: ModuleView, node: checked.ConstNodeId) Common.StaticDataStorage {
@@ -46880,8 +46883,8 @@ const BodyContext = struct {
                     .zst => .unit,
                     .scalar => |scalar| restoreScalar(BodyExprData, scalar),
                     .str => |str| .{ .str_lit = try self.addStringView(
-                        store_view.const_store.blobData(str.data),
-                        str.offset,
+                        store_view.const_store.strBytes(str),
+                        0,
                         str.len,
                     ) },
                     .crash => |str| .{ .crash = try self.addStringView(
@@ -67988,8 +67991,8 @@ fn constRestoreData(
         .zst => .unit,
         .scalar => |scalar| restoreScalar(@TypeOf(restorer.*).ConstExprData, scalar),
         .str => |str| .{ .str_lit = try emit.addStringView(
-            store_view.const_store.blobData(str.data),
-            str.offset,
+            store_view.const_store.strBytes(str),
+            0,
             str.len,
         ) },
         .crash => |str| .{ .crash = try emit.addStringView(

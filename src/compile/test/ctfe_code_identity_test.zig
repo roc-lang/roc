@@ -10,6 +10,8 @@ const backend = @import("backend");
 const eval = @import("eval");
 const lir = @import("lir");
 const roc_target = @import("roc_target");
+const check = @import("check");
+const static_data_exports = @import("static_data");
 const CoreCtx = @import("ctx").CoreCtx;
 const Coordinator = @import("../coordinator.zig").Coordinator;
 const is_freestanding = @import("../threading.zig").is_freestanding;
@@ -167,13 +169,25 @@ test "every procedure compile-time evaluation shares with a dev build is the bui
 
     var runtime = try session.takeRuntime(allocator, session.runtime_roots, coord.runtime_lowering.?.target);
     defer runtime.deinit();
+    // The build links the runtime program's materialized static data.
+    const root = coord.executableRootCheckedArtifact();
+    const imports = try coord.collectImportedArtifactViews(arena.allocator(), root);
+    const relations = try coord.collectRelationArtifactViews(arena.allocator(), root);
+    const image = try static_data_exports.buildStaticData(
+        allocator,
+        .{ .root = check.CheckedArtifact.loweringViewWithRelations(root, relations), .imports = imports },
+        &runtime,
+        roc_target.RocTarget.detectNative(),
+        .{ .include_provided_exports = true },
+    );
+    defer static_data_exports.deinitStaticData(allocator, image);
     var compiler = backend.ObjectFileCompiler.initForPack(allocator);
     compiler.emit_object = false;
     var compiled = try compiler.compileToObjectFile(
         &runtime.lir_result.store,
         &runtime.lir_result.layouts,
         &.{},
-        if (runtime.frozen_static_data) |frozen| frozen.exports else &.{},
+        image,
         runtime.lir_result.store.getProcSpecs(),
         runtime.lir_result.boxy_erased_arg_desc_offsets.items,
         runtime.lir_result.boxy_erased_arg_desc_params.items,
