@@ -2049,9 +2049,15 @@ pub const Coordinator = struct {
     /// example as a dependent of an import cycle) has no checked artifact, so
     /// the build has no program; every checked module still finishes its
     /// independent compile-time work and every report is still emitted.
-    fn appRootChecked(self: *Coordinator) bool {
+    pub fn appRootChecked(self: *Coordinator) bool {
         const app_root = self.findRootModule(.app) orelse self.findRootModule(.default_app) orelse return false;
         return app_root.mod.checkedArtifact() != null;
+    }
+
+    /// Whether a package's root module is an app or default app whose
+    /// module environment exists.
+    pub fn hasAppRoot(self: *Coordinator) bool {
+        return self.findRootModule(.app) != null or self.findRootModule(.default_app) != null;
     }
 
     fn prepareExecutableArtifacts(self: *Coordinator) compile_package.PublishError!void {

@@ -6872,6 +6872,7 @@ fn lowerDiscoveredLir(
     };
 
     const counts = try renderDrainedBuildEnvReports(ctx, build_env, display_path);
+    if (counts.errors == 0) try preparePackageDevPacks(ctx, build_env, if (object_cache) |cache| &cache.packs else null);
     const watch_inputs = try build_env.collectWatchInputStates();
     errdefer compile.watch_inputs.deinit(ctx.gpa, watch_inputs);
 
@@ -8322,7 +8323,7 @@ fn writePackObjects(
             };
             continue;
         }
-        var pack = try compileModulePack(ctx, build_env, root_artifact, app_imports, app_relations, artifact, roots, args, target);
+        var pack = try compileModulePack(ctx, build_env, root_artifact, app_imports, app_relations, artifact, roots, args.opt, currentRuntimeSpecializationStrategy(args.specialization_strategy), target);
         defer pack.deinit();
         backend.writeFileWindowsAvSafe(ctx.io.std_io, object_path, pack.compiled.object_bytes) catch {
             return error.NativeCompilationFailed;
@@ -8432,11 +8433,12 @@ fn compileModulePack(
     app_relations: []const check.CheckedArtifact.ImportedModuleView,
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     roots: []const check.CheckedArtifact.RootRequest,
-    args: cli_args.BuildArgs,
+    opt: cli_args.OptLevel,
+    specialization_strategy: base.SpecializationStrategy,
     target: RocTarget,
 ) CliMainError!ModulePack {
     const module_name = artifact.canonical_names.moduleNameText(artifact.module_identity.module_name);
-    const pack = try lowerModulePack(ctx, build_env, root_artifact, app_imports, app_relations, artifact, roots, args.opt, currentRuntimeSpecializationStrategy(args.specialization_strategy), target);
+    const pack = try lowerModulePack(ctx, build_env, root_artifact, app_imports, app_relations, artifact, roots, opt, specialization_strategy, target);
     var lowered = pack.lowered;
     errdefer lowered.deinit();
     const static_data_exports = pack.static_data_exports;
@@ -8459,6 +8461,99 @@ fn compileModulePack(
         return error.NativeCompilationFailed;
     };
     return .{ .allocator = ctx.gpa, .lowered = lowered, .static_data_exports = static_data_exports, .compiled = compiled };
+}
+
+/// Resolution has selected the final package versions and checking has
+/// published their constants. Prepare their host dev packs even when this
+/// command only checks the app, so its first build need not compile a pack
+/// program for each package module. Missing or evicted packs are rebuilt.
+fn preparePackageDevPacks(ctx: *CliCtx, build_env: *BuildEnv, runtime_packs: ?*pack_store.LoadedPacks) (Allocator.Error || error{NativeCompilationFailed})!void {
+    if (comptime !backend.host_lir_codegen_available) return;
+    const owner = build_env.compile_time_object_cache_owner orelse return tracePackageDevPacksSkipped("no object cache");
+    if (!build_env.executable_artifacts_finalized) {
+        if (devDiagnosticEnv("ROC_PACK_TRACE") != null) {
+            const checked_program = if (build_env.coordinator) |coord| coord.hasCheckedProgram() else false;
+            const app_root_found = if (build_env.coordinator) |coord| coord.hasAppRoot() else false;
+            const app_root_checked = if (build_env.coordinator) |coord| coord.appRootChecked() else false;
+            std.debug.print("package dev packs skipped: checked program not finalized (mode={s} deferred={} checked_program={} app_root_found={} app_root_checked={} packages={d})\n", .{ @tagName(build_env.post_check_publication_mode), build_env.defer_post_check, checked_program, app_root_found, app_root_checked, build_env.packages.count() });
+        }
+        return;
+    }
+    const has_url_package = found: {
+        var packages = build_env.packages.valueIterator();
+        while (packages.next()) |package| {
+            if (package.url != null) break :found true;
+        }
+        break :found false;
+    };
+    if (!has_url_package) return tracePackageDevPacksSkipped("no URL package");
+    const cache: *CompileTimeObjectCache = @ptrCast(@alignCast(owner.context));
+    const root_artifact = build_env.executableRootCheckedArtifact();
+    const imports = try build_env.collectImportedArtifactViews(ctx.gpa, root_artifact);
+    defer ctx.gpa.free(imports);
+    const relations = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
+    defer ctx.gpa.free(relations);
+    writePackageDevPacksToStore(ctx, build_env, &cache.store, &cache.packs, runtime_packs, root_artifact, imports, relations) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => {
+            std.log.err("Package dev pack compilation failed: {}", .{err});
+            return error.NativeCompilationFailed;
+        },
+    };
+}
+
+fn tracePackageDevPacksSkipped(reason: []const u8) void {
+    if (devDiagnosticEnv("ROC_PACK_TRACE") != null) std.debug.print("package dev packs skipped: {s}\n", .{reason});
+}
+
+fn writePackageDevPacksToStore(
+    ctx: *CliCtx,
+    build_env: *BuildEnv,
+    store: *const pack_store.Store,
+    offers: *pack_store.LoadedPacks,
+    runtime_packs: ?*pack_store.LoadedPacks,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    imports: []const check.CheckedArtifact.ImportedModuleView,
+    relations: []const check.CheckedArtifact.ImportedModuleView,
+) CliMainError!void {
+    const artifacts = try build_env.collectVisibleArtifacts(ctx.gpa, root_artifact);
+    defer ctx.gpa.free(artifacts);
+    // A direct URL invocation can make the package itself the root.
+    // App packs come from the app's actual program, never a pack program.
+    const app_artifact = if (build_env.getAppSemanticData()) |app| app.checked_artifact else null;
+    for (0..artifacts.len + 1) |index| {
+        const artifact = if (index == artifacts.len) root_artifact else artifacts[index];
+        if (app_artifact) |app| if (std.meta.eql(artifact.key, app.key)) continue;
+        const placement = build_env.packPlacementForArtifactKey(artifact.key) orelse continue;
+        if (devDiagnosticEnv("ROC_PACK_TRACE") != null) {
+            std.debug.print("dev pack candidate {s} ({s})\n", .{ artifact.canonical_names.moduleNameText(artifact.module_identity.module_name), @tagName(placement.origin) });
+        }
+        if (placement.origin != .pkg) continue;
+        if (try store.has(placement.origin, placement.identity, artifact.codeGenerationKey().bytes)) continue;
+        const roots = try lir.PackProgram.closedExportRoots(ctx.gpa, artifact);
+        defer ctx.gpa.free(roots);
+        if (roots.len == 0) continue;
+        if (devDiagnosticEnv("ROC_PACK_TRACE") != null) {
+            std.debug.print("package dev pack {s}\n", .{artifact.canonical_names.moduleNameText(artifact.module_identity.module_name)});
+        }
+        var pack = try compileModulePack(ctx, build_env, root_artifact, imports, relations, artifact, roots, .dev, .lss, RocTarget.detectNative());
+        defer pack.deinit();
+        const set = &pack.compiled.artifacts.?;
+        const bytes = try packFileBytes(ctx.gpa, set, &pack.lowered);
+        defer ctx.gpa.free(bytes);
+        // Offer before filing: a provider whose first lookup happens here
+        // loads the old store, then adds exactly the pack just compiled.
+        for ([_]?*pack_store.LoadedPacks{ offers, runtime_packs }) |maybe_packs| {
+            const packs = maybe_packs orelse continue;
+            packs.offerPack(bytes) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.NativeCompilationFailed,
+            };
+        }
+        store.write(placement.origin, placement.identity, artifact.codeGenerationKey().bytes, bytes) catch |err| {
+            std.log.warn("object cache could not store a package's dev pack: {}", .{err});
+        };
+    }
 }
 
 /// Write this build's packs into the object cache: the root module's pack
@@ -8532,7 +8627,7 @@ fn writePacksToStore(
         if (devDiagnosticEnv("ROC_PACK_TRACE") != null) {
             std.debug.print("module pack {s}\n", .{artifact.canonical_names.moduleNameText(artifact.module_identity.module_name)});
         }
-        var pack = try compileModulePack(ctx, build_env, root_artifact, app_imports, app_relations, artifact, roots, args, target);
+        var pack = try compileModulePack(ctx, build_env, root_artifact, app_imports, app_relations, artifact, roots, args.opt, currentRuntimeSpecializationStrategy(args.specialization_strategy), target);
         defer pack.deinit();
         const set = &(pack.compiled.artifacts orelse continue);
         const bytes = try packFileBytes(ctx.gpa, set, &pack.lowered);
@@ -10988,6 +11083,7 @@ fn typeCheckBuildCommand(
     try finishFrontEndPhase(ctx.arena, ctx.reportConfig(.stderr), reporter, build_env.getTimingInfo());
 
     const diag = try build_env.renderDiagnostics(ctx.io.stderr(), ctx.reportConfig(.stderr));
+    if (diag.errors == 0) try preparePackageDevPacks(ctx, build_env, null);
     const total_warning_count = diag.warnings + try optimizedDbgWarningsForBuild(ctx, build_env, args.opt);
     const resolved_targets_config = build_env.getPlatformTargetsConfig() orelse {
         try renderProblem(ctx, .{
@@ -18379,7 +18475,10 @@ fn collectCheckResult(
             if (report.severity.isError()) error_count += 1 else warning_count += 1;
         }
     }
-    if (error_count == 0) try publishCompileTimePack(ctx, build_env);
+    if (error_count == 0) {
+        try publishCompileTimePack(ctx, build_env);
+        try preparePackageDevPacks(ctx, build_env, null);
+    }
 
     var reports = try ctx.gpa.alloc(DrainedReport, drained.len);
     for (drained, 0..) |mod, i| {
