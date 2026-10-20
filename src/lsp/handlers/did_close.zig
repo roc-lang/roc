@@ -4,8 +4,8 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 /// Handler for `textDocument/didClose` notifications. A closed document's
-/// truth is the file on disk again, so the server drops its stored text and
-/// what the syntax driver kept for it.
+/// truth is the file on disk again, so the server drops its stored text, the
+/// client URI that named it, and what the syntax driver kept for it.
 pub fn handler(comptime ServerType: type) type {
     return struct {
         pub fn call(self: *ServerType, params_value: ?std.json.Value) (Allocator.Error || error{WriteFailed})!void {
@@ -22,6 +22,7 @@ pub fn handler(comptime ServerType: type) type {
             const uri = uri_value.string;
 
             self.doc_store.remove(uri);
+            self.syntax_checker.closeDocument(uri);
             try self.syntax_checker.forget(uri);
         }
     };

@@ -401,7 +401,7 @@ test "server tracks documents on didOpen/didChange" {
     try std.testing.expectEqual(@as(i64, 2), doc.version);
 }
 
-test "server forgets a document on didClose" {
+test "server forgets documents on didClose" {
     const allocator = std.testing.allocator;
     const file_uri = "file:///tmp/closed.roc";
 
@@ -427,9 +427,11 @@ test "server forgets a document on didClose" {
     try server.run();
 
     try std.testing.expect(server.getDocumentForTesting(file_uri) == null);
+    try std.testing.expectEqual(@as(usize, 1), server.syntax_checker.close_calls);
     try std.testing.expectEqual(@as(usize, 1), server.syntax_checker.forget_calls);
 }
 
+||||||| bd1cfe509d
 test "server applies sequential incremental changes in a single didChange" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
