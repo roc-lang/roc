@@ -162,6 +162,13 @@ pub const SemanticModuleData = struct {
     checked_artifact: ?*const CheckedArtifact.CheckedModuleArtifact,
 };
 
+/// Output of a module that completed successfully, which always includes its
+/// checked artifact.
+pub const CheckedModuleData = struct {
+    env: *ModuleEnv,
+    checked_artifact: *const CheckedArtifact.CheckedModuleArtifact,
+};
+
 /// Owned output from type checking before the coordinator takes publication.
 pub const TypeCheckOutput = struct {
     checker: Check,
