@@ -21374,7 +21374,11 @@ use (otherwise the callee holds a retained copy). The signature bits and
 rows settle to a fixpoint with the analysis, since a new row only adds
 edges. One settlement retains the immutable statement inventory, control-flow
 topology, and exact ordered-use answers while rebuilding signature-dependent
-lattice state when its inputs change. Procedures sharing reachable statement
+lattice state when its inputs change. The topology's read, definition, and
+predecessor row tables depend only on the statement inventory and the jump
+targets, so with several worker lanes they are built as one executor session
+of three tasks; each table belongs to the output allocator of the lane that
+built it. Procedures sharing reachable statement
 identities or ownership-relevant locals form one analysis component, preserving
 the base solver's combined definition and use constraints. Direct calls establish
 directed signature dependencies between components rather than merging a call
