@@ -1,12 +1,12 @@
 //! Checked modules to Monotype IR.
 
 const std = @import("std");
-const build_options = @import("build_options");
 const TypeDigestHasher = @import("base").TypeDigestHasher;
 const check = @import("check");
 const can = @import("can");
 const builtins = @import("builtins");
 const base = @import("base");
+const dev_diagnostics = base.dev_diagnostics;
 const collections = @import("collections");
 
 const Common = @import("../common.zig");
@@ -5548,6 +5548,7 @@ const Builder = struct {
 
     const SourceFileSeed = struct {
         key: checked.ModuleId,
+        module_identity: [32]u8,
         name: []const u8,
         qualified_name: []const u8,
 
@@ -5594,6 +5595,7 @@ const Builder = struct {
         gop.value_ptr.* = @intCast(seeds.items.len);
         seeds.appendAssumeCapacity(.{
             .key = view.key,
+            .module_identity = view.module_identity.stable_hash,
             .name = view.module_env.module_name,
             .qualified_name = view.module_env.qualifiedModuleName(),
         });
@@ -5622,7 +5624,7 @@ const Builder = struct {
             const id = try self.program.addSourceFile(.{
                 .name = seed.name,
                 .qualified_name = seed.qualified_name,
-                .module_identity = seed.key.module_identity_hash,
+                .module_identity = seed.module_identity,
             });
             if (id != index) Common.invariant("Monotype program source file id did not match its sorted position");
             self.source_file_ids.getPtr(seed.key.bytes).?.* = id;
@@ -8153,7 +8155,7 @@ const Builder = struct {
             const key = Ast.specIdentityKey(spec_identity);
             fn_template.spec_key = key;
             if (template.provided_low_level) |op| fn_template.procedure_keyed_by_layout = op.procedureKeyedByLayout();
-            if (pack_trace_available and specCensusEnabled()) {
+            if (dev_diagnostics.isSet(.spec_census)) {
                 const proc_base = view.names.procBase(template_ref.proc_base);
                 const name: []const u8 = if (proc_base.export_name) |e| view.names.exportNameText(e) else "?";
                 std.debug.print("CENSUS_KEY\t{s}\t{x}\tev={x}\tcodec={x}\treq={x}\tcallable={s}\n", .{ name, key.bytes[0..8], spec_identity.evidence_digest.bytes[0..6], spec_identity.codec_contract_digest.bytes[0..6], spec_identity.request_fn_ty_digest.bytes[0..6], @tagName(spec_identity.callable) });
@@ -8162,8 +8164,8 @@ const Builder = struct {
                 if (cache.lookup(key.bytes, self.spec_cache_takes)) |hit| {
                     fn_template.cached = hit;
                     self.count("spec_cache_hits");
-                    if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup monotype key={x} hit\n", .{key.bytes[0..8]});
-                } else if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup monotype key={x} miss\n", .{key.bytes[0..8]});
+                    if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("lookup monotype key={x} hit\n", .{key.bytes[0..8]});
+                } else if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("lookup monotype key={x} miss\n", .{key.bytes[0..8]});
             }
         }
         if (stored_source_topology) |stored_evidence| {
@@ -68380,34 +68382,6 @@ fn dispatchPlanIdForRuntimeExpr(view: ModuleView, expr_id: checked.CheckedExprId
     const plan_raw = @backingInt(plan_id);
     if (plan_raw >= view.static_dispatch_plans.plans.len) Common.invariant("stored serialization dispatch plan is outside plan table");
     return plan_id;
-}
-
-/// Builds without libc (the playground) and compilers built without
-/// developer diagnostics never read the environment and compile no trace
-/// output.
-const pack_trace_available = @import("builtin").link_libc and build_options.dev_diagnostics;
-
-/// `ROC_PACK_TRACE` is set: print every object cache lookup.
-fn packTraceEnabled() bool {
-    return std.c.getenv("ROC_PACK_TRACE") != null;
-}
-
-/// `ROC_SPEC_CENSUS` is set: print every closed specialization key. Closed
-/// requests are frequent on every lane, so the environment is read once per
-/// process instead of scanned per request.
-fn specCensusEnabled() bool {
-    const State = struct {
-        /// 0 = not yet read, 1 = unset, 2 = set.
-        var value: std.atomic.Value(u8) = .init(0);
-    };
-    switch (State.value.load(.acquire)) {
-        1 => return false,
-        2 => return true,
-        else => {},
-    }
-    const enabled = std.c.getenv("ROC_SPEC_CENSUS") != null;
-    State.value.store(if (enabled) 2 else 1, .release);
-    return enabled;
 }
 
 fn moduleDigestFromId(key: checked.ModuleId) names.CheckedModuleDigest {

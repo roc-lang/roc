@@ -54,6 +54,7 @@ const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
 const Can = can.Can;
 const SemanticModuleData = compile_package.SemanticModuleData;
+const CheckedModuleData = compile_package.CheckedModuleData;
 const ModuleTimingInfo = compile_package.TimingInfo;
 const CacheManager = @import("cache_manager.zig").CacheManager;
 const package_source = @import("package_source.zig");
@@ -262,8 +263,8 @@ pub const BuildEnv = struct {
     /// Whether executable artifacts were published for this build. User
     /// diagnostics do not change this: checked recovery nodes remain valid
     /// lowering input and crash only if execution reaches them. A build whose
-    /// app root never finished checking (for example because it depends on an
-    /// import cycle) has no program to publish.
+    /// app root never finished checking (for example because it depends on a
+    /// module whose source was rejected) has no program to publish.
     executable_artifacts_finalized: bool = false,
 
     /// Post-canonicalization validation of the module this build was pointed
@@ -2747,7 +2748,7 @@ pub const BuildEnv = struct {
     pub const PublicModuleInfo = struct {
         name: []const u8,
         path: []const u8,
-        semantic: SemanticModuleData,
+        checked: CheckedModuleData,
         package_name: []const u8,
         /// Root-owned names to retain when extracting documentation.
         docs_exposed_names: ?[]const []const u8 = null,
@@ -2965,6 +2966,8 @@ pub const BuildEnv = struct {
 
     /// Resolve the root package or platform's explicit public module list to
     /// completed compiler outputs. Dependency modules are deliberately absent.
+    /// Callers query only builds without error reports, in which every module
+    /// completed successfully.
     pub fn getPublicRootModules(self: *BuildEnv, allocator: Allocator) Allocator.Error![]PublicModuleInfo {
         const root_name = self.discovered_pkg_name orelse {
             base.invariant("build env invariant violated: public modules requested before dependency discovery", .{});
@@ -3000,9 +3003,9 @@ pub const BuildEnv = struct {
                 );
             };
             const module_state = root_coord_pkg.getModule(module_id).?;
-            const module_data = module_state.semanticData() orelse {
+            const module_data = module_state.checkedModule() orelse {
                 base.invariant(
-                    "build env invariant violated: public module '{s}' has no completed compiler output",
+                    "build env invariant violated: public module '{s}' did not complete successfully",
                     .{module_name},
                 );
             };
@@ -3019,7 +3022,7 @@ pub const BuildEnv = struct {
             try public_modules.append(allocator, .{
                 .name = module_name,
                 .path = module_state.path,
-                .semantic = module_data,
+                .checked = module_data,
                 .package_name = root_name,
                 .public_order = @intCast(public_index),
                 .public_type_decl = public_type_decl,
@@ -3029,9 +3032,10 @@ pub const BuildEnv = struct {
         return public_modules.toOwnedSlice(allocator);
     }
 
-    /// Return every compiled public module view in the resolved package graph.
-    /// Consumers use the public spelling here instead of exposing private
-    /// source-module names; type views additionally carry their exact root.
+    /// Return every successfully compiled public module view in the resolved
+    /// package graph. Consumers use the public spelling here instead of
+    /// exposing private source-module names; type views additionally carry
+    /// their exact root.
     pub fn getCompiledPublicModules(self: *BuildEnv, allocator: Allocator) Allocator.Error![]PublicModuleInfo {
         const coord = self.coordinator orelse {
             base.invariant("build env invariant violated: public modules requested before coordinator initialization", .{});
@@ -3049,7 +3053,7 @@ pub const BuildEnv = struct {
             for (package.public_surface.modules.items, 0..) |public_module, public_index| {
                 const module_id = coord_package.getPublicModuleId(public_module.name) orelse continue;
                 const module_state = coord_package.getModule(module_id) orelse continue;
-                const semantic = module_state.semanticData() orelse continue;
+                const checked = module_state.checkedModule() orelse continue;
                 const public_target = coord_package.getPublicModuleTarget(public_module.name) orelse unreachable;
                 const source_decl: ?CIR.Statement.Idx = switch (public_target.selection) {
                     .type_decl => |statement| statement,
@@ -3063,7 +3067,7 @@ pub const BuildEnv = struct {
                 try public_modules.append(allocator, .{
                     .name = public_module.name,
                     .path = module_state.path,
-                    .semantic = semantic,
+                    .checked = checked,
                     .package_name = package_name,
                     .public_type_decl = source_decl,
                     .public_order = @intCast(public_index),
@@ -3076,7 +3080,9 @@ pub const BuildEnv = struct {
 
     /// Return the compiled modules that belong in generated documentation.
     /// Package roots use their public modules. Platform roots additionally use
-    /// their root module when the header exposes root-owned names.
+    /// their root module when the header exposes root-owned names. Callers
+    /// query only builds without error reports, in which every module
+    /// completed successfully.
     pub fn getDocumentationModules(self: *BuildEnv, allocator: Allocator) Allocator.Error![]PublicModuleInfo {
         const root_name = self.discovered_pkg_name orelse {
             base.invariant("build env invariant violated: documentation requested before dependency discovery", .{});
@@ -3104,13 +3110,13 @@ pub const BuildEnv = struct {
                 const root_module = self.rootModule(root_name) orelse {
                     base.invariant("build env invariant violated: platform documentation root module is unavailable", .{});
                 };
-                const root_data = root_module.semanticData() orelse {
-                    base.invariant("build env invariant violated: platform documentation root module has no completed compiler output", .{});
+                const root_data = root_module.checkedModule() orelse {
+                    base.invariant("build env invariant violated: platform documentation root module did not complete successfully", .{});
                 };
                 docs_modules.appendAssumeCapacity(.{
                     .name = root_module.name,
                     .path = root_module.path,
-                    .semantic = root_data,
+                    .checked = root_data,
                     .package_name = root_name,
                     .docs_exposed_names = root_pkg.public_surface.root_names.items,
                 });
@@ -3119,8 +3125,12 @@ pub const BuildEnv = struct {
             return docs_modules.toOwnedSlice(allocator);
         }
 
-        const all_modules = try self.getCompiledModules(allocator);
-        defer allocator.free(all_modules);
+        const coord = self.coordinator orelse {
+            base.invariant("build env invariant violated: documentation requested before coordinator initialization", .{});
+        };
+        const root_coord_pkg = coord.packages.get(root_name) orelse {
+            base.invariant("build env invariant violated: documentation root coordinator package is unavailable", .{});
+        };
         const public_modules = try self.getCompiledPublicModules(allocator);
         defer allocator.free(public_modules);
 
@@ -3128,17 +3138,17 @@ pub const BuildEnv = struct {
         errdefer docs_modules.deinit(allocator);
 
         // The root's own compiled modules are its documentation surface.
-        for (all_modules) |mod| {
-            if (!std.mem.eql(u8, mod.package_name, root_name)) continue;
-            switch (mod.semantic.env.module_kind) {
+        for (root_coord_pkg.modules.items) |*mod| {
+            const checked = mod.checkedModule() orelse continue;
+            switch (checked.env.module_kind) {
                 .package, .platform => continue,
                 .type_module, .default_app, .app, .hosted, .module, .malformed => {},
             }
             try docs_modules.append(allocator, .{
                 .name = mod.name,
                 .path = mod.path,
-                .semantic = mod.semantic,
-                .package_name = mod.package_name,
+                .checked = checked,
+                .package_name = root_name,
             });
         }
 
@@ -3410,9 +3420,10 @@ pub const BuildEnv = struct {
 
         var total: usize = 0;
         for (modules) |mod| {
-            // A module that never finished checking (for example, a member of
-            // an import cycle) is not part of any built artifact, and its
-            // canonical tree still holds unresolved import references.
+            // A module that never finished checking (for example, a dependent
+            // of a module whose source was rejected) is not part of any built
+            // artifact, and its canonical tree still holds unresolved import
+            // references.
             if (mod.semantic.checked_artifact == null) continue;
             var regions = std.ArrayList(base.Region).empty;
             defer regions.deinit(self.gpa);

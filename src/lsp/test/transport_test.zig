@@ -130,3 +130,49 @@ test "transport rejects oversized header lines" {
 
     try std.testing.expectError(error.HeaderTooLong, transport.readMessage());
 }
+
+/// Drains like `std.Io.File.Writer` on Windows: a drain with buffered bytes writes only those
+/// and consumes nothing from `data`, which `std.Io.Writer.VTable.drain` allows.
+const BufferFirstWriter = struct {
+    interface: std.Io.Writer,
+    sink: [256]u8 = undefined,
+    sink_len: usize = 0,
+
+    fn init(buffer: []u8) BufferFirstWriter {
+        return .{ .interface = .{ .vtable = &.{ .drain = drain }, .buffer = buffer } };
+    }
+
+    fn drain(w: *std.Io.Writer, data: []const []const u8, splat: usize) std.Io.Writer.Error!usize {
+        const self: *BufferFirstWriter = @alignCast(@fieldParentPtr("interface", w));
+        if (w.end > 0) {
+            self.append(w.buffered());
+            w.end = 0;
+            return 0;
+        }
+        if (data.len == 1 and splat == 0) return 0;
+        self.append(data[0]);
+        return data[0].len;
+    }
+
+    fn append(self: *BufferFirstWriter, bytes: []const u8) void {
+        @memcpy(self.sink[self.sink_len..][0..bytes.len], bytes);
+        self.sink_len += bytes.len;
+    }
+};
+
+test "transport writes a whole message when a write only drains the buffer" {
+    var buffer: [64]u8 = undefined;
+    var transport = transport_module.Transport(std.Io.Reader, BufferFirstWriter).init(
+        std.testing.allocator,
+        std.testing.io,
+        .fixed(""),
+        .init(&buffer),
+        null,
+    );
+    defer transport.deinit();
+
+    // The header fits in the buffer and the payload doesn't, so the payload's first write returns 0.
+    const payload: [100]u8 = @splat('x');
+    try transport.sendBytes(&payload);
+    try std.testing.expectEqualStrings("Content-Length: 100\r\n\r\n" ++ payload, transport.writer.sink[0..transport.writer.sink_len]);
+}
