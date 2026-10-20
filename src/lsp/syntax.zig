@@ -160,6 +160,25 @@ fn contentHash(text: []const u8) [32]u8 {
     return hash;
 }
 
+fn dupeDiagnostics(allocator: Allocator, diagnostics: []const Diagnostics.Diagnostic) Allocator.Error![]Diagnostics.Diagnostic {
+    const copy = try allocator.dupe(Diagnostics.Diagnostic, diagnostics);
+    var copied: usize = 0;
+    errdefer {
+        for (copy[0..copied]) |diag| allocator.free(diag.message);
+        allocator.free(copy);
+    }
+    for (copy) |*diag| {
+        diag.message = try allocator.dupe(u8, diag.message);
+        copied += 1;
+    }
+    return copy;
+}
+
+fn freeDiagnostics(allocator: Allocator, diagnostics: []Diagnostics.Diagnostic) void {
+    for (diagnostics) |diag| allocator.free(diag.message);
+    allocator.free(diagnostics);
+}
+
 fn noteOom(oom: *?Allocator.Error, result: anytype) ?@typeInfo(@TypeOf(result)).error_union.payload {
     return result catch |err| {
         oom.* = err;
@@ -190,6 +209,15 @@ pub const SyntaxChecker = struct {
     /// URIs for which we last published a non-empty diagnostic set. Used to
     /// emit empty clears when those diagnostics are no longer valid.
     published_diagnostic_uris: std.StringHashMapUnmanaged(void) = .{},
+    /// Each checked URI of an open document, exactly as the client spelled it,
+    /// mapped to the absolute path the build knows that document's module by.
+    /// Diagnostics and locations for a path go to the client under these URIs:
+    /// a URI rebuilt from the path can spell the same file differently (percent
+    /// encoding, drive-letter case, a symlinked directory), and the client keys
+    /// its documents by the exact string. Kept in check order, so the URI a
+    /// location query picks for a file open under several URIs is deterministic.
+    /// Keys and values are owned.
+    client_document_paths: std.StringArrayHashMapUnmanaged([]u8) = .empty,
     cache_config: CacheConfig,
     log_file: ?std.Io.File = null,
     debug: DebugFlags,
@@ -293,6 +321,12 @@ pub const SyntaxChecker = struct {
         self.clearPublishedDiagnosticUris();
         self.published_diagnostic_uris.deinit(self.allocator);
 
+        for (self.client_document_paths.keys(), self.client_document_paths.values()) |uri, path| {
+            self.allocator.free(uri);
+            self.allocator.free(path);
+        }
+        self.client_document_paths.deinit(self.allocator);
+
         if (self.builtin_modules) |builtin_modules| {
             builtin_modules.deinit();
             self.allocator.destroy(builtin_modules);
@@ -328,6 +362,77 @@ pub const SyntaxChecker = struct {
     /// See `seedPublishedDiagnosticUriForTesting` for why this isn't gated on `builtin.is_test`.
     pub fn hasPublishedDiagnosticUriForTesting(self: *SyntaxChecker, uri: []const u8) bool {
         return self.published_diagnostic_uris.contains(uri);
+    }
+
+    /// Forget a document the client closed. Its URI no longer names its file, so
+    /// diagnostics and locations for that file go to a URI built from the path.
+    pub fn closeDocument(self: *SyntaxChecker, uri: []const u8) void {
+        self.mutex.lockUncancelable(self.std_io);
+        defer self.mutex.unlock(self.std_io);
+
+        const removed = self.client_document_paths.fetchOrderedRemove(uri) orelse return;
+        self.allocator.free(removed.key);
+        self.allocator.free(removed.value);
+    }
+
+    /// Record that the client names the document at `absolute_path` by `uri`.
+    fn recordClientDocument(self: *SyntaxChecker, uri: []const u8, absolute_path: []const u8) Allocator.Error!void {
+        if (self.client_document_paths.getPtr(uri)) |path| {
+            if (std.mem.eql(u8, path.*, absolute_path)) return;
+            const owned_path = try self.allocator.dupe(u8, absolute_path);
+            self.allocator.free(path.*);
+            path.* = owned_path;
+            return;
+        }
+
+        const owned_uri = try self.allocator.dupe(u8, uri);
+        errdefer self.allocator.free(owned_uri);
+        const owned_path = try self.allocator.dupe(u8, absolute_path);
+        errdefer self.allocator.free(owned_path);
+        try self.client_document_paths.put(self.allocator, owned_uri, owned_path);
+    }
+
+    /// The URI to give the client for the file at `absolute_path`: the first URI
+    /// the client opened it under, or one built from the path when it isn't open.
+    fn uriForPath(self: *const SyntaxChecker, absolute_path: []const u8) Allocator.Error![]u8 {
+        for (self.client_document_paths.keys(), self.client_document_paths.values()) |uri, path| {
+            if (std.mem.eql(u8, path, absolute_path)) return self.allocator.dupe(u8, uri);
+        }
+        return uri_util.pathToUri(self.allocator, absolute_path);
+    }
+
+    /// Append a publish of `diagnostics` for every URI the client opened the
+    /// file at `absolute_path` under, or for a URI built from the path when it
+    /// isn't open. Takes ownership of `diagnostics`.
+    fn appendPathPublishes(
+        self: *SyntaxChecker,
+        publish_list: *std.ArrayList(Diagnostics.PublishDiagnostics),
+        absolute_path: []const u8,
+        diagnostics: []Diagnostics.Diagnostic,
+    ) Allocator.Error!void {
+        errdefer freeDiagnostics(self.allocator, diagnostics);
+
+        // `diagnostics` itself goes to the first URI; every later URI gets a copy.
+        var first_uri: ?[]const u8 = null;
+        for (self.client_document_paths.keys(), self.client_document_paths.values()) |uri, path| {
+            if (!std.mem.eql(u8, path, absolute_path)) continue;
+            if (first_uri == null) {
+                first_uri = uri;
+                continue;
+            }
+            const copy = try dupeDiagnostics(self.allocator, diagnostics);
+            errdefer freeDiagnostics(self.allocator, copy);
+            const owned_uri = try self.allocator.dupe(u8, uri);
+            errdefer self.allocator.free(owned_uri);
+            try publish_list.append(self.allocator, .{ .uri = owned_uri, .diagnostics = copy });
+        }
+
+        const uri = if (first_uri) |client_uri|
+            try self.allocator.dupe(u8, client_uri)
+        else
+            try uri_util.pathToUri(self.allocator, absolute_path);
+        errdefer self.allocator.free(uri);
+        try publish_list.append(self.allocator, .{ .uri = uri, .diagnostics = diagnostics });
     }
 
     fn updateWorkspaceRoot(self: *SyntaxChecker, workspace_root: ?[]const u8) Allocator.Error!void {
@@ -512,7 +617,9 @@ pub const SyntaxChecker = struct {
                 const old_hash = self.content_hashes.get(ap);
 
                 if (old_hash) |existing| {
-                    if (std.mem.eql(u8, &existing, &new_hash)) {
+                    // A URI not yet checked has never been sent this document's
+                    // diagnostics, so it needs a build even for unchanged text.
+                    if (std.mem.eql(u8, &existing, &new_hash) and self.client_document_paths.contains(uri)) {
                         self.logDebug(.build, "[INCREMENTAL] SKIP rebuild for {s}: content hash unchanged ({x}...)", .{
                             ap,
                             new_hash[0..4].*,
@@ -549,6 +656,7 @@ pub const SyntaxChecker = struct {
         defer session.deinit();
 
         const absolute_path = session.absolute_path;
+        try self.recordClientDocument(uri, absolute_path);
 
         if (override_text) |text| {
             env_handle.setDocumentContent(absolute_path, contentHash(text), self.documentHasReports(absolute_path, session.drained_reports)) catch |err| {
@@ -568,7 +676,6 @@ pub const SyntaxChecker = struct {
             }
             for (drained_reports) |entry| {
                 const mapped_path = if (entry.abs_path.len == 0) session.absolute_path else entry.abs_path;
-                const module_uri = try uri_util.pathToUri(self.allocator, mapped_path);
 
                 var diags: std.ArrayList(Diagnostics.Diagnostic) = .empty;
                 errdefer {
@@ -590,11 +697,7 @@ pub const SyntaxChecker = struct {
                 //we also don't don't deinit the entries because buildSession will free them
                 //self.allocator.free(entry.reports);
 
-                try publish_list.append(self.allocator, .{
-                    .uri = module_uri,
-                    .diagnostics = try diags.toOwnedSlice(self.allocator),
-                });
-                diags.deinit(self.allocator);
+                try self.appendPathPublishes(&publish_list, mapped_path, try diags.toOwnedSlice(self.allocator));
             }
 
             if (publish_list.items.len == 0) {
@@ -1520,7 +1623,7 @@ pub const SyntaxChecker = struct {
                 const target_path = noteOom(oom, std.fs.path.resolve(self.allocator, &.{ doc_dir, path_text })) orelse return null;
                 defer self.allocator.free(target_path);
 
-                const target_uri = noteOom(oom, uri_util.pathToUri(self.allocator, target_path)) orelse return null;
+                const target_uri = noteOom(oom, self.uriForPath(target_path)) orelse return null;
 
                 const origin_range = cir_queries.regionToRange(module_env, dep.region());
 
@@ -1714,7 +1817,7 @@ pub const SyntaxChecker = struct {
         if (target_env == build_env.builtin_modules.builtin_module.env) return self.builtinSourceUri(oom);
         const target_hash = target_env.contentIdentityHash() orelse return null;
         const target_mod_state = findModuleByContentIdentity(build_env, target_hash) orelse return null;
-        return noteOom(oom, uri_util.pathToUri(self.allocator, target_mod_state.path));
+        return noteOom(oom, self.uriForPath(target_mod_state.path));
     }
 
     /// The region of a declaration node: the name a value definition (or a
@@ -1907,7 +2010,7 @@ pub const SyntaxChecker = struct {
                             if (maybe_anno) |anno_idx| {
                                 if (findTagInTypeAnno(&target_mod_env.store, &target_mod_env.common, anno_idx, tag_name)) |tag_region| {
                                     const range = cir_queries.regionToRange(target_mod_env, tag_region) orelse return null;
-                                    const module_uri = noteOom(oom, uri_util.pathToUri(self.allocator, mod_state.path)) orelse return null;
+                                    const module_uri = noteOom(oom, self.uriForPath(mod_state.path)) orelse return null;
                                     return DefinitionResult{
                                         .uri = module_uri,
                                         .range = range,
@@ -1917,7 +2020,7 @@ pub const SyntaxChecker = struct {
                         }
                         if (findTagInModuleEnv(target_mod_env, tag_name)) |tag_region| {
                             const range = cir_queries.regionToRange(target_mod_env, tag_region) orelse return null;
-                            const module_uri = noteOom(oom, uri_util.pathToUri(self.allocator, mod_state.path)) orelse return null;
+                            const module_uri = noteOom(oom, self.uriForPath(mod_state.path)) orelse return null;
                             return DefinitionResult{
                                 .uri = module_uri,
                                 .range = range,
@@ -1985,7 +2088,7 @@ pub const SyntaxChecker = struct {
                             if (maybe_anno) |anno_idx| {
                                 if (findTagInTypeAnno(&target_mod_env.store, &target_mod_env.common, anno_idx, tag_name)) |tag_region| {
                                     const range = cir_queries.regionToRange(target_mod_env, tag_region) orelse return null;
-                                    const module_uri = noteOom(oom, uri_util.pathToUri(self.allocator, target_mod_state.path)) orelse return null;
+                                    const module_uri = noteOom(oom, self.uriForPath(target_mod_state.path)) orelse return null;
                                     return DefinitionResult{
                                         .uri = module_uri,
                                         .range = range,
@@ -1995,7 +2098,7 @@ pub const SyntaxChecker = struct {
                         }
                         if (findTagInModuleEnv(target_mod_env, tag_name)) |tag_region| {
                             const range = cir_queries.regionToRange(target_mod_env, tag_region) orelse return null;
-                            const module_uri = noteOom(oom, uri_util.pathToUri(self.allocator, target_mod_state.path)) orelse return null;
+                            const module_uri = noteOom(oom, self.uriForPath(target_mod_state.path)) orelse return null;
                             return DefinitionResult{
                                 .uri = module_uri,
                                 .range = range,
@@ -2056,7 +2159,7 @@ pub const SyntaxChecker = struct {
             };
         }
 
-        const module_uri = uri_util.pathToUri(self.allocator, builtin_cache_path) catch |err| {
+        const module_uri = self.uriForPath(builtin_cache_path) catch |err| {
             self.allocator.free(builtin_cache_path);
             oom.* = err;
             return null;
