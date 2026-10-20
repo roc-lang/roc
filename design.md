@@ -4832,9 +4832,9 @@ Let's not?"), except that number literals do not generalize either:
 An expression-position function generalizes only where its consumer
 instantiates it: a binding's right-hand side, or a stored-value construction
 edge. A lambda that is a direct call operand, or that supplies an enclosing
-block's, conditional's, or match's value, is consumed by that expression and
-is not generalized on its own (`checking_forwarded_result`); a closure's lambda
-takes the closure's position. Generalizing such a lambda would merge its
+block's, conditional's, or match's value, or an enclosing lambda's body, is
+consumed by that expression and is not generalized on its own
+(`checking_forwarded_result`); a closure's lambda takes the closure's position. Generalizing such a lambda would merge its
 quantified variables into the enclosing expression's type and give that
 expression a scheme, and Monotype would meet a nested function whose scheme
 belongs to no binding it lowers (issue 12016). Its variables instead stay at
