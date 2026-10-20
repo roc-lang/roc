@@ -263,8 +263,8 @@ pub const BuildEnv = struct {
     /// Whether executable artifacts were published for this build. User
     /// diagnostics do not change this: checked recovery nodes remain valid
     /// lowering input and crash only if execution reaches them. A build whose
-    /// app root never finished checking (for example because it depends on an
-    /// import cycle) has no program to publish.
+    /// app root never finished checking (for example because it depends on a
+    /// module whose source was rejected) has no program to publish.
     executable_artifacts_finalized: bool = false,
 
     /// Post-canonicalization validation of the module this build was pointed
@@ -3420,9 +3420,10 @@ pub const BuildEnv = struct {
 
         var total: usize = 0;
         for (modules) |mod| {
-            // A module that never finished checking (for example, a member of
-            // an import cycle) is not part of any built artifact, and its
-            // canonical tree still holds unresolved import references.
+            // A module that never finished checking (for example, a dependent
+            // of a module whose source was rejected) is not part of any built
+            // artifact, and its canonical tree still holds unresolved import
+            // references.
             if (mod.semantic.checked_artifact == null) continue;
             var regions = std.ArrayList(base.Region).empty;
             defer regions.deinit(self.gpa);

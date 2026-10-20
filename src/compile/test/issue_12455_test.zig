@@ -6,35 +6,21 @@ const roc_target = @import("roc_target");
 
 const BuildEnv = @import("../compile_build.zig").BuildEnv;
 
-fn writePackage(tmp_dir: std.testing.TmpDir, foo_source: []const u8) !void {
+fn writePackage(tmp_dir: std.testing.TmpDir, foo_source: []const u8) std.Io.Dir.WriteFileError!void {
     const io = std.testing.io;
     try tmp_dir.dir.writeFile(io, .{ .sub_path = "main.roc", .data = "package [Foo.Bar] {}\n" });
     try tmp_dir.dir.writeFile(io, .{ .sub_path = "Foo.roc", .data = foo_source });
+    // A bidirectional control character rejects the source of `A`, so `A`
+    // and every module importing it complete with failure.
     try tmp_dir.dir.writeFile(io, .{
         .sub_path = "A.roc",
-        .data =
-        \\import B
-        \\
-        \\a : Str
-        \\a = B.b
-        \\
-        ,
-    });
-    try tmp_dir.dir.writeFile(io, .{
-        .sub_path = "B.roc",
-        .data =
-        \\import A
-        \\
-        \\b : Str
-        \\b = A.a
-        \\
-        ,
+        .data = "# \u{202E}\nA := [].{\n    a : Str\n    a = \"a\"\n}\n",
     });
 }
 
 test "issue 12455: a public module that completed with failure is not a compiled public module" {
-    // `Foo` imports a module in an import cycle, so it completes with failure
-    // and its nested public type `Foo.Bar` is never resolved.
+    // `Foo` imports a module whose source is rejected, so it completes with
+    // failure and its nested public type `Foo.Bar` is never resolved.
     const gpa = std.testing.allocator;
     const io = std.testing.io;
 

@@ -1339,8 +1339,8 @@ checker recovery. The recovery rules:
   constraint rejected and retires its owner, and the receiver keeps its type.
   An interpolation whose `Str` part demand fails keeps its `Str` result.
 
-A module that fails before checking, such as a member or dependent of an import
-cycle, has no CheckedModule. Checked-program finalization produces a
+A module that fails before checking, such as a dependent of a module whose
+source was rejected, has no CheckedModule. Checked-program finalization produces a
 program only when the app root finished checking; otherwise every checked
 module still finishes its independent compile-time work and every report is
 emitted, and a command that needs a program stops after rendering diagnostics.
@@ -1354,8 +1354,7 @@ construct with a rejected form of its own is occasionally written in that form
 (a `.?` of a required field, a plain access of an optional field, an unset of a
 required field, an effectful top-level value, a self-import, an import cycle).
 Every construct the generator learns is therefore also exercised rejected, and
-the program must lower without a compiler crash; only an import cycle may leave
-the app unchecked, and then the program must still finish checking. The CLI `snapshot-programs` suite checks every `file`,
+the program must lower without a compiler crash. The CLI `snapshot-programs` suite checks every `file`,
 `snippet`, and `expr` snapshot source as a program and requires the compiler
 not to crash, so the snapshot corpus, most of which is rejected programs,
 covers the recovery of every diagnostic that has a snapshot.
@@ -3980,6 +3979,17 @@ definitions, and compile-time roots stay available. Failing to read the source
 the import selected—a missing file, an I/O error—is not one of these outcomes;
 it is an operational failure and aborts the operation, as below.
 
+An import cycle is resolved the same way. Its members wait on each other, so
+they are still pending when the coordinator has no task queued or running; by
+then every registered module has registered its imports, so each package's
+local import graph is complete. The cycles are the strongly connected
+components of the pending modules that contain an import edge, and every
+import edge inside one is rejected: each member reports the cycle and is
+checked with its imports of the other members bound as missing. Deciding on
+the complete graph keeps the rejected edges independent of discovery and
+scheduling order, and the cycle never reaches the members' other imports or
+the modules that import them.
+
 Parsing and error reporting may recover malformed source in order to construct
 the explicit malformed/runtime-error nodes that later stages consume. I/O,
 allocation failure, unsupported compiler hosts, and corrupt serialized
@@ -3990,8 +4000,8 @@ neither: it is a debug-only assertion and unreachable in release builds, as
 stated above.
 
 A module completes with failure only where no checked output can exist for it
-(rejected source, an invalid root module path, an import cycle, or a dependency
-that completed with failure), and the module where that failure originates
+(rejected source, an invalid root module path, or a dependency that completed
+with failure), and the module where that failure originates
 always carries an error-severity report. A build without error reports has
 therefore completed every module successfully, and successful completion always
 includes the module's checked artifact. Post-build consumers of checked modules
