@@ -11670,7 +11670,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     // A build of a program whose runtime output is recorded links that output
     // and lowers no runtime program. Debug pack emission reads the lowering.
     var program_probe: ?ProgramOutputProbe = null;
-    if (object_store) |store| if (target_arch != .wasm32 and devDiagnosticEnv("ROC_DEV_PACK_OBJECTS") == null) {
+    if (object_store) |store| if (target_arch != .wasm32 and !dev_diagnostics.isSet(.dev_pack_objects)) {
         program_probe = .{
             .arena = ctx.arena,
             .gpa = ctx.gpa,
