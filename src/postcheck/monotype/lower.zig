@@ -8143,7 +8143,7 @@ const Builder = struct {
         // independently of the callable set its value joins in the caller.
         // A hosted template has no procedure of its own to cache: callers
         // reach the host directly through its declared ABI.
-        if (pack_trace_available and specCensusEnabled() and template.target != .hosted and try self.monoFnTypeMentionsFunction(lower_fn_ty)) {
+        if (dev_diagnostics.isSet(.spec_census) and template.target != .hosted and try self.monoFnTypeMentionsFunction(lower_fn_ty)) {
             const proc_base = view.names.procBase(template_ref.proc_base);
             const name: []const u8 = if (proc_base.export_name) |e| view.names.exportNameText(e) else "?";
             const types = self.program.types.view();

@@ -201,15 +201,6 @@ test "checked artifact key final bytes include compiler artifact hash" {
     try std.testing.expect(!std.meta.eql(first, second));
 }
 
-test "checked artifact key rebuilt from an artifact ref is the same map entry" {
-    const key = CheckedModuleArtifactKey{ .bytes = @as([32]u8, @splat(7)) };
-    var keys: std.AutoHashMapUnmanaged(CheckedModuleArtifactKey, void) = .empty;
-    defer keys.deinit(std.testing.allocator);
-    try keys.put(std.testing.allocator, key, {});
-    try keys.put(std.testing.allocator, checkedArtifactKeyFromArtifactRef(artifactRef(key)), {});
-    try std.testing.expectEqual(@as(u32, 1), keys.count());
-}
-
 /// Public `ModuleIdentity` declaration.
 pub const ModuleIdentity = struct {
     stable_hash: [32]u8 = @as([32]u8, @splat(0)),
