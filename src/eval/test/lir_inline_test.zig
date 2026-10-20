@@ -9771,11 +9771,11 @@ fn checkedGeneratedFnCount(program: *const MonoAst.Program) usize {
 test "W6b widened closed where-method impl is specialized once with no generated function" {
     const allocator = std.testing.allocator;
     // `status` is published at the closed row `[Ok(Str), Err(Str)]` while
-    // `describe` requests `[Ok(Str), Err(Str), Extra]`. The impl is
-    // specialized at its declared row and its result row joins the request's
-    // where the call's result flows (design.md "Row Joins"); nothing is
-    // generated to convert between them. Running the program proves only the
-    // answer, so the generated-function count is the witness.
+    // `describe` requests `[Ok(Str), Err(Str), Extra]`. The impl's row widens
+    // to the request's and the impl is specialized there (design.md "Closed
+    // Result Rows At Template Boundaries"); nothing is generated to convert
+    // between them. Running the program proves only the answer, so the
+    // generated-function count is the witness.
     const widened =
         \\describe : a -> [Ok(Str), Err(Str), Extra] where [a.status : a -> [Ok(Str), Err(Str)]]
         \\describe = |x| x.status()
@@ -9820,6 +9820,79 @@ test "W6b widened closed where-method impl is specialized once with no generated
     });
     defer exact_lowered.deinit(allocator);
     try std.testing.expectEqual(@as(usize, 0), checkedGeneratedFnCount(&exact_lowered.mono));
+}
+
+test "issue 11626: a shared callee's closed result row is specialized per caller row" {
+    const allocator = std.testing.allocator;
+    // `respond`'s result row is closed and both pages call it at `Str`, but
+    // each page's result flows into its own `Try` error row. Each call is
+    // requested at its page's row, so `respond` is specialized once per row
+    // and the two rows never meet (design.md "Closed Result Rows At Template
+    // Boundaries"): `main`'s stored type lists `NotFound(Str)` and
+    // `NotFound(U64)` in two rows, not one.
+    const source = @import("issue_11626_source.zig").source ++
+        \\
+        \\main = (text_page(""), number_page(""), text_page("ok"), number_page("ok"))
+        \\
+    ;
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .lss,
+    );
+    defer compiled.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings(
+        "(Err(NotFound(\"owned error payload longer than an inline string\")), Err(NotFound(7)), Ok(\"text\"), Ok(\"number\"))",
+        output,
+    );
+}
+
+test "issue 11626: a closed-row callee gets one specialization per widened caller row" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\respond = |text| Ok(text)
+        \\text_page = |text| if text == "" Err(NotFound("owned error payload longer than an inline string")) else respond("text")
+        \\number_page = |text| if text == "" Err(NotFound(7.U64)) else respond("number")
+        \\same_page = |text| if text == "" Err(NotFound(8.U64)) else respond("same")
+        \\
+        \\main : Bool
+        \\main = {
+        \\    text_ok = text_page("ok") == Ok("text")
+        \\    number_ok = number_page("ok") == Ok("number")
+        \\    same_ok = same_page("ok") == Ok("same")
+        \\    text_ok and number_ok and same_ok
+        \\}
+    ;
+    var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
+        allocator,
+        std.testing.io,
+        .module,
+        source,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .lss,
+    );
+    defer compiled.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), compiled.resources.checker.problems.problems.items.len);
+    const output = try helpers.lirInterpreterInspectedStr(allocator, &compiled.lowered);
+    defer allocator.free(output);
+    try std.testing.expectEqualStrings("True", output);
+
+    // `number_page` and `same_page` request the same row, so they share.
+    var lowered_source = try lowerModuleWithProcDebugNames(allocator, source, .none, true);
+    defer lowered_source.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 2), countProcsNamed(&lowered_source.lowered.lir_result.store, "respond"));
 }
 
 test "W6b question-widened closed Try impl needs no generated function" {
@@ -12704,8 +12777,11 @@ test "stored codec restore emits the same Monotype shape from Phase B" {
     //   fns=10 defs=11 exprs=593 locals=119 template_misses=14 nested_misses=0
     // and once a value whose closed or annotation-bounded row flows into an
     // annotated result relates through a row coercion (design.md "Row
-    // Subsumption"), which lowers as a `row_widen` expression per such flow.
-    // Every count is exact, including expressions and locals. The reserve-
+    // Subsumption"), which lowers as a `row_widen` expression per such flow,
+    // except for a direct call, which is requested at the coercion's row and
+    // produces it with no `row_widen` (design.md "Closed Result Rows At
+    // Template Boundaries"). Every count is exact, including expressions and
+    // locals. The reserve-
     // and-copy that Phase-B emission ends in is the same reserve-and-copy the
     // eager restore already performed (it too filled a reservation with a
     // lowered expression), so deferring orphans no expression the eager path
@@ -12717,7 +12793,7 @@ test "stored codec restore emits the same Monotype shape from Phase B" {
     const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_gate_source);
     try std.testing.expectEqual(@as(usize, 10), stats.functions);
     try std.testing.expectEqual(@as(usize, 11), stats.definitions);
-    try std.testing.expectEqual(@as(usize, 552), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 550), stats.expressions);
     try std.testing.expectEqual(@as(usize, 120), stats.locals);
     try std.testing.expect(stats.template_misses <= 14);
     try std.testing.expectEqual(@as(u64, 0), stats.nested_misses);
@@ -12850,7 +12926,7 @@ test "stored parser restore lowers a shape with an optional field" {
     const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_optional_gate_source);
     try std.testing.expectEqual(@as(usize, 10), stats.functions);
     try std.testing.expectEqual(@as(usize, 11), stats.definitions);
-    try std.testing.expectEqual(@as(usize, 682), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 680), stats.expressions);
     try std.testing.expectEqual(@as(usize, 138), stats.locals);
     try std.testing.expectEqual(@as(u64, 14), stats.template_misses);
     try std.testing.expectEqual(@as(u64, 0), stats.nested_misses);

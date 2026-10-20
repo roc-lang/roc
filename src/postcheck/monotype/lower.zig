@@ -2803,8 +2803,8 @@ fn checkedResultRowIsClosed(view: ModuleView, root: checked.CheckedTypeId) bool 
 }
 
 /// The template's checked result row when it is closed, so a request at a
-/// row that includes it is specialized at the template's own row and joined
-/// with the request's row by Lambda Solved (design.md "Row Joins").
+/// row that includes it widens that row and the template is specialized at
+/// the request's row (design.md "Closed Result Rows At Template Boundaries").
 fn closedResultRowOrNull(view: ModuleView, checked_fn_root: checked.CheckedTypeId) ?ClosedResultRow {
     const function = switch (resolvedPayload(view, checked_fn_root).payload) {
         .function => |function| function,
@@ -2854,17 +2854,6 @@ const RequestNodePair = struct {
     request: NodeId,
 };
 
-/// The components of the one result cell a request widened.
-const ResultRowWidening = struct {
-    /// Result components that stay exact graph relations: the `Try` result's
-    /// remaining type arguments.
-    exact: []const RequestNodePair,
-    /// The single row the request widened. Its shared labels' payload cells
-    /// relate exactly and the two extensions stay unrelated, so the request's
-    /// extra labels remain outside the template's closed row.
-    widened: RequestNodePair,
-};
-
 /// Type-argument index of `Builtin.Try`'s error row, the cell
 /// `closedResultRowOrNull` names as the closed row.
 const try_error_type_arg_index: usize = 1;
@@ -2907,144 +2896,137 @@ fn requestRowIncludesClosedRow(
     return true;
 }
 
+/// The row a result node presents for widening: a bare tag row itself; a
+/// nominal's structural backing row, through which a `Try`'s error argument
+/// is one tag's payload; null for anything else.
+fn resultRowNodeOrNull(graph: *InstGraph, node: NodeId) Allocator.Error!?NodeId {
+    return switch ((try graph.content(node))) {
+        .tag_union, .empty_tag_union => node,
+        .named => |named| blk: {
+            if (named.kind != .nominal) break :blk null;
+            const backing = (try graph.namedNodes(node)).backing orelse break :blk null;
+            if (!try isBareTagRowNode(graph, backing.node)) break :blk null;
+            break :blk backing.node;
+        },
+        .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_record, .erased, .zst => null,
+    };
+}
+
+/// The one result position a request widens past the template's closed row.
+const ResultRowWidening = union(enum) {
+    /// The function's own result row.
+    result: RequestNodePair,
+    /// The error row of a `Try` result: one payload of one tag of the rows
+    /// the two results present (`resultRowNodeOrNull`).
+    payload: struct {
+        name: names.TagNameId,
+        index: usize,
+        rows: RequestNodePair,
+        pair: RequestNodePair,
+    },
+
+    fn pair(self: ResultRowWidening) RequestNodePair {
+        return switch (self) {
+            .result => |result| result,
+            .payload => |payload| payload.pair,
+        };
+    }
+};
+
 /// Recognize the one result cell a request may widen past the template's
-/// closed row: a `Try` result's error argument, or the function's own result
-/// row, the positions polarity opens per use (design.md "Polarity").
-/// `declared_row` is the checker's own answer for this template. Every other
-/// component—a `Try`'s `Ok` argument, an alias's type arguments, a nested
-/// row—relates exactly.
+/// closed row: the function's own result row, or the error row of its `Try`
+/// result, the positions polarity opens per use (design.md "Polarity").
+/// `declared_row` is the checker's own answer for this template; the graph
+/// may present either side as a bare row or as the `Try` nominal, so both
+/// are read as rows and the error row is the payload the two rows share at
+/// one label. Every other component relates exactly, through the ordinary
+/// relation that follows the widening. Nothing is related here.
 fn resultRowWideningOrNull(
     graph: *InstGraph,
     declared_row: ClosedResultRow,
     public_ret: NodeId,
     request_ret: NodeId,
 ) Allocator.Error!?ResultRowWidening {
-    if (!declared_row.behind_try) {
-        if (!try requestRowIncludesClosedRow(graph, public_ret, request_ret)) return null;
-        return .{ .exact = &.{}, .widened = .{ .public = public_ret, .request = request_ret } };
-    }
-    const public_named = switch ((try graph.content(public_ret))) {
-        .named => |named| named,
-        .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
-    };
-    const request_named = switch ((try graph.content(request_ret))) {
-        .named => |named| named,
-        .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
-    };
-    // Only the `Try` nominal itself. An alias node's type arguments are not
-    // the `Try` arguments the adapter reads, and crossing to its backing row
-    // would inspect a representation this relation has no business seeing.
-    if (public_named.kind != .nominal or request_named.kind != .nominal) return null;
-    if (!sameTypeDef(public_named.def, request_named.def) or
-        public_named.args.len != request_named.args.len or
-        public_named.args.len <= try_error_type_arg_index)
+    const public_row = (try resultRowNodeOrNull(graph, public_ret)) orelse return null;
+    const request_row = (try resultRowNodeOrNull(graph, request_ret)) orelse return null;
+    if (!declared_row.behind_try and
+        (try graph.content(public_row)) == .tag_union and
+        try requestRowIncludesClosedRow(graph, public_row, request_row))
     {
-        return null;
+        return .{ .result = .{ .public = public_row, .request = request_row } };
     }
-    const public_err = public_named.args[try_error_type_arg_index];
-    const request_err = request_named.args[try_error_type_arg_index];
-    if (!try requestRowIncludesClosedRow(graph, public_err, request_err)) return null;
-    const exact = try graph.arena().alloc(RequestNodePair, public_named.args.len - 1);
-    var exact_index: usize = 0;
-    for (public_named.args, request_named.args, 0..) |public_arg, request_arg, index| {
-        if (index == try_error_type_arg_index) continue;
-        exact[exact_index] = .{ .public = public_arg, .request = request_arg };
-        exact_index += 1;
-    }
-    // The nominal's backing repeats the same rows, so relating it would unify
-    // them; it stays outside this relation exactly as the hosted `Try`
-    // widening leaves it.
-    return .{ .exact = exact, .widened = .{ .public = public_err, .request = request_err } };
-}
-
-/// Relate the labels a widened row shares with the template's closed row. The
-/// two row nodes and their extensions stay unrelated, which is exactly what
-/// keeps the request's extra labels outside the closed row.
-fn relateIncludedRowPayloads(
-    graph: *InstGraph,
-    public_row: NodeId,
-    request_row: NodeId,
-) Allocator.Error!void {
-    // Each guard here stands between the adapter and a wrong tag layout, so
-    // all of them stop the build in every mode.
-    if (!(try isBareTagRowNode(graph, public_row)) or !(try isBareTagRowNode(graph, request_row))) {
-        Common.compilerBug("result-row widening related a non-tag-union row");
-    }
-    const public = (try graph.tagRowNodesOrNull(public_row)) orelse
-        Common.compilerBug("result-row widening related a non-tag-union row");
-    const request = (try graph.tagRowNodesOrNull(request_row)) orelse
-        Common.compilerBug("result-row widening related a non-tag-union row");
+    const public = (try graph.tagRowNodesOrNull(public_row)) orelse return null;
+    const request = (try graph.tagRowNodesOrNull(request_row)) orelse return null;
     for (public.tags) |public_tag| {
-        const request_tag = graphTagByName(request.tags, public_tag.name) orelse
-            Common.compilerBug("result-row widening request removed a declared label");
-        if (public_tag.payloads.len != request_tag.payloads.len) {
-            Common.compilerBug("result-row widening request changed a declared payload arity");
-        }
-        for (public_tag.payloads, request_tag.payloads) |public_payload, request_payload| {
-            try relateRequestComponent(graph, public_payload, request_payload);
+        const request_tag = graphTagByName(request.tags, public_tag.name) orelse continue;
+        if (public_tag.payloads.len != request_tag.payloads.len) continue;
+        for (public_tag.payloads, request_tag.payloads, 0..) |public_payload, request_payload, index| {
+            if (try requestRowIncludesClosedRow(graph, public_payload, request_payload)) {
+                return .{ .payload = .{
+                    .name = public_tag.name,
+                    .index = index,
+                    .rows = .{ .public = public_row, .request = request_row },
+                    .pair = .{ .public = public_payload, .request = request_payload },
+                } };
+            }
         }
     }
+    return null;
 }
 
-/// Recognize a request whose result row includes the template's closed
-/// checked row (design.md "Row Joins"). Nothing is related here.
-fn resultRowWideningRequestOrNull(
+/// Widen a template's closed result row to a request whose row includes it,
+/// so the template is specialized at the request's row (design.md "Closed
+/// Result Rows At Template Boundaries"). A request at the template's own row
+/// widens nothing. The caller relates the two interfaces afterwards.
+fn widenClosedResultRow(
     graph: *InstGraph,
     declared_row: ClosedResultRow,
-    public_fn: NodeId,
-    request_fn: NodeId,
-) Allocator.Error!?ResultRowWidening {
-    if (graph.sameClass(public_fn, request_fn)) return null;
-    // Only a directly function-shaped pair is inspected here. Reading a
-    // function interface through a named backing is the caller's ordinary
-    // relation's business, not this one's.
-    if (!(try isFunctionNode(graph, public_fn)) or !(try isFunctionNode(graph, request_fn))) return null;
-    const public = try graph.functionNodes(public_fn);
-    const request = try graph.functionNodes(request_fn);
-    if (public.args.len != request.args.len) {
-        Common.compilerBug("result-row widening request changed arity from its checked interface");
-    }
-    return try resultRowWideningOrNull(graph, declared_row, public.ret, request.ret);
-}
-
-/// Relate a recognized result-row widening. Arguments and every non-row
-/// component stay exact graph relations; only the request's extra result
-/// labels stay outside the template's row.
-fn applyResultRowWidening(
-    graph: *InstGraph,
-    widening: ResultRowWidening,
-    public_fn: NodeId,
-    request_fn: NodeId,
+    public_ret: NodeId,
+    request_ret: NodeId,
 ) Allocator.Error!void {
-    const public = try graph.functionNodes(public_fn);
-    const request = try graph.functionNodes(request_fn);
-    for (public.args, request.args) |public_arg, request_arg| {
-        try relateRequestComponent(graph, public_arg, request_arg);
+    const widening = (try resultRowWideningOrNull(graph, declared_row, public_ret, request_ret)) orelse return;
+    const pair = widening.pair();
+    if ((try graph.content(pair.public)) != .empty_tag_union) {
+        try graph.widenClosedTagRow(pair.public, pair.request);
+        return;
     }
-    for (widening.exact) |pair| {
-        try relateRequestComponent(graph, pair.public, pair.request);
+    // The empty row's node stands for every empty row in the graph, so the
+    // position that holds it is pointed at the request's row instead: the
+    // tag payload, and the `Try` argument that names the same row.
+    const payload = switch (widening) {
+        .payload => |payload| payload,
+        .result => Common.invariant("a function result widened from an empty row"),
+    };
+    try graph.replaceTagPayloadNode(payload.rows.public, payload.name, payload.index, pair.request);
+    switch ((try graph.content(public_ret))) {
+        .named => |named| for (named.args, 0..) |arg, index| {
+            if (graph.sameClass(arg, pair.public)) try graph.replaceNamedArgNode(public_ret, index, pair.request);
+        },
+        .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => {},
     }
-    try relateIncludedRowPayloads(graph, widening.widened.public, widening.widened.request);
 }
 
-/// `relateFunctionRequestInterface` for a template whose checked result row
-/// may be closed: when the request's result row includes it, the two relate
-/// component-wise without unifying the rows, so the template is specialized
-/// at its own row and the request keeps its extra labels. Lambda Solved joins
-/// the two rows where the call's result flows (design.md "Row Joins").
-/// Returns whether the relation declined to unify.
-fn relateClosedResultRowRequestInterface(
+/// `widenClosedResultRow` for a template's checked function type and a
+/// request function node.
+fn widenClosedResultRowToRequest(
     graph: *InstGraph,
     view: ModuleView,
     checked_fn_ty: checked.CheckedTypeId,
     public_fn: NodeId,
     request_fn: NodeId,
-) Allocator.Error!bool {
-    const declared_row = closedResultRowOrNull(view, checked_fn_ty) orelse return false;
-    const widening = (try resultRowWideningRequestOrNull(graph, declared_row, public_fn, request_fn)) orelse
-        return false;
-    try applyResultRowWidening(graph, widening, public_fn, request_fn);
-    return true;
+) Allocator.Error!void {
+    const declared_row = closedResultRowOrNull(view, checked_fn_ty) orelse return;
+    if (graph.sameClass(public_fn, request_fn)) return;
+    // Only a directly function-shaped pair is inspected here. Reading a
+    // function interface through a named backing is the caller's ordinary
+    // relation's business, not this one's.
+    if (!(try isFunctionNode(graph, public_fn)) or !(try isFunctionNode(graph, request_fn))) return;
+    const public = try graph.functionNodes(public_fn);
+    const request = try graph.functionNodes(request_fn);
+    if (public.args.len != request.args.len) {
+        Common.compilerBug("result-row widening request changed arity from its checked interface");
+    }
+    try widenClosedResultRow(graph, declared_row, public.ret, request.ret);
 }
 
 /// Rendered length `hostedExternAbiViolationMessage` never exceeds.
@@ -10066,20 +10048,16 @@ const Builder = struct {
         if (lexical) |captured| try body_ctx.restoreCodecLexicalContext(captured);
         const root_node = try body_ctx.instNode(template.checked_fn_root);
         // A request whose result row includes this template's closed checked
-        // row keeps its extra labels: the rows are related component-wise and
-        // left distinct, and Lambda Solved joins them where the call's result
-        // flows (design.md "Row Joins").
-        const closed_row_widened = try relateClosedResultRowRequestInterface(
+        // row widens that row: the template is specialized at the request's
+        // row (design.md "Closed Result Rows At Template Boundaries").
+        try widenClosedResultRowToRequest(
             source_ctx.graph,
             view,
             template.checked_fn_root,
             root_node,
             request_fn_node,
         );
-        if (closed_row_widened) {
-            // Every component was related above; joining the two function
-            // interfaces here would unify the rows this relation kept apart.
-        } else if (!local_context_dependent and
+        if (!local_context_dependent and
             signature_relation == .independent_roots and
             template.target != .hosted)
         {
@@ -10095,8 +10073,7 @@ const Builder = struct {
                 try source_ctx.graph.unify(root_node, request_fn_node);
             }
         }
-        if (!closed_row_widened and
-            !local_context_dependent and
+        if (!local_context_dependent and
             signature_relation != .independent_roots and
             template.target != .hosted)
         {
@@ -26885,18 +26862,11 @@ const BodyContext = struct {
         callee_ctx.evidence = rootEvidenceWithSubstitution(template_ref, templateSchemaIn(callee_view, &template), edge);
         try callee_ctx.seedSubstitution(callee_ctx.evidence.schema.?, edge.subst);
         const root_node = try callee_ctx.instNode(template.checked_fn_root);
-        if (!try relateClosedResultRowRequestInterface(
-            self.graph,
-            callee_view,
-            template.checked_fn_root,
-            root_node,
-            roots[0],
-        )) {
-            if (template.target == .hosted) {
-                try relateFunctionRequestInterface(self.graph, root_node, roots[0]);
-            } else {
-                try relateConstructionFunctionRequestInterface(self.graph, root_node, roots[0]);
-            }
+        try widenClosedResultRowToRequest(self.graph, callee_view, template.checked_fn_root, root_node, roots[0]);
+        if (template.target == .hosted) {
+            try relateFunctionRequestInterface(self.graph, root_node, roots[0]);
+        } else {
+            try relateConstructionFunctionRequestInterface(self.graph, root_node, roots[0]);
         }
         try callee_ctx.relateMaterializedEvidenceConstraints(callee_ctx, callee_ctx.evidence.schema.?, edge.vector);
         if (templateInterfaceIsClosed(callee_view, &template)) {
@@ -28521,15 +28491,20 @@ const BodyContext = struct {
         }
         // A body whose checked type is not the
         // function's checked result is a composed `?` result (design.md "Try
-        // Return-Row Composition"), lowered at its own type's cell and
-        // returned across the function's return boundary.
+        // Return-Row Composition"). When every value it ends in takes the
+        // result's row—a direct call whose callee is specialized at that
+        // row, or a construction—it is lowered at the result's cell; otherwise
+        // it is lowered at its own type's cell and returned across the
+        // function's return boundary.
         if (self.checkedExprDivergesInLoweredRuntime(checked_body)) {
             lowering.body = .{ .child = .{ .cell = body_ret_cell, .return_boundary = false } };
             return lowering;
         }
         const body_ty = self.view.bodies.expr(checked_body).ty;
         const fn_ret_ty = self.checkedFunctionType(self.view.bodies.expr(lambda_id).ty).ret;
-        if (resolvedPayload(self.view, body_ty).root == resolvedPayload(self.view, fn_ret_ty).root) {
+        if (resolvedPayload(self.view, body_ty).root == resolvedPayload(self.view, fn_ret_ty).root or
+            try self.coercedValueTakesRow(checked_body, lowering.declared_ret_node))
+        {
             lowering.body = .{ .child = .{ .cell = body_ret_cell, .return_boundary = false } };
             return lowering;
         }
@@ -29761,6 +29736,9 @@ const BodyContext = struct {
             self.builder.countBodyDiagnostic("direct_call_request_reuses");
             if (task.expected_ret_node) |expected| {
                 const fn_nodes = try self.graph.functionNodes(request.fn_node);
+                if (closedResultRowOrNull(self.view, task.source_fn_ty)) |declared_row| {
+                    try widenClosedResultRow(self.graph, declared_row, fn_nodes.ret, expected);
+                }
                 _ = try checkedMonoRequestNode(self.graph, fn_nodes.ret, expected, .exact);
             }
             return .{ .ret = .{ .node = request.fn_node } };
@@ -29882,10 +29860,18 @@ const BodyContext = struct {
         }
         var request_ret = task.ret_node;
         if (task.expected_ret_node) |expected| {
-            request_ret = if (try self.graph.containsGeneratedPrivate(expected))
-                expected
-            else
-                try checkedMonoRequestNode(self.graph, task.ret_node, expected, .exact);
+            if (try self.graph.containsGeneratedPrivate(expected)) {
+                request_ret = expected;
+            } else {
+                // A request at a row that includes the callee's closed result
+                // row widens the callee's row: a procedure is specialized at
+                // the row its result flows into, so a function value's row,
+                // which every call shares, is never widened.
+                if (!task.callee_value) if (closedResultRowOrNull(caller.view, task.source_fn_ty)) |declared_row| {
+                    try widenClosedResultRow(self.graph, declared_row, task.ret_node, expected);
+                };
+                request_ret = try checkedMonoRequestNode(self.graph, task.ret_node, expected, .exact);
+            }
         }
         return .{ .ret = .{ .node = try functionRequestNode(self.graph, fn_node, request_args, request_ret) } };
     }
@@ -29980,10 +29966,14 @@ const BodyContext = struct {
         const checked_ret_ty = task.checked_ret_ty;
         if (task.expected_ret_node) |expected| {
             try relateRequestComponent(self.graph, task.ret_node, try caller.freshInstNode(checked_ret_ty));
-            request_ret = if (try self.graph.containsGeneratedPrivate(expected))
-                expected
-            else
-                try checkedMonoRequestNode(self.graph, task.ret_node, expected, .exact);
+            if (try self.graph.containsGeneratedPrivate(expected)) {
+                request_ret = expected;
+            } else {
+                if (closedResultRowOrNull(caller.view, plan.callable_ty)) |declared_row| {
+                    try widenClosedResultRow(self.graph, declared_row, task.ret_node, expected);
+                }
+                request_ret = try checkedMonoRequestNode(self.graph, task.ret_node, expected, .exact);
+            }
         } else {
             const caller_ret = try caller.instNode(checked_ret_ty);
             if (try self.graph.containsGeneratedPrivate(caller_ret)) {
@@ -33670,10 +33660,17 @@ const BodyContext = struct {
                 return requestLowerTask(self, .{ .span = .{ .exprs = low_level.args } });
             },
             // The demanded node already relates to the coercion's own type
-            // (above). The value is lowered at a graph cell of its own checked
-            // type, as a `?` return's value is, so a value row that no use
-            // relates to seals by the specialization's row defaults.
+            // (above). A value whose calls take the row is lowered at the
+            // demanded cell, so each callee is specialized at the row its
+            // result flows into (design.md "Closed Result Rows At Template
+            // Boundaries"). Any other value is lowered at a graph cell of its
+            // own checked type, as a `?` return's value is, so a value row
+            // that no use relates to seals by the specialization's row
+            // defaults, and the widen joins it to the demanded row.
             .row_coerce => |coerce| {
+                if (try self.coercedValueTakesRow(coerce.value, expected_node)) {
+                    return requestLowerChild(self, coerce.value, cell);
+                }
                 frame.cursor = 6;
                 return requestLowerChild(self, coerce.value, DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(coerce.value)));
             },
@@ -34047,7 +34044,12 @@ const BodyContext = struct {
                 } }),
                 .expect => try self.withTypeData(task, .{ .expect = child.exprValue() }),
                 .dbg => try self.withTypeData(task, .{ .dbg = child.exprValue() }),
-                .row_coerce => try self.withTypeData(task, .{ .row_widen = .{ .value = child.exprValue() } }),
+                // A value lowered at the coercion's row produces the row
+                // itself; any other value is widened into it.
+                .row_coerce => if (frame.cursor == 2)
+                    self.withTypeDone(task, child.exprValue())
+                else
+                    try self.withTypeData(task, .{ .row_widen = .{ .value = child.exprValue() } }),
                 .expect_err => try self.withTypeData(task, .{ .expect_err = .{
                     .msg = child.exprValue(),
                     .region = expr.source_region,
@@ -34206,17 +34208,27 @@ const BodyContext = struct {
                 return requestLowerTask(self, .{ .expr = .{ .expr = child } }),
             .break_ => try self.breakCurrentLoopExprData(),
             .return_ => |ret| return requestLowerTask(self, .{ .return_value = .{ .expr = ret.expr, .lambda = ret.lambda, .context = ret.context } }),
-            // The coerced value is lowered at a graph cell of its own checked
-            // type, like a `?` return's value; the widen node carries the
-            // demanded type and Lambda Solved relates the two without
+            // A value whose calls take the row is lowered at the coercion's
+            // row, so each callee is specialized at the row its result flows
+            // into (design.md "Closed Result Rows At Template Boundaries").
+            // Any other coerced value is lowered at a graph cell of its own
+            // checked type, like a `?` return's value; the widen node carries
+            // the demanded type and Lambda Solved relates the two without
             // unifying them. A value's row that no use relates to stays a
             // graph cell and seals by the specialization's row defaults.
-            .row_coerce => |coerce| return requestLowerTask(self, .{ .at_type_cell = .{
-                .expr = coerce.value,
-                .cell = try self.lowerTypeCell(self.view.bodies.expr(coerce.value).ty),
-                .demand = .runtime_value,
-                .diverges = false,
-            } }),
+            .row_coerce => |coerce| {
+                const expected_node = try self.graph.importMono(ty);
+                if (try self.coercedValueTakesRow(coerce.value, expected_node)) {
+                    frame.cursor = 2;
+                    return requestLowerChild(self, coerce.value, DraftTypeCell.fromGraphNode(expected_node));
+                }
+                return requestLowerTask(self, .{ .at_type_cell = .{
+                    .expr = coerce.value,
+                    .cell = try self.lowerTypeCell(self.view.bodies.expr(coerce.value).ty),
+                    .demand = .runtime_value,
+                    .diverges = false,
+                } });
+            },
             .for_ => |for_| return requestLowerTask(self, .{ .loop = try self.boxLowerTask(LoopTask, .{ .kind = .{ .for_ = checkedForLoop(for_) } }) }),
             .hosted_lambda => Common.invariant("hosted lambda expression reached ordinary Monotype expression lowering"),
             .run_low_level => |low_level| return requestLowerTask(self, .{ .span = .{ .exprs = low_level.args } }),
@@ -35359,14 +35371,64 @@ const BodyContext = struct {
         // Preserve the expected result as an active graph relation. It may
         // contain unresolved payload cells here, so materializing it as a
         // Monotype TypeId would emit an incomplete output.
+        //
+        // A direct call whose callee's closed result row the expected row
+        // includes is requested at the expected result: the callee's row
+        // widens to it, so the callee is specialized at the row its result
+        // flows into (design.md "Closed Result Rows At Template Boundaries").
+        const widens_closed_result = try self.directCallWidensClosedResult(checked_expr, call, expected_node);
         frame.cursor = 1;
         return requestLowerTask(self, .{ .call = .{
             .expr = checked_expr,
             .checked_ret_ty = expr.ty,
             .call = call,
-            .expected_ret_node = producer_request,
+            .expected_ret_node = if (widens_closed_result) expected_node else producer_request,
             .expected_ret_ty = null,
         } });
+    }
+
+    /// Whether a direct call's callee has a closed result row that
+    /// `expected_node`'s row includes, so the call is requested at the
+    /// expected result and the callee specialized there (design.md "Closed
+    /// Result Rows At Template Boundaries").
+    fn directCallWidensClosedResult(
+        self: *BodyContext,
+        call_expr: checked.CheckedExprId,
+        call: CheckedCall,
+        expected_node: NodeId,
+    ) Allocator.Error!bool {
+        const target = call.direct_target orelse return false;
+        const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
+        const declared_row = closedResultRowOrNull(self.view, source_fn_ty) orelse return false;
+        const call_ret_node = try self.instNode(self.view.bodies.expr(call_expr).ty);
+        return (try resultRowWideningOrNull(self.graph, declared_row, call_ret_node, expected_node)) != null;
+    }
+
+    /// Whether a row coercion's value is lowered at the coercion's row rather
+    /// than at its own: every value it ends in is a direct call whose callee
+    /// takes the row (`directCallWidensClosedResult`), a construction, or a
+    /// divergence, reached through blocks and branches. Anything else—a read
+    /// of a value, a call through a function value—keeps its own row, which
+    /// every use of that value shares, and is widened into the coercion's.
+    fn coercedValueTakesRow(self: *BodyContext, value: checked.CheckedExprId, expected_node: NodeId) Allocator.Error!bool {
+        var pending: std.ArrayListUnmanaged(checked.CheckedExprId) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, value);
+        while (pending.pop()) |expr_id| {
+            const expr = self.view.bodies.expr(expr_id);
+            switch (expr.data) {
+                .call => |call| if (!try self.directCallWidensClosedResult(expr_id, call, expected_node)) return false,
+                .block => |block| try pending.append(self.allocator, block.final_expr),
+                .if_ => |if_| {
+                    for (if_.branches) |branch| try pending.append(self.allocator, branch.body);
+                    try pending.append(self.allocator, if_.final_else);
+                },
+                .match_ => |match| for (match.branches) |branch| try pending.append(self.allocator, branch.value),
+                .tag, .zero_argument_tag, .crash, .runtime_error => {},
+                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .record, .empty_record, .nominal, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return false,
+            }
+        }
+        return true;
     }
 
     fn finishCallExprAtNode(self: *BodyContext, expected_node: NodeId, lowered: DraftExprId) Allocator.Error!DraftExprId {
@@ -38139,10 +38201,9 @@ const BodyContext = struct {
 
     /// Relate a procedure template's checked function type to the Monotype
     /// type a specialization requests. When the template's checked result row
-    /// is closed and the request's row includes it, the two relate
-    /// component-wise without unifying the rows, and the body lowers at the
-    /// template's own row; Lambda Solved joins the rows where the call's
-    /// result flows (design.md "Row Joins").
+    /// is closed and the request's row includes it, the row widens to the
+    /// request's and the body lowers there (design.md "Closed Result Rows At
+    /// Template Boundaries").
     fn relateCheckedFunctionToRequest(
         self: *BodyContext,
         checked_fn_ty: checked.CheckedTypeId,
@@ -38150,7 +38211,7 @@ const BodyContext = struct {
     ) Allocator.Error!NodeId {
         const checked_node = try self.instNode(checked_fn_ty);
         const request_node = try self.graph.importMonoIndependent(mono_fn_ty);
-        if (try relateClosedResultRowRequestInterface(self.graph, self.view, checked_fn_ty, checked_node, request_node)) return checked_node;
+        try widenClosedResultRowToRequest(self.graph, self.view, checked_fn_ty, checked_node, request_node);
         return try checkedMonoRequestNode(self.graph, checked_node, request_node, .construction);
     }
 
@@ -43135,18 +43196,11 @@ const BodyContext = struct {
         const fn_node = try self.instNode(source_fn_ty);
         const plan_node = try plan_ctx.instNode(plan_fn_ty);
         // A plan whose result row includes the implementation's closed
-        // published row relates component-wise without unifying the rows;
-        // Lambda Solved joins them where the call's result flows (design.md
-        // "Row Joins").
-        if (!try relateClosedResultRowRequestInterface(
-            self.graph,
-            self.view,
-            source_fn_ty,
-            fn_node,
-            plan_node,
-        )) {
-            try relateFunctionRequestInterface(self.graph, fn_node, plan_node);
-        }
+        // published row widens that row, so the implementation is specialized
+        // at the plan's row (design.md "Closed Result Rows At Template
+        // Boundaries").
+        try widenClosedResultRowToRequest(self.graph, self.view, source_fn_ty, fn_node, plan_node);
+        try relateFunctionRequestInterface(self.graph, fn_node, plan_node);
         return fn_node;
     }
 
@@ -52592,22 +52646,16 @@ const BodyContext = struct {
 
     /// `relateFunctionRequestInterface` for a resolved dispatch target. When
     /// the implementation publishes a closed result row and the request's row
-    /// includes it, the two relate component-wise without unifying the rows;
-    /// Lambda Solved joins them where the call's result flows (design.md "Row
-    /// Joins").
+    /// includes it, the row widens to the request's, so the implementation
+    /// is specialized there (design.md "Closed Result Rows At Template
+    /// Boundaries").
     fn relateDispatchTargetRequestInterface(
         self: *BodyContext,
         lookup: MethodLookup,
         target_node: NodeId,
         request_node: NodeId,
     ) Allocator.Error!void {
-        if (try relateClosedResultRowRequestInterface(
-            self.graph,
-            lookup.view,
-            lookup.target.callable_ty,
-            target_node,
-            request_node,
-        )) return;
+        try widenClosedResultRowToRequest(self.graph, lookup.view, lookup.target.callable_ty, target_node, request_node);
         try relateFunctionRequestInterface(self.graph, target_node, request_node);
     }
 
@@ -53017,8 +53065,8 @@ const BodyContext = struct {
     /// the request carries a generated private iterator representation, which
     /// only its public interface relates.
     /// A request whose result row includes the target's closed published row
-    /// keeps its extra labels here too (design.md "Result-Row Widening
-    /// Adapter"); unifying the two rows is what the adapter exists to avoid.
+    /// widens that row first (design.md "Closed Result Rows At Template
+    /// Boundaries").
     fn relateEvidenceTargetRootToRequest(
         self: *BodyContext,
         root_view: ModuleView,
@@ -53026,13 +53074,7 @@ const BodyContext = struct {
         root_node: NodeId,
         request_fn_node: NodeId,
     ) Allocator.Error!void {
-        if (try relateClosedResultRowRequestInterface(
-            self.graph,
-            root_view,
-            root_fn_ty,
-            root_node,
-            request_fn_node,
-        )) return;
+        try widenClosedResultRowToRequest(self.graph, root_view, root_fn_ty, root_node, request_fn_node);
         if (try self.graph.containsGeneratedPrivate(request_fn_node)) {
             try relateGeneratedPrivateRequestInterface(self.graph, root_node, request_fn_node);
         } else {

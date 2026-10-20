@@ -2544,9 +2544,9 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "polarity W3: recursive method whose dispatch target is the enclosing template (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/OpenMethodRecursiveMethod.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "polarity W3: recursive method whose dispatch target is the enclosing template (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/OpenMethodRecursiveMethod.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
     // A where-method implementation whose published
-    // result row is CLOSED, requested at a row that includes it. The template
-    // stays specialized at its declared row and its result row joins the
-    // request's where the call's result flows (design.md "Row Joins"). Each
+    // result row is CLOSED, requested at a row that includes it. The
+    // template's row widens to the request's and it is specialized there
+    // (design.md "Closed Result Rows At Template Boundaries"). Each
     // fixture runs on both backends; running one proves the program computes
     // the right answer, not that nothing was generated to convert it, so
     // `lir_inline_test.zig` counts `.checked_generated` fns for the same

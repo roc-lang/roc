@@ -9626,11 +9626,12 @@ the two tag sets: shared tags unify their payloads, tags on one side only are
 kept, and two rows with no tag in common still join, because a procedure
 shared by two specializations whose rows differ only in tag names relates each
 caller's row to one result and both callers then carry the union. The empty
-row is uninhabited and takes its peer's row. Monotype specializes a closed-row
-template at its own declared row and relates a wider request to it
-component-wise without unifying the two result rows
-(`relateClosedResultRowRequestInterface`); the rows then join in Lambda
-Solved where the call's result flows. The LIR builder lowers a `row_widen` as
+row is uninhabited and takes its peer's row. A procedure whose checked result
+row is closed is specialized at the row its result flows into, so a call
+whose result is widened requests the callee at the widened row and the two
+rows are one before Lambda Solved sees them (Closed Result Rows At Template
+Boundaries); a join therefore never travels backwards through a callee into
+the rows of its other callers. The LIR builder lowers a `row_widen` as
 its child into the destination and asserts the two solved types are
 value-encoding equivalent, and a tag-union boundary asserts both sides list
 the same tags: no LIR re-tags a value. A top-level value's compile-time root
@@ -10057,13 +10058,25 @@ and `lir_inline_test.zig` executes both lowering strategies with leak checking.
 
 A procedure template whose checked result row is CLOSED may be requested at a
 row that INCLUDES it—the same tags with usable payloads, plus others. Monotype
-relates the request to the template component-wise WITHOUT unifying the two
-rows (`relateClosedResultRowRequestInterface`), so the template is specialized
-once, at its own declared row, and the request keeps its extra labels. Nothing
-adapts the result: the two rows are one join set where the call's result
-flows, and Lambda Solved joins them (Row Joins). Only two positions relate
-this way, the template's DIRECT result row and the ERROR row of a `Try`
-result; a `Try`'s ok row and every nested row relate exactly.
+widens the template's row to the request's (`widenClosedResultRowToRequest`):
+the closed row takes the request's labels, the two rows become one class, and
+the template is specialized at the request's row, once per distinct row its
+result flows into. Nothing adapts the result: the body constructs its tags at
+the widened row, so the value already has the caller's representation. The
+request itself is formed at the widened row: a direct call whose result flows
+into a wider row, through a row coercion or a lambda body whose composed `?`
+result is wider than its own, is lowered at that row's cell, and a callee
+request whose row includes the callee's closed row widens it
+(`stepCallExprAtNode`, `coercedValueTakesRow`). A value that is not such a
+call—a read of a value, whose row every use shares, or a call through a
+function value—keeps its own row and is widened into the destination by a
+`row_widen`, which Lambda Solved joins (Row Joins). Only two positions widen,
+the template's DIRECT result row and the ERROR row of a `Try` result; a
+`Try`'s ok row and every nested row relate exactly. The graph may present
+either side as a bare row or as the `Try` nominal, and the empty row's node
+stands for every empty row, so an empty error row is widened by pointing its
+position—the `Err` payload and the `Try` argument—at the request's row rather
+than by rewriting the node.
 
 The set of positions a use may WIDEN is kept within the row coercion's reach
 by construction rather than by a second rule that could drift: polarity's
