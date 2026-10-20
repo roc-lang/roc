@@ -651,8 +651,12 @@ fn projectedTypeReference(
             (module_env.contentIdentityHash() orelse unreachable).*,
             local.decl_idx,
         },
+        // The compiler's baked `Builtin` module is part of the compiler, so
+        // its import records no identity (`ImportResolution.recordImportIdentities`)
+        // and none of its types has a public type projection in any package's
+        // docs.
         .external => |external| .{
-            module_env.moduleIdentityHash(module_env.importIdentity(external.module_idx) orelse unreachable).*,
+            module_env.moduleIdentityHash(module_env.importIdentity(external.module_idx) orelse return null).*,
             @as(CIR.Statement.Idx, @fromBackingInt(@intCast(external.target_node_idx))),
         },
         .external_identity => |external| .{
