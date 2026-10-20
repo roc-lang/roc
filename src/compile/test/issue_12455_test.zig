@@ -6,7 +6,7 @@ const roc_target = @import("roc_target");
 
 const BuildEnv = @import("../compile_build.zig").BuildEnv;
 
-fn writePackage(tmp_dir: std.testing.TmpDir, foo_source: []const u8) !void {
+fn writePackage(tmp_dir: std.testing.TmpDir, foo_source: []const u8) std.Io.Dir.WriteFileError!void {
     const io = std.testing.io;
     try tmp_dir.dir.writeFile(io, .{ .sub_path = "main.roc", .data = "package [Foo.Bar] {}\n" });
     try tmp_dir.dir.writeFile(io, .{ .sub_path = "Foo.roc", .data = foo_source });
