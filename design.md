@@ -623,7 +623,13 @@ each constant as weak readonly data under its `roc__h` content name, so two
 objects carrying one constant share a single copy in the link. It exports,
 for each entry it offers, a weak C-ABI entry `roc__c{hash}`, the procedure's
 arguments and result classified by `layout.abi` exactly as for a hosted
-call. Two such objects may export one entry; the link keeps one. Not every
+call. Two such objects may export one entry; the link keeps one. Each weak
+definition sits in an `any` COMDAT of its own name on every object format
+that has COMDATs, so the link keeps one copy and discards the others whole;
+COFF can express a coalescing definition only this way, since a weak
+definition without one lowers to a strong `.weak.*` default that every
+object defining it also defines. Mach-O has no COMDATs, and its linker
+coalesces weak definitions without one. Not every
 object format can place a weak symbol inside a datum, so a constant's symbol
 in an object pack marks its first byte: a constant whose symbol sits some
 bytes into its data is named as the datum anchored at its first byte, with
@@ -2598,6 +2604,18 @@ prefix once at function finalization. This preserves prepend ordering and
 fixed activation lifetime without repeatedly moving the accumulated entry
 instruction list. Slot values are available to body construction immediately;
 final instruction numbering follows the completed block order.
+
+An entry-block slot is allocated for the whole activation, so LLVM can overlap
+two slots only through `llvm.lifetime.start` and `llvm.lifetime.end`. The LLVM
+backend brackets the slot of every local whose address it passes to an
+out-of-line Roc procedure call (a result returned through memory, or an
+argument passed by pointer) with markers at that local's exact lifetime
+boundaries, which the shared LIR stack planner solves over the procedure's
+explicit control-flow graph. Other slots carry no markers: SROA removes slots
+whose addresses never escape, and markers on them would only add optimizer
+work. Procedure arguments, which the prologue writes, and locals in deferred
+string-match captures, which the backend materializes outside the statements
+that access them, keep their activation lifetime.
 
 LLVM call sites do not acquire `alwaysinline` from loop nesting. Nesting depth
 does not establish execution frequency or bound the combined body of a caller
@@ -13436,6 +13454,30 @@ frame stack, and an argument's evidence computation that reaches such an
 operand stops, lets the loop draft it, and resumes. A nested function never
 starts a lowering run of its own inside its parent's.
 
+### Lowering Scopes Share One Helper Layer
+
+Monotype lowering keeps its state in two scopes: the coordinator `Builder`,
+whose ids belong to the program or to the active specialization workspace, and
+each body's `BodyContext`, whose ids belong to its instantiation graph's
+stores. Boxy lowering has the same split between `ProcedureBuilder` and each
+`ProcBodyBuilder`. A question asked of either scope's data has one definition,
+which takes the stores it reads as parameters: type-shape queries take a type
+store (and the name store a tag label belongs to), name imports take the
+destination name store, and method lookup takes the name store its owner's ids
+belong to and memoizes only owners in the program's domain. Each scope passes
+its own stores, so the scope a helper is called from never changes which store
+it reads. Tag lookup within one name store is label identity, which there is
+id equality; a label from another domain is imported before it is looked up.
+
+Coordinator work whose inputs are program ids, such as result-row widening
+adapters, reads the program store explicitly and only under a program
+destination. Where the two scopes genuinely differ, such as the store a
+restored constant is emitted into or how a node's reuse is cached, a generic
+walker takes the scope as a comptime-duck-typed parameter (`runConstRestore`)
+or a policy struct (`RuntimeImpossibilityProofEvaluation`). A source-text test
+fails when either lowerer defines one name twice with near-identical bodies
+outside an explicit list of such per-scope interface methods.
+
 ### Monotype Types
 
 Monotype types contain no lambda sets.
@@ -20566,7 +20608,11 @@ Admission of those mandatory owned variants uses the same definition-sensitive
 ownership-place query as complete payload transfers: scalar shell reads and
 uses after an explicit rebind do not retain the argument's old stored units.
 A terminal crash or failed expectation observes only its explicit message
-operand; it does not implicitly use every live ownership place.
+operand; it does not implicitly use every live ownership place. A string or
+Boxy tag match likewise uses only its source (and the tag match's descriptor):
+a borrowed capture view reaches the source's place through its borrow link,
+and an owned capture retains through the source at the match. Only releases
+use every place.
 
 The ownership-place query asks whether a path from a statement reaches a use
 of a root's place before a statement that rebinds the root. Its cost is linear
@@ -21816,10 +21862,11 @@ change an earlier snapshot. Floating-point values that require per-binding NaN
 normalization and vector values retain independent locations. The proof never
 uses emission order, last-use guesses, or an adjacent-instruction peephole.
 
-Native stack planning consumes the shared LIR read/definition inventories plus
-explicit native descriptor accesses and fused-result writes. Runtime successor
-edges distinguish join declarations from jumps, and pattern captures write only
-on their successful edges. Immutable aliases share a storage identity; their
+Native stack planning uses the shared LIR stack planner, which builds a
+procedure's control-flow graph from the shared LIR read/definition
+inventories, plus explicit native descriptor accesses and fused-result writes.
+Runtime successor edges distinguish join declarations from jumps, and pattern
+captures write only on their successful edges. Immutable aliases share a storage identity; their
 combined reads keep that identity live. Each instruction-selection region holds
 all its inputs and outputs simultaneously, so multiword copies cannot overwrite
 unread operands. This analysis follows explicit ARC statements as ordinary reads
@@ -23131,7 +23178,8 @@ functions; object symbol discovery must never enlarge that set.
 
 Compiled Roc code references each hosted symbol (and the fixed runtime set:
 roc_alloc, roc_dealloc, roc_realloc, roc_dbg, roc_expect_failed, roc_crashed)
-as a weak extern and calls it directly with the natural C ABI for its types.
+as a weak extern (a plain extern on COFF, below) and calls it directly with
+the natural C ABI for its types.
 Entrypoints are exported under their `provides` strings with natural C ABI
 signatures. No context pointer is threaded through compiled code: hosts that
 need per-call context (for example an arena) own its delivery out of band

@@ -36,6 +36,7 @@ const roc_target = @import("roc_target");
 
 const CoreCtx = @import("ctx").CoreCtx;
 const LlvmBuilder = @import("vendor_llvm_ir").Builder;
+const SlotLifetimes = @import("SlotLifetimes.zig");
 
 const Allocator = std.mem.Allocator;
 const CFStmtId = lir.CFStmtId;
@@ -394,6 +395,8 @@ pub const MonoLlvmCodeGen = struct {
     join_points: collections.DenseMap(u32, JoinInfo),
     compiled_joins: collections.DenseMap(u32, void),
     stmt_incoming_counts: collections.DenseMap(u32, u32),
+    /// The current procedure's slot lifetime markers.
+    slot_lifetimes: SlotLifetimes,
     stmt_entry_blocks: collections.DenseMap(u32, LlvmBuilder.Function.Block.Index),
     /// Reusable store-indexed columns. Only a procedure's explicit inventory
     /// is invalidated at its end; growing the store initializes only new rows.
@@ -610,6 +613,7 @@ pub const MonoLlvmCodeGen = struct {
             .join_points = collections.DenseMap(u32, JoinInfo).init(allocator),
             .compiled_joins = collections.DenseMap(u32, void).init(allocator),
             .stmt_incoming_counts = collections.DenseMap(u32, u32).init(allocator),
+            .slot_lifetimes = SlotLifetimes.init(allocator),
             .stmt_entry_blocks = collections.DenseMap(u32, LlvmBuilder.Function.Block.Index).init(allocator),
             .debug_inline_subprograms = std.AutoHashMap(u32, LlvmBuilder.Metadata).init(allocator),
             .debug_inline_callsites = std.AutoHashMap(u32, LlvmBuilder.Metadata).init(allocator),
@@ -681,6 +685,7 @@ pub const MonoLlvmCodeGen = struct {
         self.join_points.deinit();
         self.compiled_joins.deinit();
         self.stmt_incoming_counts.deinit();
+        self.slot_lifetimes.deinit();
         self.stmt_entry_blocks.deinit();
     }
 
@@ -818,7 +823,7 @@ pub const MonoLlvmCodeGen = struct {
             }
             const fn_name = builder.strtabString(symbol) catch return error.OutOfMemory;
             const func = builder.addFunction(dummy_fn_ty, fn_name, .default) catch return error.OutOfMemory;
-            func.setLinkage(.extern_weak, &builder);
+            func.setLinkage(self.hostReferenceLinkage(), &builder);
             try fn_consts.append(self.allocator, func.toConst(&builder));
             // The shim reads each name as a NUL-terminated string.
             const symbol_z = self.allocator.dupeSentinel(u8, symbol, 0) catch return error.OutOfMemory;
@@ -966,9 +971,45 @@ pub const MonoLlvmCodeGen = struct {
         self.builder = &builder;
         defer self.builder = null;
 
+        try self.buildEntrypointModule(&builder, module_name, entrypoints);
+        return .{
+            .bitcode = try self.serializeBuilderToBitcode(&builder),
+            .allocator = self.allocator,
+        };
+    }
+
+    /// Write the textual LLVM IR of the module `generateEntrypointModule`
+    /// serializes, for tests that inspect emitted code.
+    pub fn printEntrypointModule(
+        self: *MonoLlvmCodeGen,
+        module_name: []const u8,
+        entrypoints: []const Entrypoint,
+        writer: *std.Io.Writer,
+    ) Error!void {
+        self.reset();
+
+        var builder = try self.createBuilder(module_name);
+        defer builder.deinit();
+
+        self.builder = &builder;
+        defer self.builder = null;
+
+        try self.buildEntrypointModule(&builder, module_name, entrypoints);
+        builder.print(writer) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.WriteFailed => return error.CompilationFailed,
+        };
+    }
+
+    fn buildEntrypointModule(
+        self: *MonoLlvmCodeGen,
+        builder: *LlvmBuilder,
+        module_name: []const u8,
+        entrypoints: []const Entrypoint,
+    ) Error!void {
         if (!builder.strip) {
-            try self.setupDebugInfo(&builder, module_name);
-            if (self.target.ofmt == .elf) try self.embedGdbScript(&builder);
+            try self.setupDebugInfo(builder, module_name);
+            if (self.target.ofmt == .elf) try self.embedGdbScript(builder);
         }
 
         if (self.object_cache_pack) try self.declarePackStaticData();
@@ -1002,11 +1043,6 @@ pub const MonoLlvmCodeGen = struct {
             builder.resolveDebugForwardReference(self.debug_enums_fwd_ref.unwrap().?, empty_tuple);
             builder.resolveDebugForwardReference(self.debug_globals_fwd_ref.unwrap().?, empty_tuple);
         }
-
-        return .{
-            .bitcode = try self.serializeBuilderToBitcode(&builder),
-            .allocator = self.allocator,
-        };
     }
 
     /// Creates the compile unit, registers it in `llvm.dbg.cu`, and sets the
@@ -1830,8 +1866,7 @@ pub const MonoLlvmCodeGen = struct {
         if (self.enable_default_platform_diagnostics) {
             try attrs_wip.addFnAttr(.@"noinline", builder);
         } else {
-            const inline_everywhere = self.inline_everywhere.items.len > @backingInt(proc_id) and self.inline_everywhere.items[@backingInt(proc_id)];
-            if (inline_everywhere) {
+            if (self.inlineEverywhere(proc_id)) {
                 try attrs_wip.addFnAttr(.alwaysinline, builder);
             } else {
                 try attrs_wip.addFnAttr(.inlinehint, builder);
@@ -2417,8 +2452,7 @@ pub const MonoLlvmCodeGen = struct {
         if (self.enable_default_platform_diagnostics) {
             try attrs_wip.addFnAttr(.@"noinline", builder);
         } else {
-            const inline_everywhere = self.inline_everywhere.items.len > @backingInt(proc_id) and self.inline_everywhere.items[@backingInt(proc_id)];
-            if (inline_everywhere) {
+            if (self.inlineEverywhere(proc_id)) {
                 try attrs_wip.addFnAttr(.alwaysinline, builder);
             } else {
                 try attrs_wip.addFnAttr(.inlinehint, builder);
@@ -2780,6 +2814,8 @@ pub const MonoLlvmCodeGen = struct {
                 return error.CompilationFailed;
             };
             try self.collectStmtIncomingCounts(body);
+            defer self.slot_lifetimes.clear();
+            try self.slot_lifetimes.plan(self.store, body, self.store.getLocalSpan(proc.args), AddressedCallLocals{ .codegen = self });
             try self.compileStmt(body);
             if (!self.currentBlockHasTerminator()) {
                 if (self.fast_ret_registers != null) {
@@ -2859,7 +2895,12 @@ pub const MonoLlvmCodeGen = struct {
         const wrapper_ty = builder.fnType(ret_ty, param_types.items, .normal) catch return error.OutOfMemory;
         const wrapper_name = try self.exportedFunctionName(builder, symbol_name);
         const wrapper = builder.addFunction(wrapper_ty, wrapper_name, .default) catch return error.OutOfMemory;
-        wrapper.setLinkage(if (self.object_cache_pack) .weak_odr else .external, builder);
+        if (self.object_cache_pack) {
+            wrapper.setLinkage(.weak_odr, builder);
+            wrapper.setComdat(try self.packComdat(builder, wrapper.name(builder)), builder);
+        } else {
+            wrapper.setLinkage(.external, builder);
+        }
         try self.addGeneratedFunctionStackProbeAttrs(&attrs_wip);
         wrapper.setAttributes(attrs_wip.finish(builder) catch return error.OutOfMemory, builder);
         self.configureExportCallConv(wrapper, builder);
@@ -3931,6 +3972,7 @@ pub const MonoLlvmCodeGen = struct {
         defer self.current_source_stmt = outer_source_stmt;
         self.current_source_stmt = stmt_id;
         try self.setStmtDebugLocation(stmt_id);
+        try self.emitSlotLifetimeMarkers(stmt_id);
         switch (stmt) {
             .assign_ref => |assign| {
                 try self.emitAssignRef(assign.target, assign.op);
@@ -4552,6 +4594,54 @@ pub const MonoLlvmCodeGen = struct {
             _ = try self.callFunctionIndex(func, &.{ ret_ptr, args_ptr, desc_ptr }, is_cold);
         } else {
             _ = try self.callFunctionIndex(func, &.{ ret_ptr, args_ptr }, is_cold);
+        }
+    }
+
+    fn inlineEverywhere(self: *const MonoLlvmCodeGen, proc_id: LirProcSpecId) bool {
+        return self.inline_everywhere.items.len > @backingInt(proc_id) and self.inline_everywhere.items[@backingInt(proc_id)];
+    }
+
+    /// The locals whose slot addresses `emitDirectCall` passes to an
+    /// out-of-line callee, for `SlotLifetimes`: the target of a result
+    /// returned through memory, and each argument passed by pointer. An
+    /// `alwaysinline` callee is never out of line.
+    const AddressedCallLocals = struct {
+        codegen: *MonoLlvmCodeGen,
+
+        pub const AppendError = Error;
+
+        pub fn appendAddressed(self: AddressedCallLocals, call: @FieldType(lir.LIR.CFStmt, "assign_call"), out: *std.ArrayList(LocalId)) AppendError!void {
+            const codegen = self.codegen;
+            if (codegen.store.stmtRowOrDefault(call.extra).replaces_frame) return;
+            const proc = codegen.store.getProcSpec(call.proc);
+            if (proc.hosted != null) return;
+            if (!codegen.enable_default_platform_diagnostics and codegen.inlineEverywhere(call.proc)) return;
+            if (codegen.fast_registry.get(@backingInt(call.proc)) == null) {
+                try out.append(codegen.allocator, call.target);
+                return;
+            }
+            var arena_state = Base.SingleThreadArena.init(codegen.allocator);
+            defer arena_state.deinit();
+            const sig = try codegen.fastSignature(arena_state.allocator(), proc);
+            if (sig.lowered.ret == .indirect) try out.append(codegen.allocator, call.target);
+            const args = codegen.store.getLocalSpan(call.args);
+            for (sig.lowered.args, 0..) |placement, i| {
+                if (placement == .indirect and !sig.tail_args.stored[i]) try out.append(codegen.allocator, GuardedList.at(args, i));
+            }
+        }
+    };
+
+    fn emitSlotLifetimeMarkers(self: *MonoLlvmCodeGen, stmt_id: CFStmtId) Error!void {
+        const markers = self.slot_lifetimes.at(stmt_id);
+        if (markers.len == 0) return;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const ptr_ty = try self.ptrType();
+        for (markers) |marker| {
+            const intrinsic: LlvmBuilder.Intrinsic = switch (marker.kind) {
+                .start => .@"lifetime.start",
+                .end => .@"lifetime.end",
+            };
+            _ = wip.callIntrinsic(.normal, .none, intrinsic, &.{ptr_ty}, &.{self.slot(marker.local).ptr}, "") catch return error.OutOfMemory;
         }
     }
 
@@ -9324,7 +9414,12 @@ pub const MonoLlvmCodeGen = struct {
                 else
                     builder.strtabString(content_name) catch return error.OutOfMemory;
                 const variable = builder.addVariable(name, image.ty, .default) catch return error.OutOfMemory;
-                variable.ptrConst(builder).global.setLinkage(if (data_export.is_exported) .internal else .weak_odr, builder);
+                if (data_export.is_exported) {
+                    variable.ptrConst(builder).global.setLinkage(.internal, builder);
+                } else {
+                    variable.ptrConst(builder).global.setLinkage(.weak_odr, builder);
+                    variable.setComdat(try self.packComdat(builder, variable.ptrConst(builder).global.name(builder)), builder);
+                }
                 variable.setMutability(.constant, builder);
                 variable.setAlignment(LlvmBuilder.Alignment.fromByteUnits(@max(data_export.alignment, 1)), builder);
                 if (shared) |entry| entry.value_ptr.* = variable;
@@ -13623,16 +13718,32 @@ pub const MonoLlvmCodeGen = struct {
         return func;
     }
 
+    /// The COMDAT for a weak definition an object-cache pack shares with other
+    /// packs: one `any` group under the definition's own name, so the link
+    /// keeps one copy and discards the others whole. Mach-O has no COMDATs; its
+    /// linker coalesces weak definitions without one.
+    fn packComdat(self: *const MonoLlvmCodeGen, builder: *LlvmBuilder, name: LlvmBuilder.StrtabString) Error!LlvmBuilder.Comdat.Index {
+        if (self.target.ofmt == .macho) return .none;
+        return builder.addComdat(name, .any) catch return error.OutOfMemory;
+    }
+
+    /// The linkage of a reference to a host-provided function. Weak linkage
+    /// breaks the app/host reference cycle: the symbol resolves at the end of
+    /// the link against whichever host object defines it. COFF has no
+    /// equivalent weak external and needs none, since one link pass resolves
+    /// references in both directions.
+    fn hostReferenceLinkage(self: *const MonoLlvmCodeGen) LlvmBuilder.Linkage {
+        return if (self.target.ofmt == .coff) .external else .extern_weak;
+    }
+
     /// Declare (once) a host-provided function under its literal linker symbol.
-    /// Weak linkage breaks the app/host reference cycle: the symbol resolves at
-    /// the end of the link against whichever host object defines it.
     fn declareHostSymbol(self: *MonoLlvmCodeGen, name: []const u8, fn_ty: LlvmBuilder.Type) Error!LlvmBuilder.Function.Index {
         const builder = self.builder orelse return error.CompilationFailed;
         std.debug.assert(BuiltinSymbol.fromSymbolName(name) == null);
         if (self.symbol_functions.get(name)) |func| return func;
         const fn_name = builder.strtabString(name) catch return error.OutOfMemory;
         const func = builder.addFunction(fn_ty, fn_name, .default) catch return error.OutOfMemory;
-        func.setLinkage(.extern_weak, builder);
+        func.setLinkage(self.hostReferenceLinkage(), builder);
         try self.symbol_functions.put(name, func);
         return func;
     }
@@ -14177,6 +14288,8 @@ test "object-cache pack constants are weak data under their content names and po
         const global = variable.ptrConst(&builder).global;
         if (!data_export.is_exported) try std.testing.expectEqualStrings(name, global.name(&builder).slice(&builder).?);
         try std.testing.expectEqual(if (data_export.is_exported) LlvmBuilder.Linkage.internal else .weak_odr, global.ptrConst(&builder).linkage);
+        // Mach-O has no COMDATs; its linker coalesces the weak definitions.
+        try std.testing.expectEqual(LlvmBuilder.Comdat.Index.none, variable.ptrConst(&builder).comdat);
         try std.testing.expectEqual(.constant, variable.ptrConst(&builder).mutability);
         try std.testing.expect(variable.ptrConst(&builder).init != .no_init);
     }
@@ -14190,6 +14303,70 @@ test "object-cache pack constants are weak data under their content names and po
     _ = try codegen.staticDataGlobal(@fromBackingInt(2), 16);
     _ = try codegen.staticDataGlobal(@fromBackingInt(1), 16);
     try std.testing.expectEqual(variable_count, builder.variables.items.len);
+}
+
+// repro for https://github.com/roc-lang/roc/issues/12433
+// Distinct packs legitimately define the same entry, and on COFF only a
+// COMDAT with `any` selection lets lld-link keep one copy. COFF also needs no
+// weak externals for host references, and a weak external there lowers to a
+// strong default symbol that collides across packs.
+test "issue 12433: Windows pack entries are COMDAT any and host references are not weak externals" {
+    const allocator = std.testing.allocator;
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u64);
+    defer layouts.deinit();
+    const ret = try store.addLocal(.{ .layout_idx = .i64 });
+    const body = try store.addCFStmt(.{ .assign_literal = .{
+        .target = ret,
+        .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .i64 } },
+        .next = try store.addCFStmt(.{ .ret = .{ .value = ret } }, .test_fixture),
+    } }, .test_fixture);
+    const proc = try store.addProcSpec(.{
+        .name = .fromRaw(1),
+        .identity = lir.LIR.ProcIdentity.forTest(1),
+        .args = .empty(),
+        .frame_locals = try store.addLocalSpan(&.{ret}),
+        .body = body,
+        .ret_layout = .i64,
+    }, .none);
+    const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .msvc });
+    var codegen = MonoLlvmCodeGen.initForLinkedObject(allocator, &store, &.{}, &.{}, &.{}, target);
+    defer codegen.deinit();
+    codegen.layout_store = &layouts;
+    codegen.object_cache_pack = true;
+    var builder = try codegen.createBuilder("windows_pack");
+    defer builder.deinit();
+    codegen.builder = &builder;
+    defer codegen.builder = null;
+
+    try codegen.compileAllProcSpecs(store.getProcSpecs());
+    try codegen.generateCAbiEntrypointWrapper("roc__cshared", proc, &.{}, .i64, null);
+    _ = try codegen.declareHostSymbol("hosted_monotonic_now", try builder.fnType(.void, &.{}, .normal));
+
+    var ir: std.Io.Writer.Allocating = .init(allocator);
+    defer ir.deinit();
+    try builder.print(&ir.writer);
+    const text = ir.written();
+
+    var found_entry = false;
+    var found_host = false;
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.startsWith(u8, line, "define ") and std.mem.find(u8, line, "@roc__cshared(") != null) {
+            found_entry = true;
+            if (std.mem.find(u8, line, " comdat") == null) std.debug.print("pack entry is not in a COMDAT: {s}\n", .{line});
+            try std.testing.expect(std.mem.find(u8, line, " comdat") != null);
+        }
+        if (std.mem.startsWith(u8, line, "declare ") and std.mem.find(u8, line, "@hosted_monotonic_now(") != null) {
+            found_host = true;
+            if (std.mem.find(u8, line, "extern_weak") != null) std.debug.print("host reference is a weak external: {s}\n", .{line});
+            try std.testing.expect(std.mem.find(u8, line, "extern_weak") == null);
+        }
+    }
+    try std.testing.expect(found_entry);
+    try std.testing.expect(found_host);
+    try std.testing.expect(std.mem.find(u8, text, "$roc__cshared = comdat any") != null);
 }
 
 test "frozen relocation offsets are bounded before host indexing for either target width" {
