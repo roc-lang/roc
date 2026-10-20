@@ -982,6 +982,20 @@ const Lifetime = struct {
     }
 };
 
+/// After `solveLifetimes`, every recorded access, sorted by value and then by
+/// position.
+pub fn sortedAccesses(self: *const Self) []const Access {
+    return self.accesses.items;
+}
+
+/// After `solveLifetimes`, whether `value` is needed on entry to `at`: some
+/// path from the entry of `at` reads it before writing it. `value_accesses`
+/// is the value's run of `sortedAccesses`.
+pub fn liveIn(self: *const Self, value: u32, value_accesses: []const Access, at: u32) bool {
+    const lifetime = Lifetime{ .plan = self, .ranges = self.liveRanges(value), .accesses = value_accesses };
+    return lifetime.liveIn(at);
+}
+
 /// The positions at which a solved value is occupied: where it is live on
 /// entry, plus where it is written.
 pub fn liveRanges(self: *const Self, value: u32) []const Range {
