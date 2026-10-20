@@ -131,14 +131,17 @@ const shards = [_]Shard{
     .{ .name = "source", .host = .linux, .lane = .source },
     .{ .name = "linux-core", .host = .linux, .lane = .primary, .selection = .{ .before = "run-test-eval" } },
     .{ .name = "linux-eval", .host = .linux, .lane = .primary, .selection = .{ .from = "run-test-eval", .to = "run-test-eval" } },
+    .{ .name = "linux-differential", .host = .linux, .lane = .primary, .selection = .{ .from = "run-test-strategy-differential", .to = "run-test-strategy-differential" } },
     .{ .name = "linux-simd", .host = .linux, .lane = .primary, .selection = .{ .from = "run-test-simd-differential", .to = "run-test-eval-host-effects" } },
     .{ .name = "linux-harness", .host = .linux, .lane = .primary, .selection = .{ .after = "run-test-eval-host-effects" } },
     .{ .name = "macos-core", .host = .macos, .lane = .secondary, .selection = .{ .before = "run-test-eval" } },
     .{ .name = "macos-eval", .host = .macos, .lane = .secondary, .selection = .{ .from = "run-test-eval", .to = "run-test-eval" } },
-    .{ .name = "macos-harness", .host = .macos, .lane = .secondary, .selection = .{ .after = "run-test-eval" } },
+    .{ .name = "macos-differential", .host = .macos, .lane = .secondary, .selection = .{ .from = "run-test-strategy-differential", .to = "run-test-strategy-differential" } },
+    .{ .name = "macos-harness", .host = .macos, .lane = .secondary, .selection = .{ .after = "run-test-strategy-differential" } },
     .{ .name = "windows-core", .host = .windows, .lane = .secondary, .selection = .{ .to = last_module_test_job } },
     .{ .name = "windows-zig", .host = .windows, .lane = .secondary, .selection = .{ .after = last_module_test_job, .before = "run-test-eval" } },
     .{ .name = "windows-eval", .host = .windows, .lane = .secondary, .selection = .{ .from = "run-test-eval", .to = "run-test-eval" } },
+    .{ .name = "windows-differential", .host = .windows, .lane = .secondary, .selection = .{ .from = "run-test-strategy-differential", .to = "run-test-strategy-differential" } },
     .{ .name = "windows-simd", .host = .windows, .lane = .secondary, .selection = .{ .from = "run-test-simd-differential", .to = "run-test-eval-host-effects" } },
     .{ .name = "windows-harness", .host = .windows, .lane = .secondary, .selection = .{ .after = "run-test-eval-host-effects" } },
 };
@@ -271,6 +274,11 @@ const jobs = [_]Job{
         else
             &.{ "--timeout", "120000" },
     },
+    // Runs every eval and host-effects program twice, once per lowering
+    // strategy, so it takes over an hour on Linux and macOS and is its own
+    // shard on every host (see `shards`). It sits beside `run-test-eval` so
+    // that shard and the ones after it each stay one contiguous selection.
+    .{ .name = "run-test-strategy-differential", .kind = .harness },
     .{ .name = "run-test-simd-differential", .kind = .harness },
     // `run-test-eval` leaves LLVM out for speed. This focused run keeps the
     // exact-bit float contract on every host without it.
@@ -282,7 +290,6 @@ const jobs = [_]Job{
     // limit; this catches growth before the website's nightly bump does.
     .{ .name = "run-check-echo-wasm-size", .placement = .primary_host },
     .{ .name = "run-test-eval-host-effects", .kind = .harness },
-    .{ .name = "run-test-strategy-differential", .kind = .harness },
     .{ .name = "run-test-playground", .kind = .harness },
     .{ .name = "run-test-cli", .kind = .harness },
     .{ .name = "run-test-serialization-sizes" },
