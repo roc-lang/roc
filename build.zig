@@ -17,6 +17,10 @@ const Step = std.Build.Step;
 
 var build_checks_exe: ?*Step.Compile = null;
 
+/// Whether a Debug build for this machine gets its CPU's SHA-256 instructions
+/// when the CPU has them (`hostBuildsDebugWithSha`); `-Ddebug-sha-floor`.
+var debug_sha_floor = true;
+
 fn buildChecksRun(b: *std.Build, command: []const u8) *Step.Run {
     const exe = build_checks_exe orelse blk: {
         // ReleaseFast on purpose. The source checks read every Zig file under
@@ -545,13 +549,16 @@ fn withoutSha256Floor(b: *std.Build, target: ResolvedTarget) ResolvedTarget {
     return b.resolveTargetQuery(query);
 }
 
-/// Whether `target` is this machine's own x86_64 architecture and OS and this
-/// machine's CPU has the SHA extension and SSSE3. `builtin.cpu` here is the
-/// CPU the build runner was compiled for, which Zig detects from the machine.
-/// x86_64 macOS never takes the floor: it computes digests with the portable
-/// rounds unless `-Dcpu` names its CPU (see `uses_software_rounds` in
-/// src/base/sha256.zig).
+/// Whether `target` is this machine's own x86_64 architecture and OS, this
+/// machine's CPU has the SHA extension and SSSE3, and `-Ddebug-sha-floor` has
+/// not turned the floor off. `builtin.cpu` here is the CPU the build runner
+/// was compiled for, which Zig detects from the machine, so a build that
+/// another machine will run, as CI's shared build is, turns the floor off to
+/// get one compilation that every x86-64 machine runs. x86_64 macOS never
+/// takes the floor: it computes digests with the portable rounds unless
+/// `-Dcpu` names its CPU (see `uses_software_rounds` in src/base/sha256.zig).
 fn hostBuildsDebugWithSha(target: ResolvedTarget) bool {
+    if (!debug_sha_floor) return false;
     if (builtin.target.cpu.arch != .x86_64) return false;
     if (target.result.cpu.arch != .x86_64 or target.result.os.tag != builtin.target.os.tag) return false;
     if (target.result.os.tag == .macos) return false;
@@ -1685,6 +1692,7 @@ const wasm_static_lib_carts = [_]WasmStaticLibCart{
 };
 
 pub fn build(b: *std.Build) void {
+    debug_sha_floor = b.option(bool, "debug-sha-floor", "Give a Debug build for this machine its CPU's SHA-256 instructions when the CPU has them (default: true). CI passes false: it compiles on one runner and tests on others whose CPUs differ in the SHA extension, so its Debug builds stay at the architecture baseline, one compilation on every runner, and use the portable rounds") orelse true;
     test_fixtures = .{ .b = b };
 
     // Build/run split used by MiniCI:
