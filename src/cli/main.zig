@@ -2674,37 +2674,35 @@ fn resolveInstalledEntry(ctx: *CliCtx, name: []const u8) (CliError || Allocator.
             return ctx.fail(.{ .install_entry_corrupt = .{
                 .name = name,
                 .path = entry.entry_dir,
-                .reason = "its install.json manifest is missing",
+                .reason = "its install manifest is missing",
             } });
         },
         .out_of_memory, .other => return ctx.fail(.{ .install_entry_corrupt = .{
             .name = name,
             .path = entry.entry_dir,
-            .reason = "its install.json manifest could not be read",
+            .reason = "its install manifest could not be read",
         } }),
     };
-    var parsed = (try install_store.parseManifest(ctx.gpa, manifest_bytes)) orelse {
+    const manifest = install_store.parseManifest(manifest_bytes) orelse {
         return ctx.fail(.{ .install_entry_corrupt = .{
             .name = name,
             .path = entry.entry_dir,
-            .reason = "its install.json manifest is not valid",
+            .reason = "its install manifest is not valid",
         } });
     };
-    defer parsed.deinit();
 
     // The recorded URL is the entry's identity, so it must still be a valid
     // bundle URL—a manifest that fails this check is corrupt, and nothing
     // downstream may be handed an unvalidated URL.
-    _ = base.url.parseUrlPath(parsed.manifest().url) catch {
+    _ = base.url.parseUrlPath(manifest.url) catch {
         return ctx.fail(.{ .install_entry_corrupt = .{
             .name = name,
             .path = entry.entry_dir,
-            .reason = "its install.json manifest records an invalid URL",
+            .reason = "its install manifest records an invalid URL",
         } });
     };
-    const manifest_url = try ctx.arena.dupe(u8, parsed.manifest().url);
-    // parseManifest already validated the kind string.
-    const kind = install_store.manifestKind(parsed.manifest()).?;
+    const manifest_url = try ctx.arena.dupe(u8, manifest.url);
+    const kind = manifest.kind;
 
     const artifact_path = entry.artifactPath(kind);
     std.Io.Dir.cwd().access(ctx.io.std_io, artifact_path, .{}) catch {
@@ -7340,29 +7338,27 @@ fn rocInstall(ctx: *CliCtx, args: cli_args.InstallArgs) CliMainError!void {
             return ctx.fail(.{ .install_entry_corrupt = .{
                 .name = args.shorthand,
                 .path = entry.entry_dir,
-                .reason = "its install.json manifest is missing",
+                .reason = "its install manifest is missing",
             } });
         },
         .out_of_memory, .other => return ctx.fail(.{ .install_entry_corrupt = .{
             .name = args.shorthand,
             .path = entry.entry_dir,
-            .reason = "its install.json manifest could not be read",
+            .reason = "its install manifest could not be read",
         } }),
     };
     if (existing_bytes) |bytes| {
-        var parsed = (try install_store.parseManifest(ctx.gpa, bytes)) orelse {
+        const existing = install_store.parseManifest(bytes) orelse {
             return ctx.fail(.{ .install_entry_corrupt = .{
                 .name = args.shorthand,
                 .path = entry.entry_dir,
-                .reason = "its install.json manifest is not valid",
+                .reason = "its install manifest is not valid",
             } });
         };
-        defer parsed.deinit();
-        if (std.mem.eql(u8, parsed.manifest().url, args.url)) {
+        if (std.mem.eql(u8, existing.url, args.url)) {
             // Same name + same URL: an intact entry makes this a no-op, and a
             // damaged one is safe to repair since the URL matches.
-            // parseManifest already validated the kind string.
-            const existing_kind = install_store.manifestKind(parsed.manifest()).?;
+            const existing_kind = existing.kind;
             const artifact_intact = intact: {
                 std.Io.Dir.cwd().access(ctx.io.std_io, entry.artifactPath(existing_kind), .{}) catch break :intact false;
                 break :intact true;
@@ -7382,7 +7378,7 @@ fn rocInstall(ctx: *CliCtx, args: cli_args.InstallArgs) CliMainError!void {
                 } });
             };
         } else {
-            const existing_url = try ctx.arena.dupe(u8, parsed.manifest().url);
+            const existing_url = try ctx.arena.dupe(u8, existing.url);
             return ctx.fail(.{ .shorthand_conflict = .{
                 .name = args.shorthand,
                 .existing_url = existing_url,
@@ -7495,14 +7491,13 @@ fn rocInstall(ctx: *CliCtx, args: cli_args.InstallArgs) CliMainError!void {
 
     // The manifest is written last, so a staged entry is complete by the time
     // it can be published.
-    const manifest_json = try install_store.manifestToJson(ctx.arena, .{
-        .format_version = install_store.manifest_format_version,
-        .kind = @tagName(install_kind),
+    const manifest_bytes = try install_store.encodeManifest(ctx.arena, .{
+        .kind = install_kind,
         .url = args.url,
         .hash = parsed_url.hash,
         .compiler_version = @import("compiler_version").compiler_version,
     });
-    std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = staging.manifest_path, .data = manifest_json }) catch |err| {
+    std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = staging.manifest_path, .data = manifest_bytes }) catch |err| {
         return ctx.fail(.{ .file_write_failed = .{ .path = staging.manifest_path, .err = err } });
     };
 
@@ -7512,12 +7507,11 @@ fn rocInstall(ctx: *CliCtx, args: cli_args.InstallArgs) CliMainError!void {
         const winner_bytes = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, entry.manifest_path, ctx.arena, .limited(install_manifest_size_limit)) catch {
             return ctx.fail(.{ .install_publish_failed = .{ .name = args.shorthand, .err = rename_err } });
         };
-        var winner = (try install_store.parseManifest(ctx.gpa, winner_bytes)) orelse {
+        const winner = install_store.parseManifest(winner_bytes) orelse {
             return ctx.fail(.{ .install_publish_failed = .{ .name = args.shorthand, .err = rename_err } });
         };
-        defer winner.deinit();
-        if (!std.mem.eql(u8, winner.manifest().url, args.url)) {
-            const existing_url = try ctx.arena.dupe(u8, winner.manifest().url);
+        if (!std.mem.eql(u8, winner.url, args.url)) {
+            const existing_url = try ctx.arena.dupe(u8, winner.url);
             return ctx.fail(.{ .shorthand_conflict = .{
                 .name = args.shorthand,
                 .existing_url = existing_url,
