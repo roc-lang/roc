@@ -20591,9 +20591,9 @@ that skips them releases the parameter whole.
 Because that owned variant is mandatory for a dying argument, a direct-call
 argument at a borrowed position whose parameter-benefit bit is set is an owned
 operand for take solving, exactly like an argument at an owned position: a
-field read flowing into it is consuming, so a container holding several
-refcounted fields hands that field over by a take and the call selects the
-owned variant. Without this, `{ list: acc.list, dict: acc.dict.insert(k, v) }`
+borrowed field read reaching it can take its field there, so a container
+holding several refcounted fields hands that field over by a take and the
+call selects the owned variant. Without this, `{ list: acc.list, dict: acc.dict.insert(k, v) }`
 would pass the dict borrowed while the dying record still held it, and every
 insert would copy. That demand needs the callee's benefits to be final before
 the caller's takes are solved, so takes are solved one call-graph component at
@@ -20601,9 +20601,11 @@ a time, callees first, and each component outputs its parameter benefits
 (its parameter containers, projected containers rooted at its parameters,
 complete field and tag payload reads of its parameters, and forwarding to beneficial callee
 positions) before any caller is solved. Procedures sharing statements form one
-node of that graph. A recursive component whose own new benefits demand a
-further argument retracts its committed plans and solves again; demand only
-grows, so this terminates, and a non-recursive component solves once.
+node of that graph. A benefit once published keeps classifying its positions
+as consuming operands. A recursive component whose own new benefits make a
+further refcounted argument a consuming operand retracts its committed plans
+and solves again; the consuming operands only grow, so this terminates, and a
+non-recursive component solves once.
 Admission of those mandatory owned variants uses the same definition-sensitive
 ownership-place query as complete payload transfers: scalar shell reads and
 uses after an explicit rebind do not retain the argument's old stored units.
@@ -20827,19 +20829,38 @@ Without that variant the caller must manufacture a second unit, which changes
 the runtime ownership schedule rather than merely foregoing optional inlining
 or uniqueness seeding.
 
-An owned read that has a later observation of the same stored field before
-reinitialization or an explicit outcome receipt keeps its ordinary retain.
-This does not prevent a later read from taking the field: an early read passed
-to an owned lookup can retain and release its own unit before a final mutation
-takes the container's unit. Candidate selection proves the absence of later
-observations over the explicit CFG, including borrowed descendants and whole
-container uses; it never guesses from operation names.
+A read solved owned that has a later observation of the same stored field
+before reinitialization or an explicit outcome receipt keeps its ordinary
+retain. This does not prevent a later read from taking the field: an early
+read passed to an owned lookup can retain and release its own unit before a
+final mutation takes the container's unit. Candidate selection proves the
+absence of later observations over the explicit CFG, including borrowed
+descendants and whole container uses; it never guesses from operation names.
+
+A read solved borrowed holds no unit, so it never consumes at the read. Its
+binding, and every binding borrowed onward from it, carries the field to
+where the value is consumed: an owned direct-call position, a borrowed
+position whose owned variant takes a field, or a consumed or retained
+low-level position, with no other mention of those bindings in the same
+statement. Each such operand is a use-point take candidate. It takes the
+field only where it is the last observation of that field on every path; an
+earlier one pays its ordinary retain at the operand, since the binding is
+read again afterwards. The take belongs at the operand, not at the read. A
+take at the read would leave the binding's later operands reading a field the
+container no longer holds, and retaining at the read instead would retain on
+paths that never consume the binding and force owned variants on calls that
+only borrow it, such as the lookup inside `Dict.insert`. When `use(next,
+use(next, 0))` reads a dying record's field twice, the inner call retains and
+the outer call takes the field. An operand take that is its binding's only
+mention, at an owned position of a direct call whose result is refined by an
+outcome switch, carries the same field receipt as a consuming read, so the
+restoring outcomes return the field to its place.
 
 Which remaining consuming reads become takes is decided per field by a forward
 dataflow from the container's definition over the control-flow graph,
 tracking for each refcounted field whether it may and whether it must have
-been taken on the paths reaching each point. A consuming read is a take only
-where the field cannot have been taken yet—a take where it may already be
+been taken on the paths reaching each point. A consuming read or use-point
+operand is a take only where the field cannot have been taken yet—a take where it may already be
 gone would double-consume its unit on that path. A borrow of the field, and
 any whole use of the container, must likewise run where no take can have
 happened: after a take, the container's bytes for that field can alias the
@@ -20847,9 +20868,11 @@ taker's mutation rather than the original value. A borrowing read binds a
 name that keeps reading the field's stored unit without holding a unit of its
 own, and so does every binding the solver anchors as a borrow through that
 name (its pure aliases, its own field and payload reads, and call results
-lent from it). Every operand mention of any of those bindings is therefore a
-borrow observation of the field at that statement, so a take the mention
-could follow is rejected exactly like a borrowing read placed there. An explicit outcome field
+lent from it). Every operand mention of any of those bindings other than a
+use-point take candidate is therefore a borrow observation of the field at
+that statement, so a take the mention could follow is rejected exactly like a
+borrowing read placed there. Binding an owned alias of one of them is such a
+mention, since the alias retains through it. An explicit outcome field
 receipt changes the matching edge state from taken back to available before
 that edge is walked. An explicit join-cell reinitialization starts a new
 definition after observing its value operand and clears that definition's
@@ -20862,14 +20885,16 @@ any rule simply stays residual—its reads keep their retains and its stored
 unit is released at the death point—and a container whose take set comes
 out empty keeps today's whole release exactly.
 
-Emission changes in exactly two places. A take's read emits no retain: the
-result's unit is the container's stored unit for that field, moved rather
-than duplicated. The container's release becomes its dismantling: at the
+Emission changes in exactly two places. A take emits no retain at its read or
+operand: the value's unit is the container's stored unit for that field,
+moved rather than duplicated. A use-point operand whose path no longer holds
+the field retains instead. The container's release becomes its dismantling: at the
 point its whole-value `decref` would have been placed, emission instead reads
 each refcounted field that was not taken into a fresh temporary and releases
 that temporary, using the field layout's helper and the container's
 atomicity. Fields that were taken need nothing: their units continue in the
-take targets, which are ordinary owned locals. Liveness, death placement, and
+take targets, which are ordinary owned locals, or in the consumers of the
+use-point operands. Liveness, death placement, and
 path balancing are untouched.
 
 Like precise lifetimes, take solving is order-sensitive and therefore runs in
