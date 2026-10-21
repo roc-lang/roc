@@ -30,9 +30,9 @@ finish-install: && install-rust-glue
 # refresh the global roc-coding skill's reference copies
 [linux]
 sync-roc-coding:
-    mkdir -p "$HOME/.dotfiles/.config/polytoken/skills/roc-coding"
-    cp "docs/mini-tutorial-new-compiler.md" "$HOME/.dotfiles/.config/polytoken/skills/roc-coding/mini-tutorial-new-compiler.md"
-    cp "test/echo/all_syntax_test.roc" "$HOME/.dotfiles/.config/polytoken/skills/roc-coding/all_syntax_test.roc"
+    mkdir -p "$HOME/.claude/skills/roc-coding"
+    cp "docs/mini-tutorial-new-compiler.md" "$HOME/.claude/skills/roc-coding/mini-tutorial-new-compiler.md"
+    cp "test/echo/all_syntax_test.roc" "$HOME/.claude/skills/roc-coding/all_syntax_test.roc"
 
 # install src/glue/src/RustGlue.roc as the `rust_glue` shorthand for the roc on PATH
 [linux]
