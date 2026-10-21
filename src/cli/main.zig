@@ -8639,8 +8639,10 @@ fn writeOptimizedPacks(
     var no_entries: u8 = 0;
     const selected_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(ctx.gpa, root_artifact.root_requests.runtime_requests);
     defer ctx.gpa.free(selected_roots);
+    // Lowered on this thread: a parallel lowering numbers its layouts in the
+    // order its workers finish, and LLVM compiles them into the object in that
+    // order, so the object would depend on scheduling.
     var config = linkedObjectLoweringConfig(strategy, target);
-    config.target.post_check_executor = build_env.postCheckExecutor();
     config.target.spec_cache = .{ .context = &no_entries, .find = noObjectCacheEntries };
     config.target.code_provision = nativeObjectCodeProvision(target, .dev, true, true);
     config.target.spec_comptime_reads = true;
@@ -8849,6 +8851,15 @@ fn objectPackBytes(
     if (comptime !llvm_available) return null;
     const store = &lowered.lir_result.store;
     const procs = store.getProcSpecs();
+    // The pack's tables follow its keys, never the order the program lowering
+    // it numbered its procedures in.
+    const ordered = try ctx.gpa.dupe(ObjectPackCandidate, candidates);
+    defer ctx.gpa.free(ordered);
+    std.mem.sort(ObjectPackCandidate, ordered, {}, struct {
+        fn lessThan(_: void, lhs: ObjectPackCandidate, rhs: ObjectPackCandidate) bool {
+            return std.mem.order(u8, &lhs.key, &rhs.key) == .lt;
+        }
+    }.lessThan);
 
     const converting = try lir.PackProgram.literalConvertingProcs(ctx.gpa, store);
     defer ctx.gpa.free(converting);
@@ -8873,7 +8884,7 @@ fn objectPackBytes(
     var arena_state = base.SingleThreadArena.init(ctx.gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    for (candidates) |candidate| {
+    for (ordered) |candidate| {
         const proc = procs[@backingInt(candidate.proc)];
         if (proc.body == null or proc.abi != .roc or proc.hosted != null) continue;
         if (!candidate.reads.offerable) continue;
