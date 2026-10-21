@@ -202,13 +202,14 @@ const test_literal_idents = LiteralMethodIdents{
 };
 
 test "dominant kind precedence is numeral > quote > interpolation" {
-    const region = base.Region.zero();
-    var store = try @import("store.zig").Store.initCapacity(std.testing.allocator, 1, 1);
-    defer store.deinit();
+    var numeral_infos: types.NumeralInfo.SafeList = .{};
+    defer numeral_infos.deinit(std.testing.allocator);
+    const numeral_row = try numeral_infos.append(std.testing.allocator, types.NumeralInfo.testOnlyInt(1, false, base.Region.zero()));
     const numeral_constraint = StaticDispatchConstraint{
         .fn_name = Ident.Idx.NONE,
         .fn_var = undefined,
-        .origin = .{ .from_literal = .{ .numeral = try store.appendNumeralInfo(types.NumeralInfo.testOnlyInt(1, false, region)) } },
+        .origin = .{ .from_literal = .numeral },
+        .numeral = .from(numeral_row),
     };
     const quote_constraint = StaticDispatchConstraint{
         .fn_name = Ident.Idx.NONE,

@@ -105,9 +105,8 @@ pub fn plan(self: *Self, store: *const LirStore, root: CFStmtId, params: anytype
     try self.collectCandidates(store, root, params, calls);
     if (self.candidates.count() == 0) return;
 
-    var stack_plan = StackPlan.initWithLocalIndices(self.allocator, self.indexes.local_indices);
-    self.indexes.local_indices = StackPlan.LocalIndices.init(self.allocator);
-    defer self.indexes.local_indices = stack_plan.deinitKeepingLocalIndices();
+    var stack_plan = self.indexes.takePlan();
+    defer self.indexes.keepPlan(&stack_plan);
     self.planned.clearRetainingCapacity();
     defer self.indexes.clear();
     try stack_plan.addProcGraph(store, &self.indexes, root, &self.planned, Tracked{ .candidates = &self.candidates });

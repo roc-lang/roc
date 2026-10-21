@@ -1268,28 +1268,31 @@ pub const ConstStore = struct {
     blob_backing: std.ArrayList(u8),
     /// `ConstBlobDataId` -> range into `blob_backing`.
     blob_views: std.ArrayList(ConstRange),
-    /// Build-only content index over blob ids. Hashing and equality read each
-    /// id's bytes through `blob_views`, so the index stays valid when
-    /// `blob_backing` moves.
-    blob_index: std.HashMapUnmanaged(u32, void, BlobIdContext, std.hash_map.default_max_load_percentage) = .empty,
+    /// Build-only content index over the blobs' backing int ids. Entries hash
+    /// and compare by their bytes in `blob_backing`, read afresh on every
+    /// lookup, so the backing may move while the store is being built.
+    blob_index: std.HashMapUnmanaged(u32, void, BlobIndexContext, std.hash_map.default_max_load_percentage) = .empty,
     /// True for a store reconstructed from a serialized buffer (pools point into
     /// buffer-owned memory and must not be freed).
     serialized: bool = false,
 
     pub const serde_transient_fields = .{"blob_index"};
 
-    const BlobIdContext = struct {
+    /// Hashes an indexed blob by its bytes. Indexed blobs have distinct
+    /// bytes, so two entries are equal exactly when their ids are.
+    const BlobIndexContext = struct {
         store: *const ConstStore,
 
-        pub fn hash(ctx: BlobIdContext, id: u32) u64 {
-            return std.hash.Wyhash.hash(0, ctx.store.blobData(@fromBackingInt(id)));
+        pub fn hash(self: BlobIndexContext, id: u32) u64 {
+            return std.hash.Wyhash.hash(0, self.store.blobData(@fromBackingInt(id)));
         }
 
-        pub fn eql(_: BlobIdContext, a: u32, b: u32) bool {
+        pub fn eql(_: BlobIndexContext, a: u32, b: u32) bool {
             return a == b;
         }
     };
 
+    /// Looks indexed blobs up by candidate bytes.
     const BlobBytesContext = struct {
         store: *const ConstStore,
 
@@ -1297,18 +1300,16 @@ pub const ConstStore = struct {
             return std.hash.Wyhash.hash(0, bytes);
         }
 
-        pub fn eql(ctx: BlobBytesContext, bytes: []const u8, id: u32) bool {
-            return bytesEqual(bytes, ctx.store.blobData(@fromBackingInt(id)));
+        pub fn eql(self: BlobBytesContext, bytes: []const u8, id: u32) bool {
+            // Local byte compare: `std.mem.eql` is banned in src/check.
+            const stored = self.store.blobData(@fromBackingInt(id));
+            if (stored.len != bytes.len) return false;
+            for (stored, bytes) |x, y| {
+                if (x != y) return false;
+            }
+            return true;
         }
     };
-
-    fn bytesEqual(a: []const u8, b: []const u8) bool {
-        if (a.len != b.len) return false;
-        for (a, b) |x, y| {
-            if (x != y) return false;
-        }
-        return true;
-    }
 
     pub fn init(allocator: Allocator) ConstStore {
         return .{
@@ -1515,24 +1516,63 @@ pub const ConstStore = struct {
         try std.testing.expectEqual(@as(?usize, null), try evidenceVectorEnd(std.testing.allocator, .{ .nodes = &nodes }, 0, 3));
     }
 
+    /// Writable space for `len` candidate blob bytes at the end of the blob
+    /// backing. `commitBlobData` interns what the caller writes there exactly
+    /// as `addBlobData` interns a copy of it; nothing else may touch the blob
+    /// table in between.
+    pub fn reserveBlobData(self: *ConstStore, len: usize) Allocator.Error![]u8 {
+        if (self.serialized) constStoreInvariant("cannot add blob data to a serialized const store");
+        return self.blob_backing.addManyAsSlice(self.allocator, len);
+    }
+
+    /// Intern the `len` bytes written into the space `reserveBlobData`
+    /// returned, releasing that space when equal bytes are already interned.
+    pub fn commitBlobData(self: *ConstStore, len: usize) Allocator.Error!ConstBlobDataId {
+        const start = self.blob_backing.items.len - len;
+        errdefer self.blob_backing.shrinkRetainingCapacity(start);
+        const bytes = self.blob_backing.items[start..];
+        const entry = try self.blob_index.getOrPutContextAdapted(
+            self.allocator,
+            bytes,
+            BlobBytesContext{ .store = self },
+            BlobIndexContext{ .store = self },
+        );
+        if (entry.found_existing) {
+            self.blob_backing.shrinkRetainingCapacity(start);
+            return @fromBackingInt(entry.key_ptr.*);
+        }
+        errdefer self.blob_index.removeByPtr(entry.key_ptr);
+
+        const raw_id = std.math.cast(u32, self.blob_views.items.len) orelse return error.OutOfMemory;
+        // An empty blob owns no backing, as `artifact_serialize.appendSpan`
+        // records it.
+        const view: ConstRange = if (len == 0) .{ .start = 0, .len = 0 } else .{
+            .start = std.math.cast(u32, start) orelse return error.OutOfMemory,
+            .len = std.math.cast(u32, len) orelse return error.OutOfMemory,
+        };
+        try self.blob_views.append(self.allocator, view);
+        entry.key_ptr.* = raw_id;
+        return @fromBackingInt(raw_id);
+    }
+
     pub fn addBlobData(self: *ConstStore, bytes: []const u8) Allocator.Error!ConstBlobDataId {
         if (self.serialized) constStoreInvariant("cannot add blob data to a serialized const store");
         const entry = try self.blob_index.getOrPutContextAdapted(
             self.allocator,
             bytes,
             BlobBytesContext{ .store = self },
-            BlobIdContext{ .store = self },
+            BlobIndexContext{ .store = self },
         );
         if (entry.found_existing) return @fromBackingInt(entry.key_ptr.*);
         errdefer self.blob_index.removeByPtr(entry.key_ptr);
 
-        const id: ConstBlobDataId = @fromBackingInt(@intCast(@as(u32, @intCast(self.blob_views.items.len))));
+        const raw_id = std.math.cast(u32, self.blob_views.items.len) orelse return error.OutOfMemory;
         const backing_len = self.blob_backing.items.len;
         const view = try artifact_serialize.appendSpan(ConstRange, u8, &self.blob_backing, self.allocator, bytes);
         errdefer self.blob_backing.shrinkRetainingCapacity(backing_len);
         try self.blob_views.append(self.allocator, view);
-        entry.key_ptr.* = @backingInt(id);
-        return id;
+        entry.key_ptr.* = raw_id;
+        return @fromBackingInt(raw_id);
     }
 
     fn nodeSlice(self: *const ConstStore, range: ConstRange) []const ConstNodeId {

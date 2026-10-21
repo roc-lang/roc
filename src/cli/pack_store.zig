@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const backend = @import("backend");
+const base = @import("base");
 const check = @import("check");
 const compile = @import("compile");
 const lir = @import("lir");
@@ -387,10 +388,10 @@ test "object cache interleaved writers expose only complete final bytes" {
     defer tmp.cleanup();
     const root = try tmp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(root);
-    const base = CoreCtx.default(allocator, allocator, io);
-    var store = Store{ .allocator = allocator, .roc_ctx = base, .root = try allocator.dupe(u8, root), .verbose = false };
+    const base_ctx = CoreCtx.default(allocator, allocator, io);
+    var store = Store{ .allocator = allocator, .roc_ctx = base_ctx, .root = try allocator.dupe(u8, root), .verbose = false };
     defer store.deinit();
-    var hook = Hook{ .store = &store, .base = base };
+    var hook = Hook{ .store = &store, .base = base_ctx };
     store.roc_ctx.ctx = &hook;
     store.roc_ctx.vtable.writeTempFile = &Hook.writeTempFile;
     const identity = @as([32]u8, @splat(1));
@@ -655,19 +656,25 @@ pub const LoadedPacks = struct {
         for (names.items) |name| {
             const path = try std.fs.path.join(allocator, &.{ dir_path, name });
             defer allocator.free(path);
-            const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(1024 * 1024 * 1024)) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                else => return error.PackDirectoryUnreadable,
+            // The decoded pack aliases the file bytes, which its arena owns.
+            var arena = base.SingleThreadArena.init(allocator);
+            const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, arena.allocator(), .limited(1024 * 1024 * 1024)) catch |err| {
+                arena.deinit();
+                return switch (err) {
+                    error.OutOfMemory => error.OutOfMemory,
+                    else => error.PackDirectoryUnreadable,
+                };
             };
-            defer allocator.free(bytes);
             switch (files) {
                 .discovery => {
+                    // The index copies what it keeps out of the file's bytes.
+                    defer arena.deinit();
                     try self.appendDiscovery(bytes);
                     continue;
                 },
                 .code => {},
             }
-            self.appendPack(bytes) catch |err| {
+            self.appendPack(arena, bytes) catch |err| {
                 switch (err) {
                     error.UnsupportedPackVersion => if (input == .cache_offers) continue,
                     error.OutOfMemory, error.MalformedPack, error.PackDirectoryUnreadable => {},
@@ -705,12 +712,16 @@ pub const LoadedPacks = struct {
         for (names.items) |name| {
             const path = try std.fs.path.join(allocator, &.{ dir_path, name });
             defer allocator.free(path);
-            const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(1024 * 1024 * 1024)) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                else => return error.PackDirectoryUnreadable,
+            // The decoded pack aliases the file bytes, which its arena owns.
+            var arena = base.SingleThreadArena.init(allocator);
+            const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, arena.allocator(), .limited(1024 * 1024 * 1024)) catch |err| {
+                arena.deinit();
+                return switch (err) {
+                    error.OutOfMemory => error.OutOfMemory,
+                    else => error.PackDirectoryUnreadable,
+                };
             };
-            defer allocator.free(bytes);
-            var pack = PackFile.readObject(allocator, bytes) catch |err| switch (err) {
+            var pack = PackFile.readObjectOwned(arena, bytes) catch |err| switch (err) {
                 error.UnsupportedPackVersion => continue,
                 else => |other| return other,
             };
@@ -747,8 +758,9 @@ pub const LoadedPacks = struct {
         if (offset != bytes.len) return error.MalformedPack;
     }
 
-    fn appendPack(self: *LoadedPacks, bytes: []const u8) LoadError!void {
-        var pack = try PackFile.read(self.allocator, bytes);
+    /// Decode `bytes`, which `arena` owns, taking `arena` on failure too.
+    fn appendPack(self: *LoadedPacks, arena: base.SingleThreadArena, bytes: []const u8) LoadError!void {
+        var pack = try PackFile.readOwned(arena, bytes);
         errdefer pack.deinit();
         // After this succeeds, only LoadedPacks owns the decoded arena,
         // including errors in subsequent files or indexing.

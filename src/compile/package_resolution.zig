@@ -744,10 +744,9 @@ pub const Resolver = struct {
         var out = std.ArrayListUnmanaged(u8).empty;
         for (keys.items) |key| {
             const choice = choices.get(key).?;
-            const line = try std.fmt.allocPrint(self.arena(), "{s}\x00{d}.{d}.{d}\x00{s}\x01", .{
+            try out.print(self.arena(), "{s}\x00{d}.{d}.{d}\x00{s}\x01", .{
                 key, choice.version.major, choice.version.minor, choice.version.patch, choice.hash,
             });
-            try out.appendSlice(self.arena(), line);
         }
         return out.items;
     }

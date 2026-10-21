@@ -148,9 +148,9 @@ const State = struct {
     pattern_to_def: collections.DenseMap(CIR.Pattern.Idx, CIR.Def.Idx),
     definition: collections.DenseMap(CIR.Def.Idx, [32]u8),
     owners: collections.DenseMap(CIR.Expr.Idx, Owner),
-    refs: std.AutoHashMapUnmanaged(CIR.Def.Idx, void) = .empty,
+    refs: collections.DenseMap(CIR.Def.Idx, void),
     expr_stack: std.ArrayList(CIR.Expr.Idx) = .empty,
-    seen_defaults: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .empty,
+    seen_defaults: collections.DenseMap(CIR.Expr.Idx, void),
     digests: std.ArrayList([32]u8) = .empty,
     type_walk: TypeDigest,
 
@@ -165,6 +165,8 @@ const State = struct {
             .pattern_to_def = collections.DenseMap(CIR.Pattern.Idx, CIR.Def.Idx).init(allocator),
             .definition = collections.DenseMap(CIR.Def.Idx, [32]u8).init(allocator),
             .owners = collections.DenseMap(CIR.Expr.Idx, Owner).init(allocator),
+            .refs = collections.DenseMap(CIR.Def.Idx, void).init(allocator),
+            .seen_defaults = collections.DenseMap(CIR.Expr.Idx, void).init(allocator),
             .type_walk = TypeDigest.init(allocator, inputs),
         };
         errdefer state.deinitMaps();
@@ -185,9 +187,9 @@ const State = struct {
         self.pattern_to_def.deinit();
         self.definition.deinit();
         self.owners.deinit();
-        self.refs.deinit(self.allocator);
+        self.refs.deinit();
         self.expr_stack.deinit(self.allocator);
-        self.seen_defaults.deinit(self.allocator);
+        self.seen_defaults.deinit();
         self.digests.deinit(self.allocator);
         self.type_walk.deinit();
     }

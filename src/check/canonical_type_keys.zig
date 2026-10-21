@@ -1156,7 +1156,8 @@ test "concrete keys default open literal flex vars per kind (numeral -> Dec, quo
     const numeral_constraints = try store.appendStaticDispatchConstraints(&.{.{
         .fn_name = from_numeral_ident,
         .fn_var = numeral_fn_var,
-        .origin = .{ .from_literal = .{ .numeral = try store.appendNumeralInfo(types.NumeralInfo.testOnlyInt(1, false, base.Region.zero())) } },
+        .origin = .{ .from_literal = .numeral },
+        .numeral = try store.appendNumeralInfo(types.NumeralInfo.testOnlyInt(1, false, base.Region.zero())),
     }});
     const numeral_var = try store.freshFromContent(.{
         .flex = types.Flex.init().withConstraints(numeral_constraints),

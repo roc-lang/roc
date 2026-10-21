@@ -2924,7 +2924,7 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
         const store = &result.store;
         for (0..store.procSpecCount()) |index| {
             const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
-            const spec = store.getProcSpec(proc_id);
+            const spec = store.getProcSpecImmediate(proc_id);
             const name = store.procDebugName(proc_id) orelse "?";
             if (spec.body == null) {
                 std.debug.print("CENSUS_PROC\t{d}\t{s}\t0\t0\t{s}\n", .{ index, name, if (spec.is_static_initializer) "nobody-init" else "nobody" });

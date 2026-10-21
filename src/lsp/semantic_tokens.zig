@@ -14,6 +14,7 @@ const tokenize = @import("parse").tokenize;
 const parse = @import("parse");
 const can = @import("can");
 const base = @import("base");
+const collections = @import("collections");
 const CirVisitor = @import("cir_visitor.zig").CirVisitor;
 const VisitAction = @import("cir_visitor.zig").VisitAction;
 const position = @import("position.zig");
@@ -118,12 +119,8 @@ pub fn extractSemanticTokens(
     defer allocator.free(classes);
     @memset(classes, .default);
 
-    var classifier = Classifier{
-        .allocator = allocator,
-        .ast = parse_ast,
-        .classes = classes,
-    };
-    defer classifier.bindings.deinit(allocator);
+    var classifier = Classifier.init(allocator, parse_ast, classes);
+    defer classifier.deinit();
     try classifier.walkFile();
 
     var tokens: std.ArrayListUnmanaged(SemanticToken) = .empty;
@@ -742,13 +739,73 @@ fn appendSpan(
 /// branch or loop, and the declarations of a block are in scope for what they
 /// enclose. Declarations are hoisted within their block, as Roc's are at the top
 /// level, so a function can be recognised before its definition is reached.
+///
+/// The walk keeps its pending work on an explicit stack (design.md "Stack
+/// Safety"). Each item does its own work and pushes what follows it in reverse,
+/// so items run in the order a recursive walk would reach them. Bindings are
+/// keyed by interned name: each one records the binding of the same name it
+/// shadows, and `innermost` names the latest binding of each name in scope.
 const Classifier = struct {
     allocator: Allocator,
     ast: *const AST,
     classes: []Class,
     bindings: std.ArrayListUnmanaged(Binding) = .empty,
+    innermost: collections.DenseMap(base.Ident.Idx, u32),
+    work: std.ArrayListUnmanaged(Work) = .empty,
 
-    const Binding = struct { name: []const u8, class: Class };
+    const no_binding = std.math.maxInt(u32);
+
+    const Binding = struct {
+        name: base.Ident.Idx,
+        class: Class,
+        /// The binding of the same name this one shadows, or `no_binding`.
+        shadowed: u32,
+    };
+
+    const Work = union(enum) {
+        expr: AST.Expr.Idx,
+        /// After walking a call's callee: a called name is a function unless
+        /// it is a parameter.
+        callee: AST.Expr.Idx,
+        field_segments: AST.FieldAccessSegment.Span,
+        record_field: AST.RecordField.Idx,
+        pattern: struct { idx: AST.Pattern.Idx, class: Class },
+        pattern_record_field: struct { idx: AST.PatternRecordField.Idx, class: Class },
+        bind: struct { token: Token.Idx, class: Class },
+        set: struct { token: Token.Idx, class: Class },
+        type_anno: AST.TypeAnno.Idx,
+        /// After walking a tag union member: its head names a tag.
+        tag_union_member: AST.TypeAnno.Idx,
+        anno_record_field: AST.AnnoRecordField.Idx,
+        where: AST.Collection.Idx,
+        where_clause: AST.WhereClause.Idx,
+        statement: AST.Statement.Idx,
+        bind_statement: AST.Statement.Idx,
+        statements: struct { span: AST.Statement.Span, hoist: bool },
+        /// Statements whose bindings are in scope only for one another.
+        scoped_statements: AST.Statement.Span,
+        match_branch: AST.MatchBranch.Idx,
+        /// A loop's pattern and body, after its iterable.
+        for_body: struct { patt: AST.Pattern.Idx, body: AST.Expr.Idx },
+        /// Leave a scope: drop every binding made since `bindings` had this
+        /// length.
+        end_scope: u32,
+    };
+
+    fn init(allocator: Allocator, ast: *const AST, classes: []Class) Classifier {
+        return .{
+            .allocator = allocator,
+            .ast = ast,
+            .classes = classes,
+            .innermost = .init(allocator),
+        };
+    }
+
+    fn deinit(self: *Classifier) void {
+        self.bindings.deinit(self.allocator);
+        self.innermost.deinit();
+        self.work.deinit(self.allocator);
+    }
 
     fn set(self: *Classifier, token: Token.Idx, class: Class) void {
         if (token < self.classes.len) self.classes[token] = class;
@@ -758,18 +815,48 @@ const Classifier = struct {
         for (self.ast.store.tokenSlice(span)) |token| self.set(token, class);
     }
 
-    fn bind(self: *Classifier, token: Token.Idx, class: Class) Allocator.Error!void {
-        self.set(token, class);
-        try self.bindings.append(self.allocator, .{ .name = self.ast.resolve(token), .class = class });
+    /// The interned name `text` spells, where `text` is all of `token`'s text
+    /// or the part after its punctuation. The tokenizer interns an identifier
+    /// token's name, which ends where the token does, so it is `text` exactly
+    /// when the lengths agree; any other text is interned here.
+    fn nameOf(self: *const Classifier, token: Token.Idx, text: []const u8) Allocator.Error!base.Ident.Idx {
+        if (self.ast.tokens.resolveIdentifier(token)) |ident| {
+            if (self.ast.env.getIdent(ident).len == text.len) return ident;
+        }
+        return self.ast.env.insertIdent(self.allocator, base.Ident.for_text(text));
     }
 
-    fn lookup(self: *const Classifier, name: []const u8) ?Class {
-        var i = self.bindings.items.len;
-        while (i > 0) {
-            i -= 1;
-            if (std.mem.eql(u8, self.bindings.items[i].name, name)) return self.bindings.items[i].class;
+    fn bind(self: *Classifier, token: Token.Idx, class: Class) Allocator.Error!void {
+        self.set(token, class);
+        const name = try self.nameOf(token, self.ast.resolve(token));
+        const slot = std.math.cast(u32, self.bindings.items.len) orelse return error.OutOfMemory;
+        if (slot == no_binding) return error.OutOfMemory;
+        try self.bindings.ensureUnusedCapacity(self.allocator, 1);
+        const entry = try self.innermost.getOrPut(name);
+        const shadowed = if (entry.found_existing) entry.value_ptr.* else no_binding;
+        entry.value_ptr.* = slot;
+        self.bindings.appendAssumeCapacity(.{ .name = name, .class = class, .shadowed = shadowed });
+    }
+
+    fn endScope(self: *Classifier, mark: u32) void {
+        while (self.bindings.items.len > mark) {
+            const binding = self.bindings.pop().?;
+            if (binding.shadowed == no_binding) {
+                _ = self.innermost.remove(binding.name);
+            } else {
+                self.innermost.getPtr(binding.name).?.* = binding.shadowed;
+            }
         }
-        return null;
+    }
+
+    fn scopeMark(self: *const Classifier) u32 {
+        // `bind` keeps the binding count within `u32`.
+        return @intCast(self.bindings.items.len);
+    }
+
+    fn lookup(self: *const Classifier, name: base.Ident.Idx) ?Class {
+        const slot = self.innermost.get(name) orelse return null;
+        return self.bindings.items[slot].class;
     }
 
     fn isLambda(self: *const Classifier, expr_idx: AST.Expr.Idx) bool {
@@ -777,52 +864,188 @@ const Classifier = struct {
     }
 
     fn isFunctionType(self: *const Classifier, anno_idx: AST.TypeAnno.Idx) bool {
-        const anno = self.ast.store.getTypeAnno(anno_idx);
-        if (anno == .parens) return self.isFunctionType(anno.parens.anno);
+        var anno = self.ast.store.getTypeAnno(anno_idx);
+        while (anno == .parens) anno = self.ast.store.getTypeAnno(anno.parens.anno);
         return anno == .@"fn";
+    }
+
+    fn push(self: *Classifier, item: Work) Allocator.Error!void {
+        try self.work.append(self.allocator, item);
+    }
+
+    fn pushExprs(self: *Classifier, exprs: []const AST.Expr.Idx) Allocator.Error!void {
+        var i = exprs.len;
+        while (i > 0) {
+            i -= 1;
+            try self.push(.{ .expr = exprs[i] });
+        }
+    }
+
+    fn pushPatterns(self: *Classifier, patterns: []const AST.Pattern.Idx, class: Class) Allocator.Error!void {
+        var i = patterns.len;
+        while (i > 0) {
+            i -= 1;
+            try self.push(.{ .pattern = .{ .idx = patterns[i], .class = class } });
+        }
+    }
+
+    fn pushTypeAnnos(self: *Classifier, annos: []const AST.TypeAnno.Idx) Allocator.Error!void {
+        var i = annos.len;
+        while (i > 0) {
+            i -= 1;
+            try self.push(.{ .type_anno = annos[i] });
+        }
+    }
+
+    fn pushRecordFields(self: *Classifier, fields: AST.RecordField.Span) Allocator.Error!void {
+        const items = self.ast.store.recordFieldSlice(fields);
+        var i = items.len;
+        while (i > 0) {
+            i -= 1;
+            try self.push(.{ .record_field = items[i] });
+        }
     }
 
     fn walkFile(self: *Classifier) Allocator.Error!void {
         const file = self.ast.store.getFile();
-        try self.walkStatements(file.statements, true);
+        try self.push(.{ .statements = .{ .span = file.statements, .hoist = true } });
+        while (self.work.pop()) |item| try self.step(item);
     }
 
-    fn bindStatement(self: *Classifier, statement: AST.Statement) Allocator.Error!void {
-        if (statement == .decl) {
-            const d = statement.decl;
-            try self.walkPattern(d.pattern, if (self.isLambda(d.body)) .function else .variable);
-        } else if (statement == .type_anno and self.isFunctionType(statement.type_anno.anno)) {
-            try self.bind(statement.type_anno.name, .function);
-        }
-    }
-
-    fn walkStatements(self: *Classifier, span: AST.Statement.Span, hoist: bool) Allocator.Error!void {
-        const statements = self.ast.store.statementSlice(span);
-
-        if (hoist) {
-            for (statements) |stmt_idx| try self.bindStatement(self.ast.store.getStatement(stmt_idx));
-        }
-
-        for (statements) |stmt_idx| {
-            if (!hoist) try self.bindStatement(self.ast.store.getStatement(stmt_idx));
-            try self.walkStatement(stmt_idx);
-        }
-    }
-
-    fn walkStatement(self: *Classifier, stmt_idx: AST.Statement.Idx) Allocator.Error!void {
-        switch (self.ast.store.getStatement(stmt_idx)) {
-            .decl => |d| try self.walkExpr(d.body),
-            .@"var" => |v| {
-                if (v.body) |body| try self.walkExpr(body);
-                try self.bind(v.name, .variable);
+    fn step(self: *Classifier, item: Work) Allocator.Error!void {
+        switch (item) {
+            .expr => |expr_idx| try self.stepExpr(expr_idx),
+            .callee => |expr_idx| {
+                const callee = self.ast.store.getExpr(expr_idx);
+                if (callee != .ident) return;
+                const token = callee.ident.token;
+                if (token < self.classes.len and self.classes[token] != .parameter) self.set(token, .function);
             },
-            inline .expr, .crash, .dbg => |e| try self.walkExpr(e.expr),
-            .expect => |e| try self.walkExpr(e.body),
-            .@"return" => |e| try self.walkExpr(e.expr),
-            .@"for" => |f| try self.walkFor(f.patt, f.expr, f.body),
+            .field_segments => |segments| {
+                for (self.ast.store.fieldAccessSegmentSlice(segments)) |segment| {
+                    self.set(segment.field_token, .property);
+                }
+            },
+            .record_field => |field_idx| {
+                const field = self.ast.store.getRecordField(field_idx);
+                self.set(field.name, .property);
+                if (field.value.asSupplied()) |value| try self.push(.{ .expr = value });
+            },
+            .pattern => |p| try self.stepPattern(p.idx, p.class),
+            .pattern_record_field => |f| {
+                const field = self.ast.store.getPatternRecordField(f.idx);
+                if (field.value) |value| {
+                    if (field.name) |name| self.set(name, .property);
+                    try self.push(.{ .pattern = .{ .idx = value, .class = f.class } });
+                } else if (field.name) |name| {
+                    try self.bind(name, f.class);
+                }
+            },
+            .bind => |b| try self.bind(b.token, b.class),
+            .set => |s| self.set(s.token, s.class),
+            .type_anno => |anno_idx| try self.stepTypeAnno(anno_idx),
+            .tag_union_member => |tag_idx| {
+                var head = self.ast.store.getTypeAnno(tag_idx);
+                if (head == .apply) {
+                    const args = self.ast.store.typeAnnoSlice(head.apply.args);
+                    if (args.len == 0) return;
+                    head = self.ast.store.getTypeAnno(args[0]);
+                }
+                if (head == .ty) self.set(head.ty.token, .enum_member);
+            },
+            .anno_record_field => |field_idx| {
+                const field = self.ast.store.getAnnoRecordField(field_idx) catch return;
+                self.set(field.name, .property);
+                if (field.default_value) |default_value| try self.push(.{ .expr = default_value });
+                try self.push(.{ .type_anno = field.ty });
+            },
+            .where => |where| {
+                const collection = self.ast.store.getCollection(where);
+                const clauses = self.ast.store.whereClauseSlice(.{ .span = collection.span });
+                var i = clauses.len;
+                while (i > 0) {
+                    i -= 1;
+                    try self.push(.{ .where_clause = clauses[i] });
+                }
+            },
+            .where_clause => |clause_idx| switch (self.ast.store.getWhereClause(clause_idx)) {
+                .mod_method => |m| {
+                    self.set(m.var_tok, .type_parameter);
+                    self.set(m.name_tok, .function);
+                    try self.push(.{ .type_anno = m.anno });
+                },
+                .mod_alias => |m| {
+                    self.set(m.var_tok, .type_parameter);
+                    try self.push(.{ .type_anno = m.alias });
+                },
+                .malformed => {},
+            },
+            .statement => |stmt_idx| try self.stepStatement(stmt_idx),
+            .bind_statement => |stmt_idx| {
+                const statement = self.ast.store.getStatement(stmt_idx);
+                if (statement == .decl) {
+                    const d = statement.decl;
+                    try self.push(.{ .pattern = .{
+                        .idx = d.pattern,
+                        .class = if (self.isLambda(d.body)) .function else .variable,
+                    } });
+                } else if (statement == .type_anno and self.isFunctionType(statement.type_anno.anno)) {
+                    try self.bind(statement.type_anno.name, .function);
+                }
+            },
+            .statements => |s| {
+                const statements = self.ast.store.statementSlice(s.span);
+                var i = statements.len;
+                while (i > 0) {
+                    i -= 1;
+                    try self.push(.{ .statement = statements[i] });
+                    if (!s.hoist) try self.push(.{ .bind_statement = statements[i] });
+                }
+                if (s.hoist) {
+                    i = statements.len;
+                    while (i > 0) {
+                        i -= 1;
+                        try self.push(.{ .bind_statement = statements[i] });
+                    }
+                }
+            },
+            .scoped_statements => |span| {
+                try self.push(.{ .end_scope = self.scopeMark() });
+                try self.push(.{ .statements = .{ .span = span, .hoist = false } });
+            },
+            .match_branch => |branch_idx| {
+                const branch = self.ast.store.getBranch(branch_idx);
+                try self.push(.{ .end_scope = self.scopeMark() });
+                try self.push(.{ .expr = branch.body });
+                if (branch.guard) |guard| try self.push(.{ .expr = guard });
+                try self.push(.{ .pattern = .{ .idx = branch.pattern, .class = .variable } });
+            },
+            .for_body => |f| {
+                try self.push(.{ .end_scope = self.scopeMark() });
+                try self.push(.{ .expr = f.body });
+                try self.push(.{ .pattern = .{ .idx = f.patt, .class = .variable } });
+            },
+            .end_scope => |mark| self.endScope(mark),
+        }
+    }
+
+    fn stepStatement(self: *Classifier, stmt_idx: AST.Statement.Idx) Allocator.Error!void {
+        switch (self.ast.store.getStatement(stmt_idx)) {
+            .decl => |d| try self.push(.{ .expr = d.body }),
+            .@"var" => |v| {
+                try self.push(.{ .bind = .{ .token = v.name, .class = .variable } });
+                if (v.body) |body| try self.push(.{ .expr = body });
+            },
+            inline .expr, .crash, .dbg => |e| try self.push(.{ .expr = e.expr }),
+            .expect => |e| try self.push(.{ .expr = e.body }),
+            .@"return" => |e| try self.push(.{ .expr = e.expr }),
+            .@"for" => |f| {
+                try self.push(.{ .for_body = .{ .patt = f.patt, .body = f.body } });
+                try self.push(.{ .expr = f.expr });
+            },
             .@"while" => |w| {
-                try self.walkExpr(w.cond);
-                try self.walkExpr(w.body);
+                try self.push(.{ .expr = w.body });
+                try self.push(.{ .expr = w.cond });
             },
             .import => |i| {
                 const target = i.target;
@@ -850,56 +1073,25 @@ const Classifier = struct {
                 self.set(f.type_tok, .type);
             },
             .type_decl => |t| {
+                if (t.associated) |associated| try self.push(.{ .scoped_statements = associated.statements });
+                if (t.where) |where| try self.push(.{ .where = where });
+                try self.push(.{ .type_anno = t.anno });
                 if (self.ast.store.getTypeHeader(t.header)) |header| {
                     self.set(header.name, .type_declaration);
-                    for (self.ast.store.typeAnnoSlice(header.args)) |arg| try self.walkTypeAnno(arg);
+                    try self.pushTypeAnnos(self.ast.store.typeAnnoSlice(header.args));
                 } else |_| {}
-                try self.walkTypeAnno(t.anno);
-                if (t.where) |where| try self.walkWhere(where);
-                if (t.associated) |associated| {
-                    const mark = self.bindings.items.len;
-                    defer self.bindings.shrinkRetainingCapacity(mark);
-                    try self.walkStatements(associated.statements, false);
-                }
             },
             .type_anno => |a| {
                 self.set(a.name, if (self.isFunctionType(a.anno)) .function else .variable);
-                try self.walkTypeAnno(a.anno);
-                if (a.where) |where| try self.walkWhere(where);
+                if (a.where) |where| try self.push(.{ .where = where });
+                try self.push(.{ .type_anno = a.anno });
             },
             .@"break", .malformed => {},
         }
     }
 
-    fn walkWhere(self: *Classifier, where: AST.Collection.Idx) Allocator.Error!void {
-        const collection = self.ast.store.getCollection(where);
-        const clauses = self.ast.store.whereClauseSlice(.{ .span = collection.span });
-        for (clauses) |clause_idx| {
-            switch (self.ast.store.getWhereClause(clause_idx)) {
-                .mod_method => |m| {
-                    self.set(m.var_tok, .type_parameter);
-                    self.set(m.name_tok, .function);
-                    try self.walkTypeAnno(m.anno);
-                },
-                .mod_alias => |m| {
-                    self.set(m.var_tok, .type_parameter);
-                    try self.walkTypeAnno(m.alias);
-                },
-                .malformed => {},
-            }
-        }
-    }
-
-    fn walkFor(self: *Classifier, patt: AST.Pattern.Idx, expr: AST.Expr.Idx, body: AST.Expr.Idx) Allocator.Error!void {
-        try self.walkExpr(expr);
-        const mark = self.bindings.items.len;
-        defer self.bindings.shrinkRetainingCapacity(mark);
-        try self.walkPattern(patt, .variable);
-        try self.walkExpr(body);
-    }
-
     /// Classify a pattern; the names it binds get `class`.
-    fn walkPattern(self: *Classifier, pattern_idx: AST.Pattern.Idx, class: Class) Allocator.Error!void {
+    fn stepPattern(self: *Classifier, pattern_idx: AST.Pattern.Idx, class: Class) Allocator.Error!void {
         switch (self.ast.store.getPattern(pattern_idx)) {
             .ident => |p| try self.bind(p.ident_tok, class),
             .var_ident => |p| try self.bind(p.ident_tok, class),
@@ -908,33 +1100,30 @@ const Classifier = struct {
                 self.set(p.tag_tok, if (p.backing_value) .type else .enum_member);
                 // A destructured payload holds values, never the function itself.
                 const inner: Class = if (class == .function) .variable else class;
-                for (self.ast.store.patternSlice(p.args)) |arg| try self.walkPattern(arg, inner);
+                try self.pushPatterns(self.ast.store.patternSlice(p.args), inner);
             },
             .record => |p| {
-                for (self.ast.store.patternRecordFieldSlice(p.fields)) |field_idx| {
-                    const field = self.ast.store.getPatternRecordField(field_idx);
-                    const inner: Class = if (class == .function) .variable else class;
-                    if (field.value) |value| {
-                        if (field.name) |name| self.set(name, .property);
-                        try self.walkPattern(value, inner);
-                    } else if (field.name) |name| {
-                        try self.bind(name, inner);
-                    }
+                const inner: Class = if (class == .function) .variable else class;
+                const fields = self.ast.store.patternRecordFieldSlice(p.fields);
+                var i = fields.len;
+                while (i > 0) {
+                    i -= 1;
+                    try self.push(.{ .pattern_record_field = .{ .idx = fields[i], .class = inner } });
                 }
             },
-            .list => |p| for (self.ast.store.patternSlice(p.patterns)) |item| try self.walkPattern(item, class),
-            .tuple => |p| for (self.ast.store.patternSlice(p.patterns)) |item| try self.walkPattern(item, class),
-            .alternatives => |p| for (self.ast.store.patternSlice(p.patterns)) |item| try self.walkPattern(item, class),
+            .list => |p| try self.pushPatterns(self.ast.store.patternSlice(p.patterns), class),
+            .tuple => |p| try self.pushPatterns(self.ast.store.patternSlice(p.patterns), class),
+            .alternatives => |p| try self.pushPatterns(self.ast.store.patternSlice(p.patterns), class),
             .list_rest => |p| if (p.name) |name| try self.bind(name, class),
             .as => |p| {
-                try self.walkPattern(p.pattern, class);
-                try self.bind(p.name, class);
+                try self.push(.{ .bind = .{ .token = p.name, .class = class } });
+                try self.push(.{ .pattern = .{ .idx = p.pattern, .class = class } });
             },
             .int, .frac, .typed_int, .typed_frac, .string, .single_quote, .underscore, .malformed => {},
         }
     }
 
-    fn walkTypeAnno(self: *Classifier, anno_idx: AST.TypeAnno.Idx) Allocator.Error!void {
+    fn stepTypeAnno(self: *Classifier, anno_idx: AST.TypeAnno.Idx) Allocator.Error!void {
         switch (self.ast.store.getTypeAnno(anno_idx)) {
             .ty => |t| {
                 self.setAll(t.qualifiers, .type);
@@ -942,73 +1131,58 @@ const Classifier = struct {
             },
             .ty_var => |t| self.set(t.tok, .type_parameter),
             .underscore_type_var => |t| self.set(t.tok, .type_parameter),
-            .apply => |a| for (self.ast.store.typeAnnoSlice(a.args)) |arg| try self.walkTypeAnno(arg),
+            .apply => |a| try self.pushTypeAnnos(self.ast.store.typeAnnoSlice(a.args)),
             .tag_union => |u| {
-                for (self.ast.store.typeAnnoSlice(u.tags)) |tag_idx| {
-                    try self.walkTypeAnno(tag_idx);
-                    // The head of each member names a tag, not a type.
-                    var head = self.ast.store.getTypeAnno(tag_idx);
-                    if (head == .apply) {
-                        const args = self.ast.store.typeAnnoSlice(head.apply.args);
-                        if (args.len == 0) continue;
-                        head = self.ast.store.getTypeAnno(args[0]);
-                    }
-                    if (head == .ty) self.set(head.ty.token, .enum_member);
-                }
                 switch (u.ext) {
-                    .named => |n| try self.walkTypeAnno(n.anno),
+                    .named => |n| try self.push(.{ .type_anno = n.anno }),
                     .closed, .open => {},
+                }
+                const tags = self.ast.store.typeAnnoSlice(u.tags);
+                var i = tags.len;
+                while (i > 0) {
+                    i -= 1;
+                    try self.push(.{ .tag_union_member = tags[i] });
+                    try self.push(.{ .type_anno = tags[i] });
                 }
             },
-            .tuple => |t| for (self.ast.store.typeAnnoSlice(t.annos)) |item| try self.walkTypeAnno(item),
+            .tuple => |t| try self.pushTypeAnnos(self.ast.store.typeAnnoSlice(t.annos)),
             .record => |r| {
-                for (self.ast.store.annoRecordFieldSlice(r.fields)) |field_idx| {
-                    const field = self.ast.store.getAnnoRecordField(field_idx) catch continue;
-                    self.set(field.name, .property);
-                    try self.walkTypeAnno(field.ty);
-                    if (field.default_value) |default_value| try self.walkExpr(default_value);
-                }
                 switch (r.ext) {
-                    .named => |n| try self.walkTypeAnno(n.anno),
+                    .named => |n| try self.push(.{ .type_anno = n.anno }),
                     .closed, .open => {},
+                }
+                const fields = self.ast.store.annoRecordFieldSlice(r.fields);
+                var i = fields.len;
+                while (i > 0) {
+                    i -= 1;
+                    try self.push(.{ .anno_record_field = fields[i] });
                 }
             },
             .@"fn" => |f| {
-                for (self.ast.store.typeAnnoSlice(f.args)) |arg| try self.walkTypeAnno(arg);
-                try self.walkTypeAnno(f.ret);
+                try self.push(.{ .type_anno = f.ret });
+                try self.pushTypeAnnos(self.ast.store.typeAnnoSlice(f.args));
             },
-            .parens => |p| try self.walkTypeAnno(p.anno),
+            .parens => |p| try self.push(.{ .type_anno = p.anno }),
             .underscore, .malformed => {},
         }
     }
 
-    fn walkRecordFields(self: *Classifier, fields: AST.RecordField.Span) Allocator.Error!void {
-        for (self.ast.store.recordFieldSlice(fields)) |field_idx| {
-            const field = self.ast.store.getRecordField(field_idx);
-            self.set(field.name, .property);
-            if (field.value.asSupplied()) |value| try self.walkExpr(value);
-        }
+    /// Push the walk of a call's callee, followed by its classification.
+    fn pushCallee(self: *Classifier, expr_idx: AST.Expr.Idx) Allocator.Error!void {
+        try self.push(.{ .callee = expr_idx });
+        try self.push(.{ .expr = expr_idx });
     }
 
-    /// The callee of a call is a function unless it is a parameter being called.
-    fn walkCallee(self: *Classifier, expr_idx: AST.Expr.Idx) Allocator.Error!void {
-        try self.walkExpr(expr_idx);
-        const callee = self.ast.store.getExpr(expr_idx);
-        if (callee != .ident) return;
-        const token = callee.ident.token;
-        if (token < self.classes.len and self.classes[token] != .parameter) self.set(token, .function);
-    }
-
-    fn walkExpr(self: *Classifier, expr_idx: AST.Expr.Idx) Allocator.Error!void {
+    fn stepExpr(self: *Classifier, expr_idx: AST.Expr.Idx) Allocator.Error!void {
         switch (self.ast.store.getExpr(expr_idx)) {
             .ident => |i| {
                 const qualifiers = self.ast.store.tokenSlice(i.qualifiers);
                 for (qualifiers) |qualifier| self.set(qualifier, .type);
-                const text = self.ast.resolve(i.token);
-                // A qualified name arrives as a dotted token; resolve the bare name.
-                const name = text[@min(text.len, namePrefixLen(self.ast.tokens.tokens.items(.tag)[i.token]))..];
                 if (qualifiers.len == 0) {
-                    if (self.lookup(name)) |class| self.set(i.token, class);
+                    const text = self.ast.resolve(i.token);
+                    // A qualified name arrives as a dotted token; resolve the bare name.
+                    const name = text[@min(text.len, namePrefixLen(self.ast.tokens.tokens.items(.tag)[i.token]))..];
+                    if (self.lookup(try self.nameOf(i.token, name))) |class| self.set(i.token, class);
                 } else {
                     self.set(i.token, .variable);
                 }
@@ -1018,88 +1192,82 @@ const Classifier = struct {
                 self.set(t.token, .enum_member);
             },
             .lambda => |l| {
-                const mark = self.bindings.items.len;
-                defer self.bindings.shrinkRetainingCapacity(mark);
-                for (self.ast.store.patternSlice(l.args)) |arg| try self.walkPattern(arg, .parameter);
-                try self.walkExpr(l.body);
+                try self.push(.{ .end_scope = self.scopeMark() });
+                try self.push(.{ .expr = l.body });
+                try self.pushPatterns(self.ast.store.patternSlice(l.args), .parameter);
             },
             .apply => |a| {
-                try self.walkCallee(a.@"fn");
-                for (self.ast.store.exprSlice(a.args)) |arg| try self.walkExpr(arg);
+                try self.pushExprs(self.ast.store.exprSlice(a.args));
+                try self.pushCallee(a.@"fn");
             },
             .record => |r| {
-                if (r.ext) |ext| try self.walkExpr(ext);
-                try self.walkRecordFields(r.fields);
+                try self.pushRecordFields(r.fields);
+                if (r.ext) |ext| try self.push(.{ .expr = ext });
             },
             .record_builder => |r| {
-                try self.walkExpr(r.mapper);
-                try self.walkRecordFields(r.fields);
+                try self.pushRecordFields(r.fields);
+                try self.push(.{ .expr = r.mapper });
             },
             .nominal_record => |n| {
-                try self.walkExpr(n.mapper);
-                try self.walkExpr(n.backing);
+                try self.push(.{ .expr = n.backing });
+                try self.push(.{ .expr = n.mapper });
             },
             .nominal_apply => |n| {
-                try self.walkExpr(n.mapper);
-                for (self.ast.store.exprSlice(n.args)) |arg| try self.walkExpr(arg);
+                try self.pushExprs(self.ast.store.exprSlice(n.args));
+                try self.push(.{ .expr = n.mapper });
             },
             .field_access => |f| {
-                try self.walkExpr(f.receiver);
-                for (self.ast.store.fieldAccessSegmentSlice(f.segments)) |segment| {
-                    self.set(segment.field_token, .property);
-                }
+                try self.push(.{ .field_segments = f.segments });
+                try self.push(.{ .expr = f.receiver });
             },
             .method_call => |m| {
-                try self.walkExpr(m.receiver);
-                self.set(m.method_token, .function);
-                for (self.ast.store.exprSlice(m.args)) |arg| try self.walkExpr(arg);
+                try self.pushExprs(self.ast.store.exprSlice(m.args));
+                try self.push(.{ .set = .{ .token = m.method_token, .class = .function } });
+                try self.push(.{ .expr = m.receiver });
             },
-            .tuple_access => |t| try self.walkExpr(t.expr),
+            .tuple_access => |t| try self.push(.{ .expr = t.expr }),
             .arrow_call => |a| {
-                try self.walkExpr(a.left);
-                try self.walkCallee(a.right);
+                try self.pushCallee(a.right);
+                try self.push(.{ .expr = a.left });
             },
             .bin_op => |b| {
-                try self.walkExpr(b.left);
-                try self.walkExpr(b.right);
+                try self.push(.{ .expr = b.right });
+                try self.push(.{ .expr = b.left });
             },
-            .suffix_single_question => |u| try self.walkExpr(u.expr),
-            .unary_op => |u| try self.walkExpr(u.expr),
+            .suffix_single_question => |u| try self.push(.{ .expr = u.expr }),
+            .unary_op => |u| try self.push(.{ .expr = u.expr }),
             .if_then_else => |i| {
-                try self.walkExpr(i.condition);
-                try self.walkExpr(i.then);
-                try self.walkExpr(i.@"else");
+                try self.push(.{ .expr = i.@"else" });
+                try self.push(.{ .expr = i.then });
+                try self.push(.{ .expr = i.condition });
             },
             .if_without_else => |i| {
-                try self.walkExpr(i.condition);
-                try self.walkExpr(i.then);
+                try self.push(.{ .expr = i.then });
+                try self.push(.{ .expr = i.condition });
             },
             .match => |m| {
-                try self.walkExpr(m.expr);
-                for (self.ast.store.matchBranchSlice(m.branches)) |branch_idx| {
-                    const branch = self.ast.store.getBranch(branch_idx);
-                    const mark = self.bindings.items.len;
-                    defer self.bindings.shrinkRetainingCapacity(mark);
-                    try self.walkPattern(branch.pattern, .variable);
-                    if (branch.guard) |guard| try self.walkExpr(guard);
-                    try self.walkExpr(branch.body);
+                const branches = self.ast.store.matchBranchSlice(m.branches);
+                var i = branches.len;
+                while (i > 0) {
+                    i -= 1;
+                    try self.push(.{ .match_branch = branches[i] });
                 }
+                try self.push(.{ .expr = m.expr });
             },
-            .block => |b| {
-                const mark = self.bindings.items.len;
-                defer self.bindings.shrinkRetainingCapacity(mark);
-                try self.walkStatements(b.statements, false);
+            .block => |b| try self.push(.{ .scoped_statements = b.statements }),
+            .for_expr => |f| {
+                try self.push(.{ .for_body = .{ .patt = f.patt, .body = f.body } });
+                try self.push(.{ .expr = f.expr });
             },
-            .for_expr => |f| try self.walkFor(f.patt, f.expr, f.body),
-            .dbg => |e| try self.walkExpr(e.expr),
-            .crash => |e| try self.walkExpr(e.expr),
-            .@"return" => |e| try self.walkExpr(e.expr),
-            .list => |l| for (self.ast.store.exprSlice(l.items)) |item| try self.walkExpr(item),
-            .tuple => |t| for (self.ast.store.exprSlice(t.items)) |item| try self.walkExpr(item),
-            .string => |s| for (self.ast.store.exprSlice(s.parts)) |part| try self.walkExpr(part),
-            .multiline_string => |s| for (self.ast.store.exprSlice(s.parts)) |part| try self.walkExpr(part),
-            .typed_string => |s| for (self.ast.store.exprSlice(s.parts)) |part| try self.walkExpr(part),
-            .typed_multiline_string => |s| for (self.ast.store.exprSlice(s.parts)) |part| try self.walkExpr(part),
+            .dbg => |e| try self.push(.{ .expr = e.expr }),
+            .crash => |e| try self.push(.{ .expr = e.expr }),
+            .@"return" => |e| try self.push(.{ .expr = e.expr }),
+            .list => |l| try self.pushExprs(self.ast.store.exprSlice(l.items)),
+            .tuple => |t| try self.pushExprs(self.ast.store.exprSlice(t.items)),
+            .string => |s| try self.pushExprs(self.ast.store.exprSlice(s.parts)),
+            .multiline_string => |s| try self.pushExprs(self.ast.store.exprSlice(s.parts)),
+            .typed_string => |s| try self.pushExprs(self.ast.store.exprSlice(s.parts)),
+            .typed_multiline_string => |s| try self.pushExprs(self.ast.store.exprSlice(s.parts)),
             .int,
             .frac,
             .typed_int,

@@ -69,7 +69,8 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 ///      layouts are plain layout indices.
 /// v51: statements keep their rows out of line, and the store records its
 ///      lowering modules' keys.
-pub const FORMAT_VERSION: u32 = 53;
+/// v54: combines the independent v51-v53 image changes.
+pub const FORMAT_VERSION: u32 = 54;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
@@ -293,7 +294,7 @@ pub const LirStoreImage = extern struct {
             .cf_stmt_sources = try guardedListFromRef(LirStore.StmtSourceId, "LirStore.cf_stmt_sources", base_ptr, image_size, self.cf_stmt_sources),
             .stmt_sources = try guardedListFromRef(LirStore.StmtSource, "LirStore.stmt_sources", base_ptr, image_size, self.stmt_sources),
             .cf_stmt_inline_scopes = try guardedListFromRef(LIR.InlineScopeId, "LirStore.cf_stmt_inline_scopes", base_ptr, image_size, self.cf_stmt_inline_scopes),
-            .cf_stmt_origin_kinds = try guardedListFromRef(LIR.OriginKind, "LirStore.cf_stmt_origin_kinds", base_ptr, image_size, self.cf_stmt_origin_kinds),
+            .cf_stmt_origin_kinds = try guardedListFromRef(LIR.StoredOriginKind, "LirStore.cf_stmt_origin_kinds", base_ptr, image_size, self.cf_stmt_origin_kinds),
             .inline_scopes = try guardedListFromRef(LIR.InlineScope, "LirStore.inline_scopes", base_ptr, image_size, self.inline_scopes),
             .body_coordinator = null,
             .body_prefix = std.mem.zeroes(LirStore.BodyPrefix),
@@ -830,9 +831,10 @@ comptime {
     // guards cross-version mismatches. `tail_call_builder`, `proc_rewrite`,
     // `stmt_source_rows`, `rc_effect_rows` and `facts` are transient worker state, not
     // serialized, and default to null or empty in views. The layout store's `digest_cache` is a memo
-    // each view starts empty.
+    // each view starts empty, and its `commit_scratch` and
+    // `scratch_field_offsets` are scratch that views start empty.
     std.debug.assert(@typeInfo(LirStore).@"struct".field_names.len == 40);
-    std.debug.assert(@typeInfo(layout_mod.Store).@"struct".field_names.len == 18);
+    std.debug.assert(@typeInfo(layout_mod.Store).@"struct".field_names.len == 20);
     std.debug.assert(@typeInfo(base.StringLiteral.Store).@"struct".field_names.len == 1);
 
     // The header is authored field by field in image storage and is part of a
@@ -1036,6 +1038,8 @@ fn deinitViewedLayouts(layouts: *layout_mod.Store, allocator: std.mem.Allocator)
     layouts.tag_union_variants.deinit(allocator);
     layouts.interned_layouts.deinit(allocator);
     layouts.interned_key_bytes.deinit(allocator);
+    layouts.scratch_field_offsets.deinit(allocator);
+    layouts.commit_scratch.promote(allocator).deinit();
     layouts.digest_cache.destroy(allocator);
 }
 

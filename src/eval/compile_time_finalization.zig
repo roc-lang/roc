@@ -3521,8 +3521,8 @@ fn evalInterpreterLiteralRoot(
     plan: LirProgram.LiteralRootPlan,
     shared_program: *InterpreterProgram,
 ) FinalizeError!bool {
-    const program = try shared_program.fork(lowered);
-    defer program.deinit();
+    const program = try shared_program.acquireFork(lowered);
+    defer shared_program.releaseFork(program);
     program.timing_io = if (options.timing) |timing| timing.std_io else null;
     const interpreter = &program.interpreter;
     const producer: lir.LIR.ComptimeProducer = .{ .literal = plan.id };
@@ -4032,6 +4032,12 @@ const InterpreterProgram = struct {
     shared_callable_owner: ?*InterpreterProgram = null,
     callable_images: usize = 0,
     base_callables_ready: bool = false,
+    /// Forks of this root program that finished an evaluation, kept with
+    /// their interpreter's warmed stacks and caches for the next one. A fork
+    /// in use is never here.
+    idle_forks: std.ArrayListUnmanaged(*InterpreterProgram) = .empty,
+    /// Forks handed out by `acquireFork` and not yet released.
+    active_forks: usize = 0,
 
     fn init(allocator: Allocator, modules: lir.CheckedPipeline.CheckedModuleSet, lowered: *lir.CheckedPipeline.LoweredProgram, options: Options) FinalizeError!*InterpreterProgram {
         const self = try allocator.create(InterpreterProgram);
@@ -4043,6 +4049,8 @@ const InterpreterProgram = struct {
         self.shared_callable_owner = null;
         self.callable_images = 0;
         self.base_callables_ready = false;
+        self.idle_forks = .empty;
+        self.active_forks = 0;
         const started = if (options.timing) |timing| timing.start() else 0;
         self.slots = try StaticSlotEnvironment.init(allocator, modules, lowered, roc_target.RocTarget.detectNative(), interpreter_static_data.image_options);
         errdefer self.slots.deinit();
@@ -4094,6 +4102,36 @@ const InterpreterProgram = struct {
         return child;
     }
 
+    /// A fork for one evaluation, reusing an idle one when there is one.
+    /// `releaseFork` returns it.
+    fn acquireFork(self: *InterpreterProgram, lowered: *lir.CheckedPipeline.LoweredProgram) FinalizeError!*InterpreterProgram {
+        const owner = self.shared_callable_owner orelse self;
+        // Reserve the slot `releaseFork` pushes into, so releasing never fails.
+        try owner.idle_forks.ensureTotalCapacity(owner.allocator, owner.idle_forks.items.len + owner.active_forks + 1);
+        const child = if (owner.idle_forks.pop()) |idle| reused: {
+            if (builtin.mode == .debug) {
+                std.debug.assert(idle.interpreter.store == &lowered.lir_result.store);
+                std.debug.assert(idle.shared_slots == self.slotEnvironment());
+            }
+            idle.refreshCallableMetadata();
+            break :reused idle;
+        } else try self.fork(lowered);
+        owner.active_forks += 1;
+        return child;
+    }
+
+    /// Return a fork from `acquireFork`, discarding everything its evaluation
+    /// left behind.
+    fn releaseFork(self: *InterpreterProgram, child: *InterpreterProgram) void {
+        const owner = self.shared_callable_owner orelse self;
+        if (builtin.mode == .debug) std.debug.assert(owner.active_forks > 0);
+        owner.active_forks -= 1;
+        child.host.reset();
+        child.interpreter.resetBetweenEvaluations();
+        child.timing_io = null;
+        owner.idle_forks.appendAssumeCapacity(child);
+    }
+
     const resolveFunction = interpreter_static_data.resolveFunction;
 
     fn resolveCallable(_: ?*anyopaque, data_ptr: [*]u8) error{RuntimeError}!NativeRootExport.CallableResolution {
@@ -4127,6 +4165,8 @@ const InterpreterProgram = struct {
 
     fn deinit(self: *InterpreterProgram) void {
         const allocator = self.allocator;
+        for (self.idle_forks.items) |child| child.deinit();
+        self.idle_forks.deinit(allocator);
         self.interpreter.deinit();
         self.host.deinit();
         if (self.shared_slots == null) {
@@ -6465,6 +6505,8 @@ fn testInterpreterSlot(failure_message: ?[]const u8) (FinalizeError || Interpret
     owner.shared_callable_owner = null;
     owner.callable_images = 0;
     owner.base_callables_ready = false;
+    owner.idle_forks = .empty;
+    owner.active_forks = 0;
     owner.static_strings = try Interpreter.buildStaticStrings(allocator, &result.store);
     owner.interpreter = try Interpreter.initWithBoxyTables(allocator, &result.store, &result.layouts, Interpreter.BoxyTables.fromResult(result), owner.static_strings.view(), owner.host.ops());
     owner.host.bindInterpreter(&owner.interpreter);
