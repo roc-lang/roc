@@ -6098,6 +6098,18 @@ const Certifier = struct {
             _ = try self.requireAggregateRepresentation(state, source);
             return;
         }
+        // A struct view whose shell names every refcounted slot of its layout
+        // holds no unit: ARC marked it as only its container's inline
+        // representation, read for its non-refcounted leaves, which
+        // `requireAggregateRepresentation` admits. Binding it needs only that
+        // representation. Lent by its container's value, it is live only
+        // while the container is, so anything that needs a unit through it
+        // after the container's units are spent fails.
+        if (shell.len != 0 and try self.shellHoldsNoUnit(target, shell)) {
+            const representation = try self.requireAggregateRepresentation(state, source);
+            _ = try self.bindFresh(state, target, 0, if (representation == no_value) &.{} else &.{representation});
+            return;
+        }
         const source_value = try self.requireLive(state, source);
         // Reading a variant's payload proves the container holds that variant
         // on this path; anything else is already undefined.
@@ -6128,6 +6140,15 @@ const Certifier = struct {
         info.payload_source = source_value;
         info.payload_projection = projection;
         info.payload_taken = take_kind == .take;
+    }
+
+    /// Whether `shell`, a struct view's absent slots, names every refcounted
+    /// slot of the view's layout.
+    fn shellHoldsNoUnit(self: *Certifier, target: LIR.LocalId, shell: anytype) Allocator.Error!bool {
+        const required = try self.requiredClaimsForLayout(self.store.getLocal(target).layout_idx) orelse return false;
+        var absent: ClaimSet = .{};
+        for (0..shell.len) |index| absent = try absent.withField(self.claim_arena.allocator(), GuardedList.at(shell, index));
+        return absent.eql(required);
     }
 
     /// An RC-bearing projection read observes the stored unit behind the
@@ -7538,7 +7559,7 @@ test "certify accepts a retained Boxy field borrowed from implicit capture stora
     const result = try f.local(.i64);
     const desc_local = try f.local(.opaque_ptr);
     const desc = LIR.BoxyDescRef{ .local = desc_local };
-    f.store.setLocalBoxyDesc(field, desc);
+    try f.store.setLocalBoxyDesc(field, desc);
 
     const ret = try f.ret(result);
     const result_assign = try f.assignI64(result, ret);

@@ -7,7 +7,6 @@
 const std = @import("std");
 const collections = @import("collections");
 const builtin = @import("builtin");
-const build_options = @import("build_options");
 const base = @import("base");
 const check = @import("check");
 const core = @import("lir_core");
@@ -24,6 +23,11 @@ const SingleUseInline = @import("single_use_inline.zig");
 pub const CompletedScalarValues = postcheck.ComptimeScalarValues.CompletedScalarValues;
 /// Which runtime specializations compile-time evaluation must lower.
 pub const LiteralDemand = postcheck.LiteralDemand;
+/// See `postcheck.Common.LiteralValueLookup`.
+pub const LiteralValueLookup = postcheck.Common.LiteralValueLookup;
+pub const LiteralValueHit = postcheck.Common.LiteralValueHit;
+pub const LiteralValueRead = postcheck.Common.LiteralValueRead;
+pub const LiteralRootReuse = postcheck.Common.LiteralRootReuse;
 const TagReachability = @import("tag_reachability.zig");
 const ReachableProcs = @import("reachable_procs.zig");
 const DebugPrint = @import("debug_print.zig");
@@ -163,6 +167,13 @@ pub const TargetConfig = struct {
     spec_comptime_reads: bool = false,
     /// The compilation session evaluates the program's literal roots.
     literal_roots: bool = false,
+    /// With `literal_roots`, the literal values an earlier compilation of the
+    /// program stored, which literal roots restore instead of converting
+    /// (design.md "Compile-Time Value Reuse Across Edits").
+    literal_values: ?postcheck.Common.LiteralValueLookup = null,
+    /// With `literal_values`, keep each restored literal root's conversion as
+    /// a literal root that evaluation runs to verify the stored value.
+    verify_literal_values: bool = false,
     inline_mode: InlineMode = .none,
     /// Direct-call inlining scope for SpecConstr's value-aware clones.
     /// Optimized builds use `.all_calls`; dev builds use `.iterator_fusion`
@@ -1511,6 +1522,8 @@ pub fn prepareCheckedModulesMonotype(
                 .spec_comptime_reads_out = if (target.spec_comptime_reads) &spec_comptime_reads else null,
                 .spec_key_aliases_out = &spec_key_aliases,
                 .literal_roots = target.literal_roots,
+                .literal_values = target.literal_values,
+                .verify_literal_values = target.verify_literal_values,
                 .replay_interface_summaries = target.replay_interface_summaries,
                 .target_usize = target.target_usize,
                 .inline_expects = if (target.comptime_value_reads) .shared else switch (target.inline_expects) {
@@ -2351,14 +2364,10 @@ test "checked pipeline declarations are referenced" {
 }
 
 /// Print the final LIR of every procedure whose debug name contains
-/// `ROC_LIR_DUMP`, for reading what the passes actually produced. Off unless
-/// the variable is set, and absent on targets without an environment and in
-/// compilers built without developer diagnostics.
-/// Printing the final LIR of selected procedures, for reading what the passes
-/// actually produced. Selected at compile time, so a build without an
-/// environment or a standard error stream, and a compiler built without
-/// developer diagnostics, carries none of it.
-const LirDump = if (builtin.os.tag == .freestanding or !build_options.dev_diagnostics) struct {
+/// `ROC_LIR_DUMP`, for reading what the passes actually produced. Selected at
+/// compile time, so a compiler that does not read developer diagnostics
+/// carries none of it.
+const LirDump = if (!base.dev_diagnostics.available) struct {
     fn filter() ?[]const u8 {
         return null;
     }
@@ -2366,8 +2375,7 @@ const LirDump = if (builtin.os.tag == .freestanding or !build_options.dev_diagno
     fn run(_: *const LirProgram.Result) Allocator.Error!void {}
 } else struct {
     fn filter() ?[]const u8 {
-        const raw = std.c.getenv("ROC_LIR_DUMP") orelse return null;
-        return std.mem.span(raw);
+        return base.dev_diagnostics.get(.lir_dump);
     }
 
     fn run(result: *const LirProgram.Result) Allocator.Error!void {
@@ -2499,7 +2507,7 @@ test "adopting completed compile-time values drops their initializers and identi
 /// function type or an erased callable, and the request and solved type
 /// digests. Never enabled by default; it only reads the finished stores, and a
 /// compiler built without developer diagnostics carries none of it.
-const SpecCensus = if (builtin.os.tag == .freestanding or !build_options.dev_diagnostics) struct {
+const SpecCensus = if (!base.dev_diagnostics.available) struct {
     fn enabled() bool {
         return false;
     }
@@ -2511,7 +2519,7 @@ const SpecCensus = if (builtin.os.tag == .freestanding or !build_options.dev_dia
     const MonoType = postcheck.Monotype.Type;
 
     fn enabled() bool {
-        return std.c.getenv("ROC_SPEC_CENSUS") != null;
+        return base.dev_diagnostics.isSet(.spec_census);
     }
 
     fn runLifted(lifted: *const postcheck.MonotypeLifted.Ast.Program) void {

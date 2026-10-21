@@ -395,6 +395,52 @@ pub const ComptimeRootRead = extern struct {
     root: u32,
 };
 
+/// A compile-time root a stored literal value read, named across versions of
+/// the program (design.md "Compile-Time Value Reuse Across Edits"): its module
+/// (a module no other module of the program imports by its value context,
+/// any other by its checked key), its site within that module, and the value
+/// identity it had.
+pub const LiteralValueRead = struct {
+    in_top_module: bool,
+    /// The module's value context when `in_top_module`, else its checked key.
+    module: [32]u8,
+    site: [32]u8,
+    value: [32]u8,
+};
+
+/// A literal value the literal value store holds for a value identity: its
+/// value graph and the roots its evaluation read.
+pub const LiteralValueHit = struct {
+    store: *const check.ConstStore.ConstStore,
+    root: check.ConstStore.ConstNodeId,
+    reads: []const LiteralValueRead,
+};
+
+/// The literal values an earlier compilation of the program stored, by value
+/// identity. The consumer that owns the store supplies the context.
+pub const LiteralValueLookup = struct {
+    context: *const anyopaque,
+    find: *const fn (context: *const anyopaque, identity: [32]u8) ?LiteralValueHit,
+
+    pub fn lookup(self: LiteralValueLookup, identity: [32]u8) ?LiteralValueHit {
+        return self.find(self.context, identity);
+    }
+};
+
+/// How a program evaluates one literal root (design.md "Compile-Time Value
+/// Reuse Across Edits").
+pub const LiteralRootReuse = union(enum) {
+    /// Its definition runs the literal's conversion.
+    converted,
+    /// Its definition restores the value the literal value store holds under
+    /// its value identity.
+    restored,
+    /// Its definition runs the conversion of the restored literal root it
+    /// names, which a compiler with runtime safety evaluates to verify the
+    /// stored value.
+    verifies: LiteralRootId,
+};
+
 /// What the object cache knows about a specialization it can serve: the
 /// content identity of its compiled procedure and the ownership signature
 /// and uniqueness facts ARC solved for it, which the program that links the

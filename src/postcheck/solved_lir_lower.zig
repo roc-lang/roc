@@ -6,8 +6,8 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const build_options = @import("build_options");
 const base = @import("base");
+const dev_diagnostics = base.dev_diagnostics;
 const builtins = @import("builtins");
 const can = @import("can");
 const check = @import("check");
@@ -295,6 +295,27 @@ pub fn runBorrowed(
     lowerer.result.finishExpectSites();
 
     return lowerer.finish();
+}
+
+/// Whether this consumer runs a test: whether a root it lowers carries
+/// test-plan metadata. Only a consumer that runs tests observes expects. One
+/// that shares a test program's producer for other roots, as compile-time
+/// evaluation does, runs them as ordinary expects.
+fn consumerRunsTests(
+    allocator: std.mem.Allocator,
+    produced_root_count: usize,
+    options: Options,
+) std.mem.Allocator.Error!bool {
+    if (options.test_plan_metadata.len == 0) return false;
+    const manifest = options.root_manifest orelse return true;
+    const selected = manifest.roots orelse return true;
+    var tested = try std.DynamicBitSetUnmanaged.initEmpty(allocator, produced_root_count);
+    defer tested.deinit(allocator);
+    for (options.test_plan_metadata) |metadata| tested.set(metadata.request_index);
+    for (selected) |position| {
+        if (tested.isSet(position)) return true;
+    }
+    return false;
 }
 
 const CaptureAbi = enum {
@@ -1082,7 +1103,7 @@ const Lowerer = struct {
             .inline_plan = options.inline_plan,
             .inline_scope_rebases = std.AutoHashMap(InlineScopeRebaseKey, LIR.InlineScopeId).init(allocator),
             .inline_expects = options.inline_expects,
-            .observe_expects = options.test_plan_metadata.len != 0,
+            .observe_expects = try consumerRunsTests(allocator, solved.lifted.rootsView().len, options),
             .list_in_place_map = options.list_in_place_map,
             .dict_seed_mode = options.dict_seed_mode,
             .completed_scalar_values = options.completed_scalar_values,
@@ -2967,12 +2988,12 @@ const Lowerer = struct {
                                 cached = hit;
                                 cached_key = key.bytes;
                             }
-                            if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup direct-lir key={x} {s}\n", .{ key.bytes[0..8], if (cached != null) "hit" else "identity-mismatch" });
-                        } else if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup direct-lir key={x} miss\n", .{key.bytes[0..8]});
+                            if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("lookup direct-lir key={x} {s}\n", .{ key.bytes[0..8], if (cached != null) "hit" else "identity-mismatch" });
+                        } else if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("lookup direct-lir key={x} miss\n", .{key.bytes[0..8]});
                     }
                 }
             }
-        } else if (pack_trace_available and self.spec_cache != null and packTraceEnabled()) {
+        } else if (dev_diagnostics.isSet(.pack_trace) and self.spec_cache != null) {
             if (source_fn.source) |template| if (template.spec_key) |key| std.debug.print("lookup direct-lir key={x} skipped plain={} cached={}\n", .{ key.bytes[0..8], plain_spec, cached != null });
         }
         // Only a program using the object cache separates a site-named
@@ -2992,7 +3013,7 @@ const Lowerer = struct {
                         cached_key = key;
                     }
                 }
-                if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup identity key={x} {s}\n", .{ key[0..8], if (cached != null) "hit" else "miss" });
+                if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("lookup identity key={x} {s}\n", .{ key[0..8], if (cached != null) "hit" else "miss" });
             }
         }
         if (self.procs_by_identity.get(identity)) |owner| {
@@ -3103,7 +3124,7 @@ const Lowerer = struct {
                 if (plain_spec and keyed_offer and (kept or !self.keep_specialization_procs)) {
                     try self.result.spec_procs.append(self.allocator, .{ .key = key.bytes, .proc = proc });
                     if (kept) try self.kept_spec_fns.append(self.allocator, fn_id);
-                } else if (pack_trace_available and packTraceEnabled()) {
+                } else if (dev_diagnostics.isSet(.pack_trace)) {
                     // A keyed specialization the pack will not offer.
                     std.debug.print("skip-spec key={x} reason={s} name={s}\n", .{
                         key.bytes[0..8],
@@ -3693,8 +3714,8 @@ const Lowerer = struct {
     }
 
     fn constructionOfTagExpr(self: *Lowerer, arena: std.mem.Allocator, name: Type.names.TagNameId, payload_span: Lifted.Span(Lifted.ExprId), ty: Type.TypeId, layout_idx: layout.Idx) Common.LowerError!ConstructionStep {
-        const variant_index = self.tagIndex(ty, name);
         const payloads = self.solved.lifted.exprSpan(payload_span);
+        const variant_index = try self.tagIndexForExpr(ty, name, payloads);
         // A payload-free two-variant union is a byte: its discriminant is
         // the value.
         if (layout_idx == .bool) {
@@ -4056,7 +4077,7 @@ const Lowerer = struct {
 
     fn finishTypeVar(self: *Lowerer, task: *TypeVarTask, content: Type.Content) Common.LowerError!TypeStep {
         const root = task.root;
-        self.types.set(task.reserved, content);
+        try self.types.set(task.reserved, content);
         const solved_content = self.solved.types.get(root);
         if (solved_content == .named and solved_content.named.backing != null) {
             const backing_root = self.solved.types.root(solved_content.named.backing.?.ty);
@@ -4204,6 +4225,40 @@ const Lowerer = struct {
         }
     }
 
+    /// Put a lowered row's variants of one label into one order wherever the
+    /// row appears: by label as the row already is, then by the payload types'
+    /// digests. A joined row may hold one label at two payload types (design.md
+    /// "Row Joins"), and two rows that hold the same variants must lower to one
+    /// Lambda Mono type whatever order their joins produced them in. A row
+    /// without a repeated label is left as it is.
+    fn orderRepeatedLabels(self: *Lowerer, tags: []Type.Tag) Common.LowerError!void {
+        var repeated = false;
+        for (tags, 0..) |tag, index| {
+            if (index > 0 and tags[index - 1].name == tag.name) repeated = true;
+        }
+        if (!repeated) return;
+        const Keyed = struct { tag: Type.Tag, digest: [32]u8 };
+        const keyed = try self.allocator.alloc(Keyed, tags.len);
+        defer self.allocator.free(keyed);
+        for (tags, keyed) |tag, *entry| {
+            var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+            const payloads = self.types.span(tag.payloads);
+            for (0..payloads.len) |payload_index| {
+                const digest = try self.types.typeDigest(&self.solved.lifted.names, GuardedList.at(payloads, payload_index));
+                hasher.update(&digest.bytes);
+            }
+            entry.* = .{ .tag = tag, .digest = hasher.finalResult() };
+        }
+        const name_store = &self.solved.lifted.names;
+        std.mem.sort(Keyed, keyed, name_store, struct {
+            fn lessThan(names: @TypeOf(name_store), a: Keyed, b: Keyed) bool {
+                if (a.tag.name != b.tag.name) return names.tagLabelTextLessThan(a.tag.name, b.tag.name);
+                return std.mem.order(u8, &a.digest, &b.digest) == .lt;
+            }
+        }.lessThan);
+        for (tags, keyed) |*tag, entry| tag.* = entry.tag;
+    }
+
     fn nextTypeChild(self: *Lowerer, frame: *TypeFrame, task: *TypeVarTask) Common.LowerError!TypeStep {
         const content = self.solved.types.get(task.root);
         if (frame.cursor == TypeVarCursor.field_value) {
@@ -4246,6 +4301,7 @@ const Lowerer = struct {
                     task.tys.shrinkRetainingCapacity(task.tag_payloads_start);
                     frame.index += 1;
                 }
+                try self.orderRepeatedLabels(task.tags.items);
                 return try self.finishTypeVar(task, .{ .tag_union = try self.types.addTags(task.tags.items) });
             },
             .named => |named| {
@@ -4361,7 +4417,7 @@ const Lowerer = struct {
         }
         const capture_items = self.captureSpan(task.captures);
         if (task.fields.items.len < capture_items.len) return typeVarStep(capture_items[task.fields.items.len].ty);
-        self.types.set(task.ty, .{ .capture_record = try self.types.addCaptureFields(task.fields.items) });
+        try self.types.set(task.ty, .{ .capture_record = try self.types.addCaptureFields(task.fields.items) });
         return .{ .ret = .{ .ty = task.ty } };
     }
 
@@ -4427,7 +4483,8 @@ const Lowerer = struct {
         types: SolvedType.Store.View,
         owners: *collections.DenseMap(SolvedType.TypeVarId, SolvedType.TypeVarId),
     ) Common.LowerError!void {
-        for (types.vars, 0..) |content, index| {
+        for (0..types.varCount()) |index| {
+            const content = types.get(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
             if (content != .named) continue;
             const named = content.named;
             if (named.kind == .alias or named.declared_order.len == 0) continue;
@@ -4567,7 +4624,7 @@ const Lowerer = struct {
                     .request = root.request,
                     .proc = proc,
                     .ret_layout = ret_layout,
-                    .ret_type = try self.constTypeOfType(entry.ret),
+                    .ret_type = try self.constTypeOfType(try self.declaredRootType(entry.ret, self.solved.lifted.getFn(self.solved.lifted.rootsView()[root.request_index].fn_id).ret)),
                     .plan = try self.constPlanOfType(entry.ret),
                     .value_slot = if (completed_values.get(root.request_index)) |value_root|
                         try self.comptimeValueSlot(value_root, entry.ret, ret_layout)
@@ -4628,6 +4685,338 @@ const Lowerer = struct {
 
     fn constTypeOfType(self: *Lowerer, ty: Type.TypeId) Common.LowerError!const_store.ConstTypeId {
         return (try self.runConstSchema(.{ .ty = .{ .ty = ty } })).get(.ty);
+    }
+
+    /// A program type paired with the declared Monotype type it was lowered
+    /// from.
+    const DeclaredTypePair = struct { program: Type.TypeId, declared: MonoType.TypeId };
+
+    /// The type a compile-time root is stored at: `program_ty`, the root's
+    /// return in this program, with every tag union brought back to the row
+    /// `declared_ty`, the root's lifted Monotype return, declares. The type a
+    /// root is stored and cached at is a function of its declaring module
+    /// alone (design.md "Row Joins"), while this program's joins may have
+    /// widened the root's rows, even to one label at two payload types. A
+    /// value of the declared row inhabits only its tags, so the stored value
+    /// is unchanged, and a program restoring it widens it to its own row.
+    fn declaredRootType(self: *Lowerer, program_ty: Type.TypeId, declared_ty: MonoType.TypeId) Common.LowerError!Type.TypeId {
+        var widened = std.AutoHashMap(DeclaredTypePair, bool).init(self.allocator);
+        defer widened.deinit();
+        var memo = std.AutoHashMap(DeclaredTypePair, Type.TypeId).init(self.allocator);
+        defer memo.deinit();
+        return try self.narrowToDeclared(&widened, &memo, program_ty, declared_ty);
+    }
+
+    /// Whether a tag union `program_ty` reaches lists a tag its declaration
+    /// does not, or a label twice. Only such a type is copied: every other
+    /// part of a stored root's type is the program's own.
+    fn widenedBeyondDeclared(
+        self: *Lowerer,
+        widened: *std.AutoHashMap(DeclaredTypePair, bool),
+        program_ty: Type.TypeId,
+        declared_ty: MonoType.TypeId,
+    ) Common.LowerError!bool {
+        const pair: DeclaredTypePair = .{ .program = program_ty, .declared = declared_ty };
+        // A pair met again inside itself adds nothing its other parts do not.
+        const entry = try widened.getOrPut(pair);
+        if (entry.found_existing) return entry.value_ptr.*;
+        entry.value_ptr.* = false;
+        const declared_types = self.solved.lifted.types.view();
+        const declared = declared_types.get(declared_ty);
+        const result: bool = switch (self.types.get(program_ty)) {
+            .tag_union => |span| result: {
+                if (declared != .tag_union) break :result false;
+                const declared_tags = declared_types.tagSpan(declared.tag_union);
+                if (span.len != declared_tags.len) break :result true;
+                for (declared_tags, 0..) |declared_tag, index| {
+                    const tag = self.types.tagAt(span, index);
+                    if (tag.name != declared_tag.name) break :result true;
+                    const declared_payloads = declared_types.span(declared_tag.payloads);
+                    if (declared_payloads.len != tag.payloads.len) break :result false;
+                    for (declared_payloads, 0..) |declared_payload, payload_index| {
+                        if (try self.widenedBeyondDeclared(widened, self.types.typeAt(tag.payloads, payload_index), declared_payload)) break :result true;
+                    }
+                }
+                break :result false;
+            },
+            .record => |span| result: {
+                if (declared != .record) break :result false;
+                const declared_fields = declared_types.fieldSpan(declared.record);
+                if (declared_fields.len != span.len) break :result false;
+                for (declared_fields, 0..) |declared_field, index| {
+                    if (try self.widenedBeyondDeclared(widened, self.types.fieldAt(span, index).ty, declared_field.ty)) break :result true;
+                }
+                break :result false;
+            },
+            .tuple => |span| result: {
+                if (declared != .tuple) break :result false;
+                const declared_items = declared_types.span(declared.tuple);
+                if (declared_items.len != span.len) break :result false;
+                for (declared_items, 0..) |declared_item, index| {
+                    if (try self.widenedBeyondDeclared(widened, self.types.typeAt(span, index), declared_item)) break :result true;
+                }
+                break :result false;
+            },
+            .list => |elem| declared == .list and try self.widenedBeyondDeclared(widened, elem, declared.list),
+            .box => |elem| declared == .box and try self.widenedBeyondDeclared(widened, elem, declared.box),
+            .named => |named| result: {
+                if (declared != .named) break :result false;
+                const declared_args = declared_types.span(declared.named.args);
+                if (declared_args.len != named.args.len) break :result false;
+                for (declared_args, 0..) |declared_arg, index| {
+                    if (try self.widenedBeyondDeclared(widened, self.types.typeAt(named.args, index), declared_arg)) break :result true;
+                }
+                const backing = named.backing orelse break :result false;
+                const declared_backing = declared.named.backing orelse break :result false;
+                break :result try self.widenedBeyondDeclared(widened, backing.ty, declared_backing.ty);
+            },
+            .primitive, .capture_record, .callable, .erased_fn, .erased_capture_ptr, .zst => false,
+        };
+        try widened.put(pair, result);
+        return result;
+    }
+
+    fn narrowToDeclared(
+        self: *Lowerer,
+        widened: *std.AutoHashMap(DeclaredTypePair, bool),
+        memo: *std.AutoHashMap(DeclaredTypePair, Type.TypeId),
+        program_ty: Type.TypeId,
+        declared_ty: MonoType.TypeId,
+    ) Common.LowerError!Type.TypeId {
+        const pair: DeclaredTypePair = .{ .program = program_ty, .declared = declared_ty };
+        if (memo.get(pair)) |done| return done;
+        if (!try self.widenedBeyondDeclared(widened, program_ty, declared_ty)) {
+            try memo.put(pair, program_ty);
+            return program_ty;
+        }
+        const declared_types = self.solved.lifted.types.view();
+        const declared = declared_types.get(declared_ty);
+        const allocator = self.allocator;
+        switch (self.types.get(program_ty)) {
+            .tag_union => |span| {
+                const declared_tags = switch (declared) {
+                    .tag_union => |tags| declared_types.tagSpan(tags),
+                    .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => Common.invariant("a compile-time root's tag union was declared as another kind of type"),
+                };
+                const program_tags = try allocator.alloc(Type.Tag, span.len);
+                defer allocator.free(program_tags);
+                for (program_tags, 0..) |*tag, index| tag.* = self.types.tagAt(span, index);
+                const kept = try allocator.alloc(Type.Tag, declared_tags.len);
+                defer allocator.free(kept);
+                var changed = kept.len != program_tags.len;
+                for (declared_tags, kept) |declared_tag, *out| {
+                    // A label is two variants only where their payloads
+                    // conflict, so exactly one variant fits the declared
+                    // payloads.
+                    var chosen: ?Type.Tag = null;
+                    for (program_tags) |program_tag| {
+                        if (program_tag.name != declared_tag.name) continue;
+                        if (!try self.fitsDeclaredPayloads(program_tag.payloads, declared_tag.payloads)) continue;
+                        if (chosen != null) Common.invariant("two variants of one label both fit a compile-time root's declared payloads");
+                        chosen = program_tag;
+                    }
+                    const tag = chosen orelse Common.invariant("a compile-time root's declared tag has no variant in its program row");
+                    const declared_payloads = declared_types.span(declared_tag.payloads);
+                    const payloads = try allocator.alloc(Type.TypeId, declared_payloads.len);
+                    defer allocator.free(payloads);
+                    for (declared_payloads, payloads, 0..) |declared_payload, *payload, index| {
+                        const program_payload = self.types.typeAt(tag.payloads, index);
+                        payload.* = try self.narrowToDeclared(widened, memo, program_payload, declared_payload);
+                        changed = changed or payload.* != program_payload;
+                    }
+                    out.* = .{ .name = tag.name, .checked_name = tag.checked_name, .payloads = if (changed) try self.types.addSpan(payloads) else tag.payloads };
+                }
+                const result = if (changed) try self.types.add(.{ .tag_union = try self.types.addTags(kept) }) else program_ty;
+                try memo.put(pair, result);
+                return result;
+            },
+            .record => |span| {
+                const declared_fields = switch (declared) {
+                    .record => |fields| declared_types.fieldSpan(fields),
+                    .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("a compile-time root's record was declared as another kind of type"),
+                };
+                if (declared_fields.len != span.len) Common.invariant("a compile-time root's record has other fields than its declaration");
+                const fields = try allocator.alloc(Type.Field, span.len);
+                defer allocator.free(fields);
+                var changed = false;
+                for (fields, declared_fields, 0..) |*field, declared_field, index| {
+                    field.* = self.types.fieldAt(span, index);
+                    const narrowed = try self.narrowToDeclared(widened, memo, field.ty, declared_field.ty);
+                    changed = changed or narrowed != field.ty;
+                    field.ty = narrowed;
+                }
+                const result = if (changed) try self.types.add(.{ .record = try self.types.addFields(fields) }) else program_ty;
+                try memo.put(pair, result);
+                return result;
+            },
+            .tuple => |span| {
+                const declared_items = switch (declared) {
+                    .tuple => |items| declared_types.span(items),
+                    .primitive, .named, .record, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("a compile-time root's tuple was declared as another kind of type"),
+                };
+                const result = try self.narrowSpanToDeclared(widened, memo, span, declared_items) orelse program_ty;
+                try memo.put(pair, result);
+                return result;
+            },
+            .list => |elem| {
+                const declared_elem = switch (declared) {
+                    .list => |item| item,
+                    .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst => Common.invariant("a compile-time root's list was declared as another kind of type"),
+                };
+                const narrowed = try self.narrowToDeclared(widened, memo, elem, declared_elem);
+                const result = if (narrowed != elem) try self.types.add(.{ .list = narrowed }) else program_ty;
+                try memo.put(pair, result);
+                return result;
+            },
+            .box => |elem| {
+                const declared_elem = switch (declared) {
+                    .box => |item| item,
+                    .primitive, .named, .record, .tuple, .tag_union, .list, .func, .erased, .zst => Common.invariant("a compile-time root's box was declared as another kind of type"),
+                };
+                const narrowed = try self.narrowToDeclared(widened, memo, elem, declared_elem);
+                const result = if (narrowed != elem) try self.types.add(.{ .box = narrowed }) else program_ty;
+                try memo.put(pair, result);
+                return result;
+            },
+            .named => |named| {
+                const declared_named = switch (declared) {
+                    .named => |declared_named| declared_named,
+                    .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("a compile-time root's named type was declared as another kind of type"),
+                };
+                // A recursive named type reaches itself again through its
+                // backing; that reference is this copy.
+                const copy = try self.types.add(.zst);
+                try memo.put(pair, copy);
+                var narrowed = named;
+                const declared_args = declared_types.span(declared_named.args);
+                const args = try allocator.alloc(Type.TypeId, declared_args.len);
+                defer allocator.free(args);
+                if (declared_args.len != named.args.len) Common.invariant("a compile-time root's named type has other arguments than its declaration");
+                for (declared_args, args, 0..) |declared_arg, *arg, index| {
+                    arg.* = try self.narrowToDeclared(widened, memo, self.types.typeAt(named.args, index), declared_arg);
+                }
+                narrowed.args = try self.types.addSpan(args);
+                if (named.backing) |backing| {
+                    const declared_backing = declared_named.backing orelse Common.invariant("a compile-time root's named type has a backing its declaration lacks");
+                    narrowed.backing.?.ty = try self.narrowToDeclared(widened, memo, backing.ty, declared_backing.ty);
+                }
+                try self.types.set(copy, .{ .named = narrowed });
+                return copy;
+            },
+            // Callables, erased values and scalars hold no row a join widens
+            // at the root's own type.
+            .primitive, .capture_record, .callable, .erased_fn, .erased_capture_ptr, .zst => {
+                try memo.put(pair, program_ty);
+                return program_ty;
+            },
+        }
+    }
+
+    /// The tuple of `span`'s items each brought to its declared item, or
+    /// null when none changes.
+    fn narrowSpanToDeclared(
+        self: *Lowerer,
+        widened: *std.AutoHashMap(DeclaredTypePair, bool),
+        memo: *std.AutoHashMap(DeclaredTypePair, Type.TypeId),
+        span: Type.Span,
+        declared_items: []const MonoType.TypeId,
+    ) Common.LowerError!?Type.TypeId {
+        if (declared_items.len != span.len) Common.invariant("a compile-time root's tuple has another arity than its declaration");
+        const items = try self.allocator.alloc(Type.TypeId, span.len);
+        defer self.allocator.free(items);
+        var changed = false;
+        for (items, declared_items, 0..) |*item, declared_item, index| {
+            const program_item = self.types.typeAt(span, index);
+            item.* = try self.narrowToDeclared(widened, memo, program_item, declared_item);
+            changed = changed or item.* != program_item;
+        }
+        if (!changed) return null;
+        return try self.types.add(.{ .tuple = try self.types.addSpan(items) });
+    }
+
+    /// Whether a variant's program payloads fit its declared payloads: the
+    /// same kinds of type, primitives, record fields, arities and labels,
+    /// the checks that keep two variants of one label apart (design.md "Row
+    /// Joins").
+    fn fitsDeclaredPayloads(self: *Lowerer, program_payloads: Type.Span, declared_payloads: MonoType.Span) Common.LowerError!bool {
+        const declared = self.solved.lifted.types.view().span(declared_payloads);
+        if (declared.len != program_payloads.len) return false;
+        var visiting = std.AutoHashMap(DeclaredTypePair, void).init(self.allocator);
+        defer visiting.deinit();
+        for (declared, 0..) |declared_payload, index| {
+            if (!try self.fitsDeclared(&visiting, self.types.typeAt(program_payloads, index), declared_payload)) return false;
+        }
+        return true;
+    }
+
+    fn fitsDeclared(
+        self: *Lowerer,
+        visiting: *std.AutoHashMap(DeclaredTypePair, void),
+        program_ty: Type.TypeId,
+        declared_ty: MonoType.TypeId,
+    ) Common.LowerError!bool {
+        // A pair met again inside itself fits as far as its other parts do.
+        if ((try visiting.getOrPut(.{ .program = program_ty, .declared = declared_ty })).found_existing) return true;
+        const declared_types = self.solved.lifted.types.view();
+        const declared = declared_types.get(declared_ty);
+        switch (self.types.get(program_ty)) {
+            .primitive => |primitive| return declared == .primitive and std.meta.eql(primitive, declared.primitive),
+            .record => |span| {
+                if (declared != .record) return false;
+                const declared_fields = declared_types.fieldSpan(declared.record);
+                if (declared_fields.len != span.len) return false;
+                for (declared_fields, 0..) |declared_field, index| {
+                    const field = self.types.fieldAt(span, index);
+                    if (field.name != declared_field.name) return false;
+                    if (!try self.fitsDeclared(visiting, field.ty, declared_field.ty)) return false;
+                }
+                return true;
+            },
+            .tuple => |span| {
+                if (declared != .tuple) return false;
+                const declared_items = declared_types.span(declared.tuple);
+                if (declared_items.len != span.len) return false;
+                for (declared_items, 0..) |declared_item, index| {
+                    if (!try self.fitsDeclared(visiting, self.types.typeAt(span, index), declared_item)) return false;
+                }
+                return true;
+            },
+            .tag_union => |span| {
+                if (declared != .tag_union) return false;
+                for (declared_types.tagSpan(declared.tag_union)) |declared_tag| {
+                    const declared_payloads = declared_types.span(declared_tag.payloads);
+                    const found = for (0..span.len) |index| {
+                        const tag = self.types.tagAt(span, index);
+                        if (tag.name != declared_tag.name or tag.payloads.len != declared_payloads.len) continue;
+                        const fits = for (declared_payloads, 0..) |declared_payload, payload_index| {
+                            if (!try self.fitsDeclared(visiting, self.types.typeAt(tag.payloads, payload_index), declared_payload)) break false;
+                        } else true;
+                        if (fits) break true;
+                    } else false;
+                    if (!found) return false;
+                }
+                return true;
+            },
+            .list => |elem| return declared == .list and try self.fitsDeclared(visiting, elem, declared.list),
+            .box => |elem| return declared == .box and try self.fitsDeclared(visiting, elem, declared.box),
+            .named => |named| {
+                if (declared != .named or !std.meta.eql(named.def, declared.named.def)) return false;
+                const declared_args = declared_types.span(declared.named.args);
+                if (declared_args.len != named.args.len) return false;
+                for (declared_args, 0..) |declared_arg, index| {
+                    if (!try self.fitsDeclared(visiting, self.types.typeAt(named.args, index), declared_arg)) return false;
+                }
+                return true;
+            },
+            .callable, .erased_fn => return declared == .func or declared == .erased,
+            .zst => return switch (declared) {
+                .zst => true,
+                .record => |fields| fields.len == 0,
+                .tuple => |items| items.len == 0,
+                .primitive, .named, .tag_union, .list, .box, .func, .erased => false,
+            },
+            .capture_record, .erased_capture_ptr => return false,
+        }
     }
 
     // Const schemas //
@@ -4746,7 +5135,7 @@ const Lowerer = struct {
 
     fn freeConstCallableEntry(allocator: Allocator, captures: []const LirProgram.CaptureSlot, template: LirProgram.FnTemplate) void {
         if (captures.len > 0) allocator.free(captures);
-        if (template.evidence.len > 0) allocator.free(template.evidence);
+        check.ConstStore.freeVector(allocator, template.evidence);
         if (template.evidence_frames.len > 0) allocator.free(template.evidence_frames);
     }
 
@@ -4880,6 +5269,7 @@ const Lowerer = struct {
                     .named_type = .{
                         .module = named.named_type.module,
                         .ty = named.named_type.ty,
+                        .ty_module = named.named_type.ty_module,
                     },
                     .backing = backing_plan.get(.plan),
                 } };
@@ -4930,9 +5320,9 @@ const Lowerer = struct {
         return .{ .call = .{ .ty = .{ .ty = ty } } };
     }
 
-    fn finishConstType(self: *Lowerer, task: *ConstTypeTask, stored: const_store.ConstType) ConstStep {
+    fn finishConstType(self: *Lowerer, task: *ConstTypeTask, stored: const_store.ConstType) Common.LowerError!ConstStep {
         const id = task.reserved.?;
-        self.result.const_types.fill(id, stored);
+        try self.result.const_types.fill(id, stored);
         task.reserved = null;
         task.ids.deinit(self.allocator);
         task.args.deinit(self.allocator);
@@ -4954,8 +5344,8 @@ const Lowerer = struct {
                 task.reserved = id;
                 task.cursor = ConstTypeCursor.components;
                 switch (content) {
-                    .primitive => |primitive| return self.finishConstType(task, .{ .primitive = constPrimitive(primitive) }),
-                    .zst => return self.finishConstType(task, .zst),
+                    .primitive => |primitive| return try self.finishConstType(task, .{ .primitive = constPrimitive(primitive) }),
+                    .zst => return try self.finishConstType(task, .zst),
                     .list, .box => |elem| return constTypeStep(elem),
                     // The solved source signature below is the durable authority for
                     // both callable shapes; runtime variant sets are irrelevant here
@@ -4974,8 +5364,8 @@ const Lowerer = struct {
             ConstTypeCursor.components => {
                 const component = input.?.get(.ty);
                 switch (content) {
-                    .list => return self.finishConstType(task, .{ .list = component }),
-                    .box => return self.finishConstType(task, .{ .box = component }),
+                    .list => return try self.finishConstType(task, .{ .list = component }),
+                    .box => return try self.finishConstType(task, .{ .box = component }),
                     .record => |fields| {
                         const field = self.types.fieldAt(fields, task.index);
                         task.fields.items[task.index].ty = component;
@@ -5009,10 +5399,11 @@ const Lowerer = struct {
             ConstTypeCursor.named_backing => {
                 const named = content.named;
                 const backing = named.backing.?;
-                return self.finishConstType(task, .{ .named = .{
+                return try self.finishConstType(task, .{ .named = .{
                     .named_type = .{
                         .module = named.named_type.module,
                         .ty = named.named_type.ty,
+                        .ty_module = named.named_type.ty_module,
                     },
                     .def = task.def,
                     .kind = constNamedKind(named.kind),
@@ -5028,7 +5419,7 @@ const Lowerer = struct {
             },
             ConstTypeCursor.callable_ret => {
                 // A callable's return type.
-                return self.finishConstType(task, .{ .func = .{
+                return try self.finishConstType(task, .{ .func = .{
                     .args = task.args_span,
                     .ret = input.?.get(.ty),
                 } });
@@ -5039,7 +5430,7 @@ const Lowerer = struct {
         switch (content) {
             .tuple => |items| {
                 if (task.ids.items.len < items.len) return constTypeStep(self.types.typeAt(items, task.ids.items.len));
-                return self.finishConstType(task, .{ .tuple = try self.result.const_types.appendTypeSpan(task.ids.items) });
+                return try self.finishConstType(task, .{ .tuple = try self.result.const_types.appendTypeSpan(task.ids.items) });
             },
             .record => |fields| {
                 if (task.index < fields.len) {
@@ -5052,7 +5443,7 @@ const Lowerer = struct {
                     });
                     return constTypeStep(field.ty);
                 }
-                return self.finishConstType(task, .{ .record = try self.result.const_types.appendFieldSpan(task.fields.items) });
+                return try self.finishConstType(task, .{ .record = try self.result.const_types.appendFieldSpan(task.fields.items) });
             },
             .tag_union => |tags| {
                 while (task.index < tags.len) {
@@ -5066,7 +5457,7 @@ const Lowerer = struct {
                     task.ids.clearRetainingCapacity();
                     task.index += 1;
                 }
-                return self.finishConstType(task, .{ .tag_union = try self.result.const_types.appendTagSpan(task.tags.items) });
+                return try self.finishConstType(task, .{ .tag_union = try self.result.const_types.appendTagSpan(task.tags.items) });
             },
             .named => |named| {
                 if (task.args.items.len < named.args.len) return constTypeStep(self.types.typeAt(named.args, task.args.items.len));
@@ -5088,10 +5479,11 @@ const Lowerer = struct {
                     task.cursor = ConstTypeCursor.named_backing;
                     return constTypeStep(backing.ty);
                 }
-                return self.finishConstType(task, .{ .named = .{
+                return try self.finishConstType(task, .{ .named = .{
                     .named_type = .{
                         .module = named.named_type.module,
                         .ty = named.named_type.ty,
+                        .ty_module = named.named_type.ty_module,
                     },
                     .def = task.def,
                     .kind = constNamedKind(named.kind),
@@ -6820,7 +7212,7 @@ const Lowerer = struct {
             .tuple => |items| try self.structExprsStep(where, target, self.solved.lifted.exprSpan(items), self.tupleItemTypes(ty), next),
             .record => |fields| try self.recordStep(where, target, ty, fields, next),
             .record_update => |update| .{ .tail = .{ .record_update = .{ .where = where, .target = target, .ty = ty, .update = update, .next = next } } },
-            .tag => |tag| .{ .tail = .{ .tag_payload = .{ .where = where, .target = target, .ty = ty, .variant_index = self.tagIndex(ty, tag.name), .payloads = tag.payloads, .next = next } } },
+            .tag => |tag| .{ .tail = .{ .tag_payload = .{ .where = where, .target = target, .ty = ty, .variant_index = try self.tagIndexForExpr(ty, tag.name, self.solved.lifted.exprSpan(tag.payloads)), .payloads = tag.payloads, .next = next } } },
             .call_proc => |call| try self.directCallStep(where, target, ty, Lifted.directCallee(call).local, call, next),
             .fn_ref => |fn_ref| try self.fnRefStep(where, target, expr_id, fn_ref.fn_id, fn_ref.captures, ty, next),
             .nominal => |backing| try self.nominalStep(where, target, ty, backing, next),
@@ -6941,15 +7333,16 @@ const Lowerer = struct {
             .static_data_candidate => |candidate| try self.staticDataCandidateStep(where, target, candidate, expr_ty, next),
             .comptime_value => |value| .{ .ret = try self.lowerComptimeValueInto(where, target, value, expr_ty, next) },
             .typed_boundary => |boundary| try self.typedBoundaryStep(where, target, expr_ty, boundary, next),
-            // A row coercion lowers as the same typed assignment: the source
-            // row's layout comes from the value's solved type, the destination
-            // from this expression's, and the tag-union boundary re-tags.
+            // A row coercion lowers its value straight into the destination:
+            // Lambda Solved joined the value's rows with this expression's
+            // (design.md "Row Joins"), so the two solved types have one
+            // representation.
             .row_widen => |widen| try self.rowWidenStep(where, target, expr_ty, widen.value, next),
             .list => |items| try self.listStep(where, target, expr_ty, items, next),
             .tuple => |items| try self.structExprsStep(where, target, self.solved.lifted.exprSpan(items), self.tupleItemTypes(expr_ty), next),
             .record => |fields| try self.recordStep(where, target, expr_ty, fields, next),
             .record_update => |update| .{ .tail = .{ .record_update = .{ .where = where, .target = target, .ty = expr_ty, .update = update, .next = next } } },
-            .tag => |tag| .{ .tail = .{ .tag_payload = .{ .where = where, .target = target, .ty = expr_ty, .variant_index = self.tagIndex(expr_ty, tag.name), .payloads = tag.payloads, .next = next } } },
+            .tag => |tag| .{ .tail = .{ .tag_payload = .{ .where = where, .target = target, .ty = expr_ty, .variant_index = try self.tagIndexForExpr(expr_ty, tag.name, self.solved.lifted.exprSpan(tag.payloads)), .payloads = tag.payloads, .next = next } } },
             .lambda,
             .def_ref,
             .fn_def,
@@ -7129,9 +7522,9 @@ const Lowerer = struct {
         return .{ .tail = exprTask(where, source, boundary.value, source_ty, after_source) };
     }
 
-    /// A checked row coercion (design.md "Row Coercion Primitive") is the
-    /// typed assignment of the return boundary, after asserting the
-    /// coercion's reach and superset rule on the two solved types.
+    /// A checked row join (design.md "Row Joins") lowers as its value: Lambda
+    /// Solved made the value's rows and the destination's rows one row each,
+    /// so the value is already at the destination's type.
     fn rowWidenStep(
         self: *Lowerer,
         where: LowerSite,
@@ -7140,64 +7533,14 @@ const Lowerer = struct {
         value: Lifted.ExprId,
         next: LIR.CFStmtId,
     ) Common.LowerError!LowerStep {
-        try self.assertRowWidenReach(target_ty, try self.lowerExprContextTy(value));
-        return try self.typedBoundaryStep(where, target, target_ty, .{ .value = value }, next);
-    }
-
-    /// Inside the reach (the root row, rows that are tag payloads of a reached
-    /// row, and rows behind a named backing) every source tag is in the
-    /// destination with the same arity; anywhere else the two sides are
-    /// value-encoding equivalent.
-    fn assertRowWidenReach(self: *Lowerer, target_ty: Type.TypeId, source_ty: Type.TypeId) Common.LowerError!void {
-        var work = std.ArrayList([2]Type.TypeId).empty;
-        defer work.deinit(self.allocator);
-        var visited = std.AutoHashMap(u64, void).init(self.allocator);
-        defer visited.deinit();
-        var equivalent_pairs = std.AutoHashMap(u64, void).init(self.allocator);
-        defer equivalent_pairs.deinit();
-        try work.append(self.allocator, .{ target_ty, source_ty });
-        while (work.pop()) |pair| {
-            const target_runtime = self.namedBackingRoot(pair[0]);
-            const source_runtime = self.namedBackingRoot(pair[1]);
-            const key = (@as(u64, @backingInt(target_runtime)) << 32) | @as(u64, @backingInt(source_runtime));
-            const entry = try visited.getOrPut(key);
-            if (entry.found_existing) continue;
-            const target_content = self.types.get(target_runtime);
-            const source_content = self.types.get(source_runtime);
-            if (source_content == .tag_union and target_content == .tag_union) {
-                const target_tags = self.types.tagSpan(target_content.tag_union);
-                const source_tags = self.types.tagSpan(source_content.tag_union);
-                for (0..source_tags.len) |source_index| {
-                    const source_tag = GuardedList.at(source_tags, source_index);
-                    const target_tag = GuardedList.at(target_tags, Lowerer.tagIndexInTags(target_tags, source_tag));
-                    const target_payloads = self.types.span(target_tag.payloads);
-                    const source_payloads = self.types.span(source_tag.payloads);
-                    if (target_payloads.len != source_payloads.len) {
-                        Common.invariant("row coercion source tag payload arity differed from its destination tag");
-                    }
-                    for (0..source_payloads.len) |payload_index| {
-                        try work.append(self.allocator, .{
-                            GuardedList.at(target_payloads, payload_index),
-                            GuardedList.at(source_payloads, payload_index),
-                        });
-                    }
-                }
-                continue;
-            }
-            if (source_content == .tag_union and self.types.tagSpan(source_content.tag_union).len == 0) continue;
-            if (!try self.typesEquivalentInMode(.value_encoding, target_runtime, source_runtime, &equivalent_pairs)) {
-                Common.invariant("row coercion reached differing types outside tag payloads and named backings");
+        if (builtin.mode == .debug) {
+            var equivalent_pairs = std.AutoHashMap(u64, void).init(self.allocator);
+            defer equivalent_pairs.deinit();
+            if (!try self.typesEquivalentInMode(.value_encoding, target_ty, try self.lowerExprContextTy(value), &equivalent_pairs)) {
+                Common.invariant("row join value and destination had different representations");
             }
         }
-    }
-
-    fn namedBackingRoot(self: *Lowerer, ty: Type.TypeId) Type.TypeId {
-        var current = ty;
-        while (true) {
-            const next = self.runtimeBackingType(current);
-            if (next == current) return current;
-            current = next;
-        }
+        return .{ .tail = exprTask(where, target, value, target_ty, next) };
     }
 
     fn listStep(
@@ -10572,8 +10915,9 @@ const Lowerer = struct {
             return .{ .index = 0, .ty = try self.l.nominalPatternBackingType(ty, inner), .pat = inner };
         }
 
-        pub fn tagVariant(self: MatchTreeCtx, pat_id: Lifted.PatId, ty: Type.TypeId) layout.VariantIndex {
-            return self.l.tagIndex(ty, self.l.pat(pat_id).data.tag.name);
+        pub fn tagVariant(self: MatchTreeCtx, pat_id: Lifted.PatId, ty: Type.TypeId) Common.LowerError!layout.VariantIndex {
+            const tag = self.l.pat(pat_id).data.tag;
+            return try self.l.tagIndexForPat(ty, tag.name, self.l.solved.lifted.patSpan(tag.payloads));
         }
 
         pub fn tagPayloadCount(self: MatchTreeCtx, pat_id: Lifted.PatId) u32 {
@@ -10583,16 +10927,30 @@ const Lowerer = struct {
         pub fn tagPayload(self: MatchTreeCtx, pat_id: Lifted.PatId, ty: Type.TypeId, i: u32) Common.LowerError!SubPat {
             const tag = self.l.pat(pat_id).data.tag;
             const payloads = self.l.solved.lifted.patSpan(tag.payloads);
-            const payload_tys = self.l.tagPayloadTypesByIndex(ty, self.l.tagIndex(ty, tag.name));
+            const payload_tys = self.l.tagPayloadTypesByIndex(ty, try self.l.tagIndexForPat(ty, tag.name, payloads));
             if (payloads.len != payload_tys.len) Common.invariant("tag pattern payload arity differed from target tag type");
             return .{ .index = i, .ty = GuardedList.at(payload_tys, i), .pat = GuardedList.at(payloads, i) };
         }
 
+        /// The labels a match over `root` must cover. A joined row may hold one
+        /// label at two payload types (design.md "Row Joins"), but the type the
+        /// match is written at lists each label once and only its own variant
+        /// can reach the match, so the arms are exhaustive once every label
+        /// has one.
         pub fn tagVariantCount(self: MatchTreeCtx, root: Type.TypeId) ?u32 {
             var ty = root;
             while (true) {
                 const content = self.l.types.get(ty);
-                if (content == .tag_union) return @intCast(self.l.types.tagSpan(content.tag_union).len);
+                if (content == .tag_union) {
+                    const tags = self.l.types.tagSpan(content.tag_union);
+                    var labels: u32 = 0;
+                    for (0..tags.len) |index| {
+                        const tag = GuardedList.at(tags, index);
+                        if (index > 0 and GuardedList.at(tags, index - 1).name == tag.name) continue;
+                        labels += 1;
+                    }
+                    return labels;
+                }
                 if (content != .named) return null;
                 ty = (content.named.backing orelse return null).ty;
             }
@@ -10634,7 +10992,7 @@ const Lowerer = struct {
 
         pub fn ctorKey(self: MatchTreeCtx, pat_id: Lifted.PatId, ty: Type.TypeId) Common.LowerError!u128 {
             return switch (self.l.pat(pat_id).data) {
-                .tag => |tag| self.l.tagIndex(ty, tag.name),
+                .tag => |tag| try self.l.tagIndexForPat(ty, tag.name, self.l.solved.lifted.patSpan(tag.payloads)),
                 .int_lit => |value| @bitCast(value.toI128()),
                 .dec_lit => |value| @bitCast(value.num),
                 // IEEE `==` behavior: +0.0 and -0.0 are the same
@@ -11333,7 +11691,7 @@ const Lowerer = struct {
             // A tested tag's payloads read from the storage type of its source;
             // a bound tag's from the storage type of its pattern type.
             const tag_ty = self.storageTypeOfLocalOr(task.source, task.ty);
-            task.variant_index = self.tagIndex(tag_ty, name);
+            task.variant_index = try self.tagIndexForPat(tag_ty, name, payloads);
             task.source_ty = self.storageTypeOfLocalOr(task.source, tag_ty);
             if (payloads.len != self.tagPayloadTypesByIndex(task.source_ty, task.variant_index).len) {
                 Common.invariant("tag pattern payload arity differed from target tag type");
@@ -12887,7 +13245,17 @@ const Lowerer = struct {
             frame.index += 1;
         } else {
             switch (task.kind) {
-                .tag_union => if (source_len == 0) Common.invariant("tag union boundary saw an empty source tag union"),
+                .tag_union => {
+                    if (source_len == 0) Common.invariant("tag union boundary saw an empty source tag union");
+                    // Rows that flow together are one row (design.md "Row
+                    // Joins"), so a boundary between two tag unions converts
+                    // payload representations only: both sides list the same
+                    // tags. `variantConversion` finds each source tag in the
+                    // target; this pins that the target lists nothing more.
+                    if (source_len != self.types.tagSpan(task.target_span).len) {
+                        Common.invariant("tag union boundary saw two different tag rows");
+                    }
+                },
                 .callable => {
                     if (source_len != self.types.fnVariantSpan(task.target_span).len) {
                         Common.invariant("callable boundary saw different source and target variant counts");
@@ -12928,7 +13296,7 @@ const Lowerer = struct {
             .tag_union => {
                 const target_tags = self.types.tagSpan(task.target_span);
                 const source_tag = GuardedList.at(self.types.tagSpan(task.source_span), source_index);
-                const target_index = Lowerer.tagIndexInTags(target_tags, source_tag);
+                const target_index = self.tagIndexInTags(target_tags, source_tag);
                 return .{
                     .kind = .tag,
                     .target = task.target,
@@ -13443,10 +13811,20 @@ const Lowerer = struct {
         Common.invariant("callable boundary target type did not contain source variant");
     }
 
-    fn tagIndexInTags(tags: anytype, needle: Type.Tag) usize {
+    /// The position of `needle` in `tags`: the same label and the same payload
+    /// types, since a joined row may hold one label at two payload types
+    /// (design.md "Row Joins").
+    fn tagIndexInTags(self: *Lowerer, tags: anytype, needle: Type.Tag) usize {
+        const needle_payloads = self.types.span(needle.payloads);
         for (0..tags.len) |index| {
             const tag = GuardedList.at(tags, index);
-            if (tag.name == needle.name and tag.checked_name == needle.checked_name) return index;
+            if (tag.name != needle.name or tag.checked_name != needle.checked_name) continue;
+            const payloads = self.types.span(tag.payloads);
+            if (payloads.len != needle_payloads.len) continue;
+            const same = for (0..payloads.len) |payload_index| {
+                if (GuardedList.at(payloads, payload_index) != GuardedList.at(needle_payloads, payload_index)) break false;
+            } else true;
+            if (same) return index;
         }
         Common.invariant("tag union boundary target type did not contain source tag");
     }
@@ -14665,13 +15043,47 @@ const Lowerer = struct {
         };
     }
 
-    fn tagIndex(self: *Lowerer, ty: Type.TypeId, name: Type.names.TagNameId) layout.VariantIndex {
+    /// The variant of `name` in `ty`'s row whose payload types are
+    /// `payload_tys`. A joined row may hold one label at two payload types
+    /// (design.md "Row Joins"); a constructor or pattern belongs to one static
+    /// type, which lists the label once, and its own payload types pick the
+    /// variant. A label the row holds once is that variant.
+    fn tagIndexForPayloads(self: *Lowerer, ty: Type.TypeId, name: Type.names.TagNameId, payload_tys: []const Type.TypeId) layout.VariantIndex {
         const tags = self.tagUnionTags(ty);
+        var only: ?layout.VariantIndex = null;
+        var candidates: u32 = 0;
         for (0..tags.len) |index| {
             const tag = GuardedList.at(tags, index);
-            if (tag.name == name) return @intCast(index);
+            if (tag.name != name) continue;
+            candidates += 1;
+            only = @intCast(index);
+            const payloads = self.types.span(tag.payloads);
+            if (payloads.len != payload_tys.len) continue;
+            const same = for (0..payloads.len) |payload_index| {
+                if (GuardedList.at(payloads, payload_index) != payload_tys[payload_index]) break false;
+            } else true;
+            if (same) return @intCast(index);
         }
+        if (candidates == 1) return only.?;
         Common.invariant("tag operation referenced tag absent from Lambda Mono type");
+    }
+
+    /// `tagIndexForPayloads` for a tag expression, whose payload expressions'
+    /// types are the variant's.
+    fn tagIndexForExpr(self: *Lowerer, ty: Type.TypeId, name: Type.names.TagNameId, payloads: anytype) Common.LowerError!layout.VariantIndex {
+        const payload_tys = try self.allocator.alloc(Type.TypeId, payloads.len);
+        defer self.allocator.free(payload_tys);
+        for (payload_tys, 0..) |*payload_ty, index| payload_ty.* = try self.lowerExprTy(GuardedList.at(payloads, index));
+        return self.tagIndexForPayloads(ty, name, payload_tys);
+    }
+
+    /// `tagIndexForPayloads` for a tag pattern, whose payload patterns' types
+    /// are the variant's.
+    fn tagIndexForPat(self: *Lowerer, ty: Type.TypeId, name: Type.names.TagNameId, payloads: anytype) Common.LowerError!layout.VariantIndex {
+        const payload_tys = try self.allocator.alloc(Type.TypeId, payloads.len);
+        defer self.allocator.free(payload_tys);
+        for (payload_tys, 0..) |*payload_ty, index| payload_ty.* = try self.lowerPatTy(GuardedList.at(payloads, index));
+        return self.tagIndexForPayloads(ty, name, payload_tys);
     }
 
     fn tagIndexByText(self: *Lowerer, ty: Type.TypeId, text: []const u8) layout.VariantIndex {
@@ -14890,8 +15302,8 @@ fn constFnTemplateForFn(self: *Lowerer, fn_id: Type.FnId) std.mem.Allocator.Erro
     const spec = self.fn_entries.items[@backingInt(fn_id)].spec;
     requireConstFnEvidenceTopology(template);
     const lifted = self.solved.lifted.view();
-    const evidence = try self.allocator.dupe(check.ConstStore.ConstFnEvidence, lifted.const_fn_evidence[template.const_evidence.start..][0..template.const_evidence.len]);
-    errdefer self.allocator.free(evidence);
+    const evidence = try check.ConstStore.dupeVector(self.allocator, lifted.constFnEvidence(template.const_evidence));
+    errdefer check.ConstStore.freeVector(self.allocator, evidence);
     const evidence_frames = try self.allocator.dupe(check.ConstStore.ConstFnEvidenceFrame, lifted.const_fn_evidence_frames[template.const_evidence_frames.start..][0..template.const_evidence_frames.len]);
     return .{
         .frozen_fn = if (template.frozen_fn) |id| @backingInt(id) else null,
@@ -14963,6 +15375,8 @@ fn emptyLiftedProgramForTest(allocator: std.mem.Allocator) Lifted.Program {
         NameStore.init(allocator),
         MonoType.Store.init(allocator),
         .empty, // const_fn_evidence
+        .empty, // const_fn_evidence_targets
+        .empty, // const_fn_evidence_structurals
         .empty, // const_fn_evidence_frames
         .empty, // exprs
         .empty, // pats
@@ -15163,7 +15577,7 @@ test "layout lowering accepts tag payload alias backed by primitive" {
     const alias_ty = try lowerer.types.add(.{
         .named = .{
             // Layout lowering does not read checked type ids for this synthetic type.
-            .named_type = .{ .module = .{}, .ty = undefined },
+            .named_type = .{ .module = .{}, .ty = undefined, .ty_module = .{} },
             .def = .{ .module = module_identity, .type_name = alias_name },
             .kind = .alias,
             .args = .empty(),
@@ -15182,7 +15596,7 @@ test "layout lowering accepts tag payload alias backed by primitive" {
     const repro_ty = try lowerer.types.add(.{
         .named = .{
             // Layout lowering does not read checked type ids for this synthetic type.
-            .named_type = .{ .module = .{}, .ty = undefined },
+            .named_type = .{ .module = .{}, .ty = undefined, .ty_module = .{} },
             .def = .{ .module = module_identity, .type_name = repro_name },
             .kind = .nominal,
             .args = .empty(),
@@ -15232,7 +15646,7 @@ test "layout lowering sorts a padding-free nominal record structurally" {
     const state_ty = try lowerer.types.add(.{
         .named = .{
             // Layout lowering does not read checked type ids for this synthetic type.
-            .named_type = .{ .module = .{}, .ty = undefined },
+            .named_type = .{ .module = .{}, .ty = undefined, .ty_module = .{} },
             .def = .{ .module = module_identity, .type_name = state_name },
             .kind = .nominal,
             .args = .empty(),
@@ -15285,7 +15699,7 @@ test "layout lowering keeps opted-in nominal record declaration order" {
     });
     const state_ty = try lowerer.types.add(.{
         .named = .{
-            .named_type = .{ .module = .{}, .ty = undefined },
+            .named_type = .{ .module = .{}, .ty = undefined, .ty_module = .{} },
             .def = .{ .module = module_identity, .type_name = state_name },
             .kind = .nominal,
             .args = .empty(),
@@ -15326,7 +15740,7 @@ test "a padded nominal's backing record takes the nominal's layout even when low
     });
     const padded = try solved.types.add(.{
         .named = .{
-            .named_type = .{ .module = .{}, .ty = undefined },
+            .named_type = .{ .module = .{}, .ty = undefined, .ty_module = .{} },
             .def = .{ .module = module_identity, .type_name = padded_name },
             .kind = .nominal,
             .args = .empty(),
@@ -15376,7 +15790,7 @@ test "sparse local layout nodes commit in type id order" {
     });
     const first_ty = try lowerer.types.add(.{
         .named = .{
-            .named_type = .{ .module = .{}, .ty = undefined },
+            .named_type = .{ .module = .{}, .ty = undefined, .ty_module = .{} },
             .def = .{ .module = module_identity, .type_name = first_name, .source_decl = 42 },
             .kind = .nominal,
             .args = .empty(),
@@ -15386,7 +15800,7 @@ test "sparse local layout nodes commit in type id order" {
     });
     const second_ty = try lowerer.types.add(.{
         .named = .{
-            .named_type = .{ .module = .{}, .ty = undefined },
+            .named_type = .{ .module = .{}, .ty = undefined, .ty_module = .{} },
             .def = .{ .module = module_identity, .type_name = second_name, .source_decl = 42 },
             .kind = .nominal,
             .args = .empty(),
@@ -15408,7 +15822,7 @@ test "sparse local layout nodes commit in type id order" {
 
     const probe_ty = try lowerer.types.add(.{
         .named = .{
-            .named_type = .{ .module = .{}, .ty = undefined },
+            .named_type = .{ .module = .{}, .ty = undefined, .ty_module = .{} },
             .def = .{ .module = module_identity, .type_name = probe_name, .source_decl = 42 },
             .kind = .nominal,
             .args = .empty(),
@@ -15443,7 +15857,7 @@ test "named layout index reuses only representation-equivalent instantiations" {
 
     const first_ty = try lowerer.types.add(.{
         .named = .{
-            .named_type = .{ .module = .{}, .ty = undefined },
+            .named_type = .{ .module = .{}, .ty = undefined, .ty_module = .{} },
             .def = .{ .module = module_identity, .type_name = first_name, .source_decl = 42 },
             .kind = .nominal,
             .args = first_args,
@@ -15452,7 +15866,7 @@ test "named layout index reuses only representation-equivalent instantiations" {
     });
     const equivalent_ty = try lowerer.types.add(.{
         .named = .{
-            .named_type = .{ .module = .{}, .ty = undefined },
+            .named_type = .{ .module = .{}, .ty = undefined, .ty_module = .{} },
             // A source declaration identifies the type, so display-name text is
             // intentionally absent from the shallow representation key.
             .def = .{ .module = module_identity, .type_name = equivalent_name, .source_decl = 42 },
@@ -15463,7 +15877,7 @@ test "named layout index reuses only representation-equivalent instantiations" {
     });
     const different_ty = try lowerer.types.add(.{
         .named = .{
-            .named_type = .{ .module = .{}, .ty = undefined },
+            .named_type = .{ .module = .{}, .ty = undefined, .ty_module = .{} },
             .def = .{ .module = module_identity, .type_name = different_name, .source_decl = 42 },
             .kind = .nominal,
             .args = different_args,
@@ -15513,18 +15927,18 @@ test "named layout index reuses structurally equivalent recursive types" {
     const first_backing = try lowerer.types.add(.{ .record = first_fields });
     const equivalent_backing = try lowerer.types.add(.{ .record = equivalent_fields });
 
-    lowerer.types.set(first_ty, .{
+    try lowerer.types.set(first_ty, .{
         .named = .{
-            .named_type = .{ .module = .{}, .ty = undefined },
+            .named_type = .{ .module = .{}, .ty = undefined, .ty_module = .{} },
             .def = .{ .module = module_identity, .type_name = first_name, .source_decl = 43 },
             .kind = .nominal,
             .args = .empty(),
             .backing = .{ .ty = first_backing, .use = .inspectable },
         },
     });
-    lowerer.types.set(equivalent_ty, .{
+    try lowerer.types.set(equivalent_ty, .{
         .named = .{
-            .named_type = .{ .module = .{}, .ty = undefined },
+            .named_type = .{ .module = .{}, .ty = undefined, .ty_module = .{} },
             .def = .{ .module = module_identity, .type_name = equivalent_name, .source_decl = 43 },
             .kind = .nominal,
             .args = .empty(),
@@ -15572,7 +15986,7 @@ test "named layout index applies backing metadata by named type policy" {
         const source_decl: u32 = @intCast(100 + case_index);
         const lhs_ty = try lowerer.types.add(.{
             .named = .{
-                .named_type = .{ .module = .{}, .ty = undefined },
+                .named_type = .{ .module = .{}, .ty = undefined, .ty_module = .{} },
                 .def = .{ .module = module_identity, .type_name = type_name, .source_decl = source_decl },
                 .kind = case.kind,
                 .builtin_owner = case.owner,
@@ -15586,7 +16000,7 @@ test "named layout index applies backing metadata by named type policy" {
         });
         const rhs_ty = try lowerer.types.add(.{
             .named = .{
-                .named_type = .{ .module = .{}, .ty = undefined },
+                .named_type = .{ .module = .{}, .ty = undefined, .ty_module = .{} },
                 .def = .{ .module = module_identity, .type_name = type_name, .source_decl = source_decl },
                 .kind = case.kind,
                 .builtin_owner = case.owner,
@@ -15626,17 +16040,6 @@ test "named layout index applies backing metadata by named type policy" {
 
 test "direct LIR lower declarations are referenced" {
     std.testing.refAllDecls(@This());
-}
-
-/// Whether a root's procedure runs in the compile-time evaluator.
-/// Builds without libc (the playground) and compilers built without
-/// developer diagnostics never read the environment and compile no trace
-/// output.
-const pack_trace_available = @import("builtin").link_libc and build_options.dev_diagnostics;
-
-/// `ROC_PACK_TRACE` is set: print every object cache lookup.
-fn packTraceEnabled() bool {
-    return std.c.getenv("ROC_PACK_TRACE") != null;
 }
 
 test "value encoding preserves tag identities but excludes finite call targets" {
@@ -15727,7 +16130,7 @@ test "layout lowering preserves recursive slots across cached children (issue 11
             .{ .name = first, .ty = union_ty, .default = null },
             .{ .name = second, .ty = union_ty, .default = null },
         });
-        lowerer.types.set(record, .{ .record = fields });
+        try lowerer.types.set(record, .{ .record = fields });
         const unrolled = try lowerer.types.add(.{ .record = fields });
 
         const first_layout = try lowerer.layoutOfType(if (unrolled_first) unrolled else record);

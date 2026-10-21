@@ -376,6 +376,7 @@ pub const BoxyBuiltinFn = enum {
     caller_drives,
     return_pending,
     list_concat,
+    list_append_sublist,
     list_prepend,
     list_sublist,
     list_drop_at,
@@ -428,6 +429,7 @@ pub const BoxyBuiltinFn = enum {
             .call_dict => &.{ p, p, p, 4, 4, p, p, p, p, p, 4 },
             .record_update => &.{ p, p, p, 4, p, p, 4, p, 4 },
             .list_concat => &.{ p, p, p, p, p, p, p, 4, p, 4, p, p },
+            .list_append_sublist => &.{ p, p, p, p, p, p, p, p, p, 4, p, 4, p, 1 },
             .list_prepend, .list_drop_at, .list_reserve, .list_reserve_for_append => &.{ p, p, p, p, 4, p, p, 4, p, 1 },
             .list_sublist, .list_set, .list_swap => &.{ p, p, p, p, 4, p, p, p, 4, p, 1 },
             .list_replace => &.{ p, p, p, p, 4, p, p, p, p, 4, p, 1 },
@@ -833,9 +835,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Set by `finishImage`; the code and relocations are complete only after it.
         image_finished: bool = false,
 
-        /// Whether shim-executed host-callable functions and boxed callbacks
-        /// participate in the hot-reload code reference protocol.
-        enable_hot_reload: bool = false,
+        /// Bytes the program's erased callables reserve before their captures
+        /// (`LirProgram.Result.erased_capture_prefix`). Nonzero when the
+        /// program supports a hot-reload session: generated erased-callable
+        /// procedures skip the prefix, packed payloads and frozen values
+        /// reserve it, and shim-executed host callables and boxed callbacks
+        /// follow the hot-reload code reference protocol.
+        erased_capture_prefix: u32,
 
         /// Whether object-file entrypoints should use the synthetic default
         /// platform runtime contract.
@@ -1190,7 +1196,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         };
 
         /// Errors that can occur during code generation
-        /// Initialize the code generator
+        /// Initialize the code generator for a program whose erased callables
+        /// reserve no capture prefix.
         /// Target is determined at compile time via the LirCodeGen(target) parameter
         pub fn init(
             allocator: Allocator,
@@ -1208,8 +1215,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 &.{},
                 &.{},
                 boxy_worker_procs,
+                0,
                 cpu_level,
             );
+        }
+
+        /// Whether the program supports a hot-reload session, which its
+        /// erased callables show by reserving the capture prefix.
+        fn hotReloadEnabled(self: *const Self) bool {
+            return self.erased_capture_prefix != 0;
         }
 
         pub fn initWithBoxyMetadata(
@@ -1220,8 +1234,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             erased_arg_desc_offsets: []const lir.LIR.ErasedArgDescOffset,
             erased_arg_desc_params: []const lir.LIR.ErasedArgDescParam,
             boxy_worker_procs: []const lir.LIR.LirProcSpecId,
+            erased_capture_prefix: u32,
             cpu_level: CpuLevel,
         ) Allocator.Error!Self {
+            if (builtin.mode == .debug and erased_capture_prefix != 0 and erased_capture_prefix != builtins.erased_callable.hot_reload_capture_prefix_size) {
+                base.invariant(
+                    "Dev/codegen invariant violated: erased capture prefix {d} is neither zero nor the hot-reload prefix {d}",
+                    .{ erased_capture_prefix, builtins.erased_callable.hot_reload_capture_prefix_size },
+                );
+            }
             var scratch_arg_locs = try base.Scratch(ValueLocation).init(allocator);
             errdefer scratch_arg_locs.deinit();
             var scratch_arg_infos = try base.Scratch(ArgInfo).init(allocator);
@@ -1246,6 +1267,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .erased_arg_desc_offsets = erased_arg_desc_offsets,
                 .erased_arg_desc_params = erased_arg_desc_params,
                 .boxy_worker_procs = boxy_worker_procs,
+                .erased_capture_prefix = erased_capture_prefix,
                 .boxy_runtime_used = boxy_worker_procs.len != 0,
                 .local_locations = collections.DenseMap(u32, ValueLocation).init(allocator),
                 .stack_alloca_slots = collections.DenseMap(LocalId, i32).init(allocator),
@@ -2570,10 +2592,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const start_off = try self.ensureOnStack(start_loc, 8);
                     const len_off = try self.ensureOnStack(len_loc, 8);
                     const result_offset = self.codegen.allocStackSlot(roc_list_size);
-                    try self.callListBuiltin(list_abi, .{ .callbacks = try self.listElemCallbacks(list_abi, .incref_and_decref) }, &.{
+                    const rc = try self.listElemRc(list_abi, .incref_and_decref, &.{ GuardedList.at(args, 0), GuardedList.at(args, 1) }, ll.target);
+                    try self.callListBuiltin(list_abi, rc, &.{
                         .{ .lea = result_offset }, .{ .list = list_off }, .{ .list = src_off }, .{ .mem = start_off },
                         .{ .mem = len_off },       .elem_abi,             .elem_rc,             .{ .imm = updateModeImmForArg0(ll.unique_args) },
-                    }, LowLevelBuiltins.listOp(.list_append_sublist), null);
+                    }, LowLevelBuiltins.listOp(.list_append_sublist), .list_append_sublist);
                     return listStackAt(result_offset);
                 },
                 .list_prepend => {
@@ -8493,7 +8516,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn lowLevelListDescRef(self: *Self, s: anytype) ?LIR.BoxyDescRef {
             const op = s.op;
-            if (op != .list_concat and op != .list_prepend and op != .list_set and op != .list_set_in_place_unsafe and
+            if (op != .list_concat and op != .list_append_sublist and op != .list_prepend and op != .list_set and op != .list_set_in_place_unsafe and
                 op != .list_swap and
                 op != .list_take_first and op != .list_take_last and op != .list_sublist and
                 op != .list_drop_at and op != .list_reverse and
@@ -8502,7 +8525,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (abi.elem_size_align.size == 0) return null;
             const args = self.store.getLocalSpan(s.args);
             const first = GuardedList.at(args, 0);
-            const ref = if (op == .list_concat)
+            const ref = if (op == .list_concat or op == .list_append_sublist)
                 self.boxyListElementDescRef(abi, &.{ first, GuardedList.at(args, 1) }, s.target)
             else
                 self.boxyListElementDescRef(abi, &.{first}, s.target);
@@ -8608,12 +8631,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn ensureStableLocationsForStmtLocals(self: *Self, root: CFStmtId) Allocator.Error!void {
             const indexes = try self.stackPlanIndexes();
             var plan = StackPlan.initWithLocalIndices(indexes.allocator, indexes.local_indices);
-            indexes.local_indices = .empty;
+            indexes.local_indices = StackPlan.LocalIndices.init(indexes.allocator);
             defer indexes.local_indices = plan.deinitKeepingLocalIndices();
-            // Every planned statement is in `work`, so it empties the indexes.
+            // Planning leaves the indexes empty for the next procedure.
             var work: std.ArrayList(CFStmtId) = .empty;
             defer {
-                indexes.clear(work.items);
+                indexes.clear();
                 work.deinit(plan.allocator);
             }
             try plan.addProcGraph(self.store, indexes, root, &work, StackPlanExtra{ .owner = self });
@@ -14360,10 +14383,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                 }
             }
-            const capture_prefix_size: u32 = if (self.enable_hot_reload)
-                builtins.erased_callable.hot_reload_capture_prefix_size
-            else
-                0;
+            const capture_prefix_size: u32 = self.erased_capture_prefix;
             const base_capture_size: u32 = capture_prefix_size + capture_size;
             const metadata_offset: u32 = @intCast(builtins.erased_callable.compilerMetadataOffset(base_capture_size));
             const result_desc_slot: ?i32 = if (result_desc) |desc| try self.boxyDescRefToSlot(desc) else null;
@@ -14382,7 +14402,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const total_capture_size: u32 = metadata_offset + @sizeOf(builtins.erased_callable.CompilerMetadata);
                 const capture_src_slot = self.codegen.allocStackSlot(total_capture_size);
 
-                if (self.enable_hot_reload) {
+                if (self.hotReloadEnabled()) {
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                     defer builder.deinit();
                     try self.callBuiltin(&builder, .hot_reload_retain_current);
@@ -14456,7 +14476,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // otherwise the statement's own drop callback.
                 const on_drop_slot = self.codegen.allocStackSlot(8);
                 {
-                    const on_drop_reg = if (self.enable_hot_reload) blk: {
+                    const on_drop_reg = if (self.hotReloadEnabled()) blk: {
                         const reg = try self.allocTempGeneral();
                         try self.emitBuiltinAddress(reg, .hot_reload_erased_callable_drop);
                         break :blk reg;
@@ -14505,7 +14525,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
 
-            const hot_reload_code_ref_slot: ?i32 = if (self.enable_hot_reload) blk: {
+            const hot_reload_code_ref_slot: ?i32 = if (self.hotReloadEnabled()) blk: {
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                 defer builder.deinit();
                 try self.callBuiltin(&builder, .hot_reload_retain_current);
@@ -14527,7 +14547,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitStore(.w64, heap_ptr, 0, proc_addr);
             self.codegen.freeGeneral(proc_addr);
 
-            if (self.enable_hot_reload) {
+            if (self.hotReloadEnabled()) {
                 const hot_drop_reg = try self.allocTempGeneral();
                 try self.emitBuiltinAddress(hot_drop_reg, .hot_reload_erased_callable_drop);
                 try self.emitStore(.w64, heap_ptr, @intCast(@sizeOf(usize)), hot_drop_reg);
@@ -16289,7 +16309,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn emitHotReloadEnterForHostCallable(self: *Self) Allocator.Error!?i32 {
-            if (!self.enable_hot_reload) return null;
+            if (!self.hotReloadEnabled()) return null;
 
             const code_ref_slot = self.codegen.allocStackSlot(8);
             {
@@ -17801,7 +17821,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{
                 .target = target.defaultCpuTarget(),
                 .cpu_level = self.cpu_level,
-                .hot_reload = self.enable_hot_reload,
+                .hot_reload = self.hotReloadEnabled(),
                 .default_platform_runtime = self.enable_default_platform_runtime,
                 .initialize_boxy_runtime = mode == .object_file,
                 .static_data_readonly = mode == .object_file,
@@ -19173,8 +19193,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const capture_stack = self.codegen.allocStackSlot(8);
             const capture_arg_reg = try self.allocTempGeneral();
             try self.emitLoad(.w64, capture_arg_reg, frame_ptr, capture_ptr_slot);
-            if (self.enable_hot_reload) {
-                try self.emitAddPtrImmAny(capture_arg_reg, capture_arg_reg, builtins.erased_callable.hot_reload_capture_prefix_size);
+            if (self.erased_capture_prefix != 0) {
+                try self.emitAddPtrImmAny(capture_arg_reg, capture_arg_reg, @intCast(self.erased_capture_prefix));
             }
             try self.emitStore(.w64, frame_ptr, capture_stack, capture_arg_reg);
             self.codegen.freeGeneral(capture_arg_reg);
@@ -19232,6 +19252,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             try builder.addImmArg(param.source_nested_index);
                             try self.callBoxyBuiltin(&builder, .tag_payload_desc);
                         },
+                        .tag_ext => try self.callBoxyBuiltin(&builder, .tag_ext_desc),
                     }
                     try self.emitStore(.w64, frame_ptr, desc_slot, ret_reg_0);
                 }
@@ -22057,10 +22078,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const capture_layout = proc_spec.static_erased_capture_layout orelse continue;
                 // A frozen value reserves the program's capture prefix, like
                 // one this code packs, before its captures and metadata.
-                const capture_prefix_size: u32 = if (self.enable_hot_reload)
-                    builtins.erased_callable.hot_reload_capture_prefix_size
-                else
-                    0;
+                const capture_prefix_size: u32 = self.erased_capture_prefix;
                 const capture_size = capture_prefix_size + self.getLayoutSize(capture_layout);
                 try self.emitErasedProcRegistration(@fromBackingInt(@intCast(index)), @intCast(builtins.erased_callable.compilerMetadataOffset(capture_size)), capture_prefix_size);
             }
@@ -24023,6 +24041,7 @@ test "Boxy dictionary thunks are emitted only for producer-named workers" {
         &.{},
         &.{},
         &.{worker_proc},
+        0,
         roc_target_mod.host_cpu.level(),
     );
     defer codegen.deinit();
@@ -24052,6 +24071,7 @@ test "Boxy thunk artifact splice preserves worker namespace in both orders and a
         &.{},
         &.{},
         &.{worker},
+        0,
         roc_target_mod.host_cpu.level(),
     );
     defer producer.deinit();
@@ -24080,6 +24100,7 @@ test "Boxy thunk artifact splice preserves worker namespace in both orders and a
                 &.{},
                 &.{},
                 &.{worker},
+                0,
                 roc_target_mod.host_cpu.level(),
             );
             defer receiver.deinit();

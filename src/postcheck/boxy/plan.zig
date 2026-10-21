@@ -19,6 +19,7 @@ const test_fixtures = @import("test_fixtures.zig");
 const fixtureTableIndex = test_fixtures.tableIndex;
 const builtinNominal = test_fixtures.builtinNominal;
 const moduleKey = test_fixtures.moduleKey;
+const checkedModuleKey = test_fixtures.checkedModuleKey;
 const typeKey = test_fixtures.typeKey;
 const typeSchemeKey = test_fixtures.typeSchemeKey;
 const procedureTemplateRef = test_fixtures.procedureTemplateRef;
@@ -307,7 +308,16 @@ pub const RepChild = struct {
     source_type: CheckedTypeIdentity,
     rep: TypeRepId,
     record_field_kind: checked.CheckedFieldKind = .required,
+    /// The module whose name store `role`'s labels are in
+    /// (`ProgramPlan.childLabelModule`).
+    label_module: LabelModuleIndex = .source_type,
 };
+
+/// Where a child's role labels are named: its source type's module, or a
+/// module in `ProgramPlan.label_modules`. A stored representation's labels
+/// are its ConstStore module's, while its `source_type` names the stored
+/// root, which another module can own.
+pub const LabelModuleIndex = enum(u16) { source_type = std.math.maxInt(u16), _ };
 
 /// One tag name and its planned payload representation span.
 pub const TagVariant = struct {
@@ -1369,6 +1379,8 @@ pub const ProgramPlan = struct {
     root_reps: std.ArrayList(TypeRepId),
     type_reps: std.ArrayList(TypeRepBinding),
     stored_type_reps: std.ArrayList(StoredTypeRepBinding),
+    /// Modules a child's `label_module` names.
+    label_modules: std.ArrayList(checked.ModuleId),
     representations: std.ArrayList(TypeRepresentation),
     /// Checked-source ABI shapes, requested only at public boundaries.
     host_reps: collections.DenseMap(TypeRepId, TypeRepId),
@@ -1438,6 +1450,7 @@ pub const ProgramPlan = struct {
             .root_reps = .empty,
             .type_reps = .empty,
             .stored_type_reps = .empty,
+            .label_modules = .empty,
             .representations = .empty,
             .host_reps = collections.DenseMap(TypeRepId, TypeRepId).init(allocator),
             .children = .empty,
@@ -1509,6 +1522,7 @@ pub const ProgramPlan = struct {
         self.host_reps.deinit();
         self.type_reps.deinit(self.allocator);
         self.stored_type_reps.deinit(self.allocator);
+        self.label_modules.deinit(self.allocator);
         self.root_reps.deinit(self.allocator);
         self.generated_codec_call_types.deinit(self.allocator);
         self.generated_codec_runtime_links.deinit(self.allocator);
@@ -1546,6 +1560,25 @@ pub const ProgramPlan = struct {
         self.worker_bodies.deinit(self.allocator);
         self.roots.deinit(self.allocator);
         self.* = ProgramPlan.init(self.allocator);
+    }
+
+    /// The module whose name store `child`'s role labels are in.
+    pub fn childLabelModule(self: *const ProgramPlan, child: RepChild) checked.ModuleId {
+        return switch (child.label_module) {
+            .source_type => child.source_type.module,
+            _ => self.label_modules.items[@backingInt(child.label_module)],
+        };
+    }
+
+    /// The `label_module` that names `module`.
+    pub fn labelModuleIndex(self: *ProgramPlan, module: checked.ModuleId) Allocator.Error!LabelModuleIndex {
+        for (self.label_modules.items, 0..) |existing, index| {
+            if (moduleKeyEqual(existing, module)) return @fromBackingInt(@intCast(index));
+        }
+        const index = self.label_modules.items.len;
+        if (index >= @backingInt(LabelModuleIndex.source_type)) boxyPlanInvariant("boxy plan named more label modules than its index holds");
+        try self.label_modules.append(self.allocator, module);
+        return @fromBackingInt(@intCast(index));
     }
 
     pub fn childSlice(self: *const ProgramPlan, span: Span) []const RepChild {
@@ -2213,6 +2246,8 @@ pub const AnalyzeOptions = struct {};
 /// Checked module data required by the Boxy representation planner.
 pub const ModuleView = struct {
     key: checked.ModuleId = .{},
+    /// Deep content identity of the module (`ModuleIdentity.stable_hash`).
+    module_identity: [32]u8 = @splat(0),
     canonical_names: ?*const checked_names.CanonicalNameStore = null,
     checked_types: checked.CheckedTypeStoreView,
     checked_bodies: checked.CheckedBodyStoreView = .{},
@@ -2234,9 +2269,86 @@ pub const ModuleView = struct {
     module_env: ?*const can.ModuleEnv = null,
 };
 
+/// A type variable, or a type checking left unresolved, constrains no shape.
+fn structurallyUnconstrained(payload: checked.CheckedTypePayload) bool {
+    return switch (payload) {
+        .flex, .rigid, .pending, .err => true,
+        .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => false,
+    };
+}
+
+/// Whether two checked types could be one runtime type: the same kind of type
+/// at every position, with the same record fields, tuple and function
+/// arities, nominal declarations and primitives. A type variable is compatible
+/// with anything, and so is a tag row, since rows join (design.md "Row
+/// Joins"). One label of two joined rows is one variant exactly when its
+/// payloads are compatible; otherwise the joined row holds it twice. `modules`
+/// provides `view(module_id) ModuleView`.
+pub fn checkedTypesStructurallyCompatible(
+    allocator: Allocator,
+    modules: anytype,
+    a: CheckedTypeIdentity,
+    b: CheckedTypeIdentity,
+) Allocator.Error!bool {
+    var work = std.ArrayList([2]CheckedTypeIdentity).empty;
+    defer work.deinit(allocator);
+    var seen = std.AutoHashMap([2]CheckedTypeIdentity, void).init(allocator);
+    defer seen.deinit();
+    try work.append(allocator, .{ a, b });
+    while (work.pop()) |pair| {
+        if (typeRefEql(pair[0], pair[1])) continue;
+        if ((try seen.getOrPut(pair)).found_existing) continue;
+        const view_a = modules.view(pair[0].module);
+        const view_b = modules.view(pair[1].module);
+        const left = Builder.resolvedRowJoinPayload(view_a, pair[0].ty);
+        const right = Builder.resolvedRowJoinPayload(view_b, pair[1].ty);
+        if (structurallyUnconstrained(left.payload) or structurallyUnconstrained(right.payload)) continue;
+        switch (left.payload) {
+            .flex, .rigid, .pending, .err, .alias => unreachable,
+            .tag_union, .empty_tag_union => if (right.payload != .tag_union and right.payload != .empty_tag_union) return false,
+            .empty_record => if (right.payload != .empty_record) return false,
+            .record => |record_a| {
+                if (right.payload != .record) return false;
+                const record_b = right.payload.record;
+                if (record_a.fields.len != record_b.fields.len) return false;
+                const names_a = view_a.canonical_names orelse boxyPlanInvariant("compared record had no resolved field labels");
+                const names_b = view_b.canonical_names orelse boxyPlanInvariant("compared record had no resolved field labels");
+                for (record_a.fields, record_b.fields) |field_a, field_b| {
+                    if (!std.mem.eql(u8, names_a.recordFieldLabelText(field_a.name), names_b.recordFieldLabelText(field_b.name))) return false;
+                    try work.append(allocator, .{ typeRef(view_a, field_a.ty), typeRef(view_b, field_b.ty) });
+                }
+            },
+            .tuple => |items_a| {
+                if (right.payload != .tuple) return false;
+                const items_b = right.payload.tuple;
+                if (items_a.len != items_b.len) return false;
+                for (items_a, items_b) |item_a, item_b| try work.append(allocator, .{ typeRef(view_a, item_a), typeRef(view_b, item_b) });
+            },
+            .function => |function_a| {
+                if (right.payload != .function) return false;
+                const function_b = right.payload.function;
+                if (function_a.args.len != function_b.args.len) return false;
+                for (function_a.args, function_b.args) |arg_a, arg_b| try work.append(allocator, .{ typeRef(view_a, arg_a), typeRef(view_b, arg_b) });
+                try work.append(allocator, .{ typeRef(view_a, function_a.ret), typeRef(view_b, function_b.ret) });
+            },
+            .nominal => |nominal_a| {
+                if (right.payload != .nominal) return false;
+                const nominal_b = right.payload.nominal;
+                const names_a = view_a.canonical_names orelse boxyPlanInvariant("compared nominal had no resolved names");
+                const names_b = view_b.canonical_names orelse boxyPlanInvariant("compared nominal had no resolved names");
+                if (nominal_a.source_decl != nominal_b.source_decl) return false;
+                if (!std.mem.eql(u8, names_a.moduleIdentityBytes(nominal_a.origin_module), names_b.moduleIdentityBytes(nominal_b.origin_module))) return false;
+                if (nominal_a.args.len != nominal_b.args.len) return false;
+                for (nominal_a.args, nominal_b.args) |arg_a, arg_b| try work.append(allocator, .{ typeRef(view_a, arg_a), typeRef(view_b, arg_b) });
+            },
+        }
+    }
+    return true;
+}
+
 /// The view of checked module `key` among the modules lowering received.
 pub fn moduleViewForKey(modules: Common.CheckedModules, key: checked.ModuleId) ModuleView {
-    if (moduleKeyEqual(modules.root.module.key, key)) return moduleViewFromCheckedModule(modules.root.module);
+    if (moduleKeyEqual(modules.root.module.key.digest(), key)) return moduleViewFromCheckedModule(modules.root.module);
     return importedModuleViewForKey(modules.imports, modules.root.relation_modules, key) orelse
         boxyPlanInvariant("boxy referenced a checked module that was not available to lowering");
 }
@@ -2247,10 +2359,10 @@ fn importedModuleViewForKey(
     key: checked.ModuleId,
 ) ?ModuleView {
     for (imports) |imported| {
-        if (moduleKeyEqual(key, imported.key)) return moduleViewFromImported(imported);
+        if (moduleKeyEqual(key, imported.key.digest())) return moduleViewFromImported(imported);
     }
     for (relation_modules) |relation| {
-        if (moduleKeyEqual(key, relation.key)) return moduleViewFromImported(relation);
+        if (moduleKeyEqual(key, relation.key.digest())) return moduleViewFromImported(relation);
     }
     return null;
 }
@@ -2691,7 +2803,7 @@ const LiteralPlanner = struct {
                     }
                     std.mem.sort(RepChild, children.items, self.builder, struct {
                         fn lessThan(builder: *Builder, a: RepChild, b: RepChild) bool {
-                            return std.mem.lessThan(u8, builder.moduleForId(a.source_type.module).canonical_names.?.recordFieldLabelText(a.role.record_field), builder.moduleForId(b.source_type.module).canonical_names.?.recordFieldLabelText(b.role.record_field));
+                            return std.mem.lessThan(u8, builder.moduleForId(builder.plan.childLabelModule(a)).canonical_names.?.recordFieldLabelText(a.role.record_field), builder.moduleForId(builder.plan.childLabelModule(b)).canonical_names.?.recordFieldLabelText(b.role.record_field));
                         }
                     }.lessThan);
                 },
@@ -3764,6 +3876,7 @@ pub fn analyzeProgram(
     var builder = Builder.init(allocator, input);
     defer builder.deinit();
     try builder.collectQuantifiedVariables();
+    try builder.computeRowJoins();
     try builder.bindInterpolationItemRepresentations();
 
     if (input.source_modules.len != 0 and input.source_modules.len != input.roots.len)
@@ -3917,6 +4030,17 @@ const Builder = struct {
     relation_modules: []const checked.ImportedModuleView,
     plan: ProgramPlan,
     by_type: std.AutoHashMap(CheckedTypeIdentity, TypeBindingId),
+    /// Union-find over the checked type identities whose values flow into
+    /// one another (design.md "Row Joins"): each identity maps to its parent,
+    /// a set's root to itself.
+    row_joins: std.AutoHashMap(CheckedTypeIdentity, CheckedTypeIdentity),
+    /// For every ground member of a join set with at least two ground
+    /// members, the set's representative member, whose representation the member
+    /// binds to.
+    row_join_representative: std.AutoHashMap(CheckedTypeIdentity, CheckedTypeIdentity),
+    /// For every representative member, the set's ground members, sorted; a tag
+    /// row's representation holds every member's tags.
+    row_join_members: std.AutoHashMap(CheckedTypeIdentity, []CheckedTypeIdentity),
     quantified_variables: std.AutoHashMap(CheckedTypeIdentity, void),
     /// The stored function whose use is having its dictionaries planned.
     active_stored_fn: ?StoredFnSource = null,
@@ -3929,7 +4053,13 @@ const Builder = struct {
     stored_use_substitutions: std.AutoHashMapUnmanaged(u64, Span) = .empty,
     nominal_declaration_formals: std.AutoHashMap(NominalDeclarationKey, Span),
     optional_slots: std.AutoHashMap(CheckedTypeIdentity, TypeRepId),
+    /// Presence slots built around a representation rather than a checked
+    /// type (`presenceSlotAroundRep`), by payload representation.
+    rep_presence_slots: collections.DenseMap(TypeRepId, TypeRepId),
     by_stored_type: std.AutoHashMap(StoredTypeIdentity, TypeRepId),
+    /// The stored type each stored representation was planned from. Its
+    /// `source_type` is the stored root's checked type, not its own.
+    stored_type_of_rep: collections.DenseMap(TypeRepId, StoredTypeIdentity),
     body_exprs_seen: std.AutoHashMap(BodyExprVisit, void),
     body_patterns_seen: std.AutoHashMap(BodyPatternVisit, void),
     body_statements_seen: std.AutoHashMap(BodyStatementVisit, void),
@@ -4036,10 +4166,15 @@ const Builder = struct {
             .relation_modules = if (input.root_module) |root_module| root_module.relation_modules else &.{},
             .plan = ProgramPlan.init(allocator),
             .by_type = std.AutoHashMap(CheckedTypeIdentity, TypeBindingId).init(allocator),
+            .row_joins = std.AutoHashMap(CheckedTypeIdentity, CheckedTypeIdentity).init(allocator),
+            .row_join_representative = std.AutoHashMap(CheckedTypeIdentity, CheckedTypeIdentity).init(allocator),
+            .row_join_members = std.AutoHashMap(CheckedTypeIdentity, []CheckedTypeIdentity).init(allocator),
             .quantified_variables = std.AutoHashMap(CheckedTypeIdentity, void).init(allocator),
             .nominal_declaration_formals = std.AutoHashMap(NominalDeclarationKey, Span).init(allocator),
             .optional_slots = std.AutoHashMap(CheckedTypeIdentity, TypeRepId).init(allocator),
+            .rep_presence_slots = collections.DenseMap(TypeRepId, TypeRepId).init(allocator),
             .by_stored_type = std.AutoHashMap(StoredTypeIdentity, TypeRepId).init(allocator),
+            .stored_type_of_rep = collections.DenseMap(TypeRepId, StoredTypeIdentity).init(allocator),
             .body_exprs_seen = std.AutoHashMap(BodyExprVisit, void).init(allocator),
             .body_patterns_seen = std.AutoHashMap(BodyPatternVisit, void).init(allocator),
             .body_statements_seen = std.AutoHashMap(BodyStatementVisit, void).init(allocator),
@@ -4083,7 +4218,13 @@ const Builder = struct {
         self.body_patterns_seen.deinit();
         self.body_exprs_seen.deinit();
         self.optional_slots.deinit();
+        self.rep_presence_slots.deinit();
         self.by_type.deinit();
+        self.row_joins.deinit();
+        self.row_join_representative.deinit();
+        var members = self.row_join_members.valueIterator();
+        while (members.next()) |group| self.allocator.free(group.*);
+        self.row_join_members.deinit();
         self.quantified_variables.deinit();
         self.stored_use_substitutions.deinit(self.allocator);
         self.nominal_declaration_formals.deinit();
@@ -4091,6 +4232,7 @@ const Builder = struct {
         self.observed_numeral_evidence.deinit(self.allocator);
         self.generic_numeral_sites.deinit(self.allocator);
         self.by_stored_type.deinit();
+        self.stored_type_of_rep.deinit();
         self.plan.deinit();
     }
 
@@ -7175,6 +7317,9 @@ const Builder = struct {
         if (entry.found_existing) return;
 
         const pattern = view.checked_bodies.pattern(pattern_id);
+        // A pattern checking rejected binds nothing: the code that reaches it
+        // is the reported error.
+        if (view.checked_types.payload(pattern.ty) == .err) return;
         const pattern_rep = try self.analyzeType(view, pattern.ty);
         if (!self.analyzing_nested_callable_args) try self.recordWorkerBodyType(worker, pattern_rep);
         const start = beginPlanSequence(actions);
@@ -7287,7 +7432,7 @@ const Builder = struct {
                         boxyPlanInvariant("transparent static nominal node was not unwrapped before traversal");
                     }
                 } else {
-                    const nominal_view = self.moduleForId(.{ .bytes = nominal.named_type.module.bytes });
+                    const nominal_view = self.moduleForId(.{ .bytes = nominal.named_type.ty_module.bytes });
                     const nominal_rep = try self.analyzeType(nominal_view, nominal.named_type.ty);
                     try actions.append(self.allocator, child.at(state, node, nominal_rep, null));
                 }
@@ -8416,50 +8561,41 @@ const Builder = struct {
         if (coordinate.index >= frame.roots_len) boxyPlanInvariant("stored function evidence index exceeded its frame");
         var cursor: usize = frame.roots_start;
         skipStoredEvidenceEntries(stored.evidence, &cursor, coordinate.index);
-        if (cursor >= stored.evidence.len) boxyPlanInvariant("stored function evidence ended before its selected entry");
-        var entry = stored.evidence[cursor];
+        if (cursor >= stored.evidence.nodes.len) boxyPlanInvariant("stored function evidence ended before its selected entry");
+        var entry = stored.evidence.nodes[cursor];
         if (callable_contract) |contract_index| {
-            const contracts_len = storedEvidenceCallableContractCount(entry);
+            const contracts_len = stored.evidence.callableContracts(entry);
             if (contracts_len != 0) {
                 if (contract_index >= contracts_len) boxyPlanInvariant("stored function callable contract index exceeded its entry");
                 var contract_cursor = cursor + 1;
-                if (entry == .target) switch (entry.target.nested) {
+                if (entry == .target) switch (stored.evidence.target(entry.target).nested) {
                     .resolved => |resolved| contract_cursor += resolved.subtree_len,
                     .from_callable => {},
                 };
                 skipStoredEvidenceEntries(stored.evidence, &contract_cursor, contract_index);
-                if (contract_cursor >= stored.evidence.len) boxyPlanInvariant("stored function evidence ended before its selected contract");
-                entry = stored.evidence[contract_cursor];
+                if (contract_cursor >= stored.evidence.nodes.len) boxyPlanInvariant("stored function evidence ended before its selected contract");
+                entry = stored.evidence.nodes[contract_cursor];
             }
         }
         return switch (entry) {
-            .structural => |structural| structural,
+            .structural => |structural| stored.evidence.structural(structural).*,
             .target, .from_callable, .from_scheme, .unreachable_value, .checked_error => boxyPlanInvariant("stored generated codec evidence did not select a structural codec"),
-        };
-    }
-
-    fn storedEvidenceCallableContractCount(entry: check.ConstStore.ConstFnEvidence) u32 {
-        return switch (entry) {
-            .target => |target| target.callable_contracts,
-            .structural => |structural| structural.callable_contracts,
-            .from_callable => |use| use.callable_contracts,
-            .from_scheme, .unreachable_value, .checked_error => 0,
         };
     }
 
     /// Advance past `count` stored evidence entries, each with its nested
     /// evidence and callable contracts.
-    fn skipStoredEvidenceEntries(nodes: []const check.ConstStore.ConstFnEvidence, cursor: *usize, count: u32) void {
+    fn skipStoredEvidenceEntries(evidence: check.ConstStore.ConstFnEvidenceVector, cursor: *usize, count: u32) void {
         var remaining = count;
         while (remaining > 0) : (remaining -= 1) {
-            if (cursor.* >= nodes.len) boxyPlanInvariant("stored function evidence ended inside a skipped entry");
-            const entry = nodes[cursor.*];
+            if (cursor.* >= evidence.nodes.len) boxyPlanInvariant("stored function evidence ended inside a skipped entry");
+            const entry = evidence.nodes[cursor.*];
             cursor.* += 1;
-            if (entry == .target) switch (entry.target.nested) {
+            if (entry == .target) switch (evidence.target(entry.target).nested) {
                 .resolved => |resolved| cursor.* += resolved.subtree_len,
                 .from_callable => {},
             };
-            skipStoredEvidenceEntries(nodes, cursor, storedEvidenceCallableContractCount(entry));
+            skipStoredEvidenceEntries(evidence, cursor, evidence.callableContracts(entry));
         }
     }
 
@@ -9326,6 +9462,19 @@ const Builder = struct {
         const binding = try self.internTypeBinding(source_type);
         if (self.plan.type_reps.items[@backingInt(binding)].rep) |rep| return rep;
 
+        // A type whose values flow into another type's values shares that
+        // type's representation (design.md "Row Joins"): every ground member
+        // of a join set binds to the set's representative member's plan.
+        if (self.row_join_representative.get(source_type)) |representative| {
+            if (!typeRefEql(representative, source_type)) {
+                try frames.append(self.allocator, .{ .saved_context = self.host_context, .state = .{ .row_redirect = .{
+                    .binding = binding,
+                    .request = .{ .checked = .{ .view = self.moduleForId(representative.module), .ty = representative.ty, .context = self.host_context } },
+                } } });
+                return null;
+            }
+        }
+
         // A row with no declared tags has exactly its extension's storage
         // and descriptor. Keep both checked types bound to that same plan.
         var row_ty = ty;
@@ -9597,10 +9746,526 @@ const Builder = struct {
             .empty_record => self.completeRep(rep_id, .{ .source_type = source_type, .kind = .empty_record }),
             .tag_union => |tag_union| if (self.host_mode)
                 try self.planHostTagUnionRep(requests, view, source_type, tag_union)
+            else if (self.row_join_members.get(source_type)) |members|
+                try self.planJoinedTagUnionRep(requests, source_type, members)
             else
                 try self.planTagUnionRep(requests, view, source_type, tag_union),
-            .empty_tag_union => self.completeRep(rep_id, .{ .source_type = source_type, .kind = .empty_tag_union }),
+            .empty_tag_union => if (!self.host_mode and self.row_join_members.get(source_type) != null)
+                try self.planJoinedTagUnionRep(requests, source_type, self.row_join_members.get(source_type).?)
+            else
+                self.completeRep(rep_id, .{ .source_type = source_type, .kind = .empty_tag_union }),
         };
+    }
+
+    // Row joins //
+
+    /// Seed the row joins from every place a value's rows flow into another
+    /// value's rows (design.md "Row Joins"): a checked row coercion, a lambda
+    /// body into its function's result, and a `return` into its function's
+    /// result. Each seeded pair is then descended structurally, so the types
+    /// at every matching position join too, and every join set holding at
+    /// least two ground members elects the member the others bind to.
+    fn computeRowJoins(self: *Builder) Allocator.Error!void {
+        var views = std.ArrayList(ModuleView).empty;
+        defer views.deinit(self.allocator);
+        try views.append(self.allocator, self.root_view);
+        try views.appendSlice(self.allocator, self.extra_module_views);
+        for (self.imports) |imported| try views.append(self.allocator, moduleViewFromImported(imported));
+        for (self.relation_modules) |relation| try views.append(self.allocator, moduleViewFromImported(relation));
+
+        var work = std.ArrayList([2]CheckedTypeIdentity).empty;
+        defer work.deinit(self.allocator);
+        for (views.items) |view| {
+            const bodies = view.checked_bodies;
+            for (0..bodies.exprCount()) |index| {
+                const expr = bodies.expr(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
+                switch (expr.data) {
+                    .row_coerce => |coerce| try work.append(self.allocator, .{ typeRef(view, expr.ty), typeRef(view, bodies.expr(coerce.value).ty) }),
+                    .lambda => |lambda| if (functionResultType(view, expr.ty)) |ret| {
+                        try work.append(self.allocator, .{ typeRef(view, ret), typeRef(view, bodies.expr(lambda.body).ty) });
+                    },
+                    .return_ => |ret| if (functionResultType(view, bodies.expr(ret.lambda).ty)) |fn_ret| {
+                        try work.append(self.allocator, .{ typeRef(view, fn_ret), typeRef(view, bodies.expr(ret.expr).ty) });
+                    },
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .for_, .hosted_lambda, .run_low_level => {},
+                }
+            }
+        }
+        while (work.pop()) |pair| try self.joinIdentities(&work, pair[0], pair[1]);
+        try self.chooseRowJoinRepresentatives();
+    }
+
+    /// The result type of a function type, through aliases; null for any
+    /// other type.
+    fn functionResultType(view: ModuleView, ty: checked.CheckedTypeId) ?checked.CheckedTypeId {
+        return switch (resolvedRowJoinPayload(view, ty).payload) {
+            .function => |function| function.ret,
+            .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => null,
+        };
+    }
+
+    /// Put `a` and `b` in one join set and queue their matching components.
+    /// A join set holds types resolved through their aliases: an alias names
+    /// the representation of its backing, so the backing is what joins, and
+    /// an alias member would otherwise be elected to stand for a type that is
+    /// not alias-wrapped.
+    fn joinIdentities(self: *Builder, work: *std.ArrayList([2]CheckedTypeIdentity), raw_a: CheckedTypeIdentity, raw_b: CheckedTypeIdentity) Allocator.Error!void {
+        const a = self.resolvedRowJoinIdentity(raw_a);
+        const b = self.resolvedRowJoinIdentity(raw_b);
+        const root_a = try self.rowJoinRoot(a);
+        const root_b = try self.rowJoinRoot(b);
+        if (typeRefEql(root_a, root_b)) return;
+        try self.row_joins.put(root_b, root_a);
+        try self.appendRowJoinComponents(work, a, b);
+    }
+
+    /// `identity` through its aliases.
+    fn resolvedRowJoinIdentity(self: *Builder, identity: CheckedTypeIdentity) CheckedTypeIdentity {
+        return .{ .module = identity.module, .ty = resolvedRowJoinPayload(self.moduleForId(identity.module), identity.ty).ty };
+    }
+
+    /// The root of `identity`'s join set, entering it as its own set when it
+    /// is new.
+    fn rowJoinRoot(self: *Builder, identity: CheckedTypeIdentity) Allocator.Error!CheckedTypeIdentity {
+        var current = identity;
+        var remaining = self.row_joins.count() + 1;
+        while (remaining > 0) : (remaining -= 1) {
+            const parent = self.row_joins.get(current) orelse {
+                try self.row_joins.put(current, current);
+                return current;
+            };
+            if (typeRefEql(parent, current)) return current;
+            current = parent;
+        }
+        boxyPlanInvariant("row join parents were cyclic");
+    }
+
+    const ResolvedRowJoinPayload = struct { ty: checked.CheckedTypeId, payload: checked.CheckedTypePayload };
+
+    /// `ty`'s payload through aliases, with the type it resolved to.
+    fn resolvedRowJoinPayload(view: ModuleView, ty: checked.CheckedTypeId) ResolvedRowJoinPayload {
+        var current = ty;
+        var remaining = view.checked_types.payloadCount();
+        while (remaining > 0) : (remaining -= 1) {
+            const payload = view.checked_types.payload(current);
+            if (payload != .alias) return .{ .ty = current, .payload = payload };
+            current = payload.alias.backing;
+        }
+        boxyPlanInvariant("checked alias chain was cyclic");
+    }
+
+    const RowJoinTag = struct { view: ModuleView, tag: checked.CheckedTag };
+
+    /// Append the tags along `ty`'s extension chain, and whether the chain
+    /// ends in a closed row.
+    fn collectRowJoinTags(self: *Builder, view: ModuleView, ty: checked.CheckedTypeId, out: *std.ArrayList(RowJoinTag)) Allocator.Error!bool {
+        var current = ty;
+        var remaining = view.checked_types.payloadCount();
+        while (remaining > 0) : (remaining -= 1) {
+            switch (view.checked_types.payload(current)) {
+                .tag_union => |row| {
+                    for (row.tags) |tag| try out.append(self.allocator, .{ .view = view, .tag = tag });
+                    current = row.ext;
+                },
+                .alias => |alias| current = alias.backing,
+                .empty_tag_union => return true,
+                .flex, .rigid => return try self.tagUnionExtensionIsExplicitlyClosed(view, current),
+                .pending, .err, .record, .tuple, .nominal, .function, .empty_record => boxyPlanInvariant("checked tag extension is not a tag row"),
+            }
+        }
+        boxyPlanInvariant("cyclic checked tag row extension");
+    }
+
+    /// Queue the component pairs of two joined types: shared tags' payloads,
+    /// nominal arguments, record fields, tuple items, and function arguments
+    /// and results.
+    fn appendRowJoinComponents(self: *Builder, work: *std.ArrayList([2]CheckedTypeIdentity), a: CheckedTypeIdentity, b: CheckedTypeIdentity) Allocator.Error!void {
+        const view_a = self.moduleForId(a.module);
+        const view_b = self.moduleForId(b.module);
+        const resolved_a = resolvedRowJoinPayload(view_a, a.ty);
+        const resolved_b = resolvedRowJoinPayload(view_b, b.ty);
+        switch (resolved_a.payload) {
+            .tag_union, .empty_tag_union => {
+                if (resolved_b.payload != .tag_union and resolved_b.payload != .empty_tag_union) return;
+                var tags_a = std.ArrayList(RowJoinTag).empty;
+                defer tags_a.deinit(self.allocator);
+                var tags_b = std.ArrayList(RowJoinTag).empty;
+                defer tags_b.deinit(self.allocator);
+                _ = try self.collectRowJoinTags(view_a, resolved_a.ty, &tags_a);
+                _ = try self.collectRowJoinTags(view_b, resolved_b.ty, &tags_b);
+                for (tags_a.items) |tag_a| {
+                    for (tags_b.items) |tag_b| {
+                        // A label whose payloads are structurally incompatible
+                        // is a second variant of the joined row (design.md "Row
+                        // Joins"), and its payloads join nothing.
+                        if (!try self.rowJoinTagsSameVariant(tag_a, tag_b)) continue;
+                        const args_a = tag_a.tag.argsSlice(tag_a.view.checked_types);
+                        const args_b = tag_b.tag.argsSlice(tag_b.view.checked_types);
+                        for (args_a, args_b) |arg_a, arg_b| try work.append(self.allocator, .{ typeRef(tag_a.view, arg_a), typeRef(tag_b.view, arg_b) });
+                        break;
+                    }
+                }
+            },
+            .nominal => |nominal_a| {
+                if (resolved_b.payload != .nominal) return;
+                const nominal_b = resolved_b.payload.nominal;
+                if (nominal_a.args.len != nominal_b.args.len) return;
+                for (nominal_a.args, nominal_b.args) |arg_a, arg_b| try work.append(self.allocator, .{ typeRef(view_a, arg_a), typeRef(view_b, arg_b) });
+            },
+            .record => |record_a| {
+                if (resolved_b.payload != .record) return;
+                const record_b = resolved_b.payload.record;
+                if (record_a.fields.len != record_b.fields.len) return;
+                for (record_a.fields, record_b.fields) |field_a, field_b| try work.append(self.allocator, .{ typeRef(view_a, field_a.ty), typeRef(view_b, field_b.ty) });
+            },
+            .tuple => |items_a| {
+                if (resolved_b.payload != .tuple) return;
+                const items_b = resolved_b.payload.tuple;
+                if (items_a.len != items_b.len) return;
+                for (items_a, items_b) |item_a, item_b| try work.append(self.allocator, .{ typeRef(view_a, item_a), typeRef(view_b, item_b) });
+            },
+            .function => |function_a| {
+                if (resolved_b.payload != .function) return;
+                const function_b = resolved_b.payload.function;
+                if (function_a.args.len != function_b.args.len) return;
+                for (function_a.args, function_b.args) |arg_a, arg_b| try work.append(self.allocator, .{ typeRef(view_a, arg_a), typeRef(view_b, arg_b) });
+                try work.append(self.allocator, .{ typeRef(view_a, function_a.ret), typeRef(view_b, function_b.ret) });
+            },
+            .pending, .err, .flex, .rigid, .alias, .empty_record => {},
+        }
+    }
+
+    fn rowJoinTagText(tag: RowJoinTag) []const u8 {
+        const names = tag.view.canonical_names orelse boxyPlanInvariant("joined tag row had no resolved tag labels");
+        return names.tagLabelText(tag.tag.name);
+    }
+
+    /// Whether two tags of joined rows are one variant: the same label and
+    /// structurally compatible payloads (`checkedTypesStructurallyCompatible`).
+    fn rowJoinTagsSameVariant(self: *Builder, a: RowJoinTag, b: RowJoinTag) Allocator.Error!bool {
+        if (!std.mem.eql(u8, rowJoinTagText(a), rowJoinTagText(b))) return false;
+        const args_a = a.tag.argsSlice(a.view.checked_types);
+        const args_b = b.tag.argsSlice(b.view.checked_types);
+        if (args_a.len != args_b.len) return false;
+        for (args_a, args_b) |arg_a, arg_b| {
+            if (!try checkedTypesStructurallyCompatible(self.allocator, BuilderModules{ .builder = self }, typeRef(a.view, arg_a), typeRef(b.view, arg_b))) return false;
+        }
+        return true;
+    }
+
+    const BuilderModules = struct {
+        builder: *Builder,
+        pub fn view(self: BuilderModules, module: checked.ModuleId) ModuleView {
+            return self.builder.moduleForId(module);
+        }
+    };
+
+    /// Whether a type is ground: no type variable and no open tag row
+    /// anywhere in it. Only ground members share a join set's representation;
+    /// an open row keeps its own dynamic representation and only connects the
+    /// ground types on either side of it.
+    fn rowJoinIdentityIsGround(self: *Builder, identity: CheckedTypeIdentity) Allocator.Error!bool {
+        var work = std.ArrayList(CheckedTypeIdentity).empty;
+        defer work.deinit(self.allocator);
+        var seen = std.AutoHashMap(CheckedTypeIdentity, void).init(self.allocator);
+        defer seen.deinit();
+        try work.append(self.allocator, identity);
+        while (work.pop()) |current| {
+            if ((try seen.getOrPut(current)).found_existing) continue;
+            const view = self.moduleForId(current.module);
+            const resolved = resolvedRowJoinPayload(view, current.ty);
+            switch (resolved.payload) {
+                .flex, .rigid, .pending, .err => return false,
+                .alias => unreachable,
+                .empty_record, .empty_tag_union => {},
+                .tag_union => {
+                    var tags = std.ArrayList(RowJoinTag).empty;
+                    defer tags.deinit(self.allocator);
+                    if (!try self.collectRowJoinTags(view, resolved.ty, &tags)) return false;
+                    for (tags.items) |tag| {
+                        for (tag.tag.argsSlice(tag.view.checked_types)) |arg| try work.append(self.allocator, typeRef(tag.view, arg));
+                    }
+                },
+                .nominal => |nominal| for (nominal.args) |arg| try work.append(self.allocator, typeRef(view, arg)),
+                .record => |record| for (record.fields) |field| try work.append(self.allocator, typeRef(view, field.ty)),
+                .tuple => |items| for (items) |item| try work.append(self.allocator, typeRef(view, item)),
+                .function => |function| {
+                    for (function.args) |arg| try work.append(self.allocator, typeRef(view, arg));
+                    try work.append(self.allocator, typeRef(view, function.ret));
+                },
+            }
+        }
+        return true;
+    }
+
+    fn rowJoinIdentityLessThan(_: void, a: CheckedTypeIdentity, b: CheckedTypeIdentity) bool {
+        return switch (std.mem.order(u8, &a.module.bytes, &b.module.bytes)) {
+            .lt => true,
+            .gt => false,
+            .eq => @backingInt(a.ty) < @backingInt(b.ty),
+        };
+    }
+
+    const RowJoinGroups = std.AutoHashMap(CheckedTypeIdentity, std.ArrayListUnmanaged(CheckedTypeIdentity));
+    const RowJoinCompatibility = enum { checking, compatible, incompatible };
+
+    /// Elect, for every compatible join set with at least two ground members,
+    /// the member every other ground member binds to: the least identity, so
+    /// the choice depends on the program alone.
+    ///
+    /// Checked types are shared by structure, so a join set collects every
+    /// flow of a type, not one value's flows. Two unrelated unions can then
+    /// meet through a narrower type they both receive while naming one tag at
+    /// two payload types, and such a set has no one representation
+    /// (`rowJoinSetCompatible`): its members keep their own, and a value
+    /// crossing between two of them crosses Boxy's representation boundary.
+    fn chooseRowJoinRepresentatives(self: *Builder) Allocator.Error!void {
+        var groups = RowJoinGroups.init(self.allocator);
+        defer {
+            var it = groups.valueIterator();
+            while (it.next()) |group| group.deinit(self.allocator);
+            groups.deinit();
+        }
+        var identities = std.ArrayList(CheckedTypeIdentity).empty;
+        defer identities.deinit(self.allocator);
+        var keys = self.row_joins.keyIterator();
+        while (keys.next()) |identity| try identities.append(self.allocator, identity.*);
+        for (identities.items) |identity| {
+            if (!try self.rowJoinIdentityIsGround(identity)) continue;
+            const root = try self.rowJoinRoot(identity);
+            const entry = try groups.getOrPut(root);
+            if (!entry.found_existing) entry.value_ptr.* = .empty;
+            try entry.value_ptr.append(self.allocator, identity);
+        }
+        var compatibility = std.AutoHashMap(CheckedTypeIdentity, RowJoinCompatibility).init(self.allocator);
+        defer compatibility.deinit();
+        var roots = std.ArrayList(CheckedTypeIdentity).empty;
+        defer roots.deinit(self.allocator);
+        var root_keys = groups.keyIterator();
+        while (root_keys.next()) |root| try roots.append(self.allocator, root.*);
+        for (roots.items) |root| {
+            const group = groups.getPtr(root).?;
+            if (group.items.len < 2) continue;
+            if (!try self.rowJoinSetCompatible(root, &groups, &compatibility)) continue;
+            std.mem.sort(CheckedTypeIdentity, group.items, {}, rowJoinIdentityLessThan);
+            const representative = group.items[0];
+            for (group.items) |member| try self.row_join_representative.put(member, representative);
+            try self.row_join_members.put(representative, try self.allocator.dupe(CheckedTypeIdentity, group.items));
+        }
+    }
+
+    /// Whether every ground member of the join set rooted at `root` has one
+    /// shape: the same kind of type, the same labels, fields, arities or
+    /// nominal declaration, and at every matching position a compatible join
+    /// set. A set reached again while it is being checked is a recursive type
+    /// and is compatible as far as that path decides.
+    fn rowJoinSetCompatible(
+        self: *Builder,
+        root: CheckedTypeIdentity,
+        groups: *const RowJoinGroups,
+        compatibility: *std.AutoHashMap(CheckedTypeIdentity, RowJoinCompatibility),
+    ) Allocator.Error!bool {
+        if (compatibility.get(root)) |known| return known != .incompatible;
+        const members = (groups.getPtr(root) orelse return true).items;
+        if (members.len < 2) return true;
+        try compatibility.put(root, .checking);
+        const compatible = try self.rowJoinMembersCompatible(members, groups, compatibility);
+        try compatibility.put(root, if (compatible) .compatible else .incompatible);
+        return compatible;
+    }
+
+    fn rowJoinMembersCompatible(
+        self: *Builder,
+        members: []const CheckedTypeIdentity,
+        groups: *const RowJoinGroups,
+        compatibility: *std.AutoHashMap(CheckedTypeIdentity, RowJoinCompatibility),
+    ) Allocator.Error!bool {
+        const first_view = self.moduleForId(members[0].module);
+        const first = resolvedRowJoinPayload(first_view, members[0].ty);
+        switch (first.payload) {
+            .tag_union, .empty_tag_union => {
+                var first_tags = std.ArrayList(RowJoinTag).empty;
+                defer first_tags.deinit(self.allocator);
+                _ = try self.collectRowJoinTags(first_view, first.ty, &first_tags);
+                for (members[1..]) |member| {
+                    const view = self.moduleForId(member.module);
+                    const resolved = resolvedRowJoinPayload(view, member.ty);
+                    if (resolved.payload != .tag_union and resolved.payload != .empty_tag_union) return false;
+                    var tags = std.ArrayList(RowJoinTag).empty;
+                    defer tags.deinit(self.allocator);
+                    _ = try self.collectRowJoinTags(view, resolved.ty, &tags);
+                    for (tags.items) |tag| {
+                        for (first_tags.items) |first_tag| {
+                            if (!try self.rowJoinTagsSameVariant(tag, first_tag)) continue;
+                            const args = tag.tag.argsSlice(tag.view.checked_types);
+                            const first_args = first_tag.tag.argsSlice(first_tag.view.checked_types);
+                            for (args, first_args) |arg, first_arg| {
+                                if (!try self.rowJoinPairCompatible(typeRef(tag.view, arg), typeRef(first_tag.view, first_arg), groups, compatibility)) return false;
+                            }
+                            break;
+                        }
+                    }
+                }
+                return true;
+            },
+            .record => |first_record| {
+                for (members[1..]) |member| {
+                    const view = self.moduleForId(member.module);
+                    const resolved = resolvedRowJoinPayload(view, member.ty);
+                    if (resolved.payload != .record) return false;
+                    const record = resolved.payload.record;
+                    if (record.fields.len != first_record.fields.len) return false;
+                    const first_names = first_view.canonical_names orelse boxyPlanInvariant("joined record had no resolved field labels");
+                    const names = view.canonical_names orelse boxyPlanInvariant("joined record had no resolved field labels");
+                    for (record.fields, first_record.fields) |field, first_field| {
+                        if (!std.mem.eql(u8, names.recordFieldLabelText(field.name), first_names.recordFieldLabelText(first_field.name))) return false;
+                        if (!try self.rowJoinPairCompatible(typeRef(view, field.ty), typeRef(first_view, first_field.ty), groups, compatibility)) return false;
+                    }
+                }
+                return true;
+            },
+            .tuple => |first_items| {
+                for (members[1..]) |member| {
+                    const view = self.moduleForId(member.module);
+                    const resolved = resolvedRowJoinPayload(view, member.ty);
+                    if (resolved.payload != .tuple) return false;
+                    const items = resolved.payload.tuple;
+                    if (items.len != first_items.len) return false;
+                    for (items, first_items) |item, first_item| {
+                        if (!try self.rowJoinPairCompatible(typeRef(view, item), typeRef(first_view, first_item), groups, compatibility)) return false;
+                    }
+                }
+                return true;
+            },
+            .nominal => |first_nominal| {
+                for (members[1..]) |member| {
+                    const view = self.moduleForId(member.module);
+                    const resolved = resolvedRowJoinPayload(view, member.ty);
+                    if (resolved.payload != .nominal) return false;
+                    const nominal = resolved.payload.nominal;
+                    const names = view.canonical_names orelse boxyPlanInvariant("joined nominal had no resolved names");
+                    const first_names = first_view.canonical_names orelse boxyPlanInvariant("joined nominal had no resolved names");
+                    if (nominal.source_decl != first_nominal.source_decl) return false;
+                    if (!std.mem.eql(u8, names.moduleIdentityBytes(nominal.origin_module), first_names.moduleIdentityBytes(first_nominal.origin_module))) return false;
+                    if (nominal.args.len != first_nominal.args.len) return false;
+                    for (nominal.args, first_nominal.args) |arg, first_arg| {
+                        if (!try self.rowJoinPairCompatible(typeRef(view, arg), typeRef(first_view, first_arg), groups, compatibility)) return false;
+                    }
+                }
+                return true;
+            },
+            .function => |first_function| {
+                for (members[1..]) |member| {
+                    const view = self.moduleForId(member.module);
+                    const resolved = resolvedRowJoinPayload(view, member.ty);
+                    if (resolved.payload != .function) return false;
+                    const function = resolved.payload.function;
+                    if (function.args.len != first_function.args.len) return false;
+                    for (function.args, first_function.args) |arg, first_arg| {
+                        if (!try self.rowJoinPairCompatible(typeRef(view, arg), typeRef(first_view, first_arg), groups, compatibility)) return false;
+                    }
+                    if (!try self.rowJoinPairCompatible(typeRef(view, function.ret), typeRef(first_view, first_function.ret), groups, compatibility)) return false;
+                }
+                return true;
+            },
+            .empty_record => {
+                for (members[1..]) |member| {
+                    if (resolvedRowJoinPayload(self.moduleForId(member.module), member.ty).payload != .empty_record) return false;
+                }
+                return true;
+            },
+            .pending, .err, .flex, .rigid, .alias => unreachable,
+        }
+    }
+
+    /// Whether two matching positions of two joined types share one
+    /// representation: the same identity, or two members of one compatible
+    /// join set.
+    fn rowJoinPairCompatible(
+        self: *Builder,
+        a: CheckedTypeIdentity,
+        b: CheckedTypeIdentity,
+        groups: *const RowJoinGroups,
+        compatibility: *std.AutoHashMap(CheckedTypeIdentity, RowJoinCompatibility),
+    ) Allocator.Error!bool {
+        const resolved_a = self.resolvedRowJoinIdentity(a);
+        const resolved_b = self.resolvedRowJoinIdentity(b);
+        if (typeRefEql(resolved_a, resolved_b)) return true;
+        const root_a = try self.rowJoinRoot(resolved_a);
+        const root_b = try self.rowJoinRoot(resolved_b);
+        if (!typeRefEql(root_a, root_b)) return false;
+        return try self.rowJoinSetCompatible(root_a, groups, compatibility);
+    }
+
+    /// The representation of a tag row that is a join set's representative member:
+    /// every member's tags, each payload at the representation its own type
+    /// binds to (design.md "Row Joins").
+    fn planJoinedTagUnionRep(
+        self: *Builder,
+        requests: *std.ArrayList(RepRequest),
+        source_type: CheckedTypeIdentity,
+        members: []const CheckedTypeIdentity,
+    ) Allocator.Error!RepFinish {
+        var tags = std.ArrayList(RowJoinTag).empty;
+        defer tags.deinit(self.allocator);
+        for (members) |member| {
+            const view = self.moduleForId(member.module);
+            const resolved = resolvedRowJoinPayload(view, member.ty);
+            switch (resolved.payload) {
+                .tag_union, .empty_tag_union => _ = try self.collectRowJoinTags(view, resolved.ty, &tags),
+                .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record => boxyPlanInvariant("a tag row's join set held a type that is not a tag row"),
+            }
+        }
+        // One variant per label and structurally compatible payloads; one
+        // label at incompatible payloads is two variants (design.md "Row
+        // Joins"), ordered by label and then by their first payloads'
+        // identities, so the order depends on the program alone.
+        var unique = std.ArrayList(RowJoinTag).empty;
+        defer unique.deinit(self.allocator);
+        candidates: for (tags.items) |candidate| {
+            for (unique.items) |existing| {
+                if (try self.rowJoinTagsSameVariant(candidate, existing)) continue :candidates;
+            }
+            try unique.append(self.allocator, candidate);
+        }
+        std.mem.sort(RowJoinTag, unique.items, {}, struct {
+            fn lessThan(_: void, a: RowJoinTag, b: RowJoinTag) bool {
+                switch (std.mem.order(u8, rowJoinTagText(a), rowJoinTagText(b))) {
+                    .lt => return true,
+                    .gt => return false,
+                    .eq => {},
+                }
+                const args_a = a.tag.argsSlice(a.view.checked_types);
+                const args_b = b.tag.argsSlice(b.view.checked_types);
+                if (args_a.len != args_b.len) return args_a.len < args_b.len;
+                if (args_a.len == 0) return false;
+                return rowJoinIdentityLessThan({}, typeRef(a.view, args_a[0]), typeRef(b.view, args_b[0]));
+            }
+        }.lessThan);
+        var roles = std.ArrayList(ChildRole).empty;
+        defer roles.deinit(self.allocator);
+        var variants = std.ArrayList(TagVariant).empty;
+        defer variants.deinit(self.allocator);
+        for (unique.items) |entry| {
+            const start: u32 = @intCast(roles.items.len);
+            for (entry.tag.argsSlice(entry.view.checked_types), 0..) |arg, index| {
+                try roles.append(self.allocator, .{ .tag_payload = .{ .tag = entry.tag.name, .index = @intCast(index) } });
+                try requests.append(self.allocator, .{ .checked = .{ .view = entry.view, .ty = arg, .context = self.host_context } });
+            }
+            try variants.append(self.allocator, .{ .name = entry.tag.name, .name_module = entry.view.key, .payloads = .{ .start = start, .len = entry.tag.args_len } });
+        }
+        const sources = try self.allocator.alloc(CheckedTypeIdentity, requests.items.len);
+        errdefer self.allocator.free(sources);
+        for (requests.items, sources) |request, *source| source.* = requestSourceType(request);
+        const owned_roles = try roles.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(owned_roles);
+        return .{ .host_tag_union = .{
+            .source_type = source_type,
+            .open = false,
+            .roles = owned_roles,
+            .sources = sources,
+            .variants = try variants.toOwnedSlice(self.allocator),
+        } };
     }
 
     /// Write a component-free representation into the slot the frame
@@ -10156,8 +10821,8 @@ const Builder = struct {
                 if (self.host_mode and value.view.canonical_names != null) {
                     std.mem.sort(RepChild, children, self, struct {
                         fn lessThan(builder: *Builder, a: RepChild, b: RepChild) bool {
-                            const a_names = builder.moduleForId(a.source_type.module).canonical_names.?;
-                            const b_names = builder.moduleForId(b.source_type.module).canonical_names.?;
+                            const a_names = builder.moduleForId(builder.plan.childLabelModule(a)).canonical_names.?;
+                            const b_names = builder.moduleForId(builder.plan.childLabelModule(b)).canonical_names.?;
                             return std.mem.lessThan(u8, a_names.recordFieldLabelText(a.role.record_field), b_names.recordFieldLabelText(b.role.record_field));
                         }
                     }.lessThan);
@@ -10394,7 +11059,7 @@ const Builder = struct {
         defer methods.deinit(self.allocator);
         for (constraints, 0..) |constraint, index| {
             if (self.constraintIsOwnerlessStructuralEquality(source_type, constraint)) continue;
-            if (!static_dispatch.requiresRuntimeDictionary(constraint.origin)) continue;
+            if (!static_dispatch.requiresRuntimeDictionary(constraint.origin.literalKind())) continue;
             // Independent callable relations share the checker's target slot.
             // Their signatures are all analyzed below, including duplicates.
             if (constraints.len > 1 and (try methods.getOrPut(self.allocator, constraint.fn_name)).found_existing) continue;
@@ -10586,6 +11251,7 @@ const Builder = struct {
             .source_type = source_type,
             .rep = rep_id,
         });
+        try self.stored_type_of_rep.put(rep_id, source_type);
 
         const store = store_view.const_store orelse
             boxyPlanInvariant("stored representation planning had no ConstStore");
@@ -10797,6 +11463,7 @@ const Builder = struct {
             .record => |fields| {
                 for (fields, results) |field, rep| {
                     var child = self.storedChild(.{ .record_field = field.name }, rep);
+                    child.label_module = try self.plan.labelModuleIndex(frame.store_view.key);
                     child.record_field_kind = if (field.value_ty != null)
                         checked.CheckedFieldKind.optional
                     else if (field.default != null)
@@ -10827,7 +11494,9 @@ const Builder = struct {
                 for (ordered) |tag| {
                     const payloads = store.type_store.typeSpan(tag.payloads);
                     for (0..payloads.len) |index| {
-                        try children.append(self.allocator, self.storedChild(.{ .tag_payload = .{ .tag = tag.checked_name, .index = @intCast(index) } }, results[next]));
+                        var child = self.storedChild(.{ .tag_payload = .{ .tag = tag.checked_name, .index = @intCast(index) } }, results[next]);
+                        child.label_module = try self.plan.labelModuleIndex(frame.store_view.key);
+                        try children.append(self.allocator, child);
                         next += 1;
                     }
                 }
@@ -14549,6 +15218,15 @@ const Builder = struct {
         const stored_rep = self.plan.representations.items[@backingInt(stored_rep_id)];
         // An erased stored value carries no structure below this position.
         if (stored_rep.kind == .dynamic) return;
+        // An alias names its backing's representation, and a stored value
+        // records no alias layers, so either side's alias is looked through
+        // to the structure the other side holds.
+        if (checked_rep.kind == .alias and stored_rep.kind != .alias) {
+            return try self.collectStoredRepSubstitutions(self.repQuery().requiredSingleChild(checked_rep_id, .alias_backing).rep, stored_rep_id, out, seen);
+        }
+        if (stored_rep.kind == .alias and checked_rep.kind != .alias) {
+            return try self.collectStoredRepSubstitutions(checked_rep_id, self.repQuery().requiredSingleChild(stored_rep_id, .alias_backing).rep, out, seen);
+        }
         for (0..checked_rep.children.len) |index| {
             const child = self.plan.children.items[checked_rep.children.start + index];
             if (self.plan.childIsSharedBackingTemplate(checked_rep_id, child)) continue;
@@ -14560,7 +15238,12 @@ const Builder = struct {
                     try self.collectStoredRepSubstitutions(child.rep, stored_rep_id, out, seen);
                     continue;
                 },
-                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .tuple_elem, .function_arg, .function_ret, .tag_payload, .list_elem, .box_payload => boxyPlanInvariant("stored capture representation had no child matching its checked binder representation"),
+                // A checked row joined with the rows its values flow into
+                // (design.md "Row Joins") may list tags the stored row lacks;
+                // a stored value never carries one of them, so there is
+                // nothing beneath it to substitute.
+                .tag_payload => continue,
+                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .tuple_elem, .function_arg, .function_ret, .list_elem, .box_payload => boxyPlanInvariant("stored capture representation had no child matching its checked binder representation"),
             };
             try self.collectStoredRepSubstitutions(child.rep, stored_child.rep, out, seen);
         }
@@ -14693,17 +15376,9 @@ const Builder = struct {
         }
     }
 
-    /// The checked construction site of a stored function value: the nested
-    /// callable its worker runs. Its checked evidence and scheme substitution
-    /// instantiate the worker exactly as at that site.
-    fn staticFnSite(self: *Builder, static_fn: StaticFnPlan) CheckedExprIdentity {
-        return self.staticFnNestedSite(static_fn) orelse
-            boxyPlanInvariant("stored function value with hidden inputs had no nested construction site");
-    }
-
-    /// `staticFnSite` for a nested callable, or null for a stored top-level
-    /// or generated procedure, whose stored representation is its whole
-    /// instantiation.
+    /// The checked construction site of a stored function value that is a
+    /// nested callable, or null for a stored top-level or generated
+    /// procedure, whose stored representation is its whole instantiation.
     fn staticFnNestedSite(self: *Builder, static_fn: StaticFnPlan) ?CheckedExprIdentity {
         return switch (self.plan.workers.items[@backingInt(static_fn.worker)].source) {
             .nested_expr => |expr_ref| expr_ref,
@@ -14717,40 +15392,89 @@ const Builder = struct {
         };
     }
 
-    /// A stored function value's worker takes its hidden dictionaries from
-    /// its construction site's checked evidence under that site's scheme
-    /// substitution. The site is the callable's own definition, so its types
-    /// are the worker's and supply no further instantiation.
+    /// A stored function value's worker takes the dictionaries of the types
+    /// the stored value fixes (`staticFnSchemeRepSubstitutions`). Its
+    /// construction site's evidence names types in the variables of the scope
+    /// that constructed it, which is gone.
     fn materializeStaticFnHiddenDictionaryArgs(self: *Builder) Allocator.Error!void {
         var index: usize = 0;
         while (index < self.plan.static_fns.items.len) : (index += 1) {
             const static_fn = self.plan.static_fns.items[index];
             const worker = self.plan.workers.items[@backingInt(static_fn.worker)];
             if (worker.hidden_dicts.len == 0 or static_fn.hidden_dict_args.len != 0) continue;
-            const site = self.staticFnSite(static_fn);
-            const evidence = self.checkedEvidenceForProcedureUse(site);
+            const outer_stored_fn = self.active_stored_fn;
+            const outer_stored_substitution = self.active_stored_substitution;
+            self.active_stored_fn = .{ .module = static_fn.store_module, .fn_id = static_fn.fn_id };
+            self.active_stored_substitution = try self.staticFnSchemeRepSubstitutions(static_fn);
+            defer {
+                self.active_stored_fn = outer_stored_fn;
+                self.active_stored_substitution = outer_stored_substitution;
+            }
             const hidden_dict_args = try self.materializeWorkerHiddenDictionaryArgsAtCallTypes(
                 static_fn.worker,
                 null,
                 null,
-                evidence.view,
-                evidence.entries,
-                self.useSchemeSubstitution(static_fn.worker, site),
+                null,
+                null,
+                null,
                 0,
             );
             self.plan.static_fns.items[index].hidden_dict_args = hidden_dict_args;
         }
     }
 
+    /// Each variable of a stored function value's worker paired with what the
+    /// stored value puts in its position: the use-site relation of the
+    /// worker's type to the stored representation, then the stored type of
+    /// each capture for a variable that relation does not name, then, for a
+    /// variable neither names (one only the body's
+    /// dispatches fix), its construction site's checked binding with the
+    /// constructing scope's variables replaced by their stored captures.
+    fn staticFnSchemeRepSubstitutions(self: *Builder, static_fn: StaticFnPlan) Allocator.Error!Span {
+        const worker = self.plan.workers.items[@backingInt(static_fn.worker)];
+        const stored_fn: StoredFnSource = .{ .module = static_fn.store_module, .fn_id = static_fn.fn_id };
+        const signature = try self.storedUseSchemeRepSubstitutions(worker.rep, static_fn.rep);
+        var captures = std.ArrayList(CallDescriptorRepSubstitution).empty;
+        defer captures.deinit(self.allocator);
+        try self.storedFnCaptureDescriptorSubstitutions(stored_fn, &captures);
+        var capture_bindings = collections.DenseMapUnmanaged(TypeRepId, TypeRepId).empty;
+        defer capture_bindings.deinit(self.allocator);
+        for (captures.items) |capture| try capture_bindings.put(self.allocator, capture.worker_rep, capture.call_rep);
+        const site_substitution = if (self.staticFnNestedSite(static_fn)) |site| self.useSchemeSubstitution(static_fn.worker, site) else null;
+        if (capture_bindings.count() == 0 and site_substitution == null) return signature;
+
+        const start: u32 = @intCast(self.plan.scheme_rep_substitutions.items.len);
+        try self.plan.scheme_rep_substitutions.ensureUnusedCapacity(self.allocator, signature.len);
+        for (0..signature.len) |offset| {
+            self.plan.scheme_rep_substitutions.appendAssumeCapacity(self.plan.scheme_rep_substitutions.items[signature.start + offset]);
+        }
+        for (captures.items) |capture| {
+            if (schemeRepSubstitutionFor(self.plan.scheme_rep_substitutions.items[start..], capture.worker_rep) != null) continue;
+            try self.plan.scheme_rep_substitutions.append(self.allocator, .{ .scheme_rep = capture.worker_rep, .site_rep = capture.call_rep });
+        }
+        if (site_substitution) |substitution| {
+            for (substitution.scheme_vars, substitution.site_types) |scheme_var, site_type| {
+                if (substitution.site_view.checked_types.payload(site_type) == .err) continue;
+                const scheme_rep = self.plan.repForSourceType(typeRef(substitution.callee_view, scheme_var)) orelse continue;
+                if (schemeRepSubstitutionFor(self.plan.scheme_rep_substitutions.items[start..], scheme_rep) != null) continue;
+                const site_rep = substitution.siteRep(self.plan.repForSourceType(typeRef(substitution.site_view, site_type)) orelse
+                    boxyPlanInvariant("checked construction-site substitution type was not analyzed"));
+                const stored_site_rep = try self.substitutedRep(site_rep, &capture_bindings);
+                if (stored_site_rep == scheme_rep) continue;
+                try self.plan.scheme_rep_substitutions.append(self.allocator, .{ .scheme_rep = scheme_rep, .site_rep = stored_site_rep });
+            }
+        }
+        return .{ .start = start, .len = @as(u32, @intCast(self.plan.scheme_rep_substitutions.items.len)) - start };
+    }
+
     /// A stored function value is restored at its stored representation, so
-    /// that concrete representation supplies its worker's hidden descriptors,
-    /// with a nested callable's construction-site evidence and scheme
-    /// substitution.
+    /// that concrete representation and the types its stored value fixes
+    /// (`staticFnSchemeRepSubstitutions`) supply its worker's hidden
+    /// descriptors.
     fn materializeStaticFnHiddenDescriptorArgs(self: *Builder) Allocator.Error!void {
         for (self.plan.static_fns.items) |*static_fn| {
             const worker = self.plan.workers.items[@backingInt(static_fn.worker)];
             if (worker.hidden_descs.len == 0) continue;
-            const evidence: ?CheckedCallEvidence = if (self.staticFnNestedSite(static_fn.*)) |site| self.checkedEvidenceForProcedureUse(site) else null;
             const function = (self.repQuery().functionChildren(static_fn.rep)) orelse
                 boxyPlanInvariant("stored function value had a non-callable stored representation");
             const children = self.plan.childSlice(self.plan.representations.items[@backingInt(function.rep)].children);
@@ -14762,11 +15486,10 @@ const Builder = struct {
                 arg_rep.* = child.rep;
                 arg_type.* = child.source_type;
             }
+            const stored_fn: StoredFnSource = .{ .module = static_fn.store_module, .fn_id = static_fn.fn_id };
             var stored_capture_substitutions = std.ArrayList(CallDescriptorRepSubstitution).empty;
             defer stored_capture_substitutions.deinit(self.allocator);
-            try self.storedFnCaptureDescriptorSubstitutions(.{ .module = static_fn.store_module, .fn_id = static_fn.fn_id }, &stored_capture_substitutions);
-            // The stored callable signature and captures record this value's
-            // instantiation; construction evidence supplies its dictionaries.
+            try self.storedFnCaptureDescriptorSubstitutions(stored_fn, &stored_capture_substitutions);
             static_fn.hidden_desc_args = try self.materializeWorkerHiddenDescriptorArgsWithStoredCaptures(
                 static_fn.worker,
                 arg_reps,
@@ -14774,12 +15497,12 @@ const Builder = struct {
                 function.ret,
                 arg_types,
                 self.plan.representations.items[@backingInt(function.ret)].source_type,
-                if (evidence) |known| known.view else null,
-                if (evidence) |known| known.entries else null,
                 null,
-                try self.storedUseSchemeRepSubstitutions(worker.rep, static_fn.rep),
+                null,
+                null,
+                try self.staticFnSchemeRepSubstitutions(static_fn.*),
                 stored_capture_substitutions.items,
-                .{},
+                static_fn.hidden_dict_args,
             );
         }
     }
@@ -15909,7 +16632,7 @@ const Builder = struct {
                     const path_name: RecordFieldLabelId = @fromBackingInt(@intCast(path_step.data));
                     for (children) |child| {
                         if (child.role != .record_field) continue;
-                        const child_view = self.moduleForId(child.source_type.module);
+                        const child_view = self.moduleForId(self.plan.childLabelModule(child));
                         if (recordFieldNameMatches(moduleNamesOf(path_view), path_name, moduleNamesOf(child_view), child.role.record_field)) {
                             break :blk child.rep;
                         }
@@ -15925,7 +16648,7 @@ const Builder = struct {
                     for (children) |child| {
                         if (child.role != .tag_payload) continue;
                         const payload = child.role.tag_payload;
-                        const child_view = self.moduleForId(child.source_type.module);
+                        const child_view = self.moduleForId(self.plan.childLabelModule(child));
                         if (payload.index == payload_index and
                             tagLabelNameMatches(moduleNamesOf(path_view), path_tag, moduleNamesOf(child_view), payload.tag))
                         {
@@ -16445,6 +17168,19 @@ const Builder = struct {
                 try state.substitutions.put(self.allocator, pair.scheme_rep, pair.site_rep);
             }
         }
+        // A site that binds a scheme variable to itself (a use written in the
+        // scope that quantifies it) names that variable as exactly as any
+        // other binding, though it adds no representation pair.
+        if (relation == null) if (request.scheme_substitution) |substitution| {
+            for (substitution.scheme_vars, substitution.site_types) |scheme_var, site_type| {
+                if (substitution.site_view.checked_types.payload(site_type) == .err) continue;
+                const scheme_rep = self.plan.repForSourceType(typeRef(substitution.callee_view, scheme_var)) orelse continue;
+                if (self.plan.representations.items[@backingInt(scheme_rep)].dictionaries.len == 0) continue;
+                const site_rep = substitution.siteRep(self.plan.repForSourceType(typeRef(substitution.site_view, site_type)) orelse
+                    boxyPlanInvariant("checked call-site substitution type was not analyzed"));
+                if (site_rep == scheme_rep) try state.substitutions.put(self.allocator, scheme_rep, site_rep);
+            }
+        };
 
         const definition_type = self.workerCheckedTypeForSource(worker.source, worker.checked_type);
         if (!typeRefEql(definition_type, worker.checked_type)) {
@@ -17241,11 +17977,11 @@ const Builder = struct {
     ) Allocator.Error!?DictionaryMethodEvidence {
         const source_rep_id = state.source_rep_id;
         const source_rep = self.plan.representations.items[@backingInt(source_rep_id)];
-        const source_view = self.moduleForId(source_rep.source_type.module);
         const requirement_view = self.moduleForId(requirement.source_type.module);
         _ = try self.analyzeType(requirement_view, requirement.fn_ty.ty);
-        const owner = methodOwnerForModuleType(source_view, source_rep.source_type.ty) orelse
-            self.defaultedDictionaryOwner(source_rep_id);
+        const rep_owner = self.dictionaryMethodOwner(source_rep_id);
+        const source_view = rep_owner.view;
+        const owner = rep_owner.owner;
         if (owner) |method_owner| {
             if (lookupMethodTarget(self.methodSearchModules(), source_view, method_owner, requirement_view, requirement.fn_name)) |lookup| {
                 // A compiler-derived equality or hash has no worker: the slot
@@ -17302,6 +18038,30 @@ const Builder = struct {
             }
         }
         return try self.structuralDictionaryMethodEvidence(source_rep, requirement, requirement_view);
+    }
+
+    /// A nominal's argument where the call holds the structure the
+    /// nominal's backing names: the call's representation at that
+    /// argument's formal's position in the backing. Null when the formal has
+    /// no runtime position there or the call is not that structure.
+    fn nominalArgInBackingStructure(
+        self: *Builder,
+        worker_rep_id: TypeRepId,
+        arg_index: u32,
+        call_structure_rep_id: TypeRepId,
+    ) Allocator.Error!?TypeRepId {
+        const worker_rep = self.plan.representations.items[@backingInt(worker_rep_id)];
+        if (worker_rep.kind != .nominal) return null;
+        const call_kind = self.plan.representations.items[@backingInt(call_structure_rep_id)].kind;
+        if (call_kind == .nominal or call_kind == .alias) return null;
+        const backing = for (self.plan.childSlice(worker_rep.children)) |child| {
+            if (child.role == .nominal_backing) break child.rep;
+        } else return null;
+        var bindings = self.plan.nominalBackingSubstitutions(worker_rep.nominal_backing_arg_substitutions);
+        const formal = while (bindings.next()) |binding| {
+            if (binding.arg_index == arg_index) break binding.formal_rep orelse return null;
+        } else return null;
+        return try self.repAtPosition(.runtime, backing, formal, call_structure_rep_id);
     }
 
     /// Collect, in pre-order, the hidden descriptor parameters `root`
@@ -17666,6 +18426,9 @@ const Builder = struct {
                         if (self.workerPresenceSlotPayloadMatchesUnwrappedCallRep(worker_rep_id, aligned_call_rep_id, worker_child)) break :target aligned_call_rep_id;
                         if (try self.repQuery().workerChildCanMatchUnwrappedCallRep(worker_rep_id, worker_child)) break :target aligned_call_rep_id;
                         if (worker_child.role == .tag_ext and call_children.len == 0 and call_rep.descriptor != null) break :target aligned_call_rep_id;
+                        if (worker_child.role == .nominal_arg) {
+                            if (try self.nominalArgInBackingStructure(worker_rep_id, worker_child.role.nominal_arg, structure_call_rep_id)) |call_arg| break :target call_arg;
+                        }
                         boxyPlanInvariant("boxy direct call hidden descriptor mapping saw mismatched child roles");
                     };
                     return try self.enterCallDescriptorRep(walk, frames, worker_child.rep, target);
@@ -18996,8 +19759,18 @@ const Builder = struct {
                 any_at_call = true;
                 try position_reps.append(self.allocator, at_call);
             } else {
-                try position_reps.append(self.allocator, self.plan.repForSourceType(position_type) orelse
-                    boxyPlanInvariant("static dictionary method instantiation type was not analyzed"));
+                const type_rep = self.plan.repForSourceType(position_type) orelse
+                    boxyPlanInvariant("static dictionary method instantiation type was not analyzed");
+                // The dispatcher's position is the dictionary's own
+                // representation, and a position the call binds is the
+                // call's. A stored representation's source type names its
+                // stored root, so the call is made at the representation.
+                const exact_rep = if (child_rep == dispatcher_rep)
+                    source_rep_id
+                else
+                    type_rep;
+                if (exact_rep != type_rep) any_at_call = true;
+                try position_reps.append(self.allocator, exact_rep);
             }
         }
         const start: u32 = @intCast(self.plan.dictionary_method_call_types.items.len);
@@ -19228,6 +20001,41 @@ const Builder = struct {
         return target_type;
     }
 
+    const DictionaryMethodOwner = struct {
+        /// The module whose names `owner` is written in.
+        view: ModuleView,
+        owner: ?static_dispatch.MethodOwner,
+    };
+
+    /// The method owner a dictionary for `rep_id` dispatches on. A stored
+    /// representation's owner is its stored type's: its `source_type` names
+    /// the stored root rather than its own position.
+    fn dictionaryMethodOwner(self: *Builder, rep_id: TypeRepId) DictionaryMethodOwner {
+        if (self.stored_type_of_rep.get(rep_id)) |stored| {
+            const store_view = self.moduleForId(stored.module);
+            const store = store_view.const_store orelse
+                boxyPlanInvariant("stored representation's module had no ConstStore");
+            return switch (store.type_store.get(stored.ty)) {
+                .named => |named| if (named.builtin_owner) |builtin|
+                    .{ .view = store_view, .owner = .{ .builtin = builtin } }
+                else blk: {
+                    const named_view = self.moduleForId(.{ .bytes = named.named_type.module.bytes });
+                    break :blk .{ .view = named_view, .owner = methodOwnerForModuleType(named_view, named.named_type.ty) };
+                },
+                .primitive => |primitive| .{ .view = store_view, .owner = .{ .builtin = checked.builtinOwnerForPrimitive(primitive) } },
+                .list => .{ .view = store_view, .owner = .{ .builtin = .list } },
+                .box => .{ .view = store_view, .owner = .{ .builtin = .box } },
+                .record, .tuple, .tag_union, .func, .erased, .zst => .{ .view = store_view, .owner = null },
+            };
+        }
+        const rep = self.plan.representations.items[@backingInt(rep_id)];
+        const view = self.moduleForId(rep.source_type.module);
+        return .{
+            .view = view,
+            .owner = methodOwnerForModuleType(view, rep.source_type.ty) orelse self.defaultedDictionaryOwner(rep_id),
+        };
+    }
+
     fn defaultedDictionaryOwner(self: *Builder, rep_id: TypeRepId) ?static_dispatch.MethodOwner {
         const rep = self.plan.representations.items[@backingInt(rep_id)];
         const view = self.moduleForId(rep.source_type.module);
@@ -19400,9 +20208,9 @@ const Builder = struct {
             .encoder => .encoder,
         };
         var selected: ?static_dispatch.StructuralEvidence = null;
-        for (fn_value.evidence) |entry| {
+        for (fn_value.evidence.nodes) |entry| {
             const structural = switch (entry) {
-                .structural => |structural| structural,
+                .structural => |structural| fn_value.evidence.structural(structural).*,
                 .target, .from_callable, .from_scheme, .unreachable_value, .checked_error => continue,
             };
             if (structural.derivation.kind() != expected) continue;
@@ -19499,12 +20307,58 @@ const Builder = struct {
     /// A worker field whose kind is undetermined is stored as a presence
     /// slot. Where the call made that field required, the call's value is the
     /// slot's `Present` payload, so the call side of the slot is the presence
-    /// slot over that payload.
+    /// slot over that payload. A checked call representation's slot is the
+    /// one its checked type plans. A representation planned from a stored
+    /// (ConstStore) type records the checked type of the stored root it
+    /// belongs to rather than of its own position, so its slot is built around
+    /// the representation directly (`presenceSlotAroundRep`).
     fn callPresenceSlotForWorkerSlot(self: *Builder, worker_rep_id: TypeRepId, call_rep_id: TypeRepId) Allocator.Error!TypeRepId {
-        if (self.plan.representations.items[@backingInt(worker_rep_id)].presence_slot_present_discriminant == null) return call_rep_id;
+        const worker_rep = self.plan.representations.items[@backingInt(worker_rep_id)];
+        if (worker_rep.presence_slot_present_discriminant == null) return call_rep_id;
         const call_rep = self.plan.representations.items[@backingInt(call_rep_id)];
         if (call_rep.presence_slot_present_discriminant != null) return call_rep_id;
-        return try self.optionalSlotRepresentation(self.moduleForId(call_rep.source_type.module), call_rep.source_type.ty);
+        if (self.plan.repForSourceType(call_rep.source_type) == call_rep_id) {
+            return try self.optionalSlotRepresentation(self.moduleForId(call_rep.source_type.module), call_rep.source_type.ty);
+        }
+        return try self.presenceSlotAroundRep(call_rep_id);
+    }
+
+    /// A presence slot whose Present payload is `payload_rep`, labelled in the
+    /// name store of the payload's source module, which its child roles are
+    /// read against.
+    fn presenceSlotAroundRep(self: *Builder, payload_rep: TypeRepId) Allocator.Error!TypeRepId {
+        const entry = try self.rep_presence_slots.getOrPut(payload_rep);
+        if (entry.found_existing) return entry.value_ptr.*;
+        const payload_source = self.plan.representations.items[@backingInt(payload_rep)].source_type;
+        const view = self.moduleForId(payload_source.module);
+        const names = view.canonical_names orelse
+            boxyPlanInvariant("presence slot payload ModuleView had no name store");
+        const missing = names.lookupTagLabel("#Missing") orelse
+            boxyPlanInvariant("presence slot payload module was missing the reserved Missing label");
+        const present = names.lookupTagLabel("#Present") orelse
+            boxyPlanInvariant("presence slot payload module was missing the reserved Present label");
+        const child_start: u32 = @intCast(self.plan.children.items.len);
+        try self.plan.children.append(self.allocator, .{
+            .role = .{ .tag_payload = .{ .tag = present, .index = 0 } },
+            .source_type = payload_source,
+            .rep = payload_rep,
+        });
+        const variant_start: u32 = @intCast(self.plan.tag_variants.items.len);
+        try self.plan.tag_variants.appendSlice(self.allocator, &.{
+            .{ .name = missing, .name_module = view.key },
+            .{ .name = present, .name_module = view.key, .payloads = .{ .start = child_start, .len = 1 } },
+        });
+        const rep_id: TypeRepId = @fromBackingInt(@intCast(@as(u32, @intCast(self.plan.representations.items.len))));
+        try self.plan.representations.append(self.allocator, .{
+            .source_type = payload_source,
+            .kind = .tag_union,
+            .children = .{ .start = child_start, .len = 1 },
+            .tag_variants = .{ .start = variant_start, .len = 2 },
+            .contains_dynamic = true,
+            .presence_slot_present_discriminant = 1,
+        });
+        entry.value_ptr.* = rep_id;
+        return rep_id;
     }
 
     fn workerPresenceSlotPayloadMatchesUnwrappedCallRep(
@@ -20886,7 +21740,7 @@ fn rootRequiresHostWrapper(root: checked.RootRequest) bool {
     return root.abi != .roc or root.exposure != .private;
 }
 
-fn workerSourceForRoot(root: checked.RootRequest, root_key: checked.CheckedModuleArtifactKey) ?WorkerSource {
+fn workerSourceForRoot(root: checked.RootRequest, root_key: checked.ModuleId) ?WorkerSource {
     if (root.procedure_binding) |binding| return .{ .procedure_binding = .{ .artifact = root_key, .binding = binding } };
     if (root.procedure_use) |procedure| return .{ .procedure_use = procedure };
     if (root.procedure_template) |template| return .{ .procedure_template = template };
@@ -21370,9 +22224,9 @@ pub fn NamedRepQuery(comptime Modules: type) type {
             return switch (target.role) {
                 .record_field => |target_label| switch (candidate.role) {
                     .record_field => |candidate_label| recordFieldNameMatches(
-                        self.modules.moduleNames(target.source_type.module),
+                        self.modules.moduleNames(self.query.plan.childLabelModule(target)),
                         target_label,
-                        self.modules.moduleNames(candidate.source_type.module),
+                        self.modules.moduleNames(self.query.plan.childLabelModule(candidate)),
                         candidate_label,
                     ),
                     .alias_backing,
@@ -21393,9 +22247,9 @@ pub fn NamedRepQuery(comptime Modules: type) type {
                 .tag_payload => |target_payload| switch (candidate.role) {
                     .tag_payload => |candidate_payload| target_payload.index == candidate_payload.index and
                         tagLabelNameMatches(
-                            self.modules.moduleNames(target.source_type.module),
+                            self.modules.moduleNames(self.query.plan.childLabelModule(target)),
                             target_payload.tag,
-                            self.modules.moduleNames(candidate.source_type.module),
+                            self.modules.moduleNames(self.query.plan.childLabelModule(candidate)),
                             candidate_payload.tag,
                         ),
                     .alias_backing,
@@ -22296,7 +23150,8 @@ pub fn workerSourceForMethodTarget(
 /// The planner's view of an imported checked module.
 pub fn moduleViewFromImported(imported: checked.ImportedModuleView) ModuleView {
     return .{
-        .key = imported.key,
+        .key = imported.key.digest(),
+        .module_identity = imported.module_identity.stable_hash,
         .canonical_names = imported.canonical_names,
         .checked_types = imported.checked_types,
         .checked_bodies = imported.checked_bodies,
@@ -22322,7 +23177,8 @@ pub fn moduleViewFromImported(imported: checked.ImportedModuleView) ModuleView {
 /// The planner's view of a checked module.
 pub fn moduleViewFromCheckedModule(checked_module: *const checked.CheckedModuleArtifact) ModuleView {
     return .{
-        .key = checked_module.key,
+        .key = checked_module.key.digest(),
+        .module_identity = checked_module.module_identity.stable_hash,
         .canonical_names = &checked_module.canonical_names,
         .checked_types = checked_module.checked_types.view(),
         .checked_bodies = checked_module.checked_bodies.view(),
@@ -22387,7 +23243,7 @@ fn exprRefEql(a: CheckedExprIdentity, b: CheckedExprIdentity) bool {
 }
 
 fn moduleKeyEqual(a: checked.ModuleId, b: checked.ModuleId) bool {
-    return std.mem.eql(u8, a.bytes[0..], b.bytes[0..]);
+    return a.eql(b);
 }
 
 fn methodOwnerForModuleType(view: ModuleView, ty: checked.CheckedTypeId) ?static_dispatch.MethodOwner {
@@ -22637,11 +23493,20 @@ fn patternBindsCapture(
 test "boxy planner records root wrapper plans from checked root metadata" {
     const gpa = std.testing.allocator;
 
-    const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}) },
-        .{ .nominal = builtinNominal(.u8, @fromBackingInt(@intCast(1)), .{}) },
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
+
+        builtinNominal(.u8, @fromBackingInt(@intCast(1)), .{}),
     };
-    const view = checked.CheckedTypeStoreView{ .stored_payloads = &payloads };
+
+    const payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
+        .{ .nominal = @fromBackingInt(1) },
+    };
+    const view = checked.CheckedTypeStoreView{
+        .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
+    };
     const roots = [_]checked.RootRequest{
         .{
             .order = 3,
@@ -22685,6 +23550,9 @@ test "boxy planner walks callable eval finalized const function bodies" {
 
     const root_key = moduleKey(1);
     const template_ref = procedureTemplateRef(root_key, 0);
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
+    };
     const payloads = [_]checked.StoredCheckedTypePayload{
         .{ .empty_record = {} },
         .{ .function = .{
@@ -22692,17 +23560,15 @@ test "boxy planner walks callable eval finalized const function bodies" {
             .args = .{},
             .ret = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         } },
-        .{ .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}) },
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
     };
     const exprs = [_]checked.StoredCheckedExpr{
         .{
-            .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
             .ty = @fromBackingInt(@intCast(1)),
             .source_region = .zero(),
             .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
         },
         .{
-            .id = @fromBackingInt(@intCast(1)),
             .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
             .source_region = .zero(),
             .data = .empty_record,
@@ -22719,7 +23585,6 @@ test "boxy planner walks callable eval finalized const function bodies" {
         },
     };
     const patterns = [_]checked.StoredCheckedPattern{.{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = .zero(),
         .data = .{ .assign = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
@@ -22803,7 +23668,10 @@ test "boxy planner walks callable eval finalized const function bodies" {
     };
     const root_view = ModuleView{
         .key = root_key,
-        .checked_types = .{ .stored_payloads = &payloads },
+        .checked_types = .{
+            .stored_payloads = &payloads,
+            .nominal_row_pool = &payloads_nominal_rows,
+        },
         .checked_bodies = .{
             .stored_exprs = &exprs,
             .stored_patterns = &patterns,
@@ -22858,7 +23726,7 @@ test "boxy planner describes an imported hosted worker's type variables on the R
     defer root_checked_module.checked_bodies.deinit(gpa);
 
     var import_checked_module = minimalCheckedModule(gpa);
-    import_checked_module.key = moduleKey(2);
+    import_checked_module.key = checkedModuleKey(2);
     defer import_checked_module.canonical_names.deinit();
     defer import_checked_module.checked_types.deinit(gpa);
 
@@ -22872,7 +23740,7 @@ test "boxy planner describes an imported hosted worker's type variables on the R
         },
     });
 
-    const import_template = procedureTemplateRef(import_checked_module.key, 0);
+    const import_template = procedureTemplateRef(import_checked_module.key.digest(), 0);
     var import_templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(import_template, @fromBackingInt(@intCast(1)), @fromBackingInt(@intCast(fixtureTableIndex(0))), .hosted),
     };
@@ -22908,7 +23776,7 @@ test "boxy planner describes an imported hosted worker's type variables on the R
     import_checked_module.interface_capabilities.hosted_representations = &hosted_representations;
 
     const imported_binding = checked.ImportedProcedureBindingRef{
-        .artifact = import_checked_module.key,
+        .artifact = import_checked_module.key.digest(),
         .def = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))),
     };
@@ -22947,13 +23815,11 @@ test "boxy planner describes an imported hosted worker's type variables on the R
     try root_checked_module.checked_bodies.pattern_id_pool.append(gpa, @as(checked.CheckedPatternId, @fromBackingInt(@intCast(fixtureTableIndex(0)))));
     try root_checked_module.checked_bodies.expr_id_pool.append(gpa, @as(checked.CheckedExprId, @fromBackingInt(@intCast(3))));
     try root_checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = .zero(),
         .data = .{ .assign = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
     });
     try root_checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = .zero(),
         .data = .{ .lambda = .{
@@ -22962,7 +23828,6 @@ test "boxy planner describes an imported hosted worker's type variables on the R
         } },
     });
     try root_checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = .zero(),
         .data = .{ .call = .{
@@ -22974,19 +23839,17 @@ test "boxy planner describes an imported hosted worker's type variables on the R
         } },
     });
     try root_checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = .zero(),
         .data = .{ .lookup_external = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
     });
     try root_checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = .zero(),
         .data = .{ .lookup_local = .{ .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))), .resolved = null } },
     });
 
-    const root_template = procedureTemplateRef(root_checked_module.key, 0);
+    const root_template = procedureTemplateRef(root_checked_module.key.digest(), 0);
     try root_checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .root_expr = @fromBackingInt(@intCast(fixtureTableIndex(0))),
@@ -23011,11 +23874,11 @@ test "boxy planner describes an imported hosted worker's type variables on the R
             .scope_depth = 0,
         },
     };
-    var refs_by_expr = [_]?checked.ResolvedValueRefId{
-        null,
-        null,
-        @as(checked.ResolvedValueRefId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
-        null,
+    var refs_by_expr = [_]checked.OptionalId(checked.ResolvedValueRefId){
+        .none,
+        .none,
+        .some(@as(checked.ResolvedValueRefId, @fromBackingInt(@intCast(fixtureTableIndex(0))))),
+        .none,
     };
     root_checked_module.resolved_value_refs = .{
         .records = &resolved_records,
@@ -23042,7 +23905,7 @@ test "boxy planner describes an imported hosted worker's type variables on the R
     defer plan.deinit();
 
     try std.testing.expect(plan.descriptors.items.len != 0);
-    const call_ref = CheckedExprIdentity{ .module = root_checked_module.key, .expr = @fromBackingInt(@intCast(1)) };
+    const call_ref = CheckedExprIdentity{ .module = root_checked_module.key.digest(), .expr = @fromBackingInt(@intCast(1)) };
     const direct = plan.directCallPlanForCall(call_ref, plan.roots.items[0].worker) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(plan.roots.items[0].worker, direct.caller);
     const callee_worker = plan.workers.items[@backingInt(direct.worker)];
@@ -23065,14 +23928,14 @@ test "boxy planner describes an imported hosted worker's type variables on the R
     try std.testing.expectEqual(worker_function.ret, host_function.ret);
     const substitutions = plan.callTypeSubstitutionSlice(direct.arg_substitutions);
     try std.testing.expectEqual(@as(usize, 1), substitutions.len);
-    try expectTypeRef(root_checked_module.key, @fromBackingInt(@intCast(fixtureTableIndex(0))), substitutions[0].operand_type);
+    try expectTypeRef(root_checked_module.key.digest(), @fromBackingInt(@intCast(fixtureTableIndex(0))), substitutions[0].operand_type);
     try std.testing.expectEqual(plan.repForSourceType(substitutions[0].operand_type).?, substitutions[0].operand_rep);
-    try expectTypeRef(root_checked_module.key, @fromBackingInt(@intCast(fixtureTableIndex(0))), substitutions[0].call_type);
+    try expectTypeRef(root_checked_module.key.digest(), @fromBackingInt(@intCast(fixtureTableIndex(0))), substitutions[0].call_type);
     try std.testing.expectEqual(plan.repForSourceType(substitutions[0].call_type).?, substitutions[0].call_rep);
-    try expectTypeRef(import_checked_module.key, @fromBackingInt(@intCast(fixtureTableIndex(0))), plan.representations.items[@backingInt(substitutions[0].worker_rep)].source_type);
+    try expectTypeRef(import_checked_module.key.digest(), @fromBackingInt(@intCast(fixtureTableIndex(0))), plan.representations.items[@backingInt(substitutions[0].worker_rep)].source_type);
     const ret_substitution = direct.ret_substitution orelse return error.TestUnexpectedResult;
-    try expectTypeRef(root_checked_module.key, @fromBackingInt(@intCast(fixtureTableIndex(0))), ret_substitution.call_type);
-    try expectTypeRef(import_checked_module.key, @fromBackingInt(@intCast(fixtureTableIndex(0))), plan.representations.items[@backingInt(ret_substitution.worker_rep)].source_type);
+    try expectTypeRef(root_checked_module.key.digest(), @fromBackingInt(@intCast(fixtureTableIndex(0))), ret_substitution.call_type);
+    try expectTypeRef(import_checked_module.key.digest(), @fromBackingInt(@intCast(fixtureTableIndex(0))), plan.representations.items[@backingInt(ret_substitution.worker_rep)].source_type);
 }
 
 test "boxy planner records relation-owned source type for platform-required direct calls" {
@@ -23084,14 +23947,13 @@ test "boxy planner records relation-owned source type for platform-required dire
     defer platform_checked_module.checked_bodies.deinit(gpa);
 
     var app_checked_module = minimalCheckedModule(gpa);
-    app_checked_module.key = moduleKey(3);
+    app_checked_module.key = checkedModuleKey(3);
     defer app_checked_module.canonical_names.deinit();
     defer app_checked_module.checked_types.deinit(gpa);
     defer app_checked_module.checked_bodies.deinit(gpa);
 
-    try app_checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try app_checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try app_checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(app_checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try app_checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -23099,15 +23961,13 @@ test "boxy planner records relation-owned source type for platform-required dire
             .ret = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         },
     });
-    const app_template = procedureTemplateRef(app_checked_module.key, 0);
+    const app_template = procedureTemplateRef(app_checked_module.key.digest(), 0);
     try app_checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = .zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try app_checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = .zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(1), .plan = null } },
@@ -23132,9 +23992,8 @@ test "boxy planner records relation-owned source type for platform-required dire
     };
     app_checked_module.top_level_procedure_bindings = .{ .bindings = .{ .items = &app_bindings, .capacity = app_bindings.len, .pointer_stability = .{} } };
 
-    try platform_checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try platform_checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try platform_checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(platform_checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try platform_checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -23150,15 +24009,13 @@ test "boxy planner records relation-owned source type for platform-required dire
         },
     });
 
-    const platform_template = procedureTemplateRef(platform_checked_module.key, 0);
+    const platform_template = procedureTemplateRef(platform_checked_module.key.digest(), 0);
     try platform_checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = .zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try platform_checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = .zero(),
         .data = .{ .call = .{
@@ -23170,7 +24027,6 @@ test "boxy planner records relation-owned source type for platform-required dire
         } },
     });
     try platform_checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = .zero(),
         .data = .{ .lookup_required = @as(?checked.ResolvedValueRefId, @fromBackingInt(@intCast(fixtureTableIndex(0)))) },
@@ -23186,9 +24042,9 @@ test "boxy planner records relation-owned source type for platform-required dire
     platform_checked_module.checked_procedure_templates = .{ .templates = .{ .items = &platform_templates, .capacity = platform_templates.len, .pointer_stability = .{} } };
 
     const required = checked.RequiredAppProcedureRef{
-        .artifact = app_checked_module.key,
+        .artifact = app_checked_module.key.digest(),
         .app_value = .{
-            .artifact = app_checked_module.key,
+            .artifact = app_checked_module.key.digest(),
             .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         },
         .procedure_binding = @fromBackingInt(@intCast(fixtureTableIndex(0))),
@@ -23210,10 +24066,10 @@ test "boxy planner records relation-owned source type for platform-required dire
             .scope_depth = 0,
         },
     };
-    var refs_by_expr = [_]?checked.ResolvedValueRefId{
-        null,
-        null,
-        @as(checked.ResolvedValueRefId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
+    var refs_by_expr = [_]checked.OptionalId(checked.ResolvedValueRefId){
+        .none,
+        .none,
+        .some(@as(checked.ResolvedValueRefId, @fromBackingInt(@intCast(fixtureTableIndex(0))))),
     };
     platform_checked_module.resolved_value_refs = .{
         .records = &resolved_records,
@@ -23240,24 +24096,30 @@ test "boxy planner records relation-owned source type for platform-required dire
     defer plan.deinit();
 
     const direct = plan.directCallPlanForCall(.{
-        .module = platform_checked_module.key,
+        .module = platform_checked_module.key.digest(),
         .expr = @fromBackingInt(@intCast(1)),
     }, plan.roots.items[0].worker) orelse return error.TestUnexpectedResult;
-    try expectTypeRef(platform_checked_module.key, @fromBackingInt(@intCast(2)), direct.source_fn_type);
-    try std.testing.expect(plan.repForSourceType(.{ .module = platform_checked_module.key, .ty = @fromBackingInt(@intCast(2)) }) != null);
+    try expectTypeRef(platform_checked_module.key.digest(), @fromBackingInt(@intCast(2)), direct.source_fn_type);
+    try std.testing.expect(plan.repForSourceType(.{ .module = platform_checked_module.key.digest(), .ty = @fromBackingInt(@intCast(2)) }) != null);
     try std.testing.expectEqual(@as(usize, 0), plan.callTypeSubstitutionSlice(direct.arg_substitutions).len);
     const ret_substitution = direct.ret_substitution orelse return error.TestUnexpectedResult;
-    try expectTypeRef(platform_checked_module.key, @fromBackingInt(@intCast(fixtureTableIndex(0))), ret_substitution.call_type);
+    try expectTypeRef(platform_checked_module.key.digest(), @fromBackingInt(@intCast(fixtureTableIndex(0))), ret_substitution.call_type);
     try std.testing.expectEqual(plan.repForSourceType(ret_substitution.call_type).?, ret_substitution.call_rep);
-    try expectTypeRef(app_checked_module.key, @fromBackingInt(@intCast(fixtureTableIndex(0))), plan.representations.items[@backingInt(ret_substitution.worker_rep)].source_type);
+    try expectTypeRef(app_checked_module.key.digest(), @fromBackingInt(@intCast(fixtureTableIndex(0))), plan.representations.items[@backingInt(ret_substitution.worker_rep)].source_type);
 }
 
 test "boxy planner records explicit source type representation bindings" {
     const gpa = std.testing.allocator;
 
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
+
+        builtinNominal(.u8, @fromBackingInt(@intCast(1)), .{}),
+    };
+
     const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}) },
-        .{ .nominal = builtinNominal(.u8, @fromBackingInt(@intCast(1)), .{}) },
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
+        .{ .nominal = @fromBackingInt(1) },
         .{ .function = .{
             .kind = .pure,
             .args = .{ .start = 0, .len = 1 },
@@ -23267,6 +24129,7 @@ test "boxy planner records explicit source type representation bindings" {
     const type_pool = [_]checked.CheckedTypeId{@fromBackingInt(@intCast(fixtureTableIndex(0)))};
     const view = checked.CheckedTypeStoreView{
         .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
         .type_id_pool = &type_pool,
     };
 
@@ -23283,6 +24146,10 @@ test "boxy planner records explicit source type representation bindings" {
 test "boxy planner classifies constrained variables as dynamic with descriptor and dictionary requirements" {
     const gpa = std.testing.allocator;
 
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.u64, @fromBackingInt(@intCast(2)), .{}),
+    };
+
     const payloads = [_]checked.StoredCheckedTypePayload{
         .{ .function = .{
             .kind = .pure,
@@ -23290,7 +24157,7 @@ test "boxy planner classifies constrained variables as dynamic with descriptor a
             .ret = @fromBackingInt(@intCast(2)),
         } },
         .{ .flex = .{ .constraints = .{ .start = 0, .len = 1 } } },
-        .{ .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(2)), .{}) },
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
     };
     const constraints = [_]checked.CheckedStaticDispatchConstraint{
         .{
@@ -23301,6 +24168,7 @@ test "boxy planner classifies constrained variables as dynamic with descriptor a
     };
     const view = checked.CheckedTypeStoreView{
         .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
         .constraint_pool = &constraints,
     };
 
@@ -23319,11 +24187,14 @@ test "boxy planner classifies constrained variables as dynamic with descriptor a
 
 test "boxy dictionary target slots share independent callable relations" {
     const gpa = std.testing.allocator;
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.u64, @fromBackingInt(@intCast(3)), .{}),
+    };
     const payloads = [_]checked.StoredCheckedTypePayload{
         .{ .flex = .{ .constraints = .{ .start = 0, .len = 3 } } },
         .{ .function = .{ .kind = .pure, .args = .{}, .ret = @fromBackingInt(@intCast(3)) } },
         .{ .function = .{ .kind = .pure, .args = .{}, .ret = @fromBackingInt(@intCast(4)) } },
-        .{ .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(3)), .{}) },
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
         .{ .rigid = .{} },
     };
     const constraints = [_]checked.CheckedStaticDispatchConstraint{
@@ -23333,6 +24204,7 @@ test "boxy dictionary target slots share independent callable relations" {
     };
     var plan = try analyzeCheckedTypes(gpa, .{
         .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
         .constraint_pool = &constraints,
     }, &.{@as(checked.CheckedTypeId, @fromBackingInt(@intCast(fixtureTableIndex(0))))}, .{});
     defer plan.deinit();
@@ -23347,11 +24219,14 @@ test "boxy dictionary target slots share independent callable relations" {
 
 test "boxy dictionary owners share signature groups and forward exact callable contracts" {
     const gpa = std.testing.allocator;
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.u64, @fromBackingInt(@intCast(3)), .{}),
+    };
     const payloads = [_]checked.StoredCheckedTypePayload{
         .{ .flex = .{ .constraints = .{ .start = 0, .len = 2 } } },
         .{ .function = .{ .kind = .pure, .args = .{}, .ret = @fromBackingInt(@intCast(3)) } },
         .{ .function = .{ .kind = .pure, .args = .{}, .ret = @fromBackingInt(@intCast(4)) } },
-        .{ .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(3)), .{}) },
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
         .{ .rigid = .{} },
     };
     const constraints = [_]checked.CheckedStaticDispatchConstraint{
@@ -23374,7 +24249,7 @@ test "boxy dictionary owners share signature groups and forward exact callable c
     }};
     const plans = static_dispatch.StaticDispatchPlanTable{ .evidence_refs = &refs };
     var builder = Builder.init(gpa, .{ .root_view = .{
-        .checked_types = .{ .stored_payloads = &payloads, .constraint_pool = &constraints },
+        .checked_types = .{ .stored_payloads = &payloads, .nominal_row_pool = &payloads_nominal_rows, .constraint_pool = &constraints },
         .checked_procedure_templates = &templates,
         .static_dispatch_plans = &plans,
     } });
@@ -23431,14 +24306,18 @@ test "boxy dictionary owners share signature groups and forward exact callable c
 }
 
 test "boxy literal materialization substitutes repeated constructor positions independently" {
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.u8, @fromBackingInt(@intCast(2)), .{}),
+        builtinNominal(.str, @fromBackingInt(@intCast(3)), .{}),
+    };
     const payloads = [_]checked.StoredCheckedTypePayload{
         .{ .rigid = .{} },
         .{ .tuple = .{ .start = 0, .len = 2 } },
-        .{ .nominal = builtinNominal(.u8, @fromBackingInt(@intCast(2)), .{}) },
-        .{ .nominal = builtinNominal(.str, @fromBackingInt(@intCast(3)), .{}) },
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
+        .{ .nominal = @fromBackingInt(1) },
     };
     const type_pool = [_]checked.CheckedTypeId{ @fromBackingInt(@intCast(fixtureTableIndex(0))), @fromBackingInt(@intCast(fixtureTableIndex(0))) };
-    var builder = Builder.init(std.testing.allocator, .{ .checked_types = .{ .stored_payloads = &payloads, .type_id_pool = &type_pool } });
+    var builder = Builder.init(std.testing.allocator, .{ .checked_types = .{ .stored_payloads = &payloads, .nominal_row_pool = &payloads_nominal_rows, .type_id_pool = &type_pool } });
     defer builder.deinit();
     var literals = LiteralPlanner.init(&builder);
     defer literals.deinit();
@@ -23459,16 +24338,22 @@ test "boxy literal materialization substitutes repeated constructor positions in
 }
 
 test "boxy literal terms identify defaults and explicit leaves identically" {
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.dec, @fromBackingInt(@intCast(1)), .{}),
+    };
     const payloads = [_]checked.StoredCheckedTypePayload{
         .{ .flex = .{ .numeric_default_phase = .mono_specialization } },
-        .{ .nominal = builtinNominal(.dec, @fromBackingInt(@intCast(1)), .{}) },
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
         .{ .empty_record = {} },
         .{ .record = .{ .fields = .{}, .ext = @fromBackingInt(@intCast(3)) } },
         .{ .flex = .{ .row_default = .empty_tag_union } },
         .{ .empty_tag_union = {} },
         .{ .rigid = .{} },
     };
-    var builder = Builder.init(std.testing.allocator, .{ .checked_types = .{ .stored_payloads = &payloads } });
+    var builder = Builder.init(std.testing.allocator, .{ .checked_types = .{
+        .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
+    } });
     defer builder.deinit();
     var literals = LiteralPlanner.init(&builder);
     defer literals.deinit();
@@ -23489,6 +24374,10 @@ test "boxy literal terms identify defaults and explicit leaves identically" {
 test "boxy planner keeps checked specialization defaults dynamically represented" {
     const gpa = std.testing.allocator;
 
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.u64, @fromBackingInt(@intCast(2)), .{}),
+    };
+
     const payloads = [_]checked.StoredCheckedTypePayload{
         .{ .function = .{
             .kind = .pure,
@@ -23499,7 +24388,7 @@ test "boxy planner keeps checked specialization defaults dynamically represented
             .constraints = .{ .start = 0, .len = 1 },
             .numeric_default_phase = .mono_specialization,
         } },
-        .{ .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(2)), .{}) },
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
     };
     const constraints = [_]checked.CheckedStaticDispatchConstraint{
         .{
@@ -23510,6 +24399,7 @@ test "boxy planner keeps checked specialization defaults dynamically represented
     };
     const view = checked.CheckedTypeStoreView{
         .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
         .constraint_pool = &constraints,
     };
 
@@ -23541,10 +24431,17 @@ test "boxy dictionary slots are stable across module ids and requirement subsets
     _ = try source_names.internMethodName(Ident.PARSER_FOR_METHOD_NAME);
     try std.testing.expect(root_to_hash != source_to_hash);
 
-    const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}) },
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
     };
-    const checked_types = checked.CheckedTypeStoreView{ .stored_payloads = &payloads };
+
+    const payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
+    };
+    const checked_types = checked.CheckedTypeStoreView{
+        .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
+    };
     const root_key = moduleKey(1);
     const source_key = moduleKey(2);
     const source_views = [_]ModuleView{.{
@@ -24167,14 +25064,18 @@ test "boxy planner propagates dynamic descriptor requirements through records" {
         .{ .name = @fromBackingInt(@intCast(1)), .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
         .{ .name = @fromBackingInt(@intCast(2)), .ty = @fromBackingInt(@intCast(1)) },
     };
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
+    };
     const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}) },
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
         .{ .rigid = .{} },
         .{ .empty_record = {} },
         .{ .record = .{ .fields = .{ .start = 0, .len = fields.len }, .ext = @fromBackingInt(@intCast(2)) } },
     };
     const view = checked.CheckedTypeStoreView{
         .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
         .record_field_pool = &fields,
     };
 
@@ -24206,13 +25107,17 @@ test "boxy planner preserves optional record field representation and descriptor
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .kind = .optional,
     }};
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
+    };
     const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}) },
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
         .{ .empty_record = {} },
         .{ .record = .{ .fields = .{ .start = 0, .len = fields.len }, .ext = @fromBackingInt(@intCast(1)) } },
     };
     const checked_types = checked.CheckedTypeStoreView{
         .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
         .record_field_pool = &fields,
     };
 
@@ -24261,14 +25166,18 @@ test "boxy planner preserves undetermined record field kind identity in a presen
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .kind = .undetermined(kind_var),
     }};
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
+    };
     const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}) },
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
         .{ .flex = .{} },
         .{ .empty_record = {} },
         .{ .record = .{ .fields = .{ .start = 0, .len = fields.len }, .ext = @fromBackingInt(@intCast(2)) } },
     };
     const checked_types = checked.CheckedTypeStoreView{
         .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
         .record_field_pool = &fields,
     };
 
@@ -24335,7 +25244,8 @@ test "boxy Bool retains its closed row for generic descriptor arguments" {
     defer module.canonical_names.deinit();
     defer module.checked_types.deinit(gpa);
     const bool_ty: checked.CheckedTypeId = @fromBackingInt(@intCast(fixtureTableIndex(0)));
-    try module.checked_types.payloads.append(gpa, .{ .nominal = builtinNominal(.bool, bool_ty, .{}) });
+    try module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.bool, bool_ty, .{}));
+    try module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(module.checked_types.nominal_row_pool.items.len - 1)) });
     try test_fixtures.addBoolDeclaration(gpa, &module, bool_ty);
     const tail: checked.CheckedTypeId = @fromBackingInt(@intCast(@as(u32, @intCast(module.checked_types.payloads.items.len))));
     try module.checked_types.payloads.append(gpa, .{ .rigid = .{} });
@@ -24561,13 +25471,17 @@ test "boxy planner preserves known variants on open tag-union rows" {
     const tags = [_]checked.CheckedTag{
         .{ .name = tag_exit, .args_start = 0, .args_len = 1 },
     };
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.i64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
+    };
     const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.i64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}) },
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
         .{ .flex = .{} },
         .{ .tag_union = .{ .tags = .{ .start = 0, .len = tags.len }, .ext = @fromBackingInt(@intCast(1)) } },
     };
     const view = checked.CheckedTypeStoreView{
         .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
         .type_id_pool = &type_pool,
         .tag_pool = &tags,
     };
@@ -24659,12 +25573,16 @@ test "boxy planner keeps explicit Box of dynamic payload distinct from dynamic p
     const gpa = std.testing.allocator;
 
     const type_pool = [_]checked.CheckedTypeId{@fromBackingInt(@intCast(fixtureTableIndex(0)))};
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.box, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }),
+    };
     const payloads = [_]checked.StoredCheckedTypePayload{
         .{ .flex = .{} },
-        .{ .nominal = builtinNominal(.box, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }) },
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
     };
     const view = checked.CheckedTypeStoreView{
         .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
         .type_id_pool = &type_pool,
     };
 
@@ -24691,13 +25609,17 @@ test "boxy planner preserves zero-payload tag variants explicitly" {
         .{ .name = tag_a, .args_start = 0, .args_len = 0 },
         .{ .name = tag_b, .args_start = 0, .args_len = 1 },
     };
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
+    };
     const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}) },
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
         .empty_tag_union,
         .{ .tag_union = .{ .tags = .{ .start = 0, .len = tags.len }, .ext = @fromBackingInt(@intCast(1)) } },
     };
     const view = checked.CheckedTypeStoreView{
         .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
         .type_id_pool = &type_pool,
         .tag_pool = &tags,
     };
@@ -24736,14 +25658,19 @@ test "boxy planner stores tag variants in identity layout order" {
         .{ .name = ok_tag, .args_start = 0, .args_len = 1 },
         .{ .name = err_tag, .args_start = 1, .args_len = 1 },
     };
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
+        builtinNominal(.u8, @fromBackingInt(@intCast(1)), .{}),
+    };
     const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}) },
-        .{ .nominal = builtinNominal(.u8, @fromBackingInt(@intCast(1)), .{}) },
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
+        .{ .nominal = @fromBackingInt(1) },
         .empty_tag_union,
         .{ .tag_union = .{ .tags = .{ .start = 0, .len = tags.len }, .ext = @fromBackingInt(@intCast(2)) } },
     };
     const view = checked.CheckedTypeStoreView{
         .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
         .type_id_pool = &type_pool,
         .tag_pool = &tags,
     };
@@ -24800,12 +25727,10 @@ test "boxy planner records nominal declared field order from checked payloads" {
         .df_start = 0,
         .df_len = declared_fields.len,
     }};
-    const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.u8, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}) },
-        .{ .nominal = builtinNominal(.u16, @fromBackingInt(@intCast(1)), .{}) },
-        .{ .empty_record = {} },
-        .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(@intCast(2)) } },
-        .{ .nominal = .{
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.u8, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
+        builtinNominal(.u16, @fromBackingInt(@intCast(1)), .{}),
+        .{
             .name = @fromBackingInt(@intCast(3)),
             .origin_module = @fromBackingInt(@intCast(4)),
             .owner_module = .{},
@@ -24814,10 +25739,18 @@ test "boxy planner records nominal declared field order from checked payloads" {
             .representation = .{ .local_declaration = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
             .padding_field_types = .{ .start = 0, .len = 1 },
             .declared_fields = .{ .start = 0, .len = 3 },
-        } },
+        },
+    };
+    const payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
+        .{ .nominal = @fromBackingInt(1) },
+        .{ .empty_record = {} },
+        .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(@intCast(2)) } },
+        .{ .nominal = @fromBackingInt(2) },
     };
     const view = checked.CheckedTypeStoreView{
         .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
         .nominal_declarations = &nominal_declarations,
         .type_id_pool = &type_pool,
         .record_field_pool = &record_fields,
@@ -24872,19 +25805,24 @@ test "boxy planner resolves local nominal declared order from box payload capabi
             .df_len = declared_fields.len,
         },
     };
-    const payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.u8, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}) },
-        .{ .nominal = builtinNominal(.u16, @fromBackingInt(@intCast(1)), .{}) },
-        .{ .empty_record = {} },
-        .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(@intCast(2)) } },
-        .{ .nominal = .{
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.u8, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
+        builtinNominal(.u16, @fromBackingInt(@intCast(1)), .{}),
+        .{
             .name = @fromBackingInt(@intCast(3)),
             .origin_module = nominal_key.module,
             .owner_module = root_key,
             .source_decl = nominal_key.source_decl,
             .is_opaque = false,
             .representation = .{ .local_box_payload_capability = .{ .capability = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
-        } },
+        },
+    };
+    const payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
+        .{ .nominal = @fromBackingInt(1) },
+        .{ .empty_record = {} },
+        .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(@intCast(2)) } },
+        .{ .nominal = @fromBackingInt(2) },
     };
     const capability_padding = [_]checked.CheckedTypeId{@fromBackingInt(@intCast(fixtureTableIndex(0)))};
     const capabilities = [_]checked.BoxPayloadCapabilityEntry{
@@ -24906,6 +25844,7 @@ test "boxy planner resolves local nominal declared order from box payload capabi
     };
     const view = checked.CheckedTypeStoreView{
         .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
         .nominal_declarations = &declarations,
         .type_id_pool = &type_pool,
         .record_field_pool = &record_fields,
@@ -24968,12 +25907,10 @@ test "boxy planner records imported box payload capability source modules" {
         .{ .name = root_a, .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
         .{ .name = root_b, .ty = @fromBackingInt(@intCast(1)) },
     };
-    const root_payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.u8, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}) },
-        .{ .nominal = builtinNominal(.u16, @fromBackingInt(@intCast(1)), .{}) },
-        .{ .empty_record = {} },
-        .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(@intCast(2)) } },
-        .{ .nominal = .{
+    const root_payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.u8, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
+        builtinNominal(.u16, @fromBackingInt(@intCast(1)), .{}),
+        .{
             .name = @fromBackingInt(@intCast(3)),
             .origin_module = nominal_key.module,
             .owner_module = source_key,
@@ -24983,7 +25920,14 @@ test "boxy planner records imported box payload capability source modules" {
                 .artifact = source_key,
                 .capability = @fromBackingInt(@intCast(fixtureTableIndex(0))),
             } },
-        } },
+        },
+    };
+    const root_payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
+        .{ .nominal = @fromBackingInt(1) },
+        .{ .empty_record = {} },
+        .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(@intCast(2)) } },
+        .{ .nominal = @fromBackingInt(2) },
     };
     const root_roots = [_]checked.CheckedTypeRoot{
         .{ .id = @fromBackingInt(@intCast(fixtureTableIndex(0))), .key = typeKey(15) },
@@ -24995,6 +25939,7 @@ test "boxy planner records imported box payload capability source modules" {
     const root_view = checked.CheckedTypeStoreView{
         .roots = &root_roots,
         .stored_payloads = &root_payloads,
+        .nominal_row_pool = &root_payloads_nominal_rows,
         .record_field_pool = &root_record_fields,
     };
 
@@ -25021,20 +25966,26 @@ test "boxy planner records imported box payload capability source modules" {
             .df_len = source_declared_fields.len,
         },
     };
-    const source_payloads = [_]checked.StoredCheckedTypePayload{
-        .{ .nominal = builtinNominal(.u8, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}) },
-        .{ .nominal = builtinNominal(.u16, @fromBackingInt(@intCast(1)), .{}) },
-        .{ .empty_record = {} },
-        .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(@intCast(2)) } },
-        .{ .nominal = .{
+    const source_payloads_nominal_rows = [_]checked.StoredNominal{
+        builtinNominal(.u8, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
+        builtinNominal(.u16, @fromBackingInt(@intCast(1)), .{}),
+        .{
             .name = @fromBackingInt(@intCast(3)),
             .origin_module = nominal_key.module,
             .owner_module = source_key,
             .source_decl = nominal_key.source_decl,
             .is_opaque = false,
             .representation = .{ .local_box_payload_capability = .{ .capability = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
-        } },
-        .{ .nominal = builtinNominal(.u8, @fromBackingInt(@intCast(5)), .{}) },
+        },
+        builtinNominal(.u8, @fromBackingInt(@intCast(5)), .{}),
+    };
+    const source_payloads = [_]checked.StoredCheckedTypePayload{
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
+        .{ .nominal = @fromBackingInt(1) },
+        .{ .empty_record = {} },
+        .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(@intCast(2)) } },
+        .{ .nominal = @fromBackingInt(2) },
+        .{ .nominal = @fromBackingInt(3) },
     };
     const source_roots = [_]checked.CheckedTypeRoot{
         .{ .id = @fromBackingInt(@intCast(fixtureTableIndex(0))), .key = typeKey(10) },
@@ -25065,6 +26016,7 @@ test "boxy planner records imported box payload capability source modules" {
     const source_view = checked.CheckedTypeStoreView{
         .roots = &source_roots,
         .stored_payloads = &source_payloads,
+        .nominal_row_pool = &source_payloads_nominal_rows,
         .nominal_declarations = &source_declarations,
         .type_id_pool = &source_type_pool,
         .record_field_pool = &source_record_fields,
@@ -25131,12 +26083,18 @@ test "boxy nominal substitutions share formals independently of runtime demand a
         .source_decl = 9,
     };
     var payloads: [9 + use_count]checked.StoredCheckedTypePayload = undefined;
+    var nominal_rows: [9 + use_count]checked.StoredNominal = undefined;
+    var nominal_row_count: u32 = 0;
     var initialized_payload_count: usize = 0;
     const u8_type: checked.CheckedTypeId = @fromBackingInt(@intCast(initialized_payload_count));
-    payloads[initialized_payload_count] = .{ .nominal = builtinNominal(.u8, u8_type, .{}) };
+    nominal_rows[nominal_row_count] = builtinNominal(.u8, u8_type, .{});
+    payloads[initialized_payload_count] = .{ .nominal = @fromBackingInt(nominal_row_count) };
+    nominal_row_count += 1;
     initialized_payload_count += 1;
     const u16_type: checked.CheckedTypeId = @fromBackingInt(@intCast(initialized_payload_count));
-    payloads[initialized_payload_count] = .{ .nominal = builtinNominal(.u16, u16_type, .{}) };
+    nominal_rows[nominal_row_count] = builtinNominal(.u16, u16_type, .{});
+    payloads[initialized_payload_count] = .{ .nominal = @fromBackingInt(nominal_row_count) };
+    nominal_row_count += 1;
     initialized_payload_count += 1;
     const type_pool = [_]checked.CheckedTypeId{
         u8_type, u16_type, u8_type, // first use's actuals
@@ -25169,7 +26127,7 @@ test "boxy nominal substitutions share formals independently of runtime demand a
         .{ .tuple = .{ .start = 3, .len = 2 } },
     });
     for (payloads[9..], 0..) |*payload, index| {
-        payload.* = .{ .nominal = .{
+        nominal_rows[nominal_row_count] = .{
             .name = @fromBackingInt(@intCast(3)),
             .origin_module = nominal_key.module,
             .owner_module = key,
@@ -25177,7 +26135,9 @@ test "boxy nominal substitutions share formals independently of runtime demand a
             .is_opaque = false,
             .args = .{ .start = @intCast((index % 2) * 3), .len = 3 },
             .representation = .{ .local_box_payload_capability = .{ .capability = @fromBackingInt(@intCast(index % 2)) } },
-        } };
+        };
+        payload.* = .{ .nominal = @fromBackingInt(nominal_row_count) };
+        nominal_row_count += 1;
     }
     var capabilities = std.array_list.Managed(checked.BoxPayloadCapabilityEntry).init(gpa);
     defer capabilities.deinit();
@@ -25204,6 +26164,7 @@ test "boxy nominal substitutions share formals independently of runtime demand a
         .key = key,
         .checked_types = .{
             .stored_payloads = &payloads,
+            .nominal_row_pool = nominal_rows[0..nominal_row_count],
             .type_id_pool = &type_pool,
             .nominal_declarations = declarations.items,
             .constraint_pool = &constraints,
@@ -25274,7 +26235,7 @@ test "boxy planner resolves procedure-template workers to checked bodies" {
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .root_expr = @fromBackingInt(@intCast(3)),
@@ -25298,7 +26259,7 @@ test "boxy planner resolves top-level direct bindings to checked bodies" {
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .root_expr = @fromBackingInt(@intCast(5)),
@@ -25322,7 +26283,7 @@ test "boxy planner resolves top-level direct bindings to checked bodies" {
 
     var builder = Builder.init(gpa, .{ .root_module = .{ .module = &checked_module, .roots = undefined } });
     defer builder.deinit();
-    try expectCheckedExprWorkerBody(builder.rootWorkerBody(.{ .procedure_binding = .{ .artifact = checked_module.key, .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } }), template_ref, @fromBackingInt(@intCast(5)));
+    try expectCheckedExprWorkerBody(builder.rootWorkerBody(.{ .procedure_binding = .{ .artifact = checked_module.key.digest(), .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } }), template_ref, @fromBackingInt(@intCast(5)));
 }
 
 test "boxy planner resolves callable eval bindings to finalized const function expressions" {
@@ -25335,7 +26296,7 @@ test "boxy planner resolves callable eval bindings to finalized const function e
     checked_module.const_store = check.ConstStore.ConstStore.init(gpa);
     defer checked_module.const_store.deinit();
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     var callable_templates = [_]checked.CallableEvalTemplate{
         .{
             .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
@@ -25378,7 +26339,6 @@ test "boxy planner resolves callable eval bindings to finalized const function e
     checked_module.compile_time_roots = .{ .roots = &compile_time_roots };
 
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
@@ -25427,5 +26387,5 @@ test "boxy planner resolves callable eval bindings to finalized const function e
 
     var builder = Builder.init(gpa, .{ .root_module = .{ .module = &checked_module, .roots = undefined } });
     defer builder.deinit();
-    try expectCheckedExprWorkerBody(builder.rootWorkerBody(.{ .procedure_binding = .{ .artifact = checked_module.key, .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } }), template_ref, @fromBackingInt(@intCast(fixtureTableIndex(0))));
+    try expectCheckedExprWorkerBody(builder.rootWorkerBody(.{ .procedure_binding = .{ .artifact = checked_module.key.digest(), .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } }), template_ref, @fromBackingInt(@intCast(fixtureTableIndex(0))));
 }

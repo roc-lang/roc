@@ -7,7 +7,7 @@
 //! of base-pointer fixups (3), independent of how many names it holds.
 //!
 //! Unlike `SmallStringInterner` (whose id is a byte offset), this interner hands
-//! out **serial** ids (0, 1, 2, … in insertion order) via a separate `ranges`
+//! out **serial** ids (0, 1, 2, … in insertion order) via a separate `ends`
 //! array. `CanonicalNameStore`'s `*NameId`s are serial indices today, and are
 //! used internally as such (e.g. `NominalTypeKey` equality, proc-base key
 //! encoding); preserving serial semantics keeps the conversion behavior-
@@ -31,16 +31,13 @@ const InternedBytes = @import("InternedBytes.zig");
 
 const SerialStringInterner = @This();
 
-/// `{start, len}` into `bytes` for one interned string. POD / relocation-invariant.
-pub const Range = extern struct {
-    start: u32,
-    len: u32,
-};
-
-/// All interned text, concatenated. No separators needed; `ranges` holds bounds.
+/// All interned text, concatenated in id order. No separators needed; `ends`
+/// holds bounds.
 bytes: SafeList(u8) = .{},
-/// Serial id -> byte range. `ranges.len()` is the number of interned strings.
-ranges: SafeList(Range) = .{},
+/// Serial id -> end offset of its text in `bytes`. A string's text starts
+/// where the previous id's ends, or at 0 for id 0. `ends.len()` is the
+/// number of interned strings.
+ends: SafeList(u32) = .{},
 /// Open-addressing (linear-probing) hash table: slot -> (serial id + 1).
 /// A value of 0 means the slot is empty. Stored as a flat array of u32 so it
 /// relocates with a single base-pointer fixup.
@@ -59,12 +56,12 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!SerialStrin
 
     var self = SerialStringInterner{
         .bytes = .{},
-        .ranges = .{},
+        .ends = .{},
         .index = .{},
         .supports_inserts = true,
     };
     self.bytes = try SafeList(u8).initCapacity(gpa, capacity * 4);
-    self.ranges = try SafeList(Range).initCapacity(gpa, capacity);
+    self.ends = try SafeList(u32).initCapacity(gpa, capacity);
     self.index = try SafeList(u32).initCapacity(gpa, index_cap);
     try self.index.items.ensureTotalCapacityPrecise(gpa, index_cap);
     self.index.items.items.len = index_cap;
@@ -77,13 +74,13 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!SerialStrin
 pub fn deinit(self: *SerialStringInterner, gpa: Allocator) void {
     if (!self.supports_inserts) return;
     self.bytes.deinit(gpa);
-    self.ranges.deinit(gpa);
+    self.ends.deinit(gpa);
     self.index.deinit(gpa);
 }
 
 /// Number of interned strings.
 pub fn count(self: *const SerialStringInterner) u32 {
-    return @intCast(self.ranges.items.items.len);
+    return @intCast(self.ends.items.items.len);
 }
 
 /// Immutable append boundary for the durable id and byte arrays.
@@ -95,14 +92,15 @@ pub const EpochBoundary = struct {
 /// Capture the current durable boundary without exposing growable storage.
 pub fn epochBoundary(self: *const SerialStringInterner) EpochBoundary {
     return .{
-        .ids = @intCast(self.ranges.items.items.len),
+        .ids = @intCast(self.ends.items.items.len),
         .bytes = @intCast(self.bytes.items.items.len),
     };
 }
 
 fn textAt(self: *const SerialStringInterner, id: u32) []const u8 {
-    const r = self.ranges.items.items[id];
-    return self.bytes.items.items[r.start .. r.start + r.len];
+    const ends = self.ends.items.items;
+    const start = if (id == 0) 0 else ends[id - 1];
+    return self.bytes.items.items[start..ends[id]];
 }
 
 /// Text for a serial id.
@@ -111,7 +109,7 @@ pub fn getText(self: *const SerialStringInterner, id: u32) []const u8 {
 }
 
 /// Id encoding for the shared `InternedBytes`: dense serial ids (0, 1, 2, …)
-/// stored via the `ranges` array, with hash-table cells holding `id + 1` (so 0 is
+/// stored via the `ends` array, with hash-table cells holding `id + 1` (so 0 is
 /// the empty-slot sentinel).
 const Policy = struct {
     pub const Id = u32;
@@ -120,7 +118,7 @@ const Policy = struct {
     pub const initial_index_capacity: usize = SerialStringInterner.initial_index_capacity;
 
     pub fn count(self: *const SerialStringInterner) u32 {
-        return @intCast(self.ranges.items.items.len);
+        return @intCast(self.ends.items.items.len);
     }
     pub fn cellForId(id: Id) Cell {
         return id + 1;
@@ -136,13 +134,14 @@ const Policy = struct {
         // Ids, byte offsets, and lengths are 32-bit, and index cells store
         // `id + 1`; an interner past that range has exhausted the
         // representable memory.
-        const id = std.math.cast(u32, self.ranges.items.items.len) orelse return error.OutOfMemory;
+        const id = std.math.cast(u32, self.ends.items.items.len) orelse return error.OutOfMemory;
         if (id == std.math.maxInt(u32)) return error.OutOfMemory;
         const start = std.math.cast(u32, self.bytes.items.items.len) orelse return error.OutOfMemory;
         const len = std.math.cast(u32, string.len) orelse return error.OutOfMemory;
-        _ = std.math.add(u32, start, len) catch return error.OutOfMemory;
+        const end = std.math.add(u32, start, len) catch return error.OutOfMemory;
+        try self.ends.items.ensureUnusedCapacity(gpa, 1);
         _ = try self.bytes.appendSlice(gpa, string);
-        _ = try self.ranges.append(gpa, .{ .start = start, .len = len });
+        _ = try self.ends.append(gpa, end);
         return id;
     }
     pub fn hash(string: []const u8) u64 {
@@ -189,9 +188,9 @@ pub fn clone(self: *const SerialStringInterner, gpa: Allocator) Allocator.Error!
     var new_bytes = try SafeList(u8).initCapacity(gpa, self.bytes.items.items.len);
     errdefer new_bytes.deinit(gpa);
     _ = try new_bytes.appendSlice(gpa, self.bytes.items.items);
-    var new_ranges = try SafeList(Range).initCapacity(gpa, self.ranges.items.items.len);
-    errdefer new_ranges.deinit(gpa);
-    _ = try new_ranges.appendSlice(gpa, self.ranges.items.items);
+    var new_ends = try SafeList(u32).initCapacity(gpa, self.ends.items.items.len);
+    errdefer new_ends.deinit(gpa);
+    _ = try new_ends.appendSlice(gpa, self.ends.items.items);
     var new_index = try SafeList(u32).initCapacity(gpa, self.index.items.items.len);
     errdefer new_index.deinit(gpa);
     try new_index.items.ensureTotalCapacityPrecise(gpa, self.index.items.items.len);
@@ -200,7 +199,7 @@ pub fn clone(self: *const SerialStringInterner, gpa: Allocator) Allocator.Error!
 
     return .{
         .bytes = new_bytes,
-        .ranges = new_ranges,
+        .ends = new_ends,
         .index = new_index,
         .supports_inserts = true,
     };
@@ -209,7 +208,7 @@ pub fn clone(self: *const SerialStringInterner, gpa: Allocator) Allocator.Error!
 /// Relocatable serialized form. Exactly 3 relocatable base pointers.
 pub const Serialized = extern struct {
     bytes: SafeList(u8).Serialized,
-    ranges: SafeList(Range).Serialized,
+    ends: SafeList(u32).Serialized,
     index: SafeList(u32).Serialized,
     entry_count: u32,
     _padding: u32 = 0,
@@ -221,7 +220,7 @@ pub const Serialized = extern struct {
         writer: *CompactWriter,
     ) Allocator.Error!void {
         try self.bytes.serialize(&interner.bytes, gpa, writer);
-        try self.ranges.serialize(&interner.ranges, gpa, writer);
+        try self.ends.serialize(&interner.ends, gpa, writer);
         try self.index.serialize(&interner.index, gpa, writer);
         self.entry_count = interner.count();
         self._padding = 0;
@@ -230,7 +229,7 @@ pub const Serialized = extern struct {
     pub fn deserialize(self: *const Serialized, base: usize) SerialStringInterner {
         return .{
             .bytes = self.bytes.deserializeInto(base),
-            .ranges = self.ranges.deserializeInto(base),
+            .ends = self.ends.deserializeInto(base),
             .index = self.index.deserializeInto(base),
             .supports_inserts = false,
         };
@@ -356,7 +355,7 @@ test "SerialStringInterner: enableRuntimeInserts copies frozen data and permits 
 fn nonEmptyBasePointers(it: *const SerialStringInterner) usize {
     var n: usize = 0;
     if (it.bytes.items.capacity != 0) n += 1;
-    if (it.ranges.items.capacity != 0) n += 1;
+    if (it.ends.items.capacity != 0) n += 1;
     if (it.index.items.capacity != 0) n += 1;
     return n;
 }

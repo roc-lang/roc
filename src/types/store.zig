@@ -55,6 +55,9 @@ const NominalType = types.NominalType;
 const NominalDecl = types.NominalDecl;
 const StaticDispatchConstraint = types.StaticDispatchConstraint;
 const InterpolationPartMetadata = types.InterpolationPartMetadata;
+const InterpolationMetadata = StaticDispatchConstraint.InterpolationMetadata;
+const NumeralInfo = types.NumeralInfo;
+const DerivedMapPlan = types.DerivedMapPlan;
 const SourceDecl = types.SourceDecl;
 
 /// Metadata belonging to a live union-find storage root.
@@ -212,6 +215,13 @@ pub const Store = struct {
     tags: TagSafeMultiList,
     interpolation_parts: InterpolationPartMetadata.SafeList,
     static_dispatch_constraints: StaticDispatchConstraint.SafeList,
+    /// Constraint payloads few constraints carry, held out of line so a
+    /// constraint stays a few words: numeral facts, interpolation metadata,
+    /// and derived-map plans. Entries are never mutated after appending, so
+    /// constraint copies share them.
+    numeral_infos: NumeralInfo.SafeList,
+    interpolation_metadata: InterpolationMetadata.MetadataList,
+    derived_map_plans: DerivedMapPlan.SafeList,
 
     /// The nominal declaration table: one entry per nominal declaration whose
     /// applications can appear in this store (local declarations plus every
@@ -345,6 +355,9 @@ pub const Store = struct {
             .tags = try TagSafeMultiList.initCapacity(gpa, child_capacity),
             .interpolation_parts = try InterpolationPartMetadata.SafeList.initCapacity(gpa, child_capacity),
             .static_dispatch_constraints = try StaticDispatchConstraint.SafeList.initCapacity(gpa, child_capacity),
+            .numeral_infos = .{},
+            .interpolation_metadata = .{},
+            .derived_map_plans = .{},
 
             // nominal declaration table (modules typically declare few types)
             .nominal_decls = try NominalDecl.SafeList.initCapacity(gpa, 16),
@@ -377,6 +390,9 @@ pub const Store = struct {
         self.tags.deinit(self.gpa);
         self.interpolation_parts.deinit(self.gpa);
         self.static_dispatch_constraints.deinit(self.gpa);
+        self.numeral_infos.deinit(self.gpa);
+        self.interpolation_metadata.deinit(self.gpa);
+        self.derived_map_plans.deinit(self.gpa);
         self.static_dispatch_relation_merges.deinit(self.gpa);
         self.static_dispatch_constraint_room.deinit(self.gpa);
 
@@ -412,6 +428,9 @@ pub const Store = struct {
             .tags = try self.tags.clone(gpa),
             .interpolation_parts = try self.interpolation_parts.clone(gpa),
             .static_dispatch_constraints = try self.static_dispatch_constraints.clone(gpa),
+            .numeral_infos = try self.numeral_infos.clone(gpa),
+            .interpolation_metadata = try self.interpolation_metadata.clone(gpa),
+            .derived_map_plans = try self.derived_map_plans.clone(gpa),
             .nominal_decls = try self.nominal_decls.clone(gpa),
             .nominal_decl_index = try self.nominal_decl_index.clone(gpa),
             .invalid_nominal_decl_written = self.invalid_nominal_decl_written,
@@ -469,6 +488,9 @@ pub const Store = struct {
         tags_len: usize,
         interpolation_parts_len: usize,
         static_dispatch_constraints_len: usize,
+        numeral_infos_len: usize,
+        interpolation_metadata_len: usize,
+        derived_map_plans_len: usize,
         static_dispatch_relation_merges_len: usize,
         verify_clone: SavepointVerifyClone = savepoint_verify_clone_init,
     };
@@ -547,6 +569,9 @@ pub const Store = struct {
             .tags_len = self.tags.items.len,
             .interpolation_parts_len = self.interpolation_parts.items.items.len,
             .static_dispatch_constraints_len = self.static_dispatch_constraints.items.items.len,
+            .numeral_infos_len = self.numeral_infos.items.items.len,
+            .interpolation_metadata_len = self.interpolation_metadata.items.items.len,
+            .derived_map_plans_len = self.derived_map_plans.items.items.len,
             .static_dispatch_relation_merges_len = self.static_dispatch_relation_merges.items.len,
             .verify_clone = verify_clone,
         };
@@ -655,6 +680,9 @@ pub const Store = struct {
         self.tags.items.shrinkRetainingCapacity(savepoint.tags_len);
         self.interpolation_parts.items.shrinkRetainingCapacity(savepoint.interpolation_parts_len);
         self.static_dispatch_constraints.items.shrinkRetainingCapacity(savepoint.static_dispatch_constraints_len);
+        self.numeral_infos.items.shrinkRetainingCapacity(savepoint.numeral_infos_len);
+        self.interpolation_metadata.items.shrinkRetainingCapacity(savepoint.interpolation_metadata_len);
+        self.derived_map_plans.items.shrinkRetainingCapacity(savepoint.derived_map_plans_len);
         self.static_dispatch_relation_merges.shrinkRetainingCapacity(savepoint.static_dispatch_relation_merges_len);
 
         // The probe's merges are undone, so nothing they orphaned is dead,
@@ -1074,7 +1102,7 @@ pub const Store = struct {
     /// Whether two descriptors agree on every flag an instantiated copy
     /// carries over.
     fn sameCopiedFlags(a: types.DescriptorFlags, b: types.DescriptorFlags) bool {
-        return @as(u8, @bitCast(a.copied())) == @as(u8, @bitCast(b.copied()));
+        return @as(u16, @bitCast(a.copied())) == @as(u16, @bitCast(b.copied()));
     }
 
     pub fn groundEpoch(self: *const Self) u64 {
@@ -1192,6 +1220,16 @@ pub const Store = struct {
         try self.setDesc(resolved.desc_idx, desc);
     }
 
+    /// Mark a tag row a host-boundary annotation wrote (design.md "Row
+    /// Joins"). The mark travels with the row's equivalence class and its
+    /// copies.
+    pub fn markHostFixedRow(self: *Self, target_var: Var) Allocator.Error!void {
+        const resolved = try self.resolveWriteTarget(target_var);
+        var desc = resolved.desc;
+        desc.flags.host_fixed_row = true;
+        try self.setDesc(resolved.desc_idx, desc);
+    }
+
     /// Bound an annotated definition's implicitly opened row (design.md
     /// "Polarity"). The bound travels with the row's equivalence class.
     pub fn markBoundedRowExt(self: *Self, target_var: Var) Allocator.Error!void {
@@ -1201,8 +1239,9 @@ pub const Store = struct {
         try self.setDesc(resolved.desc_idx, desc);
     }
 
-    /// End the bound on a row every use shares: a weak value binding's row is
-    /// bounded only while its own right-hand side is checked.
+    /// End the bound on a row: a platform-required definition's rows are
+    /// released where the platform relates them, and a bound an enclosing
+    /// release cleared is applied again for the owners that still hold it.
     pub fn clearBoundedRowExt(self: *Self, target_var: Var) Allocator.Error!void {
         const resolved = try self.resolveWriteTarget(target_var);
         var desc = resolved.desc;
@@ -1568,6 +1607,75 @@ pub const Store = struct {
     /// The smallest constraint list `appendStaticDispatchConstraintsAfter`
     /// reserves room after.
     const min_constraint_room = 8;
+
+    /// Pool a numeral's facts for a `from_numeral` constraint to index.
+    pub fn appendNumeralInfo(self: *Self, info: NumeralInfo) std.mem.Allocator.Error!NumeralInfo.Idx {
+        return try self.numeral_infos.append(self.gpa, info);
+    }
+
+    /// A pooled numeral's facts.
+    pub fn getNumeralInfo(self: *const Self, idx: NumeralInfo.Idx) NumeralInfo {
+        return self.numeral_infos.get(idx).*;
+    }
+
+    /// A constraint's numeral facts, when its origin is a numeric literal.
+    pub fn constraintNumeralInfo(self: *const Self, constraint: StaticDispatchConstraint) ?NumeralInfo {
+        const idx = constraint.origin.numeral() orelse return null;
+        return self.getNumeralInfo(idx);
+    }
+
+    /// `origin` with its numeral facts read out of this store's pool.
+    pub fn resolveOrigin(self: *const Self, origin: StaticDispatchConstraint.Origin) StaticDispatchConstraint.ResolvedOrigin {
+        return switch (origin) {
+            .desugared_binop => |binop| .{ .desugared_binop = .{ .negated = binop.negated } },
+            .desugared_unaryop => .desugared_unaryop,
+            .method_call => .method_call,
+            .where_clause => |clause| .{ .where_clause = .{ .body_required = clause.body_required } },
+            .from_literal => |literal| .{ .from_literal = switch (literal) {
+                .numeral => |idx| .{ .numeral = self.getNumeralInfo(idx) },
+                .quote => .quote,
+                .interpolation => .interpolation,
+            } },
+        };
+    }
+
+    /// The store-relative form of `origin`, pooling its numeral facts.
+    pub fn internOrigin(self: *Self, origin: StaticDispatchConstraint.ResolvedOrigin) std.mem.Allocator.Error!StaticDispatchConstraint.Origin {
+        return switch (origin) {
+            .desugared_binop => |binop| .{ .desugared_binop = .{ .negated = binop.negated } },
+            .desugared_unaryop => .desugared_unaryop,
+            .method_call => .method_call,
+            .where_clause => |clause| .{ .where_clause = .{ .body_required = clause.body_required } },
+            .from_literal => |literal| .{ .from_literal = switch (literal) {
+                .numeral => |info| .{ .numeral = try self.appendNumeralInfo(info) },
+                .quote => .quote,
+                .interpolation => .interpolation,
+            } },
+        };
+    }
+
+    /// Pool interpolation metadata for a `from_interpolation` constraint.
+    pub fn appendInterpolationMetadata(self: *Self, metadata: InterpolationMetadata) std.mem.Allocator.Error!InterpolationMetadata.OptIdx {
+        std.debug.assert(metadata.isPresent());
+        return .from(try self.interpolation_metadata.append(self.gpa, metadata));
+    }
+
+    /// A constraint's interpolation metadata, or `.none` when it has none.
+    pub fn getInterpolationMetadata(self: *const Self, idx: InterpolationMetadata.OptIdx) InterpolationMetadata {
+        const pooled = idx.get() orelse return .none;
+        return self.interpolation_metadata.get(pooled).*;
+    }
+
+    /// Pool a derived-map plan for a constraint.
+    pub fn appendDerivedMapPlan(self: *Self, plan: DerivedMapPlan) std.mem.Allocator.Error!DerivedMapPlan.OptIdx {
+        return .from(try self.derived_map_plans.append(self.gpa, plan));
+    }
+
+    /// A constraint's derived-map plan, when it has one.
+    pub fn getDerivedMapPlan(self: *const Self, idx: DerivedMapPlan.OptIdx) ?DerivedMapPlan {
+        const pooled = idx.get() orelse return null;
+        return self.derived_map_plans.get(pooled).*;
+    }
 
     /// Append static dispatch constraints to the backing list, returning the range
     pub fn appendStaticDispatchConstraints(self: *Self, s: []const StaticDispatchConstraint) std.mem.Allocator.Error!StaticDispatchConstraint.SafeList.Range {
@@ -2025,6 +2133,7 @@ pub const Store = struct {
         merged_desc.flags.annotation_tag_ext = merged_desc.content == .flex and
             (a_data.desc.flags.annotation_tag_ext or b_data.desc.flags.annotation_tag_ext);
         merged_desc.flags.bounded_row_ext = a_data.desc.flags.bounded_row_ext or b_data.desc.flags.bounded_row_ext;
+        merged_desc.flags.host_fixed_row = a_data.desc.flags.host_fixed_row or b_data.desc.flags.host_fixed_row;
         const merged_is_empty_tag_union = merged_desc.content == .structure and
             merged_desc.content.structure == .empty_tag_union;
         if (merged_is_empty_tag_union) {
@@ -2296,6 +2405,9 @@ pub const Store = struct {
         tags: TagSafeMultiList.Serialized,
         interpolation_parts: InterpolationPartMetadata.SafeList.Serialized,
         static_dispatch_constraints: StaticDispatchConstraint.SafeList.Serialized,
+        numeral_infos: NumeralInfo.SafeList.Serialized,
+        interpolation_metadata: InterpolationMetadata.MetadataList.Serialized,
+        derived_map_plans: DerivedMapPlan.SafeList.Serialized,
         nominal_decls: NominalDecl.SafeList.Serialized,
         nominal_decl_index: NominalDeclIndexEntry.SafeList.Serialized,
 
@@ -2316,6 +2428,9 @@ pub const Store = struct {
             try self.tags.serialize(&store.tags, allocator, writer);
             try self.interpolation_parts.serialize(&store.interpolation_parts, allocator, writer);
             try self.static_dispatch_constraints.serialize(&store.static_dispatch_constraints, allocator, writer);
+            try self.numeral_infos.serialize(&store.numeral_infos, allocator, writer);
+            try self.interpolation_metadata.serialize(&store.interpolation_metadata, allocator, writer);
+            try self.derived_map_plans.serialize(&store.derived_map_plans, allocator, writer);
             try self.nominal_decls.serialize(&store.nominal_decls, allocator, writer);
             try self.nominal_decl_index.serialize(&store.nominal_decl_index, allocator, writer);
 
@@ -2341,6 +2456,9 @@ pub const Store = struct {
                 .tags = self.tags.deserializeInto(base_addr),
                 .interpolation_parts = self.interpolation_parts.deserializeInto(base_addr),
                 .static_dispatch_constraints = self.static_dispatch_constraints.deserializeInto(base_addr),
+                .numeral_infos = self.numeral_infos.deserializeInto(base_addr),
+                .interpolation_metadata = self.interpolation_metadata.deserializeInto(base_addr),
+                .derived_map_plans = self.derived_map_plans.deserializeInto(base_addr),
                 .nominal_decls = self.nominal_decls.deserializeInto(base_addr),
                 .nominal_decl_index = self.nominal_decl_index.deserializeInto(base_addr),
             };
@@ -2361,6 +2479,9 @@ pub const Store = struct {
                 .tags = try self.tags.deserializeWithCopy(base_addr, gpa),
                 .interpolation_parts = try self.interpolation_parts.deserializeWithCopy(base_addr, gpa),
                 .static_dispatch_constraints = try self.static_dispatch_constraints.deserializeWithCopy(base_addr, gpa),
+                .numeral_infos = try self.numeral_infos.deserializeWithCopy(base_addr, gpa),
+                .interpolation_metadata = try self.interpolation_metadata.deserializeWithCopy(base_addr, gpa),
+                .derived_map_plans = try self.derived_map_plans.deserializeWithCopy(base_addr, gpa),
                 .nominal_decls = try self.nominal_decls.deserializeWithCopy(base_addr, gpa),
                 .nominal_decl_index = try self.nominal_decl_index.deserializeWithCopy(base_addr, gpa),
             };
@@ -3857,14 +3978,17 @@ test "Store multiple instances CompactWriter roundtrip" {
     };
     defer writer.deinit(gpa);
 
+    try writer.padToAlignment(gpa, @alignOf(Store.Serialized));
     const offset1 = writer.total_bytes; // Store1 starts at current position
     const serialized1 = try writer.appendAlloc(gpa, Store.Serialized);
     try serialized1.serialize(&store1, gpa, &writer);
 
+    try writer.padToAlignment(gpa, @alignOf(Store.Serialized));
     const offset2 = writer.total_bytes; // Store2 starts at current position
     const serialized2 = try writer.appendAlloc(gpa, Store.Serialized);
     try serialized2.serialize(&store2, gpa, &writer);
 
+    try writer.padToAlignment(gpa, @alignOf(Store.Serialized));
     const offset3 = writer.total_bytes; // Store3 starts at current position
     const serialized3 = try writer.appendAlloc(gpa, Store.Serialized);
     try serialized3.serialize(&store3, gpa, &writer);

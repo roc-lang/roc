@@ -1023,20 +1023,21 @@ const Unifier = struct {
         return self.types_store.resolveVar(var_).desc.flags.bounded_row_ext;
     }
 
-    /// Whether a row reaches a bounded extension along its extension chain,
-    /// so that tags added at the end of the chain would extend it.
-    fn rowChainIsBounded(self: *Self, tag_union: TagUnion) bool {
+    /// The bounded extension a row reaches along its extension chain, so that
+    /// tags added at the end of the chain would extend it; null when the chain
+    /// reaches none.
+    fn boundedExtOfRow(self: *Self, tag_union: TagUnion) ?Var {
         var ext = tag_union.ext;
         var remaining = self.types_store.len();
         while (remaining > 0) : (remaining -= 1) {
-            if (self.isBoundedRowExt(ext)) return true;
+            if (self.isBoundedRowExt(ext)) return self.types_store.resolveVar(ext).var_;
             switch (self.types_store.resolveVar(ext).desc.content) {
                 .alias => |alias| ext = self.types_store.getAliasBackingVar(alias),
                 .structure => |flat_type| switch (flat_type) {
                     .tag_union => |next| ext = next.ext,
-                    .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => return false,
+                    .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => return null,
                 },
-                .flex, .rigid, .field_presence, .err => return false,
+                .flex, .rigid, .field_presence, .err => return null,
             }
         }
         base.invariant("checker invariant violated: a tag row's extension chain is cyclic", .{});
@@ -1066,7 +1067,7 @@ const Unifier = struct {
     /// a tagless row hands the bound to that row's own extension.
     fn refuseTagsIntoBoundedExt(self: *Self, ext: ResolvedVarDesc, other: Var) Error!void {
         if (ext.desc.content != .flex or !ext.desc.flags.bounded_row_ext) return;
-        if (self.firstRowTag(other)) |tag| return self.refuseBoundedRowTag(tag);
+        if (self.firstRowTag(other)) |tag| return self.refuseBoundedRowTag(tag, ext.var_);
         if (self.rowTail(other)) |tail| try self.types_store.markBoundedRowExt(tail);
     }
 
@@ -1092,9 +1093,9 @@ const Unifier = struct {
         base.invariant("checker invariant violated: a tag row's extension chain is cyclic", .{});
     }
 
-    fn refuseBoundedRowTag(self: *Self, tag: Ident.Idx) Error!void {
+    fn refuseBoundedRowTag(self: *Self, tag: Ident.Idx, ext: Var) Error!void {
         if (self.scratch.bounded_row_violation == null) {
-            self.scratch.bounded_row_violation = .{ .tag = tag };
+            self.scratch.bounded_row_violation = .{ .tag = tag, .ext = ext };
         }
         return error.TypeMismatch;
     }
@@ -3292,11 +3293,15 @@ const Unifier = struct {
         }
         // A bounded annotation row refuses unlisted tags exactly as a closed
         // row does, and for the same reason this check precedes any merge.
-        if ((tags_ext == .b_extends_a or tags_ext == .both_extend) and self.rowChainIsBounded(a_tag_union)) {
-            return self.refuseBoundedRowTag(self.scratch.only_in_b_tags.sliceRange(partitioned.only_in_b)[0].name);
+        if (tags_ext == .b_extends_a or tags_ext == .both_extend) {
+            if (self.boundedExtOfRow(a_tag_union)) |bounded_ext| {
+                return self.refuseBoundedRowTag(self.scratch.only_in_b_tags.sliceRange(partitioned.only_in_b)[0].name, bounded_ext);
+            }
         }
-        if ((tags_ext == .a_extends_b or tags_ext == .both_extend) and self.rowChainIsBounded(b_tag_union)) {
-            return self.refuseBoundedRowTag(self.scratch.only_in_a_tags.sliceRange(partitioned.only_in_a)[0].name);
+        if (tags_ext == .a_extends_b or tags_ext == .both_extend) {
+            if (self.boundedExtOfRow(b_tag_union)) |bounded_ext| {
+                return self.refuseBoundedRowTag(self.scratch.only_in_a_tags.sliceRange(partitioned.only_in_a)[0].name, bounded_ext);
+            }
         }
 
         // Unify tags (recursion guard in unifyGuarded prevents infinite loops,
@@ -3582,7 +3587,7 @@ const Unifier = struct {
     ) Error!void {
         for (self.scratch.only_in_a_static_dispatch_constraints.items.items[retained_group_start..]) |*existing| {
             if (!sameFixedLiteralClass(existing.origin, constraint.origin)) continue;
-            existing.* = mergeStaticDispatchConstraintMetadata(constraint, existing.*);
+            existing.* = try mergeStaticDispatchConstraintMetadata(self.types_store, constraint, existing.*);
             try self.types_store.static_dispatch_relation_merges.append(self.types_store.gpa, .{
                 .dropped_fn_var = constraint.fn_var,
                 .retained_fn_var = existing.fn_var,
@@ -3933,16 +3938,23 @@ fn sameFixedLiteralClass(
 }
 
 fn mergeStaticDispatchConstraintMetadata(
+    types_store: *types_mod.Store,
     other: StaticDispatchConstraint,
     retained: StaticDispatchConstraint,
-) StaticDispatchConstraint {
+) std.mem.Allocator.Error!StaticDispatchConstraint {
     var merged = retained;
     if (other.origin == .from_literal and retained.origin == .from_literal) {
-        if (mergeFromNumeralLiteralInfo(
-            other.origin.numeralInfo(),
-            retained.origin.numeralInfo(),
-        )) |numeral_info| {
-            merged.origin = .{ .from_literal = .{ .numeral = numeral_info } };
+        if (other.origin.numeral()) |other_numeral| {
+            // Pooled facts are never mutated: copies of either constraint
+            // share them, so the merge pools its own.
+            const numeral = if (retained.origin.numeral()) |retained_numeral|
+                try types_store.appendNumeralInfo(types_mod.NumeralInfo.merged(
+                    types_store.getNumeralInfo(other_numeral),
+                    types_store.getNumeralInfo(retained_numeral),
+                ))
+            else
+                other_numeral;
+            merged.origin = .{ .from_literal = .{ .numeral = numeral } };
         }
     }
 
@@ -3956,15 +3968,6 @@ fn mergeStaticDispatchConstraintMetadata(
         merged.interpolation = other.interpolation;
     }
     return merged;
-}
-
-fn mergeFromNumeralLiteralInfo(
-    a: ?types_mod.NumeralInfo,
-    b: ?types_mod.NumeralInfo,
-) ?types_mod.NumeralInfo {
-    const a_info = a orelse return b;
-    const b_info = b orelse return a;
-    return types_mod.NumeralInfo.merged(a_info, b_info);
 }
 
 /// A list of constraint that should apply to concrete type
@@ -4216,9 +4219,11 @@ fn ChainDuplicate(comptime kind: RowKind) type {
     };
 }
 
-/// A tag a unification refused to add to a bounded annotation extension.
+/// A tag a unification refused to add to a bounded annotation extension, and
+/// that extension.
 pub const BoundedRowViolation = struct {
     tag: Ident.Idx,
+    ext: Var,
 };
 
 /// An unordered pair of resolved type descriptors.

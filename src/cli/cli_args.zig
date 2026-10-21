@@ -770,7 +770,6 @@ const target_flag: Flag = .{
         },
 };
 
-/// Internal: names the requests file of a dev build's tier 2 object build (`roc build` compiles those entries with LLVM instead of building).
 /// Internal: names the file a watched command writes its input paths and byte states to.
 const watch_inputs_file_flag: Flag = .{ .name = "--watch-inputs-file", .form = .attached, .field = "watch_inputs_file" };
 

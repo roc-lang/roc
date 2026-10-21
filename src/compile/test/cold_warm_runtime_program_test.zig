@@ -96,11 +96,11 @@ fn buildWithCache(gpa: std.mem.Allocator, cache_dir: []const u8, app_path: []con
     defer out.deinit();
     const result = &runtime.lir_result;
     for (0..result.store.procSpecCount()) |index| {
-        try lir.DebugPrint.writeProc(gpa, &result.store, &result.layouts, @enumFromInt(index), &out.writer);
+        try lir.DebugPrint.writeProc(gpa, &result.store, &result.layouts, @fromBackingInt(@intCast(index)), &out.writer);
         try out.writer.writeByte('\n');
     }
     for (result.static_data_values.items, 0..) |value, index| {
-        try out.writer.print("static s{d} layout={d} initializer={?d}\n", .{ index, @intFromEnum(value.layout_idx), if (value.initializer) |proc| @intFromEnum(proc) else null });
+        try out.writer.print("static s{d} layout={d} initializer={?d}\n", .{ index, @backingInt(value.layout_idx), if (value.initializer) |proc| @backingInt(proc) else null });
     }
     if (runtime.frozen_static_data) |frozen| for (frozen.exports) |item| {
         try out.writer.print("frozen {s} {x}\n", .{ item.symbol_name, item.bytes });
@@ -116,7 +116,13 @@ fn reportErrors(coord: *Coordinator) error{TestUnexpectedResult} {
     return error.TestUnexpectedResult;
 }
 
-fn expectColdEqualsWarm(app_source: []const u8) !void {
+const ExpectError = BuildError ||
+    std.Io.Dir.CreateDirPathError ||
+    std.Io.Dir.WriteFileError ||
+    std.Io.Dir.RealPathFileAllocError ||
+    error{ SkipZigTest, TestExpectedEqual };
+
+fn expectColdEqualsWarm(app_source: []const u8) ExpectError!void {
     if (is_freestanding) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     const io = std.testing.io;

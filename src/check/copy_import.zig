@@ -118,6 +118,9 @@ const Fill = struct {
     placeholder: Var,
     empty_tag_union_is_default: bool,
     nominal_backing_structure: bool,
+    /// A tag row a host-boundary annotation wrote is the same host row in
+    /// every module that imports it (design.md "Row Joins").
+    host_fixed_row: bool,
 };
 
 const IdentityResult = enum { flex, rigid };
@@ -373,6 +376,7 @@ fn request(ctx: *CopyContext, source_var: Var) std.mem.Allocator.Error!bool {
         .placeholder = placeholder_var,
         .empty_tag_union_is_default = resolved.desc.flags.empty_tag_union_is_default,
         .nominal_backing_structure = resolved.desc.flags.nominal_backing_structure,
+        .host_fixed_row = resolved.desc.flags.host_fixed_row,
     };
 
     // NOTE: a copied var whose content is a flex carrying a literal-conversion
@@ -536,6 +540,7 @@ fn finishFrame(ctx: *CopyContext, fill: Fill, content: Content) std.mem.Allocato
         .flags = .{
             .empty_tag_union_is_default = fill.empty_tag_union_is_default,
             .nominal_backing_structure = fill.nominal_backing_structure,
+            .host_fixed_row = fill.host_fixed_row,
         },
     });
     try ctx.scratch.values.append(ctx.allocator, fill.placeholder);
@@ -576,6 +581,11 @@ fn stepIdentity(ctx: *CopyContext, frame: *IdentityFrame) std.mem.Allocator.Erro
                 const source_constraint = frame.source_constraints[frame.idx];
                 frame.pending = source_constraint;
                 frame.pending.fn_name = try ctx.copyIdent(source_constraint.fn_name);
+                // Pooled payloads index the source store; the copy pools its
+                // own in the destination.
+                frame.pending.origin = try ctx.dest_store.internOrigin(ctx.source_store.resolveOrigin(source_constraint.origin));
+                frame.pending.interpolation = .none;
+                frame.pending.derived_map_plan = .none;
                 frame.stage = .await_fn;
                 if (!try request(ctx, source_constraint.fn_var)) return false;
             },
@@ -590,20 +600,19 @@ fn stepIdentity(ctx: *CopyContext, frame: *IdentityFrame) std.mem.Allocator.Erro
                 frame.stage = .parts;
             },
             .parts => {
-                const source_parts = ctx.source_store.sliceInterpolationParts(
-                    frame.source_constraints[frame.idx].interpolation.interpolated_parts,
-                );
+                const metadata = ctx.source_store.getInterpolationMetadata(frame.source_constraints[frame.idx].interpolation);
+                const source_parts = ctx.source_store.sliceInterpolationParts(metadata.interpolated_parts);
                 if (frame.part_idx < source_parts.len) {
                     frame.stage = .await_part;
                     if (!try request(ctx, source_parts[frame.part_idx].var_)) return false;
                     continue;
                 }
                 frame.stage = .await_item;
-                if (!try request(ctx, frame.source_constraints[frame.idx].interpolation.item_var)) return false;
+                if (!try request(ctx, metadata.item_var)) return false;
             },
             .await_part => {
                 const source_parts = ctx.source_store.sliceInterpolationParts(
-                    frame.source_constraints[frame.idx].interpolation.interpolated_parts,
+                    ctx.source_store.getInterpolationMetadata(frame.source_constraints[frame.idx].interpolation).interpolated_parts,
                 );
                 try machine.pending_parts.append(ctx.allocator, .{
                     .var_ = machine.values.pop().?,
@@ -618,20 +627,20 @@ fn stepIdentity(ctx: *CopyContext, frame: *IdentityFrame) std.mem.Allocator.Erro
                     machine.pending_parts.items[frame.parts_base..],
                 );
                 machine.pending_parts.items.len = frame.parts_base;
-                frame.pending.interpolation = .{
-                    .expr_region = frame.source_constraints[frame.idx].interpolation.expr_region,
+                frame.pending.interpolation = try ctx.dest_store.appendInterpolationMetadata(.{
+                    .expr_region = ctx.source_store.getInterpolationMetadata(frame.source_constraints[frame.idx].interpolation).expr_region,
                     .item_var = dest_item_var,
                     .interpolated_parts = dest_parts_range,
                     .regions = .imported,
-                };
+                });
                 frame.stage = .finish_constraint;
             },
             .finish_constraint => {
-                if (frame.source_constraints[frame.idx].derived_map_plan) |plan| {
-                    frame.pending.derived_map_plan = .{
+                if (ctx.source_store.getDerivedMapPlan(frame.source_constraints[frame.idx].derived_map_plan)) |plan| {
+                    frame.pending.derived_map_plan = try ctx.dest_store.appendDerivedMapPlan(.{
                         .tag_name = try ctx.copyIdent(plan.tag_name),
                         .payload_index = plan.payload_index,
-                    };
+                    });
                 }
                 // The introducing expression is module-scoped: its index refers to the
                 // SOURCE module's CIR and is meaningless here. Clear it on the boundary

@@ -1,12 +1,12 @@
 //! Checked modules to Monotype IR.
 
 const std = @import("std");
-const build_options = @import("build_options");
 const TypeDigestHasher = @import("base").TypeDigestHasher;
 const check = @import("check");
 const can = @import("can");
 const builtins = @import("builtins");
 const base = @import("base");
+const dev_diagnostics = base.dev_diagnostics;
 const collections = @import("collections");
 
 const Common = @import("../common.zig");
@@ -325,6 +325,16 @@ pub const Options = struct {
     /// whose completed value the specialization reads. The consumer that
     /// asks for this evaluates every literal root the program registers.
     literal_roots: bool = false,
+    /// With `literal_roots`, the literal values an earlier compilation of the
+    /// program stored: a literal root whose value identity names one restores
+    /// it instead of running its conversion (design.md "Compile-Time Value
+    /// Reuse Across Edits"). Literal roots carry value identities exactly
+    /// when this is set.
+    literal_values: ?Common.LiteralValueLookup = null,
+    /// With `literal_values`, keep each restored literal root's conversion as
+    /// a literal root of its own, which evaluation runs to verify the stored
+    /// value.
+    verify_literal_values: bool = false,
     /// Whether an interface request may replay a completed summary instead of
     /// expanding its callee's relations. A replay is a faithful stand-in for a
     /// fresh expansion, so this never changes the lowered program. Always on
@@ -356,9 +366,26 @@ pub const ComptimeDemand = struct {
     /// How many compile-time roots the program declared; `root_reads.len`
     /// of them became program roots.
     declared_root_count: usize = 0,
+    /// Each literal root of the program, by id: the checked roots its
+    /// definition reads, directly or through the code it reaches, its value
+    /// identity, and how the program evaluates it.
+    literals: []LiteralRootDemand = &.{},
+
+    pub const LiteralRootDemand = struct {
+        reads: Common.Span(EntryRoot),
+        /// Names the root's value across compilations; null when nothing
+        /// can name it (design.md "Compile-Time Value Reuse Across Edits").
+        identity: ?[32]u8,
+        reuse: Common.LiteralRootReuse,
+    };
 
     pub fn rootReads(self: *const ComptimeDemand, index: usize) []const EntryRoot {
         const span = self.root_reads[index];
+        return self.reads[span.start..][0..span.len];
+    }
+
+    pub fn literalReads(self: *const ComptimeDemand, id: Common.LiteralRootId) []const EntryRoot {
+        const span = self.literals[@backingInt(id)].reads;
         return self.reads[span.start..][0..span.len];
     }
 
@@ -366,6 +393,7 @@ pub const ComptimeDemand = struct {
         self.allocator.free(self.root_reads);
         self.allocator.free(self.reads);
         self.allocator.free(self.stored);
+        self.allocator.free(self.literals);
         self.* = .{ .allocator = self.allocator };
     }
 };
@@ -974,6 +1002,18 @@ const DeclaredRoot = struct {
     validation: bool,
 };
 
+/// A program literal root's value identity and how the program evaluates it.
+const LiteralReuseRow = struct {
+    identity: ?[32]u8 = null,
+    reuse: Common.LiteralRootReuse = .converted,
+};
+
+/// A compile-time root's site within the module whose checked key it holds.
+const LiteralReadSite = struct {
+    module: [32]u8,
+    site: [32]u8,
+};
+
 /// A committed expression that stands for a compile-time root's value
 /// without reading it through a slot: it restores the value an earlier
 /// compilation stored, or, in a program that does not evaluate the root,
@@ -1541,6 +1581,7 @@ const ModuleViewData = struct {
     const_store: *const checked.ConstStore,
     interface_capabilities: *const checked.ModuleInterfaceCapabilities,
     compile_time_root_reads: *const checked.CompileTimeRootReadTable,
+    compile_time_root_identities: *const checked.CompileTimeRootIdentityTable,
 };
 
 const ConstNode = struct {
@@ -2789,16 +2830,13 @@ const ClosedResultRow = struct {
     /// The checked row itself: the function result's own row, or the error
     /// argument row of a `Builtin.Try` result.
     row: checked.CheckedTypeId,
-    /// Whether the row sits inside a `Builtin.Try` result, so the adapter
-    /// unwraps and re-wraps through the checker-recorded capability.
+    /// Whether the row sits inside a `Builtin.Try` result.
     behind_try: bool,
 };
 
 /// Whether a checked tag row is closed for result-row widening. This is
-/// `CheckedTypePayload.variableSealsToRowDefault`, the same rule the checker's
-/// `checkedResultRowIsClosed` uses to decide whether to record the `Try`
-/// capability, so the two cannot drift. A rigid tail is parametric—the
-/// caller supplies the row—and is therefore not closed.
+/// `CheckedTypePayload.variableSealsToRowDefault`. A rigid tail is
+/// parametric—the caller supplies the row—and is therefore not closed.
 fn checkedResultRowIsClosed(view: ModuleView, root: checked.CheckedTypeId) bool {
     var current = root;
     var remaining = view.types.payloadCount();
@@ -2817,10 +2855,8 @@ fn checkedResultRowIsClosed(view: ModuleView, root: checked.CheckedTypeId) bool 
 }
 
 /// The template's checked result row when it is closed, so a request at a
-/// row that includes it is served by a generated widening adapter (design.md
-/// "Result-Row Widening Adapter"). Mirrors the checker's
-/// `checkedRootHasClosedResultRow`, which gates recording the `Try`
-/// capability this adapter consumes.
+/// row that includes it widens that row and the template is specialized at
+/// the request's row (design.md "Closed Result Rows At Template Boundaries").
 fn closedResultRowOrNull(view: ModuleView, checked_fn_root: checked.CheckedTypeId) ?ClosedResultRow {
     const function = switch (resolvedPayload(view, checked_fn_root).payload) {
         .function => |function| function,
@@ -2844,34 +2880,15 @@ fn closedResultRowOrNull(view: ModuleView, checked_fn_root: checked.CheckedTypeI
     }
 }
 
-/// Number of explicit labels a closed checked row lists. The declared-row
-/// guard in `resultRowWideningAdapterOrNull` compares this against the lowered
-/// declared row.
-fn checkedClosedRowLabelCount(view: ModuleView, root: checked.CheckedTypeId) usize {
-    var count: usize = 0;
-    var current = root;
-    var remaining = view.types.payloadCount();
-    while (remaining > 0) : (remaining -= 1) {
-        switch (checkedPayload(view, current)) {
-            .alias => |alias| current = alias.backing,
-            .tag_union => |tag_union| {
-                count += tag_union.tags.len;
-                current = tag_union.ext;
-            },
-            .empty_tag_union, .flex, .rigid => return count,
-            .pending, .err, .record, .tuple, .nominal, .function, .empty_record => Common.invariant("closed result row chain left its row"),
-        }
+/// Whether two tag spans list the same labels in the same order, each at
+/// the same payload arity.
+fn sameTagLabels(left: []const InstTag, right: []const InstTag) bool {
+    if (left.len != right.len) return false;
+    for (left, right) |left_tag, right_tag| {
+        if (left_tag.name != right_tag.name or left_tag.payloads.len != right_tag.payloads.len) return false;
     }
-    Common.invariant("checked result row extension chain was cyclic");
+    return true;
 }
-
-const HostedTryAdapterCapability = struct {
-    def: Type.TypeDef,
-    ok_tag: names.TagNameId,
-    err_tag: names.TagNameId,
-    ok_type_arg_index: usize,
-    err_type_arg_index: usize,
-};
 
 fn graphTagByName(
     tags: []const InstTag,
@@ -2888,23 +2905,6 @@ const RequestNodePair = struct {
     public: NodeId,
     request: NodeId,
 };
-
-/// The components of the one result cell a request widened.
-const ResultRowWidening = struct {
-    /// Result components that stay exact graph relations: the `Try` result's
-    /// remaining type arguments.
-    exact: []const RequestNodePair,
-    /// The single row the request widened. Its shared labels' payload cells
-    /// relate exactly and the two extensions stay unrelated, so the request's
-    /// extra labels remain outside the template's closed row.
-    widened: RequestNodePair,
-};
-
-/// Type-argument index of `Builtin.Try`'s error row. `closedResultRowOrNull`
-/// names `args[1]` as the closed row and the checker's
-/// `hostedTryAdapterCapabilityForCheckedRoot` records the same index, so this
-/// relation and the adapter open one and the same cell.
-const try_error_type_arg_index: usize = 1;
 
 /// Whether a node is directly function-shaped.
 fn isFunctionNode(graph: *InstGraph, node: NodeId) Allocator.Error!bool {
@@ -2944,186 +2944,137 @@ fn requestRowIncludesClosedRow(
     return true;
 }
 
-/// Recognize the one result cell the adapter can re-tag. `declared_row` is the
-/// checker's own answer for this template, so the cell opened here is exactly
-/// the cell `resultRowWideningAdapterSourceType` builds a narrowed source type
-/// for: a `Try` result's error argument, or the function's own result row. The
-/// adapter-reachable set is exactly those two. Every other component—a
-/// `Try`'s `Ok` argument (`hostedTryReturnInjectionExpr` rejects an `Ok` type
-/// change outright), an alias's type arguments, a nested row—relates exactly,
-/// so a widening there meets the ordinary closed-row rejection instead of
-/// silently passing a request no adapter will serve.
+/// The row a result node presents for widening: a bare tag row itself; a
+/// nominal's structural backing row, through which a `Try`'s error argument
+/// is one tag's payload; null for anything else.
+fn resultRowNodeOrNull(graph: *InstGraph, node: NodeId) Allocator.Error!?NodeId {
+    return switch ((try graph.content(node))) {
+        .tag_union, .empty_tag_union => node,
+        .named => |named| blk: {
+            if (named.kind != .nominal) break :blk null;
+            const backing = (try graph.namedNodes(node)).backing orelse break :blk null;
+            if (!try isBareTagRowNode(graph, backing.node)) break :blk null;
+            break :blk backing.node;
+        },
+        .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_record, .erased, .zst => null,
+    };
+}
+
+/// The one result position a request widens past the template's closed row.
+const ResultRowWidening = union(enum) {
+    /// The function's own result row.
+    result: RequestNodePair,
+    /// The error row of a `Try` result: one payload of one tag of the rows
+    /// the two results present (`resultRowNodeOrNull`).
+    payload: struct {
+        name: names.TagNameId,
+        index: usize,
+        rows: RequestNodePair,
+        pair: RequestNodePair,
+    },
+
+    fn pair(self: ResultRowWidening) RequestNodePair {
+        return switch (self) {
+            .result => |result| result,
+            .payload => |payload| payload.pair,
+        };
+    }
+};
+
+/// Recognize the one result cell a request may widen past the template's
+/// closed row: the function's own result row, or the error row of its `Try`
+/// result, the positions polarity opens per use (design.md "Polarity").
+/// `declared_row` is the checker's own answer for this template; the graph
+/// may present either side as a bare row or as the `Try` nominal, so both
+/// are read as rows and the error row is the payload the two rows share at
+/// one label. Every other component relates exactly, through the ordinary
+/// relation that follows the widening. Nothing is related here.
 fn resultRowWideningOrNull(
     graph: *InstGraph,
     declared_row: ClosedResultRow,
     public_ret: NodeId,
     request_ret: NodeId,
 ) Allocator.Error!?ResultRowWidening {
-    if (!declared_row.behind_try) {
-        if (!try requestRowIncludesClosedRow(graph, public_ret, request_ret)) return null;
-        return .{ .exact = &.{}, .widened = .{ .public = public_ret, .request = request_ret } };
-    }
-    const public_named = switch ((try graph.content(public_ret))) {
-        .named => |named| named,
-        .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
-    };
-    const request_named = switch ((try graph.content(request_ret))) {
-        .named => |named| named,
-        .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
-    };
-    // Only the `Try` nominal itself. An alias node's type arguments are not
-    // the `Try` arguments the adapter reads, and crossing to its backing row
-    // would inspect a representation this relation has no business seeing.
-    if (public_named.kind != .nominal or request_named.kind != .nominal) return null;
-    if (!sameTypeDef(public_named.def, request_named.def) or
-        public_named.args.len != request_named.args.len or
-        public_named.args.len <= try_error_type_arg_index)
+    const public_row = (try resultRowNodeOrNull(graph, public_ret)) orelse return null;
+    const request_row = (try resultRowNodeOrNull(graph, request_ret)) orelse return null;
+    if (!declared_row.behind_try and
+        (try graph.content(public_row)) == .tag_union and
+        try requestRowIncludesClosedRow(graph, public_row, request_row))
     {
-        return null;
+        return .{ .result = .{ .public = public_row, .request = request_row } };
     }
-    const public_err = public_named.args[try_error_type_arg_index];
-    const request_err = request_named.args[try_error_type_arg_index];
-    if (!try requestRowIncludesClosedRow(graph, public_err, request_err)) return null;
-    const exact = try graph.arena().alloc(RequestNodePair, public_named.args.len - 1);
-    var exact_index: usize = 0;
-    for (public_named.args, request_named.args, 0..) |public_arg, request_arg, index| {
-        if (index == try_error_type_arg_index) continue;
-        exact[exact_index] = .{ .public = public_arg, .request = request_arg };
-        exact_index += 1;
-    }
-    // The nominal's backing repeats the same rows, so relating it would unify
-    // them; it stays outside this relation exactly as the hosted `Try`
-    // widening leaves it.
-    return .{ .exact = exact, .widened = .{ .public = public_err, .request = request_err } };
-}
-
-/// Relate the labels a widened row shares with the template's closed row. The
-/// two row nodes and their extensions stay unrelated, which is exactly what
-/// keeps the request's extra labels outside the closed row.
-fn relateIncludedRowPayloads(
-    graph: *InstGraph,
-    public_row: NodeId,
-    request_row: NodeId,
-) Allocator.Error!void {
-    // Each guard here stands between the adapter and a wrong tag layout, so
-    // all of them stop the build in every mode.
-    if (!(try isBareTagRowNode(graph, public_row)) or !(try isBareTagRowNode(graph, request_row))) {
-        Common.compilerBug("result-row widening related a non-tag-union row");
-    }
-    const public = (try graph.tagRowNodesOrNull(public_row)) orelse
-        Common.compilerBug("result-row widening related a non-tag-union row");
-    const request = (try graph.tagRowNodesOrNull(request_row)) orelse
-        Common.compilerBug("result-row widening related a non-tag-union row");
+    const public = (try graph.tagRowNodesOrNull(public_row)) orelse return null;
+    const request = (try graph.tagRowNodesOrNull(request_row)) orelse return null;
     for (public.tags) |public_tag| {
-        const request_tag = graphTagByName(request.tags, public_tag.name) orelse
-            Common.compilerBug("result-row widening request removed a declared label");
-        if (public_tag.payloads.len != request_tag.payloads.len) {
-            Common.compilerBug("result-row widening request changed a declared payload arity");
-        }
-        for (public_tag.payloads, request_tag.payloads) |public_payload, request_payload| {
-            try relateRequestComponent(graph, public_payload, request_payload);
+        const request_tag = graphTagByName(request.tags, public_tag.name) orelse continue;
+        if (public_tag.payloads.len != request_tag.payloads.len) continue;
+        for (public_tag.payloads, request_tag.payloads, 0..) |public_payload, request_payload, index| {
+            if (try requestRowIncludesClosedRow(graph, public_payload, request_payload)) {
+                return .{ .payload = .{
+                    .name = public_tag.name,
+                    .index = index,
+                    .rows = .{ .public = public_row, .request = request_row },
+                    .pair = .{ .public = public_payload, .request = request_payload },
+                } };
+            }
         }
     }
+    return null;
 }
 
-/// Recognize a request whose result row includes the template's closed
-/// checked row (design.md "Result-Row Widening Adapter"). Nothing is related
-/// here, so a site that cannot reach an adapter can ask the question and then
-/// decline without having already taken the rows apart.
-fn resultRowWideningRequestOrNull(
+/// Widen a template's closed result row to a request whose row includes it,
+/// so the template is specialized at the request's row (design.md "Closed
+/// Result Rows At Template Boundaries"). A request at the template's own row
+/// widens nothing. The caller relates the two interfaces afterwards.
+fn widenClosedResultRow(
     graph: *InstGraph,
     declared_row: ClosedResultRow,
-    public_fn: NodeId,
-    request_fn: NodeId,
-) Allocator.Error!?ResultRowWidening {
-    if (graph.sameClass(public_fn, request_fn)) return null;
-    // Only a directly function-shaped pair is inspected here. Reading a
-    // function interface through a named backing is the caller's ordinary
-    // relation's business, not this one's.
-    if (!(try isFunctionNode(graph, public_fn)) or !(try isFunctionNode(graph, request_fn))) return null;
-    const public = try graph.functionNodes(public_fn);
-    const request = try graph.functionNodes(request_fn);
-    if (public.args.len != request.args.len) {
-        Common.compilerBug("result-row widening request changed arity from its checked interface");
-    }
-    return try resultRowWideningOrNull(graph, declared_row, public.ret, request.ret);
-}
-
-/// Relate a recognized result-row widening. Arguments and every non-row
-/// component stay exact graph relations; only the request's extra result
-/// labels stay outside the template's row, so the request survives to template
-/// completion where the widening adapter is generated.
-fn applyResultRowWidening(
-    graph: *InstGraph,
-    widening: ResultRowWidening,
-    public_fn: NodeId,
-    request_fn: NodeId,
+    public_ret: NodeId,
+    request_ret: NodeId,
 ) Allocator.Error!void {
-    const public = try graph.functionNodes(public_fn);
-    const request = try graph.functionNodes(request_fn);
-    for (public.args, request.args) |public_arg, request_arg| {
-        try relateRequestComponent(graph, public_arg, request_arg);
+    const widening = (try resultRowWideningOrNull(graph, declared_row, public_ret, request_ret)) orelse return;
+    const pair = widening.pair();
+    if ((try graph.content(pair.public)) != .empty_tag_union) {
+        try graph.widenClosedTagRow(pair.public, pair.request);
+        return;
     }
-    for (widening.exact) |pair| {
-        try relateRequestComponent(graph, pair.public, pair.request);
-    }
-    try relateIncludedRowPayloads(graph, widening.widened.public, widening.widened.request);
-}
-
-/// Whether the site asking for a result-row widening relation can reach the
-/// generated adapter that serves it.
-///
-/// design.md "Result-Row Widening Adapter": because the relation deliberately
-/// declines to unify the two rows, it must fail CLOSED. A request related this
-/// way that then does NOT reach an adapter leaves a callee producing one tag
-/// layout and a caller reading another—a wrong value rather than a crash. A
-/// site that cannot reach `completeTemplateReservation` therefore states
-/// `.no_adapter` and relates exactly instead, so the widening meets the
-/// ordinary `unifyTagRows` rejection.
-const AdapterReachability = enum {
-    /// The request is served by a procedure template specialization, whose
-    /// completion mints the adapter for a recorded widening.
-    adapter_reachable,
-    /// No `completeTemplateReservation` runs for this request: a `.local_proc`
-    /// dispatch target has no `checked_fn_root` and no template reservation, and
-    /// a caller-owned specialization lowers its body inline at the declared
-    /// interface.
-    no_adapter,
-};
-
-/// Whether a resolved dispatch target's callee can reach a widening adapter.
-/// Only a procedure template is specialized through
-/// `completeTemplateReservation`; a lambda-bound local procedure has no
-/// `checked_fn_root` and no template reservation, and a structural registry
-/// result has no callable body at all, so neither can ever be served by one.
-fn dispatchTargetAdapterReachability(target: static_dispatch.MethodTarget) AdapterReachability {
-    return switch (target.kind) {
-        .procedure => .adapter_reachable,
-        .local_proc, .structural => .no_adapter,
+    // The empty row's node stands for every empty row in the graph, so the
+    // position that holds it is pointed at the request's row instead: the
+    // tag payload, and the `Try` argument that names the same row.
+    const payload = switch (widening) {
+        .payload => |payload| payload,
+        .result => Common.invariant("a function result widened from an empty row"),
     };
+    try graph.replaceTagPayloadNode(payload.rows.public, payload.name, payload.index, pair.request);
+    switch ((try graph.content(public_ret))) {
+        .named => |named| for (named.args, 0..) |arg, index| {
+            if (graph.sameClass(arg, pair.public)) try graph.replaceNamedArgNode(public_ret, index, pair.request);
+        },
+        .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => {},
+    }
 }
 
-/// `relateFunctionRequestInterface` for a template whose checked result row
-/// may be closed: when the request's result row includes it, the two relate
-/// component-wise without unifying the rows. Returns whether the relation
-/// declined to unify, which is exactly the answer template completion consumes.
-fn relateClosedResultRowRequestInterface(
+/// `widenClosedResultRow` for a template's checked function type and a
+/// request function node.
+fn widenClosedResultRowToRequest(
     graph: *InstGraph,
     view: ModuleView,
     checked_fn_ty: checked.CheckedTypeId,
     public_fn: NodeId,
     request_fn: NodeId,
-    reachability: AdapterReachability,
-) Allocator.Error!bool {
-    const declared_row = closedResultRowOrNull(view, checked_fn_ty) orelse return false;
-    const widening = (try resultRowWideningRequestOrNull(graph, declared_row, public_fn, request_fn)) orelse
-        return false;
-    switch (reachability) {
-        .adapter_reachable => {},
-        .no_adapter => return false,
+) Allocator.Error!void {
+    const declared_row = closedResultRowOrNull(view, checked_fn_ty) orelse return;
+    if (graph.sameClass(public_fn, request_fn)) return;
+    // Only a directly function-shaped pair is inspected here. Reading a
+    // function interface through a named backing is the caller's ordinary
+    // relation's business, not this one's.
+    if (!(try isFunctionNode(graph, public_fn)) or !(try isFunctionNode(graph, request_fn))) return;
+    const public = try graph.functionNodes(public_fn);
+    const request = try graph.functionNodes(request_fn);
+    if (public.args.len != request.args.len) {
+        Common.compilerBug("result-row widening request changed arity from its checked interface");
     }
-    try applyResultRowWidening(graph, widening, public_fn, request_fn);
-    return true;
+    try widenClosedResultRow(graph, declared_row, public.ret, request.ret);
 }
 
 /// Rendered length `hostedExternAbiViolationMessage` never exceeds.
@@ -4088,7 +4039,7 @@ const RestoredLocalProcScope = struct {
 };
 
 const StoredConstFnEvidence = struct {
-    nodes: []const check.ConstStore.ConstFnEvidence,
+    entries: check.ConstStore.ConstFnEvidenceVector,
     frames: []const check.ConstStore.ConstFnEvidenceFrame,
     head: ?u32,
     /// `Ast.fnEvidenceDigest` of exactly these fields. It is computed once
@@ -4097,29 +4048,29 @@ const StoredConstFnEvidence = struct {
     digest: Ast.EvidenceDigest,
 
     fn init(
-        nodes: []const check.ConstStore.ConstFnEvidence,
+        entries: check.ConstStore.ConstFnEvidenceVector,
         frames: []const check.ConstStore.ConstFnEvidenceFrame,
         head: ?u32,
     ) StoredConstFnEvidence {
-        return .{ .nodes = nodes, .frames = frames, .head = head, .digest = Ast.fnEvidenceDigest(nodes, frames, head) };
+        return .{ .entries = entries, .frames = frames, .head = head, .digest = Ast.fnEvidenceDigest(entries, frames, head) };
     }
 
     fn empty() StoredConstFnEvidence {
-        return init(&.{}, &.{}, null);
+        return init(.{}, &.{}, null);
     }
 
     /// The evidence a function template recorded, with the digest it
     /// recorded for those same fields.
     fn recorded(
-        nodes: []const check.ConstStore.ConstFnEvidence,
+        entries: check.ConstStore.ConstFnEvidenceVector,
         frames: []const check.ConstStore.ConstFnEvidenceFrame,
         head: ?u32,
         digest: Ast.EvidenceDigest,
     ) StoredConstFnEvidence {
-        if (@import("builtin").mode == .debug and !std.meta.eql(digest, Ast.fnEvidenceDigest(nodes, frames, head))) {
+        if (@import("builtin").mode == .debug and !std.meta.eql(digest, Ast.fnEvidenceDigest(entries, frames, head))) {
             Common.invariant("function template evidence digest did not match its recorded topology");
         }
-        return .{ .nodes = nodes, .frames = frames, .head = head, .digest = digest };
+        return .{ .entries = entries, .frames = frames, .head = head, .digest = digest };
     }
 };
 
@@ -4146,13 +4097,24 @@ const StoredEvidenceSource = struct {
 const StoredEvidenceStorage = struct {
     nodes_ptr: usize,
     nodes_len: usize,
+    targets_ptr: usize,
+    structurals_ptr: usize,
     frames_ptr: usize,
     frames_len: usize,
 };
 
 const DraftEvidenceSpans = struct {
-    nodes: DraftSpan(check.ConstStore.ConstFnEvidence),
+    entries: DraftConstEvidence,
     frames: DraftSpan(check.ConstStore.ConstFnEvidenceFrame),
+};
+
+/// Where a draft function's stored evidence vector sits in its draft store's
+/// three evidence columns; payload indexes are relative to its own
+/// `targets` and `structurals` spans.
+const DraftConstEvidence = struct {
+    nodes: DraftSpan(check.ConstStore.ConstFnEvidence) = DraftSpan(check.ConstStore.ConstFnEvidence).empty(),
+    targets: DraftSpan(check.ConstStore.ConstFnTargetEvidence) = DraftSpan(check.ConstStore.ConstFnTargetEvidence).empty(),
+    structurals: DraftSpan(check.ConstStore.ConstFnStructuralEvidence) = DraftSpan(check.ConstStore.ConstFnStructuralEvidence).empty(),
 };
 
 const StoredEvidenceCacheEntry = struct {
@@ -4161,12 +4123,12 @@ const StoredEvidenceCacheEntry = struct {
 };
 
 fn specializationEvidenceView(evidence: StoredConstFnEvidence) specialize.EvidenceView {
-    return .{ .nodes = evidence.nodes, .frames = evidence.frames, .head = evidence.head, .digest = evidence.digest };
+    return .{ .entries = evidence.entries, .frames = evidence.frames, .head = evidence.head, .digest = evidence.digest };
 }
 
 fn storedConstFnEvidenceEql(left: StoredConstFnEvidence, right: StoredConstFnEvidence) bool {
     if (!std.meta.eql(left.digest, right.digest)) return false;
-    return Ast.fnEvidenceEql(left.nodes, left.frames, left.head, right.nodes, right.frames, right.head);
+    return Ast.fnEvidenceEql(left.entries, left.frames, left.head, right.entries, right.frames, right.head);
 }
 
 /// `Builder.site_evidence_memo`'s key: the site's checked evidence and
@@ -4235,8 +4197,8 @@ fn programViewFnEvidence(program: Ast.ProgramView, template: Ast.FnTemplate) Sto
 /// lists.
 fn programFnEvidenceSpan(template: Ast.FnTemplate) specialize.ProgramEvidenceSpan {
     return .{
-        .nodes_start = template.const_evidence.start,
-        .nodes_len = template.const_evidence.len,
+        .nodes_start = template.const_evidence.nodes.start,
+        .nodes_len = template.const_evidence.nodes.len,
         .frames_start = template.const_evidence_frames.start,
         .frames_len = template.const_evidence_frames.len,
         .head = template.const_evidence_frame_head,
@@ -4268,11 +4230,6 @@ const LoweredTemplate = struct {
     evidence: []const SpecEvidence = &.{},
     /// Exact durable topology for the complete lexical evidence chain.
     topology: ?StoredConstFnEvidence = null,
-    /// The request relation's answer recorded by the first requesting edge. A
-    /// specialization is either a widening adapter or a definition at its own
-    /// requested row, never both, so a later edge that reuses this identity
-    /// with the other answer is a disagreement about the callee's tag layout.
-    widened_result_row: bool = false,
 };
 
 const TemplateReservation = struct {
@@ -4325,9 +4282,6 @@ pub const DemandCounters = struct {
 pub const parallel_spec_jobs_per_lane: usize = 64;
 const SharedSummaries = WorkerInputs.AppendIndex(InterfaceReplayAddress, InterfaceSummaryEntry);
 
-const SpecJobRunId = enum(u32) { _ };
-var next_spec_job_run_id = std.atomic.Value(u32).init(0);
-
 /// One reserved specialization whose body has not lowered yet, in the
 /// deterministic scheduler FIFO. Every field is durable for the builder's
 /// lifetime: evidence lives in the evidence arena, the requested type is
@@ -4351,11 +4305,6 @@ const PendingSpecJob = struct {
     subst: ?SealedSubstitution,
     signature_relation: Ast.SignatureRelation,
     codec_contract: ?SealedCodecContractContext,
-    /// The request relation's own answer for this specialization: whether it
-    /// declined to unify the template's closed checked result row with the
-    /// requested one. Completion mints a widening adapter exactly when this is
-    /// set (design.md "Result-Row Widening Adapter").
-    widened_result_row: bool,
     /// Why the body is lowered. The coordinator restates it when it hands the
     /// job to a lane, since an upgrade may arrive while the job is queued.
     demand: Demand = .evaluation,
@@ -4567,10 +4516,11 @@ const SpecJobWorkspace = struct {
     }
 };
 
-/// Persistent state for one specialization execution lane. Executor-backed
-/// lanes retain it for the worker-pool lifetime; the serial path owns the same
-/// shape directly. Barriers end task-result ownership, while the workspace
-/// retains cumulative relocation state for later tasks.
+/// Persistent state for one specialization execution lane during one Monotype
+/// run. The run's `Builder` owns it for executor lanes (`spec_job_lanes`) and
+/// for the serial path alike, and frees it when the run ends. Barriers end
+/// task-result ownership, while the workspace retains cumulative relocation
+/// state for later tasks of the same run.
 pub const SpecJobWorkerState = struct {
     worker_id: SpecJobWorkerId,
     allocator: Allocator,
@@ -4674,7 +4624,7 @@ const SpecJobReleases = struct {
 /// The coordinator's read access to one worker's type/name domain: views of
 /// the latest absorbed epoch's stores, read in place, and the cumulative
 /// relocation from that domain into the program. Executor lanes own their
-/// domain for the pool lifetime; the serial path owns an equivalent directly.
+/// domain for one Monotype run; the serial path owns an equivalent directly.
 /// Only the coordinator absorbs epochs, in dispatch order, before any
 /// contained id is read.
 const SpecJobCommitDomain = struct {
@@ -4720,23 +4670,20 @@ const SpecJobCommitDomain = struct {
     }
 };
 
-/// Monotype state retained by one executor lane. Keeping the source
+/// Monotype state of one executor lane for one run. Keeping the source
 /// workspace and the coordinator's view of it together makes their cumulative
-/// relocation domains follow the worker rather than a particular coordinator
-/// `Builder`. A new Monotype run reinitializes the same retained entry because
-/// its stores belong to a different destination program.
+/// relocation domains follow the worker within the run. Nothing in it is
+/// meaningful to another run, whose stores belong to a different destination
+/// program, so the run's `Builder` frees it when the run ends.
 const SpecJobLaneState = struct {
-    run_id: SpecJobRunId,
     worker: SpecJobWorkerState,
     commit_domain: SpecJobCommitDomain,
 
     fn init(
         allocator: Allocator,
         worker_id: SpecJobWorkerId,
-        run_id: SpecJobRunId,
     ) SpecJobLaneState {
         return .{
-            .run_id = run_id,
             .worker = SpecJobWorkerState.init(allocator, worker_id),
             .commit_domain = SpecJobCommitDomain.init(allocator),
         };
@@ -4747,11 +4694,6 @@ const SpecJobLaneState = struct {
         self.worker.deinit();
         self.* = undefined;
     }
-};
-
-/// Address identity used to reserve this module's entry in an executor lane.
-const SpecJobLaneStateKey = struct {
-    var value: u8 = undefined;
 };
 
 /// One immutable graph-free result handed from ordinary body lowering to
@@ -4808,7 +4750,9 @@ const CompletedProcedureRootShard = struct {
 
 /// Captured immutable input for a root batch or one streaming specialization.
 const SpecJobWorkerInputs = struct {
-    run_id: SpecJobRunId,
+    /// The run's lane states, indexed by executor worker id. A task touches
+    /// only its own lane's slot, and lanes with one id never overlap.
+    lanes: []?*SpecJobLaneState,
     modules: Common.CheckedModules,
     module_views: []const ModuleViewData,
     source_file_ids: *const SourceFileIds,
@@ -5173,7 +5117,6 @@ const Builder = struct {
     /// `appModuleIdentity` of this lowering's modules.
     app_module_identity: ?[32]u8,
     allocator: Allocator,
-    spec_job_run_id: SpecJobRunId,
     modules: Common.CheckedModules,
     root_view: checked.ImportedModuleView,
     /// Checked module key -> position in the lowering input; built lazily on
@@ -5235,6 +5178,28 @@ const Builder = struct {
     static_data_literals: bool,
     comptime_value_reads: bool,
     literal_roots: bool,
+    /// See `Options.literal_values`. Coordinator-only.
+    literal_values: ?Common.LiteralValueLookup = null,
+    verify_literal_values: bool = false,
+    /// Each program literal root's value identity and reuse, by id, for the
+    /// literal roots `settleLiteralRoots` has seen.
+    literal_reuse: std.ArrayList(LiteralReuseRow) = .empty,
+    /// The program's literal value context, once computed; see
+    /// `literalProgramContext`.
+    literal_program_context: ??[32]u8 = null,
+    /// See `literalTopModules`; outer null until computed.
+    literal_top_modules: ??std.AutoHashMapUnmanaged([32]u8, [32]u8) = null,
+    /// Top-level statements of each top module whose types a literal value
+    /// identity named, by module key.
+    literal_top_statements: std.AutoHashMapUnmanaged([32]u8, collections.DenseMap(can.CIR.Statement.Idx, void)) = .empty,
+    /// Compile-time roots by module and site, for the modules whose roots a
+    /// stored literal value's reads were looked up in.
+    literal_read_sites: std.AutoHashMapUnmanaged(LiteralReadSite, u32) = .empty,
+    literal_read_site_modules: std.AutoHashMapUnmanaged([32]u8, void) = .empty,
+    /// The view each restored literal value is read through: the literal
+    /// value store's const store, under a key naming it apart from every
+    /// module.
+    literal_store_view: ?*ModuleViewData = null,
     replay_interface_summaries: base.TestSwitch(true),
     declared_comptime_root_functions: DeclaredComptimeRootFunctions,
     borrowed_comptime_root_functions: ?*const DeclaredComptimeRootFunctions = null,
@@ -5304,6 +5269,9 @@ const Builder = struct {
     /// Serial execution uses the same worker-tagged ownership protocol as
     /// executor callbacks.
     spec_job_worker: ?SpecJobWorkerState = null,
+    /// Executor lanes' state for this run, indexed by worker id and created
+    /// on each lane's first task. Freed with the builder.
+    spec_job_lanes: []?*SpecJobLaneState = &.{},
     /// The coordinator's view of the serial worker's absorbed epochs. It is
     /// the source for cumulative workspace-to-program relocation.
     spec_job_commit_domain: ?SpecJobCommitDomain = null,
@@ -5511,15 +5479,10 @@ const Builder = struct {
     fn init(allocator: Allocator, modules: Common.CheckedModules, program: *Ast.Program, options: Options) Builder {
         const counters = options.specialization_counters orelse
             if (options.diagnostics) |diagnostics| &diagnostics.specialization else null;
-        const raw_spec_job_run_id = next_spec_job_run_id.fetchAdd(1, .monotonic);
-        if (raw_spec_job_run_id == std.math.maxInt(u32)) {
-            Common.compilerBug("Monotype specialization run identity overflow");
-        }
         var spec_store = specialize.SpecBuilder.init(allocator, &program.names, &program.types, &program.specs);
         spec_store.counters = counters;
         return .{
             .allocator = allocator,
-            .spec_job_run_id = @fromBackingInt(@intCast(raw_spec_job_run_id)),
             .modules = modules,
             .root_view = checked.importedView(modules.root.module),
             .app_module_identity = appModuleIdentity(modules),
@@ -5539,6 +5502,8 @@ const Builder = struct {
             .static_data_literals = options.static_data_literals,
             .comptime_value_reads = options.comptime_value_reads,
             .literal_roots = options.literal_roots,
+            .literal_values = if (options.literal_roots) options.literal_values else null,
+            .verify_literal_values = options.verify_literal_values,
             .replay_interface_summaries = options.replay_interface_summaries,
             .declared_comptime_root_functions = DeclaredComptimeRootFunctions.init(allocator),
             .demand_driven_comptime_roots = options.demand_driven_comptime_roots,
@@ -5569,6 +5534,7 @@ const Builder = struct {
 
     const SourceFileSeed = struct {
         key: checked.ModuleId,
+        module_identity: [32]u8,
         name: []const u8,
         qualified_name: []const u8,
 
@@ -5615,6 +5581,7 @@ const Builder = struct {
         gop.value_ptr.* = @intCast(seeds.items.len);
         seeds.appendAssumeCapacity(.{
             .key = view.key,
+            .module_identity = view.module_identity.stable_hash,
             .name = view.module_env.module_name,
             .qualified_name = view.module_env.qualifiedModuleName(),
         });
@@ -5643,7 +5610,7 @@ const Builder = struct {
             const id = try self.program.addSourceFile(.{
                 .name = seed.name,
                 .qualified_name = seed.qualified_name,
-                .module_identity = seed.key.module_identity_hash,
+                .module_identity = seed.module_identity,
             });
             if (id != index) Common.invariant("Monotype program source file id did not match its sorted position");
             self.source_file_ids.getPtr(seed.key.bytes).?.* = id;
@@ -5712,53 +5679,52 @@ const Builder = struct {
         return builder;
     }
 
-    fn deinitSpecJobLaneState(opaque_state: *anyopaque) void {
-        const state: *SpecJobLaneState = @ptrCast(@alignCast(opaque_state));
-        const allocator = state.worker.allocator;
-        state.deinit();
-        allocator.destroy(state);
+    /// This run's lane table, sized to the executor's lanes on first use.
+    fn specJobLanes(self: *Builder) Allocator.Error![]?*SpecJobLaneState {
+        if (self.spec_job_lanes.len == 0) {
+            const executor = self.post_check_executor orelse
+                Common.compilerBug("parallel Monotype specialization ran without an executor");
+            const lanes = try self.allocator.alloc(?*SpecJobLaneState, executor.worker_count);
+            @memset(lanes, null);
+            self.spec_job_lanes = lanes;
+        }
+        return self.spec_job_lanes;
     }
 
+    fn deinitSpecJobLanes(allocator: Allocator, lanes: []?*SpecJobLaneState) void {
+        for (lanes) |maybe_state| {
+            const state = maybe_state orelse continue;
+            // Each lane allocated its state with its own worker allocator.
+            const state_allocator = state.worker.allocator;
+            state.deinit();
+            state_allocator.destroy(state);
+        }
+        if (lanes.len != 0) allocator.free(lanes);
+    }
+
+    /// The calling lane's state for this run, created on the lane's first task.
     fn ensureSpecJobLaneState(
         executor_worker: base.post_check_task_executor.Worker,
         inputs: *const SpecJobWorkerInputs,
     ) Allocator.Error!*SpecJobLaneState {
-        const key: *const anyopaque = @ptrCast(&SpecJobLaneStateKey.value);
-        if (executor_worker.lane_state.get(key)) |opaque_state| {
-            const state: *SpecJobLaneState = @ptrCast(@alignCast(opaque_state));
-            if (@backingInt(state.worker.worker_id) != executor_worker.id) {
-                Common.compilerBug("Monotype lane state moved between executor workers");
-            }
-            if (state.run_id != inputs.run_id) {
-                state.deinit();
-                state.* = SpecJobLaneState.init(
-                    executor_worker.allocator,
-                    @fromBackingInt(@intCast(executor_worker.id)),
-                    inputs.run_id,
-                );
-            }
+        std.debug.assert(executor_worker.id < inputs.lanes.len);
+        const slot = &inputs.lanes[executor_worker.id];
+        if (slot.*) |state| {
+            std.debug.assert(@backingInt(state.worker.worker_id) == executor_worker.id);
             return state;
-        }
-
-        if (executor_worker.id >= std.math.maxInt(u32)) {
-            Common.compilerBug("post-check executor returned an invalid specialization worker id");
         }
         const state = try executor_worker.allocator.create(SpecJobLaneState);
         state.* = SpecJobLaneState.init(
             executor_worker.allocator,
             @fromBackingInt(@intCast(executor_worker.id)),
-            inputs.run_id,
         );
-        errdefer {
-            state.deinit();
-            executor_worker.allocator.destroy(state);
-        }
-        try executor_worker.lane_state.put(key, state, deinitSpecJobLaneState);
+        slot.* = state;
         return state;
     }
 
     fn deinit(self: *Builder) void {
         self.allocator.free(self.program_module_buffer);
+        deinitSpecJobLanes(self.allocator, self.spec_job_lanes);
         for (self.lower_frame_pool.items) |*frames| frames.deinit(self.allocator);
         self.lower_frame_pool.deinit(self.allocator);
         for (self.decl_scope_pool.items) |scope| {
@@ -5791,6 +5757,14 @@ const Builder = struct {
         self.cached_fn_reads.deinit(self.allocator);
         self.spec_key_aliases.deinit(self.allocator);
         self.comptime_demand.deinit(self.allocator);
+        self.literal_reuse.deinit(self.allocator);
+        if (self.literal_top_modules) |*known| if (known.*) |*map| map.deinit(self.allocator);
+        var top_statements = self.literal_top_statements.valueIterator();
+        while (top_statements.next()) |statements| statements.deinit();
+        self.literal_top_statements.deinit(self.allocator);
+        self.literal_read_sites.deinit(self.allocator);
+        self.literal_read_site_modules.deinit(self.allocator);
+        if (self.literal_store_view) |view| self.allocator.destroy(view);
         self.module_index.deinit();
         self.spec_job_task_buffers.deinit(self.allocator);
         self.unshared_summary_domains.deinit(self.allocator);
@@ -6086,11 +6060,11 @@ const Builder = struct {
 
         try self.appendHostedCatalogFromView(&entries, self.rootModuleView());
         for (self.modules.imports, 0..) |imported, index| {
-            if (self.importModuleAlreadyScanned(imported.key, index)) continue;
+            if (self.importModuleAlreadyScanned(imported.key.digest(), index)) continue;
             try self.appendHostedCatalogFromView(&entries, self.importModuleView(index));
         }
         for (self.modules.root.relation_modules, 0..) |relation, index| {
-            if (self.relationModuleAlreadyScanned(relation.key, index)) continue;
+            if (self.relationModuleAlreadyScanned(relation.key.digest(), index)) continue;
             try self.appendHostedCatalogFromView(&entries, self.relationModuleView(index));
         }
 
@@ -6330,35 +6304,6 @@ const Builder = struct {
         ));
     }
 
-    fn hostedTryAdapterCapability(
-        self: *Builder,
-        view: ModuleView,
-        checked_capability: ?checked.HostedTryAdapterCapability,
-    ) Allocator.Error!?HostedTryAdapterCapability {
-        const capability = checked_capability orelse return null;
-        // `try_error_type_arg_index` names the cell the widening relation opens
-        // and the cell the adapter re-tags; `err_type_arg_index` is the same
-        // index carried from the checker. Cross-check them once, here, so the
-        // two cannot drift into opening one cell and re-tagging another.
-        if (capability.err_type_arg_index != try_error_type_arg_index) {
-            Common.compilerBug("checker-recorded Try error type-argument index disagreed with the widening relation's");
-        }
-        return .{
-            .def = try typeDef(
-                self.activeNameStore(),
-                self.app_module_identity,
-                view,
-                capability.nominal.module,
-                capability.type_name,
-                capability.nominal.source_decl,
-            ),
-            .ok_tag = try tagName(self.activeNameStore(), view, capability.ok_tag),
-            .err_tag = try tagName(self.activeNameStore(), view, capability.err_tag),
-            .ok_type_arg_index = capability.ok_type_arg_index,
-            .err_type_arg_index = capability.err_type_arg_index,
-        };
-    }
-
     /// Whether `identity` is the deep content identity of the root app
     /// module, whose declarations identity digests name by declaration.
     fn isAppModuleIdentity(self: *const Builder, identity: []const u8) bool {
@@ -6421,6 +6366,7 @@ const Builder = struct {
     /// it from every consumer.
     fn orderComptimeRoots(self: *Builder) Allocator.Error!void {
         if (!self.comptime_value_reads) return;
+        try self.settleLiteralRoots();
         const state = &self.comptime_demand;
         const view = self.program.view();
         try state.index(self.allocator, self, view);
@@ -6458,11 +6404,437 @@ const Builder = struct {
             }
             if (self.parked_root_jobs.count() != 0) Common.invariant("parked compile-time root body belonged to no declared root");
         }
+        const literal_view = self.program.view();
+        const literals = try self.allocator.alloc(ComptimeDemand.LiteralRootDemand, literal_view.literal_roots.len);
+        output.literals = literals;
+        for (literal_view.literal_roots, literals, 0..) |root, *literal, index| {
+            const start = reads.items.len;
+            for (try state.rootReads(self.allocator, literal_view, ComptimeDemandState.defItem(root.def))) |read| try reads.append(self.allocator, state.roots.items[read]);
+            const row: LiteralReuseRow = if (index < self.literal_reuse.items.len) self.literal_reuse.items[index] else .{};
+            literal.* = .{
+                .reads = .{ .start = @intCast(start), .len = @intCast(reads.items.len - start) },
+                .identity = row.identity,
+                .reuse = row.reuse,
+            };
+        }
         output.root_reads = try root_reads.toOwnedSlice(self.allocator);
         output.reads = try reads.toOwnedSlice(self.allocator);
         output.stored = try state.storedRoots(self.allocator);
         output.declared_root_count = self.declared_roots.items.len;
         if (self.comptime_demand_out) |out| out.* = output else output.deinit();
+    }
+
+    /// Give every literal root committed since the last call its value
+    /// identity, and restore the value of each one the literal value store
+    /// holds whose reads still have the value identities they had, so the
+    /// program runs no conversion for it (design.md "Compile-Time Value
+    /// Reuse Across Edits"). The restored root's definition becomes the
+    /// value's restore expression, under an identity naming the stored value,
+    /// so every read of the root and its representation evidence call it.
+    /// With `verify_literal_values`, the conversion stays the definition of a
+    /// literal root of its own that evaluation compares with the stored value.
+    fn settleLiteralRoots(self: *Builder) Allocator.Error!void {
+        const store = self.literal_values orelse return;
+        var index = self.literal_reuse.items.len;
+        while (index < self.program.literal_roots.len()) : (index += 1) {
+            if (index < self.literal_reuse.items.len) continue;
+            const id: Common.LiteralRootId = @fromBackingInt(@intCast(index));
+            const identity = try self.literalValueIdentity(id);
+            try self.literal_reuse.append(self.allocator, .{ .identity = identity });
+            const known = identity orelse continue;
+            const hit = store.lookup(known) orelse continue;
+            if (!try self.literalValueReadsApply(hit.reads)) continue;
+            try self.restoreLiteralRoot(id, known, hit);
+        }
+    }
+
+    fn restoreLiteralRoot(self: *Builder, id: Common.LiteralRootId, identity: [32]u8, hit: Common.LiteralValueHit) Allocator.Error!void {
+        const root = self.program.literal_roots.get(@backingInt(id));
+        const conversion = self.program.getDef(root.def);
+        if (self.verify_literal_values) {
+            var kept = conversion;
+            kept.symbol = self.symbols.fresh();
+            const kept_def = try self.program.addDef(kept);
+            const verifier = try self.program.addLiteralRoot(.{ .def = kept_def, .module = root.module, .site = root.site });
+            if (@backingInt(verifier) != self.literal_reuse.items.len) Common.invariant("literal root verifier was not the next literal root");
+            try self.literal_reuse.append(self.allocator, .{ .identity = identity, .reuse = .{ .verifies = id } });
+        }
+        const destination = ProgramTypeDestination.begin(self);
+        defer destination.end();
+        const saved_graph = self.active_graph;
+        const saved_draft = self.active_body_draft;
+        self.active_graph = null;
+        self.active_body_draft = null;
+        defer {
+            self.active_graph = saved_graph;
+            self.active_body_draft = saved_draft;
+        }
+        const owner = self.moduleForId(root.module);
+        const body = try runConstRestore(self, try self.literalStoreView(hit.store), owner, hit.root, conversion.ret, null);
+        for (hit.reads) |read| {
+            const current = self.literalValueReadRoot(read) orelse Common.invariant("an applied literal value read a root it no longer names");
+            try self.recordRestoredRootRead(body, current.module, current.root);
+        }
+        var restored = conversion;
+        restored.body = .{ .roc = body };
+        restored.root_identity = literalRestoreIdentity(identity);
+        self.program.setDef(root.def, restored);
+        self.literal_reuse.items[@backingInt(id)].reuse = .restored;
+    }
+
+    /// The view a stored literal value restores through: the literal value
+    /// store's const store under a key derived from it, so its blobs and
+    /// restore cache entries are named apart from every module's constants.
+    /// Restoring a value holding no function reads nothing else of a view.
+    fn literalStoreView(self: *Builder, store: *const check.ConstStore.ConstStore) Allocator.Error!ModuleView {
+        if (self.literal_store_view) |view| {
+            if (view.const_store != store) Common.invariant("one lowering restored literal values from two stores");
+            return view;
+        }
+        const view = try self.allocator.create(ModuleViewData);
+        view.* = self.rootModuleView().*;
+        view.const_store = store;
+        var hasher = TypeDigestHasher.init();
+        hasher.update("roc.monotype.literal-value-store.v1");
+        hasher.update(&view.key.bytes);
+        view.key = .{ .bytes = hasher.finalResult() };
+        view.code_generation_key = null;
+        self.literal_store_view = view;
+        return view;
+    }
+
+    /// The identity of a definition restoring the stored value of a literal
+    /// root whose value identity is `identity`.
+    fn literalRestoreIdentity(identity: [32]u8) names.TypeDigest {
+        var hasher = TypeDigestHasher.init();
+        hasher.update("roc.monotype.literal-value-restore.v1");
+        hasher.update(&identity);
+        return .{ .bytes = hasher.finalResult() };
+    }
+
+    /// Whether every root a stored literal value read is still named by its
+    /// site and still has the value identity it had.
+    fn literalValueReadsApply(self: *Builder, reads: []const Common.LiteralValueRead) Allocator.Error!bool {
+        for (reads) |read| {
+            const view = self.literalValueReadModule(read) orelse return false;
+            try self.indexLiteralReadSites(view);
+            if (self.literalValueReadRoot(read) == null) return false;
+        }
+        return true;
+    }
+
+    fn literalValueReadModule(self: *Builder, read: Common.LiteralValueRead) ?ModuleView {
+        if (!read.in_top_module) return self.moduleForKeyBytes(read.module);
+        const top = self.literal_top_modules.?.?;
+        var it = top.iterator();
+        while (it.next()) |entry| {
+            if (std.mem.eql(u8, entry.value_ptr, &read.module)) return self.moduleForKeyBytes(entry.key_ptr.*);
+        }
+        return null;
+    }
+
+    /// The current root a stored literal value's read names, once its
+    /// module's sites are indexed.
+    fn literalValueReadRoot(self: *Builder, read: Common.LiteralValueRead) ?EntryRoot {
+        const view = self.literalValueReadModule(read) orelse return null;
+        const raw = self.literal_read_sites.get(.{ .module = view.key.bytes, .site = read.site }) orelse return null;
+        const identity = view.compile_time_root_identities.rows[raw];
+        if (!std.mem.eql(u8, &identity.value, &read.value)) return null;
+        return .{ .module = view.key, .root = @fromBackingInt(raw) };
+    }
+
+    fn indexLiteralReadSites(self: *Builder, view: ModuleView) Allocator.Error!void {
+        const entry = try self.literal_read_site_modules.getOrPut(self.allocator, view.key.bytes);
+        if (entry.found_existing) return;
+        for (view.compile_time_root_identities.rows, 0..) |identity, raw| {
+            const site = try self.literal_read_sites.getOrPut(self.allocator, .{ .module = view.key.bytes, .site = identity.site });
+            if (!site.found_existing) site.value_ptr.* = @intCast(raw);
+        }
+    }
+
+    /// The modules of the lowering no other module of it imports, by key,
+    /// each with its value context. Their keys change with every edit of
+    /// their source, so literal value identities name them by value context;
+    /// every other module's key is named by an importer's value context too,
+    /// so its key names it. Null when a top module has no value context.
+    fn literalTopModules(self: *Builder) Allocator.Error!?*const std.AutoHashMapUnmanaged([32]u8, [32]u8) {
+        if (self.literal_top_modules) |*known| return if (known.*) |*map| map else null;
+        var imported = std.AutoHashMapUnmanaged([32]u8, void).empty;
+        defer imported.deinit(self.allocator);
+        for (self.root_view.direct_import_module_keys) |key| try imported.put(self.allocator, key.bytes, {});
+        for (self.modules.imports) |view| for (view.direct_import_module_keys) |key| try imported.put(self.allocator, key.bytes, {});
+        for (self.modules.root.relation_modules) |view| for (view.direct_import_module_keys) |key| try imported.put(self.allocator, key.bytes, {});
+        var top = std.AutoHashMapUnmanaged([32]u8, [32]u8).empty;
+        errdefer top.deinit(self.allocator);
+        for (self.moduleViews()) |*view| {
+            if (imported.contains(view.key.bytes)) continue;
+            const context = view.compile_time_root_identities.valueContext() orelse {
+                top.deinit(self.allocator);
+                self.literal_top_modules = @as(?std.AutoHashMapUnmanaged([32]u8, [32]u8), null);
+                return null;
+            };
+            try top.put(self.allocator, view.key.bytes, context);
+        }
+        self.literal_top_modules = top;
+        return &self.literal_top_modules.?.?;
+    }
+
+    /// Everything a per-program literal root's value can depend on beyond
+    /// the literal and its type: each module of the lowering, a top module
+    /// (`literalTopModules`) by its value context and every other module by
+    /// its checked key, and the identity of every definition a top module
+    /// exports for a platform requirement that code reachable from a
+    /// module's methods, or from an imported module's exports, looks up.
+    /// Null when a top module has no value context.
+    fn literalProgramContext(self: *Builder) Allocator.Error!?[32]u8 {
+        if (self.literal_program_context) |known| return known;
+        const top = (try self.literalTopModules()) orelse {
+            self.literal_program_context = @as(?[32]u8, null);
+            return null;
+        };
+        var names_list = std.ArrayList([33]u8).empty;
+        defer names_list.deinit(self.allocator);
+        for (self.program.view().lowering_modules) |module| {
+            var name: [33]u8 = undefined;
+            if (top.get(module.bytes)) |context| {
+                name[0] = 1;
+                name[1..].* = context;
+            } else {
+                name[0] = 0;
+                name[1..].* = module.bytes;
+            }
+            try names_list.append(self.allocator, name);
+        }
+        std.mem.sort([33]u8, names_list.items, {}, struct {
+            fn lessThan(_: void, a: [33]u8, b: [33]u8) bool {
+                return std.mem.order(u8, &a, &b) == .lt;
+            }
+        }.lessThan);
+        // Code reachable from a module's methods, or from an imported
+        // module's exports, can look up platform requirements, which run
+        // definitions a top module exports and no value context covers:
+        // those definitions' identities.
+        var required = std.ArrayList([64]u8).empty;
+        defer required.deinit(self.allocator);
+        for (self.moduleViews()) |*requirer| {
+            const identities = requirer.compile_time_root_identities;
+            const export_requires = if (top.contains(requirer.key.bytes)) &[_][32]u8{} else identities.export_requires;
+            for ([_][]const [32]u8{ identities.method_requires, export_requires }) |requirements| for (requirements) |name| {
+                var providers = top.keyIterator();
+                while (providers.next()) |provider_key| {
+                    const provider = self.moduleForKeyBytes(provider_key.*) orelse Common.invariant("a top module of the lowering had no view");
+                    for (provider.compile_time_root_identities.exports) |exported| {
+                        if (!std.mem.eql(u8, &exported.name, &name)) continue;
+                        var pair: [64]u8 = undefined;
+                        pair[0..32].* = exported.name;
+                        pair[32..].* = exported.value;
+                        try required.append(self.allocator, pair);
+                    }
+                }
+            };
+        }
+        std.mem.sort([64]u8, required.items, {}, struct {
+            fn lessThan(_: void, a: [64]u8, b: [64]u8) bool {
+                return std.mem.order(u8, &a, &b) == .lt;
+            }
+        }.lessThan);
+        var hasher = TypeDigestHasher.init();
+        hasher.update("roc.literal-value.program-context.v1");
+        hashU32(&hasher, @intCast(names_list.items.len));
+        for (names_list.items) |name| hasher.update(&name);
+        hashU32(&hasher, @intCast(required.items.len));
+        for (required.items) |pair| hasher.update(&pair);
+        const digest = hasher.finalResult();
+        self.literal_program_context = @as(?[32]u8, digest);
+        return digest;
+    }
+
+    /// The value identity of a literal root: the program context, the
+    /// literal's module (a top module by its value context, any other by key
+    /// and expression), its kind and source bytes, and its type. Null when
+    /// its type holds a function or names something no edit-stable identity
+    /// covers.
+    fn literalValueIdentity(self: *Builder, id: Common.LiteralRootId) Allocator.Error!?[32]u8 {
+        const context = (try self.literalProgramContext()) orelse return null;
+        const top = (try self.literalTopModules()).?;
+        const root = self.program.literal_roots.get(@backingInt(id));
+        const def = self.program.getDef(root.def);
+        const type_digest = (try self.literalTypeDigest(def.ret)) orelse return null;
+        const view = self.moduleForId(root.module);
+        const region = view.bodies.expr(@fromBackingInt(root.site.checked_expr)).source_region;
+        const text = view.module_env.getSourceAll()[region.start.offset..region.end.offset];
+        var hasher = TypeDigestHasher.init();
+        hasher.update("roc.literal-value.identity.v1");
+        hasher.update(&context);
+        if (top.get(root.module.bytes)) |module_context| {
+            hasher.update("top-module");
+            hasher.update(&module_context);
+        } else {
+            hasher.update("module");
+            hasher.update(&root.module.bytes);
+            hashU32(&hasher, root.site.checked_expr);
+        }
+        hasher.update(@tagName(root.site.kind));
+        hashU32(&hasher, @intCast(text.len));
+        hasher.update(text);
+        hasher.update(&type_digest);
+        return hasher.finalResult();
+    }
+
+    /// A digest of a literal root's type that every compilation of the
+    /// program with the same program context computes alike: the root
+    /// module's own types named by their top-level declaration, every other
+    /// type by its declaring module and declaration. Null for a type holding
+    /// a function or an erased value, or naming a root-module type or field
+    /// default that is not a top-level declaration.
+    fn literalTypeDigest(self: *Builder, root_ty: Type.TypeId) Allocator.Error!?[32]u8 {
+        const types = self.program.types.view();
+        const program_names = &self.program.names;
+        const top = (try self.literalTopModules()).?;
+        var visited = collections.DenseMap(Type.TypeId, u32).init(self.allocator);
+        defer visited.deinit();
+        var stack = std.ArrayList(Type.TypeId).empty;
+        defer stack.deinit(self.allocator);
+        var children = std.ArrayList(Type.TypeId).empty;
+        defer children.deinit(self.allocator);
+        var hasher = TypeDigestHasher.init();
+        hasher.update("roc.literal-value.type.v1");
+        try stack.append(self.allocator, root_ty);
+        var next_position: u32 = 0;
+        while (stack.pop()) |ty| {
+            if (visited.get(ty)) |position| {
+                hasher.update("seen");
+                hashU32(&hasher, position);
+                continue;
+            }
+            try visited.put(ty, next_position);
+            next_position += 1;
+            children.clearRetainingCapacity();
+            switch (types.get(ty)) {
+                .func, .erased => return null,
+                .zst => hasher.update("zst"),
+                .primitive => |primitive| {
+                    hasher.update("primitive");
+                    hasher.update(@tagName(primitive));
+                },
+                .list => |elem| {
+                    hasher.update("list");
+                    try children.append(self.allocator, elem);
+                },
+                .box => |payload| {
+                    hasher.update("box");
+                    try children.append(self.allocator, payload);
+                },
+                .tuple => |items| {
+                    hasher.update("tuple");
+                    try children.appendSlice(self.allocator, types.span(items));
+                },
+                .record => |fields| {
+                    hasher.update("record");
+                    for (types.fieldSpan(fields)) |field| {
+                        if (field.kind_state != .resolved) return null;
+                        const label = program_names.recordFieldLabelText(field.name);
+                        hashU32(&hasher, @intCast(label.len));
+                        hasher.update(label);
+                        if (field.default) |default| {
+                            const module = program_names.moduleIdentityBytes(default.module);
+                            const declaring = self.moduleForIdentityHash(module) orelse return null;
+                            if (top.contains(declaring.key.bytes)) return null;
+                            hasher.update("default");
+                            hasher.update(module);
+                            hashU32(&hasher, default.expr_node);
+                        }
+                        try children.append(self.allocator, field.ty);
+                        if (field.value_ty) |value_ty| {
+                            hasher.update("value-type");
+                            try children.append(self.allocator, value_ty);
+                        }
+                    }
+                },
+                .tag_union => |tags| {
+                    hasher.update("tag-union");
+                    for (types.tagSpan(tags)) |tag| {
+                        for ([_][]const u8{ program_names.tagLabelText(tag.name), program_names.tagLabelText(tag.checked_name) }) |label| {
+                            hashU32(&hasher, @intCast(label.len));
+                            hasher.update(label);
+                        }
+                        hashU32(&hasher, @intCast(types.span(tag.payloads).len));
+                        try children.appendSlice(self.allocator, types.span(tag.payloads));
+                    }
+                },
+                .named => |named| {
+                    hasher.update("named");
+                    const module = program_names.moduleIdentityBytes(named.def.module);
+                    const type_name = program_names.typeNameText(named.def.type_name);
+                    if (top.get(named.named_type.module.bytes)) |module_context| {
+                        const statement = named.def.source_decl orelse return null;
+                        const declaring = self.moduleForKeyBytes(named.named_type.module.bytes) orelse return null;
+                        const text = (try self.literalTopStatementText(declaring, statement)) orelse return null;
+                        hasher.update("top-module");
+                        hasher.update(&module_context);
+                        hashU32(&hasher, @intCast(text.len));
+                        hasher.update(text);
+                    } else {
+                        hasher.update(&named.named_type.module.bytes);
+                        hasher.update(module);
+                        hashU32(&hasher, named.def.source_decl orelse std.math.maxInt(u32));
+                    }
+                    hashU32(&hasher, @intCast(type_name.len));
+                    hasher.update(type_name);
+                    if (named.def.generated) |generated| {
+                        hasher.update("generated");
+                        hasher.update(&generated.bytes);
+                    }
+                    hasher.update(@tagName(named.def.iterator_representation));
+                    hasher.update(@tagName(named.def.iterator_kind));
+                    hashU32(&hasher, named.def.iterator_depth);
+                    hasher.update(@tagName(named.kind));
+                    if (named.builtin_owner) |owner| hasher.update(@tagName(owner));
+                    hashU32(&hasher, @intCast(types.span(named.args).len));
+                    try children.appendSlice(self.allocator, types.span(named.args));
+                    for (types.declaredFieldSpan(named.declared_order)) |declared| switch (declared) {
+                        .named => |label| {
+                            const text = program_names.recordFieldLabelText(label);
+                            hasher.update("declared");
+                            hashU32(&hasher, @intCast(text.len));
+                            hasher.update(text);
+                        },
+                        .padding => |padding| {
+                            hasher.update("padding");
+                            try children.append(self.allocator, padding);
+                        },
+                    };
+                    if (named.backing) |backing| {
+                        hasher.update("backing");
+                        hasher.update(@tagName(backing.use));
+                        hasher.update(@tagName(backing.authority));
+                        try children.append(self.allocator, backing.ty);
+                    }
+                },
+            }
+            hashU32(&hasher, @intCast(children.items.len));
+            var child_index = children.items.len;
+            while (child_index > 0) {
+                child_index -= 1;
+                try stack.append(self.allocator, children.items[child_index]);
+            }
+        }
+        return hasher.finalResult();
+    }
+
+    /// The source of a top-level statement of a top module, or null when
+    /// `statement` is not one.
+    fn literalTopStatementText(self: *Builder, view: ModuleView, statement: u32) Allocator.Error!?[]const u8 {
+        const env = view.module_env;
+        const entry = try self.literal_top_statements.getOrPut(self.allocator, view.key.bytes);
+        if (!entry.found_existing) {
+            entry.value_ptr.* = collections.DenseMap(can.CIR.Statement.Idx, void).init(self.allocator);
+            for (env.store.sliceStatements(env.all_statements)) |idx| try entry.value_ptr.put(idx, {});
+        }
+        const statement_idx: can.CIR.Statement.Idx = @fromBackingInt(statement);
+        if (!entry.value_ptr.contains(statement_idx)) return null;
+        const region = env.store.getStatementRegion(statement_idx);
+        return env.getSourceAll()[region.start.offset..region.end.offset];
     }
 
     /// Every key of a request a record served through its solved view, when
@@ -6769,7 +7141,7 @@ const Builder = struct {
         defer self.allocator.free(completions);
         const snapshot = try self.captureSpecJobInputs();
         const inputs = SpecJobWorkerInputs{
-            .run_id = self.spec_job_run_id,
+            .lanes = try self.specJobLanes(),
             .modules = self.modules,
             .module_views = self.moduleViews(),
             .source_file_ids = self.sourceFileIds(),
@@ -6962,7 +7334,7 @@ const Builder = struct {
     }
 
     fn rootSourceModule(self: *Builder, source_modules: []const checked.ModuleId, index: usize) checked.ModuleId {
-        return if (source_modules.len == 0) self.root_view.key else source_modules[index];
+        return if (source_modules.len == 0) self.root_view.key.digest() else source_modules[index];
     }
 
     /// Run a frozen root batch to completion before committing its first root,
@@ -6981,7 +7353,7 @@ const Builder = struct {
         defer self.allocator.free(completions);
         const snapshot = try self.captureSpecJobInputs();
         const inputs = SpecJobWorkerInputs{
-            .run_id = self.spec_job_run_id,
+            .lanes = try self.specJobLanes(),
             .modules = self.modules,
             .module_views = self.moduleViews(),
             .source_file_ids = self.sourceFileIds(),
@@ -7753,13 +8125,6 @@ const Builder = struct {
             defer timing_scope.end();
             break :blk (try self.materializeRootProcedureEvidence(fn_template, evidence_ref)).vector;
         } else &.{};
-        // A root is requested at the template's own declared type, which no
-        // relation ever widened—checked, not assumed.
-        try self.requireRequestDidNotWidenResultRow(
-            template_ref,
-            fn_ty,
-            "root template request widened the template's closed checked result row",
-        );
         return try self.lowerTemplateWithMono(
             template_ref,
             view,
@@ -7774,7 +8139,6 @@ const Builder = struct {
             null,
             .queued,
             null,
-            false,
             self.root_demand,
         );
     }
@@ -7826,7 +8190,7 @@ const Builder = struct {
     /// compile-time function value can restore that vector without resolving
     /// its requirements again.
     fn constFnEvidence(self: *Builder, evidence: EvidenceChain) Allocator.Error!StoredConstFnEvidence {
-        var nodes = std.ArrayList(check.ConstStore.ConstFnEvidence).empty;
+        var nodes: check.ConstStore.ConstFnEvidenceBuilder = .{};
         defer nodes.deinit(self.allocator);
         var chain = std.ArrayList(*const EvidenceChain).empty;
         defer chain.deinit(self.allocator);
@@ -7841,7 +8205,7 @@ const Builder = struct {
         while (index > 0) {
             index -= 1;
             const frame = chain.items[index];
-            const roots_start: u32 = @intCast(nodes.items.len);
+            const roots_start: u32 = @intCast(nodes.nodes.items.len);
             try self.appendConstFnEvidence(&nodes, frame.vector);
             const scope: check.ConstStore.ConstFnEvidenceScope = switch (frame.scope.lexical) {
                 .root => .root,
@@ -7864,19 +8228,19 @@ const Builder = struct {
             .frames = frames.items.len,
         };
         if (self.const_evidence_memo.get(key)) |stored| {
-            if (Ast.fnEvidenceEql(stored.nodes, stored.frames, stored.head, nodes.items, frames.items, parent)) return stored;
+            if (Ast.fnEvidenceEql(stored.entries, stored.frames, stored.head, nodes.vector(), frames.items, parent)) return stored;
         }
         // Another request with equal evidence (uses checking replayed from
         // one source) already stored this conversion and its digest.
-        const bucket = Ast.fnEvidenceBucket(nodes.items, frames.items, parent);
+        const bucket = Ast.fnEvidenceBucket(nodes.vector(), frames.items, parent);
         if (self.const_evidence_by_content.get(bucket)) |stored| {
-            if (Ast.fnEvidenceEql(stored.nodes, stored.frames, stored.head, nodes.items, frames.items, parent)) {
+            if (Ast.fnEvidenceEql(stored.entries, stored.frames, stored.head, nodes.vector(), frames.items, parent)) {
                 try self.const_evidence_memo.put(key, stored);
                 return stored;
             }
         }
         const stored = StoredConstFnEvidence.init(
-            try self.evidence_arena.allocator().dupe(check.ConstStore.ConstFnEvidence, nodes.items),
+            try nodes.dupe(self.evidence_arena.allocator()),
             try self.evidence_arena.allocator().dupe(check.ConstStore.ConstFnEvidenceFrame, frames.items),
             parent,
         );
@@ -7889,7 +8253,7 @@ const Builder = struct {
     /// template can compare later requests against its exact topology.
     fn retainFnEvidence(self: *Builder, evidence: StoredConstFnEvidence) Allocator.Error!StoredConstFnEvidence {
         return .{
-            .nodes = try self.evidence_arena.allocator().dupe(check.ConstStore.ConstFnEvidence, evidence.nodes),
+            .entries = try check.ConstStore.dupeVector(self.evidence_arena.allocator(), evidence.entries),
             .frames = try self.evidence_arena.allocator().dupe(check.ConstStore.ConstFnEvidenceFrame, evidence.frames),
             .head = evidence.head,
             .digest = evidence.digest,
@@ -7911,7 +8275,7 @@ const Builder = struct {
     /// call.
     fn appendConstFnEvidence(
         self: *Builder,
-        nodes: *std.ArrayList(check.ConstStore.ConstFnEvidence),
+        nodes: *check.ConstStore.ConstFnEvidenceBuilder,
         evidence: []const SpecEvidence,
     ) Allocator.Error!void {
         var frames = std.ArrayList(ConstFnEvidenceFrame).empty;
@@ -7928,37 +8292,39 @@ const Builder = struct {
                 const entry = parent.evidence[parent.next];
                 switch (pending.stage) {
                     .nested => {
-                        setConstFnTargetNode(nodes, pending.root_index, entry.target, .{ .resolved = .{
+                        nodes.targets.items[nodes.nodes.items[pending.root_index].target].nested = .{ .resolved = .{
                             .count = @intCast(finished.evidence.len),
-                            .subtree_len = @intCast(nodes.items.len - pending.nested_start),
-                        } });
+                            .subtree_len = @intCast(nodes.nodes.items.len - pending.nested_start),
+                        } };
                         const contracts = evidenceCallableContracts(entry);
                         if (contracts.len != 0) {
-                            parent.pending = .{ .root_index = pending.root_index, .stage = .contracts, .nested_start = nodes.items.len };
+                            parent.pending = .{ .root_index = pending.root_index, .stage = .contracts, .nested_start = nodes.nodes.items.len };
                             try frames.append(self.allocator, .{ .evidence = contracts });
                             continue;
                         }
                     },
-                    .contracts => setConstFnCallableContractCount(nodes, pending.root_index, finished.evidence.len),
+                    .contracts => nodes.setCallableContracts(pending.root_index, @intCast(finished.evidence.len)),
                 }
                 parent.next += 1;
                 continue;
             }
             const entry = frame.evidence[frame.next];
-            const root_index = nodes.items.len;
+            const root_index = nodes.nodes.items.len;
             switch (entry) {
                 .target => |target| {
-                    try nodes.append(self.allocator, undefined);
+                    // A resolved target's nested bounds are known once its
+                    // child vector has been serialized after it.
+                    try nodes.appendTarget(self.allocator, constFnTargetPayload(target, .{ .resolved = .{ .count = 0, .subtree_len = 0 } }));
                     switch (target.nested) {
-                        .synthesize => setConstFnTargetNode(nodes, root_index, target, .from_callable),
+                        .synthesize => nodes.targets.items[nodes.targets.items.len - 1].nested = .from_callable,
                         .resolved => |resolved| {
-                            frame.pending = .{ .root_index = root_index, .stage = .nested, .nested_start = nodes.items.len };
+                            frame.pending = .{ .root_index = root_index, .stage = .nested, .nested_start = nodes.nodes.items.len };
                             try frames.append(self.allocator, .{ .evidence = resolved });
                             continue;
                         },
                     }
                 },
-                .structural => |structural| try nodes.append(self.allocator, .{ .structural = .{
+                .structural => |structural| try nodes.appendStructural(self.allocator, .{
                     .derivation = structural.derivation,
                     .checked = if (structural.checked) |checked_structural| .{
                         .view = .{ .bytes = checked_structural.view.key.bytes },
@@ -7969,19 +8335,19 @@ const Builder = struct {
                         .generated_codec_derivation = checked_structural.evidence.generated_codec_derivation,
                         .generated_codec_content = codecEvidenceContent(checked_structural),
                     } else null,
-                } }),
+                }),
                 .from_callable => |use| {
-                    try nodes.append(self.allocator, .{ .from_callable = .{
+                    try nodes.appendSmall(self.allocator, .{ .from_callable = .{
                         .independent_callable = use.independent_callable,
                     } });
                 },
-                .from_scheme => |index| try nodes.append(self.allocator, .{ .from_scheme = index }),
-                .unreachable_value => try nodes.append(self.allocator, .unreachable_value),
-                .checked_error => try nodes.append(self.allocator, .checked_error),
+                .from_scheme => |index| try nodes.appendSmall(self.allocator, .{ .from_scheme = index }),
+                .unreachable_value => try nodes.appendSmall(self.allocator, .unreachable_value),
+                .checked_error => try nodes.appendSmall(self.allocator, .checked_error),
             }
             const contracts = evidenceCallableContracts(entry);
             if (contracts.len != 0) {
-                frame.pending = .{ .root_index = root_index, .stage = .contracts, .nested_start = nodes.items.len };
+                frame.pending = .{ .root_index = root_index, .stage = .contracts, .nested_start = nodes.nodes.items.len };
                 try frames.append(self.allocator, .{ .evidence = contracts });
                 continue;
             }
@@ -7989,22 +8355,11 @@ const Builder = struct {
         }
     }
 
-    fn setConstFnCallableContractCount(nodes: *std.ArrayList(check.ConstStore.ConstFnEvidence), root_index: usize, contract_count: usize) void {
-        switch (nodes.items[root_index]) {
-            .target => |*target| target.callable_contracts = @intCast(contract_count),
-            .structural => |*structural| structural.callable_contracts = @intCast(contract_count),
-            .from_callable => |*use| use.callable_contracts = @intCast(contract_count),
-            .from_scheme, .unreachable_value, .checked_error => unreachable,
-        }
-    }
-
-    fn setConstFnTargetNode(
-        nodes: *std.ArrayList(check.ConstStore.ConstFnEvidence),
-        target_index: usize,
+    fn constFnTargetPayload(
         target: *const SpecEvidenceTarget,
         nested: check.ConstStore.ConstFnNestedEvidence,
-    ) void {
-        nodes.items[target_index] = .{ .target = .{
+    ) check.ConstStore.ConstFnTargetEvidence {
+        return .{
             .view = .{ .bytes = target.view.key.bytes },
             .method = target.target,
             .method_callable_key = target.view.types.rootKey(target.target.callable_ty),
@@ -8014,7 +8369,7 @@ const Builder = struct {
                 .callable_ty = instantiation.callable_ty,
             } else null,
             .nested = nested,
-        } };
+        };
     }
 
     fn completeRootTemplateEvidence(
@@ -8071,7 +8426,6 @@ const Builder = struct {
         retained_topology: ?EvidenceChain,
         body_scheduling: TemplateBodyScheduling,
         codec_contract: ?SealedCodecContractContext,
-        widened_result_row: bool,
         demand: Demand,
     ) Allocator.Error!Ast.DefId {
         var lookup_timing_scope = ProcedureTimingScope.begin(self.timing, .lookup_reservation);
@@ -8111,13 +8465,6 @@ const Builder = struct {
                 Common.invariant("Monotype specialization index found a local template missing from lowering state");
             if (!try specEvidenceVectorEql(self.allocator, existing.evidence, spec_evidence)) {
                 Common.invariant("Monotype specialization hit disagreed on dispatch evidence");
-            }
-            // Two edges that reuse one specialization identity must agree about
-            // whether it is a widening adapter. A disagreement would define the
-            // callee at one row and call it at another, so it stops the build in
-            // every mode (design.md "Result-Row Widening Adapter").
-            if (existing.widened_result_row != widened_result_row) {
-                Common.compilerBug("Monotype specialization cache hit disagreed on its result-row widening");
             }
             if (stored_source_topology) |requested| {
                 const existing_topology = existing.topology orelse
@@ -8160,7 +8507,6 @@ const Builder = struct {
                                 job.fn_template,
                                 job.template_ref,
                                 self.moduleForId(job.method_scope),
-                                job.source_fn_ty,
                                 job.source_fn_key,
                                 job.fn_ty,
                                 job.evidence,
@@ -8168,7 +8514,6 @@ const Builder = struct {
                                 null,
                                 job.signature_relation,
                                 job.codec_contract,
-                                job.widened_result_row,
                             );
                             return existing.def;
                         },
@@ -8188,7 +8533,7 @@ const Builder = struct {
         // independently of the callable set its value joins in the caller.
         // A hosted template has no procedure of its own to cache: callers
         // reach the host directly through its declared ABI.
-        if (pack_trace_available and specCensusEnabled() and template.target != .hosted and try self.monoFnTypeMentionsFunction(lower_fn_ty)) {
+        if (dev_diagnostics.isSet(.spec_census) and template.target != .hosted and try self.monoFnTypeMentionsFunction(lower_fn_ty)) {
             const proc_base = view.names.procBase(template_ref.proc_base);
             const name: []const u8 = if (proc_base.export_name) |e| view.names.exportNameText(e) else "?";
             const types = self.program.types.view();
@@ -8210,7 +8555,7 @@ const Builder = struct {
             const key = Ast.specIdentityKey(spec_identity);
             fn_template.spec_key = key;
             if (template.provided_low_level) |op| fn_template.procedure_keyed_by_layout = op.procedureKeyedByLayout();
-            if (pack_trace_available and specCensusEnabled()) {
+            if (dev_diagnostics.isSet(.spec_census)) {
                 const proc_base = view.names.procBase(template_ref.proc_base);
                 const name: []const u8 = if (proc_base.export_name) |e| view.names.exportNameText(e) else "?";
                 std.debug.print("CENSUS_KEY\t{s}\t{x}\tev={x}\tcodec={x}\treq={x}\tcallable={s}\n", .{ name, key.bytes[0..8], spec_identity.evidence_digest.bytes[0..6], spec_identity.codec_contract_digest.bytes[0..6], spec_identity.request_fn_ty_digest.bytes[0..6], @tagName(spec_identity.callable) });
@@ -8224,12 +8569,12 @@ const Builder = struct {
                 if (cache.lookup(key.bytes, self.spec_cache_takes, try self.programModules())) |hit| {
                     fn_template.cached = hit;
                     self.count("spec_cache_hits");
-                    if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup monotype key={x} hit\n", .{key.bytes[0..8]});
-                } else if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup monotype key={x} miss\n", .{key.bytes[0..8]});
+                    if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("lookup monotype key={x} hit\n", .{key.bytes[0..8]});
+                } else if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("lookup monotype key={x} miss\n", .{key.bytes[0..8]});
             };
         }
         if (stored_source_topology) |stored_evidence| {
-            fn_template.const_evidence = try self.program.addConstFnEvidence(stored_evidence.nodes);
+            fn_template.const_evidence = try self.program.addConstFnEvidence(stored_evidence.entries);
             fn_template.const_evidence_frames = try self.program.addConstFnEvidenceFrames(stored_evidence.frames);
             fn_template.const_evidence_frame_head = stored_evidence.head;
         }
@@ -8274,7 +8619,6 @@ const Builder = struct {
                 .spec = spec,
                 .evidence = spec_evidence,
                 .topology = stored_source_topology,
-                .widened_result_row = widened_result_row,
             });
             break :blk .{
                 .reservation = .{
@@ -8307,7 +8651,6 @@ const Builder = struct {
                     .subst = subst,
                     .signature_relation = signature_relation,
                     .codec_contract = codec_contract,
-                    .widened_result_row = widened_result_row,
                     .demand = demand,
                 };
                 if (self.parking_root_job) {
@@ -8364,7 +8707,6 @@ const Builder = struct {
             fn_template,
             template_ref,
             method_scope,
-            source_fn_ty,
             source_fn_key,
             lower_fn_ty,
             spec_evidence,
@@ -8372,7 +8714,6 @@ const Builder = struct {
             retained_topology,
             signature_relation,
             codec_contract,
-            widened_result_row,
         );
         return reservation.def;
     }
@@ -8527,256 +8868,12 @@ const Builder = struct {
         try frames.append(self.allocator, .{ .ty = ty, .start = start, .next = start, .end = children.items.len });
     }
 
-    /// Everything a result-row widening adapter needs beyond the reservation
-    /// itself: the declared interface the template is specialized at, and the
-    /// `Try` capability when the adapted row sits inside a `Try` result.
-    const ResultRowWideningAdapter = struct {
-        declared_source_fn_ty: checked.CheckedTypeId,
-        declared_source_fn_key: names.TypeDigest,
-        source_fn_ty: Type.TypeId,
-        capability: ?HostedTryAdapterCapability,
-    };
-
-    /// Plan the adapter for a specialization whose request relation DECLINED to
-    /// unify the template's closed checked row with the requested one
-    /// (design.md "Result-Row Widening Adapter"). `widened_result_row` is that
-    /// relation's own answer, carried here from the specialization request; it
-    /// is the single source of truth for whether an adapter is owed. Re-deriving
-    /// the answer from the checked root instead would let the relation and the
-    /// completion disagree—the relation declining with no adapter minted is a
-    /// silent miscompile, and an adapter minted where the relation unified is a
-    /// spurious narrow specialization behind a pointless re-tag.
-    ///
-    /// Everything below the gate is the adapter's construction, and every step
-    /// of it must succeed: a recorded widening that cannot be built stops the
-    /// build rather than falling back to a definition at the wrong row.
-    ///
-    /// The declared labels are read from `lowerType` of the checked root. That
-    /// is sound only because `closedResultRowOrNull` refused every row whose
-    /// tail is a rigid or an unsealed flex: `lowerCheckedTypeVariable` seals a
-    /// rigid to the empty tag union, which would otherwise pass a parametric
-    /// row off as a closed one. A rigid *payload* is harmless—every narrowed
-    /// payload is taken from the request, never from the declared type—and
-    /// `requireLoweredDeclaredRowLabels` checks the lowered label set against
-    /// the checker's recorded row so a collapse cannot go unnoticed.
-    fn resultRowWideningAdapterOrNull(
-        self: *Builder,
-        view: ModuleView,
-        template: checked.CheckedProcedureTemplate,
-        requested_fn_ty: Type.TypeId,
-        widened_result_row: bool,
-    ) Allocator.Error!?ResultRowWideningAdapter {
-        if (!widened_result_row) return null;
-        const declared_row = closedResultRowOrNull(view, template.checked_fn_root) orelse
-            Common.compilerBug("result-row widening relation declined for a template with no closed checked result row");
-        // Everything below is coordinator-program work: `requested_fn_ty` is a
-        // program id, `sameMonoType` compares through `program.types`, and the
-        // interned narrowed source type is handed to a program-domain
-        // completion. A specialization workspace is a separate type domain
-        // whose ids cross only through an explicit relocation, so lowering the
-        // declared type there and comparing it here would read two unrelated
-        // stores with one set of ids. This pre-step runs for every
-        // specialization of every closed-result-row template, including ones
-        // an immediate caller completes from inside a shard, so it pins the
-        // destination rather than trusting the caller's.
-        const coordinator_types = ProgramTypeDestination.begin(self);
-        defer coordinator_types.end();
-        const declared_source_fn_ty = template.checked_fn_root;
-        const declared_mono_fn_ty = try self.lowerType(view, declared_source_fn_ty);
-        if (try self.sameMonoType(declared_mono_fn_ty, requested_fn_ty)) {
-            Common.compilerBug("result-row widening relation declined for a request at the declared type");
-        }
-        const capability = try self.hostedTryAdapterCapability(view, template.hosted_try_adapter);
-        const try_capability: ?HostedTryAdapterCapability = if (declared_row.behind_try)
-            capability orelse Common.compilerBug("closed Try result row had no checker-recorded Try capability")
-        else
-            null;
-        try self.requireLoweredDeclaredRowLabels(view, declared_row, try_capability, declared_mono_fn_ty);
-        const source_fn_ty = (try self.resultRowWideningAdapterSourceType(
-            try_capability,
-            declared_mono_fn_ty,
-            requested_fn_ty,
-        )) orelse Common.compilerBug("result-row widening relation declined for a request lowering cannot adapt");
-        // The narrowed source carries exactly the declared labels, so the
-        // recursive specialization below is a fixpoint of this pre-step and
-        // cannot widen again.
-        if (try self.resultRowWideningAdapterSourceType(
-            try_capability,
-            declared_mono_fn_ty,
-            source_fn_ty,
-        )) |_| {
-            Common.compilerBug("result-row widening adapter source type widened the declared row again");
-        }
-        return .{
-            .declared_source_fn_ty = declared_source_fn_ty,
-            .declared_source_fn_key = view.types.rootKey(declared_source_fn_ty),
-            .source_fn_ty = source_fn_ty,
-            .capability = try_capability,
-        };
-    }
-
-    /// Guard for the label source above: the lowered declared type must list
-    /// exactly the labels the checker recorded for this row. A row tail that
-    /// `lowerCheckedTypeVariable` sealed away shows up here as a disagreement.
-    fn requireLoweredDeclaredRowLabels(
-        self: *Builder,
-        view: ModuleView,
-        declared_row: ClosedResultRow,
-        capability: ?HostedTryAdapterCapability,
-        declared_mono_fn_ty: Type.TypeId,
-    ) Allocator.Error!void {
-        const declared_fn = functionShape(self.activeTypeStore(), declared_mono_fn_ty, "declared template root type was not a function");
-        const row_ty = if (capability) |try_capability|
-            ((try self.hostedTryInfoOrNull(try_capability, declared_fn.ret)) orelse
-                Common.compilerBug("closed Try result row did not lower to its checker-recorded Try nominal")).err_ty
-        else
-            declared_fn.ret;
-        const lowered_tags = self.bareTagUnionTagsOrNull(row_ty) orelse
-            Common.compilerBug("closed result row did not lower to a tag union");
-        if (lowered_tags.len != checkedClosedRowLabelCount(view, declared_row.row)) {
-            Common.compilerBug("lowered declared result row disagreed with the checker's recorded labels");
-        }
-    }
-
-    /// Check a route that states `widened_result_row = false` with no relation
-    /// behind the claim.
-    ///
-    /// `completeTemplateReservation` mints the adapter from the request
-    /// relation's own recorded answer, but three routes reach it without ever
-    /// running that relation and lower the body directly at the requested type
-    /// (`lowerTemplate`'s root, `lowerFnTemplateCallTarget`, and
-    /// `lowerRestoredConstFnTemplate`). Each states that its request is the
-    /// binding's own declared type; if one were ever wrong the template would
-    /// be defined at the wide row, which is exactly the miscompile the adapter
-    /// exists to prevent. So the claim is checked against the types here
-    /// instead of being taken on faith: if the adapter pre-step would have
-    /// found a narrowed source type for this request, stop the build.
-    fn requireRequestDidNotWidenResultRow(
-        self: *Builder,
-        template_ref: names.ProcTemplate,
-        requested_fn_ty: Type.TypeId,
-        comptime message: []const u8,
-    ) Allocator.Error!void {
-        const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
-        const template = view.templates.get(template_ref.template);
-        // Only a closed checked result row can be widened at all, and this
-        // filter is a checked-type walk while everything below it lowers a
-        // type; keep it first.
-        const declared_row = closedResultRowOrNull(view, template.checked_fn_root) orelse return;
-        // Same destination pin, and for the same reason, as the pre-step this
-        // mirrors: `requested_fn_ty` is a program id.
-        const coordinator_types = ProgramTypeDestination.begin(self);
-        defer coordinator_types.end();
-        const declared_mono_fn_ty = try self.lowerType(view, template.checked_fn_root);
-        const try_capability: ?HostedTryAdapterCapability = if (declared_row.behind_try)
-            (try self.hostedTryAdapterCapability(view, template.hosted_try_adapter)) orelse
-                Common.compilerBug("closed Try result row had no checker-recorded Try capability")
-        else
-            null;
-        // The same guard the pre-step applies before reading declared labels
-        // out of the lowered type, and for the same reason: a row
-        // `lowerCheckedTypeVariable` sealed to the empty tag union lists fewer
-        // labels than the checker recorded, which would make an ordinary
-        // request look wider than the declared row and report a lowering
-        // collapse as a widening that never happened.
-        try self.requireLoweredDeclaredRowLabels(view, declared_row, try_capability, declared_mono_fn_ty);
-        if (try self.resultRowWideningAdapterSourceType(
-            try_capability,
-            declared_mono_fn_ty,
-            requested_fn_ty,
-        )) |_| {
-            Common.compilerBug(message);
-        }
-    }
-
-    /// Specialize the template at its declared row and define the reserved
-    /// specialization as a generated adapter that calls it and re-tags the
-    /// result into the requested row.
-    fn completeResultRowWideningAdapter(
-        self: *Builder,
-        reservation: TemplateReservation,
-        fn_template: Ast.FnTemplate,
-        template_ref: names.ProcTemplate,
-        method_scope: ModuleView,
-        adapter: ResultRowWideningAdapter,
-        source_fn_ty: checked.CheckedTypeId,
-        source_fn_key: names.TypeDigest,
-        lower_fn_ty: Type.TypeId,
-        spec_evidence: []const SpecEvidence,
-        signature_relation: Ast.SignatureRelation,
-        codec_contract: ?SealedCodecContractContext,
-    ) Allocator.Error!void {
-        var completion_timing_scope = ProcedureTimingScope.begin(self.timing, .completion);
-        defer completion_timing_scope.end();
-
-        // The generated body is built from program ids throughout—the
-        // reserved definition, its locals, and the re-tagging match all live
-        // in the coordinator program—while the shape helpers it uses read
-        // the active store. `resultRowWideningAdapterOrNull` pins its own
-        // destination, but this step also requests the declared-row
-        // specialization, so it cannot simply pin over an active shard.
-        // Reaching here from one is a bug, and one whose only symptom would be
-        // a wrong tag discriminant, so it stops the build in every mode.
-        if (self.hasPrivateTypeDestination()) {
-            Common.compilerBug("result-row widening adapter completed with a private type destination");
-        }
-        const fn_data = functionShape(&self.program.types, lower_fn_ty, "result-row widening adapter root type was not a function");
-        const args = try self.typedLocalsForArgs(self.program.types.span(fn_data.args));
-        const source_def = try self.lowerTemplateWithMono(
-            template_ref,
-            method_scope,
-            adapter.declared_source_fn_ty,
-            adapter.declared_source_fn_key,
-            adapter.source_fn_ty,
-            spec_evidence,
-            null,
-            signature_relation,
-            .count,
-            null,
-            null,
-            .immediate,
-            codec_contract,
-            // The adapter's own source is requested at the DECLARED row, the
-            // fixpoint `resultRowWideningAdapterOrNull` asserts.
-            false,
-            self.specDemand(reservation.fn_id),
-        );
-        const adapter_template = Ast.FnTemplate{
-            .fn_def = .{ .checked_generated = template_ref },
-            .source_fn_ty = source_fn_ty,
-            .source_fn_key = source_fn_key,
-            .mono_fn_ty = lower_fn_ty,
-            .evidence_digest = fn_template.evidence_digest,
-            .const_evidence = fn_template.const_evidence,
-            .const_evidence_frames = fn_template.const_evidence_frames,
-            .const_evidence_frame_head = fn_template.const_evidence_frame_head,
-        };
-        const body = try self.resultRowWideningAdapterBody(
-            adapter.capability,
-            args,
-            self.defFnId(source_def),
-            adapter.source_fn_ty,
-            lower_fn_ty,
-        );
-        self.program.setDef(reservation.def, .{
-            .symbol = reservation.symbol,
-            .fn_def = adapter_template,
-            .fn_id = reservation.fn_id,
-            .args = args,
-            .body = .{ .roc = body },
-            .ret = fn_data.ret,
-        });
-        self.program.setFnSource(reservation.fn_id, adapter_template);
-        try self.markTemplateReady(reservation.fn_id, lower_fn_ty);
-    }
-
     fn completeTemplateReservation(
         self: *Builder,
         reservation: TemplateReservation,
         fn_template: Ast.FnTemplate,
         template_ref: names.ProcTemplate,
         method_scope: ModuleView,
-        source_fn_ty: checked.CheckedTypeId,
         source_fn_key: names.TypeDigest,
         lower_fn_ty: Type.TypeId,
         spec_evidence: []const SpecEvidence,
@@ -8784,7 +8881,6 @@ const Builder = struct {
         retained_topology: ?EvidenceChain,
         signature_relation: Ast.SignatureRelation,
         codec_contract: ?SealedCodecContractContext,
-        widened_result_row: bool,
     ) Allocator.Error!void {
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = view.templates.get(template_ref.template);
@@ -8806,34 +8902,6 @@ const Builder = struct {
             });
             self.program.setFnSource(reservation.fn_id, fn_template);
             try self.markTemplateReady(reservation.fn_id, lower_fn_ty);
-            return;
-        }
-
-        // A template whose checked result row is closed may be requested at
-        // a row that includes it (design.md "Result-Row Widening Adapter").
-        // Such a request is served by specializing the template at its
-        // declared row and generating an adapter at the requested row that
-        // calls it and re-tags the result. The inner hosted specialization,
-        // when selected by generic dispatch, retains its declared ABI.
-        if (try self.resultRowWideningAdapterOrNull(
-            view,
-            template,
-            lower_fn_ty,
-            widened_result_row,
-        )) |adapter| {
-            try self.completeResultRowWideningAdapter(
-                reservation,
-                fn_template,
-                template_ref,
-                method_scope,
-                adapter,
-                source_fn_ty,
-                source_fn_key,
-                lower_fn_ty,
-                spec_evidence,
-                signature_relation,
-                codec_contract,
-            );
             return;
         }
 
@@ -8980,6 +9048,7 @@ const Builder = struct {
     /// drain.
     fn advanceComptimeDemand(self: *Builder) Allocator.Error!bool {
         if (!self.demand_driven_comptime_roots) return false;
+        try self.settleLiteralRoots();
         const state = &self.comptime_demand;
         const view = self.program.view();
         try state.index(self.allocator, self, view);
@@ -9335,23 +9404,9 @@ const Builder = struct {
     /// Whether a queued specialization completes on the coordinator instead
     /// of in a body shard. A hosted template reaches the host directly, a
     /// template the object cache holds keeps its declared shape with no body,
-    /// and a result-row widening adapter is a generated call plus a re-tag
-    /// whose declared-row specialization is requested from the coordinator
-    /// (design.md "Result-Row Widening Adapter"). None of the three has a
-    /// graph/draft pair for a worker lane to hand back.
-    fn specJobCompletesOnCoordinator(
-        self: *Builder,
-        view: ModuleView,
-        template: checked.CheckedProcedureTemplate,
-        job: PendingSpecJob,
-    ) Allocator.Error!bool {
-        if (job.fn_template.cached != null or template.target == .hosted) return true;
-        return (try self.resultRowWideningAdapterOrNull(
-            view,
-            template,
-            job.fn_ty,
-            job.widened_result_row,
-        )) != null;
+    /// Neither has a graph/draft pair for a worker lane to hand back.
+    fn specJobCompletesOnCoordinator(template: checked.CheckedProcedureTemplate, job: PendingSpecJob) bool {
+        return job.fn_template.cached != null or template.target == .hosted;
     }
 
     /// Execute queued specialization bodies in dispatch order until the wave
@@ -9411,7 +9466,7 @@ const Builder = struct {
                 }
                 const view = self.moduleForDigest(names.procTemplateModuleDigest(job.template_ref));
                 const template = view.templates.get(job.template_ref.template);
-                if (self.spec_store.recordStatus(job.spec) == .ready or try self.specJobCompletesOnCoordinator(view, template, job)) {
+                if (self.spec_store.recordStatus(job.spec) == .ready or specJobCompletesOnCoordinator(template, job)) {
                     // Coordinator-only entries still wait their exact acceptance
                     // turn, but need not wait for any later worker task.
                     _ = self.pending_spec_jobs.pop();
@@ -9435,7 +9490,7 @@ const Builder = struct {
                     context.* = .{
                         .snapshot = snapshot,
                         .inputs = .{
-                            .run_id = self.spec_job_run_id,
+                            .lanes = try self.specJobLanes(),
                             .modules = self.modules,
                             .module_views = self.moduleViews(),
                             .source_file_ids = self.sourceFileIds(),
@@ -9710,18 +9765,14 @@ const Builder = struct {
         const view = self.moduleForDigest(names.procTemplateModuleDigest(job.template_ref));
         const template = view.templates.get(job.template_ref.template);
         // Hosted completion has no Roc graph/draft pair to transfer, and
-        // neither does an object-cache completion or a result-row widening
-        // adapter: the adapter is a generated call plus a re-tag, with the
-        // declared-row specialization requested from the coordinator. All
-        // three keep coordinator ownership while ordinary bodies establish
-        // the shard handoff.
-        if (try self.specJobCompletesOnCoordinator(view, template, job)) {
+        // neither does an object-cache completion. Both keep coordinator
+        // ownership while ordinary bodies establish the shard handoff.
+        if (specJobCompletesOnCoordinator(template, job)) {
             try self.completeTemplateReservation(
                 job.reservation,
                 job.fn_template,
                 job.template_ref,
                 self.moduleForId(job.method_scope),
-                job.source_fn_ty,
                 job.source_fn_key,
                 job.fn_ty,
                 job.evidence,
@@ -9729,7 +9780,6 @@ const Builder = struct {
                 null,
                 job.signature_relation,
                 job.codec_contract,
-                job.widened_result_row,
             );
             self.acceptSpecDispatch(job.dispatch_index);
             return;
@@ -10107,7 +10157,7 @@ const Builder = struct {
 
         const graph_fn_ty = try body_ctx.importProgramType(lower_fn_ty);
 
-        const root_node = try body_ctx.relateCheckedFunctionToMono(template.checked_fn_root, graph_fn_ty);
+        const root_node = try body_ctx.relateCheckedFunctionToRequest(template.checked_fn_root, graph_fn_ty);
         const draft_codec_contract: ?DraftCodecContractContext = if (codec_contract) |contract| .{
             .anchor = contract.anchor,
             .constructor_node = try body_ctx.activeNodeFromType(
@@ -10496,7 +10546,7 @@ const Builder = struct {
                 .source_fn_key = source_fn_key,
                 .mono_fn_ty = DraftTypeCell.fromGraphNode(request_fn_node),
                 .evidence_digest = evidence_digest,
-                .const_evidence = try source_ctx.draft.addConstFnEvidence(stored_evidence.nodes),
+                .const_evidence = try source_ctx.draft.addConstFnEvidence(stored_evidence.entries),
                 .const_evidence_frames = try source_ctx.draft.addConstFnEvidenceFrames(stored_evidence.frames),
                 .const_evidence_frame_head = stored_evidence.head,
             },
@@ -10584,29 +10634,16 @@ const Builder = struct {
         if (lexical) |captured| try body_ctx.restoreCodecLexicalContext(captured);
         const root_node = try body_ctx.instNode(template.checked_fn_root);
         // A request whose result row includes this template's closed checked
-        // row keeps its extra labels: the rows are related component-wise and
-        // the adapter is generated when the specialization completes
-        // (design.md "Result-Row Widening Adapter"). This also serves hosted
-        // implementations selected by an admitted generic dispatch request.
-        //
-        // A caller-owned (local-context-dependent) specialization has no such
-        // completion: it lowers its body inline at `root_node` below and
-        // registers the def at the declared interface, so no adapter would
-        // ever be generated and the caller would call the narrow body through
-        // its wide request. Declining here leaves the ordinary relation—and
-        // its loud rejection of a widened closed row—in charge.
-        const closed_row_widened = try relateClosedResultRowRequestInterface(
+        // row widens that row: the template is specialized at the request's
+        // row (design.md "Closed Result Rows At Template Boundaries").
+        try widenClosedResultRowToRequest(
             source_ctx.graph,
             view,
             template.checked_fn_root,
             root_node,
             request_fn_node,
-            if (local_context_dependent) .no_adapter else .adapter_reachable,
         );
-        if (closed_row_widened) {
-            // Every component was related above; joining the two function
-            // interfaces here would unify the rows this relation kept apart.
-        } else if (!local_context_dependent and
+        if (!local_context_dependent and
             signature_relation == .independent_roots and
             template.target != .hosted)
         {
@@ -10622,15 +10659,7 @@ const Builder = struct {
                 try source_ctx.graph.unify(root_node, request_fn_node);
             }
         }
-        // This is the one relation whose answer becomes the specialization's
-        // own: completion mints the widening adapter exactly when this record
-        // says the relation declined to unify the two rows, instead of deriving
-        // a second answer from the checked root (design.md "Result-Row Widening
-        // Adapter").
-        const widened_result_row = closed_row_widened;
-        source_ctx.draft.template_specs.items[spec_index].widened_result_row = widened_result_row;
-        if (!widened_result_row and
-            !local_context_dependent and
+        if (!local_context_dependent and
             signature_relation != .independent_roots and
             template.target != .hosted)
         {
@@ -11403,7 +11432,7 @@ const Builder = struct {
                 const def = try typeDef(self.activeNameStore(), self.app_module_identity, view, nominal.origin_module, nominal.name, nominal.source_decl);
                 self.noteBuiltinTryDef(nominal.builtin, self.activeNameStore(), def);
                 const named: @FieldType(Type.Content, "named") = .{
-                    .named_type = .{ .module = self.declaredModuleForNominal(view, nominal), .ty = frame.checked_ty },
+                    .named_type = .{ .module = self.declaredModuleForNominal(view, nominal), .ty = frame.checked_ty, .ty_module = moduleDigestFromId(view.key) },
                     .def = def,
                     .kind = if (nominal.is_opaque) .@"opaque" else .nominal,
                     .builtin_owner = builtinOwner(nominal.builtin),
@@ -11694,8 +11723,8 @@ const Builder = struct {
     /// does not, or when the template recorded no evidence of its own.
     fn siteEvidenceDigest(self: *Builder, fn_template: Ast.FnTemplate) ?Ast.EvidenceDigest {
         const evidence = programViewFnEvidence(self.program.view(), fn_template);
-        if (evidence.nodes.len == 0) return null;
-        if (std.debug.runtime_safety and !std.meta.eql(Ast.fnEvidenceDigest(evidence.nodes, evidence.frames, evidence.head), fn_template.evidence_digest)) {
+        if (evidence.entries.nodes.len == 0) return null;
+        if (std.debug.runtime_safety and !std.meta.eql(Ast.fnEvidenceDigest(evidence.entries, evidence.frames, evidence.head), fn_template.evidence_digest)) {
             Common.invariant("a template's recorded evidence differs from the evidence its identity digests");
         }
         const SiteNames = struct {
@@ -11710,8 +11739,8 @@ const Builder = struct {
                 return names_.builder.templateSiteDigest(proc_template);
             }
         };
-        const site_digest = Ast.fnEvidenceSiteDigest(evidence.nodes, evidence.frames, evidence.head, SiteNames{ .builder = self });
-        if (std.meta.eql(site_digest, Ast.fnEvidenceSiteDigest(evidence.nodes, evidence.frames, evidence.head, NoSiteNames{}))) return null;
+        const site_digest = Ast.fnEvidenceSiteDigest(evidence.entries, evidence.frames, evidence.head, SiteNames{ .builder = self });
+        if (std.meta.eql(site_digest, Ast.fnEvidenceSiteDigest(evidence.entries, evidence.frames, evidence.head, NoSiteNames{}))) return null;
         return site_digest;
     }
 
@@ -11821,7 +11850,7 @@ const Builder = struct {
         if (self.program_modules) |modules| return modules;
         const views = self.moduleViews();
         const identities = try self.allocator.alloc([32]u8, views.len);
-        for (views, identities) |view, *identity| identity.* = view.key.module_identity_hash;
+        for (views, identities) |view, *identity| identity.* = view.module_identity.stable_hash;
         self.program_module_buffer = identities;
         const modules = Common.sortProgramModules(identities);
         self.program_modules = modules;
@@ -12657,13 +12686,6 @@ const Builder = struct {
         // (the check would be guaranteed to fire), and a generated step lambda
         // stores merely the template it was generated inside (whose arity need
         // not even match). Neither states the claim this checks.
-        if (fn_template.fn_def != .checked_generated) {
-            try self.requireRequestDidNotWidenResultRow(
-                template_ref,
-                fn_template.mono_fn_ty,
-                "function-template call target widened the template's closed checked result row",
-            );
-        }
         const def = try self.lowerTemplateWithMono(
             template_ref,
             method_scope,
@@ -12678,7 +12700,6 @@ const Builder = struct {
             null,
             .queued,
             null,
-            false,
             self.root_demand,
         );
         return .{ .local = self.defFnId(def) };
@@ -12768,13 +12789,6 @@ const Builder = struct {
                 // type, so the claim is checked rather than stated—`.checked_generated`
                 // excluded for the reason given at the
                 // call-target site above.
-                if (fn_template.fn_def != .checked_generated) {
-                    try self.requireRequestDidNotWidenResultRow(
-                        template_ref,
-                        fn_template.mono_fn_ty,
-                        "restored constant function request widened the template's closed checked result row",
-                    );
-                }
                 const def = try self.lowerTemplateWithMono(
                     template_ref,
                     fn_view,
@@ -12789,7 +12803,6 @@ const Builder = struct {
                     retained,
                     .immediate,
                     null,
-                    false,
                     // A restored constant function is the value an
                     // evaluation produced; it keeps evaluation demand.
                     .evaluation,
@@ -13180,7 +13193,7 @@ const Builder = struct {
             .source_fn_key = source_fn_key,
             .mono_fn_ty = DraftTypeCell.fromGraphNode(request_fn_node),
             .evidence_digest = evidence_digest,
-            .const_evidence = draft_evidence.nodes,
+            .const_evidence = draft_evidence.entries,
             .const_evidence_frames = draft_evidence.frames,
             .const_evidence_frame_head = stored_evidence.head,
         }, .signature_relation = signature_relation });
@@ -14354,7 +14367,6 @@ const Builder = struct {
                 null,
                 body_scheduling,
                 codec_contract,
-                spec.widened_result_row,
                 demand,
             );
             break :blk .{ .local = self.defFnId(def) };
@@ -14564,7 +14576,7 @@ const Builder = struct {
             }
 
             // Evidence does not participate in the specialization type digest.
-            const sealed_template = try BodyDraftStore.sealFnTemplate(committed_types, fn_.source, 0, 0);
+            const sealed_template = try BodyDraftStore.sealFnTemplate(committed_types, fn_.source, .{}, 0);
             const fn_ty = sealed_template.mono_fn_ty;
             solved_fn_tys[raw_index] = fn_ty;
             const requested_evidence = draftFnEvidence(body_draft, fn_.source);
@@ -14890,7 +14902,6 @@ const Builder = struct {
                 } else null,
                 .requires_local = spec.requires_local,
                 .local_context_dependent = spec.local_context_dependent,
-                .widened_result_row = spec.widened_result_row,
                 .lexical_owner = spec.lexical_owner,
                 .fn_id = spec.fn_id,
                 .def_id = spec.def_id,
@@ -15055,6 +15066,7 @@ const Builder = struct {
         verifyDraftTemplateSpecsResolved(body_draft);
         try self.finalizeDraftNestedSpecs(body_draft, body_ids);
         self.markDiscoveryFns(body_draft, commit_extent);
+        try self.settleLiteralRoots();
         var returned_ids = body_ids;
         returned_ids.fn_slots = &.{};
         returned_ids.def_ids = &.{};
@@ -15115,6 +15127,7 @@ const Builder = struct {
         verifyDraftTemplateSpecsResolved(body_draft);
         try self.finalizeDraftNestedSpecs(body_draft, body_ids);
         self.markDiscoveryFns(body_draft, commit_extent);
+        try self.settleLiteralRoots();
         var returned_ids = body_ids;
         returned_ids.fn_slots = &.{};
         returned_ids.def_ids = &.{};
@@ -15330,7 +15343,7 @@ const Builder = struct {
             .source_fn_ty = fn_value.source_fn_ty,
             .source_fn_key = fn_value.source_fn_key,
             .mono_fn_ty = mono_fn_ty,
-            .const_evidence = if (retain_program_evidence) try self.program.addConstFnEvidence(fn_value.evidence) else .empty(),
+            .const_evidence = if (retain_program_evidence) try self.program.addConstFnEvidence(fn_value.evidence) else .{},
             .const_evidence_frames = if (retain_program_evidence) try self.program.addConstFnEvidenceFrames(fn_value.evidence_frames) else .empty(),
             .const_evidence_frame_head = if (retain_program_evidence) fn_value.evidence_frame_head else null,
         };
@@ -15852,7 +15865,7 @@ const Builder = struct {
             .source_fn_ty = fn_value.source_fn_ty,
             .source_fn_key = fn_value.source_fn_key,
             .mono_fn_ty = ty,
-            .evidence_digest = Ast.fnEvidenceDigest(&.{}, &.{}, null),
+            .evidence_digest = Ast.fnEvidenceDigest(.{}, &.{}, null),
         });
         const lambda_args = switch (kind) {
             .parser => try fn_ctx.addTypedLocalSpan(&.{
@@ -15994,13 +16007,6 @@ const Builder = struct {
         return try self.program.addPat(.{ .ty = ty, .data = .{ .bind = local } });
     }
 
-    const HostedTryInfo = struct {
-        ok_ty: Type.TypeId,
-        err_ty: Type.TypeId,
-        ok_tag: Type.Tag,
-        err_tag: Type.Tag,
-    };
-
     /// Reserved labels for the optional-slot encoding; see design.md "Field
     /// Kinds". Sorting fixes Missing at index 0 and Present at index 1.
     const optional_slot_missing_tag = "#Missing";
@@ -16011,456 +16017,6 @@ const Builder = struct {
         missing_tag: Type.Tag,
         present_tag: Type.Tag,
     };
-
-    /// The direct tag row of a Monotype: transparent alias layers are crossed,
-    /// but a nominal (`Builtin.Try` included) is not a bare row, so its
-    /// backing's labels are never mistaken for the result row.
-    fn bareTagUnionTagsOrNull(self: *Builder, ty: Type.TypeId) ?Type.StoreSpanBorrow(Type.Tag, "tags") {
-        var current = ty;
-        while (true) {
-            switch (self.activeTypeStore().get(current)) {
-                .tag_union => |tags| return self.activeTypeStore().tagSpan(tags),
-                .named => |named| {
-                    if (named.kind != .alias) return null;
-                    const backing = named.backing orelse return null;
-                    current = backing.ty;
-                },
-                .primitive, .record, .tuple, .list, .box, .func, .erased, .zst => return null,
-            }
-        }
-    }
-
-    /// Return the exact source type the template is specialized at when a
-    /// request widens its declared result-row label set. The source keeps every
-    /// requested representation choice (arguments, `Ok` payload, and row
-    /// payloads) but contains only the declared labels, so the generated Roc
-    /// adapter performs one explicit row injection and no representation
-    /// conversion. With a capability the adapted row is the result `Try`'s
-    /// error argument—the hosted instance, where the declared row is the
-    /// host ABI; without one it is the function's own result row.
-    fn resultRowWideningAdapterSourceType(
-        self: *Builder,
-        capability: ?HostedTryAdapterCapability,
-        declared_fn_ty: Type.TypeId,
-        requested_fn_ty: Type.TypeId,
-    ) Allocator.Error!?Type.TypeId {
-        if (try self.sameMonoType(declared_fn_ty, requested_fn_ty)) return null;
-        const declared = functionShape(self.coordinatorTypes(), declared_fn_ty, "result-row adapter declared type was not a function");
-        const requested = functionShape(self.coordinatorTypes(), requested_fn_ty, "result-row adapter requested type was not a function");
-        if (try self.sameMonoType(declared.ret, requested.ret)) return null;
-
-        const requested_try: ?HostedTryInfo = if (capability) |try_capability|
-            (try self.hostedTryInfoOrNull(try_capability, requested.ret)) orelse return null
-        else
-            null;
-        const declared_row_ty = if (capability) |try_capability|
-            ((try self.hostedTryInfoOrNull(try_capability, declared.ret)) orelse return null).err_ty
-        else
-            declared.ret;
-        const requested_row_ty = if (requested_try) |info| info.err_ty else requested.ret;
-
-        if (declared.args.len != requested.args.len) {
-            Common.invariant("result-row widening request changed arity from the declared type");
-        }
-
-        const declared_tags = self.bareTagUnionTagsOrNull(declared_row_ty) orelse return null;
-        const requested_tags = self.bareTagUnionTagsOrNull(requested_row_ty) orelse return null;
-        if (requested_tags.len < declared_tags.len) {
-            Common.invariant("result-row widening request removed a declared label");
-        }
-        const narrowed_tags = try self.allocator.alloc(Type.Tag, declared_tags.len);
-        defer self.allocator.free(narrowed_tags);
-        for (0..declared_tags.len) |index| {
-            const declared_tag = GuardedList.at(declared_tags, index);
-            const requested_tag = tagByNameOrNull(self.coordinatorTypes(), &self.program.names, requested_row_ty, declared_tag.name) orelse
-                Common.invariant("result-row widening request removed a declared label");
-            const declared_payloads = self.program.types.span(declared_tag.payloads);
-            const requested_payloads = self.program.types.span(requested_tag.payloads);
-            if (declared_payloads.len != requested_payloads.len) {
-                Common.invariant("result-row widening request changed a declared payload arity");
-            }
-            narrowed_tags[index] = requested_tag;
-        }
-        if (requested_tags.len == declared_tags.len) return null;
-
-        const transaction = self.program.types.beginTransaction();
-        errdefer transaction.abort(&self.program.types);
-        const speculative_row_ty = try self.program.types.add(.{
-            .tag_union = try self.program.types.addTagVariants(&self.program.names, narrowed_tags),
-        });
-        var transaction_result = try self.program.types.commitTransaction(
-            &self.program.names,
-            transaction,
-            speculative_row_ty,
-        );
-        defer transaction_result.deinit();
-        const narrowed_row_ty = transaction_result.root;
-        const narrowed_ret_ty = if (capability) |try_capability|
-            try self.hostedTryTypeLike(try_capability, requested.ret, requested_try.?.ok_ty, narrowed_row_ty)
-        else
-            narrowed_row_ty;
-        return try self.program.types.internFuncFromSpan(&self.program.names, requested.args, narrowed_ret_ty);
-    }
-
-    /// Body of a generated result-row widening adapter: call the template at
-    /// its declared row and re-tag the result into the requested row. With a
-    /// capability the re-tag unwraps and re-wraps the result `Try`; without one
-    /// the function's own result row is injected directly.
-    fn resultRowWideningAdapterBody(
-        self: *Builder,
-        capability: ?HostedTryAdapterCapability,
-        args: Ast.Span(Ast.TypedLocal),
-        source_fn: Ast.FnId,
-        source_fn_ty: Type.TypeId,
-        target_fn_ty: Type.TypeId,
-    ) Allocator.Error!Ast.ExprId {
-        const source = functionShape(self.coordinatorTypes(), source_fn_ty, "result-row adapter source type was not a function");
-        const target = functionShape(self.coordinatorTypes(), target_fn_ty, "result-row adapter target type was not a function");
-        const source_args = self.program.types.span(source.args);
-        const target_args = self.program.types.span(target.args);
-        const adapter_args = self.program.typedLocalSpan(args);
-        if (source_args.len != target_args.len or source_args.len != GuardedList.borrowLen(adapter_args)) {
-            Common.invariant("result-row widening adapter arity differed from its function types");
-        }
-
-        const call_args = try self.allocator.alloc(Ast.ExprId, GuardedList.borrowLen(adapter_args));
-        defer self.allocator.free(call_args);
-        for (0..GuardedList.borrowLen(adapter_args)) |index| {
-            const arg = GuardedList.at(adapter_args, index);
-            const source_arg_ty = GuardedList.at(source_args, index);
-            const target_arg_ty = GuardedList.at(target_args, index);
-            if (!try self.sameMonoType(arg.ty, source_arg_ty) or !try self.sameMonoType(arg.ty, target_arg_ty)) {
-                Common.invariant("result-row widening adapter argument type differed from source or target function type");
-            }
-            call_args[index] = try self.localExpr(arg.local, arg.ty);
-        }
-
-        const source_call = try self.program.addExpr(.{
-            .ty = source.ret,
-            .data = .{ .call_proc = .{
-                .callee = Ast.localProcCallee(source_fn),
-                .args = try self.program.addExprSpan(call_args),
-            } },
-        });
-        if (capability) |try_capability| {
-            return try self.hostedTryReturnInjectionExpr(try_capability, source_call, source.ret, target.ret);
-        }
-        if (!try self.errorRowIsIncludedIn(source.ret, target.ret)) {
-            Common.invariant("result-row adapter source row was not included in target row");
-        }
-        return try self.tagRowInjectionExpr(source_call, source.ret, target.ret);
-    }
-
-    fn hostedTryReturnInjectionExpr(
-        self: *Builder,
-        capability: HostedTryAdapterCapability,
-        source_expr: Ast.ExprId,
-        source_try_ty: Type.TypeId,
-        target_try_ty: Type.TypeId,
-    ) Allocator.Error!Ast.ExprId {
-        if (try self.sameMonoType(source_try_ty, target_try_ty)) return source_expr;
-
-        const source_info = try self.hostedTryInfo(capability, source_try_ty);
-        const target_info = try self.hostedTryInfo(capability, target_try_ty);
-        if (!try self.sameMonoType(source_info.ok_ty, target_info.ok_ty)) {
-            Common.invariant("Try adapter changed Ok type");
-        }
-        if (!try self.errorRowIsIncludedIn(source_info.err_ty, target_info.err_ty)) {
-            Common.invariant("Try adapter error row was not included in target row");
-        }
-
-        const ok_local = try self.program.addLocal(self.symbols.fresh(), source_info.ok_ty);
-        const ok_payload_pat = try self.bindPat(ok_local, source_info.ok_ty);
-        const ok_pat = try self.program.addPat(.{ .ty = source_try_ty, .data = .{ .tag = .{
-            .name = source_info.ok_tag.name,
-            .payloads = try self.program.addPatSpan(&[_]Ast.PatId{ok_payload_pat}),
-        } } });
-        const ok_value = try self.localExpr(ok_local, source_info.ok_ty);
-        const ok_body = try self.hostedTryOkExpr(capability, target_try_ty, ok_value);
-
-        const err_local = try self.program.addLocal(self.symbols.fresh(), source_info.err_ty);
-        const err_payload_pat = try self.bindPat(err_local, source_info.err_ty);
-        const err_pat = try self.program.addPat(.{ .ty = source_try_ty, .data = .{ .tag = .{
-            .name = source_info.err_tag.name,
-            .payloads = try self.program.addPatSpan(&[_]Ast.PatId{err_payload_pat}),
-        } } });
-        const err_value = try self.localExpr(err_local, source_info.err_ty);
-        const injected_err = try self.tagRowInjectionExpr(err_value, source_info.err_ty, target_info.err_ty);
-        const err_body = try self.hostedTryErrExpr(capability, target_try_ty, injected_err);
-
-        const branches = [_]Ast.Branch{
-            .{ .pat = ok_pat, .body = ok_body },
-            .{ .pat = err_pat, .body = err_body },
-        };
-        return try self.program.addExpr(.{ .ty = target_try_ty, .data = .{ .match_ = .{
-            .scrutinee = source_expr,
-            .branches = try self.program.addBranchSpan(&branches),
-        } } });
-    }
-
-    /// Re-tag a value of a closed tag row into a row that includes it. Used
-    /// for a `Try` result's error row and for a direct result row alike.
-    fn tagRowInjectionExpr(
-        self: *Builder,
-        source_expr: Ast.ExprId,
-        source_err_ty: Type.TypeId,
-        target_err_ty: Type.TypeId,
-    ) Allocator.Error!Ast.ExprId {
-        if (try self.sameMonoType(source_err_ty, target_err_ty)) return source_expr;
-
-        const source_tags = tagUnionTags(self.coordinatorTypes(), source_err_ty);
-        if (source_tags.len == 0) {
-            return try self.program.addExpr(.{ .ty = target_err_ty, .data = .{ .match_ = .{
-                .scrutinee = source_expr,
-                .branches = Ast.Span(Ast.Branch).empty(),
-            } } });
-        }
-
-        const branches = try self.allocator.alloc(Ast.Branch, source_tags.len);
-        defer self.allocator.free(branches);
-        for (0..source_tags.len) |index| {
-            const source_tag = GuardedList.at(source_tags, index);
-            const source_payload_tys = self.program.types.span(source_tag.payloads);
-            const target_tag = tagByName(self.coordinatorTypes(), &self.program.names, target_err_ty, source_tag.name);
-            const target_payload_tys = self.program.types.span(target_tag.payloads);
-            if (source_payload_tys.len != target_payload_tys.len) {
-                Common.invariant("Try adapter error tag payload arity differed in target row");
-            }
-
-            const payload_pats = try self.allocator.alloc(Ast.PatId, source_payload_tys.len);
-            defer self.allocator.free(payload_pats);
-            const payload_exprs = try self.allocator.alloc(Ast.ExprId, source_payload_tys.len);
-            defer self.allocator.free(payload_exprs);
-            for (0..source_payload_tys.len) |payload_index| {
-                const source_payload_ty = GuardedList.at(source_payload_tys, payload_index);
-                const target_payload_ty = GuardedList.at(target_payload_tys, payload_index);
-                if (!try self.sameMonoType(source_payload_ty, target_payload_ty)) {
-                    Common.invariant("Try adapter error tag payload type differed in target row");
-                }
-                const local = try self.program.addLocal(self.symbols.fresh(), source_payload_ty);
-                payload_pats[payload_index] = try self.bindPat(local, source_payload_ty);
-                payload_exprs[payload_index] = try self.localExpr(local, source_payload_ty);
-            }
-
-            const pat = try self.program.addPat(.{ .ty = source_err_ty, .data = .{ .tag = .{
-                .name = source_tag.name,
-                .payloads = try self.program.addPatSpan(payload_pats),
-            } } });
-            const body = try self.tagValueExpr(target_err_ty, target_tag, payload_exprs);
-            branches[index] = .{ .pat = pat, .body = body };
-        }
-
-        return try self.program.addExpr(.{ .ty = target_err_ty, .data = .{ .match_ = .{
-            .scrutinee = source_expr,
-            .branches = try self.program.addBranchSpan(branches),
-        } } });
-    }
-
-    fn hostedTryOkExpr(self: *Builder, capability: HostedTryAdapterCapability, try_ty: Type.TypeId, value_expr: Ast.ExprId) Allocator.Error!Ast.ExprId {
-        const info = try self.hostedTryInfo(capability, try_ty);
-        return try self.tagValueExpr(try_ty, info.ok_tag, &[_]Ast.ExprId{value_expr});
-    }
-
-    fn hostedTryErrExpr(self: *Builder, capability: HostedTryAdapterCapability, try_ty: Type.TypeId, err_expr: Ast.ExprId) Allocator.Error!Ast.ExprId {
-        const info = try self.hostedTryInfo(capability, try_ty);
-        return try self.tagValueExpr(try_ty, info.err_tag, &[_]Ast.ExprId{err_expr});
-    }
-
-    fn tagValueExpr(
-        self: *Builder,
-        ty: Type.TypeId,
-        tag: Type.Tag,
-        payloads: []const Ast.ExprId,
-    ) Allocator.Error!Ast.ExprId {
-        const backing_ty = nominalExprBackingType(self.coordinatorTypes(), ty) orelse ty;
-        const tag_expr = try self.program.addExpr(.{
-            .ty = backing_ty,
-            .data = .{ .tag = .{
-                .name = tag.name,
-                .payloads = try self.program.addExprSpan(payloads),
-            } },
-        });
-        if (nominalExprBackingType(self.coordinatorTypes(), ty) != null) {
-            return try self.program.addExpr(.{ .ty = ty, .data = .{ .nominal = tag_expr } });
-        }
-        return tag_expr;
-    }
-
-    fn hostedTryInfo(self: *Builder, capability: HostedTryAdapterCapability, try_ty: Type.TypeId) Allocator.Error!HostedTryInfo {
-        return (try self.hostedTryInfoOrNull(capability, try_ty)) orelse
-            Common.invariant("hosted Try capability did not match its Monotype result");
-    }
-
-    /// The hosted `Try` nominal a Monotype names, crossing transparent alias
-    /// layers on the way. The checked side already crosses them—`closedResultRowOrNull`
-    /// resolves the result payload through aliases—so
-    /// a template declared `Res : Try(Str, [NotFound])` carries a capability
-    /// and a recorded row widening. Its lowered return is a `.alias` named node
-    /// whose backing is the `Try` nominal, so matching only the outermost def
-    /// would decline a widening the checker already committed to.
-    ///
-    /// Reads `self.program.types` rather than `activeTypeStore()`: the adapter
-    /// pre-step pins the program store as the destination deliberately.
-    fn hostedTryNamedOrNull(
-        self: *Builder,
-        capability: HostedTryAdapterCapability,
-        try_ty: Type.TypeId,
-    ) ?Type.NamedContent {
-        var current = try_ty;
-        // Bounded like the graph-side walk above, and for the same reason: a
-        // backing cycle through two or more types hangs the compiler, which no
-        // `unreachable` would report in a release build.
-        var remaining = self.program.types.typeCount();
-        while (remaining > 0) : (remaining -= 1) {
-            const named = switch (self.program.types.get(current)) {
-                .named => |named| named,
-                .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return null,
-            };
-            if (sameTypeDef(named.def, capability.def)) return named;
-            if (named.kind != .alias) return null;
-            const backing = named.backing orelse return null;
-            current = backing.ty;
-        }
-        Common.compilerBug("transparent alias backing chain was cyclic");
-    }
-
-    fn hostedTryInfoOrNull(self: *Builder, capability: HostedTryAdapterCapability, try_ty: Type.TypeId) Allocator.Error!?HostedTryInfo {
-        const named = self.hostedTryNamedOrNull(capability, try_ty) orelse return null;
-        if (capability.ok_type_arg_index >= self.program.types.span(named.args).len or
-            capability.err_type_arg_index >= self.program.types.span(named.args).len)
-        {
-            Common.invariant("hosted Try capability referenced a missing Monotype type argument");
-        }
-        const backing_ty = named.backing orelse Common.invariant("hosted Try nominal had no backing");
-        const ok_tag = tagByNameOrNull(self.coordinatorTypes(), &self.program.names, backing_ty.ty, capability.ok_tag) orelse
-            Common.invariant("hosted Try backing omitted its capability-recorded Ok tag");
-        const err_tag = tagByNameOrNull(self.coordinatorTypes(), &self.program.names, backing_ty.ty, capability.err_tag) orelse
-            Common.invariant("hosted Try backing omitted its capability-recorded Err tag");
-        const ok_payloads = self.program.types.span(ok_tag.payloads);
-        const err_payloads = self.program.types.span(err_tag.payloads);
-        if (ok_payloads.len != 1 or err_payloads.len != 1) {
-            Common.invariant("hosted Try capability tags did not have one payload each");
-        }
-        const args = self.program.types.span(named.args);
-        const ok_ty = GuardedList.at(args, capability.ok_type_arg_index);
-        const err_ty = GuardedList.at(args, capability.err_type_arg_index);
-        if (!try self.sameMonoType(ok_ty, GuardedList.at(ok_payloads, 0)) or
-            !try self.sameMonoType(err_ty, GuardedList.at(err_payloads, 0)))
-        {
-            Common.invariant("hosted Try capability payload mapping disagreed with its nominal arguments");
-        }
-        return .{
-            .ok_ty = ok_ty,
-            .err_ty = err_ty,
-            .ok_tag = ok_tag,
-            .err_tag = err_tag,
-        };
-    }
-
-    fn hostedTryTypeLike(
-        self: *Builder,
-        capability: HostedTryAdapterCapability,
-        template_try_ty: Type.TypeId,
-        ok_ty: Type.TypeId,
-        err_ty: Type.TypeId,
-    ) Allocator.Error!Type.TypeId {
-        // Crosses alias layers like `hostedTryInfoOrNull`, so an alias-wrapped
-        // template `Try` is recognized here too. The rebuilt type is the bare
-        // `Try` nominal: this is the adapter's narrowed source row, which is a
-        // different row from the one any crossed alias declares.
-        const template = self.hostedTryNamedOrNull(capability, template_try_ty) orelse
-            Common.invariant("hosted Try capability did not match the adapter template nominal");
-        const template_backing = template.backing orelse
-            Common.invariant("Try template type had no backing");
-        const template_tags = switch (shapeContent(self.coordinatorTypes(), template_backing.ty)) {
-            .tag_union => |span| self.program.types.tagSpan(span),
-            .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => Common.invariant("Try template backing type was not a tag union"),
-        };
-        const transaction = self.program.types.beginTransaction();
-        errdefer transaction.abort(&self.program.types);
-        const tags = try self.allocator.alloc(Type.Tag, template_tags.len);
-        defer self.allocator.free(tags);
-        var found_ok = false;
-        var found_err = false;
-        for (0..template_tags.len) |index| {
-            const tag = GuardedList.at(template_tags, index);
-            const payload_ty = if (tag.name == capability.ok_tag) blk: {
-                found_ok = true;
-                break :blk ok_ty;
-            } else if (tag.name == capability.err_tag) blk: {
-                found_err = true;
-                break :blk err_ty;
-            } else Common.invariant("hosted Try backing contained a tag absent from its capability");
-            tags[index] = .{
-                .name = tag.name,
-                .checked_name = tag.checked_name,
-                .payloads = try self.program.types.addSpan(&.{payload_ty}),
-            };
-        }
-        if (!found_ok or !found_err) {
-            Common.invariant("Try backing type did not contain Ok and Err tags");
-        }
-        const backing_ty = try self.program.types.add(.{
-            .tag_union = try self.program.types.addTagVariants(&self.program.names, tags),
-        });
-        const template_args = self.program.types.span(template.args);
-        if (capability.ok_type_arg_index >= template_args.len or capability.err_type_arg_index >= template_args.len) {
-            Common.invariant("hosted Try capability referenced a missing template type argument");
-        }
-        const args = try GuardedList.dupe(self.allocator, Type.TypeId, template_args);
-        defer self.allocator.free(args);
-        args[capability.ok_type_arg_index] = ok_ty;
-        args[capability.err_type_arg_index] = err_ty;
-        const speculative = try self.program.types.add(.{ .named = .{
-            .named_type = template.named_type,
-            .def = template.def,
-            .kind = template.kind,
-            .builtin_owner = template.builtin_owner,
-            .args = try self.program.types.addSpan(args),
-            .backing = .{
-                .ty = backing_ty,
-                .use = template_backing.use,
-                .authority = template_backing.authority,
-            },
-            .declared_order = template.declared_order,
-        } });
-        var result = try self.program.types.commitTransaction(
-            &self.program.names,
-            transaction,
-            speculative,
-        );
-        defer result.deinit();
-        return result.root;
-    }
-
-    fn errorRowIsIncludedIn(self: *Builder, source_err_ty: Type.TypeId, target_err_ty: Type.TypeId) Allocator.Error!bool {
-        if (try self.sameMonoType(source_err_ty, target_err_ty)) return true;
-        const source_tags = tagUnionTags(self.coordinatorTypes(), source_err_ty);
-        for (0..source_tags.len) |index| {
-            const source_tag = GuardedList.at(source_tags, index);
-            const target_tag = tagByNameOrNull(self.coordinatorTypes(), &self.program.names, target_err_ty, source_tag.name) orelse return false;
-            const source_payloads = self.program.types.span(source_tag.payloads);
-            const target_payloads = self.program.types.span(target_tag.payloads);
-            if (source_payloads.len != target_payloads.len) return false;
-            for (0..source_payloads.len) |payload_index| {
-                const source_payload = GuardedList.at(source_payloads, payload_index);
-                const target_payload = GuardedList.at(target_payloads, payload_index);
-                if (!try self.sameMonoType(source_payload, target_payload)) return false;
-            }
-        }
-        return true;
-    }
-
-    /// Whether two Monotypes describe the same type. This is the structural
-    /// `typeEql` relation rather than a stored-identity digest comparison:
-    /// checking may present one unified type both alias-wrapped and unwrapped
-    /// (a nominal's type argument can keep an alias name that the backing
-    /// row's payload resolved away), and a digest keeps aliases opaque, so
-    /// digest equality would report such equal types as different.
-    fn sameMonoType(self: *Builder, a: Type.TypeId, b: Type.TypeId) Allocator.Error!bool {
-        if (a == b) return true;
-        return try self.program.types.typeEql(&self.program.names, a, b);
-    }
 };
 
 fn optionalFieldSlotForType(
@@ -16622,7 +16178,7 @@ const DraftFnTemplate = struct {
     source_fn_key: names.TypeDigest,
     mono_fn_ty: DraftTypeCell,
     evidence_digest: Ast.EvidenceDigest = .{},
-    const_evidence: DraftSpan(check.ConstStore.ConstFnEvidence) = DraftSpan(check.ConstStore.ConstFnEvidence).empty(),
+    const_evidence: DraftConstEvidence = .{},
     const_evidence_frames: DraftSpan(check.ConstStore.ConstFnEvidenceFrame) = DraftSpan(check.ConstStore.ConstFnEvidenceFrame).empty(),
     const_evidence_frame_head: ?u32 = null,
 };
@@ -17670,11 +17226,6 @@ const DraftTemplateSpec = struct {
     demand_frame_floor: RuntimeDemandGuardFrameStack = .{},
     requires_local: bool = false,
     local_context_dependent: bool = false,
-    /// Whether this request's relation declined to unify the template's closed
-    /// checked result row with the requested one. Recorded by the relation
-    /// and consumed by `completeTemplateReservation`, which mints the widening
-    /// adapter exactly when it is set (design.md "Result-Row Widening Adapter").
-    widened_result_row: bool = false,
     lexical_owner: ?DraftOwner = null,
     lexical: ?DraftCodecLexicalContext = null,
     lexical_context_key: ?names.TypeDigest = null,
@@ -17711,8 +17262,6 @@ const SealedTemplateSpec = struct {
     codec_contract: ?SealedCodecContractContext,
     requires_local: bool,
     local_context_dependent: bool,
-    /// The request relation's recorded answer, carried to completion.
-    widened_result_row: bool,
     lexical_owner: ?DraftOwner,
     fn_id: DraftFnId,
     def_id: ?DraftDefId,
@@ -18919,6 +18468,8 @@ const BodyDraftStore = struct {
     worker_local_symbol_count: u32,
     fns: std.ArrayList(DraftFn),
     const_fn_evidence: std.ArrayList(check.ConstStore.ConstFnEvidence),
+    const_fn_evidence_targets: std.ArrayList(check.ConstStore.ConstFnTargetEvidence),
+    const_fn_evidence_structurals: std.ArrayList(check.ConstStore.ConstFnStructuralEvidence),
     const_fn_evidence_frames: std.ArrayList(check.ConstStore.ConstFnEvidenceFrame),
     /// The spans already holding a stored evidence value, by the identity of
     /// its `Builder.evidence_arena` storage, so every function created from
@@ -19106,6 +18657,8 @@ const BodyDraftStore = struct {
             .worker_local_symbol_count = 0,
             .fns = .empty,
             .const_fn_evidence = .empty,
+            .const_fn_evidence_targets = .empty,
+            .const_fn_evidence_structurals = .empty,
             .const_fn_evidence_frames = .empty,
             .defs = .empty,
             .def_owners = .empty,
@@ -19403,6 +18956,8 @@ const BodyDraftStore = struct {
         self.defs.deinit(self.allocator);
         self.const_fn_evidence_frames.deinit(self.allocator);
         self.const_fn_evidence.deinit(self.allocator);
+        self.const_fn_evidence_targets.deinit(self.allocator);
+        self.const_fn_evidence_structurals.deinit(self.allocator);
         self.stored_evidence_spans.deinit(self.allocator);
         self.fns.deinit(self.allocator);
     }
@@ -19813,8 +19368,10 @@ const BodyDraftStore = struct {
     /// lives, so that storage's identity names its contents.
     fn addStoredConstFnEvidence(self: *BodyDraftStore, stored: StoredConstFnEvidence) Allocator.Error!DraftEvidenceSpans {
         const key: StoredEvidenceStorage = .{
-            .nodes_ptr = @intFromPtr(stored.nodes.ptr),
-            .nodes_len = stored.nodes.len,
+            .nodes_ptr = @intFromPtr(stored.entries.nodes.ptr),
+            .nodes_len = stored.entries.nodes.len,
+            .targets_ptr = @intFromPtr(stored.entries.targets.ptr),
+            .structurals_ptr = @intFromPtr(stored.entries.structurals.ptr),
             .frames_ptr = @intFromPtr(stored.frames.ptr),
             .frames_len = stored.frames.len,
         };
@@ -19822,17 +19379,23 @@ const BodyDraftStore = struct {
         if (!entry.found_existing) {
             errdefer _ = self.stored_evidence_spans.remove(key);
             entry.value_ptr.* = .{
-                .nodes = try self.addConstFnEvidence(stored.nodes),
+                .entries = try self.addConstFnEvidence(stored.entries),
                 .frames = try self.addConstFnEvidenceFrames(stored.frames),
             };
         }
         return entry.value_ptr.*;
     }
 
-    fn addConstFnEvidence(self: *BodyDraftStore, values: []const check.ConstStore.ConstFnEvidence) Allocator.Error!DraftSpan(check.ConstStore.ConstFnEvidence) {
-        const start: u32 = @intCast(self.const_fn_evidence.items.len);
-        try self.const_fn_evidence.appendSlice(self.allocator, values);
-        return .{ .start = start, .len = @intCast(values.len) };
+    fn addConstFnEvidence(self: *BodyDraftStore, values: check.ConstStore.ConstFnEvidenceVector) Allocator.Error!DraftConstEvidence {
+        const spans: DraftConstEvidence = .{
+            .nodes = .{ .start = @intCast(self.const_fn_evidence.items.len), .len = @intCast(values.nodes.len) },
+            .targets = .{ .start = @intCast(self.const_fn_evidence_targets.items.len), .len = @intCast(values.targets.len) },
+            .structurals = .{ .start = @intCast(self.const_fn_evidence_structurals.items.len), .len = @intCast(values.structurals.len) },
+        };
+        try self.const_fn_evidence.appendSlice(self.allocator, values.nodes);
+        try self.const_fn_evidence_targets.appendSlice(self.allocator, values.targets);
+        try self.const_fn_evidence_structurals.appendSlice(self.allocator, values.structurals);
+        return spans;
     }
 
     fn addConstFnEvidenceFrames(self: *BodyDraftStore, values: []const check.ConstStore.ConstFnEvidenceFrame) Allocator.Error!DraftSpan(check.ConstStore.ConstFnEvidenceFrame) {
@@ -19841,8 +19404,12 @@ const BodyDraftStore = struct {
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
-    fn constFnEvidence(self: *const BodyDraftStore, span: DraftSpan(check.ConstStore.ConstFnEvidence)) []const check.ConstStore.ConstFnEvidence {
-        return self.const_fn_evidence.items[span.start..][0..span.len];
+    fn constFnEvidence(self: *const BodyDraftStore, spans: DraftConstEvidence) check.ConstStore.ConstFnEvidenceVector {
+        return .{
+            .nodes = self.const_fn_evidence.items[spans.nodes.start..][0..spans.nodes.len],
+            .targets = self.const_fn_evidence_targets.items[spans.targets.start..][0..spans.targets.len],
+            .structurals = self.const_fn_evidence_structurals.items[spans.structurals.start..][0..spans.structurals.len],
+        };
     }
 
     fn constFnEvidenceFrames(self: *const BodyDraftStore, span: DraftSpan(check.ConstStore.ConstFnEvidenceFrame)) []const check.ConstStore.ConstFnEvidenceFrame {
@@ -20322,7 +19889,11 @@ const BodyDraftStore = struct {
         defer shared_literal_root_defs.deinit();
         var ids = draft_ids;
         ids.shared_literal_root_defs = &shared_literal_root_defs;
-        const evidence_span = try program.addConstFnEvidence(self.const_fn_evidence.items);
+        const evidence_span = try program.addConstFnEvidence(.{
+            .nodes = self.const_fn_evidence.items,
+            .targets = self.const_fn_evidence_targets.items,
+            .structurals = self.const_fn_evidence_structurals.items,
+        });
         const evidence_frames_span = try program.addConstFnEvidenceFrames(self.const_fn_evidence_frames.items);
 
         // The map belongs to this import, not the worker lane: independent
@@ -20441,8 +20012,7 @@ const BodyDraftStore = struct {
                 .checked_capture_id = local.checked_capture_id,
                 .capture_kind = local.capture_kind,
             });
-            const local_name = self.sourceText(self.local_names.items[index]);
-            program.local_names.appendAssumeCapacity(if (local_name.len == 0) "" else try program.allocator.dupe(u8, local_name));
+            program.local_names.appendAssumeCapacity(try program.local_name_table.intern(program.allocator, self.sourceText(self.local_names.items[index])));
         }
 
         try program.fn_def_captures.ensureUnusedCapacity(program.allocator, self.fn_def_captures.items.len);
@@ -20560,7 +20130,7 @@ const BodyDraftStore = struct {
         for (self.fns.items, 0..) |fn_, index| {
             if (emit_fns) |emit| if (!emit[index]) continue;
             program.fns.appendAssumeCapacity(.{
-                .source = try BodyDraftStore.sealFnTemplate(committed_types, fn_.source, evidence_span.start, evidence_frames_span.start),
+                .source = try BodyDraftStore.sealFnTemplate(committed_types, fn_.source, evidence_span, evidence_frames_span.start),
                 .signature_relation = fn_.signature_relation,
             });
         }
@@ -20568,7 +20138,7 @@ const BodyDraftStore = struct {
         try program.defs.ensureUnusedCapacity(program.allocator, self.defs.items.len);
         for (self.defs.items, 0..) |def, index| {
             if (emit_defs) |emit| if (!emit[index]) continue;
-            const sealed_fn_def = if (def.fn_def) |template| try BodyDraftStore.sealFnTemplate(committed_types, template, evidence_span.start, evidence_frames_span.start) else null;
+            const sealed_fn_def = if (def.fn_def) |template| try BodyDraftStore.sealFnTemplate(committed_types, template, evidence_span, evidence_frames_span.start) else null;
             const sealed_fn_id = if (def.fn_id) |fn_id| ids.fnTarget(fn_id) else null;
             if (sealed_fn_def) |template| {
                 if (sealed_fn_id) |fn_id| {
@@ -20595,7 +20165,7 @@ const BodyDraftStore = struct {
         try program.nested_defs.ensureUnusedCapacity(program.allocator, self.nested_defs.items.len);
         for (self.nested_defs.items, 0..) |def, index| {
             if (emit_nested_defs) |emit| if (!emit[index]) continue;
-            const sealed_fn_def = try BodyDraftStore.sealFnTemplate(committed_types, def.fn_def, evidence_span.start, evidence_frames_span.start);
+            const sealed_fn_def = try BodyDraftStore.sealFnTemplate(committed_types, def.fn_def, evidence_span, evidence_frames_span.start);
             const sealed_fn_id = ids.fnTarget(def.fn_id);
             program.setFnSource(sealed_fn_id, sealed_fn_def);
             program.nested_defs.appendAssumeCapacity(.{
@@ -20661,7 +20231,7 @@ const BodyDraftStore = struct {
     fn sealFnTemplate(
         committed_types: *CommittedGraphTypes,
         template: DraftFnTemplate,
-        evidence_start: u32,
+        evidence_base: Ast.ConstEvidenceSpans,
         evidence_frames_start: u32,
     ) Allocator.Error!Ast.FnTemplate {
         return .{
@@ -20670,7 +20240,11 @@ const BodyDraftStore = struct {
             .source_fn_key = template.source_fn_key,
             .mono_fn_ty = try template.mono_fn_ty.sealCommitted(committed_types),
             .evidence_digest = template.evidence_digest,
-            .const_evidence = .{ .start = evidence_start + template.const_evidence.start, .len = template.const_evidence.len },
+            .const_evidence = .{
+                .nodes = .{ .start = evidence_base.nodes.start + template.const_evidence.nodes.start, .len = template.const_evidence.nodes.len },
+                .targets = .{ .start = evidence_base.targets.start + template.const_evidence.targets.start, .len = template.const_evidence.targets.len },
+                .structurals = .{ .start = evidence_base.structurals.start + template.const_evidence.structurals.start, .len = template.const_evidence.structurals.len },
+            },
             .const_evidence_frames = .{ .start = evidence_frames_start + template.const_evidence_frames.start, .len = template.const_evidence_frames.len },
             .const_evidence_frame_head = template.const_evidence_frame_head,
         };
@@ -21783,7 +21357,7 @@ const InterfaceSummaryCache = struct {
         const owned: InterfaceSummaryEntry = .{
             .address = source.address,
             .evidence = .{
-                .nodes = try arena.dupe(check.ConstStore.ConstFnEvidence, source.evidence.nodes),
+                .entries = try check.ConstStore.dupeVector(arena, source.evidence.entries),
                 .frames = try arena.dupe(check.ConstStore.ConstFnEvidenceFrame, source.evidence.frames),
                 .head = source.evidence.head,
                 .digest = source.evidence.digest,
@@ -23809,7 +23383,7 @@ const BodyContext = struct {
     }
 
     fn addFn(self: *BodyContext, source: Ast.FnTemplate) Allocator.Error!DraftFnId {
-        if (source.const_evidence.len != 0 or source.const_evidence_frames.len != 0 or source.const_evidence_frame_head != null) {
+        if (!source.const_evidence.isEmpty() or source.const_evidence_frames.len != 0 or source.const_evidence_frame_head != null) {
             Common.invariant("body-local function source carried evidence outside its lexical lowering context");
         }
         const stored_evidence = try self.storedEvidence(self.evidence);
@@ -23821,7 +23395,7 @@ const BodyContext = struct {
                 .source_fn_ty = source.source_fn_ty,
                 .source_fn_key = source.source_fn_key,
                 .mono_fn_ty = try self.draftTypeCell(source.mono_fn_ty),
-                .const_evidence = draft_evidence.nodes,
+                .const_evidence = draft_evidence.entries,
                 .const_evidence_frames = draft_evidence.frames,
                 .const_evidence_frame_head = stored_evidence.head,
                 .evidence_digest = evidence_digest,
@@ -26894,7 +26468,7 @@ const BodyContext = struct {
         const nominal = task.nominal;
         task.def = try typeDef(self.nameStoreMut(), self.builder.app_module_identity, self.view, nominal.origin_module, nominal.name, nominal.source_decl);
         self.builder.noteBuiltinTryDef(nominal.builtin, self.nameStore(), task.def);
-        task.named_type = .{ .module = self.builder.declaredModuleForNominal(self.view, nominal), .ty = task.checked_ty };
+        task.named_type = .{ .module = self.builder.declaredModuleForNominal(self.view, nominal), .ty = task.checked_ty, .ty_module = moduleDigestFromId(self.view.key) };
         frame.cursor = InstNominalCursor.declared_order;
         return .{ .call = .{ .declared_order = try self.boxInstTask(InstDeclaredOrderTask, .{ .nominal = nominal, .args = task.args }) } };
     }
@@ -28019,21 +27593,11 @@ const BodyContext = struct {
         callee_ctx.evidence = rootEvidenceWithSubstitution(template_ref, templateSchemaIn(callee_view, &template), edge);
         try callee_ctx.seedSubstitution(callee_ctx.evidence.schema.?, edge.subst);
         const root_node = try callee_ctx.instNode(template.checked_fn_root);
-        if (!try relateClosedResultRowRequestInterface(
-            self.graph,
-            callee_view,
-            template.checked_fn_root,
-            root_node,
-            roots[0],
-            // A `.local_proc` target returned above, so this request is always
-            // served by a procedure template specialization.
-            .adapter_reachable,
-        )) {
-            if (template.target == .hosted) {
-                try relateFunctionRequestInterface(self.graph, root_node, roots[0]);
-            } else {
-                try relateConstructionFunctionRequestInterface(self.graph, root_node, roots[0]);
-            }
+        try widenClosedResultRowToRequest(self.graph, callee_view, template.checked_fn_root, root_node, roots[0]);
+        if (template.target == .hosted) {
+            try relateFunctionRequestInterface(self.graph, root_node, roots[0]);
+        } else {
+            try relateConstructionFunctionRequestInterface(self.graph, root_node, roots[0]);
         }
         try callee_ctx.relateMaterializedEvidenceConstraints(callee_ctx, callee_ctx.evidence.schema.?, edge.vector);
         if (templateInterfaceIsClosed(callee_view, &template)) {
@@ -28575,6 +28139,11 @@ const BodyContext = struct {
         ops_start: usize,
         next: usize,
         results_start: usize,
+        /// The checked tags when the checked row is closed and every one of
+        /// its tags is in the produced closed row: the
+        /// children relate the checked tags' payloads, and the witness is
+        /// the checked row (`includedRowPayloadOps`).
+        included_tags: ?[]const InstTag = null,
     };
 
     /// Relate a checked node to the value actually produced, returning the
@@ -28623,7 +28192,14 @@ const BodyContext = struct {
             }
 
             _ = frames.pop();
-            const witness = if (failed) null else try self.buildProducedValueWitness(frame, results.items[frame.results_start..]);
+            const witness = if (failed)
+                null
+            else if (frame.included_tags) |checked_tags|
+                try self.buildIncludedRowWitness(frame.checked_node, checked_tags, results.items[frame.results_start..])
+            else if (self.childWitnessesAreChecked(ops.items[frame.ops_start..], results.items[frame.results_start..]))
+                frame.checked_node
+            else
+                try self.buildProducedValueWitness(frame, results.items[frame.results_start..]);
             ops.shrinkRetainingCapacity(frame.ops_start);
             results.shrinkRetainingCapacity(frame.results_start);
             const checked_root = self.graph.rootNode(frame.checked_node);
@@ -28682,6 +28258,7 @@ const BodyContext = struct {
         if (try self.producedPairCompletesRequest(checked_root, produced_root, completions)) return produced_node;
 
         const ops_start = ops.items.len;
+        var included_tags: ?[]const InstTag = null;
         const matched: bool = matched: {
             const checked_content = (try self.graph.content(checked_root));
             const produced_content = (try self.graph.content(produced_root));
@@ -28741,7 +28318,10 @@ const BodyContext = struct {
                 },
                 .tag_union => |checked_row| switch (produced_content) {
                     .tag_union => |produced_row| {
-                        if (checked_row.tags.len != produced_row.tags.len) break :matched false;
+                        if (!sameTagLabels(checked_row.tags, produced_row.tags)) {
+                            included_tags = try self.includedRowPayloadOps(checked_root, produced_root, ops);
+                            break :matched included_tags != null;
+                        }
                         if (!(try self.rowExtsAreValueCompatible(checked_row.ext, produced_row.ext, .tag_union))) break :matched false;
                         for (checked_row.tags, produced_row.tags) |checked_tag, produced_tag| {
                             try ops.append(gpa, .{ .tag = .{
@@ -28774,9 +28354,86 @@ const BodyContext = struct {
             .ops_start = ops_start,
             .next = ops_start,
             .results_start = results.items.len,
+            .included_tags = included_tags,
         });
         pushed = true;
         return null;
+    }
+
+    /// A closed checked row whose every tag is in a closed produced row
+    /// relates tag by tag, whatever order the two rows list their tags in:
+    /// each checked tag's payloads to the produced tag of its label. The value was produced at the produced row,
+    /// and Lambda Solved joins the read with its producer (design.md "Row
+    /// Joins"), so the checked row is not unified with the wider one here.
+    /// Returns the checked tags after appending their payload pairs, or null
+    /// when the rows are not in that relation.
+    fn includedRowPayloadOps(
+        self: *BodyContext,
+        checked_root: NodeId,
+        produced_root: NodeId,
+        ops: *std.ArrayListUnmanaged(ProducedValueOp),
+    ) Allocator.Error!?[]const InstTag {
+        if (!(try self.graph.tagRowIsClosed(checked_root)) or !(try self.graph.tagRowIsClosed(produced_root))) return null;
+        const checked_row = (try self.graph.tagRowNodesOrNull(checked_root)) orelse return null;
+        const produced_row = (try self.graph.tagRowNodesOrNull(produced_root)) orelse return null;
+        if (checked_row.tags.len > produced_row.tags.len) return null;
+        for (checked_row.tags) |checked_tag| {
+            const produced_tag = graphTagByName(produced_row.tags, checked_tag.name) orelse return null;
+            if (checked_tag.payloads.len != produced_tag.payloads.len) return null;
+        }
+        for (checked_row.tags) |checked_tag| {
+            const produced_tag = graphTagByName(produced_row.tags, checked_tag.name).?;
+            for (checked_tag.payloads, produced_tag.payloads) |checked_payload, produced_payload| {
+                try ops.append(self.allocator, .{ .child = .{ .checked = checked_payload, .produced = produced_payload } });
+            }
+        }
+        return try self.graph.arena().dupe(InstTag, checked_row.tags);
+    }
+
+    /// Whether a matched container's children all relate to their checked
+    /// side while some differs from its produced side. The produced
+    /// container rebuilt around them would pair the produced row's tags or a
+    /// named type's produced arguments with checked children (an included
+    /// row below, `includedRowPayloadOps`), so the witness is the checked
+    /// container, whose children these are.
+    fn childWitnessesAreChecked(self: *BodyContext, frame_ops: []const ProducedValueOp, children: []const NodeId) bool {
+        var index: usize = 0;
+        var differs = false;
+        for (frame_ops) |op| switch (op) {
+            .child => |child| {
+                if (!self.graph.sameClass(children[index], child.checked)) return false;
+                differs = differs or !self.graph.sameClass(children[index], child.produced);
+                index += 1;
+            },
+            .field_name, .tag => {},
+        };
+        return differs;
+    }
+
+    /// An included row's witness (`includedRowPayloadOps`): the checked row,
+    /// with each payload at its witness; the checked node itself when no
+    /// payload's witness differs.
+    fn buildIncludedRowWitness(self: *BodyContext, checked_node: NodeId, checked_tags: []const InstTag, children: []const NodeId) Allocator.Error!NodeId {
+        const tags = try self.graph.arena().alloc(InstTag, checked_tags.len);
+        var changed = false;
+        var offset: usize = 0;
+        for (checked_tags, tags) |checked_tag, *out| {
+            const payloads = try self.graph.arena().dupe(NodeId, children[offset..][0..checked_tag.payloads.len]);
+            offset += checked_tag.payloads.len;
+            for (payloads, checked_tag.payloads) |payload, checked_payload| {
+                changed = changed or !self.graph.sameClass(payload, checked_payload);
+            }
+            out.* = .{
+                .name = checked_tag.name,
+                .checked_name = checked_tag.checked_name,
+                .payloads = payloads,
+            };
+        }
+        if (!changed) return checked_node;
+        return try self.graph.newNode(.{ .tag_union = .{
+            .tags = tags,
+            .ext = try self.graph.newNode(.empty_tag_union),
+        } });
     }
 
     /// A pair whose containers do not match relates through their shared
@@ -29565,15 +29222,20 @@ const BodyContext = struct {
         }
         // A body whose checked type is not the
         // function's checked result is a composed `?` result (design.md "Try
-        // Return-Row Composition"), lowered at its own type's cell and
-        // returned across the function's return boundary.
+        // Return-Row Composition"). When every value it ends in takes the
+        // result's row—a direct call whose callee is specialized at that
+        // row, or a construction—it is lowered at the result's cell; otherwise
+        // it is lowered at its own type's cell and returned across the
+        // function's return boundary.
         if (self.checkedExprDivergesInLoweredRuntime(checked_body)) {
             lowering.body = .{ .child = .{ .cell = body_ret_cell, .return_boundary = false } };
             return lowering;
         }
         const body_ty = self.view.bodies.expr(checked_body).ty;
         const fn_ret_ty = self.checkedFunctionType(self.view.bodies.expr(lambda_id).ty).ret;
-        if (resolvedPayload(self.view, body_ty).root == resolvedPayload(self.view, fn_ret_ty).root) {
+        if (resolvedPayload(self.view, body_ty).root == resolvedPayload(self.view, fn_ret_ty).root or
+            try self.coercedValueTakesRow(checked_body, lowering.declared_ret_node))
+        {
             lowering.body = .{ .child = .{ .cell = body_ret_cell, .return_boundary = false } };
             return lowering;
         }
@@ -30805,6 +30467,9 @@ const BodyContext = struct {
             self.builder.countBodyDiagnostic("direct_call_request_reuses");
             if (task.expected_ret_node) |expected| {
                 const fn_nodes = try self.graph.functionNodes(request.fn_node);
+                if (closedResultRowOrNull(self.view, task.source_fn_ty)) |declared_row| {
+                    try widenClosedResultRow(self.graph, declared_row, fn_nodes.ret, expected);
+                }
                 _ = try checkedMonoRequestNode(self.graph, fn_nodes.ret, expected, .exact);
             }
             return .{ .ret = .{ .node = request.fn_node } };
@@ -30926,10 +30591,18 @@ const BodyContext = struct {
         }
         var request_ret = task.ret_node;
         if (task.expected_ret_node) |expected| {
-            request_ret = if (try self.graph.containsGeneratedPrivate(expected))
-                expected
-            else
-                try checkedMonoRequestNode(self.graph, task.ret_node, expected, .exact);
+            if (try self.graph.containsGeneratedPrivate(expected)) {
+                request_ret = expected;
+            } else {
+                // A request at a row that includes the callee's closed result
+                // row widens the callee's row: a procedure is specialized at
+                // the row its result flows into, so a function value's row,
+                // which every call shares, is never widened.
+                if (!task.callee_value) if (closedResultRowOrNull(caller.view, task.source_fn_ty)) |declared_row| {
+                    try widenClosedResultRow(self.graph, declared_row, task.ret_node, expected);
+                };
+                request_ret = try checkedMonoRequestNode(self.graph, task.ret_node, expected, .exact);
+            }
         }
         return .{ .ret = .{ .node = try functionRequestNode(self.graph, fn_node, request_args, request_ret) } };
     }
@@ -31024,10 +30697,14 @@ const BodyContext = struct {
         const checked_ret_ty = task.checked_ret_ty;
         if (task.expected_ret_node) |expected| {
             try relateRequestComponent(self.graph, task.ret_node, try caller.freshInstNode(checked_ret_ty));
-            request_ret = if (try self.graph.containsGeneratedPrivate(expected))
-                expected
-            else
-                try checkedMonoRequestNode(self.graph, task.ret_node, expected, .exact);
+            if (try self.graph.containsGeneratedPrivate(expected)) {
+                request_ret = expected;
+            } else {
+                if (closedResultRowOrNull(caller.view, plan.callable_ty)) |declared_row| {
+                    try widenClosedResultRow(self.graph, declared_row, task.ret_node, expected);
+                }
+                request_ret = try checkedMonoRequestNode(self.graph, task.ret_node, expected, .exact);
+            }
         } else {
             const caller_ret = try caller.instNode(checked_ret_ty);
             if (try self.graph.containsGeneratedPrivate(caller_ret)) {
@@ -34708,10 +34385,17 @@ const BodyContext = struct {
                 return requestLowerTask(self, .{ .span = .{ .exprs = low_level.args } });
             },
             // The demanded node already relates to the coercion's own type
-            // (above). The value is lowered at a graph cell of its own checked
-            // type, as a `?` return's value is, so a value row that no use
-            // relates to seals by the specialization's row defaults.
+            // (above). A value whose calls take the row is lowered at the
+            // demanded cell, so each callee is specialized at the row its
+            // result flows into (design.md "Closed Result Rows At Template
+            // Boundaries"). Any other value is lowered at a graph cell of its
+            // own checked type, as a `?` return's value is, so a value row
+            // that no use relates to seals by the specialization's row
+            // defaults, and the widen joins it to the demanded row.
             .row_coerce => |coerce| {
+                if (try self.coercedValueTakesRow(coerce.value, expected_node)) {
+                    return requestLowerChild(self, coerce.value, cell);
+                }
                 frame.cursor = 6;
                 return requestLowerChild(self, coerce.value, DraftTypeCell.fromGraphNode(try self.lowerExprTypeNode(coerce.value)));
             },
@@ -35085,7 +34769,12 @@ const BodyContext = struct {
                 } }),
                 .expect => try self.withTypeData(task, .{ .expect = child.exprValue() }),
                 .dbg => try self.withTypeData(task, .{ .dbg = child.exprValue() }),
-                .row_coerce => try self.withTypeData(task, .{ .row_widen = .{ .value = child.exprValue() } }),
+                // A value lowered at the coercion's row produces the row
+                // itself; any other value is widened into it.
+                .row_coerce => if (frame.cursor == 2)
+                    self.withTypeDone(task, child.exprValue())
+                else
+                    try self.withTypeData(task, .{ .row_widen = .{ .value = child.exprValue() } }),
                 .expect_err => try self.withTypeData(task, .{ .expect_err = .{
                     .msg = child.exprValue(),
                     .region = expr.source_region,
@@ -35244,17 +34933,27 @@ const BodyContext = struct {
                 return requestLowerTask(self, .{ .expr = .{ .expr = child } }),
             .break_ => try self.breakCurrentLoopExprData(),
             .return_ => |ret| return requestLowerTask(self, .{ .return_value = .{ .expr = ret.expr, .lambda = ret.lambda, .context = ret.context } }),
-            // The coerced value is lowered at a graph cell of its own checked
-            // type, like a `?` return's value; the widen node carries the
-            // demanded type and Lambda Solved relates the two without
+            // A value whose calls take the row is lowered at the coercion's
+            // row, so each callee is specialized at the row its result flows
+            // into (design.md "Closed Result Rows At Template Boundaries").
+            // Any other coerced value is lowered at a graph cell of its own
+            // checked type, like a `?` return's value; the widen node carries
+            // the demanded type and Lambda Solved relates the two without
             // unifying them. A value's row that no use relates to stays a
             // graph cell and seals by the specialization's row defaults.
-            .row_coerce => |coerce| return requestLowerTask(self, .{ .at_type_cell = .{
-                .expr = coerce.value,
-                .cell = try self.lowerTypeCell(self.view.bodies.expr(coerce.value).ty),
-                .demand = .runtime_value,
-                .diverges = false,
-            } }),
+            .row_coerce => |coerce| {
+                const expected_node = try self.graph.importMono(ty);
+                if (try self.coercedValueTakesRow(coerce.value, expected_node)) {
+                    frame.cursor = 2;
+                    return requestLowerChild(self, coerce.value, DraftTypeCell.fromGraphNode(expected_node));
+                }
+                return requestLowerTask(self, .{ .at_type_cell = .{
+                    .expr = coerce.value,
+                    .cell = try self.lowerTypeCell(self.view.bodies.expr(coerce.value).ty),
+                    .demand = .runtime_value,
+                    .diverges = false,
+                } });
+            },
             .for_ => |for_| return requestLowerTask(self, .{ .loop = try self.boxLowerTask(LoopTask, .{ .kind = .{ .for_ = checkedForLoop(for_) } }) }),
             .hosted_lambda => Common.invariant("hosted lambda expression reached ordinary Monotype expression lowering"),
             .run_low_level => |low_level| return requestLowerTask(self, .{ .span = .{ .exprs = low_level.args } }),
@@ -36397,14 +36096,66 @@ const BodyContext = struct {
         // Preserve the expected result as an active graph relation. It may
         // contain unresolved payload cells here, so materializing it as a
         // Monotype TypeId would emit an incomplete output.
+        //
+        // A direct call whose callee's closed result row the expected row
+        // includes is requested at the expected result: the callee's row
+        // widens to it, so the callee is specialized at the row its result
+        // flows into (design.md "Closed Result Rows At Template Boundaries").
+        const widens_closed_result = try self.directCallWidensClosedResult(checked_expr, call, expected_node);
         frame.cursor = 1;
         return requestLowerTask(self, .{ .call = .{
             .expr = checked_expr,
             .checked_ret_ty = expr.ty,
             .call = call,
-            .expected_ret_node = producer_request,
+            .expected_ret_node = if (widens_closed_result) expected_node else producer_request,
             .expected_ret_ty = null,
         } });
+    }
+
+    /// Whether a direct call's callee has a closed result row that
+    /// `expected_node`'s row includes, so the call is requested at the
+    /// expected result and the callee specialized there (design.md "Closed
+    /// Result Rows At Template Boundaries").
+    fn directCallWidensClosedResult(
+        self: *BodyContext,
+        call_expr: checked.CheckedExprId,
+        call: CheckedCall,
+        expected_node: NodeId,
+    ) Allocator.Error!bool {
+        const target = call.direct_target orelse return false;
+        const source_fn_ty = self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload);
+        const declared_row = closedResultRowOrNull(self.view, source_fn_ty) orelse return false;
+        const call_ret_node = try self.instNode(self.view.bodies.expr(call_expr).ty);
+        return (try resultRowWideningOrNull(self.graph, declared_row, call_ret_node, expected_node)) != null;
+    }
+
+    /// Whether a row coercion's value is lowered at the coercion's row rather
+    /// than at its own: every value it ends in is a direct call whose callee
+    /// takes the row (`directCallWidensClosedResult`), a construction, or a
+    /// divergence, reached through blocks and branches. Anything else—a read
+    /// of a value, a restored compile-time constant, a call through a
+    /// function value—keeps its own row, which every use of that value
+    /// shares, and is widened into the coercion's.
+    fn coercedValueTakesRow(self: *BodyContext, value: checked.CheckedExprId, expected_node: NodeId) Allocator.Error!bool {
+        var pending: std.ArrayListUnmanaged(checked.CheckedExprId) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, value);
+        while (pending.pop()) |expr_id| {
+            if (self.restoredHoistedConstEntry(expr_id) != null) return false;
+            const expr = self.view.bodies.expr(expr_id);
+            switch (expr.data) {
+                .call => |call| if (!try self.directCallWidensClosedResult(expr_id, call, expected_node)) return false,
+                .block => |block| try pending.append(self.allocator, block.final_expr),
+                .if_ => |if_| {
+                    for (if_.branches) |branch| try pending.append(self.allocator, branch.body);
+                    try pending.append(self.allocator, if_.final_else);
+                },
+                .match_ => |match| for (match.branches) |branch| try pending.append(self.allocator, branch.value),
+                .tag, .zero_argument_tag, .crash, .runtime_error => {},
+                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .record, .empty_record, .nominal, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => return false,
+            }
+        }
+        return true;
     }
 
     fn finishCallExprAtNode(self: *BodyContext, expected_node: NodeId, lowered: DraftExprId) Allocator.Error!DraftExprId {
@@ -39175,15 +38926,20 @@ const BodyContext = struct {
         try relateCheckedNodeToMono(self.graph, checked_node, mono_node);
     }
 
-    fn relateCheckedFunctionToMono(
+    /// Relate a procedure template's checked function type to the Monotype
+    /// type a specialization requests. When the template's checked result row
+    /// is closed and the request's row includes it, the row widens to the
+    /// request's and the body lowers there (design.md "Closed Result Rows At
+    /// Template Boundaries").
+    fn relateCheckedFunctionToRequest(
         self: *BodyContext,
         checked_fn_ty: checked.CheckedTypeId,
         mono_fn_ty: Type.TypeId,
     ) Allocator.Error!NodeId {
         const checked_node = try self.instNode(checked_fn_ty);
         const request_node = try self.graph.importMonoIndependent(mono_fn_ty);
-        const related = try checkedMonoRequestNode(self.graph, checked_node, request_node, .construction);
-        return related;
+        try widenClosedResultRowToRequest(self.graph, self.view, checked_fn_ty, checked_node, request_node);
+        return try checkedMonoRequestNode(self.graph, checked_node, request_node, .construction);
     }
 
     fn lowerFieldNamesValueIter(
@@ -44158,7 +43914,6 @@ const BodyContext = struct {
         source_fn_ty: checked.CheckedTypeId,
         plan_ctx: *BodyContext,
         plan_fn_ty: checked.CheckedTypeId,
-        reachability: AdapterReachability,
     ) Allocator.Error!NodeId {
         const function = self.checkedFunctionType(source_fn_ty);
         const plan_function = plan_ctx.checkedFunctionType(plan_fn_ty);
@@ -44168,19 +43923,11 @@ const BodyContext = struct {
         const fn_node = try self.instNode(source_fn_ty);
         const plan_node = try plan_ctx.instNode(plan_fn_ty);
         // A plan whose result row includes the implementation's closed
-        // published row relates component-wise without unifying the rows; the
-        // widening adapter is generated at template completion (design.md
-        // "Result-Row Widening Adapter").
-        if (!try relateClosedResultRowRequestInterface(
-            self.graph,
-            self.view,
-            source_fn_ty,
-            fn_node,
-            plan_node,
-            reachability,
-        )) {
-            try relateFunctionRequestInterface(self.graph, fn_node, plan_node);
-        }
+        // published row widens that row, so the implementation is specialized
+        // at the plan's row (design.md "Closed Result Rows At Template
+        // Boundaries").
+        try widenClosedResultRowToRequest(self.graph, self.view, source_fn_ty, fn_node, plan_node);
+        try relateFunctionRequestInterface(self.graph, fn_node, plan_node);
         return fn_node;
     }
 
@@ -45151,7 +44898,7 @@ const BodyContext = struct {
                 if (raw_pattern >= store_view.bodies.pattern_binder_by_pattern.len) {
                     Common.invariant("hoisted const result pattern was outside the binder index");
                 }
-                const binder = store_view.bodies.pattern_binder_by_pattern[raw_pattern] orelse return null;
+                const binder = store_view.bodies.pattern_binder_by_pattern[raw_pattern].get() orelse return null;
                 return .{ .binder = binder, .root = entry.root };
             },
         };
@@ -47241,6 +46988,7 @@ const BodyContext = struct {
                     .named_type = .{
                         .module = named.named_type.module,
                         .ty = named.named_type.ty,
+                        .ty_module = named.named_type.ty_module,
                     },
                     .def = def,
                     .kind = monotypeNamedKind(named.kind),
@@ -47721,7 +47469,7 @@ const BodyContext = struct {
             .source_fn_ty = boundary.fn_value.source_fn_ty,
             .source_fn_key = boundary.fn_value.source_fn_key,
             .mono_fn_ty = request_cell,
-            .const_evidence = draft_evidence.nodes,
+            .const_evidence = draft_evidence.entries,
             .const_evidence_frames = draft_evidence.frames,
             .const_evidence_frame_head = stored_evidence.head,
             .evidence_digest = evidence_digest,
@@ -51270,7 +51018,7 @@ const BodyContext = struct {
                 .parent = &restored[index - 1],
             };
         }
-        if (cursor != fn_value.evidence.len) {
+        if (cursor != fn_value.evidence.nodes.len) {
             Common.invariant("stored function evidence contained unreferenced nodes");
         }
         const expected_head: LexicalDispatchScope = switch (fn_value.fn_def) {
@@ -51385,7 +51133,7 @@ const BodyContext = struct {
         pending: ?union(enum) {
             nested: struct {
                 materialized: *SpecEvidenceTarget,
-                stored: @FieldType(check.ConstStore.ConstFnEvidence, "target"),
+                stored: check.ConstStore.ConstFnTargetEvidence,
                 nested_start: usize,
                 subtree_len: usize,
             },
@@ -51400,7 +51148,7 @@ const BodyContext = struct {
     /// nesting, so each nested vector is a frame rather than a native call.
     fn materializeConstFnEvidenceVector(
         self: *BodyContext,
-        nodes: []const check.ConstStore.ConstFnEvidence,
+        evidence: check.ConstStore.ConstFnEvidenceVector,
         cursor: *usize,
         count: u32,
     ) Allocator.Error![]const SpecEvidence {
@@ -51434,12 +51182,13 @@ const BodyContext = struct {
                 parent.next += 1;
                 continue;
             }
-            if (cursor.* >= nodes.len) Common.invariant("stored function evidence ended before its declared vector length");
-            const stored = nodes[cursor.*];
+            if (cursor.* >= evidence.nodes.len) Common.invariant("stored function evidence ended before its declared vector length");
+            const stored = evidence.nodes[cursor.*];
             cursor.* += 1;
             var contracts_target: ?*SpecEvidenceTarget = null;
             frame.out[frame.next] = switch (stored) {
-                .target => |target| blk: {
+                .target => |target_index| blk: {
+                    const target = evidence.target(target_index).*;
                     const materialized = try arena.create(SpecEvidenceTarget);
                     switch (target.nested) {
                         .resolved => |resolved| {
@@ -51459,7 +51208,8 @@ const BodyContext = struct {
                         },
                     }
                 },
-                .structural => |stored_structural| blk: {
+                .structural => |structural_index| blk: {
+                    const stored_structural = evidence.structural(structural_index);
                     const restored_checked: ?CheckedSpecStructuralEvidence = if (stored_structural.checked) |stored_checked| restored: {
                         const view = self.builder.moduleForDigest(stored_checked.view);
                         if (!std.meta.eql(view.types.rootKey(stored_checked.dispatcher_ty), stored_checked.dispatcher_key) or
@@ -51495,12 +51245,7 @@ const BodyContext = struct {
                 .unreachable_value => .unreachable_value,
                 .checked_error => .checked_error,
             };
-            const contract_count: u32 = switch (stored) {
-                .target => |target| target.callable_contracts,
-                .structural => |stored_structural| stored_structural.callable_contracts,
-                .from_callable => |use| use.callable_contracts,
-                .from_scheme, .unreachable_value, .checked_error => 0,
-            };
+            const contract_count = evidence.callableContracts(stored);
             if (contract_count != 0) {
                 frame.pending = .{ .contracts = contracts_target };
                 try frames.append(self.allocator, .{ .out = try arena.alloc(SpecEvidence, contract_count) });
@@ -51522,7 +51267,7 @@ const BodyContext = struct {
     fn finishStoredEvidenceTarget(
         self: *BodyContext,
         materialized: *SpecEvidenceTarget,
-        target: @FieldType(check.ConstStore.ConstFnEvidence, "target"),
+        target: check.ConstStore.ConstFnTargetEvidence,
         nested: NestedSpecEvidence,
     ) Allocator.Error!void {
         materialized.* = .{
@@ -51772,7 +51517,7 @@ const BodyContext = struct {
     fn useSiteSchema(self: *BodyContext, expr: checked.CheckedExprId) Allocator.Error!SchemeRequirements {
         const raw_expr = @backingInt(expr);
         if (raw_expr >= self.view.resolved_refs.by_checked_expr.len) return emptySchema(self.view);
-        const ref_id = self.view.resolved_refs.by_checked_expr[raw_expr] orelse return emptySchema(self.view);
+        const ref_id = self.view.resolved_refs.by_checked_expr[raw_expr].get() orelse return emptySchema(self.view);
         const record = self.view.resolved_refs.records[@backingInt(ref_id)];
         return switch (record.ref) {
             .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |proc| self.procedureUseSchema(proc),
@@ -52782,7 +52527,6 @@ const BodyContext = struct {
         const constraint_node = try scheme_ctx.instNode(param.callable_ty);
         const root_view = if (target.instantiation) |instantiation| instantiation.view else target.view;
         const root_fn_ty = if (target.instantiation) |instantiation| instantiation.callable_ty else target.target.callable_ty;
-        const reachability = dispatchTargetAdapterReachability(target.target);
         const owner = switch (target.target.kind) {
             .procedure => |procedure| procedure.template,
             .local_proc => |local| self.localMethodOwnerTemplate(.{
@@ -52821,9 +52565,10 @@ const BodyContext = struct {
         // constraint.
         const evidence = StoredConstFnEvidence.empty();
         const address: InterfaceReplayAddress = .{
-            .kind = switch (reachability) {
-                .adapter_reachable => .method_contract,
-                .no_adapter => .local_method_contract,
+            .kind = switch (target.target.kind) {
+                .procedure => .method_contract,
+                .local_proc => .local_method_contract,
+                .structural => unreachable,
             },
             .family = DraftTemplateFamilyAddress.init(owner, self.method_scope.key, root_view.types.rootKey(root_fn_ty)),
             .evidence_digest = @splat(0),
@@ -52853,7 +52598,7 @@ const BodyContext = struct {
             .checked_error => .checked_error,
         };
         const target_node = try self.instantiateEvidenceTargetSignature(target, address.family, detached_subst);
-        try self.relateEvidenceTargetRootToRequest(root_view, root_fn_ty, target_node, detached, reachability);
+        try self.relateEvidenceTargetRootToRequest(root_view, root_fn_ty, target_node, detached);
         if (use_summaries) {
             const constraints = try InterfaceConstraints.capture(self.graph, scratch.allocator(), &.{detached});
             const summary: InterfaceSummary = if (try constraints.identityEql(self.graph, request))
@@ -53445,7 +53190,7 @@ const BodyContext = struct {
             try self.replayStoredEvidenceRelations(self.evidence);
             return;
         }
-        if (fn_value.evidence.len != 0 or fn_value.evidence_frame_head != null) {
+        if (fn_value.evidence.nodes.len != 0 or fn_value.evidence_frame_head != null) {
             Common.invariant("stored generated runtime had malformed evidence topology");
         }
         switch (plan.resolution) {
@@ -53625,23 +53370,16 @@ const BodyContext = struct {
 
     /// `relateFunctionRequestInterface` for a resolved dispatch target. When
     /// the implementation publishes a closed result row and the request's row
-    /// includes it, the two relate component-wise without unifying the rows,
-    /// so the request survives to template completion where the widening
-    /// adapter is generated (design.md "Result-Row Widening Adapter").
+    /// includes it, the row widens to the request's, so the implementation
+    /// is specialized there (design.md "Closed Result Rows At Template
+    /// Boundaries").
     fn relateDispatchTargetRequestInterface(
         self: *BodyContext,
         lookup: MethodLookup,
         target_node: NodeId,
         request_node: NodeId,
     ) Allocator.Error!void {
-        if (try relateClosedResultRowRequestInterface(
-            self.graph,
-            lookup.view,
-            lookup.target.callable_ty,
-            target_node,
-            request_node,
-            dispatchTargetAdapterReachability(lookup.target),
-        )) return;
+        try widenClosedResultRowToRequest(self.graph, lookup.view, lookup.target.callable_ty, target_node, request_node);
         try relateFunctionRequestInterface(self.graph, target_node, request_node);
     }
 
@@ -53657,7 +53395,6 @@ const BodyContext = struct {
             lookup.target.callable_ty,
             plan_ctx,
             plan_callable_ty,
-            dispatchTargetAdapterReachability(lookup.target),
         );
         if (lookup.instantiation) |instantiation| {
             var edge_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, instantiation.view, self.method_scope, self.owner_template, self.graph, self.draft);
@@ -54052,24 +53789,16 @@ const BodyContext = struct {
     /// the request carries a generated private iterator representation, which
     /// only its public interface relates.
     /// A request whose result row includes the target's closed published row
-    /// keeps its extra labels here too (design.md "Result-Row Widening
-    /// Adapter"); unifying the two rows is what the adapter exists to avoid.
+    /// widens that row first (design.md "Closed Result Rows At Template
+    /// Boundaries").
     fn relateEvidenceTargetRootToRequest(
         self: *BodyContext,
         root_view: ModuleView,
         root_fn_ty: checked.CheckedTypeId,
         root_node: NodeId,
         request_fn_node: NodeId,
-        reachability: AdapterReachability,
     ) Allocator.Error!void {
-        if (try relateClosedResultRowRequestInterface(
-            self.graph,
-            root_view,
-            root_fn_ty,
-            root_node,
-            request_fn_node,
-            reachability,
-        )) return;
+        try widenClosedResultRowToRequest(self.graph, root_view, root_fn_ty, root_node, request_fn_node);
         if (try self.graph.containsGeneratedPrivate(request_fn_node)) {
             try relateGeneratedPrivateRequestInterface(self.graph, root_node, request_fn_node);
         } else {
@@ -54156,7 +53885,7 @@ const BodyContext = struct {
                 var target_ctx = try self.substitutedMethodTargetContext(lookup);
                 defer target_ctx.deinit();
                 const target_root_node = try target_ctx.instNode(template.checked_fn_root);
-                try self.relateEvidenceTargetRootToRequest(lookup.view, template.checked_fn_root, target_root_node, request_fn_node, dispatchTargetAdapterReachability(lookup.target));
+                try self.relateEvidenceTargetRootToRequest(lookup.view, template.checked_fn_root, target_root_node, request_fn_node);
                 const edge = try self.deriveTargetEdge(&target_ctx, schema, evidence_source);
                 break :blk try self.builder.lowerDraftTemplateFromContext(
                     self,
@@ -54175,7 +53904,7 @@ const BodyContext = struct {
                 var target_ctx = try self.substitutedMethodTargetContext(lookup);
                 defer target_ctx.deinit();
                 const target_root_node = try target_ctx.instNode(source_fn_ty);
-                try self.relateEvidenceTargetRootToRequest(lookup.view, source_fn_ty, target_root_node, request_fn_node, dispatchTargetAdapterReachability(lookup.target));
+                try self.relateEvidenceTargetRootToRequest(lookup.view, source_fn_ty, target_root_node, request_fn_node);
                 const edge = try self.deriveTargetEdge(&target_ctx, schema, evidence_source);
                 break :blk .{ .local = try self.lowerDraftLocalProcAtNode(
                     .{
@@ -54890,7 +54619,7 @@ const BodyContext = struct {
             .source_fn_ty = plan.callable_ty,
             .source_fn_key = generatedCodecRuntimeKey("roc.generated_structural_parser_runtime", self.current_fn_key, plan.expr),
             .mono_fn_ty = ret_ty,
-            .evidence_digest = Ast.fnEvidenceDigest(&.{}, &.{}, null),
+            .evidence_digest = Ast.fnEvidenceDigest(.{}, &.{}, null),
         });
         var parser_expr = try self.addExpr(.{ .ty = ret_ty, .data = .{ .lambda = .{
             .fn_id = .{ .draft = fn_id },
@@ -54999,7 +54728,7 @@ const BodyContext = struct {
             .source_fn_ty = plan.callable_ty,
             .source_fn_key = runtime_source_fn_key,
             .mono_fn_ty = ret_ty,
-            .evidence_digest = Ast.fnEvidenceDigest(&.{}, &.{}, null),
+            .evidence_digest = Ast.fnEvidenceDigest(.{}, &.{}, null),
         });
         var encoder_expr = try self.addExpr(.{ .ty = ret_ty, .data = .{ .lambda = .{
             .fn_id = .{ .draft = fn_id },
@@ -56451,7 +56180,7 @@ const BodyContext = struct {
             .source_fn_ty = source_fn_ty,
             .source_fn_key = generatedEncoderCallbackKey(self.current_fn_key, source_expr, lambda_index),
             .mono_fn_ty = lambda_ty,
-            .evidence_digest = Ast.fnEvidenceDigest(&.{}, &.{}, null),
+            .evidence_digest = Ast.fnEvidenceDigest(.{}, &.{}, null),
         });
         return try self.addExpr(.{ .ty = lambda_ty, .data = .{ .lambda = .{
             .fn_id = .{ .draft = fn_id },
@@ -66265,7 +65994,6 @@ test "queued specialization skips a body claimed immediately before dispatch" {
                 .subst = null,
                 .signature_relation = .independent_roots,
                 .codec_contract = null,
-                .widened_result_row = false,
             };
         }
     }.make;
@@ -66871,7 +66599,7 @@ test "shape queries cross alias layers for every aggregate a constant restores a
     const Aliased = struct {
         fn of(store: *Type.Store, store_names: *const names.NameStore, def: Type.TypeDef, backing: Type.TypeId) Allocator.Error!Type.TypeId {
             return try store.internNamed(store_names, .{
-                .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(@backingInt(backing))) },
+                .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(@backingInt(backing))), .ty_module = .{} },
                 .def = def,
                 .kind = .alias,
                 .backing = .{ .ty = backing, .use = .inspectable },
@@ -66932,14 +66660,14 @@ test "monotype sameType keeps failed alias alternatives out of recursion stack" 
     const i64_ty = try program.types.add(.{ .primitive = .i64 });
     const str_ty = try program.types.add(.{ .primitive = .str });
     const alias_i64 = try program.types.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .named_type = .{ .module = .{}, .ty = checked_ty, .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .alias,
         .args = Type.Span.empty(),
         .backing = .{ .ty = i64_ty, .use = .inspectable },
     } });
     const alias_str = try program.types.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = checked_ty },
+        .named_type = .{ .module = .{}, .ty = checked_ty, .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .alias,
         .args = Type.Span.empty(),
@@ -67108,7 +66836,7 @@ test "graph constructor representation follows aliases and preserves nominal lay
     const outer_alias_name = try name_store.internTypeName("OuterAlias");
     const structural = try graph.newNode(.empty_tag_union);
     const alias = try graph.newNode(try graph.namedContent(.{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)), .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = alias_name },
         .kind = .alias,
         .builtin_owner = null,
@@ -67116,7 +66844,7 @@ test "graph constructor representation follows aliases and preserves nominal lay
         .backing = .{ .node = structural, .use = .inspectable },
     }));
     const nominal = try graph.newNode(try graph.namedContent(.{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)), .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = nominal_name },
         .kind = .nominal,
         .builtin_owner = null,
@@ -67124,7 +66852,7 @@ test "graph constructor representation follows aliases and preserves nominal lay
         .backing = .{ .node = alias, .use = .inspectable },
     }));
     const outer_alias = try graph.newNode(try graph.namedContent(.{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(3)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(3)), .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = outer_alias_name },
         .kind = .alias,
         .builtin_owner = null,
@@ -67821,8 +67549,8 @@ const HashDeriver = struct {
 
 fn moduleViewData(view: checked.ImportedModuleView) ModuleViewData {
     return .{
-        .code_generation_key = view.code_generation_key,
-        .key = view.key,
+        .code_generation_key = if (view.code_generation_key) |key| key.digest() else null,
+        .key = view.key.digest(),
         .module_env = view.module_env,
         .module_identity = view.module_identity,
         .names = checked.importedNames(view),
@@ -67851,6 +67579,7 @@ fn moduleViewData(view: checked.ImportedModuleView) ModuleViewData {
         .const_store = view.const_store,
         .interface_capabilities = view.interface_capabilities,
         .compile_time_root_reads = view.compile_time_root_reads,
+        .compile_time_root_identities = view.compile_time_root_identities,
     };
 }
 
@@ -68306,7 +68035,7 @@ fn checkedBinderType(view: ModuleView, binder: checked.PatternBinderId) checked.
 fn checkedCaptureBinder(view: ModuleView, pattern: checked.CheckedPatternId) checked.PatternBinderId {
     const raw = @backingInt(pattern);
     if (raw >= view.bodies.pattern_binder_by_pattern.len) Common.invariant("checked closure capture pattern was outside the binder index");
-    return view.bodies.pattern_binder_by_pattern[raw] orelse
+    return view.bodies.pattern_binder_by_pattern[raw].get() orelse
         Common.invariant("checked closure capture pattern had no binder");
 }
 
@@ -68389,34 +68118,6 @@ fn dispatchPlanIdForRuntimeExpr(view: ModuleView, expr_id: checked.CheckedExprId
     const plan_raw = @backingInt(plan_id);
     if (plan_raw >= view.static_dispatch_plans.plans.len) Common.invariant("stored serialization dispatch plan is outside plan table");
     return plan_id;
-}
-
-/// Builds without libc (the playground) and compilers built without
-/// developer diagnostics never read the environment and compile no trace
-/// output.
-const pack_trace_available = @import("builtin").link_libc and build_options.dev_diagnostics;
-
-/// `ROC_PACK_TRACE` is set: print every object cache lookup.
-fn packTraceEnabled() bool {
-    return std.c.getenv("ROC_PACK_TRACE") != null;
-}
-
-/// `ROC_SPEC_CENSUS` is set: print every closed specialization key. Closed
-/// requests are frequent on every lane, so the environment is read once per
-/// process instead of scanned per request.
-fn specCensusEnabled() bool {
-    const State = struct {
-        /// 0 = not yet read, 1 = unset, 2 = set.
-        var value: std.atomic.Value(u8) = .init(0);
-    };
-    switch (State.value.load(.acquire)) {
-        1 => return false,
-        2 => return true,
-        else => {},
-    }
-    const enabled = std.c.getenv("ROC_SPEC_CENSUS") != null;
-    State.value.store(if (enabled) 2 else 1, .release);
-    return enabled;
 }
 
 fn moduleDigestFromId(key: checked.ModuleId) names.CheckedModuleDigest {
@@ -68849,256 +68550,6 @@ const NestedSiteAddress = struct {
     }
 };
 
-test "hosted Try adapter narrows requested private representations by declared labels" {
-    const allocator = std.testing.allocator;
-    var program = Ast.Program.init(allocator);
-    defer program.deinit();
-
-    var builder: Builder = undefined;
-    builder.app_module_identity = null;
-    builder.allocator = allocator;
-    builder.program = &program;
-    builder.active_body_draft = null;
-
-    const module_identity = try program.names.internModuleIdentity(&(@as([32]u8, @splat(0xA7))));
-    const opaque_def = Type.TypeDef{
-        .module = module_identity,
-        .type_name = try program.names.internTypeName("HostedPrivate"),
-    };
-    const try_def = Type.TypeDef{
-        .module = module_identity,
-        .type_name = try program.names.internTypeName("Try"),
-    };
-    const opaque_named = Type.NamedType{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) };
-    const try_named = Type.NamedType{ .module = .{}, .ty = @fromBackingInt(@intCast(2)) };
-    const i64_ty = try program.types.add(.{ .primitive = .i64 });
-    const str_ty = try program.types.add(.{ .primitive = .str });
-    const public_opaque = try program.types.add(.{ .named = .{
-        .named_type = opaque_named,
-        .def = opaque_def,
-        .kind = .@"opaque",
-        .args = .empty(),
-        .backing = .{ .ty = i64_ty, .use = .runtime_layout_only, .authority = .checked_public },
-    } });
-    const private_opaque = try program.types.add(.{ .named = .{
-        .named_type = opaque_named,
-        .def = opaque_def,
-        .kind = .@"opaque",
-        .args = .empty(),
-        .backing = .{ .ty = i64_ty, .use = .runtime_layout_only, .authority = .generated_private },
-    } });
-    const public_box = try program.types.add(.{ .box = public_opaque });
-    const private_box = try program.types.add(.{ .box = private_opaque });
-
-    const host_err = try program.names.internTagLabel("HostErr");
-    const caller_err = try program.names.internTagLabel("CallerErr");
-    const declared_err = try program.types.add(.{ .tag_union = try program.types.addTagVariants(&program.names, &.{.{
-        .name = host_err,
-        .checked_name = host_err,
-        .payloads = try program.types.addSpan(&.{public_opaque}),
-    }}) });
-    const requested_err = try program.types.add(.{ .tag_union = try program.types.addTagVariants(&program.names, &.{
-        .{
-            .name = host_err,
-            .checked_name = host_err,
-            .payloads = try program.types.addSpan(&.{private_opaque}),
-        },
-        .{
-            .name = caller_err,
-            .checked_name = caller_err,
-            .payloads = try program.types.addSpan(&.{str_ty}),
-        },
-    }) });
-
-    const ok_name = try program.names.internTagLabel("Ok");
-    const err_name = try program.names.internTagLabel("Err");
-    const capability = HostedTryAdapterCapability{
-        .def = try_def,
-        .ok_tag = ok_name,
-        .err_tag = err_name,
-        .ok_type_arg_index = 0,
-        .err_type_arg_index = 1,
-    };
-    const template_backing = try program.types.add(.{ .tag_union = try program.types.addTagVariants(&program.names, &.{
-        .{
-            .name = ok_name,
-            .checked_name = ok_name,
-            .payloads = try program.types.addSpan(&.{public_box}),
-        },
-        .{
-            .name = err_name,
-            .checked_name = err_name,
-            .payloads = try program.types.addSpan(&.{declared_err}),
-        },
-    }) });
-    const try_template = try program.types.add(.{ .named = .{
-        .named_type = try_named,
-        .def = try_def,
-        .kind = .nominal,
-        .args = try program.types.addSpan(&.{ public_box, declared_err }),
-        .backing = .{ .ty = template_backing, .use = .inspectable },
-    } });
-    const declared_try = try builder.hostedTryTypeLike(capability, try_template, public_box, declared_err);
-    const requested_try = try builder.hostedTryTypeLike(capability, try_template, private_box, requested_err);
-    const declared_fn = try builder.closedFunctionType(&.{public_box}, declared_try);
-    const requested_fn = try builder.closedFunctionType(&.{private_box}, requested_try);
-
-    const source_fn = (try builder.resultRowWideningAdapterSourceType(capability, declared_fn, requested_fn)) orelse
-        return error.TestExpectedEqual;
-    const source = functionShape(&builder.program.types, source_fn, "test source was not a function");
-    const source_args = program.types.span(source.args);
-    try std.testing.expectEqual(@as(usize, 1), source_args.len);
-    try std.testing.expect(try builder.sameMonoType(GuardedList.at(source_args, 0), private_box));
-    const source_try = try builder.hostedTryInfo(capability, source.ret);
-    try std.testing.expect(try builder.sameMonoType(source_try.ok_ty, private_box));
-    const source_err_tags = tagUnionTags(&builder.program.types, source_try.err_ty);
-    try std.testing.expectEqual(@as(usize, 1), source_err_tags.len);
-    const source_host_err = GuardedList.at(source_err_tags, 0);
-    try std.testing.expectEqual(host_err, source_host_err.name);
-    const source_payloads = program.types.span(source_host_err.payloads);
-    try std.testing.expectEqual(@as(usize, 1), source_payloads.len);
-    try std.testing.expect(try builder.sameMonoType(GuardedList.at(source_payloads, 0), private_opaque));
-    try std.testing.expect(try builder.errorRowIsIncludedIn(source_try.err_ty, requested_err));
-
-    const impostor_def = Type.TypeDef{
-        .module = module_identity,
-        .type_name = try program.names.internTypeName("UserResult"),
-    };
-    var impostor_declared_content = program.types.get(declared_try).named;
-    impostor_declared_content.def = impostor_def;
-    const impostor_declared = try program.types.add(.{ .named = impostor_declared_content });
-    var impostor_requested_content = program.types.get(requested_try).named;
-    impostor_requested_content.def = impostor_def;
-    const impostor_requested = try program.types.add(.{ .named = impostor_requested_content });
-    const impostor_declared_fn = try builder.closedFunctionType(&.{public_box}, impostor_declared);
-    const impostor_requested_fn = try builder.closedFunctionType(&.{private_box}, impostor_requested);
-    try std.testing.expectEqual(
-        @as(?Type.TypeId, null),
-        try builder.resultRowWideningAdapterSourceType(capability, impostor_declared_fn, impostor_requested_fn),
-    );
-}
-
-test "hosted Try info accepts alias-wrapped nominal arguments over unwrapped backing payloads" {
-    // Regression test: checking may present one unified type both
-    // alias-wrapped and unwrapped—a hosted declaration like basic-cli's
-    // `cmd_exec_output! : Cmd => Try(CmdOutputSuccess, [NonZeroExitCode(CmdOutputFailure), ..])`
-    // lowered with the `Try` nominal's error argument still naming the
-    // `CmdOutputFailure` alias while the backing row's payload had resolved
-    // it to its record. Recognizing the capability mapping must use type
-    // equality (alias-transparent), not stored-identity digests, or lowering
-    // dies with "hosted Try capability payload mapping disagreed with its
-    // nominal arguments".
-    const allocator = std.testing.allocator;
-    var program = Ast.Program.init(allocator);
-    defer program.deinit();
-
-    var builder: Builder = undefined;
-    builder.app_module_identity = null;
-    builder.allocator = allocator;
-    builder.program = &program;
-    builder.active_body_draft = null;
-
-    const module_identity = try program.names.internModuleIdentity(&(@as([32]u8, @splat(0xB2))));
-    const try_def = Type.TypeDef{
-        .module = module_identity,
-        .type_name = try program.names.internTypeName("Try"),
-    };
-    const failure_alias_def = Type.TypeDef{
-        .module = module_identity,
-        .type_name = try program.names.internTypeName("HostFailure"),
-    };
-    const try_named = Type.NamedType{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) };
-    const failure_named = Type.NamedType{ .module = .{}, .ty = @fromBackingInt(@intCast(2)) };
-
-    const i64_ty = try program.types.add(.{ .primitive = .i64 });
-    const str_ty = try program.types.add(.{ .primitive = .str });
-
-    const failure_record = try program.types.add(.{ .record = try program.types.addRecordFields(&program.names, &.{.{
-        .name = try program.names.internRecordFieldLabel("exit_code"),
-        .ty = i64_ty,
-        .default = null,
-    }}) });
-    const failure_alias = try program.types.add(.{ .named = .{
-        .named_type = failure_named,
-        .def = failure_alias_def,
-        .kind = .alias,
-        .args = .empty(),
-        .backing = .{ .ty = failure_record, .use = .inspectable },
-    } });
-
-    const host_err = try program.names.internTagLabel("HostErr");
-    const caller_err = try program.names.internTagLabel("CallerErr");
-    const err_row_with_alias = try program.types.add(.{ .tag_union = try program.types.addTagVariants(&program.names, &.{.{
-        .name = host_err,
-        .checked_name = host_err,
-        .payloads = try program.types.addSpan(&.{failure_alias}),
-    }}) });
-    const err_row_bare = try program.types.add(.{ .tag_union = try program.types.addTagVariants(&program.names, &.{.{
-        .name = host_err,
-        .checked_name = host_err,
-        .payloads = try program.types.addSpan(&.{failure_record}),
-    }}) });
-
-    const ok_name = try program.names.internTagLabel("Ok");
-    const err_name = try program.names.internTagLabel("Err");
-    const capability = HostedTryAdapterCapability{
-        .def = try_def,
-        .ok_tag = ok_name,
-        .err_tag = err_name,
-        .ok_type_arg_index = 0,
-        .err_type_arg_index = 1,
-    };
-    const declared_backing = try program.types.add(.{ .tag_union = try program.types.addTagVariants(&program.names, &.{
-        .{
-            .name = ok_name,
-            .checked_name = ok_name,
-            .payloads = try program.types.addSpan(&.{str_ty}),
-        },
-        .{
-            .name = err_name,
-            .checked_name = err_name,
-            .payloads = try program.types.addSpan(&.{err_row_bare}),
-        },
-    }) });
-    const declared_try = try program.types.add(.{ .named = .{
-        .named_type = try_named,
-        .def = try_def,
-        .kind = .nominal,
-        .args = try program.types.addSpan(&.{ str_ty, err_row_with_alias }),
-        .backing = .{ .ty = declared_backing, .use = .inspectable },
-    } });
-
-    try std.testing.expect(try builder.sameMonoType(failure_alias, failure_record));
-    const declared_info = (try builder.hostedTryInfoOrNull(capability, declared_try)) orelse
-        return error.TestExpectedEqual;
-    try std.testing.expect(try builder.sameMonoType(declared_info.err_ty, err_row_bare));
-
-    // A request that widens the declared error row must still produce an
-    // adapter source type from the alias-carrying declared type.
-    const requested_err = try program.types.add(.{ .tag_union = try program.types.addTagVariants(&program.names, &.{
-        .{
-            .name = host_err,
-            .checked_name = host_err,
-            .payloads = try program.types.addSpan(&.{failure_record}),
-        },
-        .{
-            .name = caller_err,
-            .checked_name = caller_err,
-            .payloads = try program.types.addSpan(&.{str_ty}),
-        },
-    }) });
-    const requested_try = try builder.hostedTryTypeLike(capability, declared_try, str_ty, requested_err);
-    const declared_fn = try builder.closedFunctionType(&.{i64_ty}, declared_try);
-    const requested_fn = try builder.closedFunctionType(&.{i64_ty}, requested_try);
-    const source_fn = (try builder.resultRowWideningAdapterSourceType(capability, declared_fn, requested_fn)) orelse
-        return error.TestExpectedEqual;
-    const source = functionShape(&builder.program.types, source_fn, "test source was not a function");
-    const source_try = try builder.hostedTryInfo(capability, source.ret);
-    const source_err_tags = tagUnionTags(&builder.program.types, source_try.err_ty);
-    try std.testing.expectEqual(@as(usize, 1), source_err_tags.len);
-    try std.testing.expectEqual(host_err, GuardedList.at(source_err_tags, 0).name);
-}
-
 test "hosted extern boundary admits only the declared host ABI type" {
     const allocator = std.testing.allocator;
     var program = Ast.Program.init(allocator);
@@ -69115,7 +68566,7 @@ test "hosted extern boundary admits only the declared host ABI type" {
         .module = module_identity,
         .type_name = try program.names.internTypeName("Try"),
     };
-    const try_named = Type.NamedType{ .module = .{}, .ty = @fromBackingInt(@intCast(4)) };
+    const try_named = Type.NamedType{ .module = .{}, .ty = @fromBackingInt(@intCast(4)), .ty_module = .{} };
     const str_ty = try program.types.add(.{ .primitive = .str });
     const i32_ty = try program.types.add(.{ .primitive = .i32 });
 
@@ -69123,14 +68574,6 @@ test "hosted extern boundary admits only the declared host ABI type" {
     const err_name = try program.names.internTagLabel("Err");
     const host_err = try program.names.internTagLabel("HostErr");
     const exit_err = try program.names.internTagLabel("Exit");
-    const capability = HostedTryAdapterCapability{
-        .def = try_def,
-        .ok_tag = ok_name,
-        .err_tag = err_name,
-        .ok_type_arg_index = 0,
-        .err_type_arg_index = 1,
-    };
-
     const declared_err = try program.types.add(.{ .tag_union = try program.types.addTagVariants(&program.names, &.{.{
         .name = host_err,
         .checked_name = host_err,
@@ -69149,28 +68592,26 @@ test "hosted extern boundary admits only the declared host ABI type" {
         },
     }) });
 
-    const template_backing = try program.types.add(.{ .tag_union = try program.types.addTagVariants(&program.names, &.{
-        .{
-            .name = ok_name,
-            .checked_name = ok_name,
-            .payloads = try program.types.addSpan(&.{str_ty}),
-        },
-        .{
-            .name = err_name,
-            .checked_name = err_name,
-            .payloads = try program.types.addSpan(&.{declared_err}),
-        },
-    }) });
-    const try_template = try program.types.add(.{ .named = .{
-        .named_type = try_named,
-        .def = try_def,
-        .kind = .nominal,
-        .args = try program.types.addSpan(&.{ str_ty, declared_err }),
-        .backing = .{ .ty = template_backing, .use = .inspectable },
-    } });
+    // `Try(Str, err)` as the host boundary declares it: the nominal over its
+    // inspectable `[Ok(Str), Err(err)]` backing.
+    const TryType = struct {
+        fn build(p: *Ast.Program, named: Type.NamedType, def: Type.TypeDef, ok: names.TagNameId, err: names.TagNameId, ok_ty: Type.TypeId, err_ty: Type.TypeId) Allocator.Error!Type.TypeId {
+            const backing = try p.types.add(.{ .tag_union = try p.types.addTagVariants(&p.names, &.{
+                .{ .name = ok, .checked_name = ok, .payloads = try p.types.addSpan(&.{ok_ty}) },
+                .{ .name = err, .checked_name = err, .payloads = try p.types.addSpan(&.{err_ty}) },
+            }) });
+            return try p.types.add(.{ .named = .{
+                .named_type = named,
+                .def = def,
+                .kind = .nominal,
+                .args = try p.types.addSpan(&.{ ok_ty, err_ty }),
+                .backing = .{ .ty = backing, .use = .inspectable },
+            } });
+        }
+    };
 
-    const declared_try = try builder.hostedTryTypeLike(capability, try_template, str_ty, declared_err);
-    const widened_try = try builder.hostedTryTypeLike(capability, try_template, str_ty, widened_err);
+    const declared_try = try TryType.build(&program, try_named, try_def, ok_name, err_name, str_ty, declared_err);
+    const widened_try = try TryType.build(&program, try_named, try_def, ok_name, err_name, str_ty, widened_err);
     const declared_fn = try builder.closedFunctionType(&.{str_ty}, declared_try);
 
     // An extern emitted at a separately built copy of the declared type is the
@@ -69184,7 +68625,7 @@ test "hosted extern boundary admits only the declared host ABI type" {
     try std.testing.expect(!try builder.hostedExternMatchesDeclaredAbi(declared_fn, widened_fn, .exact));
 
     const empty_err = try program.types.add(.{ .tag_union = try program.types.addTagVariants(&program.names, &.{}) });
-    const narrowed_try = try builder.hostedTryTypeLike(capability, try_template, str_ty, empty_err);
+    const narrowed_try = try TryType.build(&program, try_named, try_def, ok_name, err_name, str_ty, empty_err);
     const narrowed_fn = try builder.closedFunctionType(&.{str_ty}, narrowed_try);
     try std.testing.expect(!try builder.hostedExternMatchesDeclaredAbi(declared_fn, narrowed_fn, .exact));
 
@@ -69260,8 +68701,8 @@ test "request component relation follows root authority before nested private ev
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xE1))));
     const type_name = try name_store.internTypeName("OuterEvidence");
     const inner_type_name = try name_store.internTypeName("InnerEvidence");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(8)) };
-    const inner_named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(9)) };
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(8)), .ty_module = .{} };
+    const inner_named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(9)), .ty_module = .{} };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const inner_def: Type.TypeDef = .{ .module = module_identity, .type_name = inner_type_name };
     const private_arg = try graph.newNode(try graph.namedContent(.{
@@ -69319,8 +68760,8 @@ test "request component relation descends through matching private-bearing conta
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xE2))));
     const type_name = try name_store.internTypeName("ElementEvidence");
     const inner_type_name = try name_store.internTypeName("InnerEvidence");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(10)) };
-    const inner_named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(11)) };
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(10)), .ty_module = .{} };
+    const inner_named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(11)), .ty_module = .{} };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const inner_def: Type.TypeDef = .{ .module = module_identity, .type_name = inner_type_name };
     const shared_private_arg = try graph.newNode(try graph.namedContent(.{
@@ -69384,7 +68825,7 @@ test "checked-to-mono relation preserves generated-private evidence inside a com
 
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xCE))));
     const type_name = try name_store.internTypeName("CompositeEvidence");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) };
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)), .ty_module = .{} };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const checked_backing = try graph.newNode(.empty_record);
     const mono_backing = try graph.newNode(.empty_record);
@@ -69437,7 +68878,7 @@ test "checked-to-mono relation joins exact tag request roots without collapsing 
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xCF))));
     const type_name = try name_store.internTypeName("PayloadEvidence");
     const tag_name = try name_store.internTagLabel("One");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)) };
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)), .ty_module = .{} };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const checked_backing = try graph.newNode(.empty_record);
     const mono_backing = try graph.newNode(.empty_record);
@@ -69531,7 +68972,7 @@ test "direct call request preserves generated-private return provenance" {
 
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xD3))));
     const type_name = try name_store.internTypeName("DirectReturnEvidence");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(4)) };
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(4)), .ty_module = .{} };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const public_backing = try graph.newNode(.empty_record);
     const private_backing = try graph.newNode(.empty_record);
@@ -69578,7 +69019,7 @@ test "dispatch call target relation preserves generated-private return provenanc
 
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xD4))));
     const type_name = try name_store.internTypeName("DispatchReturnEvidence");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(5)) };
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(5)), .ty_module = .{} };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const public_backing = try graph.newNode(.empty_record);
     const private_backing = try graph.newNode(.empty_record);
@@ -69628,7 +69069,7 @@ test "iterator request nodes preserve generated-private operand and result prove
 
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xD1))));
     const type_name = try name_store.internTypeName("IteratorEvidence");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)) };
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)), .ty_module = .{} };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const public_backing = try graph.newNode(.empty_record);
     const private_backing = try graph.newNode(.empty_record);
@@ -69682,7 +69123,7 @@ test "partial synthetic request nodes preserve generated-private argument and re
 
     const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xD2))));
     const type_name = try name_store.internTypeName("PartialEvidence");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(3)) };
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(3)), .ty_module = .{} };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const public_backing = try graph.newNode(.empty_record);
     const private_backing = try graph.newNode(.empty_record);
@@ -70378,30 +69819,37 @@ test "specialization lanes release their own interface summaries once a task can
     try std.testing.expect(try Found.present(cache, entries[2], &workspace));
 }
 
-test "executor lane retains Monotype state within a run and resets it between runs" {
+test "Monotype lane state belongs to its run" {
     const allocator = std.testing.allocator;
     var lane_state = base.post_check_task_executor.LaneState.init(allocator);
     defer lane_state.deinit();
-    const executor_worker = base.post_check_task_executor.Worker{
+    const lanes = try allocator.alloc(?*SpecJobLaneState, 2);
+    @memset(lanes, null);
+    var inputs: SpecJobWorkerInputs = undefined;
+    inputs.lanes = lanes;
+    const first_worker = base.post_check_task_executor.Worker{
         .id = 0,
         .allocator = allocator,
         .scratch = allocator,
         .lane_state = &lane_state,
     };
-    var inputs: SpecJobWorkerInputs = undefined;
-    inputs.run_id = @fromBackingInt(@intCast(1));
+    var second_worker = first_worker;
+    second_worker.id = 1;
 
-    const first = try Builder.ensureSpecJobLaneState(executor_worker, &inputs);
+    const first = try Builder.ensureSpecJobLaneState(first_worker, &inputs);
     first.worker.tasks_started = 7;
-    const same_run = try Builder.ensureSpecJobLaneState(executor_worker, &inputs);
-    try std.testing.expectEqual(first, same_run);
-    try std.testing.expectEqual(@as(u64, 7), same_run.worker.tasks_started);
+    const same_lane = try Builder.ensureSpecJobLaneState(first_worker, &inputs);
+    try std.testing.expectEqual(first, same_lane);
+    try std.testing.expectEqual(@as(u64, 7), same_lane.worker.tasks_started);
 
-    inputs.run_id = @fromBackingInt(@intCast(2));
-    const next_run = try Builder.ensureSpecJobLaneState(executor_worker, &inputs);
-    try std.testing.expectEqual(first, next_run);
-    try std.testing.expectEqual(@as(u64, 0), next_run.worker.tasks_started);
-    try std.testing.expectEqual(inputs.run_id, next_run.run_id);
+    const other_lane = try Builder.ensureSpecJobLaneState(second_worker, &inputs);
+    try std.testing.expect(other_lane != first);
+    try std.testing.expectEqual(@as(u64, 0), other_lane.worker.tasks_started);
+
+    // The executor's own lane storage holds nothing of the run, so nothing
+    // of it outlives the run's builder.
+    try std.testing.expectEqual(@as(usize, 0), lane_state.entries.items.len);
+    Builder.deinitSpecJobLanes(allocator, lanes);
 }
 
 test "body draft comptime roots relocate independent shards and survive source destruction" {
@@ -71711,7 +71159,7 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     const alias_checked_ty: checked.CheckedTypeId = @fromBackingInt(@intCast(2));
     const str = try stored_types.append(.{ .primitive = .str });
     const nominal = try stored_types.append(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = nominal_checked_ty },
+        .named_type = .{ .module = .{}, .ty = nominal_checked_ty, .ty_module = .{} },
         .def = .{ .module = origin, .type_name = type_name },
         .kind = .@"opaque",
         .args = .{},
@@ -71720,7 +71168,7 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     var alias = nominal;
     for (0..32) |_| {
         alias = try stored_types.append(.{ .named = .{
-            .named_type = .{ .module = .{}, .ty = alias_checked_ty },
+            .named_type = .{ .module = .{}, .ty = alias_checked_ty, .ty_module = .{} },
             .def = .{ .module = origin, .type_name = type_name },
             .kind = .alias,
             .args = .{},
@@ -71729,13 +71177,13 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     }
     const recursive = try stored_types.reserve();
     const recursive_alias = try stored_types.append(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)), .ty_module = .{} },
         .def = .{ .module = origin, .type_name = type_name },
         .kind = .alias,
         .args = .{},
         .backing = .{ .ty = recursive, .use = .inspectable },
     } });
-    stored_types.fill(recursive, .{ .tuple = try stored_types.appendTypeSpan(&.{recursive_alias}) });
+    try stored_types.fill(recursive, .{ .tuple = try stored_types.appendTypeSpan(&.{recursive_alias}) });
     const root = try stored_types.append(.{ .tuple = try stored_types.appendTypeSpan(&.{ alias, nominal, str, recursive_alias }) });
 
     var program = Ast.Program.init(gpa);

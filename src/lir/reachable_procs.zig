@@ -17,10 +17,6 @@ const LirStore = core.LirStore;
 const GuardedList = collections.GuardedList;
 const BodyClone = @import("body_clone.zig");
 
-/// `ROC_PACK_TRACE` output, compiled only into compilers built with developer
-/// diagnostics that can read the environment.
-const pack_trace_available = @import("builtin").link_libc and @import("build_options").dev_diagnostics;
-
 /// Remove proc specs unreachable from roots, closed static initializers, and
 /// explicit constant callable plans, then rewrite every retained proc reference
 /// to the compact id space.
@@ -612,7 +608,7 @@ const Pass = struct {
         }
         self.result.served_callees.shrinkRetainingCapacity(kept_served);
         // A specialization whose procedure was unreachable leaves the table.
-        const trace = pack_trace_available and std.c.getenv("ROC_PACK_TRACE") != null;
+        const trace = base.dev_diagnostics.isSet(.pack_trace);
         var kept: usize = 0;
         for (self.result.spec_procs.items) |spec_proc| {
             const new_proc = self.old_to_new[@backingInt(spec_proc.proc)] orelse {
@@ -790,7 +786,7 @@ const Pass = struct {
                 for (old_entries) |entry| {
                     if (entry.captures.len > 0) self.allocator.free(entry.captures);
                     if (entry.template) |template| {
-                        if (template.evidence.len > 0) self.allocator.free(template.evidence);
+                        @import("check").ConstStore.freeVector(self.allocator, template.evidence);
                         if (template.evidence_frames.len > 0) self.allocator.free(template.evidence_frames);
                     }
                     if (entry.boxy) |boxy| self.allocator.free(boxy.captures);
@@ -810,7 +806,7 @@ const Pass = struct {
                 } else {
                     if (entry.captures.len > 0) self.allocator.free(entry.captures);
                     if (entry.template) |template| {
-                        if (template.evidence.len > 0) self.allocator.free(template.evidence);
+                        @import("check").ConstStore.freeVector(self.allocator, template.evidence);
                         if (template.evidence_frames.len > 0) self.allocator.free(template.evidence_frames);
                     }
                     if (entry.boxy) |boxy| self.allocator.free(boxy.captures);
@@ -1523,7 +1519,7 @@ test "erased callable pruning frees evidence for fully and partly discarded sets
                     .fn_def = undefined,
                     .source_fn_ty = undefined,
                     .source_fn_key = undefined,
-                    .evidence = try allocator.dupe(@import("check").ConstStore.ConstFnEvidence, &.{.checked_error}),
+                    .evidence = .{ .nodes = try allocator.dupe(@import("check").ConstStore.ConstFnEvidence, &.{.checked_error}) },
                     .evidence_frames = try allocator.dupe(@import("check").ConstStore.ConstFnEvidenceFrame, &.{.{ .scope_id = .root, .parent = null, .roots_start = 0, .roots_len = 1 }}),
                 },
             };
@@ -1533,7 +1529,7 @@ test "erased callable pruning frees evidence for fully and partly discarded sets
     try run(&result);
     try std.testing.expectEqual(@as(usize, 0), result.erased_fns.items[0].entries.len);
     try std.testing.expectEqual(@as(usize, 1), result.erased_fns.items[1].entries.len);
-    try std.testing.expectEqual(@as(usize, 1), result.erased_fns.items[1].entries[0].template.?.evidence.len);
+    try std.testing.expectEqual(@as(usize, 1), result.erased_fns.items[1].entries[0].template.?.evidence.nodes.len);
     try std.testing.expectEqual(@as(usize, 1), result.erased_fns.items[1].entries[0].template.?.evidence_frames.len);
 }
 

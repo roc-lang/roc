@@ -2227,8 +2227,10 @@ const Pass = struct {
                 },
                 inline .try_sequence, .try_record_sequence => |sequence| try tails.append(self.allocator, sequence.ok_body),
                 .typed_boundary => |boundary| try tails.append(self.allocator, boundary.value),
-                // A self call under a row coercion is not in tail position: its
-                // result is still re-tagged after it returns.
+                // A self call under a row coercion is not in tail position: the
+                // call's type and the coercion's are distinct Monotype types
+                // until Lambda Solved joins them, so the call's value is not
+                // the function's own result here.
                 .row_widen,
                 .local,
                 .unit,
@@ -6450,24 +6452,14 @@ const Cloner = struct {
                     return self.finishExprValue(task, try self.typedBoundaryValue(task.value, runtime));
                 },
             },
-            // A row coercion is opaque to static matching: the child's known
-            // tag structure indexes the child's own row, and re-anchoring it
-            // would wrap its materialization in a `typed_boundary`, which
-            // Lambda Solved unifies rather than relates. Keep only the exact
-            // runtime value.
+            // A row coercion changes no value, so the child's known structure
+            // carries across it at the coercion's type (`widenedValue`).
             .row_widen => |widen| switch (frame.cursor) {
                 0 => {
                     frame.cursor = 1;
                     return .{ .call = .{ .demanding = .{ .expr = widen.value, .bindings = bindings } } };
                 },
-                1 => {
-                    frame.cursor = 2;
-                    return .{ .call = .{ .materialize = .{ .value = input.?.get(.value) } } };
-                },
-                else => {
-                    const source = input.?.get(.expr);
-                    return self.finishExprValue(task, .{ .expr = try self.addExpr(.{ .ty = expr.ty, .data = .{ .row_widen = .{ .value = source } } }) });
-                },
+                else => return self.finishExprValue(task, try self.widenedValue(input.?.get(.value), expr.ty)),
             },
             .tag => |tag| {
                 if (frame.cursor == 0) {
@@ -10705,10 +10697,23 @@ const Cloner = struct {
         if_branches: []const Ast.IfBranch = &.{},
         if_rewritten: []Ast.IfBranch = &.{},
         values: []Value = &.{},
+        /// The type of a row coercion of the scrutinee, which distribution
+        /// reads each inner arm's value at (`widenedValue`).
+        widen_to: ?Type.TypeId = null,
     };
 
     fn stepCaseOfCase(self: *Cloner, frame: *CloneFrame, task: *CaseOfCaseTask, input: ?CloneResult) Common.LowerError!CloneStep {
         const arena = self.arena.allocator();
+        if (frame.cursor == 0) {
+            // A row coercion of a branching value is the branching value with
+            // each arm's result coerced, so distribution reads through it.
+            while (true) {
+                const scrutinee = self.pass.program.getExpr(task.scrutinee_expr);
+                if (scrutinee.data != .row_widen) break;
+                if (task.widen_to == null) task.widen_to = scrutinee.ty;
+                task.scrutinee_expr = scrutinee.data.row_widen.value;
+            }
+        }
         const scrutinee_data = self.pass.program.getExpr(task.scrutinee_expr).data;
         if (frame.cursor == 0) {
             const outer_branches = self.pass.program.branchSpan(task.outer_branches);
@@ -10784,6 +10789,7 @@ const Cloner = struct {
                         .recorded_value = recorded_value,
                         .source_scope = .{ .pat = inner_branch.pat, .bindings = inner_branch.bindings },
                         .outer_branches = task.outer_branches,
+                        .widen_to = task.widen_to,
                     } } };
                 }
                 const distributed = try self.addExpr(.{ .ty = task.ty, .data = .{ .match_ = .{
@@ -10800,6 +10806,7 @@ const Cloner = struct {
                 .recorded_value = if (task.recorded) |arm_values| arm_values[index] else null,
                 .source_scope = null,
                 .outer_branches = task.outer_branches,
+                .widen_to = task.widen_to,
             } } },
             .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
         }
@@ -10823,6 +10830,8 @@ const Cloner = struct {
         recorded_value: ?Value,
         source_scope: ?SourceArmScope,
         outer_branches: Ast.Span(Ast.Branch),
+        /// The row coercion the arm's value crosses before the outer match.
+        widen_to: ?Type.TypeId,
         chain: *BindingChain = undefined,
         change_start: usize = 0,
         outer_value: Value = undefined,
@@ -10839,7 +10848,7 @@ const Cloner = struct {
                     frame.cursor = 2;
                     return .{ .call = .{ .distribute_value = .{
                         .ty = task.ty,
-                        .inner_value = self.emittedArmStructure(task.arm_body, recorded),
+                        .inner_value = try self.armValueAcrossWiden(task.widen_to, self.emittedArmStructure(task.arm_body, recorded)),
                         .outer_branches = task.outer_branches,
                         .bindings = task.chain,
                     } } };
@@ -10855,7 +10864,7 @@ const Cloner = struct {
                 frame.cursor = 2;
                 return .{ .call = .{ .distribute_value = .{
                     .ty = task.ty,
-                    .inner_value = input.?.get(.value),
+                    .inner_value = try self.armValueAcrossWiden(task.widen_to, input.?.get(.value)),
                     .outer_branches = task.outer_branches,
                     .bindings = task.chain,
                 } } };
@@ -10902,6 +10911,11 @@ const Cloner = struct {
                 return .{ .ret = .{ .maybe_arm = .{ .body = body, .value = task.outer_value } } };
             },
         }
+    }
+
+    fn armValueAcrossWiden(self: *Cloner, widen_to: ?Type.TypeId, value: Value) Allocator.Error!Value {
+        const dest_ty = widen_to orelse return value;
+        return try self.widenedValue(value, dest_ty);
     }
 
     /// Collapse an outer match against one inner-branch result: a known
@@ -14051,6 +14065,93 @@ const Cloner = struct {
         } };
     }
 
+    /// The value a `row_widen` to `dest_ty` produces from its child's `value`
+    /// (design.md "Row Joins"). A widen relabels the rows its child's type
+    /// reaches as the destination's and changes no value, so known structure
+    /// carries across it: a tag keeps its name and a nominal its backing, each
+    /// rebuilt at the destination's type, and a component whose type already
+    /// is the destination's stays as it is. An exact runtime value at a
+    /// differing type is the `row_widen` of it; an anchored one keeps its
+    /// structure, widened the same way, beside that runtime value.
+    fn widenedValue(self: *Cloner, value: Value, dest_ty: Type.TypeId) Allocator.Error!Value {
+        const program = self.pass.program;
+        const gpa = self.pass.allocator;
+        const arena = self.arena.allocator();
+        const Step = struct {
+            value: Value,
+            dest: Type.TypeId,
+            results_start: usize = 0,
+            expanded: bool = false,
+        };
+        var steps: std.ArrayList(Step) = .empty;
+        defer steps.deinit(gpa);
+        var results: std.ArrayList(Value) = .empty;
+        defer results.deinit(gpa);
+        try steps.append(gpa, .{ .value = value, .dest = dest_ty });
+        while (steps.pop()) |step| {
+            if (step.expanded) {
+                const children = results.items[step.results_start..];
+                const built: Value = switch (step.value) {
+                    .tag => |tag| try tagValue(program, gpa, step.dest, widenedTagName(program, step.dest, tag.name), try arena.dupe(Value, children)),
+                    .nominal => try nominalValue(program, gpa, step.dest, try self.copyValue(children[0])),
+                    .runtime_anchor => |anchor| .{ .runtime_anchor = .{
+                        .runtime = try self.addExpr(.{ .ty = step.dest, .data = .{ .row_widen = .{ .value = anchor.runtime } } }),
+                        .structure = try self.copyValue(children[0]),
+                    } },
+                    .static_data_candidate => |candidate| .{ .runtime_anchor = .{
+                        .runtime = try self.addExpr(.{ .ty = step.dest, .data = .{ .row_widen = .{ .value = candidate.expr } } }),
+                        .structure = try self.copyValue(children[0]),
+                    } },
+                    .expr, .record, .tuple, .callable => unreachable,
+                };
+                results.shrinkRetainingCapacity(step.results_start);
+                try results.append(gpa, built);
+                continue;
+            }
+            if (sameType(program, valueType(program, step.value), step.dest)) {
+                try results.append(gpa, step.value);
+                continue;
+            }
+            const expanded: Step = .{ .value = step.value, .dest = step.dest, .results_start = results.items.len, .expanded = true };
+            switch (step.value) {
+                .expr => |expr| try results.append(gpa, .{ .expr = try self.addExpr(.{ .ty = step.dest, .data = .{ .row_widen = .{ .value = expr } } }) }),
+                .runtime_anchor => |anchor| {
+                    try steps.append(gpa, expanded);
+                    try steps.append(gpa, .{ .value = anchor.structure.*, .dest = step.dest });
+                },
+                .static_data_candidate => |candidate| {
+                    try steps.append(gpa, expanded);
+                    try steps.append(gpa, .{ .value = candidate.structure.*, .dest = step.dest });
+                },
+                .tag => |tag| {
+                    const dest_tag = typeTagByLabel(program, step.dest, tag.name) orelse
+                        Common.invariant("a row widen's destination did not list a tag its child carries");
+                    const payload_tys = program.types.span(dest_tag.payloads);
+                    if (payload_tys.len != tag.payloads.len) Common.invariant("a row widen changed a tag's payload arity");
+                    try steps.append(gpa, expanded);
+                    var index = tag.payloads.len;
+                    while (index > 0) {
+                        index -= 1;
+                        try steps.append(gpa, .{ .value = tag.payloads[index], .dest = GuardedList.at(payload_tys, index) });
+                    }
+                },
+                .nominal => |nominal| {
+                    const content = program.types.get(step.dest);
+                    if (content != .named) Common.invariant("a row widen related a nominal value to a non-nominal type");
+                    const backing = content.named.backing orelse
+                        Common.invariant("a row widen reached a nominal type without an explicit backing");
+                    try steps.append(gpa, expanded);
+                    try steps.append(gpa, .{ .value = nominal.backing.*, .dest = backing.ty });
+                },
+                // A row widen reaches only tag payloads and nominal backings, so
+                // every other position has the same type on both sides.
+                .record, .tuple, .callable => Common.invariant("a row widen reached a position outside its reach"),
+            }
+        }
+        if (results.items.len != 1) Common.invariant("row widen value construction did not produce one value");
+        return results.items[0];
+    }
+
     fn typedBoundaryValue(self: *Cloner, structure: Value, runtime: Ast.ExprId) Allocator.Error!Value {
         if (std.debug.runtime_safety) {
             const boundary = self.pass.program.getExpr(runtime).data;
@@ -15033,8 +15134,10 @@ fn tailSelfCallSummary(allocator: Allocator, program: *const Ast.Program, root: 
             try tails.append(allocator, sequence.ok_body);
         },
         .typed_boundary => |boundary| try tails.append(allocator, boundary.value),
-        // A self call under a row coercion is not in tail position: its
-        // result is still re-tagged after it returns.
+        // A self call under a row coercion is not in tail position: the
+        // call's type and the coercion's are distinct Monotype types until
+        // Lambda Solved joins them, so the call's value is not the function's
+        // own result here.
         .row_widen,
         .local,
         .unit,
@@ -15699,6 +15802,29 @@ fn typeFieldByName(fields: anytype, name: names.RecordFieldNameId) ?Type.TypeId 
     return null;
 }
 
+/// The tag of the tag union `ty` whose label is `name`'s, compared by text.
+fn typeTagByLabel(
+    program: *const Ast.Program,
+    ty: Type.TypeId,
+    name: names.TagNameId,
+) ?Type.Tag {
+    const content = program.types.get(ty);
+    if (content != .tag_union) return null;
+    const tags = program.types.tagSpan(content.tag_union);
+    for (0..tags.len) |index| {
+        const tag = GuardedList.at(tags, index);
+        if (program.names.tagLabelTextEql(tag.name, name)) return tag;
+    }
+    return null;
+}
+
+/// The name a tag carried across a row widen has in the destination row.
+fn widenedTagName(program: *const Ast.Program, dest_ty: Type.TypeId, name: names.TagNameId) names.TagNameId {
+    const tag = typeTagByLabel(program, dest_ty, name) orelse
+        Common.invariant("a row widen's destination did not list a tag its child carries");
+    return tag.name;
+}
+
 fn typeTagByName(
     program: *const Ast.Program,
     ty: Type.TypeId,
@@ -16163,6 +16289,8 @@ fn emptyLiftedProgramForTest(allocator: Allocator) Ast.Program {
         names.NameStore.init(allocator),
         Type.Store.init(allocator),
         .empty, // const_fn_evidence
+        .empty, // const_fn_evidence_targets
+        .empty, // const_fn_evidence_structurals
         .empty, // const_fn_evidence_frames
         .empty, // exprs
         .empty, // pats
@@ -16905,7 +17033,7 @@ test "SpecConstr accepts a transparent alias record update base" {
     const module_identity = try program.names.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const type_name = try program.names.internTypeName("RecordAlias");
     const alias_ty = try program.types.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)), .ty_module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .alias,
         .args = Type.Span.empty(),
@@ -16941,7 +17069,7 @@ test "SpecConstr compares representations, not checked provenance" {
     const Nominal = struct {
         fn add(p: *Ast.Program, module: names.ModuleIdentityId, name: names.TypeNameId, checked_ty: u32, backing: Type.TypeId) Allocator.Error!Type.TypeId {
             return p.types.add(.{ .named = .{
-                .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(checked_ty)) },
+                .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(checked_ty)), .ty_module = .{} },
                 .def = .{ .module = module, .type_name = name, .source_decl = 7 },
                 .kind = .nominal,
                 .args = Type.Span.empty(),
@@ -18666,14 +18794,14 @@ fn substituteNamedForTest(
     const type_name = try program.names.internTypeName("Nominal");
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const first_ty = try program.types.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(first_checked_ty)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(first_checked_ty)), .ty_module = .{} },
         .def = def,
         .kind = .nominal,
         .args = Type.Span.empty(),
         .backing = .{ .ty = first_backing, .use = .inspectable },
     } });
     const second_ty = try program.types.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(second_checked_ty)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(second_checked_ty)), .ty_module = .{} },
         .def = def,
         .kind = .nominal,
         .args = Type.Span.empty(),

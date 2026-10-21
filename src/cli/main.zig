@@ -86,6 +86,7 @@ const build_options = @import("build_options");
 const shim_symbols = @import("builtins").shim_symbols;
 const Sha256Rounds = @import("builtins").sha256.Rounds;
 const base = @import("base");
+const dev_diagnostics = base.dev_diagnostics;
 const collections = @import("collections");
 const reporting = @import("reporting");
 const parse = @import("parse");
@@ -227,6 +228,14 @@ const CliBuildEnvOptions = struct {
     timings: bool = false,
     resolution_config: compile.package_resolution.Config = .{},
     track_watch_inputs: bool = false,
+    /// Release modules' solver type stores once checking finishes. Set by the
+    /// commands that read no solver types after compiling (check, build, run,
+    /// and test); see `BuildEnv.release_checked_solver_types`.
+    release_checked_solver_types: bool = false,
+    /// The command publishing the compile-time pack of the program it checks,
+    /// which compile-time evaluation then gathers as its levels run; null when
+    /// the command publishes none.
+    compile_time_pack_publisher: ?pack_store.CompileTimePublisher = null,
     source_dir_override: ?[]const u8 = null,
     post_check_publication_mode: compile.build.PostCheckPublicationMode = .executable_artifacts,
     runtime_lowering: ?compile.build.RuntimeLoweringConfig = null,
@@ -260,6 +269,7 @@ fn initCliBuildEnv(ctx: *CliCtx, opts: CliBuildEnvOptions) InitCliBuildEnvError!
     build_env.detailed_monotype_diagnostics = opts.timings;
     build_env.resolution_config = opts.resolution_config;
     build_env.setWatchInputTracking(opts.track_watch_inputs);
+    build_env.release_checked_solver_types = opts.release_checked_solver_types;
     build_env.setPostCheckPublicationMode(opts.post_check_publication_mode);
     if (opts.runtime_lowering) |config| build_env.setRuntimeLowering(config);
     if (opts.source_dir_override) |source_dir| {
@@ -281,7 +291,7 @@ fn initCliBuildEnv(ctx: *CliCtx, opts: CliBuildEnvOptions) InitCliBuildEnvError!
     }
     if (!opts.no_cache) {
         try build_env.enableDefaultCacheManager(opts.verbose_cache);
-        try attachCompileTimeObjectCache(ctx, &build_env, opts.verbose_cache);
+        try attachCompileTimeObjectCache(ctx, &build_env, opts.verbose_cache, opts.compile_time_pack_publisher);
     }
 
     return build_env;
@@ -300,9 +310,14 @@ const CompileTimeObjectCache = struct {
     /// The optimized object packs a linked dev build for the host offers its
     /// runtime program (`pack_store.Pending.linked_stores`).
     linked_stores: ?*const pack_store.LinkedStores = null,
+    /// What this command's compile-time pack is written from, gathered as the
+    /// evaluation's levels run, when the command publishes one.
+    pack_parts: ?CompileTimePackParts = null,
+    build_env: ?*BuildEnv = null,
 
     fn bind(context: *anyopaque, build_env: *BuildEnv) void {
         const self: *CompileTimeObjectCache = @ptrCast(@alignCast(context));
+        self.build_env = build_env;
         self.packs.pending = .{
             .store = &self.store,
             .linked_stores = self.linked_stores,
@@ -313,9 +328,60 @@ const CompileTimeObjectCache = struct {
 
     fn deinit(context: *anyopaque) void {
         const self: *CompileTimeObjectCache = @ptrCast(@alignCast(context));
+        if (self.pack_parts) |*parts| parts.deinit();
         self.packs.deinit();
         self.store.deinit();
         self.allocator.destroy(self);
+    }
+};
+
+/// The offers of this command's compile-time pack, gathered from each
+/// evaluation level while its code exists (`eval.CompileTimeFinalization.StageSink`);
+/// the pack's code is the code evaluation ran (`CompletedStages.artifacts`).
+const CompileTimePackParts = struct {
+    offers: PackOffers,
+    /// The command the pack is published by, which its key names.
+    publisher: pack_store.CompileTimePublisher,
+    /// Whether any level has a keyed specialization to offer.
+    has_keyed: bool = false,
+    /// Where the pack goes, decided at the first level: null when the
+    /// program has no place for one or the store already holds it.
+    destination: ?Destination = undefined,
+    decided: bool = false,
+
+    const Destination = struct {
+        placement: BuildEnv.PackPlacement,
+        key: [32]u8,
+    };
+
+    fn decideDestination(cache: *CompileTimeObjectCache, publisher: pack_store.CompileTimePublisher) Allocator.Error!?Destination {
+        const build_env = cache.build_env orelse return null;
+        const root_semantic = build_env.getExecutableRootSemanticData() orelse return null;
+        const root_artifact = root_semantic.checked_artifact orelse return null;
+        const placement = build_env.packPlacementForArtifactKey(root_artifact.key) orelse return null;
+        const key = pack_store.compileTimePackKey(root_artifact.codeGenerationKey().bytes, publisher);
+        if (try cache.store.has(placement.origin, placement.identity, key)) return null;
+        return .{ .placement = placement, .key = key };
+    }
+
+    fn deinit(self: *CompileTimePackParts) void {
+        self.offers.deinit();
+    }
+
+    fn acceptStage(
+        context: *anyopaque,
+        stage: *const lir.CheckedPipeline.LoweredProgram,
+        comptime_reads: *const lir.CheckedPipeline.SpecComptimeReads,
+    ) Allocator.Error!void {
+        const cache: *CompileTimeObjectCache = @ptrCast(@alignCast(context));
+        const self = if (cache.pack_parts) |*parts| parts else unreachable;
+        if (!self.decided) {
+            self.destination = try decideDestination(cache, self.publisher);
+            self.decided = true;
+        }
+        if (self.destination == null) return;
+        if (stage.lir_result.spec_procs.items.len != 0) self.has_keyed = true;
+        try self.offers.addProgram(stage, comptime_reads);
     }
 };
 
@@ -328,7 +394,7 @@ fn sharedCompileTimeObjectCache(build_env: *BuildEnv, target: RocTarget, opt: cl
     return cache;
 }
 
-fn attachCompileTimeObjectCache(ctx: *CliCtx, build_env: *BuildEnv, verbose: bool) Allocator.Error!void {
+fn attachCompileTimeObjectCache(ctx: *CliCtx, build_env: *BuildEnv, verbose: bool, publisher: ?pack_store.CompileTimePublisher) Allocator.Error!void {
     const store_config = CacheConfig{ .enabled = true, .verbose = verbose, .roc_ctx = ctx.coreCtx() };
     var store = pack_store.Store.init(ctx.gpa, store_config, RocTarget.detectNative(), @tagName(cli_args.OptLevel.dev)) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -342,12 +408,14 @@ fn attachCompileTimeObjectCache(ctx: *CliCtx, build_env: *BuildEnv, verbose: boo
         .io = ctx.io.std_io,
         .store = store,
         .packs = pack_store.LoadedPacks.init(ctx.gpa),
+        .pack_parts = if (publisher) |by| .{ .offers = PackOffers.init(ctx.gpa, true), .publisher = by } else null,
     };
     // One heap-owned collection supplies both lookup offers and splice artifacts.
     // Runtime sharing must retain this exact provider, not merely its host domain.
     build_env.setCompileTimeObjectCache(.{
         .spec_cache = cache.packs.specCacheLookup(),
         .splice_source = cache.packs.spliceSource(),
+        .stage_sink = if (publisher != null) .{ .context = cache, .accept = CompileTimePackParts.acceptStage } else null,
     }, .{
         .context = cache,
         .bind = CompileTimeObjectCache.bind,
@@ -2870,7 +2938,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                 if (run_object_cache) |cache| {
                     run_package_objects = try RunPackageObjects.collect(ctx.arena, cache);
                     // Cache statistics are diagnostic output, printed only on request.
-                    if (std.c.getenv("ROC_PACK_STATS") != null) {
+                    if (dev_diagnostics.isSet(.pack_stats)) {
                         var external_procs: usize = 0;
                         var linked_procs: usize = 0;
                         for (result.lowered.lir_result.store.getProcSpecs()) |proc| {
@@ -6214,12 +6282,12 @@ fn writeDevRunImageToSharedMemory(
             lowered.lir_result.boxy_erased_arg_desc_offsets.items,
             lowered.lir_result.boxy_erased_arg_desc_params.items,
             lowered.lir_result.boxy_worker_procs.items,
+            lowered.lir_result.erased_capture_prefix,
             roc_target.host_cpu.level(),
         );
         defer codegen.deinit();
         codegen.generation_mode = .shim_execution;
         try codegen.setStaticDataSymbols(internal_static_data);
-        codegen.enable_hot_reload = lowered.lir_result.erased_capture_prefix != 0;
 
         const proc_specs = store.getProcSpecs();
         // The object-cache entries this program was served are placed first,
@@ -6679,6 +6747,7 @@ fn initRunBuildEnv(ctx: *CliCtx, opts: RunBuildEnvOptions) CliMainError!BuildEnv
         .timings = if (opts.reporter) |r| r.always else false,
         .resolution_config = opts.resolution_config,
         .track_watch_inputs = true,
+        .release_checked_solver_types = true,
         .source_dir_override = opts.source_dir_override,
         .post_check_publication_mode = .executable_artifacts,
     });
@@ -8267,15 +8336,6 @@ fn defaultBuildTarget(args: cli_args.BuildArgs) RocTarget {
     return RocTarget.detectNative().defaultCpuTarget();
 }
 
-/// Read one of the developer-diagnostic environment variables. A compiler
-/// built without developer diagnostics (see `build_options.dev_diagnostics`)
-/// reads none of them: every call is a compile-time null, so the code it
-/// guards is not compiled in.
-inline fn devDiagnosticEnv(comptime name: [:0]const u8) ?[*:0]u8 {
-    if (comptime !build_options.dev_diagnostics) return null;
-    return std.c.getenv(name);
-}
-
 /// Build using the dev backend to generate native machine code.
 /// This produces truly compiled executables without an interpreter.
 /// `ROC_DEV_PACK_OBJECTS` makes a native dev build also lower every visible
@@ -8294,7 +8354,7 @@ fn writePackObjects(
     target: RocTarget,
     final_output_path: []const u8,
 ) CliMainError!void {
-    if (devDiagnosticEnv("ROC_DEV_PACK_OBJECTS") == null) return;
+    if (!dev_diagnostics.isSet(.dev_pack_objects)) return;
     {
         // The app program's own procedures, in the same shape as a pack
         // manifest, so identities can be compared across the two lowerings.
@@ -8448,7 +8508,7 @@ fn compileModulePack(
 
     var object_compiler = backend.ObjectFileCompiler.initForPack(ctx.gpa);
     object_compiler.post_check_executor = build_env.postCheckExecutor();
-    object_compiler.enable_hot_reload = lowered.lir_result.erased_capture_prefix != 0;
+    object_compiler.erased_capture_prefix = lowered.lir_result.erased_capture_prefix;
     object_compiler.emit_object = emit_object;
     const compiled = object_compiler.compileToObjectFile(
         &lowered.lir_result.store,
@@ -8486,7 +8546,7 @@ fn writePacksToStore(
     args: cli_args.BuildArgs,
     target: RocTarget,
 ) CliMainError!void {
-    if (devDiagnosticEnv("ROC_PACK_TRACE") != null) {
+    if (dev_diagnostics.isSet(.pack_trace)) {
         // What this program lowered from source: every procedure by identity,
         // for comparison with another build of the same source, and every
         // specialization by the key a pack serves it by, for comparison with
@@ -8535,7 +8595,7 @@ fn writePacksToStore(
         const roots = try lir.PackProgram.closedExportRoots(ctx.gpa, artifact);
         defer ctx.gpa.free(roots);
         if (roots.len == 0) continue;
-        if (devDiagnosticEnv("ROC_PACK_TRACE") != null) {
+        if (dev_diagnostics.isSet(.pack_trace)) {
             std.debug.print("module pack {s}\n", .{artifact.canonical_names.moduleNameText(artifact.module_identity.module_name)});
         }
         var pack = try compileModulePack(ctx, build_env, root_artifact, app_imports, app_relations, artifact, roots, args, target, false);
@@ -8628,7 +8688,7 @@ fn writeOptimizedPacks(
     const input_key = optimizedPackInputKey(root_artifact, imported_artifacts, relation_artifacts, strategy, target, args.opt);
     if (try store.optimizedInputKey(placement.identity)) |existing| {
         if (std.mem.eql(u8, &existing, &input_key)) {
-            if (devDiagnosticEnv("ROC_PACK_TRACE") != null) std.debug.print("optimized pack current\n", .{});
+            if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("optimized pack current\n", .{});
             return;
         }
     }
@@ -8935,7 +8995,7 @@ fn objectPackBytes(
             .rc_ret_conditions = try GuardedList.dupe(arena, u32, store.getU32Span(proc.rc_ret_conditions)),
         });
     }
-    if (std.c.getenv("ROC_PACK_TRACE") != null) {
+    if (dev_diagnostics.isSet(.pack_trace)) {
         for (specs.items) |spec| std.debug.print("object-offer {x}\n", .{spec.key[0..8]});
     }
     if (specs.items.len == 0) return null;
@@ -9121,33 +9181,25 @@ test "a Windows object pack defines its shared entries and constants in any-COMD
 /// rules as a runtime pack, filed beside the root module's dev packs under a
 /// key no runtime pack uses. A program whose evaluation reported an error
 /// publishes nothing.
-fn publishCompileTimePack(ctx: *CliCtx, build_env: *BuildEnv, root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact, publisher: pack_store.CompileTimePublisher) Allocator.Error!void {
+fn publishCompileTimePack(ctx: *CliCtx, build_env: *BuildEnv) Allocator.Error!void {
     if (comptime !backend.host_lir_codegen_available) return;
     const owner = build_env.compile_time_object_cache_owner orelse return;
     const cache: *CompileTimeObjectCache = @ptrCast(@alignCast(owner.context));
+    const parts = if (cache.pack_parts) |*parts| parts else return;
+    if (!parts.decided) return;
+    const destination = parts.destination orelse return;
+    if (!parts.has_keyed) return;
     const completed = build_env.compileTimeStages() orelse return;
-    const stages = completed.programs();
-    const offers = for (stages) |stage| {
-        if (stage.lir_result.spec_procs.items.len != 0) break true;
-    } else false;
-    if (!offers) return;
-    const placement = build_env.packPlacementForArtifactKey(root_artifact.key) orelse return;
-    const key = pack_store.compileTimePackKey(root_artifact.codeGenerationKey().bytes, publisher);
     const store = &cache.store;
-    if (try store.has(placement.origin, placement.identity, key)) return;
 
     // The pack holds the code evaluation ran: each stage of the evaluation is
     // its own program, and the pack offers the procedures of all of them.
     var combined = try completed.combinedArtifacts(ctx.gpa);
     defer combined.deinit();
-    const comptime_reads = build_env.compileTimeSpecReads() orelse {
-        if (builtin.mode == .debug) std.debug.panic("a program written to the object cache recorded no compile-time reads", .{});
-        unreachable;
-    };
-    const bytes = try packFileBytesOfPrograms(ctx.gpa, &combined, stages, comptime_reads, true);
+    const bytes = try parts.offers.encode(ctx.gpa, &combined);
     defer ctx.gpa.free(bytes);
-    if (devDiagnosticEnv("ROC_PACK_TRACE") != null) std.debug.print("compile-time pack {d} bytes\n", .{bytes.len});
-    store.write(placement.origin, placement.identity, key, bytes) catch |err| {
+    if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("compile-time pack {d} bytes\n", .{bytes.len});
+    store.write(destination.placement.origin, destination.placement.identity, destination.key, bytes) catch |err| {
         std.log.warn("object cache could not store the compile-time pack: {}", .{err});
     };
 }
@@ -9164,7 +9216,7 @@ fn publishDiscoverySummaries(build_env: *BuildEnv, root_artifact: *const check.C
     const placement = build_env.packPlacementForArtifactKey(root_artifact.key) orelse return;
     const bytes = try pack_store.encodeDiscovery(cache.allocator, summaries);
     defer cache.allocator.free(bytes);
-    if (devDiagnosticEnv("ROC_PACK_TRACE") != null) std.debug.print("discovery summaries {d} ({d} bytes)\n", .{ summaries.len, bytes.len });
+    if (dev_diagnostics.isSet(.pack_trace)) std.debug.print("discovery summaries {d} ({d} bytes)\n", .{ summaries.len, bytes.len });
     cache.store.writeDiscovery(placement.origin, placement.identity, bytes) catch |err| {
         std.log.warn("object cache could not store discovery summaries: {}", .{err});
     };
@@ -9173,8 +9225,8 @@ fn publishDiscoverySummaries(build_env: *BuildEnv, root_artifact: *const check.C
 /// Publish what compile-time evaluation of a program that reported no error
 /// leaves for later compilations: the code it ran and its discovery
 /// summaries.
-fn publishCompileTimeResults(ctx: *CliCtx, build_env: *BuildEnv, root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact, publisher: pack_store.CompileTimePublisher) Allocator.Error!void {
-    try publishCompileTimePack(ctx, build_env, root_artifact, publisher);
+fn publishCompileTimeResults(ctx: *CliCtx, build_env: *BuildEnv, root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact) Allocator.Error!void {
+    try publishCompileTimePack(ctx, build_env);
     try publishDiscoverySummaries(build_env, root_artifact);
 }
 
@@ -9201,167 +9253,208 @@ fn packFileBytes(
         if (builtin.mode == .debug) std.debug.panic("a program written to the object cache recorded no compile-time reads", .{});
         unreachable;
     };
-    return packFileBytesOfPrograms(allocator, set, &.{lowered}, comptime_reads, false);
+    var offers = PackOffers.init(allocator, false);
+    defer offers.deinit();
+    try offers.addProgram(lowered, comptime_reads);
+    return offers.encode(allocator, set);
 }
 
-/// Encode the artifacts of several programs lowered from one Solved program,
-/// compiled into one set, with the spec table of every procedure they offer.
-/// A key two programs offer names one procedure, offered once. `evaluation`:
-/// the programs are compile-time evaluation's.
-fn packFileBytesOfPrograms(
-    allocator: Allocator,
-    set: *const backend.dev.ProcArtifact.Set,
-    programs: []const *const lir.CheckedPipeline.LoweredProgram,
-    comptime_reads: *const lir.CheckedPipeline.SpecComptimeReads,
+/// The procedures a pack may offer, gathered from the programs it is written
+/// from, all lowered from one Solved program. Everything an offer needs from
+/// its program's code is decided and copied here, so the offers outlive that
+/// code: a compile-time pack gathers each evaluation level's offers before
+/// the level's code is released.
+const PackOffers = struct {
+    arena: base.SingleThreadArena,
+    /// The programs are compile-time evaluation's. Evaluation reads a
+    /// compile-time value through its evaluation, where every other program
+    /// reads it as a constant, and SpecConstr rewrites the two forms
+    /// differently, so evaluation's code for an entry that reads one is not
+    /// the code another program compiles, and such an entry is withheld.
     evaluation: bool,
-) Allocator.Error![]u8 {
-    var artifact_by_identity = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator);
-    defer artifact_by_identity.deinit();
-    for (set.artifacts, 0..) |artifact, index| {
-        switch (artifact.kind) {
-            .proc => |identity| try artifact_by_identity.put(identity, @intCast(index)),
-            .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => {},
-        }
-    }
-    var specs = std.ArrayList(backend.dev.PackFile.SpecEntry).empty;
-    defer specs.deinit(allocator);
-    var conditions_arena = base.SingleThreadArena.init(allocator);
-    defer conditions_arena.deinit();
-    const trace = devDiagnosticEnv("ROC_PACK_TRACE") != null;
-    var withheld: usize = 0;
-    var literal_converters = std.AutoHashMap(lir.ProcIdentity, void).init(allocator);
-    defer literal_converters.deinit();
-    for (programs) |lowered| {
-        const converting = try lir.PackProgram.literalConvertingProcs(allocator, &lowered.lir_result.store);
-        defer allocator.free(converting);
-        for (lowered.lir_result.store.getProcSpecs(), converting) |proc, converts| {
-            if (converts) try literal_converters.put(proc.identity, {});
-        }
-    }
-    var closure = try SpliceClosure.init(allocator, set);
-    defer closure.deinit();
-    // Every keyed specialization, then every procedure by its identity
-    // (`Common.procIdentityCacheKey`), which serves specializations no
-    // reservation-time key names.
+    /// Every keyed specialization, in program order.
+    keyed: std.ArrayList(Candidate) = .empty,
+    /// Every procedure offered by its identity (`Common.procIdentityCacheKey`),
+    /// which serves specializations no reservation-time key names.
+    by_identity: std.ArrayList(Candidate) = .empty,
+    /// The procedures that convert a specialized custom literal when they run.
+    literal_converters: std.AutoHashMap(lir.ProcIdentity, void),
+    /// Every key gathered. A key two programs offer names one procedure,
+    /// offered once, from the first program; identity keys are hashed apart
+    /// from specialization keys, so the two kinds never share one.
+    keys: std.AutoHashMap([32]u8, void),
+
     const Candidate = struct {
         key: [32]u8,
-        lowered: *const lir.CheckedPipeline.LoweredProgram,
-        proc: lir.LIR.LirProcSpecId,
+        identity: lir.ProcIdentity,
         reads: lir.CheckedPipeline.SpecComptimeReads.Lookup,
-        by_identity: bool,
+        /// A rule read from the program's code withholds it.
+        withheld: bool,
+        rc_borrowed_params: u64,
+        rc_ret_borrowed: bool,
+        rc_ret_lenders: u64,
+        rc_read_only_params: u64,
+        rc_ret_unique: bool,
+        rc_ret_unique_fields: u64,
+        rc_ret_conditions: []const u32,
+        /// For `ROC_PACK_TRACE`: the procedure's LIR fingerprint, when this
+        /// program lowered its body, and its debug name.
+        fingerprint: ?u64,
+        name: []const u8,
     };
-    var candidates = std.ArrayList(Candidate).empty;
-    defer candidates.deinit(allocator);
-    var offered_keys = std.AutoHashMap([32]u8, void).init(allocator);
-    defer offered_keys.deinit();
-    for (programs) |lowered| for (lowered.lir_result.spec_procs.items) |spec_proc| {
-        if ((try offered_keys.getOrPut(spec_proc.key)).found_existing) continue;
-        try candidates.append(allocator, .{
-            .key = spec_proc.key,
-            .lowered = lowered,
-            .proc = spec_proc.proc,
-            .reads = comptime_reads.get(spec_proc.key),
-            .by_identity = false,
-        });
-    };
-    for (programs) |lowered| for (lowered.lir_result.store.getProcSpecs(), 0..) |proc, index| {
-        if (proc.abi != .roc or proc.hosted != null or proc.is_static_initializer) continue;
-        const source_fn = proc.source_monotype_fn orelse continue;
-        // A procedure whose identity names its template by site is offered
-        // under its code key; any other is offered under its identity only
-        // when its identity names all of its code.
-        if (proc.code_key == null and try lir.PackProgram.procCopiesSiteCode(allocator, &lowered.lir_result.store, @fromBackingInt(@intCast(index)))) continue;
-        const key = postcheck.Common.procIdentityCacheKey(if (proc.code_key) |code| code else proc.identity.bytes);
-        if ((try offered_keys.getOrPut(key)).found_existing) continue;
-        try candidates.append(allocator, .{
-            .key = key,
-            .lowered = lowered,
-            .proc = @fromBackingInt(@intCast(index)),
-            .reads = comptime_reads.fnReads(source_fn),
-            .by_identity = true,
-        });
-    };
-    for (candidates.items) |spec_proc| {
-        const lowered = spec_proc.lowered;
-        const proc = lowered.lir_result.store.getProcSpecs()[@backingInt(spec_proc.proc)];
-        const artifact = artifact_by_identity.get(proc.identity) orelse continue;
+
+    fn init(allocator: Allocator, evaluation: bool) PackOffers {
+        return .{
+            .arena = base.SingleThreadArena.init(allocator),
+            .evaluation = evaluation,
+            .literal_converters = std.AutoHashMap(lir.ProcIdentity, void).init(allocator),
+            .keys = std.AutoHashMap([32]u8, void).init(allocator),
+        };
+    }
+
+    fn deinit(self: *PackOffers) void {
+        self.keys.deinit();
+        self.literal_converters.deinit();
+        self.arena.deinit();
+    }
+
+    /// Gather `lowered`'s offers while its code exists.
+    fn addProgram(
+        self: *PackOffers,
+        lowered: *const lir.CheckedPipeline.LoweredProgram,
+        comptime_reads: *const lir.CheckedPipeline.SpecComptimeReads,
+    ) Allocator.Error!void {
+        const allocator = self.literal_converters.allocator;
+        const store = &lowered.lir_result.store;
+        const converting = try lir.PackProgram.literalConvertingProcs(allocator, store);
+        defer allocator.free(converting);
+        for (store.getProcSpecs(), converting) |proc, converts| {
+            if (converts) try self.literal_converters.put(proc.identity, {});
+        }
+        for (lowered.lir_result.spec_procs.items) |spec_proc| {
+            if ((try self.keys.getOrPut(spec_proc.key)).found_existing) continue;
+            try self.keyed.append(self.arena.allocator(), try self.candidate(lowered, spec_proc.proc, spec_proc.key, comptime_reads.get(spec_proc.key)));
+        }
+        for (store.getProcSpecs(), 0..) |proc, index| {
+            if (proc.abi != .roc or proc.hosted != null or proc.is_static_initializer) continue;
+            const source_fn = proc.source_monotype_fn orelse continue;
+            const id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(index));
+            // A procedure whose identity names its template by site is offered
+            // under its code key; any other is offered under its identity only
+            // when its identity names all of its code.
+            if (proc.code_key == null and try lir.PackProgram.procCopiesSiteCode(allocator, store, id)) continue;
+            const key = postcheck.Common.procIdentityCacheKey(if (proc.code_key) |code| code else proc.identity.bytes);
+            if ((try self.keys.getOrPut(key)).found_existing) continue;
+            try self.by_identity.append(self.arena.allocator(), try self.candidate(lowered, id, key, comptime_reads.fnReads(source_fn)));
+        }
+    }
+
+    fn candidate(
+        self: *PackOffers,
+        lowered: *const lir.CheckedPipeline.LoweredProgram,
+        id: lir.LIR.LirProcSpecId,
+        key: [32]u8,
+        reads: lir.CheckedPipeline.SpecComptimeReads.Lookup,
+    ) Allocator.Error!Candidate {
+        const arena = self.arena.allocator();
+        const store = &lowered.lir_result.store;
+        const proc = store.getProcSpecs()[@backingInt(id)];
         // An entry whose code evaluates a compile-time root in place would
         // compute that root whenever it runs in a program that evaluates the
-        // root itself, so it is not offered. Any other entry carries the
-        // roots it reads, which a linking program demands (design.md
-        // "Demand-Driven Compile-Time Evaluation").
-        const entry_reads = spec_proc.reads;
-        if (!entry_reads.offerable) {
-            withheld += 1;
-            continue;
-        }
-        // Evaluation reads a compile-time value through its evaluation,
-        // where every other program reads it as a constant, and SpecConstr
-        // rewrites the two forms differently, so evaluation's code for such
-        // an entry is not the code another program compiles.
-        if (evaluation and entry_reads.evaluated) {
-            withheld += 1;
-            continue;
-        }
-        // A linking program calls an entry at its base signature and cannot
-        // emit the ownership variants its callers would demand from the
-        // body, so an entry that admits such demands is not offered.
-        if (proc.rc_variant_demandable) {
-            withheld += 1;
-            continue;
-        }
-        // An entry whose code calls a linked object-cache entry depends on
-        // that object being linked too; the program that splices it calls
-        // the linked entry itself instead, by taking the entry's key.
-        if (try procReachesLinkedEntry(allocator, &lowered.lir_result.store, spec_proc.proc)) {
-            withheld += 1;
-            continue;
-        }
-        // A linking program inlines it rather than calling it.
-        if (proc.inlined_at_calls) {
-            withheld += 1;
-            continue;
-        }
-        // A linking program has no body for an entry, so it sees the entry
-        // outside every call cycle and would reach it with an ordinary call
-        // where the cycle needs a frame-replacing one.
-        if (proc.tail_group != null) {
-            withheld += 1;
-            continue;
-        }
-        // Boxy statements index the program's own descriptor sidecar, and a
-        // constant holding a code pointer names code the pack may not carry;
-        // an entry that reaches either cannot be linked elsewhere, so it is
-        // not offered.
-        const placed = try closure.of(artifact);
-        if (closureNamesProgramLocalSymbols(set, placed) or closureConvertsLiteral(set, &literal_converters, placed)) {
-            withheld += 1;
-            continue;
-        }
+        // root itself, so it is not offered. A linking program calls an entry
+        // at its base signature and cannot emit the ownership variants its
+        // callers would demand from the body. An entry whose code calls a
+        // linked object-cache entry depends on that object being linked too;
+        // the program that splices it calls the linked entry itself instead,
+        // by taking the entry's key. A linking program inlines an inlined
+        // entry rather than calling it, and has no body for an entry, so it
+        // sees the entry outside every call cycle and would reach it with an
+        // ordinary call where the cycle needs a frame-replacing one.
+        const withheld = !reads.offerable or
+            (self.evaluation and reads.evaluated) or
+            proc.rc_variant_demandable or
+            try procReachesLinkedEntry(self.literal_converters.allocator, store, id) or
+            proc.inlined_at_calls or
+            proc.tail_group != null;
         // An entry this program spliced from a pack is offered again with
         // its producer's code; only a body lowered here has a fingerprint.
-        if (trace and proc.body != null) {
-            const fingerprint = try procFingerprint(allocator, lowered, spec_proc.proc);
-            std.debug.print("{s} {x} {x:0>16} {s}\n", .{ if (spec_proc.by_identity) "offer-identity" else "offer", &spec_proc.key, fingerprint, lowered.lir_result.store.procDebugName(spec_proc.proc) orelse "" });
-        }
-        try specs.append(allocator, .{
-            .key = spec_proc.key,
-            .artifact = artifact,
-            .comptime_root_reads = entry_reads.reads,
+        const fingerprint: ?u64 = if (dev_diagnostics.isSet(.pack_trace) and proc.body != null)
+            try procFingerprint(self.literal_converters.allocator, lowered, id)
+        else
+            null;
+        return .{
+            .key = key,
+            .identity = proc.identity,
+            .reads = .{ .offerable = reads.offerable, .reads = try arena.dupe(lir.CheckedPipeline.ComptimeRootRead, reads.reads), .evaluated = reads.evaluated },
+            .withheld = withheld,
             .rc_borrowed_params = proc.rc_borrowed_params,
             .rc_ret_borrowed = proc.rc_ret_borrowed,
             .rc_ret_lenders = proc.rc_ret_lenders,
             .rc_read_only_params = proc.rc_read_only_params,
             .rc_ret_unique = proc.rc_ret_unique,
             .rc_ret_unique_fields = proc.rc_ret_unique_fields,
-            .rc_ret_conditions = try GuardedList.dupe(conditions_arena.allocator(), u32, lowered.lir_result.store.getU32Span(proc.rc_ret_conditions)),
-        });
+            .rc_ret_conditions = try GuardedList.dupe(arena, u32, store.getU32Span(proc.rc_ret_conditions)),
+            .name = try arena.dupe(u8, store.procDebugName(id) orelse ""),
+            .fingerprint = fingerprint,
+        };
     }
-    if (trace) {
-        std.debug.print("pack: {d} artifacts, {d} specs offered, {d} withheld\n", .{ set.artifacts.len, specs.items.len, withheld });
+
+    /// Encode `set`, compiled from the gathered programs, with the spec table
+    /// of every procedure they offer.
+    fn encode(self: *const PackOffers, allocator: Allocator, set: *const backend.dev.ProcArtifact.Set) Allocator.Error![]u8 {
+        var artifact_by_identity = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator);
+        defer artifact_by_identity.deinit();
+        for (set.artifacts, 0..) |artifact, index| {
+            switch (artifact.kind) {
+                .proc => |identity| try artifact_by_identity.put(identity, @intCast(index)),
+                .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => {},
+            }
+        }
+        var specs = std.ArrayList(backend.dev.PackFile.SpecEntry).empty;
+        defer specs.deinit(allocator);
+        const trace = dev_diagnostics.isSet(.pack_trace);
+        var withheld: usize = 0;
+        var closure = try SpliceClosure.init(allocator, set);
+        defer closure.deinit();
+        for ([_][]const Candidate{ self.keyed.items, self.by_identity.items }, [_]bool{ false, true }) |candidates, by_identity| {
+            for (candidates) |offer| {
+                const artifact = artifact_by_identity.get(offer.identity) orelse continue;
+                if (offer.withheld) {
+                    withheld += 1;
+                    continue;
+                }
+                // Boxy statements index the program's own descriptor sidecar,
+                // and a constant holding a code pointer names code the pack
+                // may not carry; an entry that reaches either cannot be
+                // linked elsewhere, so it is not offered.
+                const placed = try closure.of(artifact);
+                if (closureNamesProgramLocalSymbols(set, placed) or closureConvertsLiteral(set, &self.literal_converters, placed)) {
+                    withheld += 1;
+                    continue;
+                }
+                if (trace) if (offer.fingerprint) |fingerprint| {
+                    std.debug.print("{s} {x} {x:0>16} {s}\n", .{ if (by_identity) "offer-identity" else "offer", &offer.key, fingerprint, offer.name });
+                };
+                try specs.append(allocator, .{
+                    .key = offer.key,
+                    .artifact = artifact,
+                    .comptime_root_reads = offer.reads.reads,
+                    .rc_borrowed_params = offer.rc_borrowed_params,
+                    .rc_ret_borrowed = offer.rc_ret_borrowed,
+                    .rc_ret_lenders = offer.rc_ret_lenders,
+                    .rc_read_only_params = offer.rc_read_only_params,
+                    .rc_ret_unique = offer.rc_ret_unique,
+                    .rc_ret_unique_fields = offer.rc_ret_unique_fields,
+                    .rc_ret_conditions = offer.rc_ret_conditions,
+                });
+            }
+        }
+        if (trace) {
+            std.debug.print("pack: {d} artifacts, {d} specs offered, {d} withheld\n", .{ set.artifacts.len, specs.items.len, withheld });
+        }
+        return backend.dev.PackFile.write(allocator, set, specs.items);
     }
-    return try backend.dev.PackFile.write(allocator, set, specs.items);
-}
+};
 
 /// The LIR fingerprint of one procedure of `lowered`, which is the same in
 /// every program that lowers that procedure identically.
@@ -11073,6 +11166,8 @@ fn initBuildCommandEnv(ctx: *CliCtx, args: cli_args.BuildArgs) InitCliBuildEnvEr
         .timings = args.timings,
         .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
         .track_watch_inputs = args.watch_inputs_file != null,
+        .release_checked_solver_types = true,
+        .compile_time_pack_publisher = .{ .command = .build, .opt = @tagName(args.opt) },
         .source_dir_override = args.source_dir_override,
         .root_source_url = args.root_source_url,
     });
@@ -11316,7 +11411,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
     // A build files the code its compile-time evaluation ran for later
     // compilations as a check does, before the runtime program takes the
     // shared Solved program.
-    if (diag.errors == 0) try publishCompileTimeResults(ctx, &build_env, root_artifact, .{ .command = .build, .opt = @tagName(args.opt) });
+    if (diag.errors == 0) try publishCompileTimeResults(ctx, &build_env, root_artifact);
     var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .linked_output, target, args.synthetic_default_platform, null, .source_bodies);
     defer lowered.deinit();
 
@@ -11538,9 +11633,9 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     var own_packs: ?pack_store.LoadedPacks = null;
     defer if (own_packs) |*packs| packs.deinit();
     var loaded_packs: ?*pack_store.LoadedPacks = null;
-    if (devDiagnosticEnv("ROC_DEV_PACK_HITS")) |dir_z| {
-        own_packs = pack_store.LoadedPacks.loadDir(ctx.gpa, ctx.io.std_io, std.mem.span(dir_z)) catch |err| {
-            std.log.err("failed to load packs from {s}: {}", .{ std.mem.span(dir_z), err });
+    if (dev_diagnostics.get(.dev_pack_hits)) |dir| {
+        own_packs = pack_store.LoadedPacks.loadDir(ctx.gpa, ctx.io.std_io, dir) catch |err| {
+            std.log.err("failed to load packs from {s}: {}", .{ dir, err });
             return error.NativeCompilationFailed;
         };
         loaded_packs = &own_packs.?;
@@ -11604,12 +11699,12 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     }
     runtime_lowering.target.code_provision = nativeObjectCodeProvision(target, args.opt, loaded_packs != null, linked_stores != null);
     // This program's specializations go into packs.
-    runtime_lowering.target.spec_comptime_reads = object_store != null or devDiagnosticEnv("ROC_DEV_PACK_OBJECTS") != null;
+    runtime_lowering.target.spec_comptime_reads = object_store != null or dev_diagnostics.isSet(.dev_pack_objects);
     build_env.setRuntimeLowering(runtime_lowering);
     // A build of a program whose runtime output is recorded links that output
     // and lowers no runtime program. Debug pack emission reads the lowering.
     var program_probe: ?ProgramOutputProbe = null;
-    if (object_store) |store| if (target_arch != .wasm32 and devDiagnosticEnv("ROC_DEV_PACK_OBJECTS") == null) {
+    if (object_store) |store| if (target_arch != .wasm32 and !dev_diagnostics.isSet(.dev_pack_objects)) {
         program_probe = .{
             .arena = ctx.arena,
             .gpa = ctx.gpa,
@@ -11650,7 +11745,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     // A build files the code its compile-time evaluation ran for later
     // compilations as a check does, before the runtime program takes the
     // shared Solved program.
-    if (diag.errors == 0) try publishCompileTimeResults(ctx, &build_env, root_artifact, .{ .command = .build, .opt = @tagName(args.opt) });
+    if (diag.errors == 0) try publishCompileTimeResults(ctx, &build_env, root_artifact);
     var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .linked_output, target, args.synthetic_default_platform, if (loaded_packs) |packs| packs.specCacheLookup() else null, nativeObjectCodeProvision(target, args.opt, loaded_packs != null, linked_stores != null));
     defer lowered.deinit();
     // The program links the objects defining the entries it took, and no
@@ -11658,7 +11753,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     if (loaded_packs) |packs| packs.settleLinkedObjects(lowered.lir_result.store.getProcSpecs());
     // Cache statistics are diagnostic output. Ordinary successful builds must
     // leave stderr empty so build runners do not report false warnings.
-    if (loaded_packs != null and devDiagnosticEnv("ROC_PACK_STATS") != null) {
+    if (loaded_packs != null and dev_diagnostics.isSet(.pack_stats)) {
         const packs = loaded_packs.?.*;
         var external_procs: usize = 0;
         for (lowered.lir_result.store.getProcSpecs()) |proc| {
@@ -11716,7 +11811,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     object_compiler.post_check_executor = build_env.postCheckExecutor();
     if (loaded_packs) |packs| object_compiler.splice_source = packs.spliceSource();
     object_compiler.capture_artifacts = object_cache_enabled;
-    object_compiler.enable_hot_reload = lowered.lir_result.erased_capture_prefix != 0;
+    object_compiler.erased_capture_prefix = lowered.lir_result.erased_capture_prefix;
     defer if (object_compiler.captured_artifacts) |*set| set.deinit();
 
     const build_scratch_dir = createUniqueTempDir(ctx) catch |err| {
@@ -14295,6 +14390,7 @@ fn runCompiledTestRoots(
                 .store = &lowered.lir_result.store,
                 .layouts = &lowered.lir_result.layouts,
                 .tables = eval.boxy_runtime.BoxyTables.fromResult(&lowered.lir_result),
+                .erased_capture_prefix = lowered.lir_result.erased_capture_prefix,
                 .roots = bool_roots,
                 .expect_site_count = lowered.lir_result.expect_sites.items.len,
                 .static_data = .{
@@ -14310,6 +14406,7 @@ fn runCompiledTestRoots(
             &lowered.lir_result.store,
             &lowered.lir_result.layouts,
             eval.boxy_runtime.BoxyTables.fromResult(&lowered.lir_result),
+            lowered.lir_result.erased_capture_prefix,
             bool_roots,
             lowered.lir_result.expect_sites.items.len,
             .size,
@@ -14319,6 +14416,7 @@ fn runCompiledTestRoots(
             &lowered.lir_result.store,
             &lowered.lir_result.layouts,
             eval.boxy_runtime.BoxyTables.fromResult(&lowered.lir_result),
+            lowered.lir_result.erased_capture_prefix,
             bool_roots,
             lowered.lir_result.expect_sites.items.len,
             .speed,
@@ -14451,6 +14549,7 @@ fn runCompiledLoweredTestModulesOnce(
             .store = &lowered_module.lowered.lir_result.store,
             .layouts = &lowered_module.lowered.lir_result.layouts,
             .tables = eval.boxy_runtime.BoxyTables.fromResult(&lowered_module.lowered.lir_result),
+            .erased_capture_prefix = lowered_module.lowered.lir_result.erased_capture_prefix,
             .roots = bool_roots,
             .expect_site_count = lowered_module.lowered.lir_result.expect_sites.items.len,
             .static_data = .{
@@ -15839,6 +15938,8 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         .timings = args.timings,
         .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
         .track_watch_inputs = args.watch_inputs_file != null,
+        .release_checked_solver_types = true,
+        .compile_time_pack_publisher = .{ .command = .test_run, .opt = @tagName(args.opt) },
         .root_source_url = args.root_source_url,
         .main_source_url = args.main_source_url,
         // `roc test` never links a program, so it publishes no executable
@@ -15919,7 +16020,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     defer runtime_metadata.deinit(ctx.gpa);
     for (test_plan.modules) |planned| {
         try runtime_requests.appendSlice(ctx.gpa, planned.test_roots);
-        try runtime_sources.appendNTimes(ctx.gpa, planned.artifact.key, planned.test_roots.len);
+        try runtime_sources.appendNTimes(ctx.gpa, planned.artifact.key.digest(), planned.test_roots.len);
         for (planned.test_roots, 0..) |root, root_index| {
             const entry = test_plan.entries[planned.first_entry_index + root_index];
             try runtime_metadata.append(ctx.gpa, .{
@@ -15958,7 +16059,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     // a program's packs from.
     if (diag.errors == 0) {
         if (build_env.getExecutableRootSemanticData()) |root_semantic| if (root_semantic.checked_artifact) |root_artifact| {
-            try publishCompileTimeResults(ctx, &build_env, root_artifact, .{ .command = .test_run, .opt = @tagName(args.opt) });
+            try publishCompileTimeResults(ctx, &build_env, root_artifact);
         };
     }
     try finishFrontEndPhase(ctx.arena, ctx.reportConfig(.stderr), &reporter, build_env.getTimingInfo());
@@ -18745,6 +18846,7 @@ fn checkFileWithBuildEnvPreserved(
         .timings = timings,
         .resolution_config = resolution_config,
         .track_watch_inputs = track_watch_inputs,
+        .compile_time_pack_publisher = .{ .command = .check, .opt = @tagName(cli_args.OptLevel.dev) },
         .source_dir_override = source_dir_override,
         .root_source_url = root_source_url,
         .main_source_url = main_source_url,
@@ -18792,6 +18894,8 @@ fn checkFileWithBuildEnv(
         .verbose_cache = cache_config.verbose,
         .timings = timings,
         .resolution_config = resolution_config,
+        .release_checked_solver_types = true,
+        .compile_time_pack_publisher = .{ .command = .check, .opt = @tagName(cli_args.OptLevel.dev) },
         .source_dir_override = source_dir_override,
         .root_source_url = root_source_url,
         .main_source_url = main_source_url,
@@ -18834,7 +18938,7 @@ fn collectCheckResult(
     }
     if (error_count == 0) {
         if (build_env.getExecutableRootSemanticData()) |root_semantic| if (root_semantic.checked_artifact) |root_artifact| {
-            try publishCompileTimeResults(ctx, build_env, root_artifact, .{ .command = .check, .opt = @tagName(cli_args.OptLevel.dev) });
+            try publishCompileTimeResults(ctx, build_env, root_artifact);
         };
     }
 
@@ -19718,11 +19822,10 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
         const public_modules = try build_env.getPublicRootModules(ctx.gpa);
         defer ctx.gpa.free(public_modules);
         for (public_modules) |module| {
-            const artifact = module.semantic.checked_artifact orelse return error.Internal;
             try inputs.append(ctx.gpa, .{
                 .exposed_name = module.name,
-                .module_env = module.semantic.env,
-                .artifact = artifact,
+                .module_env = module.checked.env,
+                .artifact = module.checked.checked_artifact,
                 .public_type_decl = module.public_type_decl,
             });
         }
@@ -19730,12 +19833,13 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
 
     if (root_pkg.kind == .platform and root_pkg.public_surface.root_names.items.len > 0) {
         const root_module = build_env.rootModule(root_name) orelse return error.Internal;
-        const root_data = root_module.semanticData() orelse return error.Internal;
-        const root_artifact = root_data.checked_artifact orelse return error.Internal;
+        const root_data = root_module.checkedModule() orelse {
+            base.invariant("bump invariant violated: platform root module did not complete successfully", .{});
+        };
         try inputs.append(ctx.gpa, .{
             .exposed_name = root_module.name,
             .module_env = root_data.env,
-            .artifact = root_artifact,
+            .artifact = root_data.checked_artifact,
             .exposed_names = root_pkg.public_surface.root_names.items,
         });
     }
@@ -19747,11 +19851,10 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
         for (routing_modules) |module| {
             if (std.mem.eql(u8, module.package_name, root_name)) continue;
             if (module.public_type_decl == null) continue;
-            const artifact = module.semantic.checked_artifact orelse return error.Internal;
             try inputs.append(ctx.gpa, .{
                 .exposed_name = module.name,
-                .module_env = module.semantic.env,
-                .artifact = artifact,
+                .module_env = module.checked.env,
+                .artifact = module.checked.checked_artifact,
                 .public_type_decl = module.public_type_decl,
             });
         }
@@ -20130,12 +20233,11 @@ fn generateDocs(
         defer ctx.gpa.free(routing_modules);
         for (routing_modules) |module_info| {
             const source_decl = module_info.public_type_decl orelse continue;
-            const artifact = module_info.semantic.checked_artifact orelse unreachable;
             try public_type_projections.append(ctx.gpa, .{
                 .public_name = module_info.name,
                 .package_name = build_env.displayNameForPackage(module_info.package_name),
-                .source_env = module_info.semantic.env,
-                .source_identity = &artifact.key.module_identity_hash,
+                .source_env = module_info.checked.env,
+                .source_identity = &module_info.checked.checked_artifact.module_identity.stable_hash,
                 .source_decl = source_decl,
                 .public_order = module_info.public_order,
             });
@@ -20149,18 +20251,17 @@ fn generateDocs(
         const sched_pkg_name = build_env.displayNameForPackage(module_info.package_name);
         modules_seen += 1;
 
-        var mod_docs = extract.extractModuleDocsWithOptions(ctx.gpa, module_info.semantic.env, sched_pkg_name, module_info.path, .{
+        var mod_docs = extract.extractModuleDocsWithOptions(ctx.gpa, module_info.checked.env, sched_pkg_name, module_info.path, .{
             .exposed_names = module_info.docs_exposed_names,
             .public_type = if (module_info.public_type_decl) |source_decl| .{
                 .public_name = module_info.name,
                 .package_name = sched_pkg_name,
-                .source_env = module_info.semantic.env,
-                .source_identity = &(module_info.semantic.checked_artifact orelse unreachable).key.module_identity_hash,
+                .source_env = module_info.checked.env,
+                .source_identity = &module_info.checked.checked_artifact.module_identity.stable_hash,
                 .source_decl = source_decl,
                 .public_order = module_info.public_order,
             } else null,
             .public_types = public_type_projections.items,
-            .checked_artifact = module_info.semantic.checked_artifact,
         }) catch |err| {
             std.debug.print("Warning: failed to extract docs for module {s}: {}\n", .{ module_info.name, err });
             extract_failed += 1;
@@ -20235,9 +20336,7 @@ fn generateBuiltinDocs(ctx: *CliCtx, base_output_dir: []const u8, with_lang_ref:
         errdefer ctx.gpa.free(modules);
         // The builtin is documented as a standalone root type module, whose
         // display package name is `module` (see `BuildEnv.displayNameForPackage`).
-        modules[0] = try docs.extract.extractModuleDocsWithOptions(ctx.gpa, builtin_modules.builtin_module.env, "module", "Builtin.roc", .{
-            .checked_artifact = &builtin_modules.checked_artifact,
-        });
+        modules[0] = try docs.extract.extractModuleDocsWithOptions(ctx.gpa, builtin_modules.builtin_module.env, "module", "Builtin.roc", .{});
         errdefer modules[0].deinit(ctx.gpa);
         break :package_docs docs.DocModel.PackageDocs{ .name = try ctx.gpa.dupe(u8, "Builtin"), .modules = modules };
     };

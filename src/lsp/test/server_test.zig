@@ -27,7 +27,7 @@ const InitialServerState = enum {
 };
 
 const FailingWriter = struct {
-    pub fn write(_: *@This(), _: []const u8) error{InjectedFailure}!usize {
+    pub fn writeAll(_: *@This(), _: []const u8) error{InjectedFailure}!void {
         return error.InjectedFailure;
     }
 };
@@ -426,8 +426,9 @@ test "server forgets documents on didClose" {
     server.client.trusted_workspace = true;
     try server.run();
 
-    try std.testing.expectEqual(@as(usize, 1), server.syntax_checker.close_calls);
     try std.testing.expect(server.getDocumentForTesting(file_uri) == null);
+    try std.testing.expectEqual(@as(usize, 1), server.syntax_checker.close_calls);
+    try std.testing.expectEqual(@as(usize, 1), server.syntax_checker.forget_calls);
 }
 
 test "server applies sequential incremental changes in a single didChange" {

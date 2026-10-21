@@ -50,8 +50,6 @@ const Span = struct { start: u32, len: u32 };
 
 allocator: Allocator,
 indexes: StackPlan.Indexes,
-/// `StackPlan`'s local index column, kept empty between procedures.
-local_indices: std.ArrayList(u32) = .empty,
 /// Locals whose slot addresses reach an out-of-line call.
 candidates: std.AutoHashMapUnmanaged(u32, void) = .empty,
 /// Locals taking part in deferred string-match captures.
@@ -73,7 +71,6 @@ pub fn init(allocator: Allocator) Self {
 
 pub fn deinit(self: *Self) void {
     self.indexes.deinit();
-    self.local_indices.deinit(self.allocator);
     self.candidates.deinit(self.allocator);
     self.deferred.deinit(self.allocator);
     self.copies.deinit(self.allocator);
@@ -108,11 +105,11 @@ pub fn plan(self: *Self, store: *const LirStore, root: CFStmtId, params: anytype
     try self.collectCandidates(store, root, params, calls);
     if (self.candidates.count() == 0) return;
 
-    var stack_plan = StackPlan.initWithLocalIndices(self.allocator, self.local_indices);
-    self.local_indices = .empty;
-    defer self.local_indices = stack_plan.deinitKeepingLocalIndices();
+    var stack_plan = StackPlan.initWithLocalIndices(self.allocator, self.indexes.local_indices);
+    self.indexes.local_indices = StackPlan.LocalIndices.init(self.allocator);
+    defer self.indexes.local_indices = stack_plan.deinitKeepingLocalIndices();
     self.planned.clearRetainingCapacity();
-    defer self.indexes.clear(self.planned.items);
+    defer self.indexes.clear();
     try stack_plan.addProcGraph(store, &self.indexes, root, &self.planned, Tracked{ .candidates = &self.candidates });
     for (stack_plan.values.items) |*value| value.size = 1;
     try stack_plan.solveLifetimes();

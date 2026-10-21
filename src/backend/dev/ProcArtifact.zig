@@ -853,6 +853,10 @@ pub fn extractPrepared(
     const relocations = try codegen.artifactRelocations(allocator);
     defer allocator.free(relocations);
     const refs = codegen.codeRefs();
+    for (relocations) |relocation| switch (relocation) {
+        .local_data, .jmp_to_return => return error.UnsupportedRelocation,
+        .retired, .linked_function, .linked_data => {},
+    };
 
     // Standalone branch islands belong to this placement, not the artifact
     // set. Embedded reservations stay inside their owning bytes but every
@@ -864,6 +868,22 @@ pub fn extractPrepared(
         artifact_of_region[index] = if (regionHasArtifact(region.kind)) artifact_count else null;
         if (regionHasArtifact(region.kind)) artifact_count += 1;
     }
+
+    // Each reference and relocation belongs to the one region its offset
+    // falls in. Grouping them once keeps extraction linear in the program's
+    // size; within a region they keep their emission order.
+    var ref_groups = try RegionGroups.init(CG, allocator, regions, refs.len, refs, refSite);
+    defer ref_groups.deinit(allocator);
+    var relocation_groups = try RegionGroups.init(CG, allocator, regions, relocations.len, relocations, relocationOffset);
+    defer relocation_groups.deinit(allocator);
+    var frame_of_entry = std.AutoHashMap(usize, usize).init(allocator);
+    defer frame_of_entry.deinit();
+    for (unwind, 0..) |function, index| {
+        const entry = try frame_of_entry.getOrPut(function.start_offset);
+        if (!entry.found_existing) entry.value_ptr.* = index;
+    }
+    var message_runs = try MessageRuns.init(CG, allocator, regions);
+    defer message_runs.deinit(allocator);
 
     const artifacts = try arena_allocator.alloc(Artifact, artifact_count);
     for (regions, 0..) |region, region_index| {
@@ -880,10 +900,9 @@ pub fn extractPrepared(
             .spliced_helper => .{ .rc_helper = try arena_allocator.dupe(u8, codegen.splicedHelperName(region.start + region.entry) orelse return error.DanglingReference) },
         };
 
-        var frame: ?Frame = null;
-        for (unwind) |function| {
-            if (function.start_offset != region.start + region.entry) continue;
-            frame = .{
+        const frame: ?Frame = if (frame_of_entry.get(region.start + region.entry)) |function_index| frame: {
+            const function = unwind[function_index];
+            break :frame .{
                 .prologue_size = function.prologue_size,
                 .stack_alloc = function.stack_alloc,
                 .frame_size = function.frame_size,
@@ -891,8 +910,7 @@ pub fn extractPrepared(
                 .epilogue_offset = function.epilogue_offset,
                 .uses_frame_pointer = function.uses_frame_pointer,
             };
-            break;
-        }
+        } else null;
 
         // Code whose identity names it reaches a procedure whose identity
         // names its template by site (`LIR.LirProcSpec.code_key`) by that
@@ -904,8 +922,8 @@ pub fn extractPrepared(
         };
         var region_refs = std.ArrayList(Reference).empty;
         var symbolic_refs = std.ArrayList(SymbolicReference).empty;
-        for (refs) |ref| {
-            if (ref.site < region.start or ref.site >= region.end) continue;
+        for (ref_groups.of(region_index)) |ref_index| {
+            const ref = refs[ref_index];
             const symbolic_target: ?@FieldType(SymbolicReference, "target") = switch (ref.target) {
                 .proc => |proc_id| if (codegen.compiledProcSymbol(proc_id) == null or
                     (region_names_code and proc_specs[@backingInt(proc_id)].code_key != null))
@@ -932,7 +950,7 @@ pub fn extractPrepared(
             const target_offset: usize = switch (ref.target) {
                 .proc => |proc_id| (codegen.compiledProcSymbol(proc_id) orelse return error.DanglingReference).code_start,
                 .rc_helper => |key| codegen.compiledRcHelperOffset(key) orelse return error.DanglingReference,
-                .message => |message_offset| messageOffsetInCode(CG, regions, message_offset) orelse return error.DanglingReference,
+                .message => |message_offset| message_runs.codeOffset(regions, message_offset) orelse return error.DanglingReference,
                 .boxy_thunk => |proc_id| codegen.boxyThunkOffset(proc_id) orelse return error.DanglingReference,
                 .offset => |offset| offset,
             };
@@ -971,14 +989,9 @@ pub fn extractPrepared(
         }
 
         var region_relocations = std.ArrayList(NamedRelocation).empty;
-        for (relocations) |relocation| {
-            switch (relocation) {
-                .retired => continue,
-                .local_data, .jmp_to_return => return error.UnsupportedRelocation,
-                .linked_function, .linked_data => {},
-            }
+        for (relocation_groups.of(region_index)) |relocation_index| {
+            const relocation = relocations[relocation_index];
             const offset = relocation.getOffset();
-            if (offset < region.start or offset >= region.end) continue;
             try region_relocations.append(arena_allocator, switch (relocation) {
                 .linked_function => |function| .{
                     .offset = @intCast(offset - region.start),
@@ -1042,6 +1055,127 @@ pub fn extractPrepared(
 
     return .{ .arena = arena, .artifacts = artifacts };
 }
+
+fn refSite(ref: anytype) ?usize {
+    return ref.site;
+}
+
+fn relocationOffset(relocation: anytype) ?usize {
+    return switch (relocation) {
+        .retired => null,
+        .linked_function, .linked_data => relocation.getOffset(),
+        .local_data, .jmp_to_return => unreachable,
+    };
+}
+
+/// The indices of a list's items grouped by the code region their offsets
+/// fall in, each group in list order.
+const RegionGroups = struct {
+    /// `items[starts[r]..starts[r + 1]]` are region `r`'s item indices.
+    starts: []u32,
+    items: []u32,
+
+    fn init(
+        comptime CG: type,
+        allocator: Allocator,
+        regions: []const CG.CodeRegion,
+        count: usize,
+        list: anytype,
+        comptime offsetOf: anytype,
+    ) Allocator.Error!RegionGroups {
+        const region_of = try allocator.alloc(?u32, count);
+        defer allocator.free(region_of);
+        const starts = try allocator.alloc(u32, regions.len + 1);
+        errdefer allocator.free(starts);
+        @memset(starts, 0);
+        var grouped: usize = 0;
+        for (list, region_of) |item, *region| {
+            region.* = if (offsetOf(item)) |offset|
+                if (regionContaining(CG, regions, offset)) |found| @intCast(found) else null
+            else
+                null;
+            if (region.*) |found| {
+                starts[found + 1] += 1;
+                grouped += 1;
+            }
+        }
+        for (1..starts.len) |index| starts[index] += starts[index - 1];
+        const items = try allocator.alloc(u32, grouped);
+        errdefer allocator.free(items);
+        const next = try allocator.dupe(u32, starts[0..regions.len]);
+        defer allocator.free(next);
+        for (region_of, 0..) |maybe_region, item_index| {
+            const region = maybe_region orelse continue;
+            items[next[region]] = @intCast(item_index);
+            next[region] += 1;
+        }
+        return .{ .starts = starts, .items = items };
+    }
+
+    fn of(self: *const RegionGroups, region: usize) []const u32 {
+        return self.items[self.starts[region]..self.starts[region + 1]];
+    }
+
+    fn deinit(self: *RegionGroups, allocator: Allocator) void {
+        allocator.free(self.starts);
+        allocator.free(self.items);
+    }
+};
+
+/// The message pool runs of a placement, for finding the run a message
+/// byte was placed in: the last run in placement order that starts at or
+/// before the message.
+const MessageRuns = struct {
+    /// Pool offset each run starts at, ascending.
+    pool_from: []u32,
+    /// For each entry of `pool_from`, the latest placement position among
+    /// the runs starting at or before it.
+    latest_region: []u32,
+
+    const Run = struct { pool_from: u32, region: u32 };
+
+    fn init(comptime CG: type, allocator: Allocator, regions: []const CG.CodeRegion) Allocator.Error!MessageRuns {
+        var runs = std.ArrayList(Run).empty;
+        defer runs.deinit(allocator);
+        for (regions, 0..) |region, index| switch (region.kind) {
+            .message_pool_run => |pool_from| try runs.append(allocator, .{ .pool_from = pool_from, .region = @intCast(index) }),
+            .proc, .rc_helper, .boxy_thunk, .entrypoint, .branch_island, .hosted_stub, .spliced_proc, .spliced_boxy_thunk, .spliced_helper => {},
+        };
+        std.mem.sort(Run, runs.items, {}, struct {
+            fn lessThan(_: void, lhs: Run, rhs: Run) bool {
+                return lhs.pool_from < rhs.pool_from;
+            }
+        }.lessThan);
+        const pool_from = try allocator.alloc(u32, runs.items.len);
+        errdefer allocator.free(pool_from);
+        const latest_region = try allocator.alloc(u32, runs.items.len);
+        var latest: u32 = 0;
+        for (runs.items, pool_from, latest_region) |run, *from, *region| {
+            latest = @max(latest, run.region);
+            from.* = run.pool_from;
+            region.* = latest;
+        }
+        return .{ .pool_from = pool_from, .latest_region = latest_region };
+    }
+
+    fn codeOffset(self: *const MessageRuns, regions: anytype, message_offset: u32) ?usize {
+        // The number of runs starting at or before the message.
+        var low: usize = 0;
+        var high: usize = self.pool_from.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            if (self.pool_from[mid] <= message_offset) low = mid + 1 else high = mid;
+        }
+        if (low == 0) return null;
+        const region = regions[self.latest_region[low - 1]];
+        return region.start + (message_offset - region.kind.message_pool_run);
+    }
+
+    fn deinit(self: *MessageRuns, allocator: Allocator) void {
+        allocator.free(self.pool_from);
+        allocator.free(self.latest_region);
+    }
+};
 
 /// Index of the first entry, in offset order, at or after `offset`.
 fn firstAtOrAfter(comptime T: type, items: []const T, offset: usize) usize {
@@ -1144,21 +1278,6 @@ fn regionContaining(comptime CG: type, regions: []const CG.CodeRegion, offset: u
         }
     }
     return null;
-}
-
-/// Code offset of a message pool byte: the last pool run that starts at or
-/// before the message, plus the message's distance into that run.
-fn messageOffsetInCode(comptime CG: type, regions: []const CG.CodeRegion, message_offset: u32) ?usize {
-    var found: ?usize = null;
-    for (regions) |region| {
-        switch (region.kind) {
-            .message_pool_run => |pool_from| {
-                if (pool_from <= message_offset) found = region.start + (message_offset - pool_from);
-            },
-            .proc, .rc_helper, .boxy_thunk, .entrypoint, .branch_island, .hosted_stub, .spliced_proc, .spliced_boxy_thunk, .spliced_helper => {},
-        }
-    }
-    return found;
 }
 
 /// What a linked program's code is reached from: the procedures the host

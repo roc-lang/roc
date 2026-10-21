@@ -13,8 +13,8 @@
 
 const std = @import("std");
 const invariant = @import("base").invariant;
+const dev_diagnostics = @import("base").dev_diagnostics;
 const builtin = @import("builtin");
-const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
 
 const layout = @import("layout");
@@ -24,7 +24,6 @@ const LirStore = lir.LirStore;
 const LirProcSpec = lir.LirProcSpec;
 const RocTarget = @import("roc_target").RocTarget;
 const Dwarf = @import("Dwarf.zig");
-const coff = @import("object/coff.zig");
 
 const ObjectWriter = @import("ObjectWriter.zig");
 const LirCodeGenMod = @import("LirCodeGen.zig");
@@ -87,10 +86,10 @@ pub const CompilationError = error{
 pub const ObjectFileCompiler = struct {
     allocator: Allocator,
     enable_default_platform_runtime: bool = false,
-    /// The program's erased callables reserve the hot-reload capture prefix
-    /// (`LirProgram.Result.erased_capture_prefix`), so its code supports a
-    /// hot-reload session.
-    enable_hot_reload: bool = false,
+    /// Bytes the program's erased callables reserve before their captures
+    /// (`LirProgram.Result.erased_capture_prefix`); nonzero when its code
+    /// supports a hot-reload session.
+    erased_capture_prefix: u32 = 0,
     timing: ?*Timing = null,
     post_check_executor: ?Executor = null,
     /// Borrowed artifacts from this exact LIR program, never an executable image.
@@ -194,7 +193,7 @@ pub const ObjectFileCompiler = struct {
         boxy_worker_procs: []const lir.LIR.LirProcSpecId,
         target: RocTarget,
     ) CompilationError!CompilationResult {
-        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, erased_arg_desc_offsets, erased_arg_desc_params, boxy_worker_procs, target, self.enable_default_platform_runtime, self.enable_hot_reload, self.timing, self.pack_mode, self.splice_source, self.capture_artifacts, self.emit_object, self.post_check_executor, self.reuse_same_program);
+        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, erased_arg_desc_offsets, erased_arg_desc_params, boxy_worker_procs, target, self.enable_default_platform_runtime, self.erased_capture_prefix, self.timing, self.pack_mode, self.splice_source, self.capture_artifacts, self.emit_object, self.post_check_executor, self.reuse_same_program);
     }
 
     /// Compile to an object file and write it to a path. Returns whether the
@@ -309,7 +308,7 @@ fn compileWithCodeGen(
     boxy_worker_procs: []const lir.LIR.LirProcSpecId,
     target: RocTarget,
     enable_default_platform_runtime: bool,
-    enable_hot_reload: bool,
+    erased_capture_prefix: u32,
     timing: ?*ObjectFileCompiler.Timing,
     pack_mode: bool,
     splice_source: ?SpliceSource,
@@ -337,6 +336,7 @@ fn compileWithCodeGen(
         erased_arg_desc_offsets,
         erased_arg_desc_params,
         boxy_worker_procs,
+        erased_capture_prefix,
         target.cpuLevel(),
     ) catch return CompilationError.OutOfMemory;
     defer codegen.deinit();
@@ -345,7 +345,6 @@ fn compileWithCodeGen(
     codegen.generation_mode = .object_file;
     codegen.setStaticDataSymbols(static_data_exports) catch return CompilationError.OutOfMemory;
     codegen.enable_default_platform_runtime = enable_default_platform_runtime;
-    codegen.enable_hot_reload = enable_hot_reload;
 
     const static_rc_helpers = static_data_export.collectRequiredRcHelpers(allocator, static_data_exports) catch {
         return CompilationError.OutOfMemory;
@@ -479,12 +478,12 @@ fn compileWithCodeGen(
         erased_arg_desc_offsets,
         erased_arg_desc_params,
         boxy_worker_procs,
+        erased_capture_prefix,
         target.cpuLevel(),
     ) catch return CompilationError.OutOfMemory;
     defer final.deinit();
     final.generation_mode = .object_file;
     final.enable_default_platform_runtime = enable_default_platform_runtime;
-    final.enable_hot_reload = enable_hot_reload;
     final.boxy_runtime_used = codegen.boxy_runtime_used;
 
     var procs_by_identity = std.AutoHashMap(lir.ProcIdentity, lir.LIR.LirProcSpecId).init(allocator);
@@ -687,7 +686,9 @@ fn compileWithCodeGen(
     // Get generated code and relocations
     symbol_relocations_started_ns = if (timing) |timings| timings.start() else 0;
     final.finishImage() catch return CompilationError.OutOfMemory;
-    if (artifactRoundTripRequested()) {
+    // `ROC_DEV_ARTIFACT_ROUNDTRIP` makes every object compile also assemble the
+    // program from its own procedure artifacts and panic if the result differs.
+    if (dev_diagnostics.isSet(.dev_artifact_roundtrip)) {
         var fresh = CodeGen.initWithBoxyMetadata(
             allocator,
             lir_store,
@@ -696,13 +697,13 @@ fn compileWithCodeGen(
             erased_arg_desc_offsets,
             erased_arg_desc_params,
             boxy_worker_procs,
+            erased_capture_prefix,
             target.cpuLevel(),
         ) catch return CompilationError.OutOfMemory;
         defer fresh.deinit();
         fresh.generation_mode = .object_file;
         fresh.setStaticDataSymbols(static_data_exports) catch return CompilationError.OutOfMemory;
         fresh.enable_default_platform_runtime = enable_default_platform_runtime;
-        fresh.enable_hot_reload = enable_hot_reload;
         ProcArtifact.verifyRoundTrip(CodeGen, allocator, &final, &fresh, proc_specs, layout_store, static_strings.exports) catch |err| switch (err) {
             error.OutOfMemory => return CompilationError.OutOfMemory,
             error.NestedCodeRegion,
@@ -1125,7 +1126,7 @@ fn crossCompileDispatch(
     boxy_worker_procs: []const lir.LIR.LirProcSpecId,
     target: RocTarget,
     enable_default_platform_runtime: bool,
-    enable_hot_reload: bool,
+    erased_capture_prefix: u32,
     timing: ?*ObjectFileCompiler.Timing,
     pack_mode: bool,
     splice_source: ?SpliceSource,
@@ -1155,7 +1156,7 @@ fn crossCompileDispatch(
                     boxy_worker_procs,
                     target,
                     enable_default_platform_runtime,
-                    enable_hot_reload,
+                    erased_capture_prefix,
                     timing,
                     pack_mode,
                     splice_source,
@@ -1376,12 +1377,4 @@ test "ObjectFileCompiler runtime static-root pack owns only reachable canonical 
             try std.testing.expectEqualStrings(text, value[0..output[2]]);
         }
     }
-}
-
-/// `ROC_DEV_ARTIFACT_ROUNDTRIP` makes every object compile also assemble the
-/// program from its own procedure artifacts and panic if the result differs.
-/// A compiler built without developer diagnostics never reads it.
-fn artifactRoundTripRequested() bool {
-    if (comptime !build_options.dev_diagnostics) return false;
-    return std.c.getenv("ROC_DEV_ARTIFACT_ROUNDTRIP") != null;
 }

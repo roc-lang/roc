@@ -631,7 +631,7 @@ const SourceAdapter = struct {
             try self.child(sink, constraint.fn_var);
             try sink.text(@tagName(constraint.origin));
             try sink.boolean(constraint.origin.binopNegated());
-            const maybe_num_literal = constraint.origin.numeralInfo();
+            const maybe_num_literal = self.store.constraintNumeralInfo(constraint);
             try sink.boolean(maybe_num_literal != null);
             if (maybe_num_literal) |num_literal| try sink.bytes(&num_literal.keyBytes());
         }
@@ -1156,7 +1156,7 @@ test "concrete keys default open literal flex vars per kind (numeral -> Dec, quo
     const numeral_constraints = try store.appendStaticDispatchConstraints(&.{.{
         .fn_name = from_numeral_ident,
         .fn_var = numeral_fn_var,
-        .origin = .{ .from_literal = .{ .numeral = types.NumeralInfo.testOnlyInt(1, false, base.Region.zero()) } },
+        .origin = .{ .from_literal = .{ .numeral = try store.appendNumeralInfo(types.NumeralInfo.testOnlyInt(1, false, base.Region.zero())) } },
     }});
     const numeral_var = try store.freshFromContent(.{
         .flex = types.Flex.init().withConstraints(numeral_constraints),
@@ -1436,11 +1436,13 @@ test "issue 11128 scheme writer reuses scratch with fresh identity and cycle num
     var writer = SchemeWriter.init(counter.allocator(), &store, &env);
     defer writer.deinit();
     for (roots) |root| _ = try writer.fromVar(root);
+    try std.testing.expectEqual(roots.len, writer.test_digests);
     const allocated = counter.allocated_bytes;
     for (0..128) |_| {
         for (roots, expected) |root, key| try std.testing.expectEqualDeep(key, try writer.fromVar(root));
     }
     try std.testing.expectEqual(allocated, counter.allocated_bytes);
+    try std.testing.expectEqual(roots.len * 129, writer.test_digests);
 }
 
 test "issue 11128 scheme writer recovers from every allocation failure" {
@@ -1915,6 +1917,39 @@ test "composed keys are the same whether or not a retaining writer keyed the chi
     const holder_fresh = try fromVarInfo(allocator, &store, &env, holder);
     _ = try writer.fromVar(cyclic);
     try std.testing.expectEqualDeep(holder_fresh, try writer.fromVar(holder));
+}
+
+test "scheme keys compose the same whether or not their closed children were keyed first" {
+    const allocator = std.testing.allocator;
+
+    var env = try ModuleEnv.init(allocator, "");
+    defer env.deinit();
+    const field_name = try env.insertIdent(Ident.for_text("field"));
+    var store = try TypeStore.initCapacity(allocator, 16, 8);
+    defer store.deinit();
+
+    const leaf = try store.freshFromContent(.{ .structure = .empty_record });
+    const record = try store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = try store.appendRecordFields(&.{.{ .name = field_name, .presence = .required(leaf) }}),
+        .ext = try store.freshFromContent(.{ .structure = .empty_record }),
+    } } });
+    const a = try store.fresh();
+    const callable = try store.freshFromContent(.{ .structure = .{ .fn_pure = .{
+        .args = try store.appendVars(&.{ record, a }),
+        .ret = a,
+    } } });
+
+    const fresh = try schemeFromVar(allocator, &store, &env, callable);
+    var scheme_writer = SchemeWriter.init(allocator, &store, &env);
+    defer scheme_writer.deinit();
+    try std.testing.expectEqualDeep(fresh, try scheme_writer.fromVar(callable));
+
+    var writer = TypeWriter.init(allocator, &store, &env);
+    defer writer.deinit();
+    writer.retainComposedKeys();
+    const record_info = try writer.fromVar(record);
+    try std.testing.expect(record_info.composable);
+    try std.testing.expectEqualDeep(fresh, try writer.schemeFromVar(callable));
 }
 
 test "err-sensitive keys distinguish erroneous content inside closed subtrees" {

@@ -152,7 +152,7 @@ pub const FnTemplate = struct {
     fn_def: const_store.FnDef,
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
-    evidence: []const const_store.ConstFnEvidence = &.{},
+    evidence: const_store.ConstFnEvidenceVector = .{},
     evidence_frames: []const const_store.ConstFnEvidenceFrame = &.{},
     evidence_frame_head: ?u32 = null,
 };
@@ -977,7 +977,7 @@ pub fn deinitFnSets(allocator: Allocator, fn_sets: []const FnSet) void {
     for (fn_sets) |fn_set| {
         for (fn_set.variants) |variant| {
             if (variant.captures.len > 0) allocator.free(variant.captures);
-            if (variant.template.evidence.len > 0) allocator.free(variant.template.evidence);
+            const_store.freeVector(allocator, variant.template.evidence);
             if (variant.template.evidence_frames.len > 0) allocator.free(variant.template.evidence_frames);
         }
         if (fn_set.variants.len > 0) allocator.free(fn_set.variants);
@@ -990,7 +990,7 @@ pub fn deinitErasedFns(allocator: Allocator, erased_fns: []const ErasedFns) void
         for (set.entries) |entry| {
             if (entry.captures.len > 0) allocator.free(entry.captures);
             if (entry.template) |template| {
-                if (template.evidence.len > 0) allocator.free(template.evidence);
+                const_store.freeVector(allocator, template.evidence);
                 if (template.evidence_frames.len > 0) allocator.free(template.evidence_frames);
             }
             if (entry.boxy) |boxy| allocator.free(boxy.captures);
