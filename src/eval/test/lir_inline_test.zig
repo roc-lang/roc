@@ -10937,6 +10937,24 @@ fn mainFieldReadTakes(allocator: Allocator, lowered: *const lir.CheckedPipeline.
     return counts;
 }
 
+/// The retains of field-read bindings (and their aliases) across every `main`
+/// procedure.
+fn mainFieldReadRetainCount(allocator: Allocator, lowered: *const lir.CheckedPipeline.LoweredProgram) TestError!usize {
+    const store = &lowered.lir_result.store;
+    var retained: usize = 0;
+    var found_main = false;
+    for (0..store.procSpecCount()) |index| {
+        const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
+        const name = store.procDebugName(proc_id) orelse continue;
+        if (!std.mem.eql(u8, name, "main")) continue;
+        if (store.getProcSpecImmediate(proc_id).body == null) continue;
+        found_main = true;
+        retained += try fieldReadRetainCount(allocator, lowered, proc_id);
+    }
+    if (!found_main) return error.MissingRootProcedure;
+    return retained;
+}
+
 /// A dying record whose `view` field is a record with one refcounted field,
 /// read by functions that take ownership in their mandatory owned variants.
 const dying_view_record_source =
@@ -11010,6 +11028,9 @@ test "field takes: a view taken whole keeps a field it is read again for" {
 
 // With the calls in the other order, `view` is taken whole and lent to
 // `lookup_first`, and then `first` is taken out of the view for `consume`.
+// The read of `first` is solved borrowed, so the take belongs to its last
+// consuming operand, the `consume` call, not to the read: the read is no
+// take, and nothing in `main` retains a field read.
 test "field takes: a view taken whole gives up a field after its last whole use" {
     const allocator = std.testing.allocator;
     const source = dying_view_record_source ++
@@ -11028,7 +11049,8 @@ test "field takes: a view taken whole gives up a field after its last whole use"
     const counts = try mainFieldReadTakes(allocator, &lowered.lowered);
     try std.testing.expectEqual(@as(usize, 1), counts.struct_takes);
     try std.testing.expectEqual(@as(usize, 1), counts.tag_union_reads);
-    try std.testing.expectEqual(@as(usize, 1), counts.tag_union_takes);
+    try std.testing.expectEqual(@as(usize, 0), counts.tag_union_takes);
+    try std.testing.expectEqual(@as(usize, 0), try mainFieldReadRetainCount(allocator, &lowered.lowered));
 }
 
 // A field read twice: the first read's binding reaches `consume` after the

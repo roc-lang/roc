@@ -20640,11 +20640,12 @@ result by a take. A residual release reads a struct field whose slots are
 only partly residual as a view marked with its absent slots and releases the
 residual slots through it.
 
-A view whose value reaches a consuming operand (an owned direct-call
-position, a borrowed position whose owned variant takes a field, or a
-consumed or retained low-level position, with no other mention of the view's
-borrow forest in the same statement) is first solved as a take of its
-whole range at its definition. While it is, it holds those slots: reads
+A view whose value reaches a consuming operand (the view itself or a
+borrowed pure same-value alias of it at an owned direct-call position, a
+borrowed position whose owned variant takes a field, or a consumed or
+retained low-level position, with no other mention of the view's borrow
+forest in the same statement) is first solved as a take of its whole range
+at its definition. While it is, it holds those slots: reads
 through it, through its aliases, and through views nested in it are reads of
 the view, not of its container, and once the take is committed the view is a
 container in its own right, solved right after the container it was taken
@@ -20959,11 +20960,16 @@ descendants and whole container uses; it never guesses from operation names.
 A read solved borrowed holds no unit, so it never consumes at the read, with
 one exception: a view whose value reaches a consuming operand is taken whole
 at its definition and then holds its slots (see the view rules above). Every
-other borrowed read's binding, and every binding borrowed onward from it, carries the field to
-where the value is consumed: an owned direct-call position, a borrowed
-position whose owned variant takes a field, or a consumed or retained
-low-level position, with no other mention of those bindings in the same
-statement. Each such operand is a use-point take candidate. It takes the
+other borrowed read's binding, and every borrowed pure same-value alias of
+it, carries the field to where the value is consumed: an owned direct-call
+position, a borrowed position whose owned variant takes a field, or a
+consumed or retained low-level position, with no other mention of the
+binding's borrow forest in the same statement. Each such operand is a
+use-point take candidate. A binding borrowed onward from the read through a
+field or payload read, a borrowed low-level result, or a lent call result
+holds a different value than the field (the payload unboxed out of a boxed
+field is not the box), so consuming it only observes the field, exactly like
+any other mention of the forest. It takes the
 field only where it is the last observation of that field on every path; an
 earlier one pays its ordinary retain at the operand, since the binding is
 read again afterwards. The take belongs at the operand, not at the read. A

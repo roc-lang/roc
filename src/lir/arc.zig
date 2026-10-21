@@ -14771,6 +14771,146 @@ test "RC Box.unbox normalizes consuming ownership to explicit RC statements" {
     try f.expectRc(payload, 1, 0, 0);
 }
 
+test "RC a consuming operand borrowed onward from a field read observes the field" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // The consumer borrows a pair of lists and appends to its first list, so
+    // its owned variant takes that list: a pair reaching it is a consuming
+    // operand.
+    const pair_param = try f.local(f.pair_list);
+    const pair_count = try f.local(.i64);
+    const pair_field = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const consumer_result = try f.local(.i64);
+    const consumer_ret = try f.ret(consumer_result);
+    const consumer_assign = try f.assignI64(consumer_result, 1, consumer_ret);
+    const append = try f.assignLowLevel(appended, &.{ pair_field, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), consumer_assign);
+    const elem_assign = try f.assignI64(elem, 5, append);
+    const read_pair_field = try f.assignRefField(pair_field, pair_param, 0, elem_assign);
+    const consumer = try f.addProc(&.{ pair_param, pair_count }, read_pair_field, .i64);
+
+    // The dispatcher borrows a record whose first field is a box of a tag
+    // union of pairs, unboxes the union, borrowed, and passes the matched
+    // variant's payload view to the consumer. The view is a value inside the
+    // box, not the record's box field: that call observes the box field
+    // rather than taking it at the operand, so the view stays lent to the
+    // consumer's borrowed base procedure and the record parameter earns no
+    // owned variant from the caller's dying record.
+    const tag_layout = try f.layouts.putTagUnion(&[_]layout_mod.Idx{ f.pair_list, f.pair_list });
+    const box_tag = try f.layouts.insertBox(tag_layout);
+    const record_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = box_tag },
+        .{ .index = 1, .layout = .str },
+    });
+    const param = try f.local(record_layout);
+    const alias = try f.local(record_layout);
+    const read_box = try f.local(box_tag);
+    const unboxed = try f.local(tag_layout);
+    const disc = try f.local(.u8);
+    const dispatch_result = try f.local(.i64);
+    const dispatch_ret = try f.ret(dispatch_result);
+    var views: [2]LIR.LocalId = undefined;
+    var branches: [2]LIR.CFSwitchBranch = undefined;
+    for (&views, &branches, 0..) |*view, *branch, variant| {
+        view.* = try f.local(f.pair_list);
+        const zero = try f.local(.i64);
+        const consume_view = try f.store.addCFStmt(.{ .assign_call = .{
+            .target = dispatch_result,
+            .proc = consumer,
+            .args = try f.span(&.{ view.*, zero }),
+            .next = dispatch_ret,
+        } }, .test_fixture);
+        const zero_assign = try f.assignI64(zero, 0, consume_view);
+        const view_read = try f.store.addCFStmt(.{ .assign_ref = .{
+            .target = view.*,
+            .op = .tagPayloadStruct(unboxed, @intCast(variant), @intCast(variant)),
+            .next = zero_assign,
+        } }, .test_fixture);
+        branch.* = .{ .value = @intCast(variant), .body = view_read };
+    }
+    const default_body = try f.assignI64(dispatch_result, 0, dispatch_ret);
+    const switch_stmt = try f.store.addCFStmt(.{ .switch_stmt = .{
+        .cond = disc,
+        .branches = try f.store.addCFSwitchBranches(&branches),
+        .default_branch = default_body,
+        .default_is_cold = false,
+        .continuation = null,
+    } }, .test_fixture);
+    const disc_read = try f.assignDiscriminant(disc, unboxed, switch_stmt);
+    const unbox = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = unboxed,
+        .op = .box_unbox,
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.box_unbox.rcEffect()),
+        .args = try f.span(&.{read_box}),
+        .next = disc_read,
+    } }, .test_fixture);
+    const read = try f.assignRefField(read_box, alias, 0, unbox);
+    const alias_bind = try f.assignRefLocal(alias, param, read);
+    const dispatcher = try f.addProc(&.{param}, alias_bind, .i64);
+
+    const a = try f.local(f.list_i64);
+    const b = try f.local(f.list_i64);
+    const pair = try f.local(f.pair_list);
+    const tag_value = try f.local(tag_layout);
+    const boxed = try f.local(box_tag);
+    const other = try f.local(.str);
+    const record = try f.local(record_layout);
+    const outer = try f.local(.i64);
+    const caller_ret = try f.ret(outer);
+    const outer_call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = outer,
+        .proc = dispatcher,
+        .args = try f.span(&.{record}),
+        .next = caller_ret,
+    } }, .test_fixture);
+    const make_record = try f.assignStruct(record, &.{ boxed, other }, outer_call);
+    const assign_other = try f.assignStr(other, "other", make_record);
+    const make_box = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = boxed,
+        .op = .box_box,
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.box_box.rcEffect()),
+        .args = try f.span(&.{tag_value}),
+        .next = assign_other,
+    } }, .test_fixture);
+    const tag_assign = try f.assignTag(tag_value, 1, pair, make_box);
+    const assign_pair = try f.assignStruct(pair, &.{ a, b }, tag_assign);
+    const b_assign = try f.assignList(b, &.{}, assign_pair);
+    const caller_body = try f.assignList(a, &.{}, b_assign);
+    _ = try f.addProc(&.{}, caller_body, .i64);
+
+    const base_proc_count = f.store.procSpecCount();
+    try insert(&f.store, &f.layouts, .{ .specialize = true, .consume_dead_boxes = false });
+
+    // No variant is emitted: the consumer's owned variant is demanded only by
+    // a dying pair, and the dispatcher's parameter has no take to activate.
+    try testing.expectEqual(base_proc_count, f.store.procSpecCount());
+    var unbox_ops: usize = 0;
+    {
+        var work = std.ArrayList(LIR.CFStmtId).empty;
+        defer work.deinit(testing.allocator);
+        var seen = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(testing.allocator, f.store.cfStmtCount());
+        defer seen.deinit(testing.allocator);
+        try work.append(testing.allocator, f.store.getProcSpecImmediate(dispatcher).body.?);
+        while (work.pop()) |cursor| {
+            if (seen.isSet(@backingInt(cursor))) continue;
+            seen.set(@backingInt(cursor));
+            const stmt = f.store.getCFStmt(cursor);
+            if (stmt == .assign_low_level and stmt.assign_low_level.target == unboxed) {
+                try testing.expectEqual(LIR.LowLevel.box_unbox_borrowed, stmt.assign_low_level.op);
+                unbox_ops += 1;
+            }
+            try body_clone.appendSuccessors(&f.store, &work, cursor, testing.allocator);
+        }
+    }
+    try testing.expectEqual(@as(usize, 1), unbox_ops);
+    for (views) |view| try f.expectRc(view, 0, 0, 0);
+    try f.expectRc(unboxed, 0, 0, 0);
+    try f.expectRc(read_box, 0, 0, 0);
+    try f.expectRc(record, 0, 1, 0);
+}
+
 test "RC Box.unbox keeps the payload borrowed while the box survives" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
