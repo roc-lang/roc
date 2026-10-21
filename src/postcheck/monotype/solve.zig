@@ -6759,6 +6759,83 @@ pub const InstGraph = struct {
         }
     }
 
+    /// Give a closed, non-empty tag row every label of `raw_wider`, a row that
+    /// lists each of the closed row's labels at the same payload arity plus
+    /// others, and make the two rows one class. Shared labels' payloads unify
+    /// exactly. Widening the closed row renumbers its discriminants, which is
+    /// the point: the row's values are built by code specialized at the wider
+    /// row (design.md "Closed Result Rows At Template Boundaries"). The empty
+    /// row's node stands for every empty row in the graph, so an empty
+    /// position is widened by `replaceTagPayloadNode` instead.
+    pub fn widenClosedTagRow(self: *InstGraph, raw_closed: NodeId, raw_wider: NodeId) Allocator.Error!void {
+        self.requireRelationProduction();
+        const closed = self.find(raw_closed);
+        const wider = self.find(raw_wider);
+        if (closed == wider) return;
+        if (!try self.tagRowIsClosed(closed)) Common.invariant("row widening received an open row as its closed row");
+        if (try self.rootContent(closed) != .tag_union) Common.invariant("row widening received a non-tag-union closed row");
+        const closed_tags = (try self.flattenTagRow(closed)).tags;
+        const wide = try self.flattenTagRow(wider);
+        for (closed_tags) |tag| {
+            const wide_tag = for (wide.tags) |candidate| {
+                if (candidate.name == tag.name) break candidate;
+            } else Common.invariant("row widening request lacked one of the closed row's labels");
+            if (tag.payloads.len != wide_tag.payloads.len) {
+                Common.invariant("row widening request changed a closed row's payload arity");
+            }
+            for (tag.payloads, wide_tag.payloads) |closed_payload, wide_payload| {
+                try self.unify(closed_payload, wide_payload);
+            }
+        }
+        try self.setContent(closed, .{ .tag_union = .{
+            .tags = try self.arena().dupe(InstTag, wide.tags),
+            .ext = wide.ext,
+            .tags_sorted = true,
+        } });
+        try self.union_(closed, wider);
+    }
+
+    /// Point payload `payload_index` of the tag named `name` in a row at
+    /// `new_payload`, rewriting only the row's own content: the payload node
+    /// it pointed at is untouched, since an empty row's node stands for every
+    /// empty row in the graph.
+    pub fn replaceTagPayloadNode(
+        self: *InstGraph,
+        raw_row: NodeId,
+        name: names.TagNameId,
+        payload_index: usize,
+        new_payload: NodeId,
+    ) Allocator.Error!void {
+        self.requireRelationProduction();
+        const row = self.find(raw_row);
+        const flat = try self.flattenTagRow(row);
+        const tags = try self.arena().dupe(InstTag, flat.tags);
+        const tag = for (tags) |*candidate| {
+            if (candidate.name == name) break candidate;
+        } else Common.invariant("row payload rewrite named a tag absent from the row");
+        if (payload_index >= tag.payloads.len) Common.invariant("row payload rewrite indexed past the tag's payloads");
+        const payloads = try self.arena().dupe(NodeId, tag.payloads);
+        payloads[payload_index] = new_payload;
+        tag.payloads = payloads;
+        try self.setContent(row, .{ .tag_union = .{ .tags = tags, .ext = flat.ext, .tags_sorted = true } });
+    }
+
+    /// Point argument `arg_index` of a named node at `new_arg`, rewriting
+    /// only the named node's own content.
+    pub fn replaceNamedArgNode(self: *InstGraph, raw_named: NodeId, arg_index: usize, new_arg: NodeId) Allocator.Error!void {
+        self.requireRelationProduction();
+        const node = self.find(raw_named);
+        const named = switch (try self.rootContent(node)) {
+            .named => |named| named,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("named argument rewrite received a non-named node"),
+        };
+        if (arg_index >= named.args.len) Common.invariant("named argument rewrite indexed past the node's arguments");
+        var widened = named.*;
+        widened.args = try self.arena().dupe(NodeId, named.args);
+        widened.args[arg_index] = new_arg;
+        try self.setContent(node, try self.namedContent(widened));
+    }
+
     /// Join two matching structural request containers after their components
     /// have already been related with public/private-aware edges. The request
     /// node remains the class representative so later body lowering continues
