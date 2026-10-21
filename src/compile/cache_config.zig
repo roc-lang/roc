@@ -338,9 +338,11 @@ pub const Constants = struct {
     ///      `public_type_not_defined`.
     /// 154: canonical diagnostics drop `execution_requires_app_or_default_app`,
     ///      and file-level diagnostics store no region.
-    /// 155: procedure templates record how much of each quantified variable
+    /// 155: Module environments record row-coerced results in place of
+    ///      row-coerced callees and closed-result definitions.
+    /// 156: procedure templates record how much of each quantified variable
     ///      their bodies demand.
-    pub const CACHE_VERSION = 155;
+    pub const CACHE_VERSION = 156;
 };
 
 /// Configuration for the Roc cache system.

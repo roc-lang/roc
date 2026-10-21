@@ -884,7 +884,7 @@ pub const MonoLlvmCodeGen = struct {
 
         // Embedded LIR image bytes, when building a standalone interpreter binary.
         const image_ref: @FieldType(ShimTarget, "image") = if (image) |bytes| .{
-            .value = try self.staticBytes(bytes),
+            .value = try self.staticImageBytes(bytes),
             .len = bytes.len,
         } else null;
 
@@ -3386,6 +3386,12 @@ pub const MonoLlvmCodeGen = struct {
                             try self.boxyInt(.i32, @backingInt(param.source_tag_name)),
                             try self.boxyInt(.i32, param.source_nested_index),
                         },
+                    ),
+                    .tag_ext => try self.callBoxy(
+                        "roc_boxy_tag_ext_desc",
+                        try self.ptrType(),
+                        &.{try self.ptrType()},
+                        &.{try self.loadPointer(self.slot(parent).ptr)},
                     ),
                 };
             };
@@ -9525,6 +9531,22 @@ pub const MonoLlvmCodeGen = struct {
         return value;
     }
 
+    /// An embedded LIR image. Its arrays are read at their offsets' natural
+    /// alignment from the image base, which the image builders and the shared
+    /// mapping keep 16-aligned, so the global is too.
+    fn staticImageBytes(self: *MonoLlvmCodeGen, bytes: []const u8) Error!LlvmBuilder.Value {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const arr_ty = builder.arrayType(bytes.len, .i8) catch return error.OutOfMemory;
+        const name = builder.strtabStringFmt(".roc.image.{d}", .{self.string_counter}) catch return error.OutOfMemory;
+        self.string_counter += 1;
+        const variable = builder.addVariable(name, arr_ty, .default) catch return error.OutOfMemory;
+        variable.ptrConst(builder).global.setLinkage(.internal, builder);
+        variable.setMutability(.constant, builder);
+        variable.setAlignment(LlvmBuilder.Alignment.fromByteUnits(16), builder);
+        variable.setInitializer(builder.stringConst(builder.string(bytes) catch return error.OutOfMemory) catch return error.OutOfMemory, builder) catch return error.OutOfMemory;
+        return variable.toValue(builder);
+    }
+
     fn staticRefcountedBytes(self: *MonoLlvmCodeGen, backing: Base.StringLiteral.Idx) Error!LlvmBuilder.Value {
         const key: u32 = @backingInt(backing);
         const builder = self.builder orelse return error.CompilationFailed;
@@ -11256,7 +11278,7 @@ pub const MonoLlvmCodeGen = struct {
 
     fn emitListAppendSublist(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
-        const abi = self.layouts().builtinListAbi(self.localLayout(target));
+        const abi = self.boxyAwareBuiltinListAbi(self.localLayout(target));
         if (abi.elem_size == 0) {
             // Zero-width elements: only the length grows.
             const count = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 3)).ptr, self.localLayout(GuardedList.at(args, 3))), self.ptrSizedIntType(), false);
@@ -11277,9 +11299,10 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 3)).ptr, self.localLayout(GuardedList.at(args, 3))), .i64, false));
         try call_args.append(self.allocator, .i32, builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory);
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
-        try self.appendListElementRcArgs(&call_args, abi, true, true);
+        const boxy_elem = self.boxyListElementDescForLocals(abi, &.{ GuardedList.at(args, 0), GuardedList.at(args, 1) }, target);
+        try self.appendListElemDescOrRcArgs(&call_args, abi, boxy_elem, true, true);
         try self.appendUpdateModeArg(&call_args, unique_args);
-        try self.callBuiltinVoid(LowLevelBuiltins.listOp(.list_append_sublist), call_args.types.items, call_args.values.items);
+        try self.callListBoxyOrBuiltin(boxy_elem, "roc_boxy_list_append_sublist", LowLevelBuiltins.listOp(.list_append_sublist), &call_args);
     }
 
     /// Store the canonical value for a list of zero-width elements into

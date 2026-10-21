@@ -523,10 +523,14 @@ comptime {
 /// detached from the mapping. The copy's header describes the copy itself: its
 /// used and total sizes are both the copy's length. The size of this mapping,
 /// which depends on how much address space the OS granted this process, does
-/// not enter the copy, so its bytes depend only on what was allocated.
-pub fn dupeDetachedImage(self: *const SharedMemoryAllocator, gpa: Allocator) Allocator.Error![]u8 {
+/// not enter the copy, so its bytes depend only on what was allocated. The
+/// copy is 16-aligned, as the mapping's pages and the image builders' buffers
+/// are, since an image's arrays are read at their offsets' natural alignment
+/// from its base.
+pub fn dupeDetachedImage(self: *const SharedMemoryAllocator, gpa: Allocator) Allocator.Error![]align(16) u8 {
     const used = self.getUsedSize();
-    const image = try gpa.dupe(u8, self.base_ptr[0..used]);
+    const image = try gpa.alignedAlloc(u8, .@"16", used);
+    @memcpy(image, self.base_ptr[0..used]);
     const header: Header = .{ .used_size = used, .total_size = used };
     @memcpy(image[0..@sizeOf(Header)], std.mem.asBytes(&header));
     return image;
@@ -611,7 +615,7 @@ test "detached image bytes do not depend on the size of the mapping" {
     const testing = std.testing;
     const page_size = try getSystemPageSize();
 
-    var images: [2][]u8 = undefined;
+    var images: [2][]align(16) u8 = undefined;
     var built: usize = 0;
     defer for (images[0..built]) |image| testing.allocator.free(image);
 
