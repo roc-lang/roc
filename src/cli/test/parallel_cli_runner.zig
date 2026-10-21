@@ -495,6 +495,7 @@ const CustomCase = enum {
     cache_passing_results,
     cache_failing_results,
     cache_invalidated_by_source_change,
+    stored_root_declared_row,
     issue_11389_check_after_test_shared_cache,
     issue_11495_paired_body_types,
     issue_11065_duplicate_module_name_across_packages,
@@ -3561,6 +3562,8 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc test caches failing results (dev)", .backend = .dev, .body = .{ .custom = .cache_failing_results } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test cache invalidated by source change (interpreter)", .backend = .interpreter, .body = .{ .custom = .cache_invalidated_by_source_change } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test cache invalidated by source change (dev)", .backend = .dev, .body = .{ .custom = .cache_invalidated_by_source_change } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12503: a cached constant read at joined rows with a repeated label is restored at its declared row (interpreter)", .backend = .interpreter, .body = .{ .custom = .stored_root_declared_row } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12503: a cached constant read at joined rows with a repeated label is restored at its declared row (dev)", .backend = .dev, .body = .{ .custom = .stored_root_declared_row } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11389: roc check succeeds on a cache roc test wrote", .body = .{ .custom = .issue_11389_check_after_test_shared_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11495: Boxy pairing keeps app body types across shared platform cache hits", .body = .{ .custom = .issue_11495_paired_body_types } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test result cache is per execution mode", .backend = .speed, .body = .{ .custom = .cache_is_per_execution_mode } },
@@ -5185,6 +5188,7 @@ fn runCustomCase(
         .cache_passing_results => customCachePassingResults(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
         .cache_failing_results => customCacheFailingResults(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
         .cache_invalidated_by_source_change => customCacheInvalidated(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
+        .stored_root_declared_row => customStoredRootDeclaredRow(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
         .issue_11389_check_after_test_shared_cache => customIssue11389CheckAfterTestSharedCache(io, allocator, &env, &timer, timeout_ms),
         .issue_11495_paired_body_types => customIssue11495PairedBodyTypes(io, allocator, &env, &timer, timeout_ms),
         .issue_11065_duplicate_module_name_across_packages => customIssue11065DuplicateModuleNameAcrossPackages(io, allocator, &env, &timer, timeout_ms),
@@ -12146,6 +12150,52 @@ fn customCacheInvalidated(io: std.Io, allocator: Allocator, env: *const CaseEnv,
     std.Io.Dir.cwd().writeFile(io, .{ .sub_path = file_path, .data = updated_content }) catch |err|
         return customInfraFailure(allocator, timer, "failed to update cache test file: {}", .{err});
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &.{ "test", opt_arg }, .roc_file = file_path, .not_contains = &.{.{ .stream = .stdout, .text = "(cached)" }} })) |failure| return failure;
+    return null;
+}
+
+/// `SharedVal`'s constant is evaluated while `Main` reads it at two joined
+/// rows that hold `Conflict` at two payload types. Editing only `Main` makes
+/// the second run restore the constant from the cache, at the row its
+/// declaring module gives it, and widen it into `Main`'s joined row.
+fn customStoredRootDeclaredRow(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64, backend: OptMode) ?TestResult {
+    const opt_arg = backendOptArg(allocator, backend) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate opt arg: {}", .{err});
+    const dir = createWorkSubdir(io, allocator, env, "stored_root_declared_row") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create fixture dir: {}", .{err});
+    var main_source: []const u8 = "";
+    for ([_][]const u8{ "SharedVal.roc", "Main.roc" }) |name| {
+        const from = std.fs.path.join(allocator, &.{ "test/cli/stored_root_declared_row", name }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate fixture path: {}", .{err});
+        const from_abs = absoluteFromProjectRoot(allocator, from) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate fixture path: {}", .{err});
+        const source = std.Io.Dir.cwd().readFileAlloc(io, from_abs, allocator, .limited(1024 * 1024)) catch |err|
+            return customInfraFailure(allocator, timer, "failed to read {s}: {}", .{ from_abs, err });
+        if (writeCaseFile(io, allocator, timer, dir, name, source)) |failure| return failure;
+        if (std.mem.eql(u8, name, "Main.roc")) main_source = source;
+    }
+    const main_path = std.fs.path.join(allocator, &.{ dir, "Main.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate main path: {}", .{err});
+    const not_contains = [_]OutputNeedle{
+        .{ .stream = .stderr, .text = "panic" },
+        .{ .stream = .stderr, .text = "invariant violated" },
+    };
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "test", opt_arg },
+        .roc_file = main_path,
+        .exit = .success,
+        .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }},
+        .not_contains = &not_contains,
+    })) |failure| return failure;
+    const edited = std.fmt.allocPrint(allocator, "{s}\nexpect describe_b(fwd_b({{}})) != \"conflict\"\n", .{main_source}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate edited main: {}", .{err});
+    if (writeCaseFile(io, allocator, timer, dir, "Main.roc", edited)) |failure| return failure;
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "test", opt_arg },
+        .roc_file = main_path,
+        .exit = .success,
+        .contains = &.{.{ .stream = .stdout, .text = "All (3) tests passed" }},
+        .not_contains = &not_contains,
+    })) |failure| return failure;
     return null;
 }
 
