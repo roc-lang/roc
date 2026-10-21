@@ -6393,7 +6393,7 @@ const ProcedureBuilder = struct {
                     boxyLowerInvariant("declared nominal field index exceeded its backing record fields");
                 }
                 const child = backing_fields.items[field.index];
-                const view = Plan.moduleViewForKey(self.modules, child.source_type.module);
+                const view = Plan.moduleViewForKey(self.modules, self.plan.childLabelModule(child));
                 field_name_ids.items[field.index] = try self.result.store.insertBoxyName(
                     view.canonical_names.?.recordFieldLabelText(child.role.record_field),
                 );
@@ -6404,7 +6404,7 @@ const ProcedureBuilder = struct {
         }
         for (self.plan.childSlice(rep.children)) |child| {
             if (child.role == .record_field) {
-                const view = Plan.moduleViewForKey(self.modules, child.source_type.module);
+                const view = Plan.moduleViewForKey(self.modules, self.plan.childLabelModule(child));
                 try field_name_ids.append(
                     self.allocator,
                     try self.result.store.insertBoxyName(view.canonical_names.?.recordFieldLabelText(child.role.record_field)),
@@ -15235,7 +15235,9 @@ const ProcBodyBuilder = struct {
         exact_reps: collections.DenseMapUnmanaged(Plan.TypeRepId, Plan.TypeRepId) = .empty,
         exact_storage: bool,
         env: DescriptorTemplateEnvId = .empty,
-        excluded_local: ?LIR.LocalId = null,
+        /// Descriptor locals the template must not read: the one it fills,
+        /// and any other still waiting to be filled.
+        excluded_locals: []const LIR.LocalId = &.{},
         /// Whether the build asked which descriptor locals this procedure
         /// has bound, making its descriptor specific to the procedure.
         read_bound_locals: bool = false,
@@ -16359,18 +16361,41 @@ const ProcBodyBuilder = struct {
                     .tag_name = no_tag_payload_read,
                     .read = .nested,
                 };
-            } else (try self.immediateTagPayloadDescriptorForRep(parent_rep, target_rep, candidate_index)) orelse continue;
-            if (source != null) {
-                boxyLowerInvariant("boxy erased argument descriptor had multiple direct parent parameters");
+            } else (try self.immediateTagReadDescriptorForRep(parent_rep, target_rep, candidate_index)) orelse continue;
+            if (source) |earlier| {
+                // A parent that an earlier parent itself holds, or that is
+                // the earlier one's backing (a nominal's record, whose fields
+                // the nominal's descriptor also lists), is the nearer one.
+                // Otherwise the representation occurs at two places in the
+                // argument (a record's field and the same field type inside
+                // its nested record); within one value a representation has
+                // one descriptor, so the first parent holding it is read.
+                const earlier_rep = self.parent.descriptorStorageRep(params[earlier.descriptor_index].rep);
+                const nearer = self.repBacksRep(earlier_rep, parent_rep) or
+                    (try self.immediateNestedDescriptorIndexForRep(earlier_rep, parent_rep)) != null or
+                    (try self.immediateTagReadDescriptorForRep(earlier_rep, parent_rep, earlier.descriptor_index)) != null;
+                if (!nearer) continue;
             }
             source = projected;
         }
         return source orelse direct;
     }
 
-    /// The tag payload of `parent_rep_id`'s descriptor that describes
-    /// `target_rep` directly, read from parameter `parent_index`.
-    fn immediateTagPayloadDescriptorForRep(
+    /// Whether `backing_rep` is the alias or nominal backing of `rep_id`.
+    fn repBacksRep(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId, backing_rep: Plan.TypeRepId) bool {
+        for (self.parent.plan.childSlice(self.parent.plan.representations.items[@backingInt(rep_id)].children)) |child| {
+            switch (child.role) {
+                .alias_backing, .nominal_backing => if (self.parent.descriptorStorageRep(child.rep) == backing_rep) return true,
+                .alias_arg, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .tuple_elem, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => {},
+            }
+        }
+        return false;
+    }
+
+    /// The tag payload or open-row extension of `parent_rep_id`'s descriptor
+    /// that describes `target_rep` directly, read from parameter
+    /// `parent_index`.
+    fn immediateTagReadDescriptorForRep(
         self: *ProcBodyBuilder,
         parent_rep_id: Plan.TypeRepId,
         target_rep: Plan.TypeRepId,
@@ -16385,7 +16410,13 @@ const ProcBodyBuilder = struct {
         if (read_path.items.len != 1) return null;
         const payload = switch (read_path.items[0]) {
             .tag_payload => |payload| payload,
-            .nested, .tag_ext, .box_payload => return null,
+            .tag_ext => return .{
+                .descriptor_index = @intCast(parent_index),
+                .nested_index = std.math.maxInt(u32),
+                .tag_name = no_tag_payload_read,
+                .read = .tag_ext,
+            },
+            .nested, .box_payload => return null,
         };
         if (payload.payload_index > std.math.maxInt(u32)) {
             boxyLowerInvariant("boxy erased argument tag payload descriptor index exceeded its ABI range");
@@ -17727,7 +17758,7 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!ExprStep {
         const rep = self.parent.plan.representations.items[@backingInt(rep_id)];
         return switch (rep.kind) {
-            .tag_union => try self.beginPlannedTagVariant(target, rep_id, self.tagVariant(rep, name), args, next),
+            .tag_union => try self.beginPlannedTagVariant(target, rep_id, try self.tagVariantForExprArgs(rep, name, args), args, next),
             .bool_tag_union => exprDone(try self.lowerBoolTagInto(target, name, args, next)),
             .dynamic => try self.beginDynamicTag(target, rep_id, name, args, next),
             .alias => .{ .tail = .{ .tag_rep = .{
@@ -18988,12 +19019,15 @@ const ProcBodyBuilder = struct {
         return .{ .tail = .{ .expr = .{ .target = expr_local, .expr_id = expr_id, .next = assign_ret } } };
     }
 
-    /// A checked row coercion (design.md "Row Coercion Primitive") crosses the
-    /// representation boundary exactly as an explicit return does: the value
-    /// is lowered at its own checked type into a fresh local, and the boundary
-    /// re-tags it into the target local. `target_rep` is the representation
-    /// the caller stores the target at; the coercion's own pair, the child's
-    /// type and `coerce_ty`, is what the reach check reads.
+    /// A checked row coercion (design.md "Row Coercion Primitive"). The child's
+    /// type and the coercion's are one join set, so when both are ground they
+    /// share one representation and the child lowers straight into the target
+    /// (design.md "Row Joins"). Otherwise the coercion's type holds an open
+    /// row: the value is lowered at its own representation into a fresh local
+    /// and crosses the representation boundary into the target's dynamic
+    /// storage exactly as an explicit return does. `target_rep` is the
+    /// representation the caller stores the target at; the coercion's own
+    /// pair, the child's type and `coerce_ty`, is what the reach check reads.
     fn beginRowCoerce(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
@@ -19007,7 +19041,17 @@ const ProcBodyBuilder = struct {
         if (!self.localUsesWorkerLayoutForRep(target, target_rep)) {
             boxyLowerInvariant("boxy row coercion target local layout disagreed with its caller's representation");
         }
-        // A child that diverges produces no value to re-tag, and its own
+        // The value's type and the destination's type are one join set, so
+        // they share one representation (design.md "Row Joins") and the value
+        // is lowered straight into the target. The two differ only when the
+        // value's type holds an open row, which keeps its dynamic
+        // representation and crosses the boundary below.
+        if (value_rep == target_rep) {
+            const items = try self.parent.allocator.alloc(ExprChainItem, 1);
+            items[0] = .{ .lower = .{ .expr = .{ .target = target, .expr_id = value_id, .next = undefined } } };
+            return exprChain(items, next);
+        }
+        // A child that diverges produces no value to move, and its own
         // checked type need not be a row at all.
         if (!self.module.checked_bodies.exprDiverges(value_id, .omit)) {
             try self.assertRowCoerceReach(self.repForType(coerce_ty), value_rep);
@@ -19036,7 +19080,7 @@ const ProcBodyBuilder = struct {
     /// be copied as it is and read at the wrong row. Such a coercion adapts
     /// the value's descriptor to the target representation's own
     /// (`assignRuntimeAdapterBoundary`). A closed tag row has no descriptor
-    /// and re-tags through the shared boundary; an open destination row and a
+    /// and crosses the shared boundary; an open destination row and a
     /// bare type parameter keep the dynamic-destination adapters there.
     ///
     /// No value holding a callable in its structure reaches this branch
@@ -19074,7 +19118,7 @@ const ProcBodyBuilder = struct {
     /// backing, which `tagVariantRepForBoundary` steps through) every source
     /// variant is in the target with the same payload arity; anywhere else
     /// the two representations hold the same tag rows. The shared
-    /// representation boundary would otherwise re-tag records and other
+    /// representation boundary would otherwise convert records and other
     /// aggregates structurally and accept a pure narrowing.
     fn assertRowCoerceReach(
         self: *ProcBodyBuilder,
@@ -19408,7 +19452,7 @@ const ProcBodyBuilder = struct {
                 .bool_tag_union => self.boolVariantIndex(name),
                 .tag_union => variant: {
                     const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
-                    const variant = self.tagVariant(rep, name);
+                    const variant = try self.tagVariantForArgs(rep, self.module, name, &.{});
                     if (variants.len == 1 and !self.tagDomainHasOpenExtension(tag_rep)) break :tested on_match;
                     break :variant variant.index;
                 },
@@ -22701,11 +22745,14 @@ const ProcBodyBuilder = struct {
             .bool_tag_union => exprDone(try self.restoreConstBoolTagInto(target, tag, next)),
             .tag_union => blk: {
                 const checked_tag = constTagPayloadTypes(type_module, checked_ty, tag.tag_name);
+                const arg_types = try self.parent.allocator.alloc(Plan.CheckedTypeIdentity, checked_tag.payload_tys.len);
+                defer self.parent.allocator.free(arg_types);
+                for (checked_tag.payload_tys, arg_types) |payload_ty, *arg_type| arg_type.* = .{ .module = type_module.key, .ty = payload_ty };
                 break :blk try self.beginRestoreConstPlannedTagPayloads(
                     target,
                     store_module,
                     type_module,
-                    self.tagVariantForModule(rep, type_module, checked_tag.name),
+                    try self.tagVariantForArgs(rep, type_module, checked_tag.name, arg_types),
                     tag,
                     checked_tag.payload_tys,
                     next,
@@ -26328,6 +26375,15 @@ const ProcBodyBuilder = struct {
             return result;
         }
 
+        // A concrete source fills no variable of the target. A target that
+        // names no type variable is then described by its static descriptor
+        // alone, however deep a recursive type runs.
+        if (!self.parent.plan.representations.items[@backingInt(source_rep)].contains_dynamic and
+            !try self.parent.plan.namesTypeVariable(self.parent.allocator, target_rep))
+        {
+            return .{ .desc = try self.parent.staticDescRefForRep(target_rep) };
+        }
+
         // Both sides share one nominal backing template, so its positions do
         // not name either side's storage. When the uses bind a formal to
         // actuals that store differently, the target's storage is its own
@@ -26925,7 +26981,7 @@ const ProcBodyBuilder = struct {
                     }
                     const source_field = self.findRecordFieldByLabel(
                         state.source_aggregate_rep,
-                        Plan.moduleViewForKey(self.parent.modules, target_child.source_type.module),
+                        Plan.moduleViewForKey(self.parent.modules, self.parent.plan.childLabelModule(target_child)),
                         target_label,
                     ) orelse {
                         switch (target_child.record_field_kind.tag) {
@@ -29118,13 +29174,13 @@ const ProcBodyBuilder = struct {
             return if (ctx.testedTagRep(ty) != null) .tag else .tag_name;
         }
 
-        pub fn tagVariant(ctx: BoxyMatchCtx, pat: checked.CheckedPatternId, ty: MatchOcc) u32 {
-            const name = ctx.pattern(pat).data.applied_tag.name;
-            const tag_rep = ctx.testedTagRep(ty) orelse return @backingInt(name);
+        pub fn tagVariant(ctx: BoxyMatchCtx, pat: checked.CheckedPatternId, ty: MatchOcc) Allocator.Error!u32 {
+            const tag = ctx.pattern(pat).data.applied_tag;
+            const tag_rep = ctx.testedTagRep(ty) orelse return @backingInt(tag.name);
             const rep = ctx.b.parent.plan.representations.items[@backingInt(tag_rep)];
             return switch (rep.kind) {
-                .bool_tag_union => ctx.b.boolVariantIndex(name),
-                .in_progress, .dynamic, .primitive, .erased_callable, .alias, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => ctx.b.tagVariant(rep, name).index,
+                .bool_tag_union => ctx.b.boolVariantIndex(tag.name),
+                .in_progress, .dynamic, .primitive, .erased_callable, .alias, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => (try ctx.b.tagVariantForPatternArgs(rep, tag.name, tag.args)).index,
             };
         }
 
@@ -29142,7 +29198,7 @@ const ProcBodyBuilder = struct {
             if (ctx.testedTagRep(ty)) |tag_rep| {
                 const rep = b.parent.plan.representations.items[@backingInt(tag_rep)];
                 if (rep.kind == .bool_tag_union) boxyLowerInvariant("builtin Bool match pattern carried a payload");
-                const variant = b.tagVariant(rep, tag.name);
+                const variant = try b.tagVariantForPatternArgs(rep, tag.name, tag.args);
                 try b.validateTagPatternPayloads(variant.name, variant.payloads, tag.args);
                 variant_index = variant.index;
                 source_tag_rep = tag_rep;
@@ -29316,7 +29372,7 @@ const ProcBodyBuilder = struct {
 
         pub fn ctorKey(ctx: BoxyMatchCtx, pat: checked.CheckedPatternId, ty: MatchOcc) Allocator.Error!u128 {
             return switch (ctx.pattern(pat).data) {
-                .applied_tag => ctx.tagVariant(pat, ty),
+                .applied_tag => try ctx.tagVariant(pat, ty),
                 .numeral_literal => |literal| if (literal.guard != null) @backingInt(pat) else try ctx.numeralKey(pat),
                 .str_literal => |literal| if (literal.guard != null)
                     @backingInt(pat)
@@ -31836,6 +31892,9 @@ const ProcBodyBuilder = struct {
         }
         const lowered = try self.parent.allocator.alloc(DescriptorArgLocal, hidden_args.len);
         errdefer self.parent.allocator.free(lowered);
+        // Arguments whose local this call allocates; materialization fills them.
+        var fresh = std.ArrayList(usize).empty;
+        defer fresh.deinit(self.parent.allocator);
 
         for (hidden_args, lowered, 0..) |arg, *local, index| {
             if (arg.source_descriptor_index) |source_index| {
@@ -31865,6 +31924,7 @@ const ProcBodyBuilder = struct {
                 const rep = self.parent.plan.representations.items[@backingInt(identity_rep)];
                 const desc = rep.descriptor orelse {
                     local.* = .{ .local = try self.addFrameLocal(.opaque_ptr) };
+                    try fresh.append(self.parent.allocator, index);
                     continue;
                 };
                 if (self.descriptorLocalForRequirementAndRepOrNull(desc, identity_rep)) |desc_local| {
@@ -31887,6 +31947,7 @@ const ProcBodyBuilder = struct {
                 }
             }
             local.* = .{ .local = try self.addFrameLocal(.opaque_ptr) };
+            try fresh.append(self.parent.allocator, index);
         }
 
         const snapshot = try self.snapshotDescriptorBindings();
@@ -31894,7 +31955,12 @@ const ProcBodyBuilder = struct {
         defer self.restoreDescriptorBindings(snapshot);
         try self.bindDirectCallHiddenDescriptorLocals(hidden_args, lowered, false);
 
-        for (hidden_args, lowered) |arg, *local| {
+        // The representation each argument's template describes, for the
+        // cycle pass below.
+        const template_reps = try self.parent.allocator.alloc(?Plan.TypeRepId, hidden_args.len);
+        defer self.parent.allocator.free(template_reps);
+        @memset(template_reps, null);
+        for (hidden_args, lowered, template_reps) |arg, *local, *template_rep| {
             if (local.from_source_value) continue;
             if (self.localIsReadOnlyDescriptorInput(local.local)) continue;
 
@@ -31915,6 +31981,7 @@ const ProcBodyBuilder = struct {
                 );
                 local.materialize = materialization.desc;
                 local.captures = materialization.captures;
+                template_rep.* = identity_call_rep;
                 continue;
             }
 
@@ -31926,6 +31993,7 @@ const ProcBodyBuilder = struct {
                 );
                 local.materialize = materialization.desc;
                 local.captures = materialization.captures;
+                template_rep.* = identity_worker_rep;
                 continue;
             }
 
@@ -31935,7 +32003,60 @@ const ProcBodyBuilder = struct {
             }
         }
 
+        // Two compound arguments this call allocates can each read the
+        // other: the levels of a recursive type. An argument that reaches
+        // itself through the locals it reads is materialized again from the
+        // ones before it alone, which breaks the cycle there.
+        var excluded = std.ArrayList(LIR.LocalId).empty;
+        defer excluded.deinit(self.parent.allocator);
+        for (fresh.items) |index| {
+            const template_rep = template_reps[index] orelse continue;
+            if (!try self.descriptorArgReachesItself(lowered, fresh.items, index)) continue;
+            excluded.clearRetainingCapacity();
+            for (fresh.items) |other| {
+                if (other < index or template_reps[other] == null or self.repIsBareDynamic(hidden_args[other].rep)) continue;
+                try excluded.append(self.parent.allocator, lowered[other].local);
+            }
+            const materialization = try self.descriptorMaterializationForKnownRepExcludingLocals(template_rep, excluded.items);
+            lowered[index].materialize = materialization.desc;
+            lowered[index].captures = materialization.captures;
+        }
+
         return lowered;
+    }
+
+    /// Whether hidden argument `root` reads, through the captures of the
+    /// arguments `fresh` names, its own local.
+    fn descriptorArgReachesItself(
+        self: *ProcBodyBuilder,
+        lowered: []const DescriptorArgLocal,
+        fresh: []const usize,
+        root: usize,
+    ) Allocator.Error!bool {
+        const allocator = self.parent.allocator;
+        var visited = try std.DynamicBitSetUnmanaged.initEmpty(allocator, lowered.len);
+        defer visited.deinit(allocator);
+        var pending = std.ArrayList(usize).empty;
+        defer pending.deinit(allocator);
+        try pending.append(allocator, root);
+        while (pending.pop()) |index| {
+            const captures = self.parent.result.store.getLocalSpan(lowered[index].captures);
+            for (0..GuardedList.borrowLen(captures)) |capture_index| {
+                const captured = GuardedList.at(captures, capture_index);
+                for (fresh) |other| {
+                    if (lowered[other].local != captured) continue;
+                    if (other == root) return true;
+                    if (visited.isSet(other)) continue;
+                    visited.set(other);
+                    try pending.append(allocator, other);
+                }
+            }
+        }
+        return false;
+    }
+
+    fn localIsAmong(locals: []const LIR.LocalId, local: LIR.LocalId) bool {
+        return std.mem.findScalar(LIR.LocalId, locals, local) != null;
     }
 
     /// A planned argument source reads the original operand's own
@@ -32879,10 +33000,13 @@ const ProcBodyBuilder = struct {
             // descriptor as a candidate the aggregate construction records; ARC
             // adopts it only when a field actually carries a descriptor, so
             // aggregates whose fields stay concrete keep the concrete plan.
-            if (!self.aggregateFieldsMayCarryDescriptor(fields) and
-                self.parent.result.store.getLocal(target).boxy_desc == null)
-            {
-                return .{};
+            if (self.parent.result.store.getLocal(target).boxy_desc == null) {
+                if (!self.aggregateFieldsMayCarryDescriptor(fields)) return .{};
+                // A target with no descriptor of its own can receive values
+                // from other producers too (each branch of a `match`), so
+                // the construction records the static descriptor rather than
+                // giving the target a descriptor only this path writes.
+                return .{ .contents_desc = try self.parent.staticDescRefForRep(identity_rep) };
             }
             return try self.constructedConcreteAggregateDescriptorForFields(target, identity_rep, fields);
         }
@@ -32941,10 +33065,14 @@ const ProcBodyBuilder = struct {
         const identity_rep = self.parent.descriptorStorageRep(rep_id);
         const rep = self.parent.plan.representations.items[@backingInt(identity_rep)];
         if (rep.descriptor == null and !rep.contains_dynamic and
-            self.parent.result.store.getLocal(target).boxy_desc == null and
-            !self.aggregateFieldsMayCarryDescriptor(fields))
+            self.parent.result.store.getLocal(target).boxy_desc == null)
         {
-            return .{};
+            if (!self.aggregateFieldsMayCarryDescriptor(fields)) return .{};
+            // A concrete union is described by its static descriptor. Its
+            // target can receive values from other producers too (each
+            // branch of an `if`), so it gets no descriptor only this path
+            // writes.
+            return .{ .desc = try self.parent.staticDescRefForRep(identity_rep) };
         }
 
         const snapshot = try self.snapshotDescriptorBindings();
@@ -33110,6 +33238,17 @@ const ProcBodyBuilder = struct {
         root: Plan.TypeRepId,
         excluded_local: ?LIR.LocalId,
     ) Allocator.Error!DescriptorMaterialization {
+        const excluded: []const LIR.LocalId = if (excluded_local) |*local| local[0..1] else &.{};
+        return try self.descriptorMaterializationForKnownRepExcludingLocals(root, excluded);
+    }
+
+    /// `descriptorMaterializationForKnownRepExcludingLocal` reading none of
+    /// `excluded_locals`.
+    fn descriptorMaterializationForKnownRepExcludingLocals(
+        self: *ProcBodyBuilder,
+        root: Plan.TypeRepId,
+        excluded_locals: []const LIR.LocalId,
+    ) Allocator.Error!DescriptorMaterialization {
         // A bound formal is described by its actual.
         var identity_rep = self.parent.descriptorIdentityRep(root);
         while (self.nominalFormalActualBelow(self.nominal_formal_bindings.items.len, identity_rep)) |actual| {
@@ -33122,7 +33261,7 @@ const ProcBodyBuilder = struct {
             const desc = rep.descriptor.?;
             if (self.descriptorBindingIsBoundForRep(identity_rep)) {
                 if (self.descriptorLocalForRequirementAndRepOrNull(desc, identity_rep)) |local| {
-                    if (local != excluded_local) {
+                    if (!localIsAmong(excluded_locals, local)) {
                         return .{ .desc = .{ .local = local } };
                     }
                 }
@@ -33142,7 +33281,7 @@ const ProcBodyBuilder = struct {
 
         var context = try self.initDescriptorTemplateContext(false);
         defer context.deinit(self.parent.allocator);
-        context.excluded_local = excluded_local;
+        context.excluded_locals = excluded_locals;
 
         const desc: LIR.BoxyDescRef = .{ .static = try self.descriptorTemplateTypeDescForRep(identity_rep, &captures, &context) };
         const span = if (captures.items.len == 0)
@@ -33649,7 +33788,7 @@ const ProcBodyBuilder = struct {
             // own descriptor describes its storage there, whatever descriptor
             // the formal's actual type carries.
             if (context.forced_refs.get(self.parent.descriptorIdentityRep(rep_id))) |local| {
-                if (context.excluded_local != local) {
+                if (!localIsAmong(context.excluded_locals, local)) {
                     try appendUniqueLocal(self.parent.allocator, captures, local);
                     return .{ .local = local };
                 }
@@ -33669,7 +33808,7 @@ const ProcBodyBuilder = struct {
             !try self.descriptorTemplateRebindsRep(identity_rep, context);
         if (may_reuse_rep_local) {
             if (context.forced_refs.get(identity_rep)) |local| {
-                if (context.excluded_local == local) return try self.templateStaticRef(rep_id, frames, context);
+                if (localIsAmong(context.excluded_locals, local)) return try self.templateStaticRef(rep_id, frames, context);
                 try appendUniqueLocal(self.parent.allocator, captures, local);
                 return .{ .local = local };
             }
@@ -33679,7 +33818,7 @@ const ProcBodyBuilder = struct {
             if (parent_desc == null or desc != parent_desc.?) {
                 context.read_bound_locals = true;
                 if (self.descriptorLocalForRequirementAndRepOrNull(desc, identity_rep)) |local| {
-                    if (self.descriptorBindingIsBoundForRep(identity_rep) and context.excluded_local != local) {
+                    if (self.descriptorBindingIsBoundForRep(identity_rep) and !localIsAmong(context.excluded_locals, local)) {
                         try appendUniqueLocal(self.parent.allocator, captures, local);
                         return .{ .local = local };
                     }
@@ -37445,18 +37584,29 @@ const ProcBodyBuilder = struct {
             // A template dictionary's adapter binds the building frame's type
             // variables; a representation naming them is described through
             // those bindings.
+            // A callee takes no descriptor for a variable that appears only
+            // inside function types (a parser combinator's `input`), so the
+            // boundary substitutes nothing for it; when nothing here
+            // describes it, the other side's representation at the same
+            // position in the two function types does.
+            const materialize_rep = if (try self.repNamesUnboundVariable(capture.materialize_rep))
+                (try self.counterpartRepAtPosition(target_function.rep, source_function.rep, capture.materialize_rep)) orelse
+                    (try self.counterpartRepAtPosition(source_function.rep, target_function.rep, capture.materialize_rep)) orelse
+                    capture.materialize_rep
+            else
+                capture.materialize_rep;
             const materialization: DescriptorMaterialization = if (self.template_frame_descriptors and
-                try self.descriptorTemplateNeedsCapturesForKnownRep(capture.materialize_rep))
-                try self.descriptorMaterializationForSourceRep(capture.materialize_rep)
+                try self.descriptorTemplateNeedsCapturesForKnownRep(materialize_rep))
+                try self.descriptorMaterializationForSourceRep(materialize_rep)
             else if (self.static_descriptor_materialization_scope) |scope|
                 .{ .desc = try self.parent.staticDescRefForWorkerRepWithSourceMap(
-                    capture.materialize_rep,
+                    materialize_rep,
                     scope.sources.get(capture.desc),
                     scope.sources,
                     scope.context,
                 ) }
             else
-                try self.descriptorMaterializationForSourceRep(capture.materialize_rep);
+                try self.descriptorMaterializationForSourceRep(materialize_rep);
             try descriptor_materializations.append(self.parent.allocator, materialization.initializer(local));
         }
         for (descriptor_captures, capture_fields[1..], capture_needs_materialization) |capture, local, needs_materialization| {
@@ -37821,6 +37971,75 @@ const ProcBodyBuilder = struct {
             };
         }
         return captures;
+    }
+
+    /// Whether `root` names a bare type variable that neither this frame
+    /// binds nor a sealed default fixes; an open tag row's extension is
+    /// described statically by its row.
+    fn repNamesUnboundVariable(self: *ProcBodyBuilder, root: Plan.TypeRepId) Allocator.Error!bool {
+        const allocator = self.parent.allocator;
+        var pending = std.ArrayList(Plan.TypeRepId).empty;
+        defer pending.deinit(allocator);
+        var visited = collections.DenseMap(Plan.TypeRepId, void).init(allocator);
+        defer visited.deinit();
+        try pending.append(allocator, root);
+        while (pending.pop()) |rep_id| {
+            if ((try visited.getOrPut(rep_id)).found_existing) continue;
+            if (self.descriptorBindingIsBoundForRep(rep_id)) continue;
+            const rep = self.parent.plan.representations.items[@backingInt(rep_id)];
+            if (self.repIsBareDynamic(rep_id)) {
+                if (rep.sealed_default == null and !rep.is_open_tag_row and rep.tag_variants.len == 0) return true;
+                continue;
+            }
+            for (self.parent.plan.childSlice(rep.children)) |child| {
+                if (self.parent.plan.childIsSharedBackingTemplate(rep_id, child)) continue;
+                try pending.append(allocator, child.rep);
+            }
+        }
+        return false;
+    }
+
+    /// The representation inside `other_root` at the position `target`
+    /// occupies inside `root`, following children by role.
+    fn counterpartRepAtPosition(
+        self: *ProcBodyBuilder,
+        root: Plan.TypeRepId,
+        other_root: Plan.TypeRepId,
+        target: Plan.TypeRepId,
+    ) Allocator.Error!?Plan.TypeRepId {
+        const allocator = self.parent.allocator;
+        const Pair = struct { rep: Plan.TypeRepId, other: Plan.TypeRepId };
+        var pending = std.ArrayList(Pair).empty;
+        defer pending.deinit(allocator);
+        var visited = collections.DenseMap(Plan.TypeRepId, void).init(allocator);
+        defer visited.deinit();
+        try pending.append(allocator, .{ .rep = root, .other = other_root });
+        while (pending.pop()) |pair| {
+            if (pair.rep == target) return pair.other;
+            if ((try visited.getOrPut(pair.rep)).found_existing) continue;
+            const rep = self.parent.plan.representations.items[@backingInt(pair.rep)];
+            const other = self.parent.plan.representations.items[@backingInt(pair.other)];
+            // An alias names its backing's structure, which the other side
+            // may hold without the alias layer.
+            if (rep.kind == .alias and other.kind != .alias) {
+                try pending.append(allocator, .{ .rep = self.parent.repQuery().requiredSingleChild(pair.rep, .alias_backing).rep, .other = pair.other });
+                continue;
+            }
+            if (other.kind == .alias and rep.kind != .alias) {
+                try pending.append(allocator, .{ .rep = pair.rep, .other = self.parent.repQuery().requiredSingleChild(pair.other, .alias_backing).rep });
+                continue;
+            }
+            const other_children = self.parent.plan.childSlice(other.children);
+            for (self.parent.plan.childSlice(rep.children)) |child| {
+                if (self.parent.plan.childIsSharedBackingTemplate(pair.rep, child)) continue;
+                // A row's extension stands for the other row's variants it
+                // does not list, not for the other row's extension.
+                if (child.role == .tag_ext) continue;
+                const other_child = self.parent.namedQuery().findMatchingChildByRole(other_children, child) orelse continue;
+                try pending.append(allocator, .{ .rep = child.rep, .other = other_child.rep });
+            }
+        }
+        return null;
     }
 
     /// The caller representation the active call boundary substitutes for
@@ -39479,7 +39698,7 @@ const ProcBodyBuilder = struct {
         for (self.parent.plan.childSlice(target_record.children)) |target_child| {
             const source_field: MatchedRecordField = switch (initial.aggregate) {
                 .record => switch (target_child.role) {
-                    .record_field => |target_label| self.findRecordFieldByLabel(state.source_record_rep, Plan.moduleViewForKey(self.parent.modules, target_child.source_type.module), target_label) orelse
+                    .record_field => |target_label| self.findRecordFieldByLabel(state.source_record_rep, Plan.moduleViewForKey(self.parent.modules, self.parent.plan.childLabelModule(target_child)), target_label) orelse
                         boxyLowerInvariant(kind ++ " record boundary source was missing target field"),
                     .record_ext => {
                         self.requireEmptyRecordExtension(target_child.rep);
@@ -41211,14 +41430,8 @@ const ProcBodyBuilder = struct {
     fn addFrameLocalForRep(self: *ProcBodyBuilder, rep_id: Plan.TypeRepId) Allocator.Error!LIR.LocalId {
         const layout_idx = self.workerRuntimeLayoutForRep(rep_id).layoutIdx();
         const identity_rep = self.parent.descriptorStorageRep(rep_id);
-        const exact = self.parent.plan.representations.items[@backingInt(rep_id)];
-        const identity = self.parent.plan.representations.items[@backingInt(identity_rep)];
         var desc: ?LIR.BoxyDescRef = null;
-        if (exact.descriptor == null and
-            (exact.contains_dynamic or identity.contains_dynamic) and
-            !self.parent.layoutIsBoxStorage(layout_idx) and
-            self.parent.layoutNeedsNestedBoxyDesc(layout_idx))
-        {
+        if (try self.repTakesValueDescriptor(rep_id)) {
             desc = .{ .local = try self.addFrameLocal(.opaque_ptr) };
         } else {
             desc = try self.frameDescriptorRefForRep(rep_id);
@@ -41229,6 +41442,29 @@ const ProcBodyBuilder = struct {
         const local = try self.addFrameLocal(layout_idx);
         if (desc) |desc_ref| self.parent.result.store.setLocalBoxyDesc(local, desc_ref);
         return local;
+    }
+
+    /// Whether a local of `rep_id` is described by a descriptor its value
+    /// brings rather than by one the representation plans: dynamic contents
+    /// with no planned descriptor of their own, unless the storage's planned
+    /// descriptor describes them here (an alias is described by its
+    /// backing's): this frame holds it, or it names no type variable and so
+    /// is static. Whatever produces the value fills it.
+    fn repTakesValueDescriptor(self: *ProcBodyBuilder, rep_id: Plan.TypeRepId) Allocator.Error!bool {
+        const layout_idx = self.workerRuntimeLayoutForRep(rep_id).layoutIdx();
+        const identity_rep = self.parent.descriptorStorageRep(rep_id);
+        const exact = self.parent.plan.representations.items[@backingInt(rep_id)];
+        const identity = self.parent.plan.representations.items[@backingInt(identity_rep)];
+        if (identity.descriptor) |desc| {
+            if (self.descriptorBindingIsBoundForRep(identity_rep) and
+                self.descriptorLocalForRequirementAndRepOrNull(desc, identity_rep) != null) return false;
+            if (!self.repIsBareDynamic(identity_rep) and
+                !try self.parent.plan.namesTypeVariable(self.parent.allocator, identity_rep)) return false;
+        }
+        return exact.descriptor == null and
+            (exact.contains_dynamic or identity.contains_dynamic) and
+            !self.parent.layoutIsBoxStorage(layout_idx) and
+            self.parent.layoutNeedsNestedBoxyDesc(layout_idx);
     }
 
     fn addGeneratedParserOutputLocalForRep(self: *ProcBodyBuilder, rep_id: Plan.TypeRepId) Allocator.Error!LIR.LocalId {
@@ -41960,6 +42196,23 @@ const ProcBodyBuilder = struct {
         var continuation = next;
         if (self.descriptor_slots.len == 0) return continuation;
 
+        // A slot a body statement writes, whose descriptor is not static, is
+        // not initialized here; the templates initialized here run before
+        // that write, so none of them reads it.
+        var late_slots = std.ArrayList(LIR.LocalId).empty;
+        defer late_slots.deinit(self.parent.allocator);
+        for (self.descriptor_slots, self.descriptor_slot_reps, 0..) |maybe_local, maybe_rep, slot_index| {
+            const local = maybe_local orelse continue;
+            const slot_rep = maybe_rep orelse continue;
+            if (outer) |snapshot| {
+                if (snapshot.slots[slot_index] == local and snapshot.slot_reps[slot_index] == slot_rep) continue;
+            }
+            if (std.mem.findScalar(LIR.LocalId, self.runtime_initialized_descriptor_locals.items, local) == null) continue;
+            const materialization = try self.descriptorMaterializationForKnownRepExcludingLocal(slot_rep, local);
+            if (materialization.captures.len == 0 and materialization.desc == .static) continue;
+            try late_slots.append(self.parent.allocator, local);
+        }
+
         // A slot's template may capture another slot, so the static
         // initializers, which capture nothing, run before all the others.
         var static_inits = std.ArrayList(struct { local: LIR.LocalId, desc: LIR.BoxyDescRef }).empty;
@@ -41985,7 +42238,7 @@ const ProcBodyBuilder = struct {
             const materialization = if (runtime_initialized)
                 try self.descriptorMaterializationForKnownRepExcludingLocal(slot_rep, local)
             else
-                try self.descriptorMaterializationForKnownRep(slot_rep);
+                try self.descriptorMaterializationForKnownRepExcludingLocals(slot_rep, late_slots.items);
             if (materialization.captures.len == 0 and materialization.desc == .static) {
                 try static_inits.append(self.parent.allocator, .{ .local = local, .desc = materialization.desc });
                 continue;
@@ -42175,7 +42428,7 @@ const ProcBodyBuilder = struct {
                     const rep = self.parent.plan.representations.items[@backingInt(tag_rep)];
                     const payloads = switch (rep.kind) {
                         .dynamic => try self.dynamicTagPayloadsForName(tag_rep, tag.name),
-                        .tag_union => self.parent.plan.childSlice(self.tagVariant(rep, tag.name).payloads),
+                        .tag_union => self.parent.plan.childSlice((try self.tagVariantForPatternArgs(rep, tag.name, tag.args)).payloads),
                         .bool_tag_union => &.{},
                         .in_progress, .primitive, .erased_callable, .alias, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => boxyLowerInvariant("boxy tag pattern binder source was not a tag representation"),
                     };
@@ -42267,7 +42520,7 @@ const ProcBodyBuilder = struct {
                         },
                         .tag_union => {
                             const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
-                            const payloads = self.parent.plan.childSlice(self.tagVariant(rep, tag.name).payloads);
+                            const payloads = self.parent.plan.childSlice((try self.tagVariantForPatternArgs(rep, tag.name, tag.args)).payloads);
                             if (payloads.len != tag.args.len) {
                                 boxyLowerInvariant("tag match pattern payload count disagreed during miss analysis");
                             }
@@ -42948,7 +43201,7 @@ const ProcBodyBuilder = struct {
         for (self.parent.plan.childSlice(rep.children)) |child| {
             switch (child.role) {
                 .record_field => |source_label| {
-                    if (Plan.recordFieldNameMatches(Plan.moduleNamesOf(Plan.moduleViewForKey(self.parent.modules, child.source_type.module)), source_label, Plan.moduleNamesOf(target_view), target_label)) {
+                    if (Plan.recordFieldNameMatches(Plan.moduleNamesOf(Plan.moduleViewForKey(self.parent.modules, self.parent.plan.childLabelModule(child))), source_label, Plan.moduleNamesOf(target_view), target_label)) {
                         return .{
                             .index = index,
                             .rep = child.rep,
@@ -43149,14 +43402,6 @@ const ProcBodyBuilder = struct {
         }
     }
 
-    fn tagVariant(
-        self: *const ProcBodyBuilder,
-        rep: Plan.TypeRepresentation,
-        name: names.TagNameId,
-    ) TagVariantLookup {
-        return self.tagVariantForModule(rep, self.module, name);
-    }
-
     fn tagVariantForModule(
         self: *const ProcBodyBuilder,
         rep: Plan.TypeRepresentation,
@@ -43164,19 +43409,92 @@ const ProcBodyBuilder = struct {
         name: names.TagNameId,
     ) TagVariantLookup {
         const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
+        var found: ?TagVariantLookup = null;
         for (variants, 0..) |variant, index| {
             if (!self.tagVariantNameMatches(variant, requested_module, name)) continue;
             if (index > std.math.maxInt(u32)) {
                 boxyLowerInvariant("tag variant index exceeded LIR variant range");
             }
-            return .{
+            if (found != null) boxyLowerInvariant("a repeated tag label was looked up without the payload types that select its variant");
+            found = .{
                 .index = @intCast(index),
                 .name = variant.name,
                 .name_module = variant.name_module,
                 .payloads = variant.payloads,
             };
         }
-        boxyLowerInvariant("tag expression referenced a variant outside its checked type representation");
+        return found orelse boxyLowerInvariant("tag expression referenced a variant outside its checked type representation");
+    }
+
+    /// The variant of `name` in `rep` that a constructor or pattern with
+    /// payload types `arg_types` belongs to. A joined row may hold one label at
+    /// two structurally incompatible payload types (design.md "Row Joins");
+    /// the constructor or pattern is written at one static type, which lists
+    /// the label once, so its own payload types select the variant whose
+    /// planned payloads they are compatible with.
+    fn tagVariantForArgs(
+        self: *const ProcBodyBuilder,
+        rep: Plan.TypeRepresentation,
+        requested_module: Plan.ModuleView,
+        name: names.TagNameId,
+        arg_types: []const Plan.CheckedTypeIdentity,
+    ) Allocator.Error!TagVariantLookup {
+        const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
+        var candidates: u32 = 0;
+        for (variants) |variant| {
+            if (self.tagVariantNameMatches(variant, requested_module, name)) candidates += 1;
+        }
+        if (candidates <= 1) return self.tagVariantForModule(rep, requested_module, name);
+        var found: ?TagVariantLookup = null;
+        for (variants, 0..) |variant, index| {
+            if (!self.tagVariantNameMatches(variant, requested_module, name)) continue;
+            const payloads = self.parent.plan.childSlice(variant.payloads);
+            if (payloads.len != arg_types.len) continue;
+            const compatible = for (payloads, arg_types) |payload, arg_type| {
+                const payload_type = self.parent.plan.representations.items[@backingInt(payload.rep)].source_type;
+                if (!try Plan.checkedTypesStructurallyCompatible(self.parent.allocator, LowererModules{ .modules = self.parent.modules }, payload_type, arg_type)) break false;
+            } else true;
+            if (!compatible) continue;
+            if (found != null) boxyLowerInvariant("two variants of one tag label were both compatible with a constructor's payload types");
+            found = .{
+                .index = @intCast(index),
+                .name = variant.name,
+                .name_module = variant.name_module,
+                .payloads = variant.payloads,
+            };
+        }
+        return found orelse boxyLowerInvariant("no variant of a repeated tag label was compatible with a constructor's payload types");
+    }
+
+    const LowererModules = struct {
+        modules: Common.CheckedModules,
+        pub fn view(self: LowererModules, module: checked.ModuleId) Plan.ModuleView {
+            return Plan.moduleViewForKey(self.modules, module);
+        }
+    };
+
+    fn exprArgTypes(self: *const ProcBodyBuilder, args: []const checked.CheckedExprId) Allocator.Error![]Plan.CheckedTypeIdentity {
+        const arg_types = try self.parent.allocator.alloc(Plan.CheckedTypeIdentity, args.len);
+        for (args, arg_types) |arg, *ty| ty.* = .{ .module = self.module.key, .ty = self.module.checked_bodies.expr(arg).ty };
+        return arg_types;
+    }
+
+    fn patternArgTypes(self: *const ProcBodyBuilder, args: []const checked.CheckedPatternId) Allocator.Error![]Plan.CheckedTypeIdentity {
+        const arg_types = try self.parent.allocator.alloc(Plan.CheckedTypeIdentity, args.len);
+        for (args, arg_types) |arg, *ty| ty.* = .{ .module = self.module.key, .ty = self.module.checked_bodies.pattern(arg).ty };
+        return arg_types;
+    }
+
+    fn tagVariantForExprArgs(self: *const ProcBodyBuilder, rep: Plan.TypeRepresentation, name: names.TagNameId, args: []const checked.CheckedExprId) Allocator.Error!TagVariantLookup {
+        const arg_types = try self.exprArgTypes(args);
+        defer self.parent.allocator.free(arg_types);
+        return try self.tagVariantForArgs(rep, self.module, name, arg_types);
+    }
+
+    fn tagVariantForPatternArgs(self: *const ProcBodyBuilder, rep: Plan.TypeRepresentation, name: names.TagNameId, args: []const checked.CheckedPatternId) Allocator.Error!TagVariantLookup {
+        const arg_types = try self.patternArgTypes(args);
+        defer self.parent.allocator.free(arg_types);
+        return try self.tagVariantForArgs(rep, self.module, name, arg_types);
     }
 
     fn tagVariantNameMatches(

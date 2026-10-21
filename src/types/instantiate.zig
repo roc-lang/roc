@@ -31,12 +31,13 @@ const Rank = types_mod.Rank;
 const Polarity = types_mod.Polarity;
 const Ident = base.Ident;
 
-/// Where a position sits relative to the result row the Monotype result-row
-/// widening adapter can re-tag (design.md "Result-Row Widening Adapter"). The
-/// checker's annotation walk makes this decision for rows written inline in a
-/// signature; this axis makes the same decision for rows a referenced type
-/// declaration contributes, so the set of positions a use may WIDEN stays equal
-/// to the set lowering can ADAPT no matter how the row was spelled.
+/// Where a position sits relative to the result rows a where-method use may
+/// widen: the signature's direct result row and a `Try` result's error row
+/// (design.md "Closed Result Rows At Template Boundaries"). The checker's
+/// annotation walk makes this decision for rows written inline in a signature;
+/// this axis makes the same decision for rows a referenced type declaration
+/// contributes, so the set of positions a use may WIDEN stays within the row
+/// coercion's reach no matter how the row was spelled.
 pub const AdapterReachPosition = enum {
     /// The entire method signature, whose function return is reachable.
     signature,
@@ -462,10 +463,10 @@ pub const Instantiator = struct {
     /// requests.
     current_polarity: Polarity = .pos,
     /// Where the position currently being instantiated sits relative to the
-    /// row the Monotype result-row widening adapter can re-tag. Starts at the
-    /// reach of the instantiation ROOT (callers using `.defer_open` set it) and
-    /// demotes to `.nested` under every constructor except the two the adapter
-    /// reaches through. Only consulted by `.defer_open`.
+    /// rows a where-method use may widen. Starts at the reach of the
+    /// instantiation ROOT (callers using `.defer_open` set it) and demotes to
+    /// `.nested` under every constructor except a function's result and a
+    /// `Try`'s error argument. Only consulted by `.defer_open`.
     current_reach: AdapterReachPosition = .nested,
     /// Identity of the builtin `Try(ok, err)` nominal. When null, no nominal is
     /// treated as a `Try`, so a `Try` error row reached through a declaration
@@ -582,8 +583,8 @@ pub const Instantiator = struct {
         /// input position closes while the callback's argument opens.
         resolve_by_polarity,
         /// Like `resolve_by_polarity` for negative positions (closed), but a
-        /// marker in a positive position that the result-row widening adapter
-        /// could re-tag is copied as a fresh marker: the copy is itself a
+        /// marker in a positive position a where-method use may widen is
+        /// copied as a fresh marker: the copy is itself a
         /// deferred signature whose own uses decide (a where-alias
         /// declaration's method signature copied into a referencing
         /// annotation, or an alias body embedded in one).
@@ -593,8 +594,9 @@ pub const Instantiator = struct {
         /// declaration mints a marker for every extensionless tag union at any
         /// depth, so `Statuses : List([Ok(Str), Err(Str)])` as a where-method
         /// result would otherwise let a use widen the row inside the `List`.
-        /// The set of positions a use may WIDEN is kept equal to the set
-        /// lowering can ADAPT (design.md "Result-Row Widening Adapter").
+        /// The set of positions a use may WIDEN is kept within the row
+        /// coercion's reach (design.md "Closed Result Rows At Template
+        /// Boundaries").
         defer_open,
     };
 
@@ -1684,10 +1686,10 @@ pub const Instantiator = struct {
             const arrived: u32 = @intCast(machine.value_stack.items.len - frame.vars_base);
             if (arrived < args_count) {
                 const arg_var = self.store.vars.items.items[@backingInt(frame.func.args.start) + arrived];
-                // Argument positions flip the surrounding polarity. No
-                // position inside a function is adapter-reachable: the adapter
-                // re-tags the result it is generated for, never a row inside a
-                // function that result contains.
+                // Argument positions flip the surrounding polarity, and no
+                // row inside an argument is one a use may widen: a use widens
+                // the result, never a row inside a function that result
+                // contains.
                 self.current_polarity = frame.saved_polarity.flip();
                 self.current_reach = .nested;
                 if (!try self.requestVar(arg_var, false)) return false;

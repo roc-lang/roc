@@ -101,7 +101,7 @@ pub const VarMap = std.hash_map.HashMap(Var, Var, std.hash_map.AutoContext(Var),
 /// Checker decisions a descriptor carries alongside its content. Descriptors
 /// live in a struct-of-arrays keyed by every union-find resolve, so these share
 /// one byte-wide column instead of one column each.
-pub const DescriptorFlags = packed struct(u8) {
+pub const DescriptorFlags = packed struct(u16) {
     /// The checker closed this otherwise-unresolved variable to `[]` after
     /// proving that no runtime constructor can inhabit it. The checked output
     /// preserves the variable identity and carries `[]` only as its row default.
@@ -143,6 +143,14 @@ pub const DescriptorFlags = packed struct(u8) {
     /// requirement records; the checker links it to the callable's copy
     /// before anything reads it, and reading it unlinked is a compiler bug.
     deferred_callable: bool = false,
+    /// A tag row a host-boundary annotation (a hosted declaration or a
+    /// `provides` definition) wrote. The host was compiled against this row's
+    /// representation, so the row never joins a wider one (design.md "Row
+    /// Joins"): a value carrying it is never widened, and whatever it flows
+    /// into must have exactly this row. A copy of the row is the same host
+    /// row, so instantiation carries the flag.
+    host_fixed_row: bool = false,
+    _padding: u7 = 0,
 
     /// The flags a copy of this class carries: those that describe its type.
     /// The others record what happened to this class itself—a rejection, a
@@ -155,6 +163,7 @@ pub const DescriptorFlags = packed struct(u8) {
         return .{
             .empty_tag_union_is_default = self.empty_tag_union_is_default,
             .nominal_backing_structure = self.nominal_backing_structure,
+            .host_fixed_row = self.host_fixed_row,
         };
     }
 

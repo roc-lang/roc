@@ -545,7 +545,7 @@ test "open rows - associated and block-local function annotations drop their `..
     );
 }
 
-test "open rows - where-method signatures open only what lowering can re-tag" {
+test "open rows - where-method signatures open only the rows a use may widen" {
     // A where-method's direct result and a `Try` result's error row open per
     // use; its arguments, a `Try`'s ok row, and anything nested deeper keep
     // their rows as written.
