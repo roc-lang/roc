@@ -95,21 +95,14 @@ const WindowsUnwindState = if (builtin.os.tag == .windows) struct {
         return total;
     }
 
-    fn lessThanFunction(_: void, lhs: coff.FunctionInfo, rhs: coff.FunctionInfo) bool {
-        return lhs.start_offset < rhs.start_offset;
-    }
-
     fn init(
         memory: []align(std.heap.page_size_min) u8,
         code_size: usize,
         xdata_offset: usize,
-        functions: []const coff.FunctionInfo,
+        /// Disjoint and sorted by start offset, as `coff.splitNestedFunctions` returns them.
+        sorted_functions: []const coff.FunctionInfo,
     ) (Allocator.Error || error{ UnsupportedPlatform, UnwindRegistrationFailed })!WindowsUnwindState {
-        if (functions.len == 0) return .{};
-
-        const sorted_functions = try allocator.dupe(coff.FunctionInfo, functions);
-        defer allocator.free(sorted_functions);
-        std.mem.sort(coff.FunctionInfo, sorted_functions, {}, lessThanFunction);
+        if (sorted_functions.len == 0) return .{};
 
         var writer = try coff.CoffWriter.init(allocator, try coffArch());
         defer writer.deinit();

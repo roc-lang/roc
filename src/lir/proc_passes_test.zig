@@ -330,6 +330,10 @@ const ReverseExecutor = struct {
     // Successful shard allocations survive submit until the phase is drained.
     output_failure: testing.FailingAllocator = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 }),
     scratch_failure: testing.FailingAllocator = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 }),
+    /// The lane the scratch-failing task runs on: passes retain their
+    /// transient storage in lane state, so its allocator fails with the
+    /// task's scratch.
+    failing_lane: ?executor.LaneState = null,
     accepted: usize = 0,
     frozen_source: ?*const core.LirStore = null,
     frozen_prefix: core.LirStore.BodyPrefix = undefined,
@@ -337,6 +341,7 @@ const ReverseExecutor = struct {
 
     fn deinit(self: *ReverseExecutor) void {
         for (&self.lane_states) |*lane| lane.deinit();
+        if (self.failing_lane) |*lane| lane.deinit();
     }
 
     fn begin(context: *anyopaque) void {
@@ -354,11 +359,13 @@ const ReverseExecutor = struct {
         var scratch = collections.SingleThreadArena.init(testing.allocator);
         defer scratch.deinit();
         const worker_id = task.id % self.lanes;
+        const fail_scratch = self.fail_scratch_task == task.id;
+        if (fail_scratch and self.failing_lane == null) self.failing_lane = executor.LaneState.init(self.scratch_failure.allocator());
         const result = task.run(task.context, .{
             .id = worker_id,
             .allocator = if (self.fail_output_task == task.id) self.output_failure.allocator() else testing.allocator,
-            .scratch = if (self.fail_scratch_task == task.id) self.scratch_failure.allocator() else scratch.allocator(),
-            .lane_state = &self.lane_states[worker_id],
+            .scratch = if (fail_scratch) self.scratch_failure.allocator() else scratch.allocator(),
+            .lane_state = if (fail_scratch) &self.failing_lane.? else &self.lane_states[worker_id],
         });
         self.pending[self.pending_len] = .{ .id = task.id, .worker_id = worker_id, .value = result };
         self.pending_len += 1;

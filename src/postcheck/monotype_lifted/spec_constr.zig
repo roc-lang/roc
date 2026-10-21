@@ -207,13 +207,14 @@
 //! Store-borrow discipline: this pass clones expressions while walking spans of
 //! the same `Program` store, and cloning appends new nodes to those stores.
 //! Never hold a `Program`-store borrow (any `*Span` result) across a call that
-//! can append to the same store: copy the span first via `GuardedList.dupe`, or
-//! read one element at a time by stable index via the `*At` accessors
-//! (`branchAt`, `captureOperandAt`), which retain no borrow. The GuardedList
-//! generation guard turns a violation into a Debug panic. The generation is
-//! per-list, so a borrow of one store stays valid across an append to a
-//! different store—only same-store appends invalidate it, so copying a span
-//! whose store this walk never grows is unnecessary.
+//! can append to the same store: take the span's rows via `walkRows` (the
+//! frozen source's rows in a body shard, which no append moves, otherwise a
+//! copy), or read one element at a time by stable index via the `*At`
+//! accessors (`branchAt`, `captureOperandAt`), which retain no borrow. The
+//! GuardedList generation guard turns a violation into a Debug panic. The
+//! generation is per-list, so a borrow of one store stays valid across an
+//! append to a different store—only same-store appends invalidate it, so
+//! copying a span whose store this walk never grows is unnecessary.
 
 const std = @import("std");
 const invariant = @import("base").invariant;
@@ -237,6 +238,31 @@ const GuardedList = collections.GuardedList;
 const TaskExecutor = @import("base").post_check_task_executor;
 
 /// Identity exhaustion is a resource failure, checked before committing shard rows.
+/// A span's rows for a walk that appends to `program` while it reads them:
+/// the frozen source's own rows when the span lies there, otherwise a copy in
+/// `allocator`.
+fn walkRows(program: *const Ast.Program, allocator: Allocator, comptime T: type, span: Ast.Span(T)) Allocator.Error![]const T {
+    if (program.frozenSpanRows(T, span)) |rows| return rows;
+    return try GuardedList.dupe(allocator, T, program.spanRows(T, span));
+}
+
+/// `walkRows` for a caller that frees its rows: `deinit` frees only a copy.
+fn OwnedWalkRows(comptime T: type) type {
+    return struct {
+        items: []const T,
+        owned: bool,
+
+        fn deinit(self: @This(), allocator: Allocator) void {
+            if (self.owned) allocator.free(self.items);
+        }
+    };
+}
+
+fn ownedWalkRows(program: *const Ast.Program, allocator: Allocator, comptime T: type, span: Ast.Span(T)) Allocator.Error!OwnedWalkRows(T) {
+    if (program.frozenSpanRows(T, span)) |rows| return .{ .items = rows, .owned = false };
+    return .{ .items = try GuardedList.dupe(allocator, T, program.spanRows(T, span)), .owned = true };
+}
+
 fn checkedIdentityTotal(start: u32, count: u32) Allocator.Error!u32 {
     return std.math.add(u32, start, count) catch error.OutOfMemory;
 }
@@ -904,10 +930,13 @@ const BinderIdentity = struct {
     digest: names.TypeDigest,
 };
 
+/// A dense slot for one binder identity, scoped to one `Subst`'s contents.
+const BinderSlot = enum(u32) { _ };
+
 const BindingTarget = union(enum) {
     local: Ast.LocalId,
-    binder: BinderIdentity,
-    alias: BinderIdentity,
+    binder: BinderSlot,
+    alias: BinderSlot,
 };
 
 const BindingChange = struct {
@@ -1497,6 +1526,10 @@ const Pass = struct {
         if (admission) |snapshot| {
             for (snapshot, 0..) |*entry, raw| entry.* = self.newSpecAdmission(raw);
         }
+        // Task scratch for the inline path, emptied after each task and kept
+        // with its capacity for the next.
+        var serial_scratch = collections.SingleThreadArena.init(self.allocator);
+        defer serial_scratch.deinit();
         var next_fn: usize = 0;
         while (next_fn < fn_count) {
             var work: [wave_capacity]Work = undefined;
@@ -1552,9 +1585,8 @@ const Pass = struct {
                 if (failure) |err| return err;
             } else {
                 for (work[0..count]) |*item| {
-                    var scratch = collections.SingleThreadArena.init(self.allocator);
-                    defer scratch.deinit();
-                    try item.execute(self.allocator, scratch.allocator());
+                    defer _ = serial_scratch.reset(.retain_capacity);
+                    try item.execute(self.allocator, serial_scratch.allocator());
                 }
             }
             if (self.options.metrics_out) |metrics| {
@@ -2077,10 +2109,12 @@ const Pass = struct {
         }
         if (call.is_cold) return;
 
-        const source_args = try GuardedList.dupe(self.allocator, Ast.TypedLocal, self.program.typedLocalSpan(worker.args));
-        defer self.allocator.free(source_args);
-        const source_captures = try GuardedList.dupe(self.allocator, Ast.TypedLocal, self.program.typedLocalSpan(worker.captures));
-        defer self.allocator.free(source_captures);
+        const source_args_rows = try ownedWalkRows(self.program, self.allocator, Ast.TypedLocal, worker.args);
+        defer source_args_rows.deinit(self.allocator);
+        const source_args = source_args_rows.items;
+        const source_captures_rows = try ownedWalkRows(self.program, self.allocator, Ast.TypedLocal, worker.captures);
+        defer source_captures_rows.deinit(self.allocator);
+        const source_captures = source_captures_rows.items;
 
         var params = std.ArrayList(Ast.TypedLocal).empty;
         defer params.deinit(self.allocator);
@@ -2699,8 +2733,9 @@ const Pass = struct {
     fn recordCallPattern(self: *Pass, fn_id: Ast.FnId, args_span: Ast.Span(Ast.ExprId)) Allocator.Error!void {
         const raw = @backingInt(fn_id);
         if (!self.plans[raw].source.size.admits()) return;
-        const args = try GuardedList.dupe(self.allocator, Ast.ExprId, self.program.exprSpan(args_span));
-        defer self.allocator.free(args);
+        const args_rows = try ownedWalkRows(self.program, self.allocator, Ast.ExprId, args_span);
+        defer args_rows.deinit(self.allocator);
+        const args = args_rows.items;
         const fn_args = self.program.typedLocalSpan(self.program.getFnAt(raw).args);
         if (args.len != fn_args.len) Common.invariant("direct call arity differed from lifted function arity");
 
@@ -2991,8 +3026,9 @@ const Pass = struct {
         const body_expr = self.program.getExpr(body);
         if (body_expr.data != .block) return null;
         const block = body_expr.data.block;
-        const stmts = try GuardedList.dupe(self.allocator, Ast.StmtId, self.program.stmtSpan(block.statements));
-        defer self.allocator.free(stmts);
+        const stmts_rows = try ownedWalkRows(self.program, self.allocator, Ast.StmtId, block.statements);
+        defer stmts_rows.deinit(self.allocator);
+        const stmts = stmts_rows.items;
 
         // Locate the driving loop: a statement whose value/expression is a loop.
         // A one-carry loop that binds its result (a fold) rebinds that result
@@ -3602,12 +3638,9 @@ const Pass = struct {
         const loop_expr = self.program.getExpr(loop_expr_id);
         const loop = loop_expr.data.loop_;
         const source_params = self.program.typedLocalSpan(loop.params);
-        const source_initials = try GuardedList.dupe(
-            self.allocator,
-            Ast.ExprId,
-            self.program.exprSpan(loop.initial_values),
-        );
-        defer self.allocator.free(source_initials);
+        const source_initials_rows = try ownedWalkRows(self.program, self.allocator, Ast.ExprId, loop.initial_values);
+        defer source_initials_rows.deinit(self.allocator);
+        const source_initials = source_initials_rows.items;
         if (source_params.len == 0 or source_params.len != source_initials.len) return null;
 
         const base_ty = self.program.getLocal(base_local).ty;
@@ -3799,8 +3832,9 @@ const Pass = struct {
         const expr = self.program.getExpr(branch_expr_id);
         if (expr.data == .if_) {
             const if_ = expr.data.if_;
-            const branches = try GuardedList.dupe(self.allocator, Ast.IfBranch, self.program.ifBranchSpan(if_.branches));
-            defer self.allocator.free(branches);
+            const branches_rows = try ownedWalkRows(self.program, self.allocator, Ast.IfBranch, if_.branches);
+            defer branches_rows.deinit(self.allocator);
+            const branches = branches_rows.items;
             var rewritten = try self.allocator.alloc(Ast.IfBranch, branches.len);
             defer self.allocator.free(rewritten);
             for (branches, 0..) |br, index| {
@@ -3814,8 +3848,9 @@ const Pass = struct {
             } } });
         } else if (expr.data == .match_) {
             const match = expr.data.match_;
-            const branches = try GuardedList.dupe(self.allocator, Ast.Branch, self.program.branchSpan(match.branches));
-            defer self.allocator.free(branches);
+            const branches_rows = try ownedWalkRows(self.program, self.allocator, Ast.Branch, match.branches);
+            defer branches_rows.deinit(self.allocator);
+            const branches = branches_rows.items;
             var rewritten = try self.allocator.alloc(Ast.Branch, branches.len);
             defer self.allocator.free(rewritten);
             for (branches, 0..) |br, index| {
@@ -4726,8 +4761,9 @@ const Pass = struct {
         if (raw >= self.plans.len) return;
         if (self.plans[raw].specs.items.len == 0) return;
 
-        const args = try GuardedList.dupe(self.allocator, Ast.ExprId, self.program.exprSpan(call.args));
-        defer self.allocator.free(args);
+        const args_rows = try ownedWalkRows(self.program, self.allocator, Ast.ExprId, call.args);
+        defer args_rows.deinit(self.allocator);
+        const args = args_rows.items;
         var order_buffer: [spec_constr_specialization_count]u8 = undefined;
         for (try self.specSelectionOrder(raw, &order_buffer)) |spec_index| {
             const spec = self.plans[raw].specs.items[spec_index];
@@ -5218,9 +5254,9 @@ const Pass = struct {
 /// scope's writes can be unwound at its boundary.
 ///
 /// The exact-local map is keyed by `LocalId`. The other two maps are keyed by
-/// `BinderIdentity`—the checked pattern binder together with the digest of the
-/// local's monomorphic type, so two locals that share a binder but were
-/// monomorphized at different types stay distinct bindings. `binder_aliases`
+/// the dense slot of a `BinderIdentity`—the checked pattern binder together
+/// with the digest of the local's monomorphic type, so two locals that share a
+/// binder but were monomorphized at different types stay distinct bindings. `binder_aliases`
 /// resolves every binder-equivalent local while cloning, for opaque and
 /// structural values alike. `binder_subst` exposes only known structure and
 /// loop-carried values to specialization decisions. Keeping those indexes
@@ -5228,8 +5264,8 @@ const Pass = struct {
 /// an opaque binding into constructor evidence.
 const Subst = struct {
     exact: collections.DenseMap(Ast.LocalId, Value),
-    binder_subst: std.AutoHashMap(BinderIdentity, Value),
-    binder_aliases: std.AutoHashMap(BinderIdentity, Value),
+    binder_subst: collections.DenseMap(BinderSlot, Value),
+    binder_aliases: collections.DenseMap(BinderSlot, Value),
     /// Binder identities carried by an enclosing loop being cloned, with a
     /// nesting refcount. A carried variable's value must survive every `let`
     /// scope inside the loop body: the state-merge lowering binds a merged
@@ -5238,16 +5274,25 @@ const Subst = struct {
     /// binder. Cloning a `let` value floats any update to a carried binder past its
     /// own restore so a later reference resolves to the merged value rather
     /// than the loop-entry value pinned at loop setup.
-    loop_carried_binders: std.AutoHashMap(BinderIdentity, u32),
+    loop_carried_binders: collections.DenseMap(BinderSlot, u32),
+    /// The slot of each binder identity met so far: each binder heads a chain
+    /// of the slots for the types it was met at, almost always one.
+    binder_heads: collections.DenseMap(check.CheckedModule.PatternBinderId, u32),
+    binder_slots: std.ArrayList(SlotNode),
     changes: std.ArrayList(BindingChange),
     allocator: Allocator,
+
+    const no_slot: u32 = std.math.maxInt(u32);
+    const SlotNode = struct { identity: BinderIdentity, next: u32 };
 
     fn init(allocator: Allocator) Subst {
         return .{
             .exact = collections.DenseMap(Ast.LocalId, Value).init(allocator),
-            .binder_subst = std.AutoHashMap(BinderIdentity, Value).init(allocator),
-            .binder_aliases = std.AutoHashMap(BinderIdentity, Value).init(allocator),
-            .loop_carried_binders = std.AutoHashMap(BinderIdentity, u32).init(allocator),
+            .binder_subst = collections.DenseMap(BinderSlot, Value).init(allocator),
+            .binder_aliases = collections.DenseMap(BinderSlot, Value).init(allocator),
+            .loop_carried_binders = collections.DenseMap(BinderSlot, u32).init(allocator),
+            .binder_heads = collections.DenseMap(check.CheckedModule.PatternBinderId, u32).init(allocator),
+            .binder_slots = .empty,
             .changes = .empty,
             .allocator = allocator,
         };
@@ -5255,6 +5300,8 @@ const Subst = struct {
 
     fn deinit(self: *Subst) void {
         self.changes.deinit(self.allocator);
+        self.binder_slots.deinit(self.allocator);
+        self.binder_heads.deinit();
         self.loop_carried_binders.deinit();
         self.binder_aliases.deinit();
         self.binder_subst.deinit();
@@ -5264,6 +5311,8 @@ const Subst = struct {
     /// Forget every substitution while keeping the tables' capacity.
     fn clearRetainingCapacity(self: *Subst) void {
         self.changes.clearRetainingCapacity();
+        self.binder_slots.clearRetainingCapacity();
+        self.binder_heads.clearRetainingCapacity();
         self.loop_carried_binders.clearRetainingCapacity();
         self.binder_aliases.clearRetainingCapacity();
         self.binder_subst.clearRetainingCapacity();
@@ -5279,11 +5328,35 @@ const Subst = struct {
     /// program mutable.
     fn binderIdentityOf(program: *Ast.Program, local: Ast.LocalId) ?BinderIdentity {
         const local_data = program.getLocal(local);
-        const binder = local_data.binder orelse return null;
+        const binder = local_data.identity.binder() orelse return null;
         return .{
             .binder = binder,
             .digest = program.types.equalityDigest(&program.names, local_data.ty),
         };
+    }
+
+    /// The slot of `identity`, or null when this substitution has never
+    /// written under it.
+    fn slotOf(self: *const Subst, identity: BinderIdentity) ?BinderSlot {
+        var cursor = self.binder_heads.get(identity.binder) orelse return null;
+        while (cursor != no_slot) {
+            const node = self.binder_slots.items[cursor];
+            if (std.mem.eql(u8, &node.identity.digest.bytes, &identity.digest.bytes)) return @fromBackingInt(cursor);
+            cursor = node.next;
+        }
+        return null;
+    }
+
+    fn internSlot(self: *Subst, identity: BinderIdentity) Allocator.Error!BinderSlot {
+        if (self.slotOf(identity)) |slot| return slot;
+        const index = std.math.cast(u32, self.binder_slots.items.len) orelse return error.OutOfMemory;
+        if (index == no_slot) return error.OutOfMemory;
+        try self.binder_slots.ensureUnusedCapacity(self.allocator, 1);
+        const head = try self.binder_heads.getOrPut(identity.binder);
+        const next = if (head.found_existing) head.value_ptr.* else no_slot;
+        head.value_ptr.* = index;
+        self.binder_slots.appendAssumeCapacity(.{ .identity = identity, .next = next });
+        return @fromBackingInt(index);
     }
 
     /// Resolve a local to its known value through the exact-local map, then the
@@ -5291,7 +5364,9 @@ const Subst = struct {
     fn get(self: *const Subst, program: *Ast.Program, local: Ast.LocalId) ?Value {
         if (self.exact.get(local)) |value| return value;
         if (binderIdentityOf(program, local)) |identity| {
-            if (self.binder_subst.get(identity)) |value| return value;
+            if (self.slotOf(identity)) |slot| {
+                if (self.binder_subst.get(slot)) |value| return value;
+            }
         }
         return null;
     }
@@ -5301,7 +5376,9 @@ const Subst = struct {
     fn getForClone(self: *const Subst, program: *Ast.Program, local: Ast.LocalId) ?Value {
         if (self.exact.get(local)) |value| return value;
         if (binderIdentityOf(program, local)) |identity| {
-            if (self.binder_aliases.get(identity)) |value| return value;
+            if (self.slotOf(identity)) |slot| {
+                if (self.binder_aliases.get(slot)) |value| return value;
+            }
         }
         return null;
     }
@@ -5323,8 +5400,9 @@ const Subst = struct {
         try self.putExact(local, value);
 
         const identity = binderIdentityOf(program, local) orelse return;
-        try self.putAlias(identity, value);
-        const subst_binder = self.isLoopCarried(identity) or switch (value) {
+        const slot = try self.internSlot(identity);
+        try self.putAliasSlot(slot, value);
+        const subst_binder = self.loop_carried_binders.contains(slot) or switch (value) {
             .tag,
             .record,
             .tuple,
@@ -5337,12 +5415,7 @@ const Subst = struct {
             => false,
         };
         if (!subst_binder) return;
-        const previous_binder = self.binder_subst.get(identity);
-        try self.changes.append(self.allocator, .{
-            .key = .{ .binder = identity },
-            .previous = previous_binder,
-        });
-        try self.binder_subst.put(identity, value);
+        try self.putBinderSlot(slot, value);
     }
 
     /// Install a substitution for one exact local id without touching its
@@ -5361,18 +5434,27 @@ const Subst = struct {
         try self.exact.put(local, value);
     }
 
-    fn putAlias(self: *Subst, identity: BinderIdentity, value: Value) Allocator.Error!void {
-        const previous = self.binder_aliases.get(identity);
+    fn putAliasSlot(self: *Subst, slot: BinderSlot, value: Value) Allocator.Error!void {
+        const previous = self.binder_aliases.get(slot);
         try self.changes.append(self.allocator, .{
-            .key = .{ .alias = identity },
+            .key = .{ .alias = slot },
             .previous = previous,
         });
-        try self.binder_aliases.put(identity, value);
+        try self.binder_aliases.put(slot, value);
+    }
+
+    fn putBinderSlot(self: *Subst, slot: BinderSlot, value: Value) Allocator.Error!void {
+        const previous = self.binder_subst.get(slot);
+        try self.changes.append(self.allocator, .{
+            .key = .{ .binder = slot },
+            .previous = previous,
+        });
+        try self.binder_subst.put(slot, value);
     }
 
     fn putLocalAlias(self: *Subst, program: *Ast.Program, local: Ast.LocalId, value: Value) Allocator.Error!void {
         const identity = binderIdentityOf(program, local) orelse return;
-        try self.putAlias(identity, value);
+        try self.putAliasSlot(try self.internSlot(identity), value);
     }
 
     /// Install a binder-wide substitution for a loop-carried slot. Reassigned
@@ -5383,13 +5465,9 @@ const Subst = struct {
     /// pre-loop local and capture recomputation turns the vanished binding into
     /// a phantom root argument.
     fn putLoopCarried(self: *Subst, identity: BinderIdentity, value: Value) Allocator.Error!void {
-        try self.putAlias(identity, value);
-        const previous = self.binder_subst.get(identity);
-        try self.changes.append(self.allocator, .{
-            .key = .{ .binder = identity },
-            .previous = previous,
-        });
-        try self.binder_subst.put(identity, value);
+        const slot = try self.internSlot(identity);
+        try self.putAliasSlot(slot, value);
+        try self.putBinderSlot(slot, value);
     }
 
     /// Remove the pre-loop `binder_subst` value for the variable carried by a
@@ -5403,33 +5481,29 @@ const Subst = struct {
     fn dropCarriedBinder(self: *Subst, program: *Ast.Program, initial: Ast.ExprId) Allocator.Error!?BinderIdentity {
         const local = localExpr(program, initial) orelse return null;
         const identity = binderIdentityOf(program, local) orelse return null;
-        if (self.binder_subst.get(identity)) |previous| {
+        const slot = self.slotOf(identity) orelse return identity;
+        if (self.binder_subst.get(slot)) |previous| {
             try self.changes.append(self.allocator, .{
-                .key = .{ .binder = identity },
+                .key = .{ .binder = slot },
                 .previous = previous,
             });
-            _ = self.binder_subst.remove(identity);
+            _ = self.binder_subst.remove(slot);
         }
-        if (self.binder_aliases.get(identity)) |previous| {
+        if (self.binder_aliases.get(slot)) |previous| {
             try self.changes.append(self.allocator, .{
-                .key = .{ .alias = identity },
+                .key = .{ .alias = slot },
                 .previous = previous,
             });
-            _ = self.binder_aliases.remove(identity);
+            _ = self.binder_aliases.remove(slot);
         }
         return identity;
-    }
-
-    /// Whether an enclosing loop currently carries this binder.
-    fn isLoopCarried(self: *const Subst, identity: BinderIdentity) bool {
-        return self.loop_carried_binders.contains(identity);
     }
 
     /// Register a binder as carried by a loop being cloned. Nested loops that
     /// carry the same binder are counted so the marker survives until the
     /// outermost such loop finishes.
     fn markLoopCarried(self: *Subst, identity: BinderIdentity) Allocator.Error!void {
-        const entry = try self.loop_carried_binders.getOrPut(identity);
+        const entry = try self.loop_carried_binders.getOrPut(try self.internSlot(identity));
         if (entry.found_existing) {
             entry.value_ptr.* += 1;
         } else {
@@ -5439,9 +5513,10 @@ const Subst = struct {
 
     /// Drop one registration of a carried binder, removing it at zero.
     fn unmarkLoopCarried(self: *Subst, identity: BinderIdentity) void {
-        const entry = self.loop_carried_binders.getPtr(identity) orelse return;
+        const slot = self.slotOf(identity) orelse return;
+        const entry = self.loop_carried_binders.getPtr(slot) orelse return;
         if (entry.* <= 1) {
-            _ = self.loop_carried_binders.remove(identity);
+            _ = self.loop_carried_binders.remove(slot);
         } else {
             entry.* -= 1;
         }
@@ -5455,26 +5530,29 @@ const Subst = struct {
     /// (an arm boundary or the loop clone itself) still unwinds it.
     fn restoreFloatingLoopCarries(self: *Subst, start: usize) Allocator.Error!void {
         if (self.loop_carried_binders.count() == 0) return self.restore(start);
-        var floated = std.ArrayList(struct { identity: BinderIdentity, value: Value }).empty;
+        var floated = std.ArrayList(struct { slot: BinderSlot, value: Value }).empty;
         defer floated.deinit(self.allocator);
         for (self.changes.items[start..]) |change| {
-            const identity = switch (change.key) {
-                .binder => |identity| identity,
+            const slot = switch (change.key) {
+                .binder => |slot| slot,
                 .local, .alias => continue,
             };
-            if (!self.isLoopCarried(identity)) continue;
-            const value = self.binder_subst.get(identity) orelse continue;
+            if (!self.loop_carried_binders.contains(slot)) continue;
+            const value = self.binder_subst.get(slot) orelse continue;
             var seen = false;
             for (floated.items) |entry| {
-                if (std.meta.eql(entry.identity, identity)) {
+                if (entry.slot == slot) {
                     seen = true;
                     break;
                 }
             }
-            if (!seen) try floated.append(self.allocator, .{ .identity = identity, .value = value });
+            if (!seen) try floated.append(self.allocator, .{ .slot = slot, .value = value });
         }
         self.restore(start);
-        for (floated.items) |entry| try self.putLoopCarried(entry.identity, entry.value);
+        for (floated.items) |entry| {
+            try self.putAliasSlot(entry.slot, entry.value);
+            try self.putBinderSlot(entry.slot, entry.value);
+        }
     }
 
     fn restore(self: *Subst, start: usize) void {
@@ -5490,23 +5568,69 @@ const Subst = struct {
                         _ = self.exact.remove(local);
                     }
                 },
-                .binder => |identity| {
+                .binder => |slot| {
                     if (change.previous) |previous| {
-                        self.binder_subst.putAssumeCapacity(identity, previous);
+                        self.binder_subst.putAssumeCapacity(slot, previous);
                     } else {
-                        _ = self.binder_subst.remove(identity);
+                        _ = self.binder_subst.remove(slot);
                     }
                 },
-                .alias => |identity| {
+                .alias => |slot| {
                     if (change.previous) |previous| {
-                        self.binder_aliases.putAssumeCapacity(identity, previous);
+                        self.binder_aliases.putAssumeCapacity(slot, previous);
                     } else {
-                        _ = self.binder_aliases.remove(identity);
+                        _ = self.binder_aliases.remove(slot);
                     }
                 },
             }
         }
         self.changes.shrinkRetainingCapacity(start);
+    }
+};
+
+/// Emptied lists kept with their capacity for the clone tasks that build
+/// spans while their children append to them. A fixed number are kept so
+/// returning one never allocates; beyond that a returned list is freed.
+fn SpareLists(comptime T: type) type {
+    return struct {
+        const Self = @This();
+        const max_lists = 8;
+
+        lists: [max_lists]std.ArrayList(T) = undefined,
+        len: usize = 0,
+
+        fn take(self: *Self) std.ArrayList(T) {
+            if (self.len == 0) return .empty;
+            self.len -= 1;
+            return self.lists[self.len];
+        }
+
+        /// Keep `list` empty for the next task, leaving `list` itself empty.
+        fn give(self: *Self, allocator: Allocator, list: *std.ArrayList(T)) void {
+            defer list.* = .empty;
+            if (list.capacity == 0) return;
+            if (self.len == max_lists) return list.deinit(allocator);
+            list.clearRetainingCapacity();
+            self.lists[self.len] = list.*;
+            self.len += 1;
+        }
+
+        fn deinit(self: *Self, allocator: Allocator) void {
+            for (self.lists[0..self.len]) |*list| list.deinit(allocator);
+            self.len = 0;
+        }
+    };
+}
+
+const ClonerSpareLists = struct {
+    stmts: SpareLists(Ast.StmtId) = .{},
+    exprs: SpareLists(Ast.ExprId) = .{},
+    typed_locals: SpareLists(Ast.TypedLocal) = .{},
+
+    fn deinit(self: *ClonerSpareLists, allocator: Allocator) void {
+        self.stmts.deinit(allocator);
+        self.exprs.deinit(allocator);
+        self.typed_locals.deinit(allocator);
     }
 };
 
@@ -5564,6 +5688,7 @@ const ClonerScratch = struct {
     /// capacity for the next run. A fixed number are kept so returning one
     /// never allocates.
     spare_clone_frames: CloneFramePool,
+    spare_lists: ClonerSpareLists,
 
     fn fresh(allocator: Allocator) ClonerScratch {
         return .{
@@ -5584,6 +5709,7 @@ const ClonerScratch = struct {
             .inline_scope_origins = collections.DenseMap(Ast.InlineScopeId, Ast.InlineScopeId).init(allocator),
             .rebased_inline_scope_changes = .empty,
             .spare_clone_frames = .{},
+            .spare_lists = .{},
         };
     }
 
@@ -5625,6 +5751,7 @@ const ClonerScratch = struct {
         self.inline_scope_origins.deinit();
         self.rebased_inline_scope_changes.deinit(allocator);
         self.spare_clone_frames.deinit(allocator);
+        self.spare_lists.deinit(allocator);
         self.subst.deinit();
         self.arena.deinit();
     }
@@ -5702,6 +5829,8 @@ const Cloner = struct {
     /// attempt rollback. Accepted entries remain useful for the rest of the clone.
     rebased_inline_scope_changes: std.ArrayList(InlineScopeRebasePair),
     spare_clone_frames: CloneFramePool,
+    /// Span-building lists for clone tasks (`ClonerSpareLists`).
+    spare_lists: ClonerSpareLists,
     /// Depth of the wrapper-strip recursion in the static value matchers
     /// (`bindPatToValue`/`bindPatToMatchValue`/`bindPatToFlowValue`), counting
     /// each `runtime_anchor.structure`/`nominal.backing`/
@@ -5787,6 +5916,7 @@ const Cloner = struct {
             .inline_scope_origins = scratch.inline_scope_origins,
             .rebased_inline_scope_changes = scratch.rebased_inline_scope_changes,
             .spare_clone_frames = scratch.spare_clone_frames,
+            .spare_lists = scratch.spare_lists,
             .wrapper_strip_depth = 0,
             .materialize_strip_depth = 0,
             .inline_calls = .all,
@@ -5844,6 +5974,7 @@ const Cloner = struct {
             .inline_scope_origins = self.inline_scope_origins,
             .rebased_inline_scope_changes = self.rebased_inline_scope_changes,
             .spare_clone_frames = self.spare_clone_frames,
+            .spare_lists = self.spare_lists,
         };
         self.pass.returnClonerScratch(&scratch);
     }
@@ -5996,11 +6127,11 @@ const Cloner = struct {
         const allocator = self.pass.allocator;
         switch (frame.task) {
             .block_value => |*task| if (task.statements_owned) {
-                task.statements.deinit(allocator);
+                self.spare_lists.stmts.give(allocator, task.statements);
                 task.statements_owned = false;
             },
             .exit_block_value => |*task| if (task.statements_owned) {
-                task.statements.deinit(allocator);
+                self.spare_lists.stmts.give(allocator, task.statements);
                 task.statements_owned = false;
             },
             .let_case_arm_body => |*task| {
@@ -6008,20 +6139,20 @@ const Cloner = struct {
                 task.emitted_statements = .empty;
             },
             .distribute_arm => |*task| if (task.statements_owned) {
-                task.statements.deinit(allocator);
+                self.spare_lists.stmts.give(allocator, task.statements);
                 task.statements_owned = false;
             },
             .continue_ => |*task| if (task.new_values_owned) {
-                task.new_values.deinit(allocator);
+                self.spare_lists.exprs.give(allocator, task.new_values);
                 task.new_values_owned = false;
             },
             .loop_value => |task| if (task.attempt_lists_owned) {
-                task.new_params.deinit(allocator);
-                task.new_initials.deinit(allocator);
+                self.spare_lists.typed_locals.give(allocator, task.new_params);
+                self.spare_lists.exprs.give(allocator, task.new_initials);
                 task.attempt_lists_owned = false;
             },
             .call_proc => |*task| if (task.out_owned) {
-                task.out.deinit(allocator);
+                self.spare_lists.exprs.give(allocator, task.out);
                 task.out_owned = false;
             },
             .stmt_span => |*task| {
@@ -6376,7 +6507,9 @@ const Cloner = struct {
         source_fields: []const Ast.FieldExpr = &.{},
         values: []Value = &.{},
         fields: []FieldValue = &.{},
-        result_type_fields: []const Type.Field = &.{},
+        /// The result record's type fields, read one at a time since cloning
+        /// can grow the type store.
+        result_type_fields: Type.Span = Type.Span.empty(),
         value: Value = undefined,
         other: Value = undefined,
         expr_out: Ast.ExprId = undefined,
@@ -6456,7 +6589,7 @@ const Cloner = struct {
             .tag => |tag| {
                 if (frame.cursor == 0) {
                     assertStructuralConstructionType(self.pass.program, expr.ty);
-                    task.sources = try GuardedList.dupe(self.arena.allocator(), Ast.ExprId, self.pass.program.exprSpan(tag.payloads));
+                    task.sources = try walkRows(self.pass.program, self.arena.allocator(), Ast.ExprId, tag.payloads);
                     task.values = try self.arena.allocator().alloc(Value, task.sources.len);
                     frame.cursor = 1;
                 } else {
@@ -6471,7 +6604,7 @@ const Cloner = struct {
             .record => |fields_span| {
                 if (frame.cursor == 0) {
                     assertStructuralConstructionType(self.pass.program, expr.ty);
-                    task.source_fields = try GuardedList.dupe(self.arena.allocator(), Ast.FieldExpr, self.pass.program.fieldExprSpan(fields_span));
+                    task.source_fields = try walkRows(self.pass.program, self.arena.allocator(), Ast.FieldExpr, fields_span);
                     task.fields = try self.arena.allocator().alloc(FieldValue, task.source_fields.len);
                     frame.cursor = 1;
                 } else {
@@ -6490,7 +6623,7 @@ const Cloner = struct {
             .tuple => |items_span| {
                 if (frame.cursor == 0) {
                     assertStructuralConstructionType(self.pass.program, expr.ty);
-                    task.sources = try GuardedList.dupe(self.arena.allocator(), Ast.ExprId, self.pass.program.exprSpan(items_span));
+                    task.sources = try walkRows(self.pass.program, self.arena.allocator(), Ast.ExprId, items_span);
                     task.values = try self.arena.allocator().alloc(Value, task.sources.len);
                     frame.cursor = 1;
                 } else {
@@ -6731,28 +6864,15 @@ const Cloner = struct {
         const bindings = task.bindings;
         switch (frame.cursor) {
             0 => {
-                task.source_fields = try GuardedList.dupe(
-                    self.arena.allocator(),
-                    Ast.FieldExpr,
-                    self.pass.program.fieldExprSpan(update.fields),
-                );
-                task.result_type_fields = try GuardedList.dupe(
-                    self.arena.allocator(),
-                    Type.Field,
-                    self.pass.program.types.fieldSpan(recordUpdateFieldSpan(self.pass.program, expr.ty)),
-                );
+                task.source_fields = try walkRows(self.pass.program, self.arena.allocator(), Ast.FieldExpr, update.fields);
+                task.result_type_fields = recordUpdateFieldSpan(self.pass.program, expr.ty);
                 frame.cursor = 1;
                 return .{ .call = .{ .expr = update.base } };
             },
             1 => {
                 const base = input.?.get(.expr);
                 const base_ty = self.pass.program.getExpr(base).ty;
-                const base_type_fields = try GuardedList.dupe(
-                    self.pass.allocator,
-                    Type.Field,
-                    self.pass.program.types.fieldSpan(recordUpdateFieldSpan(self.pass.program, base_ty)),
-                );
-                defer self.pass.allocator.free(base_type_fields);
+                const base_type_fields = recordUpdateFieldSpan(self.pass.program, base_ty);
                 if (base_type_fields.len != task.result_type_fields.len) {
                     Common.invariant("record update base and result had different field counts in SpecConstr");
                 }
@@ -6767,13 +6887,14 @@ const Cloner = struct {
                 task.fields = try self.arena.allocator().alloc(FieldValue, task.result_type_fields.len);
                 var snapshot_fields = std.ArrayList(Ast.RecordDestruct).empty;
                 defer snapshot_fields.deinit(self.pass.allocator);
-                for (task.result_type_fields, 0..) |result_type_field, index| {
+                for (0..task.result_type_fields.len) |index| {
+                    const result_type_field = GuardedList.at(self.pass.program.types.fieldSpan(task.result_type_fields), index);
                     const updated = for (task.source_fields) |field| {
                         if (self.pass.program.names.recordFieldLabelTextEql(result_type_field.name, field.name)) break field.value;
                     } else null;
                     if (updated != null) continue;
 
-                    const base_type_field = base_type_fields[index];
+                    const base_type_field = GuardedList.at(self.pass.program.types.fieldSpan(base_type_fields), index);
                     if (!self.pass.program.names.recordFieldLabelTextEql(result_type_field.name, base_type_field.name)) {
                         Common.invariant("record update base and result had different ordered fields in SpecConstr");
                     }
@@ -6808,14 +6929,14 @@ const Cloner = struct {
             },
             else => {
                 task.fields[frame.index] = .{
-                    .name = task.result_type_fields[frame.index].name,
+                    .name = GuardedList.at(self.pass.program.types.fieldSpan(task.result_type_fields), frame.index).name,
                     .value = input.?.get(.value),
                 };
                 frame.index += 1;
             },
         }
         while (frame.index < task.result_type_fields.len) {
-            const type_field = task.result_type_fields[frame.index];
+            const type_field = GuardedList.at(self.pass.program.types.fieldSpan(task.result_type_fields), frame.index);
             const updated = for (task.source_fields) |field| {
                 if (self.pass.program.names.recordFieldLabelTextEql(type_field.name, field.name)) break field.value;
             } else {
@@ -7522,8 +7643,9 @@ const Cloner = struct {
         switch (frame.cursor) {
             0 => {
                 task.retained = try self.cloneRetainedLocals(join_point.retained);
-                const source_params = try GuardedList.dupe(self.pass.allocator, Ast.TypedLocal, self.pass.program.typedLocalSpan(join_point.params));
-                defer self.pass.allocator.free(source_params);
+                const source_params_rows = try ownedWalkRows(self.pass.program, self.pass.allocator, Ast.TypedLocal, join_point.params);
+                defer source_params_rows.deinit(self.pass.allocator);
+                const source_params = source_params_rows.items;
                 task.params = try self.arena.allocator().alloc(Ast.TypedLocal, source_params.len);
                 for (source_params, 0..) |source_param, index| {
                     const local = try self.pass.program.addLocal(self.pass.symbols.fresh(), source_param.ty);
@@ -8128,11 +8250,11 @@ const Cloner = struct {
 
                 switch (value_data) {
                     .match_ => |match| {
-                        task.match_branches = try GuardedList.dupe(arena, Ast.Branch, self.pass.program.branchSpan(match.branches));
+                        task.match_branches = try walkRows(self.pass.program, arena, Ast.Branch, match.branches);
                         task.match_rewritten = try arena.alloc(Ast.Branch, task.match_branches.len);
                     },
                     .if_ => |if_| {
-                        task.if_branches = try GuardedList.dupe(arena, Ast.IfBranch, self.pass.program.ifBranchSpan(if_.branches));
+                        task.if_branches = try walkRows(self.pass.program, arena, Ast.IfBranch, if_.branches);
                         task.if_rewritten = try arena.alloc(Ast.IfBranch, task.if_branches.len);
                     },
                     .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
@@ -8314,8 +8436,9 @@ const Cloner = struct {
         const join_id = self.pass.freshJoinPoint();
         const remainder = switch (value_data) {
             .match_ => |match| blk: {
-                const branches = try GuardedList.dupe(self.pass.allocator, Ast.Branch, self.pass.program.branchSpan(match.branches));
-                defer self.pass.allocator.free(branches);
+                const branches_rows = try ownedWalkRows(self.pass.program, self.pass.allocator, Ast.Branch, match.branches);
+                defer branches_rows.deinit(self.pass.allocator);
+                const branches = branches_rows.items;
                 const rewritten = try self.pass.allocator.alloc(Ast.Branch, branches.len);
                 defer self.pass.allocator.free(rewritten);
                 for (branches, 0..) |branch, index| {
@@ -8337,8 +8460,9 @@ const Cloner = struct {
                 } } });
             },
             .if_ => |if_| blk: {
-                const branches = try GuardedList.dupe(self.pass.allocator, Ast.IfBranch, self.pass.program.ifBranchSpan(if_.branches));
-                defer self.pass.allocator.free(branches);
+                const branches_rows = try ownedWalkRows(self.pass.program, self.pass.allocator, Ast.IfBranch, if_.branches);
+                defer branches_rows.deinit(self.pass.allocator);
+                const branches = branches_rows.items;
                 const rewritten = try self.pass.allocator.alloc(Ast.IfBranch, branches.len);
                 defer self.pass.allocator.free(rewritten);
                 for (branches, 0..) |branch, index| {
@@ -8560,7 +8684,7 @@ const Cloner = struct {
     fn stepCaptureLetCaseJump(self: *Cloner, frame: *CloneFrame, task: *CaptureLetCaseJumpTask, input: ?CloneResult) Common.LowerError!CloneStep {
         const arena = self.arena.allocator();
         if (frame.cursor == 0) {
-            task.args = try GuardedList.dupe(arena, Ast.ExprId, self.pass.program.exprSpan(task.jump.args));
+            task.args = try walkRows(self.pass.program, arena, Ast.ExprId, task.jump.args);
             task.values = try arena.alloc(Value, task.args.len);
             task.chain = try self.newChain();
             frame.cursor = 1;
@@ -9020,8 +9144,8 @@ const Cloner = struct {
         const arena = self.arena.allocator();
         switch (frame.cursor) {
             LoopValueCursor.start => {
-                task.params = try GuardedList.dupe(arena, Ast.TypedLocal, self.pass.program.typedLocalSpan(task.loop.params));
-                task.initial_values = try GuardedList.dupe(arena, Ast.ExprId, self.pass.program.exprSpan(task.loop.initial_values));
+                task.params = try walkRows(self.pass.program, arena, Ast.TypedLocal, task.loop.params);
+                task.initial_values = try walkRows(self.pass.program, arena, Ast.ExprId, task.loop.initial_values);
                 if (task.params.len != task.initial_values.len) Common.invariant("loop parameter count differed from initial value count");
 
                 task.values = try arena.alloc(Value, task.initial_values.len);
@@ -9075,14 +9199,14 @@ const Cloner = struct {
                         .initial_values = try self.pass.program.addExprSpan(task.new_initials.items),
                         .body = body,
                     } } });
-                    task.new_params.deinit(self.pass.allocator);
-                    task.new_initials.deinit(self.pass.allocator);
+                    self.spare_lists.typed_locals.give(self.pass.allocator, task.new_params);
+                    self.spare_lists.exprs.give(self.pass.allocator, task.new_initials);
                     task.attempt_lists_owned = false;
                     return self.finishLoopValue(task, .{ .expr = loop });
                 }
 
-                task.new_params.deinit(self.pass.allocator);
-                task.new_initials.deinit(self.pass.allocator);
+                self.spare_lists.typed_locals.give(self.pass.allocator, task.new_params);
+                self.spare_lists.exprs.give(self.pass.allocator, task.new_initials);
                 task.attempt_lists_owned = false;
                 self.subst.restore(task.split_start);
                 self.rewindLoopAttempt(task.attempt_mark);
@@ -9180,9 +9304,9 @@ const Cloner = struct {
         if (task.has_constructor) {
             task.attempt_mark = self.markLoopAttempt();
             task.new_params = try arena.create(std.ArrayList(Ast.TypedLocal));
-            task.new_params.* = .empty;
+            task.new_params.* = self.spare_lists.typed_locals.take();
             task.new_initials = try arena.create(std.ArrayList(Ast.ExprId));
-            task.new_initials.* = .empty;
+            task.new_initials.* = self.spare_lists.exprs.take();
             task.attempt_lists_owned = true;
             task.split_start = self.subst.watermark();
             task.forward_sources = .empty;
@@ -9299,7 +9423,7 @@ const Cloner = struct {
     };
 
     fn finishBlockValueTask(self: *Cloner, task: *BlockValueTask, value: Value) CloneStep {
-        task.statements.deinit(self.pass.allocator);
+        self.spare_lists.stmts.give(self.pass.allocator, task.statements);
         task.statements_owned = false;
         self.subst.restore(task.change_start);
         return retValue(value);
@@ -9323,7 +9447,7 @@ const Cloner = struct {
                 task.change_start = self.subst.watermark();
                 task.block_bindings = try self.newChain();
                 task.statements = try self.arena.allocator().create(std.ArrayList(Ast.StmtId));
-                task.statements.* = .empty;
+                task.statements.* = self.spare_lists.stmts.take();
                 task.statements_owned = true;
                 task.terminated = self.pass.program.getExpr(block.final_expr).data == .@"unreachable";
             },
@@ -9537,7 +9661,7 @@ const Cloner = struct {
                 task.change_start = self.subst.watermark();
                 task.block_bindings = try self.newChain();
                 task.statements = try self.arena.allocator().create(std.ArrayList(Ast.StmtId));
-                task.statements.* = .empty;
+                task.statements.* = self.spare_lists.stmts.take();
                 task.statements_owned = true;
                 frame.cursor = 1;
             },
@@ -9574,7 +9698,7 @@ const Cloner = struct {
                     } } })
                 else
                     try self.wrapBindings(task.block_bindings.*, materialized);
-                task.statements.deinit(self.pass.allocator);
+                self.spare_lists.stmts.give(self.pass.allocator, task.statements);
                 task.statements_owned = false;
                 self.subst.restore(task.change_start);
                 return retValue(.{ .expr = result });
@@ -9633,7 +9757,7 @@ const Cloner = struct {
             return .{ .call = .{ .materialize = .{ .value = value } } };
         }
         task.bindings.appendChain(task.block_bindings.*);
-        task.statements.deinit(self.pass.allocator);
+        self.spare_lists.stmts.give(self.pass.allocator, task.statements);
         task.statements_owned = false;
         self.subst.restore(task.change_start);
         return retValue(value);
@@ -9683,12 +9807,12 @@ const Cloner = struct {
                     return .{ .call = .{ .expr_span = .{ .span = task.values } } };
                 }
                 const loop = self.loop_stack.items[task.frame_count - 1];
-                task.source_values = try GuardedList.dupe(arena, Ast.ExprId, self.pass.program.exprSpan(task.values));
+                task.source_values = try walkRows(self.pass.program, arena, Ast.ExprId, task.values);
                 if (task.source_values.len != loop.values.len) {
                     Common.invariantFmt("continue value count differed from specialized loop pattern: continue has {d} values, {d} frames with innermost expecting {d}", .{ task.source_values.len, task.frame_count, loop.values.len });
                 }
                 task.new_values = try arena.create(std.ArrayList(Ast.ExprId));
-                task.new_values.* = .empty;
+                task.new_values.* = self.spare_lists.exprs.take();
                 task.new_values_owned = true;
                 task.chain = try self.newChain();
                 frame.cursor = 1;
@@ -9724,7 +9848,7 @@ const Cloner = struct {
         const continued = try self.addExpr(.{ .ty = task.ty, .data = .{ .continue_ = .{
             .values = try self.pass.program.addExprSpan(task.new_values.items),
         } } });
-        task.new_values.deinit(self.pass.allocator);
+        self.spare_lists.exprs.give(self.pass.allocator, task.new_values);
         task.new_values_owned = false;
         return retExpr(try self.wrapBindings(task.chain.*, continued));
     }
@@ -9768,7 +9892,7 @@ const Cloner = struct {
                     frame.cursor = CallProcCursor.plain_args;
                     return .{ .call = .{ .expr_span = .{ .span = call.args } } };
                 }
-                task.args = try GuardedList.dupe(arena, Ast.ExprId, self.pass.program.exprSpan(call.args));
+                task.args = try walkRows(self.pass.program, arena, Ast.ExprId, call.args);
                 task.values = try arena.alloc(Value, task.args.len);
                 task.analyzed = try arena.alloc(ClonedValue, task.args.len);
                 frame.cursor = CallProcCursor.analyzed_arg;
@@ -9839,7 +9963,7 @@ const Cloner = struct {
         // chains: those chains must be placed exactly once before the call.
         task.chain = try self.newChain();
         task.out = try arena.create(std.ArrayList(Ast.ExprId));
-        task.out.* = .empty;
+        task.out.* = self.spare_lists.exprs.take();
         task.out_owned = true;
         var order_buffer: [spec_constr_specialization_count]u8 = undefined;
         for (try self.pass.specSelectionOrder(raw, &order_buffer)) |spec_index| {
@@ -9865,7 +9989,7 @@ const Cloner = struct {
             return .{ .call = .{ .append_exprs_from_value = .{ .shape = pattern.args[frame.index], .value = task.values[frame.index], .out = task.out } } };
         }
         task.expr_span = try self.pass.program.addExprSpan(task.out.items);
-        task.out.deinit(self.pass.allocator);
+        self.spare_lists.exprs.give(self.pass.allocator, task.out);
         task.out_owned = false;
         frame.cursor = CallProcCursor.specialized_captures;
         return .{ .call = .{ .capture_span = .{ .span = task.call.captures } } };
@@ -9878,7 +10002,7 @@ const Cloner = struct {
             return .{ .call = .{ .materialize = .{ .value = task.values[frame.index] } } };
         }
         task.expr_span = try self.pass.program.addExprSpan(task.out.items);
-        task.out.deinit(self.pass.allocator);
+        self.spare_lists.exprs.give(self.pass.allocator, task.out);
         task.out_owned = false;
         frame.cursor = CallProcCursor.residual_captures;
         return .{ .call = .{ .capture_span = .{ .span = task.call.captures } } };
@@ -10738,12 +10862,12 @@ const Cloner = struct {
 
             switch (scrutinee_data) {
                 .match_ => |inner_match| {
-                    task.match_branches = try GuardedList.dupe(arena, Ast.Branch, self.pass.program.branchSpan(inner_match.branches));
+                    task.match_branches = try walkRows(self.pass.program, arena, Ast.Branch, inner_match.branches);
                     task.match_rewritten = try arena.alloc(Ast.Branch, task.match_branches.len);
                     task.values = try arena.alloc(Value, task.match_branches.len);
                 },
                 .if_ => |inner_if| {
-                    task.if_branches = try GuardedList.dupe(arena, Ast.IfBranch, self.pass.program.ifBranchSpan(inner_if.branches));
+                    task.if_branches = try walkRows(self.pass.program, arena, Ast.IfBranch, inner_if.branches);
                     task.if_rewritten = try arena.alloc(Ast.IfBranch, task.if_branches.len);
                     task.values = try arena.alloc(Value, task.if_branches.len + 1);
                 },
@@ -10883,7 +11007,7 @@ const Cloner = struct {
                     const arm_data = self.pass.program.getExpr(task.arm_body).data;
                     if (arm_data == .block) {
                         task.statements = try self.arena.allocator().create(std.ArrayList(Ast.StmtId));
-                        task.statements.* = .empty;
+                        task.statements.* = self.spare_lists.stmts.take();
                         task.statements_owned = true;
                         const existing = self.pass.program.stmtSpan(arm_data.block.statements);
                         for (0..existing.len) |index| {
@@ -10905,7 +11029,7 @@ const Cloner = struct {
             },
             3 => {
                 const body = input.?.get(.expr);
-                task.statements.deinit(self.pass.allocator);
+                self.spare_lists.stmts.give(self.pass.allocator, task.statements);
                 task.statements_owned = false;
                 self.subst.restore(task.change_start);
                 return .{ .ret = .{ .maybe_arm = .{ .body = body, .value = task.outer_value } } };
@@ -11026,11 +11150,11 @@ const Cloner = struct {
                 if (!self.admitInlineBodyGrowth(source.size)) return residualCallableCall(frame, task);
 
                 task.source_expr = source.expr;
-                task.source_args = try GuardedList.dupe(arena, Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.args));
-                task.args = try GuardedList.dupe(arena, Ast.ExprId, self.pass.program.exprSpan(task.args_span));
+                task.source_args = try walkRows(self.pass.program, arena, Ast.TypedLocal, source_fn.args);
+                task.args = try walkRows(self.pass.program, arena, Ast.ExprId, task.args_span);
                 if (task.source_args.len != task.args.len) Common.invariant("callable call arity differed from lifted function arity");
 
-                task.source_captures = try GuardedList.dupe(arena, Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.captures));
+                task.source_captures = try walkRows(self.pass.program, arena, Ast.TypedLocal, source_fn.captures);
                 if (task.source_captures.len != callable.captures.len) {
                     Common.invariant("callable value capture count differed from lifted function capture count");
                 }
@@ -11182,17 +11306,17 @@ const Cloner = struct {
                 }
                 if (!self.admitInlineBodyGrowth(source.size)) return plainDirectCall(frame, task);
                 task.source_expr = source.expr;
-                task.source_args = try GuardedList.dupe(arena, Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.args));
-                task.args = try GuardedList.dupe(arena, Ast.ExprId, self.pass.program.exprSpan(task.args_span));
+                task.source_args = try walkRows(self.pass.program, arena, Ast.TypedLocal, source_fn.args);
+                task.args = try walkRows(self.pass.program, arena, Ast.ExprId, task.args_span);
                 if (task.source_args.len != task.args.len) Common.invariant("direct call arity differed from lifted function arity");
 
                 task.change_start = self.subst.watermark();
 
-                task.captures = try GuardedList.dupe(arena, Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.captures));
+                task.captures = try walkRows(self.pass.program, arena, Ast.TypedLocal, source_fn.captures);
                 // The call's capture operands are keyed by CaptureId, not positional
                 // with the callee's capture slots. Clone each operand's value keyed by
                 // id, then resolve each slot's value by its own CaptureId below.
-                task.operands = try GuardedList.dupe(arena, Ast.CaptureOperand, self.pass.program.captureOperandSpan(task.captures_span));
+                task.operands = try walkRows(self.pass.program, arena, Ast.CaptureOperand, task.captures_span);
                 if (task.captures.len != task.operands.len) {
                     Common.invariant("direct call capture count differed from lifted function capture count");
                 }
@@ -11523,7 +11647,7 @@ const Cloner = struct {
 
     fn stepStmtSpan(self: *Cloner, frame: *CloneFrame, task: *StmtSpanTask, input: ?CloneResult) Common.LowerError!CloneStep {
         if (frame.cursor == 0) {
-            task.source = try GuardedList.dupe(self.arena.allocator(), Ast.StmtId, self.pass.program.stmtSpan(task.span));
+            task.source = try walkRows(self.pass.program, self.arena.allocator(), Ast.StmtId, task.span);
             frame.cursor = 1;
         } else {
             const cloned = input.?.get(.stmt);
@@ -11549,7 +11673,7 @@ const Cloner = struct {
         const arena = self.arena.allocator();
         switch (frame.cursor) {
             0 => {
-                task.source = try GuardedList.dupe(arena, Ast.Branch, self.pass.program.branchSpan(task.span));
+                task.source = try walkRows(self.pass.program, arena, Ast.Branch, task.span);
                 task.branches = try arena.alloc(Ast.Branch, task.source.len);
                 task.values = try arena.alloc(Value, task.source.len);
             },
@@ -11605,7 +11729,7 @@ const Cloner = struct {
         const arena = self.arena.allocator();
         switch (frame.cursor) {
             0 => {
-                task.source = try GuardedList.dupe(arena, Ast.IfBranch, self.pass.program.ifBranchSpan(task.span));
+                task.source = try walkRows(self.pass.program, arena, Ast.IfBranch, task.span);
                 task.branches = try arena.alloc(Ast.IfBranch, task.source.len);
                 task.values = try arena.alloc(Value, task.source.len);
                 task.unchanged = self.source_reuse == .original_body;
@@ -11840,7 +11964,7 @@ const Cloner = struct {
         const source_fn_id = self.pass.callable_sources.get(callable.fn_id) orelse callable.fn_id;
         const source_fn = self.pass.program.getFn(source_fn_id);
         task.source_fn = source_fn;
-        const source_captures = try GuardedList.dupe(arena, Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.captures));
+        const source_captures = try walkRows(self.pass.program, arena, Ast.TypedLocal, source_fn.captures);
         if (source_captures.len != callable.captures.len) {
             Common.invariant("callable value capture count differed from lifted function capture count");
         }
@@ -11887,9 +12011,9 @@ const Cloner = struct {
             const local = try self.pass.program.addLocalWithCaptureIdentity(
                 self.pass.symbols.fresh(),
                 capture_ty,
-                source_local.binder,
+                source_local.identity.binder(),
                 id,
-                source_local.checked_capture_id,
+                source_local.identity.checkedCaptureId(),
                 source_local.capture_kind,
             );
             worker_captures[index] = .{ .local = local, .ty = capture_ty };
@@ -11912,7 +12036,7 @@ const Cloner = struct {
         }
         task.captures_span = try self.pass.program.addTypedLocalSpan(worker_captures);
 
-        const source_args = try GuardedList.dupe(arena, Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.args));
+        const source_args = try walkRows(self.pass.program, arena, Ast.TypedLocal, source_fn.args);
         const args = try arena.alloc(Ast.TypedLocal, source_args.len);
         for (source_args, 0..) |source_arg, index| {
             const local = try self.pass.program.addLocal(self.pass.symbols.fresh(), source_arg.ty);
@@ -11978,7 +12102,7 @@ const Cloner = struct {
 
     fn stepMaterializeWithCaptures(self: *Cloner, frame: *CloneFrame, task: *MaterializeWithCapturesTask, input: ?CloneResult) Common.LowerError!CloneStep {
         if (frame.cursor == 0) {
-            task.captures = try GuardedList.dupe(self.arena.allocator(), Ast.TypedLocal, self.pass.program.typedLocalSpan(task.captures_span));
+            task.captures = try walkRows(self.pass.program, self.arena.allocator(), Ast.TypedLocal, task.captures_span);
             if (task.captures.len != task.values.len) {
                 Common.invariant("callable value capture count differed from specialized function capture count");
             }
@@ -12142,7 +12266,7 @@ const Cloner = struct {
                     if (callee_raw >= self.pass.plans.len) continue;
                     if (self.pass.newSpecAdmission(callee_raw) != .admitted) continue;
 
-                    const args = try GuardedList.dupe(self.arena.allocator(), Ast.ExprId, self.pass.program.exprSpan(call.args));
+                    const args = try walkRows(self.pass.program, self.arena.allocator(), Ast.ExprId, call.args);
                     const values = try self.arena.allocator().alloc(Value, args.len);
                     if (args.len == 0) {
                         try self.pass.recordCallPatternForValues(callee, values);
@@ -12351,8 +12475,9 @@ const Cloner = struct {
     fn buildArgs(self: *Cloner) Allocator.Error!Ast.Span(Ast.TypedLocal) {
         const source_fn = self.pass.program.getFn(self.source_fn);
         const source_body = self.pass.sourceBody(self.source_fn);
-        const source_args = try GuardedList.dupe(self.pass.allocator, Ast.TypedLocal, self.pass.program.typedLocalSpan(source_fn.args));
-        defer self.pass.allocator.free(source_args);
+        const source_args_rows = try ownedWalkRows(self.pass.program, self.pass.allocator, Ast.TypedLocal, source_fn.args);
+        defer source_args_rows.deinit(self.pass.allocator);
+        const source_args = source_args_rows.items;
         if (source_args.len != self.pattern.args.len) Common.invariant("call-pattern argument count differed from source function arity");
         const saved_loc = self.current_loc;
         defer self.current_loc = saved_loc;
@@ -12941,8 +13066,9 @@ const Cloner = struct {
             } } });
         }
         const rest_match = self.pass.program.getExpr(let_.rest).data.match_;
-        const branches = try GuardedList.dupe(self.pass.allocator, Ast.Branch, self.pass.program.branchSpan(rest_match.branches));
-        defer self.pass.allocator.free(branches);
+        const branches_rows = try ownedWalkRows(self.pass.program, self.pass.allocator, Ast.Branch, rest_match.branches);
+        defer branches_rows.deinit(self.pass.allocator);
+        const branches = branches_rows.items;
         const rewritten = try self.pass.allocator.alloc(Ast.Branch, branches.len);
         defer self.pass.allocator.free(rewritten);
         for (branches, joins, 0..) |branch, join, index| {

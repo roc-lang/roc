@@ -3,8 +3,9 @@
 //! This interner deduplicates its string values because they are
 //! expected to be small and often repeated since they tend to represent
 //! the same value being referenced in many places. The indices assigned
-//! to each interned string are serial, meaning they can be used for
-//! arrays with values corresponding 1-to-1 to interned values, e.g. regions.
+//! to each interned string are serial, starting at 1, meaning they can be
+//! used for arrays with values corresponding 1-to-1 to interned values,
+//! e.g. regions.
 
 const std = @import("std");
 const invariant = @import("invariant.zig").invariant;
@@ -16,14 +17,17 @@ const InternedBytes = @import("InternedBytes.zig");
 
 const SmallStringInterner = @This();
 
-/// The raw underlying bytes for all strings.
-/// Since strings are small, they are simply null terminated.
-/// This uses only 1 byte to encode the size and is cheap to scan.
+/// The text of every interned string, concatenated in insertion order.
 bytes: collections.SafeList(u8) = .{},
+/// End offset in `bytes` of each string, by index. Slot 0 holds the 0 that
+/// the first string starts at, so string `i` spans `ends[i - 1]..ends[i]`.
+ends: collections.SafeList(u32) = .{},
 /// A hash table using linear probing to map hashes to string indices.
-/// Each slot contains an Idx pointing to the start of a string in bytes.
 /// A value of .unused (0) indicates an empty slot.
 index: collections.SafeList(Idx) = .{},
+/// The high hash byte of the string in each occupied `index` slot, so a probe
+/// compares text only when this byte matches.
+fingerprints: collections.SafeList(u8) = .{},
 /// The current number of entries in the hash table.
 entry_count: u32 = 0,
 /// Flag to track whether this interner supports inserts (true) or is deserialized (false).
@@ -38,11 +42,6 @@ pub const Idx = enum(u32) {
     _,
 };
 
-fn assertAppendRange(expected_start: usize, expected_len: u32, range: collections.SafeList(u8).Range) void {
-    std.debug.assert(@backingInt(range.start) == expected_start);
-    std.debug.assert(range.count == expected_len);
-}
-
 /// Initialize a `SmallStringInterner` with the specified capacity.
 pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.Error!SmallStringInterner {
     // TODO: tune this. Rough assumption that average small string is 4 bytes.
@@ -53,46 +52,46 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
     // Round up to next power of 2 for better modulo performance
     const hash_table_capacity = std.math.ceilPowerOfTwo(u32, hash_table_size) catch hash_table_size;
 
-    var self = SmallStringInterner{
-        .bytes = collections.SafeList(u8){},
-        .index = collections.SafeList(Idx){},
+    var bytes = try collections.SafeList(u8).initCapacity(gpa, capacity * bytes_per_string);
+    errdefer bytes.deinit(gpa);
+
+    var ends = try collections.SafeList(u32).initCapacity(gpa, capacity + 1);
+    errdefer ends.deinit(gpa);
+    _ = ends.appendAssumeCapacity(0);
+
+    var index = try collections.SafeList(Idx).initCapacity(gpa, hash_table_capacity);
+    errdefer index.deinit(gpa);
+    index.items.items.len = hash_table_capacity;
+    @memset(index.items.items, .unused);
+
+    var fingerprints = try collections.SafeList(u8).initCapacity(gpa, hash_table_capacity);
+    errdefer fingerprints.deinit(gpa);
+    fingerprints.items.items.len = hash_table_capacity;
+    @memset(fingerprints.items.items, 0);
+
+    return .{
+        .bytes = bytes,
+        .ends = ends,
+        .index = index,
+        .fingerprints = fingerprints,
         .entry_count = 0,
     };
-
-    // Properly initialize the bytes array to ensure clean state
-    self.bytes = try collections.SafeList(u8).initCapacity(gpa, capacity * bytes_per_string);
-    errdefer self.bytes.deinit(gpa);
-
-    // Start with at least one byte to ensure Idx.unused (0) never points to valid data
-    {
-        const expected_idx = self.bytes.items.items.len;
-        const idx = try self.bytes.append(gpa, 0);
-        std.debug.assert(@backingInt(idx) == expected_idx);
-    }
-
-    // Initialize hash table with all zeros (Idx.unused)
-    self.index = try collections.SafeList(Idx).initCapacity(gpa, hash_table_capacity);
-    try self.index.items.ensureTotalCapacityPrecise(gpa, hash_table_capacity);
-    self.index.items.items.len = hash_table_capacity;
-    @memset(self.index.items.items, .unused);
-
-    return self;
 }
 
 const Index = InternedBytes.Index(Policy);
 
-/// Id encoding for the shared `InternedBytes`: the public `Idx` IS the byte
-/// offset of a null-terminated string in `bytes`, and is stored directly in each
-/// hash-table cell (`Idx.unused` == 0 marks an empty slot—offset 0 is the reserved
-/// leading byte, so it never names a real entry).
+/// Id encoding for the shared `InternedBytes`: the public `Idx` is the
+/// string's serial index, stored directly in each hash-table cell
+/// (`Idx.unused` == 0 marks an empty slot; serial indices start at 1).
 const Policy = struct {
     pub const Id = Idx;
     pub const Cell = Idx;
     pub const empty_cell: Cell = .unused;
     // `initCapacity` always pre-allocates the table, so the core's lazy-alloc path is
     // never taken; this only matters for a default-`.{}` interner, which this type
-    // does not support (offset 0 must be the reserved byte).
+    // does not support (`ends` must hold the leading 0).
     pub const initial_index_capacity: usize = 16;
+    pub const use_fingerprints = true;
 
     pub fn count(self: *const SmallStringInterner) u32 {
         return self.entry_count;
@@ -104,35 +103,23 @@ const Policy = struct {
         return cell;
     }
     pub fn textForId(self: *const SmallStringInterner, id: Id) []const u8 {
-        return std.mem.sliceTo(self.bytes.items.items[@backingInt(id)..], 0);
-    }
-    /// Whether the entry at `id` is exactly `text`. Entries are
-    /// null-terminated, so comparing `text.len` bytes and then the terminator
-    /// decides it without first scanning the entry for its length. An entry
-    /// ends at its first zero byte, so a `text` holding a zero byte equals no
-    /// entry; that is checked only once the bytes already match.
-    pub fn textEql(self: *const SmallStringInterner, id: Id, text: []const u8) bool {
-        const stored = self.bytes.items.items[@backingInt(id)..];
-        if (stored.len <= text.len) return false;
-        if (stored[text.len] != 0) return false;
-        if (!std.mem.eql(u8, stored[0..text.len], text)) return false;
-        return std.mem.findScalar(u8, text, 0) == null;
+        return self.getText(id);
     }
     pub fn appendEntry(self: *SmallStringInterner, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!Id {
         assertSupportsInserts(self.supports_inserts);
-        const new_offset: Idx = @fromBackingInt(@intCast(self.bytes.len()));
-        {
-            const expected_start = self.bytes.items.items.len;
-            const range = try self.bytes.appendSlice(gpa, string);
-            assertAppendRange(expected_start, @intCast(string.len), range);
-        }
-        {
-            const expected_idx = self.bytes.items.items.len;
-            const idx = try self.bytes.append(gpa, 0);
-            std.debug.assert(@backingInt(idx) == expected_idx);
-        }
+        // Every offset in `ends` is a u32, so the text past that range has
+        // exhausted the representable memory.
+        const start = self.bytes.items.items.len;
+        const end = std.math.cast(u32, start + string.len) orelse return error.OutOfMemory;
+        const new_idx: Idx = @fromBackingInt(std.math.cast(u32, self.ends.items.items.len) orelse return error.OutOfMemory);
+        // Reserve both columns first, so a failed allocation leaves no text
+        // that the next entry's span would absorb.
+        try self.bytes.items.ensureUnusedCapacity(gpa, string.len);
+        try self.ends.items.ensureUnusedCapacity(gpa, 1);
+        self.bytes.items.appendSliceAssumeCapacity(string);
+        _ = self.ends.appendAssumeCapacity(end);
         self.entry_count += 1;
-        return new_offset;
+        return new_idx;
     }
     pub fn hash(string: []const u8) u64 {
         return InternedBytes.hash(string);
@@ -158,23 +145,7 @@ pub fn enableRuntimeInserts(self: *SmallStringInterner, gpa: std.mem.Allocator) 
     if (self.supports_inserts) {
         return;
     }
-
-    // Copy the bytes array into newly allocated memory using proper ArrayList API
-    const bytes_slice = self.bytes.items.items;
-    var new_bytes = collections.SafeList(u8){};
-    try new_bytes.items.ensureTotalCapacity(gpa, bytes_slice.len);
-    try new_bytes.items.appendSlice(gpa, bytes_slice);
-    self.bytes = new_bytes;
-
-    // Copy the index array into newly allocated memory using proper ArrayList API
-    const index_slice = self.index.items.items;
-    var new_index = collections.SafeList(Idx){};
-    try new_index.items.ensureTotalCapacity(gpa, index_slice.len);
-    try new_index.items.appendSlice(gpa, index_slice);
-    self.index = new_index;
-
-    // Mark as supporting inserts so deinit will free the memory
-    self.supports_inserts = true;
+    self.* = try self.clone(gpa);
 }
 
 /// Free all memory consumed by this interner.
@@ -187,41 +158,53 @@ pub fn deinit(self: *SmallStringInterner, gpa: std.mem.Allocator) void {
         return;
     }
     self.bytes.deinit(gpa);
+    self.ends.deinit(gpa);
     self.index.deinit(gpa);
+    self.fingerprints.deinit(gpa);
+}
+
+fn cloneColumn(comptime T: type, gpa: std.mem.Allocator, column: *const collections.SafeList(T)) std.mem.Allocator.Error!collections.SafeList(T) {
+    var copy = try collections.SafeList(T).initCapacity(gpa, column.items.items.len);
+    copy.items.appendSliceAssumeCapacity(column.items.items);
+    return copy;
 }
 
 /// Clone this interner into fresh owned memory that supports inserts.
 pub fn clone(self: *const SmallStringInterner, gpa: std.mem.Allocator) std.mem.Allocator.Error!SmallStringInterner {
-    var bytes = collections.SafeList(u8){};
+    var bytes = try cloneColumn(u8, gpa, &self.bytes);
     errdefer bytes.deinit(gpa);
-    try bytes.items.ensureTotalCapacity(gpa, self.bytes.items.items.len);
-    try bytes.items.appendSlice(gpa, self.bytes.items.items);
-
-    var index = collections.SafeList(Idx){};
+    var ends = try cloneColumn(u32, gpa, &self.ends);
+    errdefer ends.deinit(gpa);
+    var index = try cloneColumn(Idx, gpa, &self.index);
     errdefer index.deinit(gpa);
-    try index.items.ensureTotalCapacity(gpa, self.index.items.items.len);
-    try index.items.appendSlice(gpa, self.index.items.items);
+    const fingerprints = try cloneColumn(u8, gpa, &self.fingerprints);
 
     return .{
         .bytes = bytes,
+        .ends = ends,
         .index = index,
+        .fingerprints = fingerprints,
         .entry_count = self.entry_count,
         .supports_inserts = true,
     };
 }
 
+fn probeIndex(self: *const SmallStringInterner) Index {
+    return Index.fromParts(self.index, self.fingerprints, self.entry_count);
+}
+
 /// Find a string in the hash table using linear probing.
 /// Returns the Idx if found, or the slot index where it should be inserted if not found.
 pub fn findStringOrSlot(self: *const SmallStringInterner, string: []const u8) InternedBytes.FindResult(Idx) {
-    const index = Index.fromCells(self.index, self.entry_count);
-    return index.findStringOrSlot(self, Policy.hash(string), string);
+    return self.probeIndex().findStringOrSlot(self, Policy.hash(string), string);
 }
 
 /// Add a string to this interner, returning a unique, serial index.
 pub fn insert(self: *SmallStringInterner, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!Idx {
-    var index = Index.fromCells(self.index, self.entry_count);
+    var index = self.probeIndex();
     defer {
         self.index = index.cells;
+        self.fingerprints = index.fingerprints;
         self.entry_count = index.len;
     }
     return index.insert(self, gpa, string);
@@ -229,40 +212,39 @@ pub fn insert(self: *SmallStringInterner, gpa: std.mem.Allocator, string: []cons
 
 /// Check if a string is already interned in this interner, used for generating unique names.
 pub fn contains(self: *const SmallStringInterner, string: []const u8) bool {
-    const index = Index.fromCells(self.index, self.entry_count);
-    return index.contains(self, string);
+    return self.probeIndex().contains(self, string);
 }
 
 /// Look up a string in this interner and return its index if found.
 /// Unlike insert, this never modifies the interner (no resize, no insertion).
 /// Useful for deserialized interners that cannot be grown.
 pub fn lookup(self: *const SmallStringInterner, string: []const u8) ?Idx {
-    const index = Index.fromCells(self.index, self.entry_count);
-    return index.lookup(self, string);
+    return self.probeIndex().lookup(self, string);
 }
 
-/// Whether `idx` refers to an entry within this interner's data. Offset 0 is the
-/// reserved "unused" sentinel, and any offset at or beyond the bytes buffer was
-/// never produced by this interner—so an Idx from another store fails this.
+/// Whether `idx` refers to an entry within this interner's data. Index 0 is
+/// the reserved "unused" sentinel, and any index past the entry count was
+/// never produced by this interner.
 pub fn isInBounds(self: *const SmallStringInterner, idx: Idx) bool {
-    const offset = @backingInt(idx);
-    return offset != 0 and offset < self.bytes.items.items.len;
+    const serial = @backingInt(idx);
+    return serial != 0 and serial <= self.entry_count;
 }
 
 /// Get a reference to the text for an interned string.
 pub fn getText(self: *const SmallStringInterner, idx: Idx) []u8 {
-    const bytes_slice = self.bytes.items.items;
-    const start = @backingInt(idx);
-    return std.mem.sliceTo(bytes_slice[start..], 0);
+    const serial: usize = @backingInt(idx);
+    const ends = self.ends.items.items;
+    return self.bytes.items.items[ends[serial - 1]..ends[serial]];
 }
 
 /// Serialized representation of a SmallStringInterner
 /// Uses extern struct to guarantee consistent field layout across optimization levels.
 pub const Serialized = extern struct {
     bytes: collections.SafeList(u8).Serialized,
-    /// The probe table (runtime field `index`); kept named `hash_table` here so the
-    /// on-disk `ModuleEnv` layout hash is unchanged by the field rename.
+    ends: collections.SafeList(u32).Serialized,
+    /// The probe table (runtime field `index`).
     hash_table: collections.SafeList(Idx).Serialized,
+    fingerprints: collections.SafeList(u8).Serialized,
     entry_count: u32,
     /// Padding to maintain struct alignment
     _padding: u32 = 0,
@@ -274,11 +256,10 @@ pub const Serialized = extern struct {
         allocator: std.mem.Allocator,
         writer: *CompactWriter,
     ) std.mem.Allocator.Error!void {
-        // Serialize the bytes SafeList
         try self.bytes.serialize(&interner.bytes, allocator, writer);
-        // Serialize the probe table
+        try self.ends.serialize(&interner.ends, allocator, writer);
         try self.hash_table.serialize(&interner.index, allocator, writer);
-        // Copy simple values directly
+        try self.fingerprints.serialize(&interner.fingerprints, allocator, writer);
         self.entry_count = interner.entry_count;
         self._padding = 0;
     }
@@ -288,7 +269,9 @@ pub const Serialized = extern struct {
     pub fn deserializeInto(self: *const Serialized, base: usize) SmallStringInterner {
         return SmallStringInterner{
             .bytes = self.bytes.deserializeInto(base),
+            .ends = self.ends.deserializeInto(base),
             .index = self.hash_table.deserializeInto(base),
+            .fingerprints = self.fingerprints.deserializeInto(base),
             .entry_count = self.entry_count,
             // Mark as not supporting inserts - deserialized interners have memory owned by the buffer
             .supports_inserts = false,
@@ -337,8 +320,9 @@ test "SmallStringInterner empty CompactWriter roundtrip" {
     var deserialized_value = deserialized_serialized.deserializeInto(@intFromPtr(buffer.ptr));
     const deserialized = &deserialized_value;
 
-    // Verify empty - bytes starts with one zero byte, hash_table should be empty
-    try std.testing.expectEqual(@as(usize, 1), deserialized.bytes.len());
+    // Verify empty - no text, and `ends` holds only the leading 0
+    try std.testing.expectEqual(@as(usize, 0), deserialized.bytes.len());
+    try std.testing.expectEqual(@as(usize, 1), deserialized.ends.len());
     try std.testing.expectEqual(@as(u32, 0), deserialized.entry_count);
 }
 
@@ -427,16 +411,16 @@ test "SmallStringInterner with populated hashmap CompactWriter roundtrip" {
 
     // Insert many strings to ensure the hash map is well populated
     const test_data = [_]struct { str: []const u8, expected_idx: u32 }{
-        .{ .str = "first", .expected_idx = 1 }, // First string starts at index 1 (after initial 0 byte)
-        .{ .str = "second", .expected_idx = 7 },
-        .{ .str = "third", .expected_idx = 14 },
+        .{ .str = "first", .expected_idx = 1 }, // Serial indices start at 1
+        .{ .str = "second", .expected_idx = 2 },
+        .{ .str = "third", .expected_idx = 3 },
         .{ .str = "first", .expected_idx = 1 }, // duplicate
-        .{ .str = "fourth", .expected_idx = 20 },
-        .{ .str = "fifth", .expected_idx = 27 },
-        .{ .str = "second", .expected_idx = 7 }, // duplicate
-        .{ .str = "sixth", .expected_idx = 33 },
-        .{ .str = "seventh", .expected_idx = 39 },
-        .{ .str = "eighth", .expected_idx = 47 },
+        .{ .str = "fourth", .expected_idx = 4 },
+        .{ .str = "fifth", .expected_idx = 5 },
+        .{ .str = "second", .expected_idx = 2 }, // duplicate
+        .{ .str = "sixth", .expected_idx = 6 },
+        .{ .str = "seventh", .expected_idx = 7 },
+        .{ .str = "eighth", .expected_idx = 8 },
     };
 
     for (test_data) |data| {
@@ -485,15 +469,15 @@ test "SmallStringInterner with populated hashmap CompactWriter roundtrip" {
     try std.testing.expectEqual(original_entry_count, deserialized.entry_count);
 
     // But all strings should still be accessible
-    // Note: Index 0 is reserved, so all indices are offset by 1
+    // Note: Index 0 is reserved, so serial indices start at 1
     try std.testing.expectEqualStrings("first", deserialized.getText(@fromBackingInt(@intCast(1))));
-    try std.testing.expectEqualStrings("second", deserialized.getText(@fromBackingInt(@intCast(7))));
-    try std.testing.expectEqualStrings("third", deserialized.getText(@fromBackingInt(@intCast(14))));
-    try std.testing.expectEqualStrings("fourth", deserialized.getText(@fromBackingInt(@intCast(20))));
-    try std.testing.expectEqualStrings("fifth", deserialized.getText(@fromBackingInt(@intCast(27))));
-    try std.testing.expectEqualStrings("sixth", deserialized.getText(@fromBackingInt(@intCast(33))));
-    try std.testing.expectEqualStrings("seventh", deserialized.getText(@fromBackingInt(@intCast(39))));
-    try std.testing.expectEqualStrings("eighth", deserialized.getText(@fromBackingInt(@intCast(47))));
+    try std.testing.expectEqualStrings("second", deserialized.getText(@fromBackingInt(@intCast(2))));
+    try std.testing.expectEqualStrings("third", deserialized.getText(@fromBackingInt(@intCast(3))));
+    try std.testing.expectEqualStrings("fourth", deserialized.getText(@fromBackingInt(@intCast(4))));
+    try std.testing.expectEqualStrings("fifth", deserialized.getText(@fromBackingInt(@intCast(5))));
+    try std.testing.expectEqualStrings("sixth", deserialized.getText(@fromBackingInt(@intCast(6))));
+    try std.testing.expectEqualStrings("seventh", deserialized.getText(@fromBackingInt(@intCast(7))));
+    try std.testing.expectEqualStrings("eighth", deserialized.getText(@fromBackingInt(@intCast(8))));
 
     // Verify the original had entries
     try std.testing.expect(original_entry_count > 0);
@@ -546,7 +530,7 @@ test "SmallStringInterner CompactWriter roundtrip" {
     // Verify strings are still accessible
     // Note: Index 0 is reserved for the unused marker, so strings start at index 1
     try std.testing.expectEqualStrings("test1", deserialized.getText(@fromBackingInt(@intCast(1))));
-    try std.testing.expectEqualStrings("test2", deserialized.getText(@fromBackingInt(@intCast(7))));
+    try std.testing.expectEqualStrings("test2", deserialized.getText(@fromBackingInt(@intCast(2))));
 }
 
 test "SmallStringInterner edge cases CompactWriter roundtrip" {
@@ -564,7 +548,7 @@ test "SmallStringInterner edge cases CompactWriter roundtrip" {
         "special\ncharacters\ttabs",
         "unicode: 你好世界", // UTF-8
         "very_long_string_that_is_much_longer_than_average_to_test_capacity_handling",
-        "\x00embedded", // string starting with null (though this might not work)
+        "\x00embedded", // string starting with a zero byte
         "end_with_space ",
         " start_with_space",
     };
@@ -615,13 +599,7 @@ test "SmallStringInterner edge cases CompactWriter roundtrip" {
         const idx = indices.items[i];
         const actual_str = deserialized.getText(idx);
 
-        // Special case: strings starting with null byte will be truncated to empty string
-        // This is a limitation of null-terminated string storage
-        if (expected_str.len > 0 and expected_str[0] == '\x00') {
-            try std.testing.expectEqualStrings("", actual_str);
-        } else {
-            try std.testing.expectEqualStrings(expected_str, actual_str);
-        }
+        try std.testing.expectEqualStrings(expected_str, actual_str);
     }
 }
 

@@ -7,7 +7,8 @@
 
 const std = @import("std");
 const collections = @import("collections");
-const compilerInvariant = @import("base").invariant;
+const base = @import("base");
+const compilerInvariant = base.invariant;
 const builtins = @import("builtins");
 const layout = @import("layout");
 const lir = @import("lir");
@@ -67,14 +68,15 @@ pub fn freezeRootIntoSlot(
     if (program.layouts.targetUsize().size() != word_size) {
         invariant("native root export requires host-width LIR");
     }
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = base.SingleThreadArena.init(allocator);
     defer arena.deinit();
     var builder = Builder{
-        .graph = .{ .allocator = arena.allocator(), .program = program, .slot = slot },
+        .graph = .{ .allocator = arena.allocator(), .output = allocator, .program = program, .slot = slot },
         .callables = callables,
     };
+    defer builder.graph.deinit();
     const root_symbol = try builder.graph.addNode(
-        try Program.staticDataSymbolName(builder.graph.allocator, slot),
+        try Program.staticDataSymbolName(allocator, slot),
         builder.graph.size(slot_layout),
         builder.graph.alignment(slot_layout),
     );
@@ -101,7 +103,7 @@ pub fn freezeRootIntoSlot(
         const job = builder.jobs.items[next];
         try builder.visit(job);
     }
-    return builder.graph.finish(allocator);
+    return builder.graph.finish();
 }
 
 const Destination = frozen_graph.Destination;

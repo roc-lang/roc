@@ -336,13 +336,22 @@ pub const Constants = struct {
     /// 153: a package or platform header's qualified exposures record a
     ///      deferred reference, and canonical diagnostics gain
     ///      `public_type_not_defined`.
-    /// 154: canonical diagnostics drop `execution_requires_app_or_default_app`,
+    /// 154: Type stores keep each slot's kind in a column beside its payload,
+    ///      and numeric literal facts in a table that static dispatch
+    ///      constraints index.
+    /// 155: Identifier stores assign serial indices, keep each name's end
+    ///      offset and probe fingerprints in columns of their own, and drop
+    ///      the per-identifier attribute column.
+    /// 156: Type stores keep each derived map payload selection in a table
+    ///      keyed by its callable's class instead of on every static
+    ///      dispatch constraint.
+    /// 157: canonical diagnostics drop `execution_requires_app_or_default_app`,
     ///      and file-level diagnostics store no region.
-    /// 155: Module environments record row-coerced results in place of
+    /// 158: Module environments record row-coerced results in place of
     ///      row-coerced callees and closed-result definitions.
-    /// 156: procedure templates record how much of each quantified variable
+    /// 159: procedure templates record how much of each quantified variable
     ///      their bodies demand.
-    pub const CACHE_VERSION = 156;
+    pub const CACHE_VERSION = 159;
 };
 
 /// Configuration for the Roc cache system.

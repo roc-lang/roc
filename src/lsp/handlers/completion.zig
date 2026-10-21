@@ -4,6 +4,7 @@
 //! imported module exports, and local variables in scope.
 
 const std = @import("std");
+const base = @import("base");
 const Allocator = std.mem.Allocator;
 const protocol = @import("../protocol.zig");
 const syntax = @import("../syntax.zig");
@@ -69,17 +70,7 @@ pub fn handler(comptime ServerType: type) type {
             };
 
             if (completion_result) |result| {
-                defer {
-                    // Free allocated completion item fields owned by the builder.
-                    for (result.items) |item| {
-                        self.allocator.free(item.label);
-                        if (item.detail) |d| self.allocator.free(d);
-                        if (item.documentation) |documentation| self.allocator.free(documentation);
-                        if (item.sortText) |sort_text| self.allocator.free(sort_text);
-                        if (item.insertText) |insert_text| self.allocator.free(insert_text);
-                    }
-                    self.allocator.free(result.items);
-                }
+                defer result.deinit();
 
                 // Build the completion response
                 const CompletionResponse = struct {
@@ -105,8 +96,7 @@ pub fn handler(comptime ServerType: type) type {
 
 /// A single completion item returned to the client.
 ///
-/// Note: optional string fields are owned by the completion builder and must be
-/// freed by the caller that consumes the result.
+/// Its strings are owned by the `CompletionResult` holding it.
 pub const CompletionItem = struct {
     label: []const u8,
     kind: ?u32 = null,
@@ -120,4 +110,10 @@ pub const CompletionItem = struct {
 pub const CompletionResult = struct {
     items: []const CompletionItem,
     is_incomplete: bool,
+    /// Owns `items` and every string in them.
+    arena: base.SingleThreadArena,
+
+    pub fn deinit(self: CompletionResult) void {
+        self.arena.deinit();
+    }
 };

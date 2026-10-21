@@ -571,7 +571,7 @@ fn renderBelowContent(
 fn writeReportSnippet(writer: *std.Io.Writer, palette: ColorPalette, highlight_color: []const u8, start_line: u32, start_column: u32, end_line: u32, end_column: u32, text: []const u8, gpa: Allocator) (Allocator.Error || error{WriteFailed})!void {
     var snippet = try source_region.Snippet.init(gpa, text, start_column, end_column);
     defer snippet.deinit();
-    for (snippet.rows.items, 0..) |row, index| {
+    for (snippet.rows, 0..) |row, index| {
         const line = snippet.line(row);
         var i: usize = 0;
         while (i < line.len) {

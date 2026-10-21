@@ -6,9 +6,12 @@
 
 const std = @import("std");
 const compile = @import("compile");
+const can = @import("can");
+const scope_map = @import("scope_map.zig");
 
 const Allocator = std.mem.Allocator;
 const BuildEnv = compile.BuildEnv;
+const ModuleEnv = can.ModuleEnv;
 
 /// Reference-counted owner for a `BuildEnv` shared across LSP components.
 pub const BuildEnvHandle = struct {
@@ -21,6 +24,15 @@ pub const BuildEnvHandle = struct {
     document_path: ?[]const u8 = null,
     document_hash: ?[32]u8 = null,
     document_has_reports: bool = true,
+    /// Scope maps of this env's modules, built on first request. A module's
+    /// CIR does not change once its build env holds it, so each map stays
+    /// valid until the env is freed.
+    scope_maps: std.ArrayList(ScopeMapEntry) = .empty,
+
+    const ScopeMapEntry = struct {
+        module_env: *const ModuleEnv,
+        scope_map: scope_map.ScopeMap,
+    };
 
     /// Create a new handle with a single owner.
     pub fn create(allocator: Allocator, env: BuildEnv, cwd: [:0]const u8, owner: []const u8, debug: bool) Allocator.Error!*BuildEnvHandle {
@@ -65,6 +77,21 @@ pub const BuildEnvHandle = struct {
         return self.document_has_reports;
     }
 
+    /// The scope bindings of `module_env`, which must be a module of this
+    /// handle's env. The slice stays valid until the handle is freed.
+    pub fn scopeBindings(self: *BuildEnvHandle, module_env: *ModuleEnv) Allocator.Error![]const scope_map.Binding {
+        for (self.scope_maps.items) |entry| {
+            if (entry.module_env == module_env) return entry.scope_map.bindings.items;
+        }
+
+        try self.scope_maps.ensureUnusedCapacity(self.allocator, 1);
+        var built = scope_map.ScopeMap.init(self.allocator);
+        errdefer built.deinit();
+        try built.build(module_env);
+        self.scope_maps.appendAssumeCapacity(.{ .module_env = module_env, .scope_map = built });
+        return built.bindings.items;
+    }
+
     /// Retain the handle for an additional owner.
     pub fn retain(self: *BuildEnvHandle, owner: []const u8) void {
         self.ref_count += 1;
@@ -93,6 +120,8 @@ pub const BuildEnvHandle = struct {
                 self.allocator.free(path);
             }
             self.owners.deinit(self.allocator);
+            for (self.scope_maps.items) |*entry| entry.scope_map.deinit();
+            self.scope_maps.deinit(self.allocator);
             self.env.deinit();
             self.allocator.free(self.cwd);
             self.allocator.destroy(self);

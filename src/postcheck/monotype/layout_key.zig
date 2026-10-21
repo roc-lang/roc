@@ -118,7 +118,7 @@ pub fn solvingCanChange(allocator: Allocator, store: *const Type.Store, root: Ty
                 for (0..span.len) |index| {
                     const field = GuardedList.at(span, index);
                     try pending.append(allocator, field.ty);
-                    if (field.value_ty) |value_ty| try pending.append(allocator, value_ty);
+                    if (field.value_ty.get()) |value_ty| try pending.append(allocator, value_ty);
                 }
             },
             .tuple => |items| {
