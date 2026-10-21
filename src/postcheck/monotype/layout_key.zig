@@ -24,9 +24,10 @@ const GuardedList = collections.GuardedList;
 /// The layout representative of `root`, interned in `store`; null when a
 /// layout-only specialization cannot stand for it. That is when the type
 /// holds a function (its layout is a lambda set's, which only the program
-/// decides), is recursive, or is a nominal type whose layout is not its
-/// backing's: one with no runtime backing, an iterator, or a record that
-/// declares its own field order.
+/// decides), holds a tag row (a row is joined where values flow, so its
+/// layout is the program's too; design.md "Row Joins"), is recursive, or is
+/// a nominal type whose layout is not its backing's: one with no runtime
+/// backing, an iterator, or a record that declares its own field order.
 pub fn layoutRepresentative(
     allocator: Allocator,
     store: *Type.Store,
@@ -93,10 +94,13 @@ pub fn knownSized(allocator: Allocator, store: *const Type.Store, root: Type.Typ
     return false;
 }
 
-/// Whether `root` holds a function anywhere, a boxed erased callable included.
-/// Lambda solving relates the members of every callable a type holds, so a
-/// demand-shaped signature, whose call relates nothing, must hold none.
-pub fn holdsFunction(allocator: Allocator, store: *const Type.Store, root: Type.TypeId) Allocator.Error!bool {
+/// Whether Lambda Solved could change `root`: it holds a function anywhere
+/// (a boxed erased callable included), whose members lambda solving relates,
+/// or a tag row anywhere, which lambda solving joins with every row a value
+/// of it flows into or out of (design.md "Row Joins"). A demand-shaped call
+/// relates nothing across it, so its signature must hold neither: a row on
+/// one side of the call could otherwise be widened without the other.
+pub fn solvingCanChange(allocator: Allocator, store: *const Type.Store, root: Type.TypeId) Allocator.Error!bool {
     var visited = collections.DenseMap(Type.TypeId, void).init(allocator);
     defer visited.deinit();
     var pending: std.ArrayList(Type.TypeId) = .empty;
@@ -105,7 +109,7 @@ pub fn holdsFunction(allocator: Allocator, store: *const Type.Store, root: Type.
     while (pending.pop()) |ty| {
         if ((try visited.getOrPut(ty)).found_existing) continue;
         switch (store.get(ty)) {
-            .func, .erased => return true,
+            .func, .erased, .tag_union => return true,
             .primitive, .zst, .hole => {},
             .list, .box => |elem| try pending.append(allocator, elem),
             .record => |fields| {
@@ -119,13 +123,6 @@ pub fn holdsFunction(allocator: Allocator, store: *const Type.Store, root: Type.
             .tuple => |items| {
                 const span = store.span(items);
                 for (0..span.len) |index| try pending.append(allocator, GuardedList.at(span, index));
-            },
-            .tag_union => |tags| {
-                const tag_span = store.tagSpan(tags);
-                for (0..tag_span.len) |tag_index| {
-                    const payloads = store.span(GuardedList.at(tag_span, tag_index).payloads);
-                    for (0..payloads.len) |index| try pending.append(allocator, GuardedList.at(payloads, index));
-                }
             },
             .named => |named| {
                 const args = store.span(named.args);
@@ -153,7 +150,6 @@ const Builder = struct {
     active: collections.DenseMap(Type.TypeId, void),
     frames: std.ArrayList(Frame) = .empty,
     scratch: std.ArrayList(Type.TypeId) = .empty,
-    tag_scratch: std.ArrayList(Type.Store.TagInput) = .empty,
 
     const Frame = struct {
         ty: Type.TypeId,
@@ -165,7 +161,6 @@ const Builder = struct {
         self.active.deinit();
         self.frames.deinit(self.allocator);
         self.scratch.deinit(self.allocator);
-        self.tag_scratch.deinit(self.allocator);
     }
 
     fn representative(self: *Builder, root: Type.TypeId) Allocator.Error!?Type.TypeId {
@@ -210,13 +205,7 @@ const Builder = struct {
                 const span = self.store.span(items);
                 for (0..span.len) |index| try self.push(GuardedList.at(span, index));
             },
-            .tag_union => |tags| {
-                const tag_span = self.store.tagSpan(tags);
-                for (0..tag_span.len) |tag_index| {
-                    const payloads = self.store.span(GuardedList.at(tag_span, tag_index).payloads);
-                    for (0..payloads.len) |index| try self.push(GuardedList.at(payloads, index));
-                }
-            },
+            .tag_union => {},
             .named => |named| switch (namedLayout(named)) {
                 .itself, .none => {},
                 .backing => |backing| try self.push(backing),
@@ -276,29 +265,9 @@ const Builder = struct {
                 }
                 return try self.store.internTuple(self.name_store, self.scratch.items);
             },
-            .tag_union => |tags| {
-                // Payload representatives in one shared buffer; each tag's
-                // slice is cut from it once every payload is known.
-                self.scratch.clearRetainingCapacity();
-                self.tag_scratch.clearRetainingCapacity();
-                const tag_span = self.store.tagSpan(tags);
-                for (0..tag_span.len) |tag_index| {
-                    const tag = GuardedList.at(tag_span, tag_index);
-                    const payloads = self.store.span(tag.payloads);
-                    for (0..payloads.len) |index| {
-                        const rep = self.memo.get(GuardedList.at(payloads, index)).? orelse return null;
-                        try self.scratch.append(self.allocator, rep);
-                    }
-                    try self.tag_scratch.append(self.allocator, .{ .name = tag.name, .checked_name = tag.name, .payloads = &.{} });
-                }
-                var start: usize = 0;
-                for (self.tag_scratch.items, 0..) |*input, tag_index| {
-                    const count = self.store.span(GuardedList.at(tag_span, tag_index).payloads).len;
-                    input.payloads = self.scratch.items[start .. start + count];
-                    start += count;
-                }
-                return try self.store.internTagUnion(self.name_store, self.tag_scratch.items);
-            },
+            // A tag row is joined with every row a value of it flows into or
+            // out of, so no layout of its own stands for it.
+            .tag_union => return null,
             .named => |named| return switch (namedLayout(named)) {
                 .itself => ty,
                 .none => null,
@@ -354,7 +323,7 @@ test "records, tuples, and nominal wrappers with one layout share a representati
         (try layoutRepresentative(testing.allocator, &store, &name_store, i8_ty)).?);
 }
 
-test "a type holding a function has no layout representative" {
+test "a type holding a function or a tag row has no layout representative" {
     var name_store = names.NameStore.init(testing.allocator);
     defer name_store.deinit();
     var store = Type.Store.init(testing.allocator);
@@ -366,6 +335,42 @@ test "a type holding a function has no layout representative" {
     const holder = try store.internTuple(&name_store, &.{ u64_ty, funcs });
     try testing.expectEqual(@as(?Type.TypeId, null), try layoutRepresentative(testing.allocator, &store, &name_store, func));
     try testing.expectEqual(@as(?Type.TypeId, null), try layoutRepresentative(testing.allocator, &store, &name_store, holder));
+
+    const a_tag = try name_store.internTagLabel("A");
+    const b_tag = try name_store.internTagLabel("B");
+    const row = try store.internTagUnion(&name_store, &.{
+        .{ .name = a_tag, .checked_name = a_tag, .payloads = &.{u64_ty} },
+        .{ .name = b_tag, .checked_name = b_tag, .payloads = &.{} },
+    });
+    const rows = try store.internList(&name_store, row);
+    const row_holder = try store.internTuple(&name_store, &.{ u64_ty, rows });
+    try testing.expectEqual(@as(?Type.TypeId, null), try layoutRepresentative(testing.allocator, &store, &name_store, row));
+    try testing.expectEqual(@as(?Type.TypeId, null), try layoutRepresentative(testing.allocator, &store, &name_store, row_holder));
+}
+
+test "solving can change a type holding a function or a tag row and no other" {
+    var name_store = names.NameStore.init(testing.allocator);
+    defer name_store.deinit();
+    var store = Type.Store.init(testing.allocator);
+    defer store.deinit();
+
+    const u64_ty = try store.internPrimitive(&name_store, .u64);
+    const hole = try store.internHole(&name_store);
+    const holes = try store.internList(&name_store, hole);
+    const x_field = try name_store.internRecordFieldLabel("x");
+    const point = try store.internRecord(&name_store, &.{.{ .name = x_field, .ty = u64_ty, .default = null }});
+    const func = try store.internFunc(&name_store, &.{u64_ty}, u64_ty);
+    const a_tag = try name_store.internTagLabel("A");
+    const row = try store.internTagUnion(&name_store, &.{.{ .name = a_tag, .checked_name = a_tag, .payloads = &.{u64_ty} }});
+    const rows = try store.internList(&name_store, row);
+    const row_holder = try store.internTuple(&name_store, &.{ point, rows });
+
+    try testing.expect(!try solvingCanChange(testing.allocator, &store, u64_ty));
+    try testing.expect(!try solvingCanChange(testing.allocator, &store, holes));
+    try testing.expect(!try solvingCanChange(testing.allocator, &store, point));
+    try testing.expect(try solvingCanChange(testing.allocator, &store, func));
+    try testing.expect(try solvingCanChange(testing.allocator, &store, row));
+    try testing.expect(try solvingCanChange(testing.allocator, &store, row_holder));
 }
 
 test "only structurally sized types are known sized" {

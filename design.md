@@ -15501,20 +15501,23 @@ requests that agree on everything their body demands reuse one
 specialization. A request is not shaped when a slot is a checking error, when
 its function is also used as a value (a value's type is the program's), when
 its identity depends on its lexical context or a codec contract, or when the
-shaped signature would hold a function anywhere, a boxed erased callable
-included (`LayoutKey.holdsFunction`).
-The last rule means no lambda set, and no erased callable's member set, ever
-crosses a shaped call.
+shaped signature would hold, anywhere in an argument or the result, a type
+Lambda Solved could change (`LayoutKey.solvingCanChange`): a function, a boxed
+erased callable included, or a tag row. Lambda Solved relates nothing across
+a shaped call, so no lambda set, and no erased callable's member set, ever
+crosses one; and a tag row is joined with every row a value of it flows into
+or out of (Row Joins), so a row on the caller's side of the call could be
+widened after Monotype sealed the callee's copy, and the two would commit
+different layouts. A hole is not such a type: the body behind it never reads
+the items it stands for.
 
 The layout representative of a type drops what layout selection ignores: a
 record becomes the tuple of its fields in their row order, and a nominal type
 its backing's representative. Scalars, `Str`, and the builtins with fixed
-layouts are their own representatives, and lists, boxes, tuples, and tag
-unions keep their structure with representative components. A type holding a
-function, a recursive type, an iterator, and a nominal record that declares
-its own field order have no representative; such a slot keeps its type. Tag
-names are kept, so two tag unions share a representative only when their tags
-agree as well as their payloads.
+layouts are their own representatives, and lists, boxes, and tuples keep
+their structure with representative components. A type holding a function or
+a tag row, a recursive type, an iterator, and a nominal record that declares
+its own field order have no representative; such a slot keeps its type.
 
 Every call to a shaped specialization records it (`CallProc.demand_shaped`).
 Its arguments and result keep the call's types, while the callee's parameters
@@ -15535,8 +15538,7 @@ forms, and `builtinListAbi`/`builtinBoxAbi` report no item for it.
 `layout.Store.acceptsAtHoles` is the one relation later stages use where a
 value meets a hole: a layout accepts another when they are equal, when the
 expected one is a list or box of holes and the actual one is a list or box,
-or when both are structs or tag unions of one shape whose components accept
-pairwise. Direct LIR lowers a shaped call's arguments at their own types, and
+or when both are structs of one shape whose fields accept pairwise. Direct LIR lowers a shaped call's arguments at their own types, and
 its local assignments and representation boundaries accept a value at a
 hole-holding layout; an inlined shaped body binds its parameters to the
 caller's locals directly.

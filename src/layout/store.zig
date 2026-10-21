@@ -2546,10 +2546,12 @@ pub const Store = struct {
     /// Whether a value of layout `actual` can stand where layout `expected` is
     /// required (design.md "Specialization By Demand"): the two are equal, or
     /// `expected` is a list or box of holes and `actual` a list or box of
-    /// sized items, or both are structs or tag unions of the same shape whose
-    /// components accept pairwise. A demand-shaped procedure reads a list or
-    /// box of holes only as its header, which every element type shares, and
-    /// such headers have one size and alignment whatever their items are.
+    /// sized items, or both are structs of the same shape whose fields accept
+    /// pairwise. A demand-shaped procedure reads a list or box of holes only
+    /// as its header, which every element type shares, and such headers have
+    /// one size and alignment whatever their items are. A tag union never
+    /// crosses a demand-shaped call (its row joins where values flow), so an
+    /// unequal tag union is not accepted.
     pub fn acceptsAtHoles(self: *const Self, allocator: std.mem.Allocator, actual: Idx, expected: Idx) std.mem.Allocator.Error!bool {
         var pending: std.ArrayList([2]Idx) = .empty;
         defer pending.deinit(allocator);
@@ -2581,18 +2583,7 @@ pub const Store = struct {
                         try pending.append(allocator, .{ actual_field.layout, expected_field.layout });
                     }
                 },
-                .tag_union => {
-                    if (actual_layout.tag != .tag_union) return false;
-                    const expected_data = self.getTagUnionData(expected_layout.getTagUnion().idx);
-                    const actual_data = self.getTagUnionData(actual_layout.getTagUnion().idx);
-                    const expected_variants = self.getTagUnionVariants(expected_data);
-                    const actual_variants = self.getTagUnionVariants(actual_data);
-                    if (expected_variants.len != actual_variants.len) return false;
-                    for (0..expected_variants.len) |index| {
-                        try pending.append(allocator, .{ actual_variants.get(index).payload_layout, expected_variants.get(index).payload_layout });
-                    }
-                },
-                .scalar, .box_of_zst, .list_of_zst, .closure, .erased_callable, .zst, .ptr, .erased_box, .hole => return false,
+                .scalar, .box_of_zst, .list_of_zst, .closure, .erased_callable, .zst, .ptr, .erased_box, .hole, .tag_union => return false,
             }
         }
         return true;

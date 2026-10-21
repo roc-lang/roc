@@ -13826,8 +13826,10 @@ const Builder = struct {
     /// alone it demands becomes its layout representative, and the template's
     /// checked root instantiated at that substitution is the request type. A
     /// variable whose type has no layout representative keeps its type, and a
-    /// request whose shaped signature would hold a function is not shaped:
-    /// its lambda sets would have to cross the call.
+    /// request whose shaped signature would hold a function or a tag row is
+    /// not shaped: Lambda Solved relates nothing across a shaped call, and it
+    /// would have to relate the function's lambda sets or join the row with
+    /// the rows the caller's value flows between (design.md "Row Joins").
     fn demandShapedRequest(
         self: *Builder,
         template_ref: names.ProcTemplate,
@@ -13863,9 +13865,9 @@ const Builder = struct {
         const shaped_fn = functionShape(types_, shaped_fn_ty, "a demand-shaped request type was not a function");
         const shaped_args = types_.span(shaped_fn.args);
         for (0..shaped_args.len) |index| {
-            if (try LayoutKey.holdsFunction(self.allocator, types_, GuardedList.at(shaped_args, index))) return null;
+            if (try LayoutKey.solvingCanChange(self.allocator, types_, GuardedList.at(shaped_args, index))) return null;
         }
-        if (try LayoutKey.holdsFunction(self.allocator, types_, shaped_fn.ret)) return null;
+        if (try LayoutKey.solvingCanChange(self.allocator, types_, shaped_fn.ret)) return null;
         if (try types_.typeEql(name_store, shaped_fn_ty, fn_ty)) return null;
         return .{ .fn_ty = shaped_fn_ty, .subst = shaped };
     }
