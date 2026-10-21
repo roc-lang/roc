@@ -71,36 +71,92 @@ pub const Scope = struct {
     forward_policy: ForwardPolicy,
     owner_type_path: ?TypePathIdx,
     decls: Span,
-    value_decls: std.AutoHashMapUnmanaged(Ident.Idx, NameBucket),
-    type_decls: std.AutoHashMapUnmanaged(Ident.Idx, NameBucket),
-    import_alias_decls: std.AutoHashMapUnmanaged(Ident.Idx, NameBucket),
+    /// The scope's value, type, and import-alias names: spans into
+    /// `scope_names`, each sorted by identifier. Filled when the scope closes.
+    value_names: Span,
+    type_names: Span,
+    import_alias_names: Span,
     region: TokenRegion,
 };
 
-/// All declarations sharing one source name in one parser scope.
+/// The name tables a scope keeps its declarations in.
+pub const Namespace = enum(u8) {
+    value,
+    type,
+    import_alias,
+};
+
+/// One source name a closed scope declares in one namespace, with every
+/// declaration of it in source order (a span into `scope_name_decl_ids`).
+pub const ScopeName = struct {
+    ident: Ident.Idx,
+    decls: Span,
+};
+
+/// A name recorded in a scope that is still open.
+const OpenName = struct {
+    namespace: Namespace,
+    ident: Ident.Idx,
+    decl: DeclIdx,
+    /// Position among the scope's recorded names, so sorting keeps source order.
+    seq: u32,
+    /// Registered by `addValueName`, which records a declaration once per name.
+    once: bool,
+
+    fn lessThan(_: void, a: OpenName, b: OpenName) bool {
+        if (a.namespace != b.namespace) return @backingInt(a.namespace) < @backingInt(b.namespace);
+        const a_ident = a.ident.denseIndex();
+        const b_ident = b.ident.denseIndex();
+        if (a_ident != b_ident) return a_ident < b_ident;
+        return a.seq < b.seq;
+    }
+};
+
+/// All declarations sharing one source name, in source order.
 pub const NameBucket = struct {
     first: ?DeclIdx = null,
-    overflow: std.ArrayListUnmanaged(DeclIdx) = .empty,
+    rest: []const DeclIdx = &.{},
 
     pub const Iterator = struct {
         bucket: NameBucket,
         index: usize = 0,
 
         pub fn next(self: *Iterator) ?DeclIdx {
-            if (self.index == 0) {
-                self.index = 1;
-                return self.bucket.first;
-            }
-
-            const overflow_index = self.index - 1;
-            if (overflow_index >= self.bucket.overflow.items.len) return null;
-
+            const decl = self.bucket.at(self.index) orelse return null;
             self.index += 1;
-            return self.bucket.overflow.items[overflow_index];
+            return decl;
         }
     };
 
-    pub fn append(self: *NameBucket, gpa: std.mem.Allocator, decl_idx: DeclIdx) std.mem.Allocator.Error!void {
+    fn fromSlice(decls: []const DeclIdx) NameBucket {
+        if (decls.len == 0) return .{};
+        return .{ .first = decls[0], .rest = decls[1..] };
+    }
+
+    pub fn count(self: NameBucket) usize {
+        return (if (self.first == null) @as(usize, 0) else 1) + self.rest.len;
+    }
+
+    pub fn at(self: NameBucket, index: usize) ?DeclIdx {
+        if (index == 0) return self.first;
+
+        const rest_index = index - 1;
+        if (rest_index >= self.rest.len) return null;
+
+        return self.rest[rest_index];
+    }
+
+    pub fn iter(self: NameBucket) Iterator {
+        return .{ .bucket = self };
+    }
+};
+
+/// Declarations sharing one key in a module-wide table, in source order.
+const GrowingBucket = struct {
+    first: ?DeclIdx = null,
+    overflow: std.ArrayListUnmanaged(DeclIdx) = .empty,
+
+    fn append(self: *GrowingBucket, gpa: std.mem.Allocator, decl_idx: DeclIdx) std.mem.Allocator.Error!void {
         if (self.first == null) {
             self.first = decl_idx;
             return;
@@ -109,25 +165,12 @@ pub const NameBucket = struct {
         try self.overflow.append(gpa, decl_idx);
     }
 
-    pub fn deinit(self: *NameBucket, gpa: std.mem.Allocator) void {
+    fn deinit(self: *GrowingBucket, gpa: std.mem.Allocator) void {
         self.overflow.deinit(gpa);
     }
 
-    pub fn count(self: NameBucket) usize {
-        return (if (self.first == null) @as(usize, 0) else 1) + self.overflow.items.len;
-    }
-
-    pub fn at(self: NameBucket, index: usize) ?DeclIdx {
-        if (index == 0) return self.first;
-
-        const overflow_index = index - 1;
-        if (overflow_index >= self.overflow.items.len) return null;
-
-        return self.overflow.items[overflow_index];
-    }
-
-    pub fn iter(self: NameBucket) Iterator {
-        return .{ .bucket = self };
+    fn view(self: GrowingBucket) NameBucket {
+        return .{ .first = self.first, .rest = self.overflow.items };
     }
 };
 
@@ -243,14 +286,24 @@ open_scope_decls: std.ArrayList(DeclIdx),
 /// Where each open scope's run in `open_scope_decls` starts, parallel to
 /// `scope_stack`.
 open_scope_decl_starts: std.ArrayList(u32),
+/// Every closed scope's names, one sorted run per scope and namespace.
+scope_names: std.ArrayList(ScopeName),
+/// The declarations of each entry of `scope_names`.
+scope_name_decl_ids: std.ArrayList(DeclIdx),
+/// Names recorded in the open scopes, innermost last, in the same nesting
+/// discipline as `open_scope_decls`.
+open_scope_names: std.ArrayList(OpenName),
+/// Where each open scope's run in `open_scope_names` starts, parallel to
+/// `scope_stack`.
+open_scope_name_starts: std.ArrayList(u32),
 decl_by_statement: collections.DenseMap(u32, DeclIdx),
 type_dependencies: std.ArrayList(TypeDependency),
 type_dependency_segments: std.ArrayList(Ident.Idx),
 type_paths: std.ArrayList(TypePath),
 type_path_intern: std.AutoHashMapUnmanaged(TypePathKey, TypePathIdx),
 type_path_by_statement: collections.DenseMap(u32, TypePathIdx),
-type_decls_by_path: std.AutoHashMapUnmanaged(TypePathIdx, NameBucket),
-assoc_value_decls: std.AutoHashMapUnmanaged(AssocValue, NameBucket),
+type_decls_by_path: std.AutoHashMapUnmanaged(TypePathIdx, GrowingBucket),
+assoc_value_decls: std.AutoHashMapUnmanaged(AssocValue, GrowingBucket),
 package_header_modules: std.ArrayList(PackageHeaderModule),
 imports: std.ArrayList(Import),
 explicit_unqualified_imports: std.AutoHashMapUnmanaged(Ident.Idx, void),
@@ -265,6 +318,10 @@ pub fn init(gpa: std.mem.Allocator) DeclIndex {
         .scope_decl_ids = .empty,
         .open_scope_decls = .empty,
         .open_scope_decl_starts = .empty,
+        .scope_names = .empty,
+        .scope_name_decl_ids = .empty,
+        .open_scope_names = .empty,
+        .open_scope_name_starts = .empty,
         .decl_by_statement = .init(gpa),
         .type_dependencies = .empty,
         .type_dependency_segments = .empty,
@@ -282,14 +339,13 @@ pub fn init(gpa: std.mem.Allocator) DeclIndex {
 
 /// Release all declaration-index storage.
 pub fn deinit(self: *DeclIndex) void {
-    for (self.scopes.items) |*scope| {
-        deinitNameBuckets(Ident.Idx, self.gpa, &scope.value_decls);
-        deinitNameBuckets(Ident.Idx, self.gpa, &scope.type_decls);
-        deinitNameBuckets(Ident.Idx, self.gpa, &scope.import_alias_decls);
-    }
     deinitNameBuckets(AssocValue, self.gpa, &self.assoc_value_decls);
     self.open_scope_decls.deinit(self.gpa);
     self.open_scope_decl_starts.deinit(self.gpa);
+    self.scope_names.deinit(self.gpa);
+    self.scope_name_decl_ids.deinit(self.gpa);
+    self.open_scope_names.deinit(self.gpa);
+    self.open_scope_name_starts.deinit(self.gpa);
     self.scopes.deinit(self.gpa);
     self.decls.deinit(self.gpa);
     self.scope_decl_ids.deinit(self.gpa);
@@ -306,7 +362,7 @@ pub fn deinit(self: *DeclIndex) void {
     self.scope_stack.deinit(self.gpa);
 }
 
-fn deinitNameBuckets(comptime K: type, gpa: std.mem.Allocator, map: *std.AutoHashMapUnmanaged(K, NameBucket)) void {
+fn deinitNameBuckets(comptime K: type, gpa: std.mem.Allocator, map: *std.AutoHashMapUnmanaged(K, GrowingBucket)) void {
     var iter = map.valueIterator();
     while (iter.next()) |bucket| {
         bucket.deinit(gpa);
@@ -334,14 +390,16 @@ pub fn enterScope(
         .forward_policy = forward_policy,
         .owner_type_path = null,
         .decls = Span.empty(),
-        .value_decls = .{},
-        .type_decls = .{},
-        .import_alias_decls = .{},
+        .value_names = Span.empty(),
+        .type_names = Span.empty(),
+        .import_alias_names = Span.empty(),
         .region = region,
     });
     try self.open_scope_decl_starts.ensureUnusedCapacity(self.gpa, 1);
+    try self.open_scope_name_starts.ensureUnusedCapacity(self.gpa, 1);
     try self.scope_stack.append(self.gpa, idx);
     self.open_scope_decl_starts.appendAssumeCapacity(@intCast(self.open_scope_decls.items.len));
+    self.open_scope_name_starts.appendAssumeCapacity(@intCast(self.open_scope_names.items.len));
     return idx;
 }
 
@@ -357,13 +415,98 @@ pub fn exitScope(
     const start: u32 = @intCast(self.scope_decl_ids.items.len);
     try self.scope_decl_ids.appendSlice(self.gpa, self.open_scope_decls.items[run_start..]);
     const end: u32 = @intCast(self.scope_decl_ids.items.len);
+    const names = try self.closeScopeNames();
     self.open_scope_decls.shrinkRetainingCapacity(run_start);
     _ = self.open_scope_decl_starts.pop();
     _ = self.scope_stack.pop();
     var scope = self.scopes.items[@backingInt(idx)];
     scope.decls = .{ .start = start, .len = end - start };
+    scope.value_names = names.get(.value);
+    scope.type_names = names.get(.type);
+    scope.import_alias_names = names.get(.import_alias);
     scope.region = region;
     self.scopes.items[@backingInt(idx)] = scope;
+}
+
+/// Move the innermost open scope's recorded names into sorted per-namespace
+/// runs of `scope_names` and drop them from the open-name stack.
+fn closeScopeNames(self: *DeclIndex) std.mem.Allocator.Error!std.EnumArray(Namespace, Span) {
+    const run_start = self.open_scope_name_starts.items[self.open_scope_name_starts.items.len - 1];
+    const run = self.open_scope_names.items[run_start..];
+    std.sort.pdq(OpenName, run, {}, OpenName.lessThan);
+
+    var spans = std.EnumArray(Namespace, Span).initFill(Span.empty());
+    try self.scope_names.ensureUnusedCapacity(self.gpa, run.len);
+    try self.scope_name_decl_ids.ensureUnusedCapacity(self.gpa, run.len);
+    if (self.scope_name_decl_ids.items.len + run.len > std.math.maxInt(u32) or
+        self.scope_names.items.len + run.len > std.math.maxInt(u32)) return error.OutOfMemory;
+
+    var i: usize = 0;
+    while (i < run.len) {
+        const namespace = run[i].namespace;
+        const names_start: u32 = @intCast(self.scope_names.items.len);
+        while (i < run.len and run[i].namespace == namespace) {
+            const ident = run[i].ident;
+            const decls_start: u32 = @intCast(self.scope_name_decl_ids.items.len);
+            while (i < run.len and run[i].namespace == namespace and run[i].ident.eql(ident)) : (i += 1) {
+                const decl = run[i].decl;
+                if (run[i].once and std.mem.findScalar(DeclIdx, self.scope_name_decl_ids.items[decls_start..], decl) != null) continue;
+                self.scope_name_decl_ids.appendAssumeCapacity(decl);
+            }
+            const decls_len: u32 = @intCast(self.scope_name_decl_ids.items.len - decls_start);
+            self.scope_names.appendAssumeCapacity(.{ .ident = ident, .decls = .{ .start = decls_start, .len = decls_len } });
+        }
+        spans.set(namespace, .{ .start = names_start, .len = @as(u32, @intCast(self.scope_names.items.len)) - names_start });
+    }
+
+    self.open_scope_names.shrinkRetainingCapacity(run_start);
+    _ = self.open_scope_name_starts.pop();
+    return spans;
+}
+
+/// Record `ident` as naming `decl_idx` in `namespace` of the innermost open scope.
+fn addOpenName(self: *DeclIndex, scope_idx: ScopeIdx, namespace: Namespace, ident: Ident.Idx, decl_idx: DeclIdx, once: bool) std.mem.Allocator.Error!void {
+    if (self.currentScope() != scope_idx) base.invariant("parser declaration name joined a scope other than the innermost open one", .{});
+    const run_start = self.open_scope_name_starts.items[self.open_scope_name_starts.items.len - 1];
+    const seq = std.math.cast(u32, self.open_scope_names.items.len - run_start) orelse return error.OutOfMemory;
+    try self.open_scope_names.append(self.gpa, .{
+        .namespace = namespace,
+        .ident = ident,
+        .decl = decl_idx,
+        .seq = seq,
+        .once = once,
+    });
+}
+
+/// The names a closed scope declares in `namespace`, sorted by identifier.
+pub fn scopeNames(self: *const DeclIndex, scope_idx: ScopeIdx, namespace: Namespace) []const ScopeName {
+    const scope = &self.scopes.items[@backingInt(scope_idx)];
+    const span = switch (namespace) {
+        .value => scope.value_names,
+        .type => scope.type_names,
+        .import_alias => scope.import_alias_names,
+    };
+    return self.scope_names.items[span.start..][0..span.len];
+}
+
+/// The declarations of one of a scope's names.
+pub fn scopeNameDecls(self: *const DeclIndex, name: ScopeName) NameBucket {
+    return .fromSlice(self.scope_name_decl_ids.items[name.decls.start..][0..name.decls.len]);
+}
+
+/// All declarations of `ident` in `namespace` of a closed scope.
+pub fn scopeDeclsNamed(self: *const DeclIndex, scope_idx: ScopeIdx, namespace: Namespace, ident: Ident.Idx) NameBucket {
+    const names = self.scopeNames(scope_idx, namespace);
+    const key = ident.denseIndex();
+    var low: usize = 0;
+    var high: usize = names.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        const mid_key = names[mid].ident.denseIndex();
+        if (mid_key == key) return self.scopeNameDecls(names[mid]);
+        if (mid_key < key) low = mid + 1 else high = mid;
+    }
+    return .{};
 }
 
 /// Return the scope currently being parsed, if any.
@@ -391,7 +534,7 @@ pub fn addDecl(self: *DeclIndex, decl: Decl) std.mem.Allocator.Error!DeclIdx {
     try self.decl_by_statement.put(decl.statement, idx);
     if (decl.name_ident) |ident| {
         if (declKindMayBindValue(decl.kind)) {
-            try addDeclToBucket(Ident.Idx, self.gpa, &self.scopes.items[@backingInt(decl.scope)].value_decls, ident, idx);
+            try self.addOpenName(decl.scope, .value, ident, idx, false);
             if (decl.owner_type_path) |owner_path| {
                 try addDeclToBucket(AssocValue, self.gpa, &self.assoc_value_decls, .{
                     .owner = owner_path,
@@ -399,7 +542,7 @@ pub fn addDecl(self: *DeclIndex, decl: Decl) std.mem.Allocator.Error!DeclIdx {
                 }, idx);
             }
         } else if (declKindMayBindType(decl.kind)) {
-            try addDeclToBucket(Ident.Idx, self.gpa, &self.scopes.items[@backingInt(decl.scope)].type_decls, ident, idx);
+            try self.addOpenName(decl.scope, .type, ident, idx, false);
             if (decl.type_path) |path| {
                 try self.type_path_by_statement.put(decl.statement, path);
                 try addDeclToBucket(TypePathIdx, self.gpa, &self.type_decls_by_path, path, idx);
@@ -414,22 +557,14 @@ pub fn addDecl(self: *DeclIndex, decl: Decl) std.mem.Allocator.Error!DeclIdx {
 /// has no single `name_ident`; each bound name is registered through here so
 /// a reference ahead of the declaration resolves to it.
 pub fn addValueName(self: *DeclIndex, scope_idx: ScopeIdx, ident: Ident.Idx, decl_idx: DeclIdx) std.mem.Allocator.Error!void {
-    const gop = try self.scopes.items[@backingInt(scope_idx)].value_decls.getOrPut(self.gpa, ident);
-    if (!gop.found_existing) {
-        gop.value_ptr.* = .{};
-    }
     // A pattern binding the same name twice registers the declaration once.
-    var existing = gop.value_ptr.iter();
-    while (existing.next()) |registered| {
-        if (registered == decl_idx) return;
-    }
-    try gop.value_ptr.append(self.gpa, decl_idx);
+    try self.addOpenName(scope_idx, .value, ident, decl_idx, true);
 }
 
 fn addDeclToBucket(
     comptime K: type,
     gpa: std.mem.Allocator,
-    map: *std.AutoHashMapUnmanaged(K, NameBucket),
+    map: *std.AutoHashMapUnmanaged(K, GrowingBucket),
     key: K,
     decl_idx: DeclIdx,
 ) std.mem.Allocator.Error!void {
@@ -476,18 +611,18 @@ fn declKindMayBindType(kind: DeclKind) bool {
 
 /// Return all value-like declarations for a name in a scope.
 pub fn scopeValueDecls(self: *const DeclIndex, scope_idx: ScopeIdx, ident: Ident.Idx) NameBucket {
-    const scope = &self.scopes.items[@backingInt(scope_idx)];
-    return scope.value_decls.get(ident) orelse .{};
+    return self.scopeDeclsNamed(scope_idx, .value, ident);
 }
 
 /// Record the module alias introduced by an import declaration.
 pub fn addImportAliasDecl(self: *DeclIndex, scope_idx: ScopeIdx, ident: Ident.Idx, decl_idx: DeclIdx) std.mem.Allocator.Error!void {
-    try addDeclToBucket(Ident.Idx, self.gpa, &self.scopes.items[@backingInt(scope_idx)].import_alias_decls, ident, decl_idx);
+    try self.addOpenName(scope_idx, .import_alias, ident, decl_idx, false);
 }
 
 /// Return all associated value declarations for an owner type path and item name.
 pub fn assocValueDecls(self: *const DeclIndex, owner: TypePathIdx, item: Ident.Idx) NameBucket {
-    return self.assoc_value_decls.get(.{ .owner = owner, .item = item }) orelse .{};
+    const bucket = self.assoc_value_decls.get(.{ .owner = owner, .item = item }) orelse return .{};
+    return bucket.view();
 }
 
 /// Record a package-header upper expose that canonicalization should consider
@@ -606,7 +741,8 @@ pub fn declForStatement(self: *const DeclIndex, statement: u32) ?DeclIdx {
 
 /// Return all parser type declarations recorded for a type path in source order.
 pub fn typeDeclsForPath(self: *const DeclIndex, path: TypePathIdx) NameBucket {
-    return self.type_decls_by_path.get(path) orelse .{};
+    const bucket = self.type_decls_by_path.get(path) orelse return .{};
+    return bucket.view();
 }
 
 /// Mark an adjacent annotation and value declaration as one source pair.
@@ -759,7 +895,7 @@ test "scopeValueDecls records only value-binding declarations" {
     try std.testing.expect(index.scopeValueDecls(scope_idx, var_anno_ident).count() != 0);
     try std.testing.expect(index.scopeValueDecls(scope_idx, import_ident).count() == 0);
     try std.testing.expect(index.scopeValueDecls(scope_idx, type_ident).count() == 0);
-    const import_alias_decls = index.scopes.items[@backingInt(scope_idx)].import_alias_decls.get(import_ident).?;
+    const import_alias_decls = index.scopeDeclsNamed(scope_idx, .import_alias, import_ident);
     try std.testing.expectEqual(@as(usize, 1), import_alias_decls.count());
     try std.testing.expectEqual(import_decl_idx, import_alias_decls.first.?);
 }

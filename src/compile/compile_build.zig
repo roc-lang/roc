@@ -1681,24 +1681,30 @@ pub const BuildEnv = struct {
     /// Uses the filesystem vtable which works on both POSIX, Windows, and wasm
     /// (unlike std.posix.getenv which only works on POSIX systems).
     fn logicalModuleToPath(self: *BuildEnv, root_dir: []const u8, logical_name: []const u8) (Allocator.Error || error{PathOutsideWorkspace})![]const u8 {
+        // `std.fs.path.join` of `root_dir` and the logical name's non-empty
+        // segments, then the extension, built in one buffer. Every segment
+        // adds at most its length plus one separator, so the capacity holds
+        // the whole path.
+        var with_ext = std.ArrayList(u8).empty;
+        defer with_ext.deinit(self.gpa);
+        try with_ext.ensureTotalCapacityPrecise(self.gpa, root_dir.len + logical_name.len + 1 + ".roc".len);
+        with_ext.appendSliceAssumeCapacity(root_dir);
         var parts = std.mem.splitScalar(u8, logical_name, '/');
-        var segs = std.ArrayList([]const u8).empty;
-        defer segs.deinit(self.gpa);
-
-        try segs.append(self.gpa, root_dir);
-        while (parts.next()) |p| {
-            if (p.len == 0) continue;
-            try segs.append(self.gpa, p);
+        while (parts.next()) |part| {
+            if (part.len == 0) continue;
+            if (with_ext.items.len == 0) {
+                with_ext.appendSliceAssumeCapacity(part);
+                continue;
+            }
+            const prev_sep = std.fs.path.isSep(with_ext.items[with_ext.items.len - 1]);
+            const this_sep = std.fs.path.isSep(part[0]);
+            if (!prev_sep and !this_sep) with_ext.appendAssumeCapacity(std.fs.path.sep);
+            with_ext.appendSliceAssumeCapacity(if (prev_sep and this_sep) part[1..] else part);
         }
-
-        const joined = try std.fs.path.join(self.gpa, segs.items);
-        defer self.gpa.free(joined);
-
-        const with_ext = try std.fmt.allocPrint(self.gpa, "{s}.roc", .{joined});
-        defer self.gpa.free(with_ext);
+        with_ext.appendSliceAssumeCapacity(".roc");
 
         // Canonicalize and sandbox
-        const canon = try std.fs.path.resolve(self.gpa, &.{with_ext});
+        const canon = try std.fs.path.resolve(self.gpa, &.{with_ext.items});
         // Enforce sandbox for dotted resolution: must be within the current package root (first workspace root).
         // If multiple roots are registered, we still require the resolved path to match at least one.
         if (!PathUtils.isWithinRoot(canon, self.workspace_roots.items)) {
@@ -2248,7 +2254,7 @@ pub const BuildEnv = struct {
 
     fn remapSyntheticRootSourceRegion(
         self: *BuildEnv,
-        allocator: Allocator,
+        document: *reporting.Document,
         region: *reporting.SourceCodeDisplayRegion,
         original_line_starts: []const u32,
     ) Allocator.Error!void {
@@ -2266,9 +2272,7 @@ pub const BuildEnv = struct {
         // the staging appended, which is not the user's code; that region
         // keeps its own text and only its file name maps back.
         if (original_line_starts.len == 0 or original_end_line > original_line_starts.len) {
-            const owned_filename = try allocator.dupe(u8, original_path);
-            if (region.filename) |old_filename| allocator.free(old_filename);
-            region.filename = owned_filename;
+            region.filename = try document.ownString(original_path);
             return;
         }
 
@@ -2279,13 +2283,8 @@ pub const BuildEnv = struct {
             .end_col_idx = region.end_column - 1,
         };
 
-        const line_text = try allocator.dupe(u8, region_info.calculateLineText(original_source, original_line_starts));
-        errdefer allocator.free(line_text);
-        const owned_filename = try allocator.dupe(u8, original_path);
-        errdefer allocator.free(owned_filename);
-
-        allocator.free(region.line_text);
-        if (region.filename) |old_filename| allocator.free(old_filename);
+        const line_text = try document.ownString(region_info.calculateLineText(original_source, original_line_starts));
+        const owned_filename = try document.ownString(original_path);
 
         region.line_text = line_text;
         region.filename = owned_filename;
@@ -2295,15 +2294,15 @@ pub const BuildEnv = struct {
 
     fn remapSyntheticRootDocumentElement(
         self: *BuildEnv,
-        allocator: Allocator,
+        document: *reporting.Document,
         element: *reporting.DocumentElement,
         original_line_starts: []const u32,
     ) Allocator.Error!void {
         switch (element.*) {
-            .source_code_region => |*region| try self.remapSyntheticRootSourceRegion(allocator, region, original_line_starts),
+            .source_code_region => |*region| try self.remapSyntheticRootSourceRegion(document, region, original_line_starts),
             .source_code_with_underlines => |*underlines| {
                 const old_start_line = underlines.display_region.start_line;
-                try self.remapSyntheticRootSourceRegion(allocator, &underlines.display_region, original_line_starts);
+                try self.remapSyntheticRootSourceRegion(document, &underlines.display_region, original_line_starts);
                 const header_lines = self.synthetic_root_header_lines;
                 if (header_lines == 0 or old_start_line <= header_lines) return;
                 for (underlines.underline_regions) |*underline| {
@@ -2323,9 +2322,7 @@ pub const BuildEnv = struct {
                 const header_lines = self.synthetic_root_header_lines;
                 if (header_lines > 0 and location.line <= header_lines) return;
 
-                const owned_filename = try allocator.dupe(u8, original_path);
-                if (location.filename) |old_filename| allocator.free(old_filename);
-                location.filename = owned_filename;
+                location.filename = try document.ownString(original_path);
                 if (location.line > header_lines) location.line -= header_lines;
             },
             .text,
@@ -2357,7 +2354,7 @@ pub const BuildEnv = struct {
         defer original_line_starts.deinit(self.gpa);
         for (report.document.elements.items) |*element| {
             try self.remapSyntheticRootDocumentElement(
-                report.document.allocator,
+                &report.document,
                 element,
                 original_line_starts.items.items,
             );
@@ -3296,9 +3293,8 @@ pub const BuildEnv = struct {
     ) ?PackPlacement {
         const coord = self.coordinator orelse return null;
         const location = coord.checked_artifact_index.get(key.bytes) orelse return null;
-        const pkg = self.packages.get(location.pkg_name) orelse return null;
-        const coord_pkg = coord.packages.get(location.pkg_name) orelse return null;
-        const module = coord_pkg.getModule(location.module_id) orelse return null;
+        const pkg = self.packages.get(location.pkg.name) orelse return null;
+        const module = location.pkg.getModule(location.module_id) orelse return null;
         var hasher = base.Sha256.init(.{});
         if (pkg.url) |url| {
             hasher.update("pkg\x00");

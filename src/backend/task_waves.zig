@@ -22,14 +22,16 @@ pub const Admission = struct {
 /// Run every job of `jobs` whose `skipped` is false. `Job` declares
 /// `fn skipped(*const Job) bool`, an `oom: bool` field its callback sets on
 /// allocation failure, and `fn execute(*anyopaque, tasks.Worker) ?*anyopaque`.
-/// Without an executor, jobs run in order on `sequential_lane`, which outlives
-/// the waves so lane state carries from one wave to the next as on a worker.
+/// Without an executor, jobs run in order on `sequential_lane` with
+/// `sequential_scratch`, which outlive the waves so lane state and scratch
+/// capacity carry from one wave to the next as on a worker.
 pub fn execute(
     comptime Job: type,
     allocator: Allocator,
     jobs: []Job,
     executor: ?tasks.Executor,
     sequential_lane: *tasks.LaneState,
+    sequential_scratch: *base.SingleThreadArena,
     admission: *Admission,
 ) Allocator.Error!void {
     var failed = false;
@@ -59,8 +61,7 @@ pub fn execute(
         }
         session.end();
     } else {
-        var scratch = base.SingleThreadArena.init(allocator);
-        defer scratch.deinit();
+        const scratch = sequential_scratch;
         var accepted: usize = 0;
         for (jobs) |*job| {
             if (job.skipped()) continue;

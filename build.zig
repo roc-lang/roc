@@ -2384,14 +2384,14 @@ pub fn build(b: *std.Build) void {
     // Build wasm32 builtins object at build time so the eval/REPL pipeline can
     // merge real compiled builtins into WASM modules (instead of using host imports).
     const wasm32_resolved_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none });
-    const wasm32_eval_runtime = addEvalWasmRuntimeModules(b, roc_modules, wasm32_resolved_target, "wasm32", optimize, strip, omit_frame_pointer);
+    const wasm32_eval_runtime = addEvalWasmRuntimeModules(b, roc_modules, wasm32_resolved_target, "wasm32", optimize);
     const wasm32_boxy_runtime_module = wasm32_eval_runtime.boxy_runtime;
     const wasm32_builtins_module = wasm32_eval_runtime.builtins;
     roc_modules.eval.addImport("wasm32_boxy_runtime", wasm32_boxy_runtime_module);
     roc_modules.eval.addImport("wasm32_builtins", wasm32_builtins_module);
     // The same objects for WebAssembly 1.0, which the evaluator's wasm32v1
     // runs link.
-    const wasm32v1_eval_runtime = addEvalWasmRuntimeModules(b, roc_modules, b.resolveTargetQuery(roc_target.RocTarget.wasm32v1.llvmTargetQuery()), "wasm32v1", optimize, strip, omit_frame_pointer);
+    const wasm32v1_eval_runtime = addEvalWasmRuntimeModules(b, roc_modules, b.resolveTargetQuery(roc_target.RocTarget.wasm32v1.llvmTargetQuery()), "wasm32v1", optimize);
     const wasm32v1_boxy_runtime_module = wasm32v1_eval_runtime.boxy_runtime;
     const wasm32v1_builtins_module = wasm32v1_eval_runtime.builtins;
     roc_modules.eval.addImport("wasm32v1_boxy_runtime", wasm32v1_boxy_runtime_module);
@@ -5203,6 +5203,16 @@ fn addMacosAflFuzzExe(
     return exe.getEmittedBin();
 }
 
+/// Debug-info settings for every object `roc` embeds and links into the
+/// programs it builds (builtins, compiler-rt carriers, shims, Boxy runtimes,
+/// default-platform runtimes). They are fixed rather than taken from
+/// `-Dstrip` or `-Dtracy-callstack`, because emitting debug info changes
+/// LLVM's instruction selection: following the compiler's own debug
+/// configuration would make the machine code of every program `roc` builds
+/// depend on how `roc` itself was built.
+const program_object_strip = true;
+const program_object_omit_frame_pointer: ?bool = null;
+
 /// Build a Boxy runtime object for `target`: the `roc_boxy_*` C-ABI wrappers
 /// plus `roc_boxy_init_embedded`. The selected root configures standalone
 /// extern-symbol calls or evaluator-vtable calls.
@@ -5211,14 +5221,12 @@ fn addMacosAflFuzzExe(
 /// rather than following the compiler's own. A `Debug` compiler would otherwise
 /// emit a `Debug` runtime into every generic program it builds, which enables
 /// builtins' hosted debug diagnostics and grows this object by an order of
-/// magnitude. `strip` still follows the build, so debug info for the runtime
-/// remains available wherever the rest of the build carries it.
+/// magnitude. Its debug-info settings are pinned too; see
+/// `program_object_strip`.
 fn buildBoxyRuntimeObject(
     b: *std.Build,
     roc_modules: modules.RocModules,
     target: ResolvedTarget,
-    strip: bool,
-    omit_frame_pointer: ?bool,
     name: []const u8,
     root_source_file: std.Build.LazyPath,
 ) *Step.Compile {
@@ -5229,8 +5237,8 @@ fn buildBoxyRuntimeObject(
             .root_source_file = root_source_file,
             .target = target,
             .optimize = optimize,
-            .strip = strip,
-            .omit_frame_pointer = omit_frame_pointer,
+            .strip = program_object_strip,
+            .omit_frame_pointer = program_object_omit_frame_pointer,
             // Native runtime objects can participate in shared-library links.
             // Wasm uses direct data-symbol relocations so compiler-only
             // relocatable composition can bind its app-specific Boxy sidecar.
@@ -5276,15 +5284,11 @@ fn addEvalWasmRuntimeModules(
     target: ResolvedTarget,
     name: []const u8,
     optimize: OptimizeMode,
-    strip: bool,
-    omit_frame_pointer: ?bool,
 ) struct { boxy_runtime: *std.Build.Module, builtins: *std.Build.Module } {
     const boxy_runtime_obj = buildBoxyRuntimeObject(
         b,
         roc_modules,
         target,
-        strip,
-        omit_frame_pointer,
         b.fmt("roc_boxy_runtime_{s}_eval", .{name}),
         b.path("src/boxy_runtime/eval_main.zig"),
     );
@@ -5300,7 +5304,7 @@ fn addEvalWasmRuntimeModules(
         ),
     });
 
-    const builtins_obj = addBuiltinsObject(b, roc_modules, b.fmt("roc_builtins_{s}_eval", .{name}), "src/builtins/static_lib.zig", target, optimize, strip, omit_frame_pointer, false);
+    const builtins_obj = addBuiltinsObject(b, roc_modules, b.fmt("roc_builtins_{s}_eval", .{name}), "src/builtins/static_lib.zig", target, optimize, false);
 
     const compiler_rt_obj = b.addObject(.{
         .name = b.fmt("compiler_rt_{s}_eval", .{name}),
@@ -5308,8 +5312,8 @@ fn addEvalWasmRuntimeModules(
             .root_source_file = std.Build.LazyPath.zig_lib.path(b, "compiler_rt.zig"),
             .target = target,
             .optimize = optimize,
-            .strip = strip,
-            .omit_frame_pointer = omit_frame_pointer,
+            .strip = program_object_strip,
+            .omit_frame_pointer = program_object_omit_frame_pointer,
             .pic = true,
         }),
     });
@@ -5346,8 +5350,6 @@ fn addMachineCodeShimLib(
     roc_modules: modules.RocModules,
     target: ResolvedTarget,
     optimize: OptimizeMode,
-    strip: bool,
-    omit_frame_pointer: ?bool,
     shim_host_abi_module: *std.Build.Module,
     compiled_builtins_module: *std.Build.Module,
     write_compiled_builtins: *Step.WriteFile,
@@ -5358,8 +5360,8 @@ fn addMachineCodeShimLib(
             .root_source_file = b.path("src/machine_code_shim/main.zig"),
             .target = target,
             .optimize = optimize,
-            .strip = strip,
-            .omit_frame_pointer = omit_frame_pointer,
+            .strip = program_object_strip,
+            .omit_frame_pointer = program_object_omit_frame_pointer,
             .pic = true,
         }),
         .linkage = .static,
@@ -5539,8 +5541,6 @@ fn addBuiltinsObject(
     root_source_file: []const u8,
     target: ResolvedTarget,
     optimize: OptimizeMode,
-    strip: bool,
-    omit_frame_pointer: ?bool,
     bundle_compiler_rt: bool,
 ) *Step.Compile {
     const obj = b.addObject(.{
@@ -5549,8 +5549,8 @@ fn addBuiltinsObject(
             .root_source_file = b.path(root_source_file),
             .target = target,
             .optimize = optimize,
-            .strip = strip,
-            .omit_frame_pointer = omit_frame_pointer,
+            .strip = program_object_strip,
+            .omit_frame_pointer = program_object_omit_frame_pointer,
             .pic = true,
         }),
     });
@@ -5641,7 +5641,7 @@ fn addMainExe(
     // This RocOps-ABI object is not linked into built executables (the dev
     // backend links the extern-ABI object below, the LLVM backend merges
     // builtins into the app object), so it does not need compiler-rt.
-    const builtins_obj = addBuiltinsObject(b, roc_modules, "roc_builtins", "src/builtins/static_lib.zig", builtins_target, optimize, strip, omit_frame_pointer, false);
+    const builtins_obj = addBuiltinsObject(b, roc_modules, "roc_builtins", "src/builtins/static_lib.zig", builtins_target, optimize, false);
 
     // Extern-symbol-mode builtins object: same builtins, but host operations
     // go through linker-resolved symbols (the symbol ABI) instead of RocOps.
@@ -5653,7 +5653,7 @@ fn addMainExe(
     // link's --gc-sections drops the unused ones. macOS is excluded: it always
     // links -lSystem (which provides libm) and `-fcompiler-rt` for a macOS
     // target crashes the Zig compiler under the build server (--listen).
-    const builtins_extern_obj = addBuiltinsObject(b, roc_modules, "roc_builtins_extern", "src/builtins/extern_static_lib.zig", builtins_target, optimize, strip, omit_frame_pointer, target.result.os.tag != .macos);
+    const builtins_extern_obj = addBuiltinsObject(b, roc_modules, "roc_builtins_extern", "src/builtins/extern_static_lib.zig", builtins_target, optimize, target.result.os.tag != .macos);
 
     const shim_host_abi_module = b.createModule(.{
         .root_source_file = b.path("src/shim_host_abi.zig"),
@@ -5670,8 +5670,8 @@ fn addMainExe(
             .root_source_file = b.path("src/interpreter_shim/main.zig"),
             .target = target,
             .optimize = optimize,
-            .strip = strip,
-            .omit_frame_pointer = omit_frame_pointer,
+            .strip = program_object_strip,
+            .omit_frame_pointer = program_object_omit_frame_pointer,
             .pic = true, // Enable Position Independent Code for PIE compatibility
         }),
         .linkage = .static,
@@ -5748,7 +5748,7 @@ fn addMainExe(
     const copy_interpreter_shim = embedded_assets;
     _ = copy_interpreter_shim.addCopyFile(bare_interpreter_shim, b.pathJoin(&.{ "", interpreter_shim_filename }));
 
-    const machine_code_shim_lib = addMachineCodeShimLib(b, roc_modules, target, optimize, strip, omit_frame_pointer, shim_host_abi_module, compiled_builtins_module, write_compiled_builtins);
+    const machine_code_shim_lib = addMachineCodeShimLib(b, roc_modules, target, optimize, shim_host_abi_module, compiled_builtins_module, write_compiled_builtins);
 
     var machine_code_shim_test_for_registry: ?*Step.Compile = null;
     var machine_code_shim_archive_check_for_registry: ?*Step = null;
@@ -5876,7 +5876,7 @@ fn addMainExe(
             if (target.result.cpu.arch == cross_target.result.cpu.arch and
                 target.result.os.tag == cross_target.result.os.tag and
                 target.result.abi == cross_target.result.abi) continue;
-            const cross_shim = addMachineCodeShimLib(b, roc_modules, cross_target, optimize, strip, omit_frame_pointer, shim_host_abi_module, compiled_builtins_module, write_compiled_builtins);
+            const cross_shim = addMachineCodeShimLib(b, roc_modules, cross_target, optimize, shim_host_abi_module, compiled_builtins_module, write_compiled_builtins);
             const check_cross = b.addRunArtifact(archive_checker);
             check_cross.addArg(@tagName(cross_target.result.os.tag));
             check_cross.addFileArg(cross_shim.getEmittedBin());
@@ -6009,7 +6009,7 @@ fn addMainExe(
         // Build builtins object file for this target.
         // Non-extern (RocOps-ABI) object is not linked into executables; only
         // wasm32 merges compiler-rt below for the eval/REPL pipeline.
-        const cross_builtins_obj = addBuiltinsObject(b, roc_modules, b.fmt("roc_builtins_{s}", .{cross_target.name}), "src/builtins/static_lib.zig", cross_resolved_target, optimize, strip, omit_frame_pointer, false);
+        const cross_builtins_obj = addBuiltinsObject(b, roc_modules, b.fmt("roc_builtins_{s}", .{cross_target.name}), "src/builtins/static_lib.zig", cross_resolved_target, optimize, false);
 
         const cross_wasm32_compiler_rt_obj: ?*Step.Compile = if (cross_is_wasm) blk: {
             const compiler_rt_obj = b.addObject(.{
@@ -6018,8 +6018,8 @@ fn addMainExe(
                     .root_source_file = std.Build.LazyPath.zig_lib.path(b, "compiler_rt.zig"),
                     .target = cross_resolved_target,
                     .optimize = optimize,
-                    .strip = strip,
-                    .omit_frame_pointer = omit_frame_pointer,
+                    .strip = program_object_strip,
+                    .omit_frame_pointer = program_object_omit_frame_pointer,
                     .pic = true,
                 }),
             });
@@ -6059,7 +6059,7 @@ fn addMainExe(
         }
 
         // Extern-symbol-mode builtins object for this target (the symbol ABI).
-        const cross_builtins_extern_obj = addBuiltinsObject(b, roc_modules, b.fmt("roc_builtins_extern_{s}", .{cross_target.name}), "src/builtins/extern_static_lib.zig", cross_resolved_target, optimize, strip, omit_frame_pointer, cross_bundle_compiler_rt);
+        const cross_builtins_extern_obj = addBuiltinsObject(b, roc_modules, b.fmt("roc_builtins_extern_{s}", .{cross_target.name}), "src/builtins/extern_static_lib.zig", cross_resolved_target, optimize, cross_bundle_compiler_rt);
         // This object links into -nostdlib executables, and a freestanding
         // default-platform program has no libc at all, so nothing in the link
         // defines the stack protector's `__stack_chk_fail` and
@@ -6081,8 +6081,6 @@ fn addMainExe(
                 b,
                 roc_modules,
                 cross_resolved_target,
-                strip,
-                omit_frame_pointer,
                 b.fmt("roc_boxy_runtime_{s}", .{cross_target.name}),
                 b.path("src/boxy_runtime/main.zig"),
             );
@@ -6113,7 +6111,7 @@ fn addMainExe(
                     .root_source_file = default_platform_root_source,
                     .target = cross_resolved_target,
                     .optimize = .fast,
-                    .strip = strip,
+                    .strip = program_object_strip,
                     .omit_frame_pointer = false,
                     .pic = true,
                     .single_threaded = true,
@@ -6186,7 +6184,7 @@ fn addMainExe(
                     .root_source_file = default_platform_root_source,
                     .target = cross_resolved_target,
                     .optimize = .fast,
-                    .strip = strip,
+                    .strip = program_object_strip,
                     .omit_frame_pointer = false,
                     .pic = true,
                     .single_threaded = true,

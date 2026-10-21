@@ -217,13 +217,13 @@ fn destroyStackPlanIndexes(opaque_indexes: *anyopaque) void {
 const wave_capacity = 32;
 
 /// Runs one bounded wave; see `task_waves.execute`.
-fn executeWave(comptime CG: type, allocator: Allocator, jobs: []Job(CG), executor: ?tasks.Executor, sequential_lane: *tasks.LaneState, metrics: *Metrics) Allocator.Error!void {
+fn executeWave(comptime CG: type, allocator: Allocator, jobs: []Job(CG), executor: ?tasks.Executor, sequential_lane: *tasks.LaneState, sequential_scratch: *base.SingleThreadArena, metrics: *Metrics) Allocator.Error!void {
     var admission: task_waves.Admission = .{ .submitted = metrics.tasks_submitted, .peak = metrics.peak_inflight_fragments };
     defer {
         metrics.tasks_submitted = admission.submitted;
         metrics.peak_inflight_fragments = admission.peak;
     }
-    return task_waves.execute(Job(CG), allocator, jobs, executor, sequential_lane, &admission);
+    return task_waves.execute(Job(CG), allocator, jobs, executor, sequential_lane, sequential_scratch, &admission);
 }
 
 fn requireHelpers(allocator: Allocator, fragment: *const Artifact.Fragment, queue: *std.ArrayList(u64), seen: *std.AutoHashMap(u64, void)) Allocator.Error!void {
@@ -262,6 +262,8 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
     errdefer retained.deinit();
     var sequential_lane = tasks.LaneState.init(allocator);
     defer sequential_lane.deinit();
+    var sequential_scratch = base.SingleThreadArena.init(allocator);
+    defer sequential_scratch.deinit();
     // Index immutable backing once; workers capture only reached data. Execution
     // callers leave mutable static roots external, never copied placeholder values.
     std.debug.assert(contract.static_data_readonly or options.constant_exports.len == 0);
@@ -322,7 +324,7 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
                 }
             }
         }
-        try executeWave(CG, allocator, storage[0..count], options.executor, &sequential_lane, &metrics);
+        try executeWave(CG, allocator, storage[0..count], options.executor, &sequential_lane, &sequential_scratch, &metrics);
         for (storage[0..count]) |*job| {
             const fragment = &job.fragment.?;
             try requireHelpers(allocator, fragment, &helper_queue, &helper_seen);
@@ -359,7 +361,7 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
                 }
             }
         }
-        try executeWave(CG, allocator, storage[0..count], options.executor, &sequential_lane, &metrics);
+        try executeWave(CG, allocator, storage[0..count], options.executor, &sequential_lane, &sequential_scratch, &metrics);
         for (storage[0..count]) |*job| {
             const fragment = &job.fragment.?;
             try requireHelpers(allocator, fragment, &helper_queue, &helper_seen);

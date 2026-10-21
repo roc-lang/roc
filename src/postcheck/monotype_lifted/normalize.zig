@@ -160,9 +160,15 @@ const Normalizer = struct {
     symbols: Common.SymbolGen,
     sinks: std.ArrayList(Statements) = .empty,
     frames: std.ArrayList(Frame) = .empty,
+    /// The rows of the record or closure span being rebuilt, before they are
+    /// appended as one span.
+    field_scratch: std.ArrayList(Ast.FieldExpr) = .empty,
+    capture_scratch: std.ArrayList(Ast.CaptureOperand) = .empty,
 
     fn deinit(self: *Normalizer) void {
         const allocator = self.program.allocator;
+        self.capture_scratch.deinit(allocator);
+        self.field_scratch.deinit(allocator);
         for (self.frames.items) |*frame| switch (frame.kind) {
             .expr => |*expr| expr.deinit(allocator),
             .stmts, .scope => {},
@@ -519,8 +525,8 @@ const Normalizer = struct {
     }
 
     fn fieldSpanFrom(self: *Normalizer, span: Ast.Span(Ast.FieldExpr), values: []const Ast.ExprId) Allocator.Error!Ast.Span(Ast.FieldExpr) {
-        const items = try self.program.allocator.alloc(Ast.FieldExpr, span.len);
-        defer self.program.allocator.free(items);
+        self.field_scratch.clearRetainingCapacity();
+        const items = try self.field_scratch.addManyAsSlice(self.program.allocator, span.len);
         for (items, values, 0..) |*item, value, index| {
             item.* = GuardedList.at(self.program.fieldExprSpan(span), index);
             item.value = value;
@@ -529,8 +535,8 @@ const Normalizer = struct {
     }
 
     fn captureSpanFrom(self: *Normalizer, span: Ast.Span(Ast.CaptureOperand), values: []const Ast.ExprId) Allocator.Error!Ast.Span(Ast.CaptureOperand) {
-        const items = try self.program.allocator.alloc(Ast.CaptureOperand, span.len);
-        defer self.program.allocator.free(items);
+        self.capture_scratch.clearRetainingCapacity();
+        const items = try self.capture_scratch.addManyAsSlice(self.program.allocator, span.len);
         for (items, values, 0..) |*item, value, index| {
             item.* = GuardedList.at(self.program.captureOperandSpan(span), index);
             item.value = value;

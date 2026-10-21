@@ -17,6 +17,50 @@ const no_local = std.math.maxInt(u32);
 /// Exact topology construction count for reuse tests.
 pub threadlocal var topology_builds: usize = 0;
 
+/// Memoized `usesAfter` answers: each statement's answered locals are a
+/// chain from that statement's head through `entries`.
+pub const UseAnswers = struct {
+    pub const Entry = struct {
+        stmt: LIR.CFStmtId,
+        local: LIR.LocalId,
+        answer: bool,
+        next: u32,
+    };
+
+    allocator: Allocator,
+    heads: collections.DenseMap(LIR.CFStmtId, u32),
+    entries: std.ArrayList(Entry) = .empty,
+
+    pub fn init(allocator: Allocator) UseAnswers {
+        return .{ .allocator = allocator, .heads = collections.DenseMap(LIR.CFStmtId, u32).init(allocator) };
+    }
+
+    pub fn deinit(self: *UseAnswers) void {
+        self.heads.deinit();
+        self.entries.deinit(self.allocator);
+    }
+
+    pub fn get(self: *const UseAnswers, stmt: LIR.CFStmtId, local: LIR.LocalId) ?bool {
+        var cursor = self.heads.get(stmt) orelse return null;
+        while (cursor != no_local) {
+            const entry = self.entries.items[cursor];
+            if (entry.local == local) return entry.answer;
+            cursor = entry.next;
+        }
+        return null;
+    }
+
+    /// Records the answer for a query `get` has not answered.
+    pub fn put(self: *UseAnswers, stmt: LIR.CFStmtId, local: LIR.LocalId, answer: bool) Allocator.Error!void {
+        const position = std.math.cast(u32, self.entries.items.len) orelse return error.OutOfMemory;
+        if (position == no_local) return error.OutOfMemory;
+        const head = try self.heads.getOrPut(stmt);
+        if (!head.found_existing) head.value_ptr.* = no_local;
+        try self.entries.append(self.allocator, .{ .stmt = stmt, .local = local, .answer = answer, .next = head.value_ptr.* });
+        head.value_ptr.* = position;
+    }
+};
+
 /// Orders the uses of a local along control flow. A consuming use takes the
 /// value's single ownership unit with it, so the value is unique at that use
 /// exactly when no other use of the same local can execute afterwards
@@ -55,10 +99,8 @@ pub const UseOrder = struct {
     mark_defs: std.ArrayList(u64) = .empty,
     /// Only the fixed-point workspace enables this cache. Each key names
     /// an immutable ordered-use question, independent of signatures/takes.
-    use_answers: ?*std.AutoHashMap(UseQuery, bool) = null,
+    use_answers: ?*UseAnswers = null,
     backward_visits: usize = 0,
-
-    pub const UseQuery = struct { stmt: LIR.CFStmtId, local: LIR.LocalId };
 
     /// Explicit compact domains for one procedure. Whole-program ARC already
     /// owns dense store-wide domains and leaves this absent.
@@ -396,7 +438,7 @@ pub const UseOrder = struct {
             }
         }
         for (member_list.items) |stmt| tables.seen.unset(tables.stmtIndex(stmt));
-        const members = try allocator.dupe(u32, member_list.items);
+        const members = try member_list.toOwnedSlice(allocator);
         errdefer allocator.free(members);
         errdefer if (scratch != null) for (members) |stmt| {
             tables.jump_join[tables.stmtIndex(stmt)] = no_local;
@@ -772,11 +814,11 @@ pub const UseOrder = struct {
     /// Statement inventories walked structurally from each procedure body,
     /// for callers that hold no per-procedure lists of their own.
     pub fn initFromStore(allocator: Allocator, store: *const LirStore, only_proc: ?LIR.LirProcSpecId) Allocator.Error!UseOrder {
-        var lists = std.ArrayList([]const LIR.CFStmtId).empty;
-        defer {
-            for (lists.items) |list| allocator.free(list);
-            lists.deinit(allocator);
-        }
+        // Every procedure's inventory is one run of a shared buffer.
+        var stmts = std.ArrayList(LIR.CFStmtId).empty;
+        defer stmts.deinit(allocator);
+        var ends = std.ArrayList(usize).empty;
+        defer ends.deinit(allocator);
         var seen = collections.DenseMap(LIR.CFStmtId, void).init(allocator);
         defer seen.deinit();
         var stack = std.ArrayList(LIR.CFStmtId).empty;
@@ -784,26 +826,30 @@ pub const UseOrder = struct {
         const first: usize = if (only_proc) |id| @backingInt(id) else 0;
         const end = if (only_proc != null) first + 1 else store.procSpecCount();
         for (first..end) |proc_index| {
-            const proc = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
+            const proc = store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
             const body = proc.body orelse continue;
-            var list = std.ArrayList(LIR.CFStmtId).empty;
-            errdefer list.deinit(allocator);
             seen.clearRetainingCapacity();
             stack.clearRetainingCapacity();
             try stack.append(allocator, body);
             while (stack.pop()) |current| {
                 if (seen.contains(current)) continue;
                 try seen.put(current, {});
-                try list.append(allocator, current);
+                try stmts.append(allocator, current);
                 try body_clone.appendSuccessorsInOrder(store, &stack, current, allocator, .{ .switch_edges = .arms_first });
             }
-            try lists.ensureUnusedCapacity(allocator, 1);
-            lists.appendAssumeCapacity(try list.toOwnedSlice(allocator));
+            try ends.append(allocator, stmts.items.len);
         }
-        if (only_proc == null) return init(allocator, store, lists.items);
-        const domain = try Domain.create(allocator, store, lists.items);
+        const lists = try allocator.alloc([]const LIR.CFStmtId, ends.items.len);
+        defer allocator.free(lists);
+        var start: usize = 0;
+        for (lists, ends.items) |*list, end_index| {
+            list.* = stmts.items[start..end_index];
+            start = end_index;
+        }
+        if (only_proc == null) return init(allocator, store, lists);
+        const domain = try Domain.create(allocator, store, lists);
         errdefer domain.destroy(allocator);
-        return fromTopology(allocator, try initTopology(allocator, store, lists.items, .{ .compact = domain }, null, null));
+        return fromTopology(allocator, try initTopology(allocator, store, lists, .{ .compact = domain }, null, null));
     }
 
     pub fn deinit(self: *UseOrder) void {
@@ -845,15 +891,15 @@ pub const UseOrder = struct {
     /// before `local` is redefined. Marks from the local's reads once and
     /// answers every later query about the same local from those marks.
     pub fn usesAfter(self: *UseOrder, from: u32, local: LIR.LocalId) Allocator.Error!bool {
-        const key: UseQuery = .{ .stmt = @fromBackingInt(@intCast(from)), .local = local };
-        if (self.use_answers) |answers| if (answers.get(key)) |answer| return answer;
+        const from_stmt: LIR.CFStmtId = @fromBackingInt(@intCast(from));
+        if (self.use_answers) |answers| if (answers.get(from_stmt, local)) |answer| return answer;
         if (self.marked_local != @backingInt(local) or !self.marked_uses) {
             try self.markFrom(local, self.topology.reads_of.row(local));
             self.marked_local = @backingInt(local);
             self.marked_uses = true;
         }
         const answer = self.after(from, local);
-        if (self.use_answers) |answers| try answers.put(key, answer);
+        if (self.use_answers) |answers| try answers.put(from_stmt, local, answer);
         return answer;
     }
 
@@ -1017,8 +1063,8 @@ pub const UseOrder = struct {
                 note(self.ctx, @backingInt(successor));
             }
         };
-        const node = store.getCFStmt(@fromBackingInt(@intCast(stmt)));
-        switch (node) {
+        const node = store.getCFStmtImmediate(@fromBackingInt(@intCast(stmt)));
+        switch (node.*) {
             .jump => {
                 const join_stmt = tables.jump_join[tables.stmtIndex(stmt)];
                 if (join_stmt == no_local) return true;
@@ -1069,7 +1115,7 @@ pub const UseOrder = struct {
             .join,
             .ret,
             .crash,
-            => body_clone.forEachSuccessor(store, node, .{ .join_body = false }, Visitor{ .ctx = ctx }, Visitor.call),
+            => body_clone.forEachSuccessor(store, node.*, .{ .join_body = false }, Visitor{ .ctx = ctx }, Visitor.call),
         }
         return false;
     }

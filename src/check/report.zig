@@ -344,7 +344,7 @@ pub const ReportBuilder = struct {
         const inner_region_info = self.module_env.calcRegionInfo(try self.expressionHighlightRegion(inner_region.*));
 
         const display_region = SourceCodeDisplayRegion{
-            .line_text = try self.gpa.dupe(u8, outer_region_info.calculateLineText(self.source, self.module_env.getLineStarts())),
+            .line_text = outer_region_info.calculateLineText(self.source, self.module_env.getLineStarts()),
             .start_line = outer_region_info.start_line_idx + 1,
             .start_column = outer_region_info.start_col_idx + 1,
             .end_line = outer_region_info.end_line_idx + 1,

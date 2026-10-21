@@ -157,50 +157,47 @@ fn nodeFor(self: *Inputs, path: []const u8, input: usize) Error!*Node {
     return node;
 }
 
+/// Resolve `path` through the input graph, growing one path buffer a
+/// component at a time. Returns the owned resolved path, or null when the
+/// path stops resolving.
 fn resolve(self: *Inputs, path: []const u8, base: ?[]const u8, input: usize, links: *std.StringHashMapUnmanaged(void)) Error!?[]const u8 {
     var components = std.fs.path.componentIterator(path);
-    var current: []const u8 = try self.allocator.dupe(u8, components.root() orelse base.?);
-    errdefer self.allocator.free(current);
-    const root = try self.nodeFor(current, input);
+    var current = std.ArrayList(u8).empty;
+    defer current.deinit(self.allocator);
+    try current.appendSlice(self.allocator, components.root() orelse base.?);
+    const root = try self.nodeFor(current.items, input);
     root.topology = true;
     while (components.next()) |component| {
-        const parent = try self.nodeFor(current, input);
+        const parent = try self.nodeFor(current.items, input);
         parent.topology = true;
-        if (parent.kind != .directory) {
-            self.allocator.free(current);
-            return null;
-        }
+        if (parent.kind != .directory) return null;
         if (std.mem.eql(u8, component.name, ".")) continue;
         if (std.mem.eql(u8, component.name, "..")) {
-            const parent_path = try self.allocator.dupe(u8, std.fs.path.dirname(current) orelse current);
-            self.allocator.free(current);
-            current = parent_path;
-            (try self.nodeFor(current, input)).topology = true;
+            current.shrinkRetainingCapacity((std.fs.path.dirname(current.items) orelse current.items).len);
+            (try self.nodeFor(current.items, input)).topology = true;
             continue;
         }
-        const candidate = try std.fs.path.join(self.allocator, &.{ current, component.name });
-        errdefer self.allocator.free(candidate);
-        const node = try self.nodeFor(candidate, input);
+        // `std.fs.path.join` of the directory and the component name, which
+        // holds no separator.
+        const parent_len = current.items.len;
+        if (!std.fs.path.isSep(current.items[parent_len - 1])) try current.append(self.allocator, std.fs.path.sep);
+        try current.appendSlice(self.allocator, component.name);
+        const node = try self.nodeFor(current.items, input);
         if (node.kind == .sym_link) {
             node.topology = true;
-            if (node.link == null or links.contains(candidate)) {
-                self.allocator.free(candidate);
-                self.allocator.free(current);
-                return null;
-            }
-            try links.put(self.allocator, candidate, {});
-            const target = self.resolve(node.link.?, current, input, links) catch |err| {
-                _ = links.remove(candidate);
+            if (node.link == null or links.contains(current.items)) return null;
+            // The buffer holds the link's path, and stays unchanged, until the
+            // link leaves `links` again.
+            try links.put(self.allocator, current.items, {});
+            const target = self.resolve(node.link.?, current.items[0..parent_len], input, links) catch |err| {
+                _ = links.remove(current.items);
                 return err;
             };
-            _ = links.remove(candidate);
-            self.allocator.free(candidate);
-            self.allocator.free(current);
-            current = target orelse return null;
-        } else {
-            self.allocator.free(current);
-            current = candidate;
+            _ = links.remove(current.items);
+            const resolved = target orelse return null;
+            current.deinit(self.allocator);
+            current = .fromOwnedSlice(@constCast(resolved));
         }
     }
-    return current;
+    return try current.toOwnedSlice(self.allocator);
 }

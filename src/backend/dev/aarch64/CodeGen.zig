@@ -4,6 +4,7 @@
 //! function prologues/epilogues and instruction selection.
 
 const std = @import("std");
+const collections = @import("collections");
 const invariant = @import("base").invariant;
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
@@ -83,11 +84,13 @@ pub fn CodeGen(comptime target: RocTarget) type {
 
         /// Every branch site emitted so far, in emission order (see "Control flow").
         branch_sites: std.ArrayList(BranchSite),
-        /// Patch location -> index into `branch_sites`.
-        branch_site_index: std.AutoHashMapUnmanaged(usize, u32),
+        /// Index into `branch_sites` by the patch location's instruction
+        /// word (see `instructionWord`).
+        branch_site_index: collections.DenseMapUnmanaged(u32, u32),
         /// Finished bodies may discard branch worklists, but artifact capture
-        /// still needs their exact in-body call reservations.
-        retired_call_veneers: std.AutoHashMapUnmanaged(usize, usize) = .empty,
+        /// still needs their exact in-body call reservations, by the call's
+        /// instruction word.
+        retired_call_veneers: collections.DenseMapUnmanaged(u32, usize) = .empty,
         /// Every site whose location, veneer, or target was set, each with
         /// the buffer length at that moment, in the order they were set. A
         /// field is only ever set to an offset already emitted, so every site
@@ -611,10 +614,23 @@ pub fn CodeGen(comptime target: RocTarget) type {
             return distance + self.branchShiftMargin() < self.branch_reach_limit;
         }
 
+        /// The index of the instruction word at code offset `loc`, which keys
+        /// the branch-site tables. Instructions are word aligned.
+        fn instructionWord(loc: usize) ?u32 {
+            std.debug.assert(loc % 4 == 0);
+            return std.math.cast(u32, loc / 4);
+        }
+
+        /// `instructionWord` for a location being recorded.
+        fn recordedInstructionWord(loc: usize) Allocator.Error!u32 {
+            return instructionWord(loc) orelse error.OutOfMemory;
+        }
+
         fn registerBranchSite(self: *Self, site: BranchSite) Allocator.Error!void {
             const index: u32 = @intCast(self.branch_sites.items.len);
+            const word = try recordedInstructionWord(site.loc);
             try self.branch_sites.append(self.allocator, site);
-            try self.branch_site_index.put(self.allocator, site.loc, index);
+            try self.branch_site_index.put(self.allocator, word, index);
             self.branch_open_unveneered += 1;
             try self.logBranchSite(index);
         }
@@ -626,8 +642,12 @@ pub fn CodeGen(comptime target: RocTarget) type {
             try self.branch_site_log.append(self.allocator, .{ .emitted = emitted, .index = index });
         }
 
+        fn branchSiteAt(self: *const Self, loc: usize) ?u32 {
+            return self.branch_site_index.get(instructionWord(loc) orelse return null);
+        }
+
         fn branchSiteIndex(self: *Self, loc: usize) u32 {
-            return self.branch_site_index.get(loc) orelse
+            return self.branchSiteAt(loc) orelse
                 invariant("AArch64 branch patch at 0x{x} names no registered branch site", .{loc});
         }
 
@@ -665,7 +685,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// so re-resolving it can route through a veneer exactly as a call
         /// emitted here would.
         pub fn registerAssembledCallSite(self: *Self, loc: usize) Allocator.Error!void {
-            if (self.branch_site_index.contains(loc)) return;
+            if (self.branchSiteAt(loc) != null) return;
             try self.registerBranchSite(.{ .loc = loc, .kind = .call });
         }
 
@@ -681,7 +701,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         }
 
         pub fn callVeneer(self: *const Self, loc: usize) ?usize {
-            const index = self.branch_site_index.get(loc) orelse return self.retired_call_veneers.get(loc);
+            const index = self.branchSiteAt(loc) orelse return self.retired_call_veneers.get(instructionWord(loc) orelse return null);
             return self.branch_sites.items[index].veneer;
         }
 
@@ -1009,14 +1029,14 @@ pub fn CodeGen(comptime target: RocTarget) type {
             const items = self.branch_sites.items;
             for (visited.items) |index| {
                 const site = items[index];
-                if (site.loc >= body_start and site.loc < body_end) _ = self.branch_site_index.remove(site.loc);
+                if (site.loc >= body_start and site.loc < body_end) _ = self.branch_site_index.remove(instructionWord(site.loc).?);
             }
             for (visited.items) |index| {
                 const site = &items[index];
                 const loc_moved = site.loc >= body_start and site.loc < body_end;
                 if (loc_moved) {
                     site.loc += delta;
-                    try self.branch_site_index.put(self.allocator, site.loc, index);
+                    try self.branch_site_index.put(self.allocator, try recordedInstructionWord(site.loc), index);
                 }
                 var veneer_moved = false;
                 if (site.veneer) |veneer| {
@@ -1062,7 +1082,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
             if (self.branch_resolved < 4096 or self.branch_resolved * 2 < items.len) return;
             for (items) |site| {
                 if (site.target != null and site.kind == .call) {
-                    if (site.veneer) |veneer| try self.retired_call_veneers.put(self.allocator, site.loc, veneer);
+                    if (site.veneer) |veneer| try self.retired_call_veneers.put(self.allocator, instructionWord(site.loc).?, veneer);
                 }
             }
             self.branch_site_index.clearRetainingCapacity();
@@ -1070,7 +1090,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
             for (items) |site| {
                 if (site.target != null) continue;
                 items[kept] = site;
-                try self.branch_site_index.put(self.allocator, site.loc, @intCast(kept));
+                try self.branch_site_index.put(self.allocator, instructionWord(site.loc).?, @intCast(kept));
                 kept += 1;
             }
             self.branch_sites.shrinkRetainingCapacity(kept);

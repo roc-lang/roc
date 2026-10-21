@@ -643,8 +643,6 @@ pub const Merge = struct { start: u32, len: u32 };
 
 allocator: Allocator,
 indexes: StackPlan.Indexes,
-/// `StackPlan`'s local index column, kept empty between procedures.
-local_indices: std.ArrayList(u32) = .empty,
 /// Each local's representation, by local id. Rows outside the current
 /// procedure's inventory hold `.memory`.
 reps: std.ArrayList(Rep) = .empty,
@@ -672,7 +670,6 @@ pub fn init(allocator: Allocator) Self {
 
 pub fn deinit(self: *Self) void {
     self.indexes.deinit();
-    self.local_indices.deinit(self.allocator);
     self.reps.deinit(self.allocator);
     self.addressed.deinit(self.allocator);
     self.ssa_locals.deinit(self.allocator);
@@ -787,9 +784,8 @@ const Tracked = struct {
 /// point the merged locals live on entry to it.
 /// The first `param_count` SSA locals are parameters.
 fn classify(self: *Self, store: *const LirStore, param_count: usize, root: CFStmtId, ops: anytype) Allocator.Error!void {
-    var stack_plan = StackPlan.initWithLocalIndices(self.allocator, self.local_indices);
-    self.local_indices = .empty;
-    defer self.local_indices = stack_plan.deinitKeepingLocalIndices();
+    var stack_plan = self.indexes.takePlan();
+    defer self.indexes.keepPlan(&stack_plan);
     self.planned.clearRetainingCapacity();
     defer self.indexes.clear(self.planned.items);
     try stack_plan.addProcGraph(store, &self.indexes, root, &self.planned, Tracked{ .plan = self });

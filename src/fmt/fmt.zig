@@ -511,6 +511,7 @@ const Formatter = struct {
     /// Suspended emission workers.
     frames: std.ArrayList(Frame) = .empty,
     /// Grouped predictions normalize source-only newlines independently.
+    /// Shares one allocation with `node_layouts`, directly after it.
     grouped_layouts: []TypeLayout,
     /// Prefix counts of comments in inter-token gaps.
     comment_prefix: []u32,
@@ -541,12 +542,12 @@ const Formatter = struct {
     /// Creates a new Formatter for the given parse IR.
     fn init(ast: AST, writer: *std.Io.Writer, options: Options) FormatAstError!Formatter {
         if (!tokenizationPermitsFormatting(ast)) return error.ParsingFailed;
-        const node_layouts = try ast.gpa.alloc(TypeLayout, ast.store.nodeCount());
-        errdefer ast.gpa.free(node_layouts);
-        @memset(node_layouts, .unknown);
-        const grouped_layouts = try ast.gpa.alloc(TypeLayout, ast.store.nodeCount());
-        errdefer ast.gpa.free(grouped_layouts);
-        @memset(grouped_layouts, .unknown);
+        const node_count = ast.store.nodeCount();
+        const layouts = try ast.gpa.alloc(TypeLayout, 2 * node_count);
+        errdefer ast.gpa.free(layouts);
+        @memset(layouts, .unknown);
+        const node_layouts = layouts[0..node_count];
+        const grouped_layouts = layouts[node_count..];
         const comment_prefix = try ast.gpa.alloc(u32, ast.tokens.tokens.len + 1);
         errdefer ast.gpa.free(comment_prefix);
         comment_prefix[0] = 0;
@@ -570,10 +571,9 @@ const Formatter = struct {
     }
 
     fn deinit(fmt: *Formatter) void {
-        fmt.ast.gpa.free(fmt.node_layouts);
+        fmt.ast.gpa.free(fmt.node_layouts.ptr[0 .. 2 * fmt.node_layouts.len]);
         fmt.layout_scratch.deinit(fmt.ast.gpa);
         fmt.frames.deinit(fmt.ast.gpa);
-        fmt.ast.gpa.free(fmt.grouped_layouts);
         fmt.ast.gpa.free(fmt.comment_prefix);
     }
 
@@ -1371,19 +1371,36 @@ const Formatter = struct {
         };
     }
 
-    fn orderedName(fmt: *Formatter, comptime T: type, idx: T) FormatAstError![]const u8 {
-        var name: std.Io.Writer.Allocating = .init(fmt.ast.gpa);
-        defer name.deinit();
+    /// Where an ordered entry's name is: in the source, or in the
+    /// collection's name buffer when it is pieced together from several tokens.
+    const OrderedName = union(enum) {
+        source: []const u8,
+        pooled: struct { start: usize, end: usize },
+
+        fn resolve(name: OrderedName, pool: []const u8) []const u8 {
+            return switch (name) {
+                .source => |text| text,
+                .pooled => |span| pool[span.start..span.end],
+            };
+        }
+    };
+
+    fn orderedName(fmt: *Formatter, comptime T: type, idx: T, pool: *std.ArrayList(u8)) FormatAstError!OrderedName {
         if (T == AST.ExposedItem.Idx) {
             const item = fmt.ast.store.getExposedItem(idx);
             switch (item) {
                 inline .lower_ident, .upper_ident, .upper_ident_star => |ident, tag| {
-                    for (fmt.ast.store.tokenSlice(ident.qualifiers)) |qualifier| {
-                        try name.writer.writeAll(std.mem.trimStart(u8, fmt.ast.resolve(qualifier), "."));
-                        try name.writer.writeByte('.');
+                    const qualifiers = fmt.ast.store.tokenSlice(ident.qualifiers);
+                    const base_name = std.mem.trimStart(u8, fmt.ast.resolve(ident.ident), ".");
+                    if (qualifiers.len == 0 and tag != .upper_ident_star) return .{ .source = base_name };
+                    const start = pool.items.len;
+                    for (qualifiers) |qualifier| {
+                        try pool.appendSlice(fmt.ast.gpa, std.mem.trimStart(u8, fmt.ast.resolve(qualifier), "."));
+                        try pool.append(fmt.ast.gpa, '.');
                     }
-                    try name.writer.writeAll(std.mem.trimStart(u8, fmt.ast.resolve(ident.ident), "."));
-                    if (tag == .upper_ident_star) try name.writer.writeAll(".*");
+                    try pool.appendSlice(fmt.ast.gpa, base_name);
+                    if (tag == .upper_ident_star) try pool.appendSlice(fmt.ast.gpa, ".*");
+                    return .{ .pooled = .{ .start = start, .end = pool.items.len } };
                 },
                 .malformed => return error.ParsingFailed,
             }
@@ -1396,9 +1413,8 @@ const Formatter = struct {
                 fmt.ast.store.getSymbolMapEntry(idx).symbol
             else
                 @compileError("unsupported ordered header item");
-            try name.writer.writeAll(fmt.ast.resolve(token));
+            return .{ .source = fmt.ast.resolve(token) };
         }
-        return try name.toOwnedSlice();
     }
 
     fn flushSourceGap(fmt: *Formatter, gap: SourceGap, spacing: CommentSpacing) error{WriteFailed}!void {
@@ -1433,11 +1449,13 @@ const Formatter = struct {
 
         const Entry = OrderedEntry(T);
         var entries = std.ArrayList(Entry).empty;
-        defer {
-            for (entries.items) |entry| fmt.ast.gpa.free(entry.name);
-            entries.deinit(fmt.ast.gpa);
-        }
+        defer entries.deinit(fmt.ast.gpa);
         try entries.ensureTotalCapacity(fmt.ast.gpa, items.len);
+        var names = std.ArrayList(OrderedName).empty;
+        defer names.deinit(fmt.ast.gpa);
+        try names.ensureTotalCapacity(fmt.ast.gpa, items.len);
+        var name_pool = std.ArrayList(u8).empty;
+        defer name_pool.deinit(fmt.ast.gpa);
         const opening_end: usize = fmt.ast.tokens.resolve(region.start).end.offset;
         const first_start = fmt.ast.tokens.resolve(fmt.nodeRegion(@backingInt(items[0])).start).start.offset;
         const opening_text = fmt.ast.env.source[opening_end..first_start];
@@ -1462,9 +1480,10 @@ const Formatter = struct {
             const gap = fmt.ast.env.source[gap_start..gap_end];
             const line_end = std.mem.findScalar(u8, gap, '\n') orelse gap.len;
             const inline_end = if (std.mem.findScalar(u8, gap[0..line_end], '#') != null) gap_start + line_end else gap_start;
+            names.appendAssumeCapacity(try fmt.orderedName(T, idx, &name_pool));
             entries.appendAssumeCapacity(.{
                 .idx = idx,
-                .name = try fmt.orderedName(T, idx),
+                .name = undefined,
                 .leading = .{ .start = leading_start, .end = item_start },
                 .before_separator = .{ .start = item_end, .end = if (has_comma) comma.start.offset else item_end },
                 .trailing = .{ .start = gap_start, .end = inline_end },
@@ -1472,6 +1491,7 @@ const Formatter = struct {
             leading_start = inline_end;
         }
         const closing_gap = SourceGap{ .start = leading_start, .end = closing_start };
+        for (entries.items, names.items) |*entry, name| entry.name = name.resolve(name_pool.items);
         std.mem.sort(Entry, entries.items, {}, Entry.lessThan);
 
         if (multiline) fmt.curr_indent += 1 else if (braces == .curly) try fmt.push(' ');

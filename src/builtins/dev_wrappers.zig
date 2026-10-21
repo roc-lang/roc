@@ -796,34 +796,28 @@ fn requireElementDecref(element_decref: ?RcDropFn, roc_ops: *RocOps) RcDropFn {
     return element_decref orelse utils.builtinInvariant(roc_ops, "list wrapper received no element decref callback for refcounted elements");
 }
 
-const CallbackElementDecrefContext = struct {
-    callback: RcDropFn,
-};
+/// The element-callback context for a compiled `decref` helper is the
+/// helper's own address, so each element visit loads nothing before calling it.
+fn elementDecrefContext(callback: RcDropFn) ?*anyopaque {
+    return @ptrFromInt(@intFromPtr(callback));
+}
 
-const CallbackElementIncrefContext = struct {
-    callback: RcIncFn,
-};
+/// The element-callback context for a compiled `incref` helper is the
+/// helper's own address, so each element visit loads nothing before calling it.
+fn elementIncrefContext(callback: RcIncFn) ?*anyopaque {
+    return @ptrFromInt(@intFromPtr(callback));
+}
 
 fn callbackListElementDecref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
     if (element == null) return;
-    const ctx_ptr = context orelse unreachable; // every use of this callback in this file pairs it with a CallbackElementDecrefContext pointer
-    const ctx: *const CallbackElementDecrefContext = utils.alignedPtrCast(
-        *const CallbackElementDecrefContext,
-        @as([*]u8, @ptrCast(ctx_ptr)),
-        @src(),
-    );
-    ctx.callback(element);
+    const callback: RcDropFn = @ptrFromInt(@intFromPtr(context orelse unreachable)); // every use of this callback in this file pairs it with elementDecrefContext, whose context is the non-null helper address
+    callback(element);
 }
 
 fn callbackListElementIncref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
     if (element == null) return;
-    const ctx_ptr = context orelse unreachable; // every use of this callback in this file pairs it with a CallbackElementIncrefContext pointer
-    const ctx: *const CallbackElementIncrefContext = utils.alignedPtrCast(
-        *const CallbackElementIncrefContext,
-        @as([*]u8, @ptrCast(ctx_ptr)),
-        @src(),
-    );
-    ctx.callback(element, 1);
+    const callback: RcIncFn = @ptrFromInt(@intFromPtr(context orelse unreachable)); // every use of this callback in this file pairs it with elementIncrefContext, whose context is the non-null helper address
+    callback(element, 1);
 }
 
 /// Wrapper: listWithCapacity
@@ -858,21 +852,17 @@ pub fn roc_builtins_list_concat(out: *RocList, a_bytes: ?[*]u8, a_len: usize, a_
     const update_mode_a: utils.UpdateMode = if (update_modes & 1 != 0) .InPlace else .Immutable;
     const update_mode_b: utils.UpdateMode = if (update_modes & 2 != 0) .InPlace else .Immutable;
     if (elements_refcounted) {
-        var inc_ctx = CallbackElementIncrefContext{
-            .callback = requireElementIncref(element_incref, roc_ops),
-        };
-        var dec_ctx = CallbackElementDecrefContext{
-            .callback = requireElementDecref(element_decref, roc_ops),
-        };
+        const inc_ctx = elementIncrefContext(requireElementIncref(element_incref, roc_ops));
+        const dec_ctx = elementDecrefContext(requireElementDecref(element_decref, roc_ops));
         out.* = listConcat(
             a,
             b,
             alignment,
             element_width,
             true,
-            @ptrCast(&inc_ctx),
+            inc_ctx,
             &callbackListElementIncref,
-            @ptrCast(&dec_ctx),
+            dec_ctx,
             &callbackListElementDecref,
             update_mode_a,
             update_mode_b,
@@ -890,13 +880,9 @@ pub fn roc_builtins_list_append_range_within(out: *RocList, list_bytes: ?[*]u8, 
     const roc_ops = in_process_host.ops();
     const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     if (elements_refcounted) {
-        var inc_ctx = CallbackElementIncrefContext{
-            .callback = requireElementIncref(element_incref, roc_ops),
-        };
-        var dec_ctx = CallbackElementDecrefContext{
-            .callback = requireElementDecref(element_decref, roc_ops),
-        };
-        out.* = listAppendRangeWithin(l, start, count, alignment, element_width, true, @ptrCast(&inc_ctx), &callbackListElementIncref, @ptrCast(&dec_ctx), &callbackListElementDecref, update_mode, roc_ops);
+        const inc_ctx = elementIncrefContext(requireElementIncref(element_incref, roc_ops));
+        const dec_ctx = elementDecrefContext(requireElementDecref(element_decref, roc_ops));
+        out.* = listAppendRangeWithin(l, start, count, alignment, element_width, true, inc_ctx, &callbackListElementIncref, dec_ctx, &callbackListElementDecref, update_mode, roc_ops);
     } else {
         out.* = listAppendRangeWithin(l, start, count, alignment, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), update_mode, roc_ops);
     }
@@ -909,13 +895,9 @@ pub fn roc_builtins_list_copy_range_within(out: *RocList, list_bytes: ?[*]u8, li
     const roc_ops = in_process_host.ops();
     const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     if (elements_refcounted) {
-        var inc_ctx = CallbackElementIncrefContext{
-            .callback = requireElementIncref(element_incref, roc_ops),
-        };
-        var dec_ctx = CallbackElementDecrefContext{
-            .callback = requireElementDecref(element_decref, roc_ops),
-        };
-        out.* = listCopyRangeWithin(l, dest_index, src_index, count, alignment, element_width, true, @ptrCast(&inc_ctx), &callbackListElementIncref, @ptrCast(&dec_ctx), &callbackListElementDecref, roc_ops);
+        const inc_ctx = elementIncrefContext(requireElementIncref(element_incref, roc_ops));
+        const dec_ctx = elementDecrefContext(requireElementDecref(element_decref, roc_ops));
+        out.* = listCopyRangeWithin(l, dest_index, src_index, count, alignment, element_width, true, inc_ctx, &callbackListElementIncref, dec_ctx, &callbackListElementDecref, roc_ops);
     } else {
         out.* = listCopyRangeWithin(l, dest_index, src_index, count, alignment, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), roc_ops);
     }
@@ -927,10 +909,8 @@ pub fn roc_builtins_list_append_range_within_unsafe(out: *RocList, list_bytes: ?
     const roc_ops = in_process_host.ops();
     const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     if (elements_refcounted) {
-        var inc_ctx = CallbackElementIncrefContext{
-            .callback = requireElementIncref(element_incref, roc_ops),
-        };
-        out.* = list.listAppendRangeWithinUnsafe(l, start, count, element_width, true, @ptrCast(&inc_ctx), &callbackListElementIncref, roc_ops);
+        const inc_ctx = elementIncrefContext(requireElementIncref(element_incref, roc_ops));
+        out.* = list.listAppendRangeWithinUnsafe(l, start, count, element_width, true, inc_ctx, &callbackListElementIncref, roc_ops);
     } else {
         out.* = list.listAppendRangeWithinUnsafe(l, start, count, element_width, false, null, @ptrCast(&rcNone), roc_ops);
     }
@@ -961,13 +941,9 @@ pub fn roc_builtins_list_append_sublist(out: *RocList, list_bytes: ?[*]u8, list_
     const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     const src = RocList{ .bytes = src_bytes, .length = src_len, .capacity_or_alloc_ptr = src_cap };
     if (elements_refcounted) {
-        var inc_ctx = CallbackElementIncrefContext{
-            .callback = requireElementIncref(element_incref, roc_ops),
-        };
-        var dec_ctx = CallbackElementDecrefContext{
-            .callback = requireElementDecref(element_decref, roc_ops),
-        };
-        out.* = listAppendSublist(l, src, start, len, alignment, element_width, true, @ptrCast(&inc_ctx), &callbackListElementIncref, @ptrCast(&dec_ctx), &callbackListElementDecref, update_mode, roc_ops);
+        const inc_ctx = elementIncrefContext(requireElementIncref(element_incref, roc_ops));
+        const dec_ctx = elementDecrefContext(requireElementDecref(element_decref, roc_ops));
+        out.* = listAppendSublist(l, src, start, len, alignment, element_width, true, inc_ctx, &callbackListElementIncref, dec_ctx, &callbackListElementDecref, update_mode, roc_ops);
     } else {
         out.* = listAppendSublist(l, src, start, len, alignment, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), update_mode, roc_ops);
     }
@@ -989,13 +965,9 @@ pub fn roc_builtins_list_prepend(out: *RocList, list_bytes: ?[*]u8, list_len: us
     const roc_ops = in_process_host.ops();
     const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     if (elements_refcounted) {
-        var inc_ctx = CallbackElementIncrefContext{
-            .callback = requireElementIncref(element_incref, roc_ops),
-        };
-        var dec_ctx = CallbackElementDecrefContext{
-            .callback = requireElementDecref(element_decref, roc_ops),
-        };
-        out.* = listPrepend(l, alignment, element, element_width, true, @ptrCast(&inc_ctx), &callbackListElementIncref, @ptrCast(&dec_ctx), &callbackListElementDecref, update_mode, &copy_fallback, roc_ops);
+        const inc_ctx = elementIncrefContext(requireElementIncref(element_incref, roc_ops));
+        const dec_ctx = elementDecrefContext(requireElementDecref(element_decref, roc_ops));
+        out.* = listPrepend(l, alignment, element, element_width, true, inc_ctx, &callbackListElementIncref, dec_ctx, &callbackListElementDecref, update_mode, &copy_fallback, roc_ops);
     } else {
         out.* = listPrepend(l, alignment, element, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), update_mode, &copy_fallback, roc_ops);
     }
@@ -1008,10 +980,8 @@ pub fn roc_builtins_list_sublist(out: *RocList, list_bytes: ?[*]u8, list_len: us
     const roc_ops = in_process_host.ops();
     const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     if (elements_refcounted) {
-        var dec_ctx = CallbackElementDecrefContext{
-            .callback = requireElementDecref(element_decref, roc_ops),
-        };
-        out.* = listSublist(l, alignment, element_width, true, start, len, @ptrCast(&dec_ctx), &callbackListElementDecref, update_mode, roc_ops);
+        const dec_ctx = elementDecrefContext(requireElementDecref(element_decref, roc_ops));
+        out.* = listSublist(l, alignment, element_width, true, start, len, dec_ctx, &callbackListElementDecref, update_mode, roc_ops);
     } else {
         out.* = listSublist(l, alignment, element_width, false, start, len, null, @ptrCast(&rcNone), update_mode, roc_ops);
     }
@@ -1030,13 +1000,9 @@ pub fn roc_builtins_list_drop_at(out: *RocList, list_bytes: ?[*]u8, list_len: us
     const roc_ops = in_process_host.ops();
     const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     if (elements_refcounted) {
-        var inc_ctx = CallbackElementIncrefContext{
-            .callback = requireElementIncref(element_incref, roc_ops),
-        };
-        var dec_ctx = CallbackElementDecrefContext{
-            .callback = requireElementDecref(element_decref, roc_ops),
-        };
-        out.* = listDropAt(l, alignment, element_width, true, index, @ptrCast(&inc_ctx), &callbackListElementIncref, @ptrCast(&dec_ctx), &callbackListElementDecref, update_mode, roc_ops);
+        const inc_ctx = elementIncrefContext(requireElementIncref(element_incref, roc_ops));
+        const dec_ctx = elementDecrefContext(requireElementDecref(element_decref, roc_ops));
+        out.* = listDropAt(l, alignment, element_width, true, index, inc_ctx, &callbackListElementIncref, dec_ctx, &callbackListElementDecref, update_mode, roc_ops);
     } else {
         out.* = listDropAt(l, alignment, element_width, false, index, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), update_mode, roc_ops);
     }
@@ -1053,13 +1019,9 @@ pub fn roc_builtins_list_replace(out: *RocList, list_bytes: ?[*]u8, list_len: us
         return;
     }
     if (elements_refcounted) {
-        var inc_ctx = CallbackElementIncrefContext{
-            .callback = requireElementIncref(element_incref, roc_ops),
-        };
-        var dec_ctx = CallbackElementDecrefContext{
-            .callback = requireElementDecref(element_decref, roc_ops),
-        };
-        out.* = listReplace(l, alignment, index, element, element_width, true, @ptrCast(&inc_ctx), &callbackListElementIncref, @ptrCast(&dec_ctx), &callbackListElementDecref, out_element, &copy_fallback, roc_ops);
+        const inc_ctx = elementIncrefContext(requireElementIncref(element_incref, roc_ops));
+        const dec_ctx = elementDecrefContext(requireElementDecref(element_decref, roc_ops));
+        out.* = listReplace(l, alignment, index, element, element_width, true, inc_ctx, &callbackListElementIncref, dec_ctx, &callbackListElementDecref, out_element, &copy_fallback, roc_ops);
     } else {
         out.* = listReplace(l, alignment, index, element, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), out_element, &copy_fallback, roc_ops);
     }
@@ -1071,13 +1033,9 @@ pub fn roc_builtins_list_set(out: *RocList, list_bytes: ?[*]u8, list_len: usize,
     const roc_ops = in_process_host.ops();
     const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     if (elements_refcounted) {
-        var inc_ctx = CallbackElementIncrefContext{
-            .callback = requireElementIncref(element_incref, roc_ops),
-        };
-        var dec_ctx = CallbackElementDecrefContext{
-            .callback = requireElementDecref(element_decref, roc_ops),
-        };
-        out.* = listSet(l, alignment, index, element, element_width, true, @ptrCast(&inc_ctx), &callbackListElementIncref, @ptrCast(&dec_ctx), &callbackListElementDecref, update_mode, &copy_fallback, roc_ops);
+        const inc_ctx = elementIncrefContext(requireElementIncref(element_incref, roc_ops));
+        const dec_ctx = elementDecrefContext(requireElementDecref(element_decref, roc_ops));
+        out.* = listSet(l, alignment, index, element, element_width, true, inc_ctx, &callbackListElementIncref, dec_ctx, &callbackListElementDecref, update_mode, &copy_fallback, roc_ops);
     } else {
         out.* = listSet(l, alignment, index, element, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), update_mode, &copy_fallback, roc_ops);
     }
@@ -1089,13 +1047,9 @@ pub fn roc_builtins_list_swap(out: *RocList, list_bytes: ?[*]u8, list_len: usize
     const roc_ops = in_process_host.ops();
     const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     if (elements_refcounted) {
-        var inc_ctx = CallbackElementIncrefContext{
-            .callback = requireElementIncref(element_incref, roc_ops),
-        };
-        var dec_ctx = CallbackElementDecrefContext{
-            .callback = requireElementDecref(element_decref, roc_ops),
-        };
-        out.* = listSwap(l, alignment, element_width, index_1, index_2, true, @ptrCast(&inc_ctx), &callbackListElementIncref, @ptrCast(&dec_ctx), &callbackListElementDecref, update_mode, &copy_fallback, roc_ops);
+        const inc_ctx = elementIncrefContext(requireElementIncref(element_incref, roc_ops));
+        const dec_ctx = elementDecrefContext(requireElementDecref(element_decref, roc_ops));
+        out.* = listSwap(l, alignment, element_width, index_1, index_2, true, inc_ctx, &callbackListElementIncref, dec_ctx, &callbackListElementDecref, update_mode, &copy_fallback, roc_ops);
     } else {
         out.* = listSwap(l, alignment, element_width, index_1, index_2, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), update_mode, &copy_fallback, roc_ops);
     }
@@ -1107,13 +1061,9 @@ pub fn roc_builtins_list_reserve(out: *RocList, list_bytes: ?[*]u8, list_len: us
     const roc_ops = in_process_host.ops();
     const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     if (elements_refcounted) {
-        var inc_ctx = CallbackElementIncrefContext{
-            .callback = requireElementIncref(element_incref, roc_ops),
-        };
-        var dec_ctx = CallbackElementDecrefContext{
-            .callback = requireElementDecref(element_decref, roc_ops),
-        };
-        out.* = listReserve(l, alignment, spare, element_width, true, @ptrCast(&inc_ctx), &callbackListElementIncref, @ptrCast(&dec_ctx), &callbackListElementDecref, update_mode, roc_ops);
+        const inc_ctx = elementIncrefContext(requireElementIncref(element_incref, roc_ops));
+        const dec_ctx = elementDecrefContext(requireElementDecref(element_decref, roc_ops));
+        out.* = listReserve(l, alignment, spare, element_width, true, inc_ctx, &callbackListElementIncref, dec_ctx, &callbackListElementDecref, update_mode, roc_ops);
     } else {
         out.* = listReserve(l, alignment, spare, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), update_mode, roc_ops);
     }
@@ -1125,13 +1075,9 @@ pub fn roc_builtins_list_reserve_for_append(out: *RocList, list_bytes: ?[*]u8, l
     const roc_ops = in_process_host.ops();
     const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     if (elements_refcounted) {
-        var inc_ctx = CallbackElementIncrefContext{
-            .callback = requireElementIncref(element_incref, roc_ops),
-        };
-        var dec_ctx = CallbackElementDecrefContext{
-            .callback = requireElementDecref(element_decref, roc_ops),
-        };
-        out.* = listReserveForAppend(l, alignment, spare, element_width, true, @ptrCast(&inc_ctx), &callbackListElementIncref, @ptrCast(&dec_ctx), &callbackListElementDecref, update_mode, roc_ops);
+        const inc_ctx = elementIncrefContext(requireElementIncref(element_incref, roc_ops));
+        const dec_ctx = elementDecrefContext(requireElementDecref(element_decref, roc_ops));
+        out.* = listReserveForAppend(l, alignment, spare, element_width, true, inc_ctx, &callbackListElementIncref, dec_ctx, &callbackListElementDecref, update_mode, roc_ops);
     } else {
         out.* = listReserveForAppend(l, alignment, spare, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), update_mode, roc_ops);
     }
@@ -1143,13 +1089,9 @@ pub fn roc_builtins_list_release_excess_capacity(out: *RocList, list_bytes: ?[*]
     const roc_ops = in_process_host.ops();
     const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     if (elements_refcounted) {
-        var inc_ctx = CallbackElementIncrefContext{
-            .callback = requireElementIncref(element_incref, roc_ops),
-        };
-        var dec_ctx = CallbackElementDecrefContext{
-            .callback = requireElementDecref(element_decref, roc_ops),
-        };
-        out.* = listReleaseExcessCapacity(l, alignment, element_width, true, @ptrCast(&inc_ctx), &callbackListElementIncref, @ptrCast(&dec_ctx), &callbackListElementDecref, update_mode, roc_ops);
+        const inc_ctx = elementIncrefContext(requireElementIncref(element_incref, roc_ops));
+        const dec_ctx = elementDecrefContext(requireElementDecref(element_decref, roc_ops));
+        out.* = listReleaseExcessCapacity(l, alignment, element_width, true, inc_ctx, &callbackListElementIncref, dec_ctx, &callbackListElementDecref, update_mode, roc_ops);
     } else {
         out.* = listReleaseExcessCapacity(l, alignment, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), update_mode, roc_ops);
     }
@@ -1236,15 +1178,13 @@ pub fn roc_builtins_list_decref_with(list_bytes: ?[*]u8, list_len: usize, list_c
     const roc_ops = in_process_host.ops();
     const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     if (element_decref) |callback| {
-        var ctx = CallbackElementDecrefContext{
-            .callback = callback,
-        };
+        const ctx = elementDecrefContext(callback);
         listDecref(
             l,
             alignment,
             element_width,
             true,
-            @ptrCast(&ctx),
+            ctx,
             &callbackListElementDecref,
             roc_ops,
         );
@@ -1351,15 +1291,13 @@ pub fn roc_builtins_list_free_with(list_bytes: ?[*]u8, list_len: usize, list_cap
     const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
 
     if (element_decref) |callback| {
-        var ctx = CallbackElementDecrefContext{
-            .callback = callback,
-        };
+        const ctx = elementDecrefContext(callback);
 
         if (l.getAllocationDataPtr(roc_ops)) |source| {
             const count = l.getAllocationElementCount(true, roc_ops);
             var i: usize = 0;
             while (i < count) : (i += 1) {
-                callbackListElementDecref(@ptrCast(&ctx), source + i * element_width);
+                callbackListElementDecref(ctx, source + i * element_width);
             }
         }
 
@@ -2022,49 +1960,12 @@ pub fn roc_builtins_num_shr_u128(out_low: *u64, out_high: *u64, a_low: u64, a_hi
 
 // ── Numeric-to-string wrappers ──
 
-/// Format a u128 to decimal string without using compiler_rt intrinsics.
-/// Uses i128h.divTrunc_u128 and i128h.rem_u128 to avoid __udivti3/__umodti3.
-fn u128ToStr(buf: []u8, val: u128) []u8 {
-    if (val == 0) {
-        buf[0] = '0';
-        return buf[0..1];
-    }
-    var tmp: [40]u8 = undefined;
-    var len: usize = 0;
-    var v = val;
-    while (v != 0) {
-        const digit: u8 = @truncate(i128h.rem_u128(v, 10));
-        tmp[len] = '0' + digit;
-        len += 1;
-        v = i128h.divTrunc_u128(v, 10);
-    }
-    // Reverse into output buffer
-    for (0..len) |i| {
-        buf[i] = tmp[len - 1 - i];
-    }
-    return buf[0..len];
+fn signedIntToStr(comptime T: type, buf: []u8, val: T) []const u8 {
+    return i128h.i128_to_str(buf, @as(i128, @intCast(val))).str;
 }
 
-/// Format an i128 to decimal string without using compiler_rt intrinsics.
-fn i128ToStr(buf: []u8, val: i128) []u8 {
-    if (val >= 0) {
-        return u128ToStr(buf, @intCast(val));
-    }
-    buf[0] = '-';
-    const abs: u128 = if (val == std.math.minInt(i128))
-        @as(u128, @bitCast(val))
-    else
-        @intCast(-val);
-    const digits = u128ToStr(buf[1..], abs);
-    return buf[0 .. 1 + digits.len];
-}
-
-fn signedIntToStr(comptime T: type, buf: []u8, val: T) []u8 {
-    return i128ToStr(buf, @as(i128, @intCast(val)));
-}
-
-fn unsignedIntToStr(comptime T: type, buf: []u8, val: T) []u8 {
-    return u128ToStr(buf, @as(u128, @intCast(val)));
+fn unsignedIntToStr(comptime T: type, buf: []u8, val: T) []const u8 {
+    return i128h.u128_to_str(buf, @as(u128, @intCast(val))).str;
 }
 
 /// Unified integer-to-string wrapper: dispatches on int_width/is_signed
@@ -2091,9 +1992,9 @@ pub fn roc_builtins_int_to_str(out: *RocStr, val_low: u64, val_high: u64, int_wi
         16 => blk: {
             const val128: u128 = i128h.from_u64_pair(val_low, val_high);
             break :blk if (is_signed)
-                i128ToStr(&buf, @as(i128, @bitCast(val128)))
+                signedIntToStr(i128, &buf, @as(i128, @bitCast(val128)))
             else
-                u128ToStr(&buf, val128);
+                unsignedIntToStr(u128, &buf, val128);
         },
         else => utils.builtinInvariant(roc_ops, "int_to_str integer width is not 1, 2, 4, 8, or 16 bytes"),
     };
@@ -2470,13 +2371,9 @@ pub fn roc_builtins_list_reverse(out: *RocList, list_bytes: ?[*]u8, list_len: us
     const roc_ops = in_process_host.ops();
     const l = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
     if (elements_refcounted) {
-        var inc_ctx = CallbackElementIncrefContext{
-            .callback = requireElementIncref(element_incref, roc_ops),
-        };
-        var dec_ctx = CallbackElementDecrefContext{
-            .callback = requireElementDecref(element_decref, roc_ops),
-        };
-        out.* = list.listReverse(l, alignment, element_width, true, @ptrCast(&inc_ctx), &callbackListElementIncref, @ptrCast(&dec_ctx), &callbackListElementDecref, update_mode, &copy_fallback, roc_ops);
+        const inc_ctx = elementIncrefContext(requireElementIncref(element_incref, roc_ops));
+        const dec_ctx = elementDecrefContext(requireElementDecref(element_decref, roc_ops));
+        out.* = list.listReverse(l, alignment, element_width, true, inc_ctx, &callbackListElementIncref, dec_ctx, &callbackListElementDecref, update_mode, &copy_fallback, roc_ops);
     } else {
         out.* = list.listReverse(l, alignment, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), update_mode, &copy_fallback, roc_ops);
     }
