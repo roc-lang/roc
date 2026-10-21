@@ -19398,6 +19398,44 @@ proves non-strict strict, so a counter tested against its limit with `!=` is
 known to lie strictly inside it. `bool_not` of a modeled comparison carries the
 complementary comparison, which is how `!=` reaches the prover.
 
+### Saturating results and the other integer operations in the prover
+
+A saturating operation is an overflow predicate whose true arm yields a
+constant bound and whose false arm yields the wrapping result, so its value
+reaches the prover as a merge of a constant edge with an exact edge. Merging
+those edges like any others would lose what the exact edge knows, since a
+constant proves little about another root, so constant edges take no part in
+the meet of a local's bounds: the bounds every non-constant edge proves are
+kept where each constant edge's value satisfies them by the bound root's own
+range. `min(a + b, highest)` is therefore at least `a` on every path, because
+`highest` is at least any value of `a`'s type. An upper bound that only a zero
+edge fails holds whenever the merged value is not zero: `max(len - k, 0)` is
+at most `len - k` on every path that sees it above zero. Such a bound is kept
+apart, and a branch edge whose ordering puts the value at or above one asserts
+it along that edge, taking the edge's origin. That is what lets a single
+comparison `index < len.minus_saturated(k - 1)` prove the read of `k`
+items at `index`, and the fixed-width reads and writes of the builtins
+bound their index exactly so: the saturating limit depends only on the list,
+so a loop hoists it and keeps one comparison per access.
+
+An overflow predicate's true edge asserts what overflowing means: a
+difference overflows when the subtrahend exceeds the minuend, a sum when the
+mathematical sum of its operands exceeds the type's highest value, and a
+product by a positive constant when the other operand exceeds the highest
+value divided by that constant.
+
+The remaining unsigned operations get the range their operands allow and the
+orderings they always have with them: a quotient is at most its dividend, a
+remainder or modulo is below its divisor and at most its dividend, a right
+shift is at most its operand and a left shift by a constant scales its range
+when that stays within the type, `or` is at least either operand, `xor` and
+`or` are within the all-ones value covering both operands, `not` mirrors its
+operand's range, a bit count is at most the operand's width, and an absolute
+difference is at most the operands' spread. A division or remainder survives
+only with a nonzero divisor, so past one the divisor is at least one, and a
+checked division or remainder whose divisor is proven at least one becomes
+its plain form. Signed operands are not modeled.
+
 ### Dec
 
 `Dec` is fixed-point over an `i128`. Its addition and subtraction are plain
@@ -19410,7 +19448,9 @@ multiplication requires rescaling, so it remains its own `dec_mul` operation.
 Division, remainder, modulo, negation, and absolute value keep their existing
 checked forms. Their overflow shape differs—the most negative value divided
 by negative one, and division by zero—and they are not part of this family.
-Shift operations do not yet assert no-wraparound where it would be provable.
+The range prover turns an unsigned checked division or remainder whose
+divisor it proves nonzero into the plain form (see above). Shift operations
+do not yet assert no-wraparound where it would be provable.
 
 ## ARC Borrow Inference
 
