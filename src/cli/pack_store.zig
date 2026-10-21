@@ -94,6 +94,58 @@ pub const Store = struct {
         try self.writePath(path, bytes);
     }
 
+    /// The object pack an optimized build of the program whose root module
+    /// has placement identity `identity` filed, which each optimized build of
+    /// that program replaces.
+    pub fn optimizedPackPath(self: *const Store, identity: [32]u8) Allocator.Error![]u8 {
+        const name = std.fmt.bytesToHex(identity, .lower) ++ ".rpk".*;
+        return std.fs.path.join(self.allocator, &.{ self.root, "optimized", &name });
+    }
+
+    /// The object pack a URL-package module's artifact `key` names under
+    /// placement identity `identity`.
+    pub fn packagePackPath(self: *const Store, identity: [32]u8, key: [32]u8) Allocator.Error![]u8 {
+        return self.packPath(.pkg, identity, key);
+    }
+
+    /// The input key of the optimized pack filed for root `identity`
+    /// (`PackFile.ObjectBinding.input_key`), or null when there is none.
+    pub fn optimizedInputKey(self: *const Store, identity: [32]u8) Allocator.Error!?[32]u8 {
+        const path = try self.optimizedPackPath(identity);
+        defer self.allocator.free(path);
+        const bytes = self.roc_ctx.readFile(path, self.allocator) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return null,
+        };
+        defer self.allocator.free(bytes);
+        return PackFile.objectInputKey(bytes);
+    }
+
+    /// File the optimized pack of root `identity`, replacing the one an
+    /// earlier optimized build filed.
+    pub fn replaceOptimized(self: *const Store, identity: [32]u8, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!void {
+        const path = try self.optimizedPackPath(identity);
+        defer self.allocator.free(path);
+        const dir = std.fs.path.dirname(path).?;
+        self.roc_ctx.makePath(dir) catch |err| {
+            self.reportWriteFailure("create directory", dir, bytes.len, err);
+            return error.PackWriteFailed;
+        };
+        const temp_path = self.roc_ctx.writeTempFile(self.allocator, path, bytes) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => |write_err| {
+                self.reportWriteFailure("write staging file", path, bytes.len, write_err);
+                return error.PackWriteFailed;
+            },
+        };
+        defer self.allocator.free(temp_path);
+        errdefer self.roc_ctx.deleteFile(temp_path) catch {};
+        self.roc_ctx.rename(temp_path, path) catch |err| {
+            self.reportWriteFailure("publish staging file", temp_path, bytes.len, err);
+            return error.PackWriteFailed;
+        };
+    }
+
     /// Whether the pack for `key` is already in the store.
     pub fn has(self: *const Store, origin: compile.BuildEnv.PackOrigin, identity: [32]u8, key: [32]u8) Allocator.Error!bool {
         const path = try self.packPath(origin, identity, key);
@@ -219,11 +271,11 @@ test "object cache loading owns decoded packs and commits both indexes atomicall
             try std.testing.expectEqual(@as(usize, 1), packs.packs.items.len);
             packs.indexPacks() catch |err|
                 return rejected(&packs, expected_key, err);
-            const hit = packs.specCacheLookup().lookup(expected_key, .dev_code) orelse return error.TestUnexpectedResult;
+            const hit = packs.specCacheLookup().lookup(expected_key, .dev_code, &.{}) orelse return error.TestUnexpectedResult;
             try std.testing.expectEqualSlices(u8, &expected_identity.bytes, &hit.identity);
             try std.testing.expectEqual(@as(u64, 1), hit.rc_borrowed_params);
             // A consumer that cannot splice is never served dev artifacts.
-            try std.testing.expect(packs.specCacheLookup().lookup(expected_key, .linked_objects) == null);
+            try std.testing.expect(packs.specCacheLookup().lookup(expected_key, .linked_objects, &.{}) == null);
             const located = packs.spliceSource().find(packs.spliceSource().context, expected_key) orelse return error.TestUnexpectedResult;
             try std.testing.expectEqual(expected_identity, located.set.artifacts[located.index].kind.proc);
         }
@@ -233,7 +285,7 @@ test "object cache loading owns decoded packs and commits both indexes atomicall
             try std.testing.expectEqual(err, packs.failure.?);
             try std.testing.expect(packs.state == .unavailable);
             try std.testing.expectError(err, packs.indexPacks());
-            try std.testing.expect(packs.specCacheLookup().lookup(key_to_find, .dev_code) == null);
+            try std.testing.expect(packs.specCacheLookup().lookup(key_to_find, .dev_code, &.{}) == null);
             const splice = packs.spliceSource();
             try std.testing.expect(splice.find(splice.context, key_to_find) == null);
             try std.testing.expectEqual(@as(u64, 0), packs.hits);
@@ -265,7 +317,7 @@ test "object cache loading owns decoded packs and commits both indexes atomicall
     defer malformed.deinit();
     try std.testing.expectError(error.MalformedPack, malformed.loadDirInto(io, malformed_path, .cache_offers));
     try std.testing.expectEqual(error.MalformedPack, malformed.failure.?);
-    try std.testing.expect(malformed.specCacheLookup().lookup(key, .dev_code) == null);
+    try std.testing.expect(malformed.specCacheLookup().lookup(key, .dev_code, &.{}) == null);
     try std.testing.expect(malformed.spliceSource().find(malformed.spliceSource().context, key) == null);
 }
 
@@ -460,20 +512,151 @@ test "the cache sweep finds and ages the packs the store writes" {
     try std.testing.expect(!try store.has(.pkg, pkg_identity, key));
 }
 
+/// The stores of LLVM-compiled object packs a dev build for one target links
+/// from, one per optimization level that files them, in the order their
+/// offers rank.
+pub const LinkedStores = struct {
+    stores: [2]Store,
+
+    /// `opt_names` names the levels in rank order.
+    pub fn init(allocator: Allocator, cache_config: compile.CacheConfig, target: RocTarget, opt_names: [2][]const u8) Store.InitError!LinkedStores {
+        var first = try Store.init(allocator, cache_config, target, opt_names[0]);
+        errdefer first.deinit();
+        return .{ .stores = .{ first, try Store.init(allocator, cache_config, target, opt_names[1]) } };
+    }
+
+    pub fn deinit(self: *LinkedStores) void {
+        for (&self.stores) |*store| store.deinit();
+    }
+
+    /// A digest of every object pack a program whose root module is
+    /// `root_artifact` would load: the build's optimization state. A package
+    /// module's pack is named by its input key, and the optimized pack
+    /// carries its own, so the digest reads no object.
+    pub fn stateDigest(self: *const LinkedStores, build_env: *compile.BuildEnv, root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact) Allocator.Error![32]u8 {
+        const allocator = self.stores[0].allocator;
+        const modules = try packageModules(allocator, build_env, root_artifact);
+        defer allocator.free(modules);
+        var hasher = std.crypto.hash.Blake3.init(.{});
+        hasher.update("roc.optimization-state.v1");
+        for (&self.stores) |*store| {
+            for (modules) |module| {
+                const path = try store.packagePackPath(module.identity, module.key);
+                defer allocator.free(path);
+                if (!store.roc_ctx.fileExists(path)) continue;
+                hasher.update(path);
+                hasher.update(&.{0});
+            }
+            const placement = optimizedPackPlacement(build_env, root_artifact) orelse continue;
+            const input_key = try store.optimizedInputKey(placement.identity) orelse continue;
+            const path = try store.optimizedPackPath(placement.identity);
+            defer allocator.free(path);
+            hasher.update(path);
+            hasher.update(&.{0});
+            hasher.update(&input_key);
+        }
+        var digest: [32]u8 = undefined;
+        hasher.final(&digest);
+        return digest;
+    }
+};
+
+/// The placement whose identity names the optimized pack of the program
+/// whose root module is `root_artifact`: the app's when the program has one,
+/// since every app of a platform shares the platform as its root, and
+/// otherwise the root's.
+pub fn optimizedPackPlacement(build_env: *compile.BuildEnv, root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact) ?compile.BuildEnv.PackPlacement {
+    if (build_env.getAppSemanticData()) |app| {
+        if (app.checked_artifact) |artifact| return build_env.packPlacementForArtifactKey(artifact.key);
+    }
+    return build_env.packPlacementForArtifactKey(root_artifact.key);
+}
+
+/// The key an object pack's app-bound entries are bound to
+/// (`PackFile.ObjectBinding.app_key`): every checked module the program whose
+/// root module is `root_artifact` lowers against. Code named by site has a
+/// current body only its module's content pins, so an edit of any module of
+/// the program stops those entries serving.
+pub fn programBindingKey(allocator: Allocator, build_env: *compile.BuildEnv, root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact) Allocator.Error![32]u8 {
+    const imports = try build_env.collectImportedArtifactViews(allocator, root_artifact);
+    defer allocator.free(imports);
+    const relations = try build_env.collectRelationArtifactViews(allocator, root_artifact);
+    defer allocator.free(relations);
+    var hasher = std.crypto.hash.Blake3.init(.{});
+    hasher.update("roc.program-binding.v1");
+    hasher.update(&root_artifact.key.bytes);
+    hasher.update(&root_artifact.codeGenerationKey().bytes);
+    inline for (.{ imports, relations }) |views| {
+        var count: [8]u8 = undefined;
+        std.mem.writeInt(u64, &count, views.len, .little);
+        hasher.update(&count);
+        for (views) |view| {
+            hasher.update(&view.key.bytes);
+            hasher.update(&(view.code_generation_key orelse view.key).bytes);
+        }
+    }
+    var key: [32]u8 = undefined;
+    hasher.final(&key);
+    return key;
+}
+
+/// A dev pack as a program asks for its entries: the pack's artifact set and
+/// a digest of the program's modules (`Common.ProgramModules`).
+const ProgramPack = struct {
+    set: *const backend.dev.ProcArtifact.Set,
+    modules: [32]u8,
+
+    fn of(set: *const backend.dev.ProcArtifact.Set, modules: Common.ProgramModules) ProgramPack {
+        var hasher = std.crypto.hash.Blake3.init(.{});
+        for (modules) |identity| hasher.update(&identity);
+        var digest: [32]u8 = undefined;
+        hasher.final(&digest);
+        return .{ .set = set, .modules = digest };
+    }
+};
+
+/// A URL-package module in view of a program: its placement identity and the
+/// artifact key its object pack is filed under.
+const PackageModule = struct {
+    identity: [32]u8,
+    key: [32]u8,
+
+    fn lessThan(_: void, lhs: PackageModule, rhs: PackageModule) bool {
+        return switch (std.mem.order(u8, &lhs.identity, &rhs.identity)) {
+            .lt => true,
+            .gt => false,
+            .eq => std.mem.order(u8, &lhs.key, &rhs.key) == .lt,
+        };
+    }
+};
+
+/// The URL-package modules in view of the program whose root module is
+/// `root_artifact`, in identity order, so the packs they offer load in an
+/// order no directory listing decides.
+fn packageModules(allocator: Allocator, build_env: *compile.BuildEnv, root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact) Allocator.Error![]PackageModule {
+    const artifacts = try build_env.collectVisibleArtifacts(allocator, root_artifact);
+    defer allocator.free(artifacts);
+    var modules = std.ArrayList(PackageModule).empty;
+    errdefer modules.deinit(allocator);
+    for (artifacts) |artifact| {
+        if (std.meta.eql(artifact.key, root_artifact.key)) continue;
+        const placement = build_env.packPlacementForArtifactKey(artifact.key) orelse continue;
+        if (placement.origin != .pkg) continue;
+        try modules.append(allocator, .{ .identity = placement.identity, .key = artifact.codeGenerationKey().bytes });
+    }
+    std.mem.sort(PackageModule, modules.items, {}, PackageModule.lessThan);
+    return try modules.toOwnedSlice(allocator);
+}
+
 /// What a lazily loaded store needs once checking has produced the module
 /// set: the store and the modules in view.
 pub const Pending = struct {
     /// Dev packs, whose artifacts are spliced; null for a consumer whose
     /// emitter cannot splice them, which only object packs serve.
     store: ?*const Store,
-    /// LLVM-compiled object packs of URL-package modules
-    /// (`PackFile.ObjectPack`), which only a consumer whose code is linked
-    /// takes.
-    linked_store: ?*const Store = null,
-    /// Whether the linked store's object packs of the root module itself, the
-    /// tier 2 entries a background build compiled for earlier builds of it,
-    /// are offered too.
-    linked_root_objects: bool = true,
+    /// LLVM-compiled object packs (`PackFile.ObjectPack`) that optimized
+    /// builds filed, which only a consumer whose code is linked takes.
+    linked_stores: ?*const LinkedStores = null,
     io: std.Io,
     build_env: *compile.BuildEnv,
 };
@@ -553,10 +736,10 @@ pub const LoadedPacks = struct {
     /// would place code for a procedure an object pack offers
     /// (`linked_identities`).
     dev_reaches_linked: std.AutoHashMapUnmanaged(*const backend.dev.ProcArtifact.Set, []bool) = .empty,
-    /// The module content identities of the program's source files, once the
-    /// program's modules are known: an entry whose lines name any other
-    /// module version is not offered (`indexPacksUnrecorded`).
-    program_modules: ?std.AutoHashMapUnmanaged([32]u8, void) = null,
+    /// Per dev pack and asking program, whether a splice of each artifact
+    /// would place a line or a location in a module version the program does
+    /// not lower against (`linesOutsideProgram`).
+    lines_outside: std.AutoHashMapUnmanaged(ProgramPack, []bool) = .empty,
     /// Per object pack, whether the program takes one of its entries, so it
     /// links the pack's object; settled from the lowered program
     /// (`settleLinkedObjects`).
@@ -690,48 +873,24 @@ pub const LoadedPacks = struct {
         }
     }
 
-    /// Read every object pack in `dir_path`, in name order, without
-    /// indexing. A missing directory or a pack of another format is no offer.
-    fn loadObjectDirIntoUnrecorded(self: *LoadedPacks, io: std.Io, dir_path: []const u8) LoadError!void {
+    /// Read the object pack at `path` without indexing. A missing file or a
+    /// pack of another format is no offer.
+    fn loadObjectFile(self: *LoadedPacks, io: std.Io, path: []const u8) LoadError!void {
         const allocator = self.allocator;
-        var names = std.ArrayList([]u8).empty;
-        defer {
-            for (names.items) |name| allocator.free(name);
-            names.deinit(allocator);
-        }
-        {
-            var dir = std.Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true }) catch |err| switch (err) {
-                error.FileNotFound => return,
-                else => return error.PackDirectoryUnreadable,
-            };
-            defer dir.close(io);
-            var entries = dir.iterate();
-            while (true) {
-                const entry = (entries.next(io) catch return error.PackDirectoryUnreadable) orelse break;
-                if (entry.kind != .file) continue;
-                if (!std.mem.endsWith(u8, entry.name, ".rpk")) continue;
-                try names.ensureUnusedCapacity(allocator, 1);
-                names.appendAssumeCapacity(try allocator.dupe(u8, entry.name));
-            }
-        }
-        std.mem.sort([]u8, names.items, {}, nameLessThan);
-        for (names.items) |name| {
-            const path = try std.fs.path.join(allocator, &.{ dir_path, name });
-            defer allocator.free(path);
-            const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(1024 * 1024 * 1024)) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                else => return error.PackDirectoryUnreadable,
-            };
-            defer allocator.free(bytes);
-            var pack = PackFile.readObject(allocator, bytes) catch |err| switch (err) {
-                error.UnsupportedPackVersion => continue,
-                else => |other| return other,
-            };
-            errdefer pack.deinit();
-            try self.object_packs_used.append(allocator, false);
-            errdefer _ = self.object_packs_used.pop();
-            try self.object_packs.append(allocator, pack);
-        }
+        const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(1024 * 1024 * 1024)) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.FileNotFound => return,
+            else => return error.PackDirectoryUnreadable,
+        };
+        defer allocator.free(bytes);
+        var pack = PackFile.readObject(allocator, bytes) catch |err| switch (err) {
+            error.UnsupportedPackVersion => return,
+            else => |other| return other,
+        };
+        errdefer pack.deinit();
+        try self.object_packs_used.append(allocator, false);
+        errdefer _ = self.object_packs_used.pop();
+        try self.object_packs.append(allocator, pack);
     }
 
     /// Index one discovery summary file. A file of another format version
@@ -782,24 +941,7 @@ pub const LoadedPacks = struct {
 
     fn indexPacksUnrecorded(self: *LoadedPacks) LoadError!void {
         for (self.packs.items) |*pack| {
-            // An entry whose lines or procedure locations name a module
-            // version this program does not have would place lines that
-            // differ from the procedure's own, which the program would
-            // attribute to its current version; the program compiles it.
-            var absent: ?[]bool = null;
-            defer if (absent) |marks| self.allocator.free(marks);
-            if (self.program_modules) |modules| {
-                const present = try self.allocator.alloc(bool, pack.set.source_files.len);
-                defer self.allocator.free(present);
-                var all_present = true;
-                for (pack.set.source_files, present) |identity, *is_present| {
-                    is_present.* = modules.contains(identity);
-                    all_present = all_present and is_present.*;
-                }
-                if (!all_present) absent = try backend.dev.ProcArtifact.reachingAbsentFiles(self.allocator, &pack.set, present);
-            }
             for (pack.specs) |spec| {
-                if (absent) |marks| if (marks[spec.artifact]) continue;
                 const root = pack.set.artifacts[spec.artifact];
                 const identity = switch (root.kind) {
                     .proc => |identity| identity,
@@ -825,10 +967,13 @@ pub const LoadedPacks = struct {
         self.state = .ready;
     }
 
-    /// Index every loaded object pack.
-    fn indexObjectPacks(self: *LoadedPacks) LoadError!void {
-        for (self.object_packs.items, 0..) |pack, pack_index| {
+    /// Index every loaded object pack, in load order: the first pack to
+    /// offer a key or a procedure serves it. An app-bound procedure built for
+    /// another version of the program (`programBindingKey`) is not offered.
+    fn indexObjectPacks(self: *LoadedPacks, program_key: [32]u8) LoadError!void {
+        for (self.object_packs.items, 0..) |*pack, pack_index| {
             for (pack.specs) |spec| {
+                if (!pack.servesProgram(spec.artifact, program_key)) continue;
                 const linked = try self.linked_identities.getOrPut(self.allocator, pack.identities[spec.artifact]);
                 if (!linked.found_existing) linked.value_ptr.* = @intCast(pack_index);
                 const gop = try self.linked_specs.getOrPut(spec.key);
@@ -851,42 +996,44 @@ pub const LoadedPacks = struct {
         }
     }
 
-    /// Load and index the pending linked store's object packs for the
-    /// URL-package modules in view. Runs once, at the first lookup that
-    /// takes a linked entry.
+    /// Load and index the object packs of the program in view. Runs once,
+    /// at the first lookup that takes a linked entry.
     fn ensureLinkedLoaded(self: *LoadedPacks) void {
         if (self.linked_state != .pending) return;
         self.linked_state = .unavailable;
         const pending = self.pending orelse return;
-        const store = pending.linked_store orelse return;
+        const stores = pending.linked_stores orelse return;
         const root_semantic = pending.build_env.getExecutableRootSemanticData() orelse return;
         const root_artifact = root_semantic.checked_artifact orelse return;
-        self.loadLinked(pending, store, root_artifact) catch |err| {
+        self.loadLinked(pending, stores, root_artifact) catch |err| {
             std.log.warn("optimized object packs unavailable for this build: {}", .{err});
             return;
         };
         self.linked_state = .ready;
     }
 
-    fn loadLinked(self: *LoadedPacks, pending: Pending, store: *const Store, root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact) LoadError!void {
-        const artifacts = try pending.build_env.collectVisibleArtifacts(self.allocator, root_artifact);
-        defer self.allocator.free(artifacts);
-        for (artifacts) |artifact| {
-            if (std.meta.eql(artifact.key, root_artifact.key)) continue;
-            const placement = pending.build_env.packPlacementForArtifactKey(artifact.key) orelse continue;
-            if (placement.origin != .pkg) continue;
-            const dir = try store.identityDir(placement.origin, placement.identity);
-            defer self.allocator.free(dir);
-            try self.loadObjectDirIntoUnrecorded(pending.io, dir);
-        }
-        if (pending.linked_root_objects) {
-            if (pending.build_env.packPlacementForArtifactKey(root_artifact.key)) |placement| {
-                const dir = try store.identityDir(placement.origin, placement.identity);
-                defer self.allocator.free(dir);
-                try self.loadObjectDirIntoUnrecorded(pending.io, dir);
+    /// Each store in rank order offers its packs of the URL-package modules
+    /// in view, in identity order, then the optimized pack of the root. Each
+    /// is read by its exact path, so the packs a program links and which of
+    /// them serves a procedure two offer are functions of the optimization
+    /// state alone.
+    fn loadLinked(self: *LoadedPacks, pending: Pending, stores: *const LinkedStores, root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact) LoadError!void {
+        const modules = try packageModules(self.allocator, pending.build_env, root_artifact);
+        defer self.allocator.free(modules);
+        const root_placement = optimizedPackPlacement(pending.build_env, root_artifact);
+        for (&stores.stores) |*store| {
+            for (modules) |module| {
+                const path = try store.packagePackPath(module.identity, module.key);
+                defer self.allocator.free(path);
+                try self.loadObjectFile(pending.io, path);
+            }
+            if (root_placement) |placement| {
+                const path = try store.optimizedPackPath(placement.identity);
+                defer self.allocator.free(path);
+                try self.loadObjectFile(pending.io, path);
             }
         }
-        try self.indexObjectPacks();
+        try self.indexObjectPacks(try programBindingKey(self.allocator, pending.build_env, root_artifact));
     }
 
     /// Load the pending store's packs for the root module and every module
@@ -946,12 +1093,6 @@ pub const LoadedPacks = struct {
     }
 
     fn loadPending(self: *LoadedPacks, pending: Pending, root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact) LoadError!void {
-        var modules = std.AutoHashMapUnmanaged([32]u8, void).empty;
-        errdefer modules.deinit(self.allocator);
-        try modules.put(self.allocator, root_artifact.key.module_identity_hash, {});
-        for (root_artifact.lowering_visibility.module_ids) |key| try modules.put(self.allocator, key.module_identity_hash, {});
-        if (self.program_modules) |*previous| previous.deinit(self.allocator);
-        self.program_modules = modules;
         const store = pending.store orelse return;
         if (pending.build_env.packPlacementForArtifactKey(root_artifact.key)) |placement| {
             try store.loadIdentity(pending.io, self, placement.origin, placement.identity);
@@ -974,7 +1115,9 @@ pub const LoadedPacks = struct {
         var reaching = self.dev_reaches_linked.valueIterator();
         while (reaching.next()) |marks| self.allocator.free(marks.*);
         self.dev_reaches_linked.deinit(self.allocator);
-        if (self.program_modules) |*modules| modules.deinit(self.allocator);
+        var outside = self.lines_outside.valueIterator();
+        while (outside.next()) |marks| self.allocator.free(marks.*);
+        self.lines_outside.deinit(self.allocator);
         for (self.object_packs.items) |*pack| pack.deinit();
         self.object_packs.deinit(self.allocator);
         self.object_packs_used.deinit(self.allocator);
@@ -1024,7 +1167,7 @@ pub const LoadedPacks = struct {
         return try packs.toOwnedSlice(allocator);
     }
 
-    fn findSpec(context: *anyopaque, key: [32]u8, takes: Common.SpecCacheTakes) ?Common.SpecCacheHit {
+    fn findSpec(context: *anyopaque, key: [32]u8, takes: Common.SpecCacheTakes, modules: Common.ProgramModules) ?Common.SpecCacheHit {
         const self: *LoadedPacks = @ptrCast(@alignCast(context));
         self.ensureLoaded();
         if (self.state != .ready) return null;
@@ -1039,6 +1182,10 @@ pub const LoadedPacks = struct {
         }
         if (!takes.takesDevCode()) return null;
         const hit = self.specs.get(key) orelse return null;
+        // An entry whose splice would place a line or a location in a module
+        // version the asking program does not lower against would place lines
+        // that differ from the procedure's own; the program compiles it.
+        if (self.linesOutsideProgram(key, modules)) return null;
         // A consumer whose code is linked takes every procedure an object
         // offers from the object. A dev entry whose splice would place dev
         // code for such a procedure, as an entry compile-time evaluation
@@ -1051,6 +1198,30 @@ pub const LoadedPacks = struct {
         }
         self.hits += 1;
         return hit;
+    }
+
+    /// Whether a splice of the dev entry under `key` would place a line or a
+    /// location in a module version outside `modules`.
+    fn linesOutsideProgram(self: *LoadedPacks, key: [32]u8, modules: Common.ProgramModules) bool {
+        const located = self.artifacts.get(key) orelse return false;
+        const set = located.set;
+        var all_present = true;
+        for (set.source_files) |identity| all_present = all_present and Common.programHasModule(modules, identity);
+        if (all_present) return false;
+        const program_pack = ProgramPack.of(set, modules);
+        if (self.lines_outside.get(program_pack)) |marks| return marks[located.index];
+        // Refusing the entry is always sound: the program compiles the
+        // procedure itself.
+        const present = self.allocator.alloc(bool, set.source_files.len) catch return true;
+        defer self.allocator.free(present);
+        for (set.source_files, present) |identity, *is_present| is_present.* = Common.programHasModule(modules, identity);
+        const marks = backend.dev.ProcArtifact.reachingAbsentFiles(self.allocator, set, present) catch return true;
+        self.lines_outside.put(self.allocator, program_pack, marks) catch {
+            const outside = marks[located.index];
+            self.allocator.free(marks);
+            return outside;
+        };
+        return marks[located.index];
     }
 
     /// Whether the code a splice of the dev entry under `key` places
@@ -1174,22 +1345,55 @@ test "loaded packs offer no entry whose lines name a missing module version or t
     var packs = LoadedPacks.init(allocator);
     defer packs.deinit();
     try packs.appendPack(bytes);
-    var modules = std.AutoHashMapUnmanaged([32]u8, void).empty;
-    try modules.put(allocator, present_module, {});
-    packs.program_modules = modules;
+    const modules: Common.ProgramModules = &.{present_module};
     try packs.indexPacks();
     const lookup = packs.specCacheLookup();
-    try std.testing.expect(lookup.lookup(@splat(1), .dev_code) != null);
-    try std.testing.expect(lookup.lookup(@splat(2), .dev_code) != null);
+    try std.testing.expect(lookup.lookup(@splat(1), .dev_code, modules) != null);
+    try std.testing.expect(lookup.lookup(@splat(2), .dev_code, modules) != null);
     // Its lines name a version of a module this program does not have.
-    try std.testing.expect(lookup.lookup(@splat(3), .dev_code) == null);
+    try std.testing.expect(lookup.lookup(@splat(3), .dev_code, modules) == null);
 
     // Once an object offers the callee, a consumer whose program links
     // objects takes neither the callee's dev code nor the caller's, whose
     // splice places it; a consumer that links nothing still takes both.
     packs.linked_state = .unavailable;
     try packs.linked_identities.put(allocator, callee, 0);
-    try std.testing.expect(lookup.lookup(@splat(1), .dev_code) != null);
-    try std.testing.expect(lookup.lookup(@splat(1), .dev_code_beside_linked_objects) == null);
-    try std.testing.expect(lookup.lookup(@splat(2), .dev_code_and_linked_objects) == null);
+    try std.testing.expect(lookup.lookup(@splat(1), .dev_code, modules) != null);
+    try std.testing.expect(lookup.lookup(@splat(1), .dev_code_beside_linked_objects, modules) == null);
+    try std.testing.expect(lookup.lookup(@splat(2), .dev_code_and_linked_objects, modules) == null);
+}
+
+test "object packs serve in load order, and app-bound entries serve only the program they were built for" {
+    const allocator = std.testing.allocator;
+    const shared = lir.ProcIdentity.forTest(71);
+    const app_code = lir.ProcIdentity.forTest(72);
+    const program_key: [32]u8 = @splat(0x5a);
+    const Spec = PackFile.SpecEntry;
+    const spec = struct {
+        fn of(key: u8, artifact: u32) Spec {
+            return .{ .key = @splat(key), .artifact = artifact, .rc_borrowed_params = 0, .rc_ret_borrowed = false, .rc_ret_lenders = 0, .rc_read_only_params = 0, .rc_ret_unique = false, .rc_ret_unique_fields = 0, .rc_ret_conditions = &.{} };
+        }
+    }.of;
+    // The first pack offers `shared`, and the program's own code bound to
+    // `program_key`; the second offers `shared` under the same key.
+    const first = try PackFile.writeObject(allocator, "first", &.{ shared, app_code }, &.{ spec(1, 0), spec(2, 1) }, .{ .app_key = program_key, .app_bound = &.{ false, true } });
+    defer allocator.free(first);
+    const second = try PackFile.writeObject(allocator, "second", &.{shared}, &.{spec(1, 0)}, .{ .app_bound = &.{false} });
+    defer allocator.free(second);
+    for ([_][32]u8{ program_key, @splat(0x6b) }) |consumer_program| {
+        var packs = LoadedPacks.init(allocator);
+        defer packs.deinit();
+        for ([_][]const u8{ first, second }) |bytes| {
+            var pack = try PackFile.readObject(allocator, bytes);
+            errdefer pack.deinit();
+            try packs.object_packs_used.append(allocator, false);
+            try packs.object_packs.append(allocator, pack);
+        }
+        try packs.indexObjectPacks(consumer_program);
+        try std.testing.expectEqual(@as(u32, 0), packs.linked_specs.get(@splat(1)).?.pack);
+        try std.testing.expectEqual(@as(?u32, 0), packs.linked_identities.get(shared));
+        const serves_app = std.mem.eql(u8, &consumer_program, &program_key);
+        try std.testing.expectEqual(serves_app, packs.linked_specs.get(@splat(2)) != null);
+        try std.testing.expectEqual(serves_app, packs.linked_identities.get(app_code) != null);
+    }
 }

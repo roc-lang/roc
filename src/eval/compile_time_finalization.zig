@@ -896,10 +896,10 @@ test "shared producer requires the exact non-null provider capability" {
     const LookupResult = LookupFn.return_type.?;
     const Takes = LookupFn.param_types[2].?;
     const Callbacks = struct {
-        fn first(_: *anyopaque, _: [32]u8, _: Takes) LookupResult {
+        fn first(_: *anyopaque, _: [32]u8, _: Takes, _: LookupFn.param_types[3].?) LookupResult {
             return null;
         }
-        fn second(context: *anyopaque, _: [32]u8, _: Takes) LookupResult {
+        fn second(context: *anyopaque, _: [32]u8, _: Takes, _: LookupFn.param_types[3].?) LookupResult {
             // Distinct behavior keeps optimized builds from merging callbacks.
             const count: *u8 = @ptrCast(context);
             count.* += 1;

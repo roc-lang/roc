@@ -197,6 +197,21 @@ are two distinct identities even when their declaring modules are
 byte-identical, and no deduplication, specialization, or merging step may
 collapse two externally-bound identities into one.
 
+### Output Determinism
+
+A compiler run's output is a function of the source bytes it compiles, its
+command line, and the optimization state: the object packs that earlier
+optimized builds filed in this compiler's object store, at the paths the
+build reads them from. Nothing else decides a byte of it: not what the dev
+store, recorded program outputs, compile-time packs or discovery summaries
+hold, not thread scheduling or timing, not directory listing order or file
+times. Every cache other than the optimization state is transparent, so a
+hit produces exactly what a miss would have. The store lives in a folder of
+the compiler build (`compat-<id>`), so compilers built differently have
+separate optimization states, and two machines compiling the same source
+produce different dev executables when their optimization histories
+differ.
+
 ### Representation Capacity
 
 Every count, index, position, offset, and value that grows with the size of
@@ -590,16 +605,18 @@ and source frames from it.
 ### Object Cache Store
 
 Packs live under `<cache root>/<compiler version>/objects-v<pack format>/
-<target>-<opt>/<local|pkg>/<module identity>/<key>.rpk`. A pack's path is a
-function of its content, so a writer stages it beside its path in a file it
+<target>-<opt>/<local|pkg>/<module identity>/<key>.rpk`, and the pack an
+optimized build files for its program, which each optimized build of the
+program replaces, under `<target>-<opt>/optimized/<identity>.rpk`. Every
+other pack's path is a function of its content, so a writer stages it beside its path in a file it
 alone created (`CoreCtx.writeTempFile`), so two writers never share a partly
 written file, renames it into place, and leaves a pack already present alone; builds with runtime
 safety compare the bytes they would have written with the pack in place. The
 background sweep (`cache_cleanup.sweep`) deletes every `objects-v*` namespace
 of a format other than the compiler's own, ages the current namespace's
 `local/` packs (rewritten by every edit) and recorded program outputs
-(`programs/`, see "Recorded Program Output") on one day and its `pkg/` packs
-on thirty, by last use (`max(atime, mtime)`), and then deletes the least
+(`programs/`, see "Recorded Program Output") on one day and its `pkg/` and
+`optimized/` packs on thirty, by last use (`max(atime, mtime)`), and then deletes the least
 recently used persistent cache files of every family until the cache fits
 `CacheConfig.max_size_mb`. Eviction only deletes files; it never changes what
 a build writes.
@@ -624,17 +641,27 @@ depend on where it sits in its file, so an entry could be served across an
 edit of a module its code was lowered from; its lines would then name a module
 version the program does not have, while the program's own compile of the
 procedure would carry its current lines. Such an entry is not offered:
-loading the packs for a program whose modules are known (`LoadedPacks`), an
-entry whose splice would place a line or location in a file the program's
-modules do not include is left out of the index, and the program compiles the
-procedure. A splice therefore binds every line, and a line it could not bind
-is an invariant violation.
+every lookup names the asking program's modules (`Common.ProgramModules`,
+the module identities of the checked modules it lowers against), and an
+entry whose splice would place a line or location in any other module
+version does not serve it (`LoadedPacks.linesOutsideProgram`); the program
+compiles the procedure. A stable reference to a procedure counts only as far
+as a splice follows it: a procedure keeps its identity across an edit of its
+module only when named by site, and a program taking an entry that refers to
+one lowers it itself. A splice therefore binds every line, and a line it
+could not bind is an invariant violation.
 
-A URL-package module also gets an optimized object pack, filed in the same
-layout under `<target>-speed/pkg/` for a native target and
-`<target>-size/pkg/` for wasm32: its closed exports lowered under the LIR
-policy of that optimization level and compiled by LLVM at it into one object,
-with the same spec table naming each entry's procedure. The object defines everything its code
+An optimized build (`--opt=speed` or `--opt=size`) files LLVM-compiled
+object packs under its own level's store (see "Optimized Builds Feed Dev
+Builds"). A URL-package module gets one in the same layout under `pkg/`:
+its closed exports lowered under the object pack policy
+(`linkedObjectLoweringConfig`, the dev policy, so each procedure keeps the
+identity a dev build gives it and its code means what dev code means:
+expects run, reference counts are shared across threads, `Dict` has the dev
+seed) and compiled by LLVM at the build's level into one object, with the
+same spec table naming each entry's procedure. A module whose code cannot be
+a linked object gets an empty pack, which offers nothing, so it is not
+lowered again. The object defines everything its code
 needs: procedures, refcount helpers, and builtins as internal symbols, and
 each constant as weak readonly data under its `roc__h` content name, so two
 objects carrying one constant share a single copy in the link. It exports,
@@ -677,9 +704,15 @@ producer it shares (`CodeProvision.host_dev_objects_beside_linked`), never
 takes a dev entry whose splice would place dev code for a procedure an
 object offers, as an entry compile-time evaluation filed can. Which of a
 program's procedures link an object's entry is then a function of the
-object packs alone, never of which dev packs exist. A build whose store lacks
-a URL-package module's object pack builds it once the module is checked and
-before the program lowers, so that build already links it.
+object packs alone, never of which dev packs exist.
+
+A dev build reads object packs by exact path, never by listing a
+directory: for the target's preferred level (`speed` natively, `size` on
+wasm32) and then the other, the pack of each URL-package module in view
+under its artifact key, in module identity order, then the optimized pack
+of its program. The first pack to offer a key or a procedure serves it, so
+which pack serves a procedure two offer, and the order the program links
+them in, are functions of the optimization state alone.
 
 The wasm32 dev backend cannot splice dev code, so a wasm32 dev build
 reads and writes no dev packs and takes only object packs' entries
@@ -697,8 +730,8 @@ which passes vectors by lane), and the
 object's imports, the runtime and hosted functions its code calls, are
 allowed undefined in the sealed object beside the program's own.
 
-`roc run --opt=dev` links every object pack of its URL packages into the
-cached host program, beside a table of their C-ABI entries that the
+`roc run --opt=dev` links every object pack it loads into the cached host
+program, beside a table of their C-ABI entries that the
 generated platform shim defines (`roc_shim_package_names`), and its image,
 streamed to that host program, calls an entry by name: the machine-code shim
 resolves it from the table as it resolves hosted functions. The object packs
@@ -706,21 +739,6 @@ are part of the host program's identity, so editing the app reloads only
 the image, and a hot reload rebuild that would need other objects reports a
 changed host interface. The image splices the dev packs' entries the same way
 an object build does, with the data they carry.
-
-A tier 2 entry, one the program offers by identity alone, can be optimized
-only once an app requests it. After a cached dev build writes its packs, it
-starts a detached `roc build --tier2-objects=<requests>` naming the entries it
-offered by identity that no object served. That build lowers the app exactly
-as the requesting build did, so each entry keeps its identity, compiles with
-LLVM every entry whose call closure an object can define whole (no literal
-conversion, no erased call, and no procedure served from the cache, named by
-site, or holding a copy of such code), and files the object pack under the
-app module in the optimized store, named by its requests. A later dev build
-loads the root module's object packs too and links such an entry in place of
-its dev code. `roc check` never starts one, and `roc run` links only its URL
-packages' objects, so a hot reload session keeps one host program.
-`ROC_BACKGROUND_OBJECTS=off` disables the build and `wait` makes the dev
-build wait for it.
 
 A specialization whose request mentions a function type has no
 reservation-time key: which closures it receives is decided by lambda
@@ -776,6 +794,45 @@ the structure of its backing rather than by its module's content, so a
 package specialization at an app type keeps its identity across edits that
 leave the type's structure alone.
 
+
+### Optimized Builds Feed Dev Builds
+
+An optimized build of a program, once its executable is written and when it
+reports no error, files the object packs a later dev build links in place of
+compiling the code they hold (`writeOptimizedPacks`), under its own level's
+store: the pack of every URL-package module in view the store lacks, and the
+optimized pack of the program, which each optimized build of it
+replaces. The root's pack comes from a second lowering of the checked
+program under the object pack policy, with an empty object cache lookup, so
+every procedure has the identity and the code key a dev build that reads the
+object cache gives it. Every procedure with a body is a candidate under the
+key a dev build's Direct LIR looks it up by
+(`Common.procIdentityCacheKey(code_key orelse identity)`), and LLVM compiles
+every candidate whose call closure an object can define whole into one
+object. The pack's header carries its input key (`optimizedPackInputKey`:
+the format, target, level, specialization strategy, and every checked module
+the program lowers against); an optimized build whose stored pack has that
+key lowers nothing again.
+
+The pack is filed under the app module's placement when the program has an
+app, since every app of a platform shares the platform as its root, and
+under the root's otherwise (`pack_store.optimizedPackPlacement`). It may
+hold code named by site: a procedure with a code key, or one whose body
+copied such code, as a platform entry whose LLVM code inlined the app's
+`main!` does. Such code's current body is pinned only by its module's
+content, so a procedure whose closure holds any is app-bound
+(`PackFile.ObjectBinding.app_bound`) to the program's binding key, a digest
+of every checked module the program lowers against
+(`pack_store.programBindingKey`), and a dev build of any other version of
+the program is not offered its entries. An edit therefore drops every entry
+holding site-named code until the next optimized build, while the entries
+that hold none, package specializations at app types included, keep
+serving.
+Entries that make erased calls or convert literals are not offered, as for a
+package's pack, and a program with no candidate gets an empty pack.
+
+`roc run --opt=dev` links the root's pack too, beside its URL packages'
+packs, and keeps the objects it loaded for its whole hot reload session.
 
 ### Canonical Dev Images
 
@@ -2510,8 +2567,9 @@ reference counts.
 A dev build also records its program's runtime output: the Roc object it
 linked and the link inputs it read from the lowering (hosted symbols, link
 roots and app exports), filed under a key covering every checked module the
-program lowers against, with their code-generation keys, and the build's
-output policy, inside the store's namespace for the target, compiler and
+program lowers against, with their code-generation keys, the build's output
+policy, and a digest of the optimization state (the object packs the program
+would load, named by their paths and input keys), inside the store's namespace for the target, compiler and
 optimization level. Once a later build's program is checked and before it is
 evaluated, the build asks for that key. On a hit the program is evaluated
 exactly as a build without the record evaluates it: its specialization decides

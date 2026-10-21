@@ -5210,6 +5210,11 @@ const Builder = struct {
     /// The object cache consulted for closed specializations, if any.
     spec_cache: ?Common.SpecCacheLookup,
     spec_cache_takes: Common.SpecCacheTakes,
+    /// The module identities of the checked modules this lowering reads, which
+    /// the object cache serves entries for (`Common.ProgramModules`); built
+    /// at the first lookup.
+    program_modules: ?Common.ProgramModules = null,
+    program_module_buffer: [][32]u8 = &.{},
     counters: ?*SpecializationCounters,
     diagnostics: ?*Diagnostics,
     /// Result-owned sink while one ordinary specialization shard is lowering or
@@ -5742,6 +5747,7 @@ const Builder = struct {
     }
 
     fn deinit(self: *Builder) void {
+        self.allocator.free(self.program_module_buffer);
         for (self.lower_frame_pool.items) |*frames| frames.deinit(self.allocator);
         self.lower_frame_pool.deinit(self.allocator);
         for (self.decl_scope_pool.items) |scope| {
@@ -8187,7 +8193,7 @@ const Builder = struct {
             // reads no code pack.
             const settled_discovery = demand == .discovery and body_scheduling == .queued and !self.parking_root_job and self.discoverySettled(key.bytes);
             if (!settled_discovery) if (self.spec_cache) |cache| {
-                if (cache.lookup(key.bytes, self.spec_cache_takes)) |hit| {
+                if (cache.lookup(key.bytes, self.spec_cache_takes, try self.programModules())) |hit| {
                     fn_template.cached = hit;
                     self.count("spec_cache_hits");
                     if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup monotype key={x} hit\n", .{key.bytes[0..8]});
@@ -11783,6 +11789,17 @@ const Builder = struct {
     }
 
     /// Every input module's view, built on first use.
+    fn programModules(self: *Builder) Allocator.Error!Common.ProgramModules {
+        if (self.program_modules) |modules| return modules;
+        const views = self.moduleViews();
+        const identities = try self.allocator.alloc([32]u8, views.len);
+        for (views, identities) |view, *identity| identity.* = view.key.module_identity_hash;
+        self.program_module_buffer = identities;
+        const modules = Common.sortProgramModules(identities);
+        self.program_modules = modules;
+        return modules;
+    }
+
     fn moduleViews(self: *Builder) []const ModuleViewData {
         if (self.borrowed_module_views) |views| return views;
         if (self.module_views.len != 0) return self.module_views;

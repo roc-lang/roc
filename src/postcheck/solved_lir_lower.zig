@@ -282,6 +282,7 @@ pub fn runBorrowed(
     lowerer.layout_keyed_source_digests = layout_keyed_source_digests;
 
     try lowerer.result.store.setSourceFiles(solved.lifted.sourceFiles());
+    try lowerer.setProgramModules(solved.lifted.sourceFiles());
     try lowerer.result.setLoweringModules(solved.lifted.loweringModules());
     try lowerer.prepareExpectSites();
     try lowerer.indexSourceFns();
@@ -788,6 +789,10 @@ const Lowerer = struct {
     proc_debug_names: bool,
     spec_cache: ?Common.SpecCacheLookup,
     spec_cache_takes: Common.SpecCacheTakes,
+    /// The module identities of this program's source files, which the
+    /// object cache serves entries for (`Common.ProgramModules`).
+    program_modules: Common.ProgramModules = &.{},
+    program_module_buffer: [][32]u8 = &.{},
     /// This consumer's explicit share of the producer's roots and requests.
     root_manifest: ?RootManifest,
     /// Drain positions, kept across calls so a second drain resumes.
@@ -1214,7 +1219,17 @@ const Lowerer = struct {
 
     /// Release every lowering-time table. The LIR result and the runtime
     /// schema store are the output and are not touched.
+    fn setProgramModules(self: *Lowerer, files: []const base.SourceFileEntry) std.mem.Allocator.Error!void {
+        const identities = try self.allocator.alloc([32]u8, files.len);
+        for (files, identities) |file, *identity| identity.* = file.module_identity;
+        self.program_module_buffer = identities;
+        self.program_modules = Common.sortProgramModules(identities);
+    }
+
     fn deinitLoweringState(self: *Lowerer) void {
+        self.allocator.free(self.program_module_buffer);
+        self.program_module_buffer = &.{};
+        self.program_modules = &.{};
         self.deinitWorkerWorkspaces();
         self.prepared_worker_types.deinit();
         self.prepared_worker_fns.deinit();
@@ -2947,7 +2962,7 @@ const Lowerer = struct {
             if (self.spec_cache) |cache| {
                 if (source_fn.source) |template| {
                     if (template.spec_key) |key| {
-                        if (cache.lookup(key.bytes, self.spec_cache_takes)) |hit| {
+                        if (cache.lookup(key.bytes, self.spec_cache_takes, self.program_modules)) |hit| {
                             if (std.mem.eql(u8, &hit.identity, &identity.bytes)) {
                                 cached = hit;
                                 cached_key = key.bytes;
@@ -2971,7 +2986,7 @@ const Lowerer = struct {
         if (cached == null and source_fn.body == .roc and spec.abi == .finite and !spec.return_reuse.enabled()) {
             if (self.spec_cache) |cache| {
                 const key = Common.procIdentityCacheKey(if (code_key) |code| code else identity.bytes);
-                if (cache.lookup(key, self.spec_cache_takes)) |hit| {
+                if (cache.lookup(key, self.spec_cache_takes, self.program_modules)) |hit| {
                     if (std.mem.eql(u8, &hit.identity, &identity.bytes)) {
                         cached = hit;
                         cached_key = key;
@@ -5329,7 +5344,7 @@ const Lowerer = struct {
         if (monotype_hit.c_abi_entry or !self.spec_cache_takes.takesLinkedObjects()) return monotype_hit;
         const cache = self.spec_cache orelse return monotype_hit;
         const key = template.spec_key orelse return monotype_hit;
-        if (cache.lookup(key.bytes, self.spec_cache_takes)) |linked| {
+        if (cache.lookup(key.bytes, self.spec_cache_takes, self.program_modules)) |linked| {
             if (linked.c_abi_entry and std.mem.eql(u8, &linked.identity, &monotype_hit.identity)) return linked;
         }
         // A linked object may offer the procedure under its identity alone,
@@ -5339,7 +5354,7 @@ const Lowerer = struct {
         // key first.
         const identity: LIR.ProcIdentity = .{ .bytes = monotype_hit.identity };
         const identity_key = Common.procIdentityCacheKey(if (procCodeKey(template, identity)) |code| code else identity.bytes);
-        const linked = cache.lookup(identity_key, self.spec_cache_takes) orelse return monotype_hit;
+        const linked = cache.lookup(identity_key, self.spec_cache_takes, self.program_modules) orelse return monotype_hit;
         if (!linked.c_abi_entry or !std.mem.eql(u8, &linked.identity, &monotype_hit.identity)) return monotype_hit;
         return linked;
     }
