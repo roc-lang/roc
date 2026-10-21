@@ -7132,11 +7132,7 @@ Builtin :: [].{
 			## expect U8.plus_saturated(2, 3) == 5
 			## ```
 			plus_saturated : U8, U8 -> U8
-			plus_saturated = |a, b|
-				if (a.plus_overflows(b))
-					highest
-				else
-					a.plus_wrap(b)
+			plus_saturated = |a, b| unsigned_plus_saturated(U8.highest, a, b)
 
 			## Subtract the second [U8] from the first.
 			## ```roc
@@ -8788,11 +8784,7 @@ Builtin :: [].{
 			## expect U16.plus_saturated(2, 3) == 5
 			## ```
 			plus_saturated : U16, U16 -> U16
-			plus_saturated = |a, b|
-				if (a.plus_overflows(b))
-					highest
-				else
-					a.plus_wrap(b)
+			plus_saturated = |a, b| unsigned_plus_saturated(U16.highest, a, b)
 
 			## Subtract the second [U16] from the first.
 			## ```roc
@@ -9086,15 +9078,12 @@ Builtin :: [].{
 			from_le_bytes : List(U8), U64 -> Try(U16, [OutOfBounds])
 			from_le_bytes = |bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 2` and `len - 2` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 2` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 2`.
-				if len < 2 or index > len.minus_wrap(2) {
+				# 2 items starting at `index` fit when `index < len - 1`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(1) {
 					Err(OutOfBounds)
 				} else {
 					Ok(u16_from_le_bytes_unchecked(bytes, index))
@@ -9994,15 +9983,12 @@ Builtin :: [].{
 			from_le_bytes : List(U8), U64 -> Try(I16, [OutOfBounds])
 			from_le_bytes = |bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 2` and `len - 2` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 2` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 2`.
-				if len < 2 or index > len.minus_wrap(2) {
+				# 2 items starting at `index` fit when `index < len - 1`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(1) {
 					Err(OutOfBounds)
 				} else {
 					Ok(i16_from_le_bytes_unchecked(bytes, index))
@@ -10547,11 +10533,7 @@ Builtin :: [].{
 			## expect U32.plus_saturated(2, 3) == 5
 			## ```
 			plus_saturated : U32, U32 -> U32
-			plus_saturated = |a, b|
-				if (a.plus_overflows(b))
-					highest
-				else
-					a.plus_wrap(b)
+			plus_saturated = |a, b| unsigned_plus_saturated(U32.highest, a, b)
 
 			## Subtract the second [U32] from the first.
 			## ```roc
@@ -10845,15 +10827,12 @@ Builtin :: [].{
 			from_le_bytes : List(U8), U64 -> Try(U32, [OutOfBounds])
 			from_le_bytes = |bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 4` and `len - 4` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 4` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 4`.
-				if len < 4 or index > len.minus_wrap(4) {
+				# 4 items starting at `index` fit when `index < len - 3`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(3) {
 					Err(OutOfBounds)
 				} else {
 					Ok(u32_from_le_bytes_unchecked(bytes, index))
@@ -11787,15 +11766,12 @@ Builtin :: [].{
 			from_le_bytes : List(U8), U64 -> Try(I32, [OutOfBounds])
 			from_le_bytes = |bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 4` and `len - 4` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 4` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 4`.
-				if len < 4 or index > len.minus_wrap(4) {
+				# 4 items starting at `index` fit when `index < len - 3`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(3) {
 					Err(OutOfBounds)
 				} else {
 					Ok(i32_from_le_bytes_unchecked(bytes, index))
@@ -12358,11 +12334,7 @@ Builtin :: [].{
 			## expect U64.plus_saturated(2, 3) == 5
 			## ```
 			plus_saturated : U64, U64 -> U64
-			plus_saturated = |a, b|
-				if (a.plus_overflows(b))
-					highest
-				else
-					a.plus_wrap(b)
+			plus_saturated = |a, b| unsigned_plus_saturated(U64.highest, a, b)
 
 			## Subtract the second [U64] from the first.
 			## ```roc
@@ -12656,15 +12628,12 @@ Builtin :: [].{
 			from_le_bytes : List(U8), U64 -> Try(U64, [OutOfBounds])
 			from_le_bytes = |bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 8` and `len - 8` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 8` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 8`.
-				if len < 8 or index > len.minus_wrap(8) {
+				# 8 items starting at `index` fit when `index < len - 7`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(7) {
 					Err(OutOfBounds)
 				} else {
 					Ok(u64_from_le_bytes_unchecked(bytes, index))
@@ -13663,15 +13632,12 @@ Builtin :: [].{
 			from_le_bytes : List(U8), U64 -> Try(I64, [OutOfBounds])
 			from_le_bytes = |bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 8` and `len - 8` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 8` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 8`.
-				if len < 8 or index > len.minus_wrap(8) {
+				# 8 items starting at `index` fit when `index < len - 7`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(7) {
 					Err(OutOfBounds)
 				} else {
 					Ok(i64_from_le_bytes_unchecked(bytes, index))
@@ -14257,11 +14223,7 @@ Builtin :: [].{
 			## expect U128.plus_saturated(2, 3) == 5
 			## ```
 			plus_saturated : U128, U128 -> U128
-			plus_saturated = |a, b|
-				if (a.plus_overflows(b))
-					highest
-				else
-					a.plus_wrap(b)
+			plus_saturated = |a, b| unsigned_plus_saturated(U128.highest, a, b)
 
 			## Subtract the second [U128] from the first.
 			## ```roc
@@ -14555,15 +14517,12 @@ Builtin :: [].{
 			from_le_bytes : List(U8), U64 -> Try(U128, [OutOfBounds])
 			from_le_bytes = |bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 16` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 16`.
-				if len < 16 or index > len.minus_wrap(16) {
+				# 16 items starting at `index` fit when `index < len - 15`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(15) {
 					Err(OutOfBounds)
 				} else {
 					Ok(u128_from_le_bytes_unchecked(bytes, index))
@@ -15579,15 +15538,12 @@ Builtin :: [].{
 			from_le_bytes : List(U8), U64 -> Try(I128, [OutOfBounds])
 			from_le_bytes = |bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 16` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 16`.
-				if len < 16 or index > len.minus_wrap(16) {
+				# 16 items starting at `index` fit when `index < len - 15`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(15) {
 					Err(OutOfBounds)
 				} else {
 					Ok(i128_from_le_bytes_unchecked(bytes, index))
@@ -19837,15 +19793,12 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(U8x16, [OutOfBounds])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 16` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 16`.
-				if len < 16 or index > len.minus_wrap(16) {
+				# 16 items starting at `index` fit when `index < len - 15`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(15) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u8x16_load_16_unchecked(bytes, index))
@@ -19862,15 +19815,12 @@ Builtin :: [].{
 			store : U8x16, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 16` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 16`.
-				if len < 16 or index > len.minus_wrap(16) {
+				# 16 items starting at `index` fit when `index < len - 15`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(15) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u8x16_store_16_unchecked(vector, bytes, index))
@@ -19891,20 +19841,18 @@ Builtin :: [].{
 				chunks = Iter.custom(
 					0.U64,
 					Known(chunk_count),
-					|start|
-						# Compare the index against a limit rather than subtracting from it.
-						# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-						# reads repeatedly hoists them out and keeps just the one comparison of
-						# `start` against a precomputed bound. Subtracting the other way round --
-						# `len - start < 16` -- reads the same but depends on `start`, so all of it
-						# stays in the loop.
-						#
-						# Wrapping is safe because the first check has already ruled out `len < 16`.
-						if len >= 16 and start <= len.minus_wrap(16) {
+					|start| {
+						# 16 items starting at `start` fit when `start < len - 15`. That
+						# limit depends only on the list, so a loop that reads repeatedly hoists
+						# it and keeps just the one comparison of `start` against it. The
+						# subtraction saturates, so a list shorter than that has a limit of
+						# zero, which no index is below.
+						if start < len.minus_saturated(15) {
 							Ok((simd_u8x16_load_16_unchecked(bytes, start), start + 16))
 						} else {
 							Err(NoMore)
-						},
+						}
+					},
 				)
 				{ chunks, tail: List.drop_first(bytes, chunk_count * 16) }
 			}
@@ -20435,15 +20383,12 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(I8x16, [OutOfBounds])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 16` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 16`.
-				if len < 16 or index > len.minus_wrap(16) {
+				# 16 items starting at `index` fit when `index < len - 15`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(15) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i8x16_load_16_unchecked(bytes, index))
@@ -20460,15 +20405,12 @@ Builtin :: [].{
 			store : I8x16, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 16` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 16`.
-				if len < 16 or index > len.minus_wrap(16) {
+				# 16 items starting at `index` fit when `index < len - 15`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(15) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i8x16_store_16_unchecked(vector, bytes, index))
@@ -20997,15 +20939,12 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(U16x8, [OutOfBounds])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 16` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 16`.
-				if len < 16 or index > len.minus_wrap(16) {
+				# 16 items starting at `index` fit when `index < len - 15`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(15) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u16x8_load_16_unchecked(bytes, index))
@@ -21018,7 +20957,7 @@ Builtin :: [].{
 			load_units : List(U16), U64 -> Try(U16x8, [OutOfBounds])
 			load_units = |units, index| {
 				len = List.len(units)
-				if len < 8 or index > len.minus_wrap(8) {
+				if index >= len.minus_saturated(7) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u16x8_load_units_unchecked(units, index))
@@ -21035,15 +20974,12 @@ Builtin :: [].{
 			store : U16x8, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 16` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 16`.
-				if len < 16 or index > len.minus_wrap(16) {
+				# 16 items starting at `index` fit when `index < len - 15`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(15) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u16x8_store_16_unchecked(vector, bytes, index))
@@ -21644,15 +21580,12 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(I16x8, [OutOfBounds])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 16` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 16`.
-				if len < 16 or index > len.minus_wrap(16) {
+				# 16 items starting at `index` fit when `index < len - 15`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(15) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i16x8_load_16_unchecked(bytes, index))
@@ -21669,15 +21602,12 @@ Builtin :: [].{
 			store : I16x8, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 16` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 16`.
-				if len < 16 or index > len.minus_wrap(16) {
+				# 16 items starting at `index` fit when `index < len - 15`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(15) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i16x8_store_16_unchecked(vector, bytes, index))
@@ -22157,15 +22087,12 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(U32x4, [OutOfBounds])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 16` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 16`.
-				if len < 16 or index > len.minus_wrap(16) {
+				# 16 items starting at `index` fit when `index < len - 15`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(15) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u32x4_load_16_unchecked(bytes, index))
@@ -22178,7 +22105,7 @@ Builtin :: [].{
 			load_units : List(U32), U64 -> Try(U32x4, [OutOfBounds])
 			load_units = |units, index| {
 				len = List.len(units)
-				if len < 4 or index > len.minus_wrap(4) {
+				if index >= len.minus_saturated(3) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u32x4_load_units_unchecked(units, index))
@@ -22195,15 +22122,12 @@ Builtin :: [].{
 			store : U32x4, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 16` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 16`.
-				if len < 16 or index > len.minus_wrap(16) {
+				# 16 items starting at `index` fit when `index < len - 15`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(15) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u32x4_store_16_unchecked(vector, bytes, index))
@@ -22737,15 +22661,12 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(I32x4, [OutOfBounds])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 16` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 16`.
-				if len < 16 or index > len.minus_wrap(16) {
+				# 16 items starting at `index` fit when `index < len - 15`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(15) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i32x4_load_16_unchecked(bytes, index))
@@ -22762,15 +22683,12 @@ Builtin :: [].{
 			store : I32x4, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 16` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 16`.
-				if len < 16 or index > len.minus_wrap(16) {
+				# 16 items starting at `index` fit when `index < len - 15`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(15) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i32x4_store_16_unchecked(vector, bytes, index))
@@ -23179,15 +23097,12 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(U64x2, [OutOfBounds])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 16` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 16`.
-				if len < 16 or index > len.minus_wrap(16) {
+				# 16 items starting at `index` fit when `index < len - 15`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(15) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u64x2_load_16_unchecked(bytes, index))
@@ -23204,15 +23119,12 @@ Builtin :: [].{
 			store : U64x2, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 16` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 16`.
-				if len < 16 or index > len.minus_wrap(16) {
+				# 16 items starting at `index` fit when `index < len - 15`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(15) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u64x2_store_16_unchecked(vector, bytes, index))
@@ -23646,15 +23558,12 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(I64x2, [OutOfBounds])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 16` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 16`.
-				if len < 16 or index > len.minus_wrap(16) {
+				# 16 items starting at `index` fit when `index < len - 15`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(15) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i64x2_load_16_unchecked(bytes, index))
@@ -23671,15 +23580,12 @@ Builtin :: [].{
 			store : I64x2, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 16` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 16`.
-				if len < 16 or index > len.minus_wrap(16) {
+				# 16 items starting at `index` fit when `index < len - 15`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(15) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i64x2_store_16_unchecked(vector, bytes, index))
@@ -27135,6 +27041,15 @@ list_prepend_if_ok = |list, maybe_item|
 	match maybe_item {
 		Ok(item) => List.prepend(list, item)
 		Err(_) => list
+	}
+
+unsigned_plus_saturated : item, item, item -> item
+	where [item.plus_overflows : item, item -> Bool, item.plus_wrap : item, item -> item]
+unsigned_plus_saturated = |highest, a, b|
+	if a.plus_overflows(b) {
+		highest
+	} else {
+		a.plus_wrap(b)
 	}
 
 unsigned_minus_saturated : item, item, item -> item

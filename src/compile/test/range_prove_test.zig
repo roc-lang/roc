@@ -44,6 +44,8 @@ const Shape = struct {
     minus_checked: usize = 0,
     is_lt: usize = 0,
     is_gt: usize = 0,
+    is_gte: usize = 0,
+    sub_overflows: usize = 0,
     switches: usize = 0,
 };
 
@@ -68,6 +70,8 @@ fn countDecodeShape(store: *const lir.LirStore, layouts: *const layout.Store) ha
             .minus_checked = std.mem.count(u8, text, "num_int_sub_crash_on_overflow"),
             .is_lt = std.mem.count(u8, text, "num_is_lt("),
             .is_gt = std.mem.count(u8, text, "num_is_gt("),
+            .is_gte = std.mem.count(u8, text, "num_is_gte("),
+            .sub_overflows = std.mem.count(u8, text, "num_int_sub_overflows("),
             .switches = std.mem.count(u8, text, "switch "),
         };
         return;
@@ -113,9 +117,10 @@ test "a margin too small for the read keeps every bounds check" {
     );
     try std.testing.expect(counted.found_decode_proc);
     // A four-byte margin cannot justify an eight-byte read: the wrapper's
-    // length test and bound test both survive, as do their switches.
-    try std.testing.expect(counted.is_lt >= 1);
-    try std.testing.expect(counted.is_gt >= 1);
+    // saturating limit and its bound test both survive, as do their
+    // switches.
+    try std.testing.expectEqual(@as(usize, 1), counted.sub_overflows);
+    try std.testing.expectEqual(@as(usize, 1), counted.is_gte);
     try std.testing.expectEqual(@as(usize, 3), counted.switches);
     // The margin add still cannot be proven overflow-free: the entry cursor
     // is caller-controlled. The advance's `+ 7` is provable even here: the
@@ -137,8 +142,8 @@ test "the pass leaves the shape untouched when disabled" {
     try std.testing.expect(counted.found_decode_proc);
     try std.testing.expectEqual(@as(usize, 2), counted.plus_checked);
     try std.testing.expectEqual(@as(usize, 1), counted.minus_checked);
-    try std.testing.expectEqual(@as(usize, 1), counted.is_lt);
-    try std.testing.expectEqual(@as(usize, 1), counted.is_gt);
+    try std.testing.expectEqual(@as(usize, 1), counted.sub_overflows);
+    try std.testing.expectEqual(@as(usize, 1), counted.is_gte);
     try std.testing.expectEqual(@as(usize, 3), counted.switches);
 }
 
@@ -389,9 +394,10 @@ test "a hash bounded by a guard on entry and a shift on the back edge proves its
     );
     try std.testing.expect(meet_shape.found);
     try std.testing.expectEqual(@as(usize, 1), meet_shape.get_unsafe);
-    // The entry guard's length test, the loop condition, and the word read's
-    // short-input test remain; the table read's bounds test is proven away.
-    try std.testing.expectEqual(@as(usize, 3), meet_shape.is_lt);
+    // The entry guard's length test and the loop condition remain, as does
+    // the word read's bound test against its saturating limit, which is not
+    // a `<`; the table read's bounds test is proven away.
+    try std.testing.expectEqual(@as(usize, 2), meet_shape.is_lt);
 }
 
 test "a byte merged from a read and a literal keeps its byte range for the overflow proof" {
@@ -1148,6 +1154,29 @@ test "SIMD alignment prerequisite inlines checked wrappers with either crash arm
     }
 }
 
+test "wrapper inlining admits a guard whose arm returns an argument or a literal" {
+    inline for (.{
+        "if n > 16 { x } else { x.shl_wrap(n) }",
+        "if n > 16 { 0 } else { x.shl_wrap(n) }",
+    }) |body| {
+        try harness.expectLirInspectionWithOptions(
+            guardedWrapperApp(body),
+            .{ .inline_mode = .wrappers, .proc_debug_names = true },
+            inspectGuardedWrapper,
+        );
+        try std.testing.expect(!guarded_proc_survives);
+    }
+}
+
+test "a guard that recurses into itself stays a procedure" {
+    try harness.expectLirInspectionWithOptions(
+        guardedWrapperApp("if n == 0 { x } else { guarded(x.shl_wrap(1), n - 1) }"),
+        .{ .inline_mode = .wrappers, .proc_debug_names = true },
+        inspectGuardedWrapper,
+    );
+    try std.testing.expect(guarded_proc_survives);
+}
+
 test "wrapper inlining admits a guard whose arms each pass through to one operation" {
     inline for (.{
         "if n > 16 { x.shr_zf_wrap(n) } else { x.shl_wrap(n) }",
@@ -1849,4 +1878,193 @@ test "the match extension proves every word read on both sides against its entry
     try std.testing.expectEqual(@as(usize, 1), marked_shape.is_lt);
     try std.testing.expectEqual(@as(usize, 1), marked_shape.is_gt);
     try std.testing.expectEqual(@as(usize, 1), marked_shape.is_gte);
+}
+
+const RuleCounts = struct {
+    found: bool = false,
+    add_crash: usize = 0,
+    add_proven: usize = 0,
+    sub_crash: usize = 0,
+    sub_proven: usize = 0,
+    div_checked: usize = 0,
+    div_plain: usize = 0,
+    rem_checked: usize = 0,
+    rem_plain: usize = 0,
+    is_lt: usize = 0,
+    is_lte: usize = 0,
+};
+
+var rule_marker: []const u8 = "";
+var rule_counts: RuleCounts = .{};
+
+fn countRule(store: *const lir.LirStore, layouts: *const layout.Store) harness.LowerToLirHarnessError!void {
+    rule_counts = .{};
+    const gpa = std.testing.allocator;
+    const buf = try gpa.alloc(u8, 1 << 20);
+    defer gpa.free(buf);
+    for (0..store.getProcSpecs().len) |index| {
+        var writer = std.Io.Writer.fixed(buf);
+        try lir.DebugPrint.writeProc(gpa, store, layouts, @fromBackingInt(@intCast(@as(u32, @intCast(index)))), &writer);
+        const text = writer.buffered();
+        if (std.mem.count(u8, text, rule_marker) == 0) continue;
+        if (std.c.getenv("RANGE_PROVE_DUMP") != null) std.debug.print("\n===== rule proc =====\n{s}\n", .{text});
+        rule_counts = .{
+            .found = true,
+            .add_crash = std.mem.count(u8, text, "num_int_add_crash_on_overflow("),
+            .add_proven = std.mem.count(u8, text, "num_int_add_proven_cannot_overflow("),
+            .sub_crash = std.mem.count(u8, text, "num_int_sub_crash_on_overflow("),
+            .sub_proven = std.mem.count(u8, text, "num_int_sub_proven_cannot_overflow("),
+            .div_checked = std.mem.count(u8, text, "num_div_trunc_by_checked("),
+            .div_plain = std.mem.count(u8, text, "num_div_trunc_by("),
+            .rem_checked = std.mem.count(u8, text, "num_rem_by_checked("),
+            .rem_plain = std.mem.count(u8, text, "num_rem_by("),
+            .is_lt = std.mem.count(u8, text, "num_is_lt("),
+            .is_lte = std.mem.count(u8, text, "num_is_lte("),
+        };
+        return;
+    }
+}
+
+/// The checks left in the procedure containing `marker` after range proving
+/// an app whose `main!` echoes `call`.
+fn ruleCounts(comptime body: []const u8, comptime call: []const u8, marker: []const u8) (harness.LowerToLirHarnessError || error{TestExpectedTrue})!RuleCounts {
+    rule_marker = marker;
+    try harness.expectLirInspectionWithOptions(
+        arithmeticApp(body, call),
+        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        countRule,
+    );
+    try std.testing.expect(rule_counts.found);
+    return rule_counts;
+}
+
+const two_bytes = "calc(List.len(_args).to_u8_wrap(), List.len(_args).to_u8_wrap())";
+const three_bytes = "calc(List.len(_args).to_u8_wrap(), List.len(_args).to_u8_wrap(), List.len(_args).to_u8_wrap())";
+const one_byte = "calc(List.len(_args).to_u8_wrap())";
+
+test "a comparison that puts a saturating difference above zero bounds what is below it" {
+    const read_app = struct {
+        fn source(comptime compare: []const u8) []const u8 {
+            return "calc : List(U8), U64 -> U8\n" ++
+                "calc = |bytes, i| {\n" ++
+                "    limit = List.len(bytes).minus_saturated(7)\n" ++
+                "    if i " ++ compare ++ " limit { List.get(bytes, i + 6) ?? 0 } else { 0 }\n" ++
+                "}\n";
+        }
+    };
+    const call = "calc(Str.to_utf8(Str.join_with(_args, \",\")), List.len(_args))";
+    // `i < limit` makes the limit at least one, where it is `len - 7`, so the
+    // read's bounds test folds and only the comparison itself remains.
+    const below = try ruleCounts(read_app.source("<"), call, "num_int_sub_overflows(");
+    try std.testing.expectEqual(@as(usize, 1), below.is_lt);
+    try std.testing.expectEqual(@as(usize, 0), below.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), below.add_proven);
+    // `i <= limit` allows a limit of zero, where `len` may be below seven, so
+    // the read keeps its bounds test.
+    const at_most = try ruleCounts(read_app.source("<="), call, "num_int_sub_overflows(");
+    try std.testing.expectEqual(@as(usize, 1), at_most.is_lte);
+    try std.testing.expectEqual(@as(usize, 1), at_most.is_lt);
+}
+
+test "a saturating sum is at least each operand when its bound is the type's highest" {
+    const proven = try ruleCounts("calc : U8, U8 -> U8\ncalc = |a, b| a.plus_saturated(b) - a\n", two_bytes, "num_int_add_overflows(");
+    try std.testing.expectEqual(@as(usize, 1), proven.sub_proven);
+    try std.testing.expectEqual(@as(usize, 0), proven.sub_crash);
+    // A bound below an operand's range is not at least that operand.
+    const capped = try ruleCounts("calc : U8, U8 -> U8\ncalc = |a, b| (if a.plus_overflows(b) { 100 } else { a.plus_wrap(b) }) - a\n", two_bytes, "num_int_add_overflows(");
+    try std.testing.expectEqual(@as(usize, 1), capped.sub_crash);
+}
+
+test "an overflow predicate's true edge asserts the ordering that overflowing means" {
+    const sub = try ruleCounts("calc : U8, U8 -> U8\ncalc = |a, b| if a.minus_overflows(b) { b - a } else { 0 }\n", two_bytes, "num_int_sub_overflows(");
+    try std.testing.expectEqual(@as(usize, 1), sub.sub_proven);
+    const sub_unrelated = try ruleCounts("calc : U8, U8, U8 -> U8\ncalc = |a, b, c| if a.minus_overflows(b) { c - a } else { 0 }\n", three_bytes, "num_int_sub_overflows(");
+    try std.testing.expectEqual(@as(usize, 1), sub_unrelated.sub_crash);
+
+    const add = try ruleCounts("calc : U8 -> U8\ncalc = |a| if a.plus_overflows(200) { a - 56 } else { 0 }\n", one_byte, "num_int_add_overflows(");
+    try std.testing.expectEqual(@as(usize, 1), add.sub_proven);
+    const add_short = try ruleCounts("calc : U8 -> U8\ncalc = |a| if a.plus_overflows(200) { a - 57 } else { 0 }\n", one_byte, "num_int_add_overflows(");
+    try std.testing.expectEqual(@as(usize, 1), add_short.sub_crash);
+
+    const mul = try ruleCounts("calc : U8 -> U8\ncalc = |a| if a.times_overflows(16) { a - 16 } else { 0 }\n", one_byte, "num_int_mul_overflows(");
+    try std.testing.expectEqual(@as(usize, 1), mul.sub_proven);
+    const mul_short = try ruleCounts("calc : U8 -> U8\ncalc = |a| if a.times_overflows(16) { a - 17 } else { 0 }\n", one_byte, "num_int_mul_overflows(");
+    try std.testing.expectEqual(@as(usize, 1), mul_short.sub_crash);
+}
+
+test "a division by a divisor proven nonzero runs unchecked" {
+    const nonzero = try ruleCounts("calc : U8, U8 -> U8\ncalc = |a, b| a // b.bitwise_or(1)\n", two_bytes, "num_div_trunc_by");
+    try std.testing.expectEqual(@as(usize, 0), nonzero.div_checked);
+    try std.testing.expectEqual(@as(usize, 1), nonzero.div_plain);
+    const unknown = try ruleCounts("calc : U8, U8 -> U8\ncalc = |a, b| a // b\n", two_bytes, "num_div_trunc_by");
+    try std.testing.expectEqual(@as(usize, 1), unknown.div_checked);
+
+    const rem_nonzero = try ruleCounts("calc : U8, U8 -> U8\ncalc = |a, b| a % b.bitwise_or(1)\n", two_bytes, "num_rem_by");
+    try std.testing.expectEqual(@as(usize, 0), rem_nonzero.rem_checked);
+    try std.testing.expectEqual(@as(usize, 1), rem_nonzero.rem_plain);
+}
+
+test "a quotient is at most its dividend and a surviving division proves its divisor nonzero" {
+    const quotient = try ruleCounts("calc : U8, U8 -> U8\ncalc = |a, b| a - a // b\n", two_bytes, "num_div_trunc_by");
+    try std.testing.expectEqual(@as(usize, 1), quotient.sub_proven);
+    const other = try ruleCounts("calc : U8, U8 -> U8\ncalc = |a, b| b - a // b\n", two_bytes, "num_div_trunc_by");
+    try std.testing.expectEqual(@as(usize, 1), other.sub_crash);
+
+    const divisor = try ruleCounts("calc : U8, U8 -> U8\ncalc = |a, b| {\n    q = a // b\n    q.bitwise_or(b - 1)\n}\n", two_bytes, "num_div_trunc_by");
+    try std.testing.expectEqual(@as(usize, 1), divisor.sub_proven);
+    const past_one = try ruleCounts("calc : U8, U8 -> U8\ncalc = |a, b| {\n    q = a // b\n    q.bitwise_or(b - 2)\n}\n", two_bytes, "num_div_trunc_by");
+    try std.testing.expectEqual(@as(usize, 1), past_one.sub_crash);
+}
+
+test "a remainder is below its divisor" {
+    const constant = try ruleCounts("calc : U8 -> U8\ncalc = |a| a % 16 + 240\n", one_byte, "num_rem_by");
+    try std.testing.expectEqual(@as(usize, 1), constant.add_proven);
+    const wider = try ruleCounts("calc : U8 -> U8\ncalc = |a| a % 17 + 240\n", one_byte, "num_rem_by");
+    try std.testing.expectEqual(@as(usize, 1), wider.add_crash);
+
+    const dynamic = try ruleCounts("calc : U8, U8 -> U8\ncalc = |a, b| b - a % b\n", two_bytes, "num_rem_by");
+    try std.testing.expectEqual(@as(usize, 1), dynamic.sub_proven);
+    const unrelated = try ruleCounts("calc : U8, U8, U8 -> U8\ncalc = |a, b, c| c - a % b\n", three_bytes, "num_rem_by");
+    try std.testing.expectEqual(@as(usize, 1), unrelated.sub_crash);
+}
+
+test "a right shift is at most its operand and a left shift by a constant scales its range" {
+    const right = try ruleCounts("calc : U8, U8 -> U8\ncalc = |a, n| a - a.shr_zf_wrap(n)\n", two_bytes, "num_shift_right_zf_by(");
+    try std.testing.expectEqual(@as(usize, 1), right.sub_proven);
+    const left = try ruleCounts("calc : U8, U8 -> U8\ncalc = |a, n| a - a.shl_wrap(n)\n", two_bytes, "num_shift_left_by(");
+    try std.testing.expectEqual(@as(usize, 1), left.sub_crash);
+
+    const scaled = try ruleCounts("calc : U8 -> U8\ncalc = |a| a.bitwise_and(15).shl_wrap(4) + 15\n", one_byte, "num_shift_left_by(");
+    try std.testing.expectEqual(@as(usize, 1), scaled.add_proven);
+    const overflowing = try ruleCounts("calc : U8 -> U8\ncalc = |a| a.bitwise_and(31).shl_wrap(4) + 15\n", one_byte, "num_shift_left_by(");
+    try std.testing.expectEqual(@as(usize, 1), overflowing.add_crash);
+}
+
+test "bitwise or, xor, and not bound their results by their operands' ranges" {
+    const or_lower = try ruleCounts("calc : U8, U8 -> U8\ncalc = |a, b| a.bitwise_or(b) - a\n", two_bytes, "num_bitwise_or(");
+    try std.testing.expectEqual(@as(usize, 1), or_lower.sub_proven);
+    const xor_lower = try ruleCounts("calc : U8, U8 -> U8\ncalc = |a, b| a.bitwise_xor(b) - a\n", two_bytes, "num_bitwise_xor(");
+    try std.testing.expectEqual(@as(usize, 1), xor_lower.sub_crash);
+
+    const xor_range = try ruleCounts("calc : U8, U8 -> U8\ncalc = |a, b| a.bitwise_and(15).bitwise_xor(b.bitwise_and(7)) + 240\n", two_bytes, "num_bitwise_xor(");
+    try std.testing.expectEqual(@as(usize, 1), xor_range.add_proven);
+    const xor_wide = try ruleCounts("calc : U8, U8 -> U8\ncalc = |a, b| a.bitwise_and(31).bitwise_xor(b.bitwise_and(7)) + 240\n", two_bytes, "num_bitwise_xor(");
+    try std.testing.expectEqual(@as(usize, 1), xor_wide.add_crash);
+
+    const not_range = try ruleCounts("calc : U8 -> U8\ncalc = |a| a.bitwise_or(240).bitwise_not() + 240\n", one_byte, "num_bitwise_not(");
+    try std.testing.expectEqual(@as(usize, 1), not_range.add_proven);
+    const not_wide = try ruleCounts("calc : U8 -> U8\ncalc = |a| a.bitwise_or(224).bitwise_not() + 240\n", one_byte, "num_bitwise_not(");
+    try std.testing.expectEqual(@as(usize, 1), not_wide.add_crash);
+}
+
+test "a bit count is at most its operand's width and an absolute difference at most the operands' spread" {
+    const count = try ruleCounts("calc : U8 -> U8\ncalc = |a| a.count_one_bits() + 247\n", one_byte, "num_count_one_bits(");
+    try std.testing.expectEqual(@as(usize, 1), count.add_proven);
+    const count_over = try ruleCounts("calc : U8 -> U8\ncalc = |a| a.count_one_bits() + 248\n", one_byte, "num_count_one_bits(");
+    try std.testing.expectEqual(@as(usize, 1), count_over.add_crash);
+
+    const diff = try ruleCounts("calc : U8, U8 -> U8\ncalc = |a, b| a.bitwise_and(15).abs_diff(b.bitwise_and(15)) + 240\n", two_bytes, "num_abs_diff(");
+    try std.testing.expectEqual(@as(usize, 1), diff.add_proven);
+    const diff_wide = try ruleCounts("calc : U8, U8 -> U8\ncalc = |a, b| a.bitwise_and(31).abs_diff(b.bitwise_and(15)) + 240\n", two_bytes, "num_abs_diff(");
+    try std.testing.expectEqual(@as(usize, 1), diff_wide.add_crash);
 }

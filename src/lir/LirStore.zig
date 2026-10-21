@@ -2296,6 +2296,7 @@ fn noteStmtShapes(self: *Self, stmt: CFStmt) void {
         .assign_low_level => |assign| {
             if (assign.op == .box_box) self.shapes.box_box = true;
             if (CheckedArithmetic.isFamily(assign.op)) self.shapes.checked_arithmetic = true;
+            if (assign.op == .num_div_by_checked or assign.op == .num_div_trunc_by_checked or assign.op == .num_rem_by_checked or assign.op == .num_mod_by_checked) self.shapes.checked_division = true;
             if (assign.op == .simd_concat_shift_bytes) self.shapes.simd_concat_shift = true;
             if (assign.op == .num_is_eq or assign.op == .num_is_lt or assign.op == .num_is_lte or assign.op == .num_is_gt or assign.op == .num_is_gte) {
                 const args = self.getLocalSpan(assign.args);
