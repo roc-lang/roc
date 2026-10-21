@@ -71008,7 +71008,10 @@ test "issue 11362: checked instantiation reserves only recursive node identities
     const recursive = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(1) }, false);
     try checked_types.fillSyntheticTypeRoot(gpa, recursive, .{ .tuple = try gpa.dupe(checked.CheckedTypeId, &.{ recursive, recursive }) });
 
+    var program = Ast.Program.init(gpa);
+    defer program.deinit();
     var builder: Builder = undefined;
+    builder.program = &program;
     builder.app_module_identity = null;
     builder.next_instantiation_scope = 0;
     builder.allocator = gpa;
@@ -71030,6 +71033,8 @@ test "issue 11362: checked instantiation reserves only recursive node identities
     var ctx_view: ModuleViewData = undefined;
     ctx.view = &ctx_view;
     ctx_view.key = .{ .bytes = @splat(0) };
+    // The program seeds this module as its lowering input, as the coordinator does.
+    ctx_view.lowering_module = try program.addLoweringModule(ctx_view.key);
     ctx_view.types = checked_types.view();
     ctx.instantiation = TypeInstantiationContext.init(gpa, builder.allocateInstantiationScope(), ctx.view.key.bytes);
     ctx.resolves_enclosing_variables = false;
@@ -71090,7 +71095,10 @@ test "issue 11362: allocation failure removes active checked instantiation marke
             defer checked_types.deinit(gpa);
             const recursive = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(1) }, false);
             try checked_types.fillSyntheticTypeRoot(gpa, recursive, .{ .tuple = try gpa.dupe(checked.CheckedTypeId, &.{recursive}) });
+            var program = Ast.Program.init(gpa);
+            defer program.deinit();
             var builder: Builder = undefined;
+            builder.program = &program;
             builder.app_module_identity = null;
             builder.next_instantiation_scope = 0;
             builder.allocator = gpa;
@@ -71112,6 +71120,8 @@ test "issue 11362: allocation failure removes active checked instantiation marke
             var ctx_view: ModuleViewData = undefined;
             ctx.view = &ctx_view;
             ctx_view.key = .{ .bytes = @splat(0) };
+            // The program seeds this module as its lowering input, as the coordinator does.
+            ctx_view.lowering_module = try program.addLoweringModule(ctx_view.key);
             ctx_view.types = checked_types.view();
             ctx.instantiation = TypeInstantiationContext.init(allocator, builder.allocateInstantiationScope(), ctx.view.key.bytes);
             ctx.resolves_enclosing_variables = false;
@@ -71244,7 +71254,10 @@ fn testLazyCheckedInstantiationAliases(gpa: Allocator) (Allocator.Error || error
         .owner_module = .{},
         .backing = acyclic,
     } });
+    var program = Ast.Program.init(std.testing.allocator);
+    defer program.deinit();
     var builder: Builder = undefined;
+    builder.program = &program;
     builder.app_module_identity = null;
     builder.next_instantiation_scope = 0;
     builder.allocator = gpa;
@@ -71266,6 +71279,8 @@ fn testLazyCheckedInstantiationAliases(gpa: Allocator) (Allocator.Error || error
     var ctx_view: ModuleViewData = undefined;
     ctx.view = &ctx_view;
     ctx_view.key = .{ .bytes = @splat(0) };
+    // The program seeds this module as its lowering input, as the coordinator does.
+    ctx_view.lowering_module = try program.addLoweringModule(ctx_view.key);
     ctx_view.types = checked_types.view();
     ctx.instantiation = TypeInstantiationContext.init(gpa, builder.allocateInstantiationScope(), ctx.view.key.bytes);
     ctx.resolves_enclosing_variables = false;
@@ -71340,7 +71355,10 @@ test "issue 11362: checked instantiation allocates placeholders only for recursi
     const recursive = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, false);
     try checked_types.fillSyntheticTypeRoot(gpa, recursive, .{ .tuple = try gpa.dupe(checked.CheckedTypeId, &.{ recursive, recursive }) });
 
+    var program = Ast.Program.init(gpa);
+    defer program.deinit();
     var builder: Builder = undefined;
+    builder.program = &program;
     builder.app_module_identity = null;
     builder.next_instantiation_scope = 0;
     builder.allocator = gpa;
@@ -71362,6 +71380,8 @@ test "issue 11362: checked instantiation allocates placeholders only for recursi
     var ctx_view: ModuleViewData = undefined;
     ctx.view = &ctx_view;
     ctx_view.key = .{ .bytes = @splat(0) };
+    // The program seeds this module as its lowering input, as the coordinator does.
+    ctx_view.lowering_module = try program.addLoweringModule(ctx_view.key);
     ctx_view.types = checked_types.view();
     ctx.instantiation = TypeInstantiationContext.init(gpa, builder.allocateInstantiationScope(), ctx.view.key.bytes);
     ctx.resolves_enclosing_variables = false;
@@ -71407,7 +71427,10 @@ test "issue 11362: allocation failure removes checked instantiation markers" {
             defer type_store.deinit();
             const graph = try InstGraph.create(allocator, &type_store, &name_store);
             defer graph.destroy();
+            var program = Ast.Program.init(std.testing.allocator);
+            defer program.deinit();
             var builder: Builder = undefined;
+            builder.program = &program;
             builder.app_module_identity = null;
             builder.next_instantiation_scope = 0;
             builder.allocator = allocator;
@@ -71429,6 +71452,8 @@ test "issue 11362: allocation failure removes checked instantiation markers" {
             var ctx_view: ModuleViewData = undefined;
             ctx.view = &ctx_view;
             ctx_view.key = .{ .bytes = @splat(0) };
+            // The program seeds this module as its lowering input, as the coordinator does.
+            ctx_view.lowering_module = try program.addLoweringModule(ctx_view.key);
             ctx_view.types = view;
             ctx.instantiation = TypeInstantiationContext.init(allocator, builder.allocateInstantiationScope(), ctx.view.key.bytes);
             ctx.resolves_enclosing_variables = false;
@@ -71468,7 +71493,10 @@ fn testLazyCheckedInstantiation(allocator: Allocator, recursive: bool) (Allocato
     defer graph.destroy();
     var diagnostics: Diagnostics = .{};
     graph.setDiagnostics(&diagnostics.graph);
+    var program = Ast.Program.init(gpa);
+    defer program.deinit();
     var builder: Builder = undefined;
+    builder.program = &program;
     builder.app_module_identity = null;
     builder.next_instantiation_scope = 0;
     builder.allocator = gpa;
@@ -71490,6 +71518,8 @@ fn testLazyCheckedInstantiation(allocator: Allocator, recursive: bool) (Allocato
     var ctx_view: ModuleViewData = undefined;
     ctx.view = &ctx_view;
     ctx_view.key = .{ .bytes = @splat(0) };
+    // The program seeds this module as its lowering input, as the coordinator does.
+    ctx_view.lowering_module = try program.addLoweringModule(ctx_view.key);
     ctx_view.types = checked_types.view();
     ctx.instantiation = TypeInstantiationContext.init(allocator, builder.allocateInstantiationScope(), ctx.view.key.bytes);
     ctx.resolves_enclosing_variables = false;
@@ -71586,7 +71616,10 @@ test "lazy checked instantiation allocates only recursive placeholders and clear
                 .args = try std.testing.allocator.dupe(checked.CheckedTypeId, &.{variable}),
             } });
 
+            var program = Ast.Program.init(std.testing.allocator);
+            defer program.deinit();
             var builder: Builder = undefined;
+            builder.program = &program;
             builder.app_module_identity = null;
             builder.next_instantiation_scope = 0;
             builder.allocator = gpa;
@@ -71608,6 +71641,8 @@ test "lazy checked instantiation allocates only recursive placeholders and clear
             var ctx_view: ModuleViewData = undefined;
             ctx.view = &ctx_view;
             ctx_view.key = .{ .bytes = @splat(0) };
+            // The program seeds this module as its lowering input, as the coordinator does.
+            ctx_view.lowering_module = try program.addLoweringModule(ctx_view.key);
             ctx_view.types = checked_types.view();
             ctx.instantiation = TypeInstantiationContext.init(gpa, builder.allocateInstantiationScope(), ctx.view.key.bytes);
             ctx.resolves_enclosing_variables = false;
@@ -71656,7 +71691,10 @@ test "lazy checked placeholders obey closed and innermost declaration scopes" {
     const open = try checked_types.reserveSyntheticTypeRoot(gpa, .{}, true);
     const closed = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(1) }, false);
     // This test exercises only scope allocation and checked-node lookup.
+    var program = Ast.Program.init(gpa);
+    defer program.deinit();
     var builder: Builder = undefined;
+    builder.program = &program;
     builder.app_module_identity = null;
     builder.next_instantiation_scope = 0;
     builder.allocator = gpa;
@@ -71674,6 +71712,9 @@ test "lazy checked placeholders obey closed and innermost declaration scopes" {
     ctx.graph = graph;
     var ctx_view: ModuleViewData = undefined;
     ctx.view = &ctx_view;
+    ctx_view.key = .{ .bytes = @splat(0) };
+    // The program seeds this module as its lowering input, as the coordinator does.
+    ctx_view.lowering_module = try program.addLoweringModule(ctx_view.key);
     ctx_view.types = checked_types.view();
     ctx.instantiation = TypeInstantiationContext.init(gpa, builder.allocateInstantiationScope(), @splat(0));
     ctx.resolves_enclosing_variables = false;

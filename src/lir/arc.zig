@@ -6797,11 +6797,12 @@ const Inserter = struct {
         // The node and successor lists grow while the graph is discovered.
         // They grow in the freeing scratch allocator and are then kept at
         // their exact size, so the source arena never retains outgrown lists.
-        var lists_growing = true;
-        errdefer if (lists_growing) {
-            graph.nodes.deinit(self.source_liveness.scratch_allocator);
-            graph.successors.deinit(self.source_liveness.scratch_allocator);
-        };
+        // Each list is settled separately: once the nodes live in the source
+        // arena, only the successors still belong to the scratch allocator.
+        var nodes_growing = true;
+        errdefer if (nodes_growing) graph.nodes.deinit(self.source_liveness.scratch_allocator);
+        var successors_growing = true;
+        errdefer if (successors_growing) graph.successors.deinit(self.source_liveness.scratch_allocator);
         var work = std.ArrayList(u32).empty;
         defer work.deinit(self.source_liveness.scratch_allocator);
         var successors = std.ArrayList(LIR.CFStmtId).empty;
@@ -7107,9 +7108,10 @@ const Inserter = struct {
         }
 
         graph.nodes = try settleGrownList(ReadBeforeRebindNode, graph_allocator, self.source_liveness.scratch_allocator, &graph.nodes);
+        nodes_growing = false;
         graph.liveness = try self.livenessStructure(&graph, graph_allocator);
         graph.successors.deinit(self.source_liveness.scratch_allocator);
-        lists_growing = false;
+        successors_growing = false;
         try self.solveLiveness(&graph);
         // There are exactly two source read contracts: no restitution, or
         // the solver's complete available outcome span. Parameter ownership
