@@ -9078,7 +9078,7 @@ Builtin :: [].{
 			from_le_bytes : List(U8), U64 -> Try(U16, [OutOfBounds])
 			from_le_bytes = |bytes, index| {
 				len = List.len(bytes)
-				# 2 elements starting at `index` fit when `index < len - 1`. That
+				# 2 items starting at `index` fit when `index < len - 1`. That
 				# limit depends only on the list, so a loop that reads repeatedly hoists
 				# it and keeps just the one comparison of `index` against it. The
 				# subtraction saturates, so a list shorter than that has a limit of
@@ -9983,7 +9983,7 @@ Builtin :: [].{
 			from_le_bytes : List(U8), U64 -> Try(I16, [OutOfBounds])
 			from_le_bytes = |bytes, index| {
 				len = List.len(bytes)
-				# 2 elements starting at `index` fit when `index < len - 1`. That
+				# 2 items starting at `index` fit when `index < len - 1`. That
 				# limit depends only on the list, so a loop that reads repeatedly hoists
 				# it and keeps just the one comparison of `index` against it. The
 				# subtraction saturates, so a list shorter than that has a limit of
@@ -10827,7 +10827,7 @@ Builtin :: [].{
 			from_le_bytes : List(U8), U64 -> Try(U32, [OutOfBounds])
 			from_le_bytes = |bytes, index| {
 				len = List.len(bytes)
-				# 4 elements starting at `index` fit when `index < len - 3`. That
+				# 4 items starting at `index` fit when `index < len - 3`. That
 				# limit depends only on the list, so a loop that reads repeatedly hoists
 				# it and keeps just the one comparison of `index` against it. The
 				# subtraction saturates, so a list shorter than that has a limit of
@@ -11766,7 +11766,7 @@ Builtin :: [].{
 			from_le_bytes : List(U8), U64 -> Try(I32, [OutOfBounds])
 			from_le_bytes = |bytes, index| {
 				len = List.len(bytes)
-				# 4 elements starting at `index` fit when `index < len - 3`. That
+				# 4 items starting at `index` fit when `index < len - 3`. That
 				# limit depends only on the list, so a loop that reads repeatedly hoists
 				# it and keeps just the one comparison of `index` against it. The
 				# subtraction saturates, so a list shorter than that has a limit of
@@ -12628,7 +12628,7 @@ Builtin :: [].{
 			from_le_bytes : List(U8), U64 -> Try(U64, [OutOfBounds])
 			from_le_bytes = |bytes, index| {
 				len = List.len(bytes)
-				# 8 elements starting at `index` fit when `index < len - 7`. That
+				# 8 items starting at `index` fit when `index < len - 7`. That
 				# limit depends only on the list, so a loop that reads repeatedly hoists
 				# it and keeps just the one comparison of `index` against it. The
 				# subtraction saturates, so a list shorter than that has a limit of
@@ -13632,7 +13632,7 @@ Builtin :: [].{
 			from_le_bytes : List(U8), U64 -> Try(I64, [OutOfBounds])
 			from_le_bytes = |bytes, index| {
 				len = List.len(bytes)
-				# 8 elements starting at `index` fit when `index < len - 7`. That
+				# 8 items starting at `index` fit when `index < len - 7`. That
 				# limit depends only on the list, so a loop that reads repeatedly hoists
 				# it and keeps just the one comparison of `index` against it. The
 				# subtraction saturates, so a list shorter than that has a limit of
@@ -14517,7 +14517,7 @@ Builtin :: [].{
 			from_le_bytes : List(U8), U64 -> Try(U128, [OutOfBounds])
 			from_le_bytes = |bytes, index| {
 				len = List.len(bytes)
-				# 16 elements starting at `index` fit when `index < len - 15`. That
+				# 16 items starting at `index` fit when `index < len - 15`. That
 				# limit depends only on the list, so a loop that reads repeatedly hoists
 				# it and keeps just the one comparison of `index` against it. The
 				# subtraction saturates, so a list shorter than that has a limit of
@@ -15538,7 +15538,7 @@ Builtin :: [].{
 			from_le_bytes : List(U8), U64 -> Try(I128, [OutOfBounds])
 			from_le_bytes = |bytes, index| {
 				len = List.len(bytes)
-				# 16 elements starting at `index` fit when `index < len - 15`. That
+				# 16 items starting at `index` fit when `index < len - 15`. That
 				# limit depends only on the list, so a loop that reads repeatedly hoists
 				# it and keeps just the one comparison of `index` against it. The
 				# subtraction saturates, so a list shorter than that has a limit of
@@ -19793,7 +19793,7 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(U8x16, [OutOfBounds])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				# 16 elements starting at `index` fit when `index < len - 15`. That
+				# 16 items starting at `index` fit when `index < len - 15`. That
 				# limit depends only on the list, so a loop that reads repeatedly hoists
 				# it and keeps just the one comparison of `index` against it. The
 				# subtraction saturates, so a list shorter than that has a limit of
@@ -19815,7 +19815,7 @@ Builtin :: [].{
 			store : U8x16, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				# 16 elements starting at `index` fit when `index < len - 15`. That
+				# 16 items starting at `index` fit when `index < len - 15`. That
 				# limit depends only on the list, so a loop that reads repeatedly hoists
 				# it and keeps just the one comparison of `index` against it. The
 				# subtraction saturates, so a list shorter than that has a limit of
@@ -19842,7 +19842,7 @@ Builtin :: [].{
 					0.U64,
 					Known(chunk_count),
 					|start| {
-						# 16 elements starting at `start` fit when `start < len - 15`. That
+						# 16 items starting at `start` fit when `start < len - 15`. That
 						# limit depends only on the list, so a loop that reads repeatedly hoists
 						# it and keeps just the one comparison of `start` against it. The
 						# subtraction saturates, so a list shorter than that has a limit of
@@ -20383,7 +20383,7 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(I8x16, [OutOfBounds])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				# 16 elements starting at `index` fit when `index < len - 15`. That
+				# 16 items starting at `index` fit when `index < len - 15`. That
 				# limit depends only on the list, so a loop that reads repeatedly hoists
 				# it and keeps just the one comparison of `index` against it. The
 				# subtraction saturates, so a list shorter than that has a limit of
@@ -20405,7 +20405,7 @@ Builtin :: [].{
 			store : I8x16, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				# 16 elements starting at `index` fit when `index < len - 15`. That
+				# 16 items starting at `index` fit when `index < len - 15`. That
 				# limit depends only on the list, so a loop that reads repeatedly hoists
 				# it and keeps just the one comparison of `index` against it. The
 				# subtraction saturates, so a list shorter than that has a limit of
@@ -20939,7 +20939,7 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(U16x8, [OutOfBounds])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				# 16 elements starting at `index` fit when `index < len - 15`. That
+				# 16 items starting at `index` fit when `index < len - 15`. That
 				# limit depends only on the list, so a loop that reads repeatedly hoists
 				# it and keeps just the one comparison of `index` against it. The
 				# subtraction saturates, so a list shorter than that has a limit of
@@ -20974,7 +20974,7 @@ Builtin :: [].{
 			store : U16x8, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				# 16 elements starting at `index` fit when `index < len - 15`. That
+				# 16 items starting at `index` fit when `index < len - 15`. That
 				# limit depends only on the list, so a loop that reads repeatedly hoists
 				# it and keeps just the one comparison of `index` against it. The
 				# subtraction saturates, so a list shorter than that has a limit of
@@ -21580,7 +21580,7 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(I16x8, [OutOfBounds])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				# 16 elements starting at `index` fit when `index < len - 15`. That
+				# 16 items starting at `index` fit when `index < len - 15`. That
 				# limit depends only on the list, so a loop that reads repeatedly hoists
 				# it and keeps just the one comparison of `index` against it. The
 				# subtraction saturates, so a list shorter than that has a limit of
@@ -21602,7 +21602,7 @@ Builtin :: [].{
 			store : I16x8, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				# 16 elements starting at `index` fit when `index < len - 15`. That
+				# 16 items starting at `index` fit when `index < len - 15`. That
 				# limit depends only on the list, so a loop that reads repeatedly hoists
 				# it and keeps just the one comparison of `index` against it. The
 				# subtraction saturates, so a list shorter than that has a limit of
@@ -22087,7 +22087,7 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(U32x4, [OutOfBounds])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				# 16 elements starting at `index` fit when `index < len - 15`. That
+				# 16 items starting at `index` fit when `index < len - 15`. That
 				# limit depends only on the list, so a loop that reads repeatedly hoists
 				# it and keeps just the one comparison of `index` against it. The
 				# subtraction saturates, so a list shorter than that has a limit of
@@ -22122,7 +22122,7 @@ Builtin :: [].{
 			store : U32x4, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				# 16 elements starting at `index` fit when `index < len - 15`. That
+				# 16 items starting at `index` fit when `index < len - 15`. That
 				# limit depends only on the list, so a loop that reads repeatedly hoists
 				# it and keeps just the one comparison of `index` against it. The
 				# subtraction saturates, so a list shorter than that has a limit of
@@ -22661,7 +22661,7 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(I32x4, [OutOfBounds])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				# 16 elements starting at `index` fit when `index < len - 15`. That
+				# 16 items starting at `index` fit when `index < len - 15`. That
 				# limit depends only on the list, so a loop that reads repeatedly hoists
 				# it and keeps just the one comparison of `index` against it. The
 				# subtraction saturates, so a list shorter than that has a limit of
@@ -22683,7 +22683,7 @@ Builtin :: [].{
 			store : I32x4, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				# 16 elements starting at `index` fit when `index < len - 15`. That
+				# 16 items starting at `index` fit when `index < len - 15`. That
 				# limit depends only on the list, so a loop that reads repeatedly hoists
 				# it and keeps just the one comparison of `index` against it. The
 				# subtraction saturates, so a list shorter than that has a limit of
@@ -23097,7 +23097,7 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(U64x2, [OutOfBounds])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				# 16 elements starting at `index` fit when `index < len - 15`. That
+				# 16 items starting at `index` fit when `index < len - 15`. That
 				# limit depends only on the list, so a loop that reads repeatedly hoists
 				# it and keeps just the one comparison of `index` against it. The
 				# subtraction saturates, so a list shorter than that has a limit of
@@ -23119,7 +23119,7 @@ Builtin :: [].{
 			store : U64x2, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				# 16 elements starting at `index` fit when `index < len - 15`. That
+				# 16 items starting at `index` fit when `index < len - 15`. That
 				# limit depends only on the list, so a loop that reads repeatedly hoists
 				# it and keeps just the one comparison of `index` against it. The
 				# subtraction saturates, so a list shorter than that has a limit of
@@ -23558,7 +23558,7 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(I64x2, [OutOfBounds])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				# 16 elements starting at `index` fit when `index < len - 15`. That
+				# 16 items starting at `index` fit when `index < len - 15`. That
 				# limit depends only on the list, so a loop that reads repeatedly hoists
 				# it and keeps just the one comparison of `index` against it. The
 				# subtraction saturates, so a list shorter than that has a limit of
@@ -23580,7 +23580,7 @@ Builtin :: [].{
 			store : I64x2, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				# 16 elements starting at `index` fit when `index < len - 15`. That
+				# 16 items starting at `index` fit when `index < len - 15`. That
 				# limit depends only on the list, so a loop that reads repeatedly hoists
 				# it and keeps just the one comparison of `index` against it. The
 				# subtraction saturates, so a list shorter than that has a limit of

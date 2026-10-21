@@ -1927,7 +1927,7 @@ fn countRule(store: *const lir.LirStore, layouts: *const layout.Store) harness.L
 
 /// The checks left in the procedure containing `marker` after range proving
 /// an app whose `main!` echoes `call`.
-fn ruleCounts(comptime body: []const u8, comptime call: []const u8, marker: []const u8) !RuleCounts {
+fn ruleCounts(comptime body: []const u8, comptime call: []const u8, marker: []const u8) (harness.LowerToLirHarnessError || error{TestExpectedTrue})!RuleCounts {
     rule_marker = marker;
     try harness.expectLirInspectionWithOptions(
         arithmeticApp(body, call),

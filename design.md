@@ -19389,7 +19389,7 @@ at most `len - k` on every path that sees it above zero. Such a bound is kept
 apart, and a branch edge whose ordering puts the value at or above one asserts
 it along that edge, taking the edge's origin. That is what lets a single
 comparison `index < len.minus_saturated(k - 1)` prove the read of `k`
-elements at `index`, and the fixed-width reads and writes of the builtins
+items at `index`, and the fixed-width reads and writes of the builtins
 bound their index exactly so: the saturating limit depends only on the list,
 so a loop hoists it and keeps one comparison per access.
 

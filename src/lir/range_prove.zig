@@ -5578,25 +5578,15 @@ const Pass = struct {
                 }
                 try self.bindFresh(s.target);
             },
-            .num_div_by,
-            .num_div_by_checked,
-            .num_div_trunc_by,
-            .num_div_trunc_by_checked,
-            .num_rem_by,
-            .num_rem_by_checked,
-            .num_mod_by,
-            .num_mod_by_checked,
-            .num_shift_left_by,
-            .num_shift_right_by,
-            .num_shift_right_zf_by,
-            .num_bitwise_or,
-            .num_bitwise_xor,
-            .num_bitwise_not,
-            .num_count_one_bits,
-            .num_count_leading_zero_bits,
-            .num_count_trailing_zero_bits,
-            .num_abs_diff,
-            => try self.modelUnsignedArith(stmt, s, args, arg_count),
+            .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked => try self.modelUnsignedArith(stmt, s, args, arg_count, .division),
+            .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked => try self.modelUnsignedArith(stmt, s, args, arg_count, .remainder),
+            .num_shift_left_by => try self.modelUnsignedArith(stmt, s, args, arg_count, .shift_left),
+            .num_shift_right_by, .num_shift_right_zf_by => try self.modelUnsignedArith(stmt, s, args, arg_count, .shift_right),
+            .num_bitwise_or => try self.modelUnsignedArith(stmt, s, args, arg_count, .bitwise_or),
+            .num_bitwise_xor => try self.modelUnsignedArith(stmt, s, args, arg_count, .bitwise_xor),
+            .num_bitwise_not => try self.modelUnsignedArith(stmt, s, args, arg_count, .bitwise_not),
+            .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits => try self.modelUnsignedArith(stmt, s, args, arg_count, .bit_count),
+            .num_abs_diff => try self.modelUnsignedArith(stmt, s, args, arg_count, .abs_diff),
             .str_is_eq,
             .str_is_eq_static_small,
             .str_static_small_word_eq,
@@ -6239,33 +6229,47 @@ const Pass = struct {
     /// one the divisor is at least one; the plain forms are only ever the
     /// checked ones with that already proven. A checked form whose divisor is
     /// proven nonzero becomes the plain form.
-    fn modelUnsignedArith(self: *Pass, stmt: CFStmtId, s: anytype, args: anytype, arg_count: usize) ResourceError!void {
+    /// The unsigned arithmetic `modelUnsignedArith` models, by result shape;
+    /// each member stands for the low-level ops whose results it bounds alike.
+    const UnsignedArithOp = enum {
+        division,
+        remainder,
+        shift_left,
+        shift_right,
+        bitwise_or,
+        bitwise_xor,
+        bitwise_not,
+        bit_count,
+        abs_diff,
+    };
+
+    fn modelUnsignedArith(self: *Pass, stmt: CFStmtId, s: anytype, args: anytype, arg_count: usize, op: UnsignedArithOp) ResourceError!void {
         const operand_layout = if (arg_count > 0) self.localLayout(GuardedList.at(args, 0)) else self.localLayout(s.target);
         const max = trackedIntMax(operand_layout) orelse {
-            if (try self.bitCountResult(s, operand_layout)) return;
+            if (try self.bitCountResult(op, s.target, operand_layout)) return;
             return self.bindFresh(s.target);
         };
         const width: u7 = @intCast(std.math.log2_int(u128, @intCast(max + 1)));
         const a = (if (arg_count > 0) try self.valueOf(GuardedList.at(args, 0)) else null) orelse return self.bindFresh(s.target);
         const lo_a = self.absLoOf(a);
         const hi_a = @min(self.absHiOf(a), max);
-        switch (s.op) {
-            .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits => {
+        switch (op) {
+            .bit_count => {
                 const node = (try self.rangeRoot(0, width)) orelse return self.bindFresh(s.target);
                 return self.bind(s.target, .{ .node = node });
             },
-            .num_bitwise_not => {
+            .bitwise_not => {
                 const node = (try self.rangeRoot(max - hi_a, max - lo_a)) orelse return self.bindFresh(s.target);
                 return self.bind(s.target, .{ .node = node });
             },
-            else => {},
+            .division, .remainder, .shift_left, .shift_right, .bitwise_or, .bitwise_xor, .abs_diff => {},
         }
         if (arg_count != 2) return self.bindFresh(s.target);
         const b = (try self.valueOf(GuardedList.at(args, 1))) orelse return self.bindFresh(s.target);
         const lo_b = self.absLoOf(b);
         const hi_b = @min(self.absHiOf(b), max);
-        switch (s.op) {
-            .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked => {
+        switch (op) {
+            .division => {
                 try self.dischargeDivisor(stmt, s.op, b);
                 try self.assertNonzeroDivisor(b);
                 const divisor_lo = @max(lo_b, 1);
@@ -6275,7 +6279,7 @@ const Pass = struct {
                 try self.addResultFact(s.target, self.orderingFact(node, a, 0, .meet));
                 return self.bind(s.target, .{ .node = node });
             },
-            .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked => {
+            .remainder => {
                 try self.dischargeDivisor(stmt, s.op, b);
                 try self.assertNonzeroDivisor(b);
                 const node = (try self.rangeRoot(0, @max(0, @min(hi_a, hi_b - 1)))) orelse return self.bindFresh(s.target);
@@ -6283,7 +6287,7 @@ const Pass = struct {
                 try self.addResultFact(s.target, self.orderingFact(node, b, -1, .meet));
                 return self.bind(s.target, .{ .node = node });
             },
-            .num_shift_right_by, .num_shift_right_zf_by => {
+            .shift_right => {
                 // The count is taken modulo the width.
                 const node = if (self.constValueOf(b)) |count| blk: {
                     const shift: u7 = @intCast(@mod(count, width));
@@ -6293,7 +6297,7 @@ const Pass = struct {
                 try self.addResultFact(s.target, self.orderingFact(result, a, 0, .meet));
                 return self.bind(s.target, .{ .node = result });
             },
-            .num_shift_left_by => {
+            .shift_left => {
                 if (self.constValueOf(b)) |count| {
                     const shift: u7 = @intCast(@mod(count, width));
                     if (hi_a <= (max >> shift)) {
@@ -6303,21 +6307,21 @@ const Pass = struct {
                 }
                 return self.bindFresh(s.target);
             },
-            .num_bitwise_or => {
+            .bitwise_or => {
                 const node = (try self.rangeRoot(@max(lo_a, lo_b), lowBitsMask(@max(hi_a, hi_b)))) orelse return self.bindFresh(s.target);
                 try self.addResultFact(s.target, self.orderingFact(a, node, 0, .meet));
                 try self.addResultFact(s.target, self.orderingFact(b, node, 0, .meet));
                 return self.bind(s.target, .{ .node = node });
             },
-            .num_bitwise_xor => {
+            .bitwise_xor => {
                 const node = (try self.rangeRoot(0, lowBitsMask(@max(hi_a, hi_b)))) orelse return self.bindFresh(s.target);
                 return self.bind(s.target, .{ .node = node });
             },
-            .num_abs_diff => {
+            .abs_diff => {
                 const node = (try self.rangeRoot(0, @max(0, hi_a - lo_b, hi_b - lo_a))) orelse return self.bindFresh(s.target);
                 return self.bind(s.target, .{ .node = node });
             },
-            else => unreachable,
+            .bit_count, .bitwise_not => unreachable, // the unary switch above returned for these
         }
     }
 
@@ -6328,21 +6332,19 @@ const Pass = struct {
     }
 
     /// A bit count is at most its operand's width, whatever its signedness.
-    fn bitCountResult(self: *Pass, s: anytype, operand_layout: layout_mod.Idx) ResourceError!bool {
-        switch (s.op) {
-            .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits => {},
-            else => return false,
-        }
+    fn bitCountResult(self: *Pass, op: UnsignedArithOp, target: LocalId, operand_layout: layout_mod.Idx) ResourceError!bool {
+        if (op != .bit_count) return false;
         const width: i128 = switch (operand_layout) {
             .u8, .i8 => 8,
             .u16, .i16 => 16,
             .u32, .i32 => 32,
             .u64, .i64 => 64,
             .u128, .i128 => 128,
-            else => return false,
+            .bool, .str, .f32, .f64, .dec, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => return false,
+            _ => return false,
         };
         const node = (try self.freshRoot(0, width)) orelse return false;
-        try self.bind(s.target, .{ .node = node });
+        try self.bind(target, .{ .node = node });
         return true;
     }
 
