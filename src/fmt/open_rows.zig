@@ -13,7 +13,8 @@
 //! other position keeps it; a type application's argument is generated at the
 //! application's polarity composed with the positions of the declaration
 //! formal it is substituted for; a where-method signature opens only the rows
-//! the result-row widening adapter can re-tag. Which annotations qualify at all
+//! within the row coercion's reach (design.md "Closed Result Rows At Template
+//! Boundaries"). Which annotations qualify at all
 //! mirrors `Check.bindingRhsGeneralizes` together with
 //! `Check.collectHostBoundaryAnnotations`.
 //!

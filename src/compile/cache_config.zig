@@ -347,7 +347,9 @@ pub const Constants = struct {
     ///      dispatch constraint.
     /// 157: canonical diagnostics drop `execution_requires_app_or_default_app`,
     ///      and file-level diagnostics store no region.
-    pub const CACHE_VERSION = 157;
+    /// 158: Module environments record row-coerced results in place of
+    ///      row-coerced callees and closed-result definitions.
+    pub const CACHE_VERSION = 158;
 };
 
 /// Configuration for the Roc cache system.
