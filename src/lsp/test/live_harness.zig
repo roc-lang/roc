@@ -110,8 +110,8 @@ pub const Reader = struct {
 /// Adapts server output writes to the harness's synchronized output queue.
 pub const Writer = struct {
     queue: *Queue,
-    pub fn write(w: *Writer, bytes: []const u8) error{ OutOfMemory, Closed }!usize {
-        return w.queue.write(bytes);
+    pub fn writeAll(w: *Writer, bytes: []const u8) error{ OutOfMemory, Closed }!void {
+        _ = try w.queue.write(bytes);
     }
 };
 

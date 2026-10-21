@@ -233,6 +233,7 @@ comptime {
         "roc_boxy_caller_drives",
         "roc_boxy_return_pending",
         "roc_boxy_list_concat",
+        "roc_boxy_list_append_sublist",
         "roc_boxy_list_prepend",
         "roc_boxy_list_sublist",
         "roc_boxy_list_drop_at",

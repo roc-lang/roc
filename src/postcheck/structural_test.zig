@@ -325,18 +325,20 @@ test "Lambda Solved consumes lifted program through a read-only view" {
     try std.testing.expect(std.mem.find(u8, solve_source, "self.program.lifted.") == null);
 }
 
-test "Lambda Solved unify does not yield explicit empty tag unions" {
+test "Lambda Solved unify joins tag rows and never proves an uninhabited shape" {
     const solve_source = @embedFile("lambda_solved/solve.zig");
     const unify_source = sourceSliceBetween(solve_source, "fn unify", "fn transparentAliasBacking");
     try expectNotContains(unify_source, "isEmptyTagUnion");
-    try expectNotContains(unify_source, "empty tag union");
     try expectNotContains(solve_source, "fn isEmptyTagUnion");
 
-    // No uninhabited shape yields to its peer either: an empty row meets only
-    // an empty row, and every other uninhabited type unifies structurally.
+    // Two tag rows that meet become one row holding both rows' tags, and an
+    // empty row takes its populated peer's row (design.md "Row Joins"). No
+    // other uninhabited shape yields to its peer: every other uninhabited type
+    // unifies structurally.
     const unify_roots = sourceSliceBetween(solve_source, "fn unifyRoots(", "fn joinsTypeRoots(");
     try expectNotContains(unify_roots, "typeIsProvenUninhabited");
-    try expectContains(unify_roots, "Common.invariant(\"empty tag row failed Lambda Solved unification\")");
+    try expectContains(unify_roots, "(design.md \"Row Joins\")");
+    try expectNotContains(unify_roots, "empty tag row failed Lambda Solved unification");
 }
 
 test "Monotype lowering does not use unsolved_monos side table" {
@@ -379,7 +381,7 @@ test "Monotype generated-private selection cannot become ordinary or reopen fini
     const request_selection = sourceSliceBetween(
         lower_source,
         "fn selectRequestRepresentation(",
-        "const HostedTryAdapterCapability",
+        "const ClosedResultRow = struct",
     );
     try expectContains(request_selection, "containsFinishedMono(public_node)");
     try expectContains(request_selection, "containsFinishedMono(private_node)");
@@ -1444,41 +1446,6 @@ test "Monotype generated-private call requests retain separate request nodes" {
     try expectNotContains(iterator, "self.graph.unify(formal_node, try self.graph.importMono(evidence_ty))");
 }
 
-test "hosted Try adaptation consumes checker-recorded nominal provenance" {
-    const lower_source = @embedFile("monotype/lower.zig");
-    const nominal_provenance = sourceSliceBetween(
-        lower_source,
-        "fn hostedTryNamedOrNull(",
-        "fn hostedTryTypeLike(",
-    );
-    // The hosted `Try` adapter is now one instance of the general result-row
-    // widening adapter (design.md "Result-Row Widening Adapter"), so the two
-    // functions this slices between carry the general names. The adapter no
-    // longer returns early on a missing capability—a template whose result
-    // is a bare closed row is adapted without one—so the assertion that
-    // pinned the capability as the only route to `Try` moved to the two
-    // `hostedTryInfoOrNull` calls that read the `Try` rows through it.
-    const adapter_source = sourceSliceBetween(
-        lower_source,
-        "fn resultRowWideningAdapterSourceType(",
-        "fn resultRowWideningAdapterBody(",
-    );
-    try std.testing.expect(@hasField(check.CheckedModule.CheckedProcedureTemplate, "hosted_try_adapter"));
-    try expectContains(lower_source, "template.hosted_try_adapter");
-    try expectContains(nominal_provenance, "capability.def");
-    try expectContains(nominal_provenance, "capability.ok_type_arg_index");
-    try expectContains(nominal_provenance, "capability.err_type_arg_index");
-    try expectContains(adapter_source, "self.hostedTryInfoOrNull(try_capability, requested.ret)");
-    try expectContains(adapter_source, "self.hostedTryInfoOrNull(try_capability, declared.ret)");
-    try expectContains(lower_source, "sameTypeDef(named.def, capability.def)");
-    try expectContains(lower_source, "tagByNameOrNull(self.coordinatorTypes(), &self.program.names, backing_ty.ty, capability.ok_tag)");
-    try expectContains(lower_source, "tagByNameOrNull(self.coordinatorTypes(), &self.program.names, backing_ty.ty, capability.err_tag)");
-    try expectNotContains(lower_source, "fn graphTryInfoOrNull(");
-    try expectNotContains(lower_source, "fn graphTagByText(");
-    try expectNotContains(lower_source, "fn tryInfoOrNull(");
-    try expectNotContains(lower_source, "fn tagByTextOrNull(");
-}
-
 test "Monotype source locations carry final program file ids and draft compaction preserves procedure debug names" {
     const lower_source = @embedFile("monotype/lower.zig");
     // The program's source-file and checked-module tables are seeded in
@@ -1792,6 +1759,31 @@ test "hoist-preserving iterator producers are reachable through their method nam
     }
 }
 
+test "value rules have one definition site" {
+    // Inspection, structural equality and hashing, and `to_inspect` override
+    // selection are defined once, in `value_rules/`, for both lowering
+    // strategies and the Boxy runtime; no lowerer holds a copy of them.
+    const lowerers = [_][]const u8{
+        @embedFile("monotype/lower.zig"),
+        @embedFile("solved_lir_lower.zig"),
+        @embedFile("boxy/lower.zig"),
+        @embedFile("boxy/plan.zig"),
+    };
+    const literals = [_][]const u8{ "\"<missing>\"", "\"<function>\"", "\"<opaque>\"", "\"Box(\"", "\"{ \"", "\" }\"" };
+    for (lowerers) |source| {
+        for (literals) |literal| try expectNotContains(source, literal);
+        try expectNotContains(source, "fn lookupInspectOverride(");
+        try expectNotContains(source, "fn beginEq(");
+        try expectNotContains(source, "fn beginHash(");
+    }
+    const inspect = @embedFile("value_rules/inspect.zig");
+    for (literals) |literal| try expectContains(inspect, literal);
+    try expectContains(@embedFile("value_rules/inspect_override.zig"), "pub fn lookupInspectOverride(");
+    const structural = @embedFile("value_rules/structural.zig");
+    try expectContains(structural, "fn beginEq(");
+    try expectContains(structural, "fn beginHash(");
+}
+
 /// One function definition found in a source file: its name and the token
 /// text of its body, braces included.
 const SourceFn = struct {
@@ -2061,6 +2053,22 @@ test "post-check lowerers define no helper twice with near-identical bodies" {
         "namedEnter",
         "tagPayloadOperand",
         "tagUnionExit",
+        // The callbacks `value_rules`' structural equality and hashing walks
+        // call on Boxy's lowering contexts (`EqLowering` / `HashLowering`):
+        // one context struct per rule, each forwarding to the procedure
+        // body builder.
+        "allocator",
+        "boolSwitch",
+        "componentLocal",
+        "discriminantLocal",
+        "discriminantSwitch",
+        "isZstLocal",
+        "payloadCount",
+        "readDiscriminant",
+        "readField",
+        "releaseWrap",
+        "variantCount",
+        "wrapRequest",
         // Conventional method names on unrelated types (sort orders,
         // lifecycle, map access, timing scopes, worker task entry points).
         "lessThan",
@@ -2173,7 +2181,7 @@ test "Monotype lowering scopes share one definition of each type-shape, name-imp
     }
     // Method lookup takes the name store its owner belongs to; `BodyContext`
     // calls the `Builder` implementation with its own.
-    const lookups = [_][]const u8{ "lookupMethodTarget", "lookupMethodTargetByName", "lookupInspectOverride" };
+    const lookups = [_][]const u8{ "lookupMethodTarget", "lookupMethodTargetByName", "inspectOverrideFor" };
     inline for (lookups) |name| {
         try std.testing.expectEqual(@as(usize, 1), countDefinitions(source, "fn " ++ name ++ "("));
         try expectContains(source, "    fn " ++ name ++ "(\n        self: *Builder,\n        scope: ModuleView,\n        owner_names: *const names.NameStore,");

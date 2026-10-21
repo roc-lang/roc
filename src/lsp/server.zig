@@ -41,6 +41,7 @@ const initialize_handler_mod = @import("handlers/initialize.zig");
 const shutdown_handler_mod = @import("handlers/shutdown.zig");
 const did_open_handler_mod = @import("handlers/did_open.zig");
 const did_change_handler_mod = @import("handlers/did_change.zig");
+const did_close_handler_mod = @import("handlers/did_close.zig");
 const semantic_tokens_handler_mod = @import("handlers/semantic_tokens.zig");
 const hover_handler_mod = @import("handlers/hover.zig");
 const definition_handler_mod = @import("handlers/definition.zig");
@@ -129,9 +130,11 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
         });
         const DidOpenHandler = did_open_handler_mod.handler(Self);
         const DidChangeHandler = did_change_handler_mod.handler(Self);
+        const DidCloseHandler = did_close_handler_mod.handler(Self);
         const notification_handlers = std.StaticStringMap(NotificationPtr).initComptime(.{
             .{ "textDocument/didOpen", &DidOpenHandler.call },
             .{ "textDocument/didChange", &DidChangeHandler.call },
+            .{ "textDocument/didClose", &DidCloseHandler.call },
         });
 
         allocator: std.mem.Allocator,
@@ -521,25 +524,6 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
             }
 
             if (std.mem.eql(u8, method, "initialized")) return;
-            if (std.mem.eql(u8, method, "textDocument/didClose")) {
-                const value = params orelse return;
-                if (value != .object) return;
-                const document = value.object.get("textDocument") orelse return;
-                if (document != .object) return;
-                const uri = document.object.get("uri") orelse return;
-                if (uri != .string) return;
-                self.doc_store.remove(uri.string);
-                if (self.root_inputs.fetchRemove(uri.string)) |entry| {
-                    self.allocator.free(entry.key);
-                    self.freeRootInputs(entry.value);
-                    try self.installCoverage();
-                }
-                self.diagnostic_contributions.remove(self.allocator, uri.string);
-                if (@hasDecl(SyntaxDriverType, "invalidateDocument")) try self.syntax_checker.invalidateDocument();
-                try self.publishContributions();
-                return;
-            }
-
             if (notification_handlers.get(method)) |handler| {
                 try handler(self, params);
                 return;
@@ -585,6 +569,19 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
                 .id = id.*,
                 .result = result,
             });
+        }
+
+        pub fn onDocumentClosed(self: *Self, uri: []const u8) (Allocator.Error || error{WriteFailed})!void {
+            self.doc_store.remove(uri);
+            self.syntax_checker.closeDocument(uri);
+            if (self.root_inputs.fetchRemove(uri)) |entry| {
+                self.allocator.free(entry.key);
+                self.freeRootInputs(entry.value);
+                try self.installCoverage();
+            }
+            self.diagnostic_contributions.remove(self.allocator, uri);
+            if (@hasDecl(SyntaxDriverType, "invalidateDocument")) try self.syntax_checker.invalidateDocument();
+            try self.publishContributions();
         }
 
         pub fn onDocumentChanged(self: *Self, uri: []const u8) (Allocator.Error || error{WriteFailed})!void {
@@ -784,10 +781,9 @@ test "diagnostic URIs retire after the last successful clear and are not republi
         output: *std.ArrayList(u8),
         fail: *bool,
 
-        pub fn write(self: *@This(), bytes: []const u8) error{ OutOfMemory, WriteFailed }!usize {
+        pub fn writeAll(self: *@This(), bytes: []const u8) error{ OutOfMemory, WriteFailed }!void {
             if (self.fail.*) return error.WriteFailed;
             try self.output.appendSlice(std.testing.allocator, bytes);
-            return bytes.len;
         }
     };
     var output: std.ArrayList(u8) = .empty;

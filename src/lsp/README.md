@@ -23,12 +23,16 @@ The following notifications are handled:
 - `initialized`, `exit`
 - `didOpen` (stores the buffer into a `StringHashMap`)
 - `didChange` (same as `didOpen`, and supports incremental changes)
-- `didClose` (releases the document's independent buffer and checking ownership)
+- `didClose` (releases the document's independent buffer, checking ownership, and client URI)
 
 In trusted sessions, diagnostics are pushed as `textDocument/publishDiagnostics`
 when a document is opened or changed, and when a saved compiler-recorded input
 changes. Live updates work while the editor is idle and do not require editor
 file-watch notifications.
+
+Diagnostics and locations for an open document always use the URI the client opened it under,
+exactly as the client spelled it, since a URI rebuilt from the file's path can name the same file
+differently (percent-encoding, drive-letter case, or a path through a symlink).
 
 ### Saved dependency updates
 
