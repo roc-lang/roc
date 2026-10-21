@@ -381,10 +381,17 @@ jobs:
       # among them. The cache records those files as link inputs, so a shard
       # needs them in place before it re-stamps the cache; left out, Zig would
       # unpack fresh copies afterwards and relink everything that uses LLVM.
+      #
+      # `minici-build-runner-image` names the hosted runner image this job ran
+      # on. A shard compares it with its own (`--minici-build-runner-image`):
+      # on another image the system headers and libraries differ, so compile
+      # steps that read them miss the restored cache for a reason that is not
+      # build.zig's, and MiniCI's cache-reuse canary says so instead of failing.
       - name: Pack MiniCI build artifact
         shell: bash
         run: |
           set -euo pipefail
+          printf '%s/%s\n' "${ImageOS:?}" "${ImageVersion:?}" > .zig-cache/minici-build-runner-image
           if [ "$RUNNER_OS" = "Windows" ]; then
             tar --dereference -cf - .zig-cache zig-pkg zig-out/bin zig-out/lib | zstd -T0 -3 -q -o minici-build.tar.zst
           else
@@ -539,8 +546,14 @@ jobs:
         with:
           arch: x64
 
+      # The image `build-ci` ran on, recorded by the build job's pack step and
+      # read here in bash so the value reaches the shell-neutral run step below.
+      - name: Read the runner image build-ci ran on
+        shell: bash
+        run: echo "MINICI_BUILD_RUNNER_IMAGE=$(cat .zig-cache/minici-build-runner-image)" >> "$GITHUB_ENV"
+
       - name: Run MiniCI
-        run: zig build minici -- --minici-skip-build --minici-shard ${{ matrix.minici_shard }}
+        run: zig build minici -- --minici-skip-build --minici-build-runner-image ${{ env.MINICI_BUILD_RUNNER_IMAGE }} --minici-shard ${{ matrix.minici_shard }}
 
       # `.zig-cache` doubles as Zig's global cache, its local cache, and the
       # build temp dir. It is restored from the MiniCI build artifact, so the
