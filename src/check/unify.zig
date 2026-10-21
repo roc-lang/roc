@@ -3946,14 +3946,18 @@ fn mergeStaticDispatchConstraintMetadata(
     if (other.origin == .from_literal and retained.origin == .from_literal) {
         if (other.origin.numeral()) |other_numeral| {
             // Pooled facts are never mutated: copies of either constraint
-            // share them, so the merge pools its own.
-            const numeral = if (retained.origin.numeral()) |retained_numeral|
-                try types_store.appendNumeralInfo(types_mod.NumeralInfo.merged(
-                    types_store.getNumeralInfo(other_numeral),
-                    types_store.getNumeralInfo(retained_numeral),
-                ))
-            else
-                other_numeral;
+            // share them, so a merge whose facts neither side already holds
+            // pools its own. Facts equal to the retained side's keep its
+            // entry, so the merged constraint stays equal to the retained
+            // one and the receiver's list is kept whole.
+            const numeral = if (retained.origin.numeral()) |retained_numeral| numeral: {
+                const retained_info = types_store.getNumeralInfo(retained_numeral);
+                const other_info = types_store.getNumeralInfo(other_numeral);
+                const merged_info = types_mod.NumeralInfo.merged(other_info, retained_info);
+                if (std.meta.eql(merged_info, retained_info)) break :numeral retained_numeral;
+                if (std.meta.eql(merged_info, other_info)) break :numeral other_numeral;
+                break :numeral try types_store.appendNumeralInfo(merged_info);
+            } else other_numeral;
             merged.origin = .{ .from_literal = .{ .numeral = numeral } };
         }
     }
