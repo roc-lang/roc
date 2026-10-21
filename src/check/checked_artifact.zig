@@ -28624,40 +28624,7 @@ const TypeVarMentions = struct {
         self.visited.clearRetainingCapacity();
         self.found.clearRetainingCapacity();
         try self.push(root, .{ .outside_container = true });
-        while (self.pending.pop()) |step| {
-            switch (self.checked_types.payload(step.ty)) {
-                .flex, .rigid => try self.noteMention(step.ty, step.flags),
-                .alias => |alias| try self.push(alias.backing, step.flags),
-                .record => |record| {
-                    for (record.fields) |field| try self.push(field.ty, step.flags);
-                    try self.pushRowExtension(record.ext, step.flags);
-                },
-                .tuple => |elems| for (elems) |elem| try self.push(elem, step.flags),
-                .nominal => |nominal| {
-                    var arg_flags = step.flags;
-                    if (nominal.builtin) |builtin_nominal| switch (builtin_nominal) {
-                        .list, .box => arg_flags.outside_container = false,
-                        .fields, .field, .parse_tag_union_spec, .iter, .stream => arg_flags.decides_representation = true,
-                        .bool, .try_, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .dict, .set, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => {},
-                    };
-                    for (nominal.args) |arg| try self.push(arg, arg_flags);
-                    for (nominal.padding_field_types) |padding| try self.push(padding, step.flags);
-                },
-                .function => |function| {
-                    var inner = step.flags;
-                    inner.under_function = true;
-                    for (function.args) |arg| try self.push(arg, inner);
-                    try self.push(function.ret, inner);
-                },
-                .tag_union => |tag_union| {
-                    for (tag_union.tags) |tag| {
-                        for (tag.argsSlice(self.checked_types)) |arg| try self.push(arg, step.flags);
-                    }
-                    try self.pushRowExtension(tag_union.ext, step.flags);
-                },
-                .empty_record, .empty_tag_union, .err, .pending => {},
-            }
-        }
+        while (self.pending.pop()) |step| try expandStep(self.checked_types, step, self);
         const lessThan = struct {
             fn lessThan(_: void, left: TypeVarMention, right: TypeVarMention) bool {
                 return @backingInt(left.var_ty) < @backingInt(right.var_ty);
@@ -28673,22 +28640,61 @@ const TypeVarMentions = struct {
         return mentions;
     }
 
+    /// Visit one step of a walk from a type to the variables it mentions:
+    /// note the variable it reaches, or push each component with the flags of
+    /// the path through it. `sink` provides `push(ty, flags)` and
+    /// `noteMention(var_ty, flags)`.
+    fn expandStep(checked_types: *const CheckedTypeStore, step: Step, sink: anytype) Allocator.Error!void {
+        switch (checked_types.payload(step.ty)) {
+            .flex, .rigid => try sink.noteMention(step.ty, step.flags),
+            .alias => |alias| try sink.push(alias.backing, step.flags),
+            .record => |record| {
+                for (record.fields) |field| try sink.push(field.ty, step.flags);
+                try expandRowExtension(checked_types, record.ext, step.flags, sink);
+            },
+            .tuple => |elems| for (elems) |elem| try sink.push(elem, step.flags),
+            .nominal => |nominal| {
+                var arg_flags = step.flags;
+                if (nominal.builtin) |builtin_nominal| switch (builtin_nominal) {
+                    .list, .box => arg_flags.outside_container = false,
+                    .fields, .field, .parse_tag_union_spec, .iter, .stream => arg_flags.decides_representation = true,
+                    .bool, .try_, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .dict, .set, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => {},
+                };
+                for (nominal.args) |arg| try sink.push(arg, arg_flags);
+                for (nominal.padding_field_types) |padding| try sink.push(padding, step.flags);
+            },
+            .function => |function| {
+                var inner = step.flags;
+                inner.under_function = true;
+                for (function.args) |arg| try sink.push(arg, inner);
+                try sink.push(function.ret, inner);
+            },
+            .tag_union => |tag_union| {
+                for (tag_union.tags) |tag| {
+                    for (tag.argsSlice(checked_types)) |arg| try sink.push(arg, step.flags);
+                }
+                try expandRowExtension(checked_types, tag_union.ext, step.flags, sink);
+            },
+            .empty_record, .empty_tag_union, .err, .pending => {},
+        }
+    }
+
+    fn expandRowExtension(checked_types: *const CheckedTypeStore, ext: CheckedTypeId, flags: TypeVarMentionFlags, sink: anytype) Allocator.Error!void {
+        switch (checked_types.payload(ext)) {
+            .flex, .rigid => {
+                var ext_flags = flags;
+                ext_flags.row_extension = true;
+                try sink.noteMention(ext, ext_flags);
+            },
+            .pending, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => try sink.push(ext, flags),
+        }
+    }
+
     fn push(self: *TypeVarMentions, ty: CheckedTypeId, flags: TypeVarMentionFlags) Allocator.Error!void {
         const step: Step = .{ .ty = ty, .flags = flags };
         const entry = try self.visited.getOrPut(self.allocator, step);
         if (entry.found_existing) return;
         try self.pending.append(self.allocator, step);
-    }
-
-    fn pushRowExtension(self: *TypeVarMentions, ext: CheckedTypeId, flags: TypeVarMentionFlags) Allocator.Error!void {
-        switch (self.checked_types.payload(ext)) {
-            .flex, .rigid => {
-                var ext_flags = flags;
-                ext_flags.row_extension = true;
-                try self.noteMention(ext, ext_flags);
-            },
-            .pending, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => try self.push(ext, flags),
-        }
     }
 
     fn noteMention(self: *TypeVarMentions, var_ty: CheckedTypeId, flags: TypeVarMentionFlags) Allocator.Error!void {
@@ -28721,9 +28727,18 @@ const TemplateDemandPass = struct {
     work: std.ArrayList(Work) = .empty,
     imported_templates: std.AutoHashMapUnmanaged(ImportedDefKey, ?canonical.ProcedureTemplateRef) = .empty,
 
+    /// Every step a raise has walked in the current template, at the demand
+    /// it raised. A raise's effect is a function of its step and demand, and
+    /// demands only rise, so a step walked once at a demand never needs
+    /// walking again at that demand within the template.
+    raised: std.AutoHashMapUnmanaged(RaiseStep, void) = .empty,
+    raise_pending: std.ArrayList(RaiseStep) = .empty,
+
     // The template being walked.
     current: canonical.CheckedProcedureTemplateId = undefined,
     current_vars: []const CheckedTypeId = &.{},
+    /// Each quantified variable's slot in `current_vars`.
+    current_slots: collections.DenseMap(CheckedTypeId, u32),
     current_demands: []SchemeVarDemand = &.{},
 
     /// The demand of the caller's `caller_slot` is at least that of the local
@@ -28738,6 +28753,29 @@ const TemplateDemandPass = struct {
     const ImportedDefKey = struct {
         artifact: CheckedModuleArtifactKey,
         def: CIR.Def.Idx,
+    };
+
+    /// One step of a raise walk: a type reached along a path with `flags`,
+    /// raising the variables it mentions to `demand` (and exact mentions to
+    /// `full`).
+    const RaiseStep = struct {
+        step: TypeVarMentions.Step,
+        demand: SchemeVarDemand,
+    };
+
+    /// The sink `TypeVarMentions.expandStep` drives during a raise walk.
+    const RaiseSink = struct {
+        pass: *TemplateDemandPass,
+        demand: SchemeVarDemand,
+
+        pub fn push(sink: RaiseSink, ty: CheckedTypeId, flags: TypeVarMentionFlags) Allocator.Error!void {
+            try sink.pass.pushRaise(.{ .step = .{ .ty = ty, .flags = flags }, .demand = sink.demand });
+        }
+
+        pub fn noteMention(sink: RaiseSink, var_ty: CheckedTypeId, flags: TypeVarMentionFlags) Allocator.Error!void {
+            const slot = sink.pass.slotOf(var_ty) orelse return;
+            sink.pass.raiseSlot(slot, if (exactMention(flags)) .full else sink.demand);
+        }
     };
 
     /// Where an expression stands relative to the operation that consumes it.
@@ -28768,6 +28806,9 @@ const TemplateDemandPass = struct {
 
     fn deinit(self: *TemplateDemandPass) void {
         self.mentions.deinit();
+        self.current_slots.deinit();
+        self.raised.deinit(self.allocator);
+        self.raise_pending.deinit(self.allocator);
         self.demands.deinit(self.allocator);
         self.edges.deinit(self.allocator);
         self.work.deinit(self.allocator);
@@ -28784,6 +28825,9 @@ const TemplateDemandPass = struct {
         for (templates, 0..) |*template, raw| {
             self.current = @fromBackingInt(@intCast(raw));
             self.current_vars = self.templates.templateSchemeVars(template);
+            self.current_slots.clearRetainingCapacity();
+            for (self.current_vars, 0..) |var_ty, slot| try self.current_slots.put(var_ty, @intCast(slot));
+            self.raised.clearRetainingCapacity();
             self.current_demands = self.demands.items[template.demands.start .. template.demands.start + template.demands.len];
             try self.analyzeTemplate(template);
         }
@@ -28841,6 +28885,13 @@ const TemplateDemandPass = struct {
             }
         }
 
+        // Walking the body only raises demands, and the edges it records only
+        // raise this template's demands, so a template that already demands
+        // all of every variable has nothing left to learn from its body.
+        for (self.current_demands) |demand| {
+            if (demand != .full) break;
+        } else return;
+
         const root_expr = self.checked_bodies.body(body_id).root_expr;
         const root = self.checked_bodies.expr(root_expr);
         if (root.data != .lambda) return self.raiseEverything();
@@ -28877,10 +28928,7 @@ const TemplateDemandPass = struct {
     }
 
     fn slotOf(self: *const TemplateDemandPass, var_ty: CheckedTypeId) ?usize {
-        for (self.current_vars, 0..) |candidate, slot| {
-            if (candidate == var_ty) return slot;
-        }
-        return null;
+        return if (self.current_slots.get(var_ty)) |slot| slot else null;
     }
 
     fn raiseSlot(self: *TemplateDemandPass, slot: usize, demand: SchemeVarDemand) void {
@@ -28892,12 +28940,20 @@ const TemplateDemandPass = struct {
     }
 
     /// Raise every quantified variable `ty` mentions to `demand`, and every one
-    /// whose exact type it needs (see `exactMention`) to `full`.
+    /// whose exact type it needs (see `exactMention`) to `full`. The walk
+    /// skips every step an earlier raise in this template already walked at
+    /// this demand, so the raises of one template cost the size of the types
+    /// they reach, however many of its expressions share those types.
     fn raiseMentions(self: *TemplateDemandPass, ty: CheckedTypeId, demand: SchemeVarDemand) Allocator.Error!void {
-        for (try self.mentions.of(ty)) |mention| {
-            const slot = self.slotOf(mention.var_ty) orelse continue;
-            self.raiseSlot(slot, if (exactMention(mention.flags)) .full else demand);
-        }
+        try self.pushRaise(.{ .step = .{ .ty = ty, .flags = .{ .outside_container = true } }, .demand = demand });
+        const sink: RaiseSink = .{ .pass = self, .demand = demand };
+        while (self.raise_pending.pop()) |raise| try TypeVarMentions.expandStep(self.checked_types, raise.step, sink);
+    }
+
+    fn pushRaise(self: *TemplateDemandPass, raise: RaiseStep) Allocator.Error!void {
+        const entry = try self.raised.getOrPut(self.allocator, raise);
+        if (entry.found_existing) return;
+        try self.raise_pending.append(self.allocator, raise);
     }
 
     /// Whether a type needs the exact type of a variable it mentions this
@@ -28907,13 +28963,10 @@ const TemplateDemandPass = struct {
         return flags.under_function or flags.decides_representation;
     }
 
-    /// Raise every quantified variable whose exact type `ty` needs to `full`.
+    /// Raise every quantified variable whose exact type `ty` needs to `full`:
+    /// a raise to `none` leaves every other mention as it is.
     fn raiseFunctionMentions(self: *TemplateDemandPass, ty: CheckedTypeId) Allocator.Error!void {
-        for (try self.mentions.of(ty)) |mention| {
-            if (!exactMention(mention.flags)) continue;
-            const slot = self.slotOf(mention.var_ty) orelse continue;
-            self.raiseSlot(slot, .full);
-        }
+        try self.raiseMentions(ty, .none);
     }
 
     fn pushExpr(self: *TemplateDemandPass, id: CheckedExprId, role: ExprRole) Allocator.Error!void {
@@ -37683,6 +37736,7 @@ pub fn publishFromTypedModule(
             .top_level_procedure_bindings = &top_level_procedure_bindings,
             .static_dispatch_plans = &static_dispatch_plans,
             .imports = .{ .current_owner = artifact_key, .direct = inputs.imports, .available = inputs.available_artifacts, .relations = inputs.relation_artifacts },
+            .current_slots = collections.DenseMap(CheckedTypeId, u32).init(allocator),
             .mentions = .{
                 .allocator = allocator,
                 .checked_types = checked_types,
