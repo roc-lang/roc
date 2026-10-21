@@ -3,12 +3,12 @@
 # obligation that reaches it drags a second requirement along, while its
 # published result row is closed by the top-level `closed_ok` / `closed_err`.
 # `describe` uses the method twice in one body—once exhaustively at the
-# declared row and once widened—so the adapter is minted beside an ordinary
-# declared-row specialization of the same template.
+# declared row and once widened—so one declared-row specialization serves both
+# uses and its result row joins the wider one (design.md "Row Joins").
 #
 # Both constructors are observed through `show`, and `Extra` sorts between
-# `Err` and `Ok`, so a re-tag that used the declared discriminants would show
-# up as a wrong branch on either backend.
+# `Err` and `Ok`, so a result numbered by the declared row alone would show up
+# as a wrong branch on either backend.
 WidenNestedEvidenceClosedImpl := {}
 
 closed_ok : [Ok(Str), Err(Str)]
