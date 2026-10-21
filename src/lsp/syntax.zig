@@ -209,6 +209,9 @@ pub const SyntaxChecker = struct {
     /// URIs for which we last published a non-empty diagnostic set. Used to
     /// emit empty clears when those diagnostics are no longer valid.
     published_diagnostic_uris: std.StringHashMapUnmanaged(void) = .{},
+    root_owned_publication: bool = false,
+    watch_inputs: []const compile.watch_inputs.Input = &.{},
+    after_resolution: @FieldType(BuildEnv, "after_resolution") = null,
     /// Each checked URI of an open document, exactly as the client spelled it,
     /// mapped to the absolute path the build knows that document's module by.
     /// Diagnostics and locations for a path go to the client under these URIs:
@@ -298,6 +301,7 @@ pub const SyntaxChecker = struct {
     }
 
     pub fn deinit(self: *SyntaxChecker) void {
+        if (self.watch_inputs.len != 0) compile.watch_inputs.deinit(self.allocator, self.watch_inputs);
         // Release live handles first, then snapshots.
         // Handles guarantee the BuildEnv is freed exactly once.
         if (self.build_env) |handle| {
@@ -336,6 +340,18 @@ pub const SyntaxChecker = struct {
         var hash_keys = self.content_hashes.keyIterator();
         while (hash_keys.next()) |key| self.allocator.free(key.*);
         self.content_hashes.deinit(self.allocator);
+    }
+
+    /// The server publishes the union of active-root contributions itself.
+    /// Transfer every compiler-consumed observation to the server.
+    pub fn takeWatchInputs(self: *SyntaxChecker) []const compile.watch_inputs.Input {
+        const inputs = self.watch_inputs;
+        self.watch_inputs = &.{};
+        return inputs;
+    }
+
+    pub fn setRootOwnedPublication(self: *SyntaxChecker) void {
+        self.root_owned_publication = true;
     }
 
     fn clearPublishedDiagnosticUris(self: *SyntaxChecker) void {
@@ -655,6 +671,10 @@ pub const SyntaxChecker = struct {
         var session = try BuildSession.init(self.allocator, self.std_io, env, uri, override_text, self.workspace_root);
         defer session.deinit();
 
+        if (self.watch_inputs.len != 0) compile.watch_inputs.deinit(self.allocator, self.watch_inputs);
+        self.watch_inputs = &.{};
+        self.watch_inputs = try env.collectWatchInputStates();
+
         const absolute_path = session.absolute_path;
         try self.recordClientDocument(uri, absolute_path);
 
@@ -751,35 +771,42 @@ pub const SyntaxChecker = struct {
             });
         }
 
-        var stale_uris: std.ArrayList([]const u8) = .empty;
-        defer {
-            for (stale_uris.items) |stale_uri| self.allocator.free(stale_uri);
-            stale_uris.deinit(self.allocator);
-        }
-
-        var it = self.published_diagnostic_uris.keyIterator();
-        while (it.next()) |prev| {
-            if (!publishListContainsUri(publish_list, prev.*)) {
-                try stale_uris.append(self.allocator, try self.allocator.dupe(u8, prev.*));
+        if (!self.root_owned_publication) {
+            var previous = self.published_diagnostic_uris.keyIterator();
+            while (previous.next()) |old_uri| {
+                if (!publishListContainsUri(publish_list, old_uri.*)) {
+                    const uri = try self.allocator.dupe(u8, old_uri.*);
+                    errdefer self.allocator.free(uri);
+                    try publish_list.append(self.allocator, .{ .uri = uri, .diagnostics = &.{} });
+                }
             }
         }
-        for (stale_uris.items) |stale_uri| {
-            try publish_list.append(self.allocator, .{
-                .uri = try self.allocator.dupe(u8, stale_uri),
-                .diagnostics = &.{},
-            });
-        }
-
+        // In server sessions, root ownership and stale clearing are external.
         self.clearPublishedDiagnosticUris();
         for (publish_list.items) |set| {
             if (set.diagnostics.len == 0) continue;
             const owned = try self.allocator.dupe(u8, set.uri);
             const gop = try self.published_diagnostic_uris.getOrPut(self.allocator, owned);
-            if (gop.found_existing) {
-                self.allocator.free(owned);
-            } else {
-                gop.key_ptr.* = owned;
-            }
+            if (gop.found_existing) self.allocator.free(owned);
+        }
+    }
+
+    /// Discard diagnostic and checked-feature reuse after a dependency changes
+    /// or an independent document closes. All handles can contain shared inputs.
+    pub fn invalidateDocument(self: *SyntaxChecker) Allocator.Error!void {
+        self.mutex.lockUncancelable(self.std_io);
+        defer self.mutex.unlock(self.std_io);
+        var keys = self.content_hashes.keyIterator();
+        while (keys.next()) |key| self.allocator.free(key.*);
+        self.content_hashes.clearRetainingCapacity();
+        self.clearSnapshots();
+        if (self.previous_build_env) |handle| {
+            handle.release(owner_previous);
+            self.previous_build_env = null;
+        }
+        if (self.build_env) |handle| {
+            handle.release(owner_build);
+            self.build_env = null;
         }
     }
 
@@ -820,6 +847,7 @@ pub const SyntaxChecker = struct {
         env.compiler_version = build_options.compiler_compatibility_id;
         env.source_pin_version = @import("compiler_version").compiler_version;
         env.setFinalizeExecutableArtifacts(false);
+        env.after_resolution = self.after_resolution;
 
         if (self.cache_config.enabled) {
             const cache_manager = try self.allocator.create(CacheManager);

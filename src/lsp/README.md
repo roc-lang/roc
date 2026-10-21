@@ -23,12 +23,51 @@ The following notifications are handled:
 - `initialized`, `exit`
 - `didOpen` (stores the buffer into a `StringHashMap`)
 - `didChange` (same as `didOpen`, and supports incremental changes)
-- `didClose` (drops the buffer and forgets the document's URI)
+- `didClose` (releases the document's independent buffer, checking ownership, and client URI)
 
-Diagnostics are pushed as `textDocument/publishDiagnostics` when a document is opened or changed.
+In trusted sessions, diagnostics are pushed as `textDocument/publishDiagnostics`
+when a document is opened or changed, and when a saved compiler-recorded input
+changes. Live updates work while the editor is idle and do not require editor
+file-watch notifications.
+
 Diagnostics and locations for an open document always use the URI the client opened it under,
 exactly as the client spelled it, since a URI rebuilt from the file's path can name the same file
 differently (percent-encoding, drive-letter case, or a path through a symlink).
+
+### Saved dependency updates
+
+The server watches exact mutable inputs recorded by checks of open documents:
+imported Roc sources, `Str` and `List(U8)` file imports, and explicit local
+package/platform inputs. Changes in bytes, existence, or readability refresh the
+affected open documents. Missing inputs discovered by failed checks remain
+watched, including when parent directories must first be created. Each check
+replaces its dependency set. Unrelated files, metadata-only changes, and
+identical-byte replacements do not cause checks. Immutable URL packages are
+excluded; creating a previously absent candidate workspace owner alone does not
+trigger ownership discovery.
+
+A check uses its target's latest editor buffer and **saved dependencies**. Opening
+a dependency and editing it without saving does not overlay those edits into
+other documents' checks. Dependency refresh also invalidates checked-feature
+results, such as hover and semantic tokens, even when the target text is unchanged.
+
+An open document's own buffer diagnostics take precedence over saved-file reports
+from importers, including when its own result is empty. While a new buffer result
+is pending, disk reports do not replace it. For closed dependencies, diagnostics
+are the stable, deduplicated union of reports from currently open roots. Removing
+an import or closing a root removes only its reports; closing a dependency makes
+remaining saved-file reports eligible again.
+
+Closing a document releases independent checking and watch ownership, but its
+saved file remains watched if another open document needs it. Reopening uses the
+new supplied buffer. Shutdown stops watch-driven checking and publication, and
+teardown releases watcher resources. Bursts may coalesce; diagnostics converge
+after inputs stabilize, with no fixed latency guarantee.
+
+Watch establishment, replacement, and runtime failures are reported to the user,
+even while editor input is idle. Failed coverage is not silently replaced by an
+alternate watcher. Ordinary document checking remains available where the failure
+permits it. Untrusted sessions establish no compiler-input watches.
 
 ### Inlay hints
 

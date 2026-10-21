@@ -13,6 +13,8 @@
 const std = @import("std");
 
 test "lsp unit tests" {
+    std.testing.refAllDecls(@import("lsp").diagnostic_contributions);
+    std.testing.refAllDecls(@import("diagnostic_contributions_test.zig"));
     std.testing.refAllDecls(@import("protocol_test.zig"));
     std.testing.refAllDecls(@import("server_test.zig"));
     std.testing.refAllDecls(@import("transport_test.zig"));
