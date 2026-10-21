@@ -4699,136 +4699,242 @@ const Lowerer = struct {
     /// widened the root's rows, even to one label at two payload types. A
     /// value of the declared row inhabits only its tags, so the stored value
     /// is unchanged, and a program restoring it widens it to its own row.
+    /// Only the parts a join widened are copied. Each walk keeps its own
+    /// explicit stack, so type nesting never becomes native call depth.
     fn declaredRootType(self: *Lowerer, program_ty: Type.TypeId, declared_ty: MonoType.TypeId) Common.LowerError!Type.TypeId {
-        var widened = std.AutoHashMap(DeclaredTypePair, bool).init(self.allocator);
-        defer widened.deinit();
-        var memo = std.AutoHashMap(DeclaredTypePair, Type.TypeId).init(self.allocator);
-        defer memo.deinit();
-        return try self.narrowToDeclared(&widened, &memo, program_ty, declared_ty);
+        var walk = DeclaredWalk.init(self.allocator);
+        defer walk.deinit();
+        return try self.narrowToDeclared(&walk, .{ .program = program_ty, .declared = declared_ty });
     }
 
-    /// Whether a tag union `program_ty` reaches lists a tag its declaration
-    /// does not, or a label twice. Only such a type is copied: every other
-    /// part of a stored root's type is the program's own.
-    fn widenedBeyondDeclared(
-        self: *Lowerer,
-        widened: *std.AutoHashMap(DeclaredTypePair, bool),
-        program_ty: Type.TypeId,
-        declared_ty: MonoType.TypeId,
-    ) Common.LowerError!bool {
-        const pair: DeclaredTypePair = .{ .program = program_ty, .declared = declared_ty };
-        // A pair met again inside itself adds nothing its other parts do not.
-        const entry = try widened.getOrPut(pair);
-        if (entry.found_existing) return entry.value_ptr.*;
-        entry.value_ptr.* = false;
+    /// The state of one `declaredRootType` walk.
+    const DeclaredWalk = struct {
+        /// Whether each pair analyzed reaches a row the program widened.
+        widened: std.AutoHashMap(DeclaredTypePair, bool),
+        /// Each pair's type at the declared rows, once built. A named
+        /// type's entry is its copy from the moment the copy begins, so a
+        /// recursive reference reaches it.
+        narrowed: std.AutoHashMap(DeclaredTypePair, Type.TypeId),
+        /// Pairs whose narrowed type is being built.
+        active: std.AutoHashMap(DeclaredTypePair, void),
+        /// Scratch for one widening query.
+        visited: std.AutoHashMap(DeclaredTypePair, void),
+        pending: std.ArrayList(DeclaredTypePair) = .empty,
+        children: std.ArrayList(DeclaredTypePair) = .empty,
+        /// The narrowing build: open frames, their child pairs, the chosen
+        /// variant of each declared tag, and finished children's types.
+        frames: std.ArrayList(NarrowFrame) = .empty,
+        frame_pairs: std.ArrayList(DeclaredTypePair) = .empty,
+        frame_tags: std.ArrayList(Type.Tag) = .empty,
+        results: std.ArrayList(Type.TypeId) = .empty,
+
+        fn init(allocator: Allocator) DeclaredWalk {
+            return .{
+                .widened = std.AutoHashMap(DeclaredTypePair, bool).init(allocator),
+                .narrowed = std.AutoHashMap(DeclaredTypePair, Type.TypeId).init(allocator),
+                .active = std.AutoHashMap(DeclaredTypePair, void).init(allocator),
+                .visited = std.AutoHashMap(DeclaredTypePair, void).init(allocator),
+            };
+        }
+
+        fn deinit(self: *DeclaredWalk) void {
+            const allocator = self.widened.allocator;
+            self.widened.deinit();
+            self.narrowed.deinit();
+            self.active.deinit();
+            self.visited.deinit();
+            self.pending.deinit(allocator);
+            self.children.deinit(allocator);
+            self.frames.deinit(allocator);
+            self.frame_pairs.deinit(allocator);
+            self.frame_tags.deinit(allocator);
+            self.results.deinit(allocator);
+        }
+    };
+
+    /// One pair whose narrowed type waits for its children's.
+    const NarrowFrame = struct {
+        pair: DeclaredTypePair,
+        /// `DeclaredWalk.frame_pairs[children_start..][0..children_len]`.
+        children_start: u32,
+        children_len: u32,
+        next: u32 = 0,
+        /// Where this frame's children's types start in `DeclaredWalk.results`.
+        results_start: u32,
+        /// Where a tag union's chosen variants start in `DeclaredWalk.frame_tags`.
+        tags_start: u32,
+        /// A named type's copy.
+        copy: ?Type.TypeId = null,
+    };
+
+    /// Whether a pair reaches a tag union whose program row lists a tag its
+    /// declaration does not, or a label twice.
+    fn widenedBeyondDeclared(self: *Lowerer, walk: *DeclaredWalk, start: DeclaredTypePair) Common.LowerError!bool {
+        if (walk.widened.get(start)) |known| return known;
+        const allocator = self.allocator;
+        walk.visited.clearRetainingCapacity();
+        walk.pending.clearRetainingCapacity();
+        try walk.visited.put(start, {});
+        try walk.pending.append(allocator, start);
+        while (walk.pending.pop()) |pair| {
+            if (walk.widened.get(pair)) |known| {
+                if (known) {
+                    try walk.widened.put(start, true);
+                    return true;
+                }
+                // Nothing this pair reaches is widened.
+                continue;
+            }
+            walk.children.clearRetainingCapacity();
+            if (try self.widenedHere(pair, &walk.children)) {
+                try walk.widened.put(start, true);
+                return true;
+            }
+            for (walk.children.items) |child| {
+                if ((try walk.visited.getOrPut(child)).found_existing) continue;
+                try walk.pending.append(allocator, child);
+            }
+        }
+        // Every pair this query reached reaches only pairs it reached.
+        var reached = walk.visited.keyIterator();
+        while (reached.next()) |pair| try walk.widened.put(pair.*, false);
+        return false;
+    }
+
+    /// Whether `pair`'s own row is widened beyond its declaration; appends
+    /// the pairs beneath it to `children` otherwise.
+    fn widenedHere(self: *Lowerer, pair: DeclaredTypePair, children: *std.ArrayList(DeclaredTypePair)) Common.LowerError!bool {
+        const allocator = self.allocator;
         const declared_types = self.solved.lifted.types.view();
-        const declared = declared_types.get(declared_ty);
-        const result: bool = switch (self.types.get(program_ty)) {
-            .tag_union => |span| result: {
-                if (declared != .tag_union) break :result false;
+        const declared = declared_types.get(pair.declared);
+        switch (self.types.get(pair.program)) {
+            .tag_union => |span| {
+                if (declared != .tag_union) return false;
                 const declared_tags = declared_types.tagSpan(declared.tag_union);
-                if (span.len != declared_tags.len) break :result true;
+                if (span.len != declared_tags.len) return true;
                 for (declared_tags, 0..) |declared_tag, index| {
                     const tag = self.types.tagAt(span, index);
-                    if (tag.name != declared_tag.name) break :result true;
+                    if (tag.name != declared_tag.name) return true;
                     const declared_payloads = declared_types.span(declared_tag.payloads);
-                    if (declared_payloads.len != tag.payloads.len) break :result false;
+                    if (declared_payloads.len != tag.payloads.len) return false;
                     for (declared_payloads, 0..) |declared_payload, payload_index| {
-                        if (try self.widenedBeyondDeclared(widened, self.types.typeAt(tag.payloads, payload_index), declared_payload)) break :result true;
+                        try children.append(allocator, .{ .program = self.types.typeAt(tag.payloads, payload_index), .declared = declared_payload });
                     }
                 }
-                break :result false;
+                return false;
             },
-            .record => |span| result: {
-                if (declared != .record) break :result false;
+            .record => |span| {
+                if (declared != .record) return false;
                 const declared_fields = declared_types.fieldSpan(declared.record);
-                if (declared_fields.len != span.len) break :result false;
+                if (declared_fields.len != span.len) return false;
                 for (declared_fields, 0..) |declared_field, index| {
-                    if (try self.widenedBeyondDeclared(widened, self.types.fieldAt(span, index).ty, declared_field.ty)) break :result true;
+                    try children.append(allocator, .{ .program = self.types.fieldAt(span, index).ty, .declared = declared_field.ty });
                 }
-                break :result false;
+                return false;
             },
-            .tuple => |span| result: {
-                if (declared != .tuple) break :result false;
+            .tuple => |span| {
+                if (declared != .tuple) return false;
                 const declared_items = declared_types.span(declared.tuple);
-                if (declared_items.len != span.len) break :result false;
+                if (declared_items.len != span.len) return false;
                 for (declared_items, 0..) |declared_item, index| {
-                    if (try self.widenedBeyondDeclared(widened, self.types.typeAt(span, index), declared_item)) break :result true;
+                    try children.append(allocator, .{ .program = self.types.typeAt(span, index), .declared = declared_item });
                 }
-                break :result false;
+                return false;
             },
-            .list => |elem| declared == .list and try self.widenedBeyondDeclared(widened, elem, declared.list),
-            .box => |elem| declared == .box and try self.widenedBeyondDeclared(widened, elem, declared.box),
-            .named => |named| result: {
-                if (declared != .named) break :result false;
+            .list => |elem| {
+                if (declared == .list) try children.append(allocator, .{ .program = elem, .declared = declared.list });
+                return false;
+            },
+            .box => |elem| {
+                if (declared == .box) try children.append(allocator, .{ .program = elem, .declared = declared.box });
+                return false;
+            },
+            .named => |named| {
+                if (declared != .named) return false;
                 const declared_args = declared_types.span(declared.named.args);
-                if (declared_args.len != named.args.len) break :result false;
+                if (declared_args.len != named.args.len) return false;
                 for (declared_args, 0..) |declared_arg, index| {
-                    if (try self.widenedBeyondDeclared(widened, self.types.typeAt(named.args, index), declared_arg)) break :result true;
+                    try children.append(allocator, .{ .program = self.types.typeAt(named.args, index), .declared = declared_arg });
                 }
-                const backing = named.backing orelse break :result false;
-                const declared_backing = declared.named.backing orelse break :result false;
-                break :result try self.widenedBeyondDeclared(widened, backing.ty, declared_backing.ty);
+                const backing = named.backing orelse return false;
+                const declared_backing = declared.named.backing orelse return false;
+                try children.append(allocator, .{ .program = backing.ty, .declared = declared_backing.ty });
+                return false;
             },
-            .primitive, .capture_record, .callable, .erased_fn, .erased_capture_ptr, .zst => false,
-        };
-        try widened.put(pair, result);
-        return result;
+            .primitive, .capture_record, .callable, .erased_fn, .erased_capture_ptr, .zst => return false,
+        }
     }
 
-    fn narrowToDeclared(
-        self: *Lowerer,
-        widened: *std.AutoHashMap(DeclaredTypePair, bool),
-        memo: *std.AutoHashMap(DeclaredTypePair, Type.TypeId),
-        program_ty: Type.TypeId,
-        declared_ty: MonoType.TypeId,
-    ) Common.LowerError!Type.TypeId {
-        const pair: DeclaredTypePair = .{ .program = program_ty, .declared = declared_ty };
-        if (memo.get(pair)) |done| return done;
-        if (!try self.widenedBeyondDeclared(widened, program_ty, declared_ty)) {
-            try memo.put(pair, program_ty);
-            return program_ty;
+    /// `pair.program` with every widened row brought back to its
+    /// declaration.
+    fn narrowToDeclared(self: *Lowerer, walk: *DeclaredWalk, root: DeclaredTypePair) Common.LowerError!Type.TypeId {
+        if (try self.enterNarrow(walk, root)) |done| return done;
+        while (walk.frames.items.len != 0) {
+            const top = &walk.frames.items[walk.frames.items.len - 1];
+            if (top.next < top.children_len) {
+                const child = walk.frame_pairs.items[top.children_start + top.next];
+                top.next += 1;
+                if (try self.enterNarrow(walk, child)) |done| try walk.results.append(self.allocator, done);
+                continue;
+            }
+            const frame = walk.frames.pop().?;
+            const built = try self.finishNarrow(walk, frame);
+            walk.results.shrinkRetainingCapacity(frame.results_start);
+            walk.frame_pairs.shrinkRetainingCapacity(frame.children_start);
+            walk.frame_tags.shrinkRetainingCapacity(frame.tags_start);
+            _ = walk.active.remove(frame.pair);
+            try walk.narrowed.put(frame.pair, built);
+            if (walk.frames.items.len == 0) return built;
+            try walk.results.append(self.allocator, built);
         }
-        const declared_types = self.solved.lifted.types.view();
-        const declared = declared_types.get(declared_ty);
+        unreachable;
+    }
+
+    /// `pair`'s narrowed type when it needs no frame, or null after opening
+    /// one whose children follow.
+    fn enterNarrow(self: *Lowerer, walk: *DeclaredWalk, pair: DeclaredTypePair) Common.LowerError!?Type.TypeId {
+        if (walk.narrowed.get(pair)) |done| return done;
+        if (!try self.widenedBeyondDeclared(walk, pair)) {
+            try walk.narrowed.put(pair, pair.program);
+            return pair.program;
+        }
+        // Types reach themselves only through named types, whose copies
+        // are entered before their children.
+        if ((try walk.active.getOrPut(pair)).found_existing) Common.invariant("a compile-time root's type reached itself outside a named type");
         const allocator = self.allocator;
-        switch (self.types.get(program_ty)) {
+        const declared_types = self.solved.lifted.types.view();
+        const declared = declared_types.get(pair.declared);
+        var frame: NarrowFrame = .{
+            .pair = pair,
+            .children_start = @intCast(walk.frame_pairs.items.len),
+            .children_len = 0,
+            .results_start = @intCast(walk.results.items.len),
+            .tags_start = @intCast(walk.frame_tags.items.len),
+        };
+        switch (self.types.get(pair.program)) {
             .tag_union => |span| {
                 const declared_tags = switch (declared) {
                     .tag_union => |tags| declared_types.tagSpan(tags),
                     .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => Common.invariant("a compile-time root's tag union was declared as another kind of type"),
                 };
-                const program_tags = try allocator.alloc(Type.Tag, span.len);
-                defer allocator.free(program_tags);
-                for (program_tags, 0..) |*tag, index| tag.* = self.types.tagAt(span, index);
-                const kept = try allocator.alloc(Type.Tag, declared_tags.len);
-                defer allocator.free(kept);
-                var changed = kept.len != program_tags.len;
-                for (declared_tags, kept) |declared_tag, *out| {
+                for (declared_tags) |declared_tag| {
                     // A label is two variants only where their payloads
                     // conflict, so exactly one variant fits the declared
                     // payloads.
                     var chosen: ?Type.Tag = null;
-                    for (program_tags) |program_tag| {
+                    for (0..span.len) |index| {
+                        const program_tag = self.types.tagAt(span, index);
                         if (program_tag.name != declared_tag.name) continue;
                         if (!try self.fitsDeclaredPayloads(program_tag.payloads, declared_tag.payloads)) continue;
                         if (chosen != null) Common.invariant("two variants of one label both fit a compile-time root's declared payloads");
                         chosen = program_tag;
                     }
                     const tag = chosen orelse Common.invariant("a compile-time root's declared tag has no variant in its program row");
-                    const declared_payloads = declared_types.span(declared_tag.payloads);
-                    const payloads = try allocator.alloc(Type.TypeId, declared_payloads.len);
-                    defer allocator.free(payloads);
-                    for (declared_payloads, payloads, 0..) |declared_payload, *payload, index| {
-                        const program_payload = self.types.typeAt(tag.payloads, index);
-                        payload.* = try self.narrowToDeclared(widened, memo, program_payload, declared_payload);
-                        changed = changed or payload.* != program_payload;
+                    try walk.frame_tags.append(allocator, tag);
+                    for (declared_types.span(declared_tag.payloads), 0..) |declared_payload, index| {
+                        try walk.frame_pairs.append(allocator, .{ .program = self.types.typeAt(tag.payloads, index), .declared = declared_payload });
                     }
-                    out.* = .{ .name = tag.name, .checked_name = tag.checked_name, .payloads = if (changed) try self.types.addSpan(payloads) else tag.payloads };
                 }
-                const result = if (changed) try self.types.add(.{ .tag_union = try self.types.addTags(kept) }) else program_ty;
-                try memo.put(pair, result);
-                return result;
             },
             .record => |span| {
                 const declared_fields = switch (declared) {
@@ -4836,47 +4942,33 @@ const Lowerer = struct {
                     .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("a compile-time root's record was declared as another kind of type"),
                 };
                 if (declared_fields.len != span.len) Common.invariant("a compile-time root's record has other fields than its declaration");
-                const fields = try allocator.alloc(Type.Field, span.len);
-                defer allocator.free(fields);
-                var changed = false;
-                for (fields, declared_fields, 0..) |*field, declared_field, index| {
-                    field.* = self.types.fieldAt(span, index);
-                    const narrowed = try self.narrowToDeclared(widened, memo, field.ty, declared_field.ty);
-                    changed = changed or narrowed != field.ty;
-                    field.ty = narrowed;
+                for (declared_fields, 0..) |declared_field, index| {
+                    try walk.frame_pairs.append(allocator, .{ .program = self.types.fieldAt(span, index).ty, .declared = declared_field.ty });
                 }
-                const result = if (changed) try self.types.add(.{ .record = try self.types.addFields(fields) }) else program_ty;
-                try memo.put(pair, result);
-                return result;
             },
             .tuple => |span| {
                 const declared_items = switch (declared) {
                     .tuple => |items| declared_types.span(items),
                     .primitive, .named, .record, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("a compile-time root's tuple was declared as another kind of type"),
                 };
-                const result = try self.narrowSpanToDeclared(widened, memo, span, declared_items) orelse program_ty;
-                try memo.put(pair, result);
-                return result;
+                if (declared_items.len != span.len) Common.invariant("a compile-time root's tuple has another arity than its declaration");
+                for (declared_items, 0..) |declared_item, index| {
+                    try walk.frame_pairs.append(allocator, .{ .program = self.types.typeAt(span, index), .declared = declared_item });
+                }
             },
             .list => |elem| {
                 const declared_elem = switch (declared) {
                     .list => |item| item,
                     .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst => Common.invariant("a compile-time root's list was declared as another kind of type"),
                 };
-                const narrowed = try self.narrowToDeclared(widened, memo, elem, declared_elem);
-                const result = if (narrowed != elem) try self.types.add(.{ .list = narrowed }) else program_ty;
-                try memo.put(pair, result);
-                return result;
+                try walk.frame_pairs.append(allocator, .{ .program = elem, .declared = declared_elem });
             },
             .box => |elem| {
                 const declared_elem = switch (declared) {
                     .box => |item| item,
                     .primitive, .named, .record, .tuple, .tag_union, .list, .func, .erased, .zst => Common.invariant("a compile-time root's box was declared as another kind of type"),
                 };
-                const narrowed = try self.narrowToDeclared(widened, memo, elem, declared_elem);
-                const result = if (narrowed != elem) try self.types.add(.{ .box = narrowed }) else program_ty;
-                try memo.put(pair, result);
-                return result;
+                try walk.frame_pairs.append(allocator, .{ .program = elem, .declared = declared_elem });
             },
             .named => |named| {
                 const declared_named = switch (declared) {
@@ -4886,53 +4978,117 @@ const Lowerer = struct {
                 // A recursive named type reaches itself again through its
                 // backing; that reference is this copy.
                 const copy = try self.types.add(.zst);
-                try memo.put(pair, copy);
-                var narrowed = named;
+                try walk.narrowed.put(pair, copy);
+                frame.copy = copy;
                 const declared_args = declared_types.span(declared_named.args);
-                const args = try allocator.alloc(Type.TypeId, declared_args.len);
-                defer allocator.free(args);
                 if (declared_args.len != named.args.len) Common.invariant("a compile-time root's named type has other arguments than its declaration");
-                for (declared_args, args, 0..) |declared_arg, *arg, index| {
-                    arg.* = try self.narrowToDeclared(widened, memo, self.types.typeAt(named.args, index), declared_arg);
+                for (declared_args, 0..) |declared_arg, index| {
+                    try walk.frame_pairs.append(allocator, .{ .program = self.types.typeAt(named.args, index), .declared = declared_arg });
                 }
-                narrowed.args = try self.types.addSpan(args);
                 if (named.backing) |backing| {
                     const declared_backing = declared_named.backing orelse Common.invariant("a compile-time root's named type has a backing its declaration lacks");
-                    narrowed.backing.?.ty = try self.narrowToDeclared(widened, memo, backing.ty, declared_backing.ty);
+                    try walk.frame_pairs.append(allocator, .{ .program = backing.ty, .declared = declared_backing.ty });
                 }
+            },
+            // Callables, erased values and scalars hold no row a join widens
+            // at the root's own type, so none is ever widened.
+            .primitive, .capture_record, .callable, .erased_fn, .erased_capture_ptr, .zst => Common.invariant("a compile-time root's leaf type was widened"),
+        }
+        frame.children_len = @as(u32, @intCast(walk.frame_pairs.items.len)) - frame.children_start;
+        try walk.frames.append(allocator, frame);
+        return null;
+    }
+
+    /// Build a frame's narrowed type from its children's.
+    fn finishNarrow(self: *Lowerer, walk: *DeclaredWalk, frame: NarrowFrame) Common.LowerError!Type.TypeId {
+        const children = walk.frame_pairs.items[frame.children_start..][0..frame.children_len];
+        const results = walk.results.items[frame.results_start..];
+        if (results.len != children.len) Common.invariant("a narrowed compile-time root type lost a child's type");
+        var changed = false;
+        for (children, results) |child, result| changed = changed or result != child.program;
+        switch (self.types.get(frame.pair.program)) {
+            .tag_union => |span| {
+                const chosen = walk.frame_tags.items[frame.tags_start..];
+                if (chosen.len != span.len) changed = true;
+                if (!changed) return frame.pair.program;
+                const kept = try self.allocator.alloc(Type.Tag, chosen.len);
+                defer self.allocator.free(kept);
+                var next: usize = 0;
+                for (chosen, kept) |tag, *out| {
+                    const payloads = results[next..][0..tag.payloads.len];
+                    const program_payloads = children[next..][0..tag.payloads.len];
+                    next += tag.payloads.len;
+                    var payloads_changed = false;
+                    for (program_payloads, payloads) |program_payload, payload| payloads_changed = payloads_changed or payload != program_payload.program;
+                    out.* = .{ .name = tag.name, .checked_name = tag.checked_name, .payloads = if (payloads_changed) try self.types.addSpan(payloads) else tag.payloads };
+                }
+                return try self.types.add(.{ .tag_union = try self.types.addTags(kept) });
+            },
+            .record => |span| {
+                if (!changed) return frame.pair.program;
+                const fields = try self.allocator.alloc(Type.Field, span.len);
+                defer self.allocator.free(fields);
+                for (fields, results, 0..) |*field, result, index| {
+                    field.* = self.types.fieldAt(span, index);
+                    field.ty = result;
+                }
+                return try self.types.add(.{ .record = try self.types.addFields(fields) });
+            },
+            .tuple => {
+                if (!changed) return frame.pair.program;
+                return try self.types.add(.{ .tuple = try self.types.addSpan(results) });
+            },
+            .list => return if (changed) try self.types.add(.{ .list = results[0] }) else frame.pair.program,
+            .box => return if (changed) try self.types.add(.{ .box = results[0] }) else frame.pair.program,
+            .named => |named| {
+                const copy = frame.copy orelse Common.invariant("a narrowed named type had no copy");
+                var narrowed = named;
+                narrowed.args = try self.types.addSpan(results[0..named.args.len]);
+                if (narrowed.backing) |*backing| backing.ty = results[named.args.len];
                 try self.types.set(copy, .{ .named = narrowed });
                 return copy;
             },
-            // Callables, erased values and scalars hold no row a join widens
-            // at the root's own type.
-            .primitive, .capture_record, .callable, .erased_fn, .erased_capture_ptr, .zst => {
-                try memo.put(pair, program_ty);
-                return program_ty;
-            },
+            .primitive, .capture_record, .callable, .erased_fn, .erased_capture_ptr, .zst => Common.invariant("a compile-time root's leaf type was widened"),
         }
     }
 
-    /// The tuple of `span`'s items each brought to its declared item, or
-    /// null when none changes.
-    fn narrowSpanToDeclared(
-        self: *Lowerer,
-        widened: *std.AutoHashMap(DeclaredTypePair, bool),
-        memo: *std.AutoHashMap(DeclaredTypePair, Type.TypeId),
-        span: Type.Span,
-        declared_items: []const MonoType.TypeId,
-    ) Common.LowerError!?Type.TypeId {
-        if (declared_items.len != span.len) Common.invariant("a compile-time root's tuple has another arity than its declaration");
-        const items = try self.allocator.alloc(Type.TypeId, span.len);
-        defer self.allocator.free(items);
-        var changed = false;
-        for (items, declared_items, 0..) |*item, declared_item, index| {
-            const program_item = self.types.typeAt(span, index);
-            item.* = try self.narrowToDeclared(widened, memo, program_item, declared_item);
-            changed = changed or item.* != program_item;
+    /// One requirement of a pair fitting its declaration: it holds when one
+    /// of its alternatives does. `FitAlternative`s are spans of pairs that
+    /// must all fit.
+    const FitRequirement = struct { alternatives_start: u32, alternatives_len: u32 };
+    const FitAlternative = struct { pairs_start: u32, pairs_len: u32 };
+
+    /// One pair being checked: every requirement must hold.
+    const FitFrame = struct {
+        pair: DeclaredTypePair,
+        requirements_start: u32,
+        requirements_len: u32,
+        requirement: u32 = 0,
+        alternative: u32 = 0,
+        pair_index: u32 = 0,
+    };
+
+    /// The state of one fit check.
+    const FitWalk = struct {
+        /// Each pair's finished answer; a pair still being checked fits as
+        /// far as its other parts do.
+        answers: std.AutoHashMap(DeclaredTypePair, bool),
+        active: std.AutoHashMap(DeclaredTypePair, void),
+        frames: std.ArrayList(FitFrame) = .empty,
+        requirements: std.ArrayList(FitRequirement) = .empty,
+        alternatives: std.ArrayList(FitAlternative) = .empty,
+        pairs: std.ArrayList(DeclaredTypePair) = .empty,
+
+        fn deinit(self: *FitWalk) void {
+            const allocator = self.answers.allocator;
+            self.answers.deinit();
+            self.active.deinit();
+            self.frames.deinit(allocator);
+            self.requirements.deinit(allocator);
+            self.alternatives.deinit(allocator);
+            self.pairs.deinit(allocator);
         }
-        if (!changed) return null;
-        return try self.types.add(.{ .tuple = try self.types.addSpan(items) });
-    }
+    };
 
     /// Whether a variant's program payloads fit its declared payloads: the
     /// same kinds of type, primitives, record fields, arities and labels,
@@ -4941,25 +5097,87 @@ const Lowerer = struct {
     fn fitsDeclaredPayloads(self: *Lowerer, program_payloads: Type.Span, declared_payloads: MonoType.Span) Common.LowerError!bool {
         const declared = self.solved.lifted.types.view().span(declared_payloads);
         if (declared.len != program_payloads.len) return false;
-        var visiting = std.AutoHashMap(DeclaredTypePair, void).init(self.allocator);
-        defer visiting.deinit();
+        var walk: FitWalk = .{
+            .answers = std.AutoHashMap(DeclaredTypePair, bool).init(self.allocator),
+            .active = std.AutoHashMap(DeclaredTypePair, void).init(self.allocator),
+        };
+        defer walk.deinit();
         for (declared, 0..) |declared_payload, index| {
-            if (!try self.fitsDeclared(&visiting, self.types.typeAt(program_payloads, index), declared_payload)) return false;
+            if (!try self.fitsDeclared(&walk, .{ .program = self.types.typeAt(program_payloads, index), .declared = declared_payload })) return false;
         }
         return true;
     }
 
-    fn fitsDeclared(
-        self: *Lowerer,
-        visiting: *std.AutoHashMap(DeclaredTypePair, void),
-        program_ty: Type.TypeId,
-        declared_ty: MonoType.TypeId,
-    ) Common.LowerError!bool {
+    fn fitsDeclared(self: *Lowerer, walk: *FitWalk, root: DeclaredTypePair) Common.LowerError!bool {
+        var answer: bool = if (try self.enterFit(walk, root)) |done| return done else undefined;
+        while (walk.frames.items.len != 0) {
+            const top = &walk.frames.items[walk.frames.items.len - 1];
+            const step = self.nextFitPair(walk, top);
+            switch (step) {
+                .pair => |pair| {
+                    if (try self.enterFit(walk, pair)) |done| self.takeFitAnswer(walk, done);
+                    continue;
+                },
+                .done => |fits| answer = fits,
+            }
+            const frame = walk.frames.pop().?;
+            walk.requirements.shrinkRetainingCapacity(frame.requirements_start);
+            _ = walk.active.remove(frame.pair);
+            try walk.answers.put(frame.pair, answer);
+            if (walk.frames.items.len == 0) return answer;
+            self.takeFitAnswer(walk, answer);
+        }
+        unreachable;
+    }
+
+    const FitStep = union(enum) { pair: DeclaredTypePair, done: bool };
+
+    /// The next pair the top frame waits on, or its answer once every
+    /// requirement held or one could not.
+    fn nextFitPair(_: *Lowerer, walk: *FitWalk, frame: *FitFrame) FitStep {
+        while (true) {
+            if (frame.requirement == frame.requirements_len) return .{ .done = true };
+            const requirement = walk.requirements.items[frame.requirements_start + frame.requirement];
+            if (frame.alternative == requirement.alternatives_len) return .{ .done = false };
+            const alternative = walk.alternatives.items[requirement.alternatives_start + frame.alternative];
+            if (frame.pair_index == alternative.pairs_len) {
+                frame.requirement += 1;
+                frame.alternative = 0;
+                frame.pair_index = 0;
+                continue;
+            }
+            return .{ .pair = walk.pairs.items[alternative.pairs_start + frame.pair_index] };
+        }
+    }
+
+    /// Advance the top frame past the pair it waited on.
+    fn takeFitAnswer(_: *Lowerer, walk: *FitWalk, fits: bool) void {
+        const frame = &walk.frames.items[walk.frames.items.len - 1];
+        if (fits) {
+            frame.pair_index += 1;
+        } else {
+            frame.alternative += 1;
+            frame.pair_index = 0;
+        }
+    }
+
+    /// `pair`'s answer when it needs no frame, or null after opening one.
+    fn enterFit(self: *Lowerer, walk: *FitWalk, pair: DeclaredTypePair) Common.LowerError!?bool {
+        if (walk.answers.get(pair)) |known| return known;
         // A pair met again inside itself fits as far as its other parts do.
-        if ((try visiting.getOrPut(.{ .program = program_ty, .declared = declared_ty })).found_existing) return true;
+        if (walk.active.contains(pair)) return true;
+        const allocator = self.allocator;
         const declared_types = self.solved.lifted.types.view();
-        const declared = declared_types.get(declared_ty);
-        switch (self.types.get(program_ty)) {
+        const declared = declared_types.get(pair.declared);
+        const requirements_start: u32 = @intCast(walk.requirements.items.len);
+        const Single = struct {
+            fn add(w: *FitWalk, a: Allocator, child: DeclaredTypePair) Allocator.Error!void {
+                try w.requirements.append(a, .{ .alternatives_start = @intCast(w.alternatives.items.len), .alternatives_len = 1 });
+                try w.alternatives.append(a, .{ .pairs_start = @intCast(w.pairs.items.len), .pairs_len = 1 });
+                try w.pairs.append(a, child);
+            }
+        };
+        switch (self.types.get(pair.program)) {
             .primitive => |primitive| return declared == .primitive and std.meta.eql(primitive, declared.primitive),
             .record => |span| {
                 if (declared != .record) return false;
@@ -4967,46 +5185,57 @@ const Lowerer = struct {
                 if (declared_fields.len != span.len) return false;
                 for (declared_fields, 0..) |declared_field, index| {
                     const field = self.types.fieldAt(span, index);
-                    if (field.name != declared_field.name) return false;
-                    if (!try self.fitsDeclared(visiting, field.ty, declared_field.ty)) return false;
+                    if (field.name != declared_field.name) {
+                        walk.requirements.shrinkRetainingCapacity(requirements_start);
+                        return false;
+                    }
+                    try Single.add(walk, allocator, .{ .program = field.ty, .declared = declared_field.ty });
                 }
-                return true;
             },
             .tuple => |span| {
                 if (declared != .tuple) return false;
                 const declared_items = declared_types.span(declared.tuple);
                 if (declared_items.len != span.len) return false;
                 for (declared_items, 0..) |declared_item, index| {
-                    if (!try self.fitsDeclared(visiting, self.types.typeAt(span, index), declared_item)) return false;
+                    try Single.add(walk, allocator, .{ .program = self.types.typeAt(span, index), .declared = declared_item });
                 }
-                return true;
             },
             .tag_union => |span| {
                 if (declared != .tag_union) return false;
                 for (declared_types.tagSpan(declared.tag_union)) |declared_tag| {
                     const declared_payloads = declared_types.span(declared_tag.payloads);
-                    const found = for (0..span.len) |index| {
+                    const alternatives_start: u32 = @intCast(walk.alternatives.items.len);
+                    for (0..span.len) |index| {
                         const tag = self.types.tagAt(span, index);
                         if (tag.name != declared_tag.name or tag.payloads.len != declared_payloads.len) continue;
-                        const fits = for (declared_payloads, 0..) |declared_payload, payload_index| {
-                            if (!try self.fitsDeclared(visiting, self.types.typeAt(tag.payloads, payload_index), declared_payload)) break false;
-                        } else true;
-                        if (fits) break true;
-                    } else false;
-                    if (!found) return false;
+                        try walk.alternatives.append(allocator, .{ .pairs_start = @intCast(walk.pairs.items.len), .pairs_len = @intCast(declared_payloads.len) });
+                        for (declared_payloads, 0..) |declared_payload, payload_index| {
+                            try walk.pairs.append(allocator, .{ .program = self.types.typeAt(tag.payloads, payload_index), .declared = declared_payload });
+                        }
+                    }
+                    const alternatives_len = @as(u32, @intCast(walk.alternatives.items.len)) - alternatives_start;
+                    if (alternatives_len == 0) {
+                        walk.requirements.shrinkRetainingCapacity(requirements_start);
+                        return false;
+                    }
+                    try walk.requirements.append(allocator, .{ .alternatives_start = alternatives_start, .alternatives_len = alternatives_len });
                 }
-                return true;
             },
-            .list => |elem| return declared == .list and try self.fitsDeclared(visiting, elem, declared.list),
-            .box => |elem| return declared == .box and try self.fitsDeclared(visiting, elem, declared.box),
+            .list => |elem| {
+                if (declared != .list) return false;
+                try Single.add(walk, allocator, .{ .program = elem, .declared = declared.list });
+            },
+            .box => |elem| {
+                if (declared != .box) return false;
+                try Single.add(walk, allocator, .{ .program = elem, .declared = declared.box });
+            },
             .named => |named| {
                 if (declared != .named or !std.meta.eql(named.def, declared.named.def)) return false;
                 const declared_args = declared_types.span(declared.named.args);
                 if (declared_args.len != named.args.len) return false;
                 for (declared_args, 0..) |declared_arg, index| {
-                    if (!try self.fitsDeclared(visiting, self.types.typeAt(named.args, index), declared_arg)) return false;
+                    try Single.add(walk, allocator, .{ .program = self.types.typeAt(named.args, index), .declared = declared_arg });
                 }
-                return true;
             },
             .callable, .erased_fn => return declared == .func or declared == .erased,
             .zst => return switch (declared) {
@@ -5017,6 +5246,13 @@ const Lowerer = struct {
             },
             .capture_record, .erased_capture_ptr => return false,
         }
+        try walk.active.put(pair, {});
+        try walk.frames.append(allocator, .{
+            .pair = pair,
+            .requirements_start = requirements_start,
+            .requirements_len = @as(u32, @intCast(walk.requirements.items.len)) - requirements_start,
+        });
+        return null;
     }
 
     // Const schemas //
