@@ -14103,7 +14103,7 @@ const Cloner = struct {
                         .runtime = try self.addExpr(.{ .ty = step.dest, .data = .{ .row_widen = .{ .value = candidate.expr } } }),
                         .structure = try self.copyValue(children[0]),
                     } },
-                    .expr, .record, .tuple, .callable => unreachable,
+                    .expr, .record, .tuple, .callable => unreachable, // only tag, nominal and anchored steps are expanded with children below
                 };
                 results.shrinkRetainingCapacity(step.results_start);
                 try results.append(gpa, built);

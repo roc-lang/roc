@@ -2290,7 +2290,7 @@ pub fn checkedTypesStructurallyCompatible(
         const right = Builder.resolvedRowJoinPayload(view_b, pair[1].ty);
         if (structurallyUnconstrained(left.payload) or structurallyUnconstrained(right.payload)) continue;
         switch (left.payload) {
-            .flex, .rigid, .pending, .err, .alias => unreachable,
+            .flex, .rigid, .pending, .err, .alias => unreachable, // structurallyUnconstrained payloads continued above and resolvedRowJoinPayload resolved aliases
             .tag_union, .empty_tag_union => if (right.payload != .tag_union and right.payload != .empty_tag_union) return false,
             .empty_record => if (right.payload != .empty_record) return false,
             .record => |record_a| {
@@ -9942,7 +9942,7 @@ const Builder = struct {
             const resolved = resolvedRowJoinPayload(view, current.ty);
             switch (resolved.payload) {
                 .flex, .rigid, .pending, .err => return false,
-                .alias => unreachable,
+                .alias => unreachable, // resolvedRowJoinPayload resolved the type through aliases
                 .empty_record, .empty_tag_union => {},
                 .tag_union => {
                     var tags = std.ArrayList(RowJoinTag).empty;
@@ -10140,7 +10140,7 @@ const Builder = struct {
                 }
                 return true;
             },
-            .pending, .err, .flex, .rigid, .alias => unreachable,
+            .pending, .err, .flex, .rigid, .alias => unreachable, // group members passed rowJoinIdentityIsGround and resolvedRowJoinPayload resolved aliases
         }
     }
 

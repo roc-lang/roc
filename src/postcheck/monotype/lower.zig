@@ -51991,7 +51991,7 @@ const BodyContext = struct {
             .kind = switch (target.target.kind) {
                 .procedure => .method_contract,
                 .local_proc => .local_method_contract,
-                .structural => unreachable,
+                .structural => unreachable, // the owner-template switch above rejects structural targets before this address is built
             },
             .family = DraftTemplateFamilyAddress.init(owner, self.method_scope.key, root_view.types.rootKey(root_fn_ty)),
             .evidence_digest = @splat(0),

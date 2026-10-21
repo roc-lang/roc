@@ -12672,10 +12672,7 @@ pub const CheckedBodyStore = struct {
                 // Subsumption", "Row Coercion Primitive").
                 if (module.moduleEnvConst().rowCoercedResultWideVar(node)) |wide_var| {
                     const wide_ty = checked_types.rootForSourceVar(module, wide_var) orelse {
-                        if (builtin.mode == .debug) {
-                            base.invariant("checked artifact invariant violated: row-coerced result's widened type root was not published", .{});
-                        }
-                        unreachable;
+                        base.invariant("checked artifact invariant violated: row-coerced result's widened type root was not published", .{});
                     };
                     const wrapper: CheckedExprId = @fromBackingInt(@intCast(try checkedSourceNodeIdFromLen(exprs.items.len)));
                     try exprs.append(allocator, .{

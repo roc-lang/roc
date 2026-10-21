@@ -2140,7 +2140,7 @@ const Solver = struct {
             }
             if (left_tag != right_tag) return false;
             switch (left_content) {
-                .link, .mono, .unbound, .forall => unreachable,
+                .link, .mono, .unbound, .forall => unreachable, // resolvedContentAt follows links and monos, and unbound/forall pairs continued above
                 .primitive => |prim| if (prim != right_content.primitive) return false,
                 .zst, .lambda_set, .erased, .tag_union => {},
                 .list => |elem| try work.append(self.allocator, .{ .first = elem, .second = right_content.list }),
