@@ -2075,26 +2075,7 @@ test "boxy abi sidecar view initializes the global runtime from image bytes" {
     var fba = std.heap.FixedBufferAllocator.init(buffer);
     const fba_alloc = fba.allocator();
 
-    var lowered: LirProgram.Result = undefined;
-    lowered.store = LirStore.init(fba_alloc);
-    lowered.layouts = try layout_mod.Store.init(fba_alloc, base.target.TargetUsize.native);
-    lowered.root_procs = .empty;
-    lowered.boxy_type_descs = .empty;
-    lowered.boxy_dicts = .empty;
-    lowered.boxy_adapters = .empty;
-    lowered.boxy_desc_refs = .empty;
-    lowered.boxy_dict_refs = .empty;
-    lowered.boxy_tag_variants = .empty;
-    lowered.boxy_tag_payload_descs = .empty;
-    lowered.boxy_field_names = .empty;
-    lowered.boxy_method_slots = .empty;
-    lowered.boxy_worker_procs = .empty;
-    lowered.boxy_method_arg_layouts = .empty;
-    lowered.boxy_method_hidden_desc_sources = .empty;
-    lowered.boxy_erased_arg_layouts = .empty;
-    lowered.boxy_erased_arg_desc_keys = .empty;
-    lowered.boxy_erased_arg_desc_offsets = .empty;
-    lowered.boxy_erased_arg_desc_params = .empty;
+    var lowered = try LirProgram.Result.init(fba_alloc, base.target.TargetUsize.native);
 
     const tag_name = try lowered.store.insertBoxyName("Only");
     try lowered.boxy_type_descs.append(fba_alloc, .{
