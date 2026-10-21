@@ -241,6 +241,12 @@ pub const BuildEnv = struct {
     cwd: []const u8,
     /// Whether to retain exact source byte states for watch-mode refreshes.
     track_watch_inputs: bool = false,
+    resolution_inputs: std.ArrayList(watch_inputs.Input) = .empty,
+    /// Deterministic boundary after resolver consumption, before materialization.
+    after_resolution: ?struct {
+        ctx: *anyopaque,
+        call: *const fn (*anyopaque) Allocator.Error!void,
+    } = null,
 
     /// Whether `compileDiscovered` validates that the selected platform target's
     /// declared link files exist before type checking.
@@ -402,6 +408,8 @@ pub const BuildEnv = struct {
     }
 
     pub fn deinit(self: *BuildEnv) void {
+        for (self.resolution_inputs.items) |input| self.gpa.free(input.path);
+        self.resolution_inputs.deinit(self.gpa);
         if (comptime trace_build) {
             std.debug.print("[DEINIT] BuildEnv.deinit starting\n", .{});
         }
@@ -1784,12 +1792,20 @@ pub const BuildEnv = struct {
         }
     }
 
+    fn observeResolutionInput(ctx: *anyopaque, path: []const u8, state: watch_inputs.State) Allocator.Error!void {
+        const self: *BuildEnv = @ptrCast(@alignCast(ctx));
+        const owned = try self.gpa.dupe(u8, path);
+        errdefer self.gpa.free(owned);
+        try self.resolution_inputs.append(self.gpa, .{ .path = owned, .state = state });
+    }
+
     fn resolutionFetcher(self: *BuildEnv) package_resolution.CtxFetcher {
         return .{
             .fs = self.filesystem,
             .gpa = self.gpa,
             .cache_packages_dir = self.package_cache_dir,
             .compiler_owned_source_dir = self.compiler_owned_source_dir,
+            .input_observer = if (self.track_watch_inputs) .{ .ctx = self, .observe = observeResolutionInput } else null,
         };
     }
 
@@ -1827,7 +1843,16 @@ pub const BuildEnv = struct {
         };
         defer resolved.deinit();
 
+        if (self.after_resolution) |hook| try hook.call(hook.ctx);
         try self.materializeResolved(root_pkg_name, &resolved);
+    }
+
+    fn resolvedInputState(self: *BuildEnv, path: []const u8) watch_inputs.State {
+        for (self.resolution_inputs.items) |input| {
+            if (std.mem.eql(u8, input.path, path)) return input.state;
+        }
+        if (builtin.mode == .debug) base.invariant("resolved local header has no consumed input state: {s}", .{path});
+        unreachable;
     }
 
     fn materializeResolved(self: *BuildEnv, root_pkg_name: []const u8, resolved: *const package_resolution.Resolved) BuildError!void {
@@ -1862,7 +1887,7 @@ pub const BuildEnv = struct {
             } else null;
             const root_file_state: ?watch_inputs.State = if (self.track_watch_inputs)
                 if (url_view == null)
-                    try self.currentFileWatchState(package.root_file)
+                    self.resolvedInputState(package.root_file)
                 else
                     .{ .hash = package.root_source_hash }
             else
@@ -1892,6 +1917,9 @@ pub const BuildEnv = struct {
 
             var child_info = try self.parseHeaderDeps(package.root_file);
             defer child_info.deinit(self.gpa);
+            if (self.track_watch_inputs and package.url == null) {
+                try observeResolutionInput(self, package.root_file, child_info.source_file_state.?);
+            }
             if (resolved.selected_platform_index == @as(u32, @intCast(i))) {
                 replaceDiscoveredParse(&self.discovered_platform_parse, takeDiscoveredParse(&child_info.parsed));
             }
@@ -2484,7 +2512,11 @@ pub const BuildEnv = struct {
         path: []const u8,
         state: watch_inputs.State,
     ) Allocator.Error!void {
-        if (seen.contains(path)) return;
+        if (seen.contains(path)) {
+            for (inputs.items) |input| {
+                if (std.mem.eql(u8, input.path, path) and std.meta.eql(input.state, state)) return;
+            }
+        }
         const owned = try self.gpa.dupe(u8, path);
         errdefer self.gpa.free(owned);
         try inputs.append(self.gpa, .{ .path = owned, .state = state });
@@ -2530,6 +2562,10 @@ pub const BuildEnv = struct {
         var seen = std.StringHashMapUnmanaged(void){};
         defer seen.deinit(self.gpa);
 
+        for (self.resolution_inputs.items) |input| {
+            try self.appendWatchInputState(&inputs, &seen, input.path, input.state);
+        }
+
         var build_pkg_it = self.packages.iterator();
         while (build_pkg_it.next()) |entry| {
             const pkg = entry.value_ptr.*;
@@ -2547,6 +2583,10 @@ pub const BuildEnv = struct {
                 const pkg = entry.value_ptr.*;
                 if (pkg.url != null) continue;
                 for (pkg.modules.items) |*mod| {
+                    switch (mod.source_input_consumption) {
+                        .pending => continue,
+                        .consumed => {},
+                    }
                     const state = mod.source_file_state orelse {
                         if (builtin.mode == .debug) base.invariant("coordinator module {s} has no source_file_state", .{mod.name});
                         unreachable;
@@ -3710,6 +3750,163 @@ pub const BuildEnv = struct {
     };
 };
 
+test "ROC-12252 early source failure exports consumed inputs without pending modules" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const cwd = try tmp.dir.realPathFileAlloc(testing.io, ".", allocator);
+    defer allocator.free(cwd);
+    const missing_path = try std.fs.path.join(allocator, &.{ cwd, "Missing.roc" });
+    defer allocator.free(missing_path);
+    const pending_path = try std.fs.path.join(allocator, &.{ cwd, "Pending.roc" });
+    defer allocator.free(pending_path);
+    var env = try BuildEnv.init(allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, testing.io);
+    defer env.deinit();
+    env.setWatchInputTracking(true);
+    const coord = try allocator.create(Coordinator);
+    coord.* = try Coordinator.init(allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), env.builtin_modules, build_options.compiler_compatibility_id, null, env.filesystem);
+    env.coordinator = coord;
+    coord.setWatchInputTracking(true);
+    const pkg = try coord.ensurePackage("pkg", cwd);
+    const missing = try pkg.ensureModule(allocator, "Missing", missing_path);
+    const pending = try pkg.ensureModule(allocator, "Pending", pending_path);
+    pkg.remaining_modules = 2;
+    coord.total_remaining = 2;
+    try coord.enqueueParseTask(pkg.name, missing);
+    try coord.enqueueParseTask(pkg.name, pending);
+    try coord.start();
+    try testing.expectError(error.FileNotFound, coord.coordinatorLoop());
+    try testing.expectEqual(.consumed, pkg.getModule(missing).?.source_input_consumption);
+    try testing.expectEqual(.pending, pkg.getModule(pending).?.source_input_consumption);
+    const inputs = try env.collectWatchInputStates();
+    defer env.freeWatchInputStates(inputs);
+    try testing.expectEqual(@as(usize, 1), inputs.len);
+    try testing.expectEqualStrings(missing_path, inputs[0].path);
+    try testing.expect(inputs[0].state == .missing);
+}
+
+test "ROC-12252 local resolution failure exports repair inputs" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const cwd = try tmp.dir.realPathFileAlloc(testing.io, ".", allocator);
+    defer allocator.free(cwd);
+    const main = try std.fs.path.join(allocator, &.{ cwd, "main.roc" });
+    defer allocator.free(main);
+    const dep = try std.fs.path.join(allocator, &.{ cwd, "missing", "main.roc" });
+    defer allocator.free(dep);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "main.roc", .data = "package [] { dep: \"./missing/main.roc\" }\n" });
+    var env = try BuildEnv.init(allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, testing.io);
+    defer env.deinit();
+    env.setWatchInputTracking(true);
+    try testing.expectError(error.InvalidDependency, env.discoverDependencies(main));
+    const inputs = try env.collectWatchInputStates();
+    defer env.freeWatchInputStates(inputs);
+    for (inputs) |input| {
+        if (std.mem.eql(u8, input.path, dep)) {
+            try testing.expect(input.state == .missing);
+            return;
+        }
+    }
+    return error.MissingRepairInput;
+}
+
+test "ROC-12252 invalid local package and platform export raw repair states" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    inline for (.{ "", "platform " }) |modifier| {
+        var tmp = testing.tmpDir(.{});
+        defer tmp.cleanup();
+        const cwd = try tmp.dir.realPathFileAlloc(testing.io, ".", allocator);
+        defer allocator.free(cwd);
+        const main = try std.fs.path.join(allocator, &.{ cwd, "main.roc" });
+        defer allocator.free(main);
+        const dep = try std.fs.path.join(allocator, &.{ cwd, "dep.roc" });
+        defer allocator.free(dep);
+        const source = "package [] { dep: " ++ modifier ++ "\"./dep.roc\" }\n";
+        const invalid = "package [\r\n";
+        try tmp.dir.writeFile(testing.io, .{ .sub_path = "main.roc", .data = source });
+        try tmp.dir.writeFile(testing.io, .{ .sub_path = "dep.roc", .data = invalid });
+        var env = try BuildEnv.init(allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, testing.io);
+        defer env.deinit();
+        env.setWatchInputTracking(true);
+        try testing.expectError(error.InvalidDependency, env.discoverDependencies(main));
+        const inputs = try env.collectWatchInputStates();
+        defer env.freeWatchInputStates(inputs);
+        var found = false;
+        for (inputs) |input| {
+            if (std.mem.eql(u8, input.path, dep)) {
+                try testing.expect(std.meta.eql(input.state, watch_inputs.State{ .hash = watch_inputs.hashBytes(invalid) }));
+                found = true;
+            }
+        }
+        try testing.expect(found);
+    }
+}
+
+test "ROC-12252 resolved header mutation preserves consumed provenance" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const cwd = try tmp.dir.realPathFileAlloc(testing.io, ".", allocator);
+    defer allocator.free(cwd);
+    const main = try std.fs.path.join(allocator, &.{ cwd, "main.roc" });
+    defer allocator.free(main);
+    const dep = try std.fs.path.join(allocator, &.{ cwd, "dep.roc" });
+    defer allocator.free(dep);
+    const before = "package [] {}\r\n";
+    const after = "package [] {}\n";
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "main.roc", .data = "package [] { dep: \"./dep.roc\" }\n" });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "dep.roc", .data = before });
+    const Mutation = struct {
+        dir: std.Io.Dir,
+        called: bool = false,
+        fn call(ctx: *anyopaque) Allocator.Error!void {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            self.dir.writeFile(testing.io, .{ .sub_path = "dep.roc", .data = after }) catch unreachable;
+            self.called = true;
+        }
+    };
+    var mutation = Mutation{ .dir = tmp.dir };
+    var env = try BuildEnv.init(allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, testing.io);
+    defer env.deinit();
+    env.setWatchInputTracking(true);
+    env.after_resolution = .{ .ctx = &mutation, .call = Mutation.call };
+    try env.discoverDependencies(main);
+    try testing.expect(mutation.called);
+    const inputs = try env.collectWatchInputStates();
+    defer env.freeWatchInputStates(inputs);
+    var saw_before = false;
+    var saw_after = false;
+    for (inputs) |input| {
+        if (!std.mem.eql(u8, input.path, dep)) continue;
+        saw_before = saw_before or std.meta.eql(input.state, watch_inputs.State{ .hash = watch_inputs.hashBytes(before) });
+        saw_after = saw_after or std.meta.eql(input.state, watch_inputs.State{ .hash = watch_inputs.hashBytes(after) });
+    }
+    try testing.expect(saw_before);
+    try testing.expect(saw_after);
+}
+
+test "ROC-12252 conflicting consumed states are retained" {
+    const testing = std.testing;
+    var env = try BuildEnv.init(testing.allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), "/", testing.io);
+    defer env.deinit();
+    env.setWatchInputTracking(true);
+    const before: watch_inputs.State = .{ .hash = watch_inputs.hashBytes("before\r\n") };
+    const after: watch_inputs.State = .{ .hash = watch_inputs.hashBytes("after\n") };
+    try BuildEnv.observeResolutionInput(&env, "/pkg/main.roc", before);
+    try BuildEnv.observeResolutionInput(&env, "/pkg/main.roc", after);
+    try BuildEnv.observeResolutionInput(&env, "/pkg/main.roc", before);
+    const inputs = try env.collectWatchInputStates();
+    defer env.freeWatchInputStates(inputs);
+    try testing.expectEqual(@as(usize, 2), inputs.len);
+    try testing.expect(std.meta.eql(before, inputs[0].state));
+    try testing.expect(std.meta.eql(after, inputs[1].state));
+}
+
 test "BuildEnv collectWatchInputStates includes package root state" {
     const testing = std.testing;
     const allocator = testing.allocator;
@@ -3811,6 +4008,7 @@ test "BuildEnv collectWatchInputStates resolves file dependencies from module so
     const coord_module_id = try coord_pkg.ensureModule(allocator, "App", generated_app_path);
     const coord_mod = &coord_pkg.modules.items[coord_module_id];
     coord_mod.source_dir_override = try allocator.dupe(u8, real_src_dir);
+    coord_mod.source_input_consumption = .consumed;
     coord_mod.source_file_state = .{ .hash = @as([32]u8, @splat(2)) };
     try testing.expectEqualStrings(real_src_dir, coord_mod.canonicalSourceDir());
 

@@ -3917,6 +3917,9 @@ pub fn build(b: *std.Build) void {
     run_test_zig_step.dependOn(run_guarded_list_violations_step);
 
     for (module_tests_result.tests) |module_test| {
+        if (std.mem.eql(u8, module_test.test_step.name, "lsp") or std.mem.eql(u8, module_test.test_step.name, "lsp_unit") or std.mem.eql(u8, module_test.test_step.name, "lsp_integration")) {
+            linkWatchPlatformLibs(module_test.test_step, target);
+        }
         // Standalone module tests have fresh roots, so display-version imports
         // must be declared separately from the production LSP module.
         if (std.mem.eql(u8, module_test.test_step.name, "lsp")) {
@@ -4028,6 +4031,7 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
+    linkWatchPlatformLibs(lsp_integration_runner_exe, target);
     add_tracy(b, roc_modules.build_options, lsp_integration_runner_exe, target, false, flag_enable_tracy);
     lsp_integration_runner_exe.step.dependOn(&write_compiled_builtins.step);
     build_test_lsp_integration_runner_step.dependOn(&lsp_integration_runner_exe.step);

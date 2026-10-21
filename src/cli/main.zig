@@ -14634,6 +14634,27 @@ fn captureWatchInputSet(ctx: *CliCtx, inputs: []const []const u8) WatchCollectIn
     };
 }
 
+fn appendConsumedWatchInput(
+    ctx: *CliCtx,
+    paths: *std.ArrayList([]const u8),
+    snapshot: *std.ArrayList(WatchSnapshotEntry),
+    seen: *std.StringHashMapUnmanaged(void),
+    path: []const u8,
+    state: WatchFileState,
+) WatchCollectInputSetError!void {
+    const absolute = try absolutePathFromCwd(ctx, path);
+    errdefer ctx.gpa.free(absolute);
+
+    // Reconciliation must compare every consumed state, including differing
+    // observations of one logical path. Only supplemental current-state inputs
+    // use this map to skip paths already recorded by the compiler.
+    try paths.append(ctx.gpa, absolute);
+    errdefer _ = paths.pop();
+    try snapshot.append(ctx.gpa, .{ .state = state });
+    errdefer _ = snapshot.pop();
+    try seen.put(ctx.gpa, absolute, {});
+}
+
 fn appendCompilerWatchInput(
     ctx: *CliCtx,
     paths: *std.ArrayList([]const u8),
@@ -14641,9 +14662,7 @@ fn appendCompilerWatchInput(
     seen: *std.StringHashMapUnmanaged(void),
     input: compile.watch_inputs.Input,
 ) WatchCollectInputSetError!void {
-    if (try appendOwnedWatchPath(ctx, paths, seen, input.path)) {
-        try snapshot.append(ctx.gpa, .{ .state = watchFileStateFromCompiler(input.state) });
-    }
+    try appendConsumedWatchInput(ctx, paths, snapshot, seen, input.path, watchFileStateFromCompiler(input.state));
 }
 
 fn appendCurrentCollectedWatchInput(
@@ -14855,9 +14874,7 @@ fn appendWatchInputWithState(
 ) WatchReadInputsError!void {
     if (path.len == 0) return error.WatchInputsMalformed;
 
-    if (try appendOwnedWatchPath(ctx, paths, seen, path)) {
-        try snapshot.append(ctx.gpa, .{ .state = state });
-    }
+    try appendConsumedWatchInput(ctx, paths, snapshot, seen, path, state);
 }
 
 fn appendCurrentWatchInput(
@@ -20032,6 +20049,67 @@ test "readWatchInputsFile parses path states and explicit extras" {
     try testing.expectEqualStrings(main_path, input_set.inputs[1]);
     try testing.expect(input_set.snapshot[0].state.eql(.missing));
     try testing.expect(input_set.snapshot[1].state.eql(.missing));
+}
+
+test "watch reconciliation preserves differing observations of one compiler input" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    var io_state = Io.create(testing.io);
+    var ctx = CliCtx.init(allocator, arena.allocator(), &io_state, .check);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_root = try tmp.dir.realPathFileAlloc(testing.io, ".", allocator);
+    defer allocator.free(tmp_root);
+    const watched_path = try std.fs.path.join(allocator, &.{ tmp_root, "watched.txt" });
+    defer allocator.free(watched_path);
+    const inputs_path = try std.fs.path.join(allocator, &.{ tmp_root, "watch-inputs" });
+    defer allocator.free(inputs_path);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "watched.txt", .data = "current" });
+
+    const current: compile.watch_inputs.State = .{ .hash = compile.watch_inputs.hashBytes("current") };
+    const differing_states = [_]compile.watch_inputs.State{
+        .{ .hash = compile.watch_inputs.hashBytes("earlier") },
+        .missing,
+        .unreadable,
+    };
+    for (differing_states) |differing| {
+        // The first observation matches disk, so path-only deduplication would
+        // incorrectly accept this run by dropping the second observation.
+        const compiler_inputs = [_]compile.watch_inputs.Input{
+            .{ .path = watched_path, .state = current },
+            .{ .path = watched_path, .state = differing },
+        };
+        var collected = try collectWatchInputSetFromCompilerInputs(&ctx, &compiler_inputs, &.{watched_path});
+        defer collected.deinit(&ctx);
+        try testing.expectEqual(@as(usize, 2), collected.inputs.len);
+        try testing.expect(collected.snapshot[0].state.eql(watchFileStateFromCompiler(current)));
+        try testing.expect(collected.snapshot[1].state.eql(watchFileStateFromCompiler(differing)));
+
+        var signal = WatchEventSignal{};
+        var state = WatchState{};
+        defer state.deinit(&ctx);
+
+        // Cover the child-process format as well as in-process collection.
+        try writeWatchInputSetFile(&ctx, inputs_path, &collected);
+        const serialized = try readWatchInputsFile(&ctx, inputs_path, &.{watched_path});
+        try testing.expectEqual(@as(usize, 2), serialized.inputs.len);
+        try testing.expect(try refreshWatchState(&ctx, &state, &signal, serialized));
+
+        // Hot reload uses a separate collector before serializing candidates.
+        const hot_reload = try collectHotReloadWatchInputSet(&ctx, &compiler_inputs, null);
+        try testing.expectEqual(@as(usize, 2), hot_reload.inputs.len);
+        try testing.expect(try refreshWatchState(&ctx, &state, &signal, hot_reload));
+
+        const direct = try collectWatchInputSetFromCompilerInputs(&ctx, &compiler_inputs, &.{watched_path});
+        try testing.expect(try refreshWatchState(&ctx, &state, &signal, direct));
+    }
 }
 
 test "watchPathIsInsideDirectory respects path boundaries" {

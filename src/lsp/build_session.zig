@@ -57,8 +57,10 @@ pub const BuildSession = struct {
         const path = try uri_util.uriToPath(allocator, uri);
         defer allocator.free(path);
 
-        const absolute_path: [:0]u8 = std.Io.Dir.cwd().realPathFileAlloc(std_io, path, allocator) catch
-            try allocator.dupeSentinel(u8, path, 0);
+        const absolute_path: [:0]u8 = std.Io.Dir.cwd().realPathFileAlloc(std_io, path, allocator) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => try allocator.dupeSentinel(u8, path, 0),
+        };
         errdefer allocator.free(absolute_path);
 
         // Set up file override if override text provided.
@@ -77,10 +79,14 @@ pub const BuildSession = struct {
         const preferred_main = try preferredMainFromWorkspace(allocator, std_io, env.filesystem, workspace_root);
         defer if (preferred_main) |main_path| allocator.free(main_path);
 
+        // Record the states actually consumed, including inputs of failed builds.
+        env.setWatchInputTracking(true);
+
         // Build
         const build_succeeded = blk: {
-            env.buildResolvingMain(absolute_path, preferred_main) catch {
-                break :blk false;
+            env.buildResolvingMain(absolute_path, preferred_main) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => break :blk false,
             };
             break :blk true;
         };
