@@ -19,6 +19,23 @@ pub const TypeVarId = enum(u32) {
     }
 };
 
+/// A `TypeVarId` or none, at the width of one id. `Store.add` refuses the
+/// sentinel id, so `none` never names a variable.
+pub const MaybeTypeVarId = enum(u32) {
+    none = std.math.maxInt(u32),
+    _,
+
+    pub fn of(ty: ?TypeVarId) MaybeTypeVarId {
+        const present = ty orelse return .none;
+        return @fromBackingInt(@backingInt(present));
+    }
+
+    pub fn get(self: MaybeTypeVarId) ?TypeVarId {
+        if (self == .none) return null;
+        return @fromBackingInt(@backingInt(self));
+    }
+};
+
 /// Slice descriptor for type, field, tag, capture, or member arrays.
 pub const Span = extern struct {
     start: u32,
@@ -130,6 +147,55 @@ pub const Content = union(enum) {
     },
 };
 
+/// Payload stored by `Content.named`.
+pub const NamedContent = std.meta.fieldInfo(Content, .named).type;
+
+/// Payload stored by `Content.erased`.
+pub const ErasedContent = std.meta.fieldInfo(Content, .erased).type;
+
+/// A type variable as the store keeps it. A named payload and an erased
+/// payload are far larger than every other variant, so they live in side
+/// lists and the node holds their index; every node is then a few words,
+/// and a link walk reads only these.
+pub const StoredNode = union(enum(u8)) {
+    link: TypeVarId,
+    unbound,
+    forall,
+    primitive: MonoType.Primitive,
+    named: u32,
+    record: Span,
+    tuple: Span,
+    tag_union: Span,
+    list: TypeVarId,
+    box: TypeVarId,
+    func: @FieldType(Content, "func"),
+    lambda_set: Span,
+    erased: u32,
+    zst,
+    mono: @FieldType(Content, "mono"),
+};
+
+/// The content `node` stores, reading its payload from the side lists.
+fn contentOf(node: StoredNode, named_payloads: []const NamedContent, erased_payloads: []const ErasedContent) Content {
+    return switch (node) {
+        .link => |target| .{ .link = target },
+        .unbound => .unbound,
+        .forall => .forall,
+        .primitive => |primitive| .{ .primitive = primitive },
+        .named => |index| .{ .named = named_payloads[index] },
+        .record => |span_| .{ .record = span_ },
+        .tuple => |span_| .{ .tuple = span_ },
+        .tag_union => |span_| .{ .tag_union = span_ },
+        .list => |elem| .{ .list = elem },
+        .box => |elem| .{ .box = elem },
+        .func => |func| .{ .func = func },
+        .lambda_set => |span_| .{ .lambda_set = span_ },
+        .erased => |index| .{ .erased = erased_payloads[index] },
+        .zst => .zst,
+        .mono => |leaf| .{ .mono = leaf },
+    };
+}
+
 /// Sentinel for a lazy leaf that has not been reached by any expansion yet.
 pub const no_leaf_context: u32 = std.math.maxInt(u32);
 
@@ -151,48 +217,14 @@ test "lambda solved named backing preserves generated-private authority" {
     );
 }
 
-/// A variable's content as the store keeps it: `Content` with its two large
-/// payloads, `named` and `erased`, held out of line by index. Solving leaves
-/// nearly every variable a link, and the Solved program stays alive while
-/// compile-time evaluation lowers each level from it, so a variable takes a
-/// few words rather than the size of the largest payload.
-const Slot = union(enum) {
-    link: TypeVarId,
-    unbound,
-    forall,
-    primitive: MonoType.Primitive,
-    named: u32,
-    record: Span,
-    tuple: Span,
-    tag_union: Span,
-    list: TypeVarId,
-    box: TypeVarId,
-    func: @FieldType(Content, "func"),
-    lambda_set: Span,
-    erased: u32,
-    zst,
-    mono: @FieldType(Content, "mono"),
-};
-
-const NamedPayload = @FieldType(Content, "named");
-const ErasedPayload = @FieldType(Content, "erased");
-
-fn slotContent(slots: []const Slot, named: []const NamedPayload, erased: []const ErasedPayload, id: TypeVarId) Content {
-    return switch (slots[@backingInt(id)]) {
-        .named => |index| .{ .named = named[index] },
-        .erased => |index| .{ .erased = erased[index] },
-        inline .link, .unbound, .forall, .primitive, .record, .tuple, .tag_union, .list, .box, .func, .lambda_set, .zst, .mono => |payload, tag| @unionInit(Content, @tagName(tag), payload),
-    };
-}
-
 /// Store for Lambda Solved type variables and their shared spans.
 pub const Store = struct {
     allocator: std.mem.Allocator,
-    vars: std.ArrayList(Slot),
-    /// Out-of-line payloads of `named` and `erased` variables. Rewriting a
-    /// variable that already holds one reuses its entry.
-    named_payloads: std.ArrayList(NamedPayload),
-    erased_payloads: std.ArrayList(ErasedPayload),
+    vars: std.ArrayList(StoredNode),
+    /// Payloads of the named nodes in `vars`, by `StoredNode.named` index.
+    named_payloads: std.ArrayList(NamedContent),
+    /// Payloads of the erased nodes in `vars`, by `StoredNode.erased` index.
+    erased_payloads: std.ArrayList(ErasedContent),
     owned_named_backings: std.ArrayList(bool),
     spans: std.ArrayList(TypeVarId),
     fields: std.ArrayList(Field),
@@ -233,50 +265,75 @@ pub const Store = struct {
         self.vars.deinit(self.allocator);
     }
 
+    /// The node storing `content`, appending a named or erased payload to its
+    /// side list. `previous` is the node being replaced, whose payload slot a
+    /// payload of the same kind takes over.
+    fn storeNode(self: *Store, content: Content, previous: ?StoredNode) std.mem.Allocator.Error!StoredNode {
+        return switch (content) {
+            .link => |target| .{ .link = target },
+            .unbound => .unbound,
+            .forall => .forall,
+            .primitive => |primitive| .{ .primitive = primitive },
+            .named => |named| blk: {
+                if (previous) |node| if (node == .named) {
+                    self.named_payloads.items[node.named] = named;
+                    break :blk node;
+                };
+                const index = std.math.cast(u32, self.named_payloads.items.len) orelse return error.OutOfMemory;
+                try self.named_payloads.append(self.allocator, named);
+                break :blk .{ .named = index };
+            },
+            .record => |span_| .{ .record = span_ },
+            .tuple => |span_| .{ .tuple = span_ },
+            .tag_union => |span_| .{ .tag_union = span_ },
+            .list => |elem| .{ .list = elem },
+            .box => |elem| .{ .box = elem },
+            .func => |func| .{ .func = func },
+            .lambda_set => |span_| .{ .lambda_set = span_ },
+            .erased => |erased| blk: {
+                if (previous) |node| if (node == .erased) {
+                    self.erased_payloads.items[node.erased] = erased;
+                    break :blk node;
+                };
+                const index = std.math.cast(u32, self.erased_payloads.items.len) orelse return error.OutOfMemory;
+                try self.erased_payloads.append(self.allocator, erased);
+                break :blk .{ .erased = index };
+            },
+            .zst => .zst,
+            .mono => |leaf| .{ .mono = leaf },
+        };
+    }
+
     /// The number of variables.
     pub fn varCount(self: *const Store) usize {
         return self.vars.items.len;
     }
 
     pub fn add(self: *Store, content: Content) std.mem.Allocator.Error!TypeVarId {
-        const id: TypeVarId = @fromBackingInt(@intCast(@as(u32, @intCast(self.vars.items.len))));
+        if (self.vars.items.len >= @backingInt(MaybeTypeVarId.none)) return error.OutOfMemory;
+        const id: TypeVarId = @fromBackingInt(@as(u32, @intCast(self.vars.items.len)));
         try self.vars.ensureUnusedCapacity(self.allocator, 1);
         try self.owned_named_backings.ensureUnusedCapacity(self.allocator, 1);
-        const slot = try self.slotFor(null, content);
-        self.vars.appendAssumeCapacity(slot);
+        self.vars.appendAssumeCapacity(try self.storeNode(content, null));
         self.owned_named_backings.appendAssumeCapacity(false);
         return id;
     }
 
     pub fn set(self: *Store, id: TypeVarId, content: Content) std.mem.Allocator.Error!void {
-        const slot = try self.slotFor(self.vars.items[@backingInt(id)], content);
+        if (content == .link) return self.setLink(id, content.link);
+        const node = try self.storeNode(content, self.vars.items[@backingInt(id)]);
         self.mutation_epoch +%= 1;
-        if (content == .link and self.owned_named_backings.items[@backingInt(id)]) {
-            const target = self.root(content.link);
-            self.owned_named_backings.items[@backingInt(target)] = true;
-        }
-        self.vars.items[@backingInt(id)] = slot;
+        self.vars.items[@backingInt(id)] = node;
     }
 
-    /// The slot holding `content`, in place of `previous` when the variable
-    /// already has one: a payload goes into the entry `previous` holds, if it
-    /// holds one of the same kind.
-    fn slotFor(self: *Store, previous: ?Slot, content: Content) std.mem.Allocator.Error!Slot {
-        return switch (content) {
-            .named => |payload| .{ .named = try storePayload(NamedPayload, self.allocator, &self.named_payloads, if (previous) |slot| if (slot == .named) slot.named else null else null, payload) },
-            .erased => |payload| .{ .erased = try storePayload(ErasedPayload, self.allocator, &self.erased_payloads, if (previous) |slot| if (slot == .erased) slot.erased else null else null, payload) },
-            inline .link, .unbound, .forall, .primitive, .record, .tuple, .tag_union, .list, .box, .func, .lambda_set, .zst, .mono => |payload, tag| @unionInit(Slot, @tagName(tag), payload),
-        };
-    }
-
-    fn storePayload(comptime T: type, allocator: std.mem.Allocator, payloads: *std.ArrayList(T), reuse: ?u32, payload: T) std.mem.Allocator.Error!u32 {
-        if (reuse) |index| {
-            payloads.items[index] = payload;
-            return index;
+    /// Link `id` to `target`, carrying an owned named backing to its root.
+    pub fn setLink(self: *Store, id: TypeVarId, target: TypeVarId) void {
+        self.mutation_epoch +%= 1;
+        if (self.owned_named_backings.items[@backingInt(id)]) {
+            const target_root = self.root(target);
+            self.owned_named_backings.items[@backingInt(target_root)] = true;
         }
-        const index: u32 = @intCast(payloads.items.len);
-        try payloads.append(allocator, payload);
-        return index;
+        self.vars.items[@backingInt(id)] = .{ .link = target };
     }
 
     pub fn markNamedBacking(self: *Store, id: TypeVarId) void {
@@ -290,20 +347,17 @@ pub const Store = struct {
     }
 
     pub fn get(self: *const Store, id: TypeVarId) Content {
-        return slotContent(self.vars.items, self.named_payloads.items, self.erased_payloads.items, id);
-    }
-
-    fn isLink(self: *const Store, id: TypeVarId) ?TypeVarId {
-        return switch (self.vars.items[@backingInt(id)]) {
-            .link => |target| target,
-            .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .func, .lambda_set, .erased, .zst, .mono => null,
-        };
+        return contentOf(self.vars.items[@backingInt(id)], self.named_payloads.items, self.erased_payloads.items);
     }
 
     pub fn root(self: *const Store, id: TypeVarId) TypeVarId {
         var current = id;
-        while (self.isLink(current)) |target| current = target;
-        return current;
+        while (true) {
+            switch (self.vars.items[@backingInt(current)]) {
+                .link => |target| current = target,
+                .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .func, .lambda_set, .erased, .zst, .mono => return current,
+            }
+        }
     }
 
     pub fn rootContent(self: *const Store, id: TypeVarId) Content {
@@ -313,15 +367,16 @@ pub const Store = struct {
     pub fn rootCompressed(self: *Store, id: TypeVarId) TypeVarId {
         const root_id = self.root(id);
         // Path compression preserves every variable's meaning, so it is not a
-        // mutation observers must see. A link's slot holds no payload, so
-        // rewriting one never allocates.
+        // mutation observers must see.
+        const epoch = self.mutation_epoch;
+        defer self.mutation_epoch = epoch;
         var current = id;
         while (current != root_id) {
-            const next = self.isLink(current) orelse break;
-            if (self.owned_named_backings.items[@backingInt(current)]) {
-                self.owned_named_backings.items[@backingInt(root_id)] = true;
-            }
-            self.vars.items[@backingInt(current)] = .{ .link = root_id };
+            const next = switch (self.vars.items[@backingInt(current)]) {
+                .link => |target| target,
+                .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .func, .lambda_set, .erased, .zst, .mono => break,
+            };
+            self.setLink(current, root_id);
             current = next;
         }
 
@@ -343,6 +398,31 @@ pub const Store = struct {
         const start: u32 = @intCast(self.spans.items.len);
         try self.spans.appendSlice(self.allocator, values);
         return .{ .start = start, .len = @intCast(values.len) };
+    }
+
+    /// A span of `len` new vars at the end of the span pool, returned with
+    /// its slots for the caller to fill before the store's next append.
+    pub fn addSpanSlots(self: *Store, len: usize) std.mem.Allocator.Error!SpanSlots(TypeVarId) {
+        return try appendSlots(TypeVarId, self.allocator, &self.spans, len);
+    }
+
+    /// A span of `len` new captures at the end of the capture pool, returned
+    /// with its slots for the caller to fill before the store's next append.
+    pub fn addCaptureSlots(self: *Store, len: usize) std.mem.Allocator.Error!SpanSlots(Capture) {
+        return try appendSlots(Capture, self.allocator, &self.captures, len);
+    }
+
+    pub fn SpanSlots(comptime T: type) type {
+        return struct { span: Span, slots: []T };
+    }
+
+    fn appendSlots(comptime T: type, allocator: std.mem.Allocator, list: *std.ArrayList(T), len: usize) std.mem.Allocator.Error!SpanSlots(T) {
+        if (len == 0) return .{ .span = .empty(), .slots = &.{} };
+        const start = std.math.cast(u32, list.items.len) orelse return error.OutOfMemory;
+        const count = std.math.cast(u32, len) orelse return error.OutOfMemory;
+        if (std.math.maxInt(u32) - start < count) return error.OutOfMemory;
+        const slots = try list.addManyAsSlice(allocator, len);
+        return .{ .span = .{ .start = start, .len = count }, .slots = slots };
     }
 
     pub fn addFields(self: *Store, values: []const Field) std.mem.Allocator.Error!Span {
@@ -411,9 +491,9 @@ pub const Store = struct {
     }
 
     pub const View = struct {
-        vars: []const Slot,
-        named_payloads: []const NamedPayload,
-        erased_payloads: []const ErasedPayload,
+        vars: []const StoredNode,
+        named_payloads: []const NamedContent,
+        erased_payloads: []const ErasedContent,
         spans: []const TypeVarId,
         fields: []const Field,
         tags: []const Tag,
@@ -422,20 +502,17 @@ pub const Store = struct {
         declared_fields: []const DeclaredField,
 
         pub fn get(self: View, id: TypeVarId) Content {
-            return slotContent(self.vars, self.named_payloads, self.erased_payloads, id);
-        }
-
-        /// The number of variables.
-        pub fn varCount(self: View) usize {
-            return self.vars.len;
+            return contentOf(self.vars[@backingInt(id)], self.named_payloads, self.erased_payloads);
         }
 
         pub fn root(self: View, id: TypeVarId) TypeVarId {
             var current = id;
-            while (true) switch (self.vars[@backingInt(current)]) {
-                .link => |target| current = target,
-                .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .func, .lambda_set, .erased, .zst, .mono => return current,
-            };
+            while (true) {
+                switch (self.vars[@backingInt(current)]) {
+                    .link => |target| current = target,
+                    .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .func, .lambda_set, .erased, .zst, .mono => return current,
+                }
+            }
         }
 
         pub fn rootContent(self: View, id: TypeVarId) Content {

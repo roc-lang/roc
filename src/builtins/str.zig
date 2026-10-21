@@ -1170,14 +1170,7 @@ pub fn startsWith(string: RocStr, prefix: RocStr) callconv(.c) bool {
     }
 
     // we won't exceed bytes_len due to the previous check
-    var i: usize = 0;
-    while (i < prefix_len) {
-        if (bytes_ptr[i] != prefix_ptr[i]) {
-            return false;
-        }
-        i += 1;
-    }
-    return true;
+    return std.mem.eql(u8, bytes_ptr[0..prefix_len], prefix_ptr[0..prefix_len]);
 }
 
 /// Str.drop_prefix - Returns string with prefix removed, or original if no match.
@@ -1348,14 +1341,7 @@ pub fn endsWith(string: RocStr, suffix: RocStr) callconv(.c) bool {
     }
 
     const offset: usize = bytes_len - suffix_len;
-    var i: usize = 0;
-    while (i < suffix_len) {
-        if (bytes_ptr[i + offset] != suffix_ptr[i]) {
-            return false;
-        }
-        i += 1;
-    }
-    return true;
+    return std.mem.eql(u8, bytes_ptr[offset..bytes_len], suffix_ptr[0..suffix_len]);
 }
 
 /// Str.concat - concatenates two strings.
@@ -1404,11 +1390,8 @@ pub fn strConcat(
         var result = arg1.reallocateForAppend(combined_length, update_mode, roc_ops);
         const src = arg2.asU8ptr()[0..arg2.len()];
         const dest = result.asU8ptrMut()[arg1.len()..combined_length];
-        var i = src.len;
-        while (i > 0) {
-            i -= 1;
-            dest[i] = src[i];
-        }
+        // `arg2` may be a seamless slice into the buffer `result` reuses.
+        @memmove(dest, src);
 
         return result;
     }

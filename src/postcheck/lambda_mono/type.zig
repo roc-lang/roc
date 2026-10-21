@@ -122,10 +122,16 @@ pub const Content = union(enum) {
     zst,
 };
 
-/// A type's content as the store keeps it: `Content` with its two large
-/// payloads, `named` and `erased_fn`, held out of line by index, so a type
-/// takes a few words rather than the size of the largest payload.
-const Slot = union(enum) {
+/// Payload stored by `Content.named`.
+pub const NamedContent = std.meta.fieldInfo(Content, .named).type;
+
+/// Payload stored by `Content.erased_fn`.
+pub const ErasedFnContent = std.meta.fieldInfo(Content, .erased_fn).type;
+
+/// A type as the store keeps it. A named payload and an erased callable's
+/// digest are far larger than every other variant, so they live in side
+/// lists and the node holds their index; every node is then a few words.
+pub const StoredNode = union(enum(u8)) {
     primitive: MonoType.Primitive,
     named: u32,
     record: Span,
@@ -140,18 +146,16 @@ const Slot = union(enum) {
     zst,
 };
 
-const NamedPayload = @FieldType(Content, "named");
-const ErasedFnPayload = @FieldType(Content, "erased_fn");
-
 /// Store for Lambda Mono types and their shared spans.
 pub const Store = struct {
     allocator: std.mem.Allocator,
     digest_scratch: DigestScratch,
-    types: StoreList(Slot, "types"),
-    /// Out-of-line payloads of `named` and `erased_fn` types. Replacing a
-    /// type that already holds one reuses its entry.
-    named_payloads: StoreList(NamedPayload, "named_payloads"),
-    erased_fn_payloads: StoreList(ErasedFnPayload, "erased_fn_payloads"),
+    types: StoreList(StoredNode, "types"),
+    /// Payloads of the named nodes in `types`, by `StoredNode.named` index.
+    named_payloads: StoreList(NamedContent, "named_payloads"),
+    /// Payloads of the erased callable nodes in `types`, by
+    /// `StoredNode.erased_fn` index.
+    erased_fn_payloads: StoreList(ErasedFnContent, "erased_fn_payloads"),
     spans: StoreList(TypeId, "spans"),
     fields: StoreList(Field, "fields"),
     capture_fields: StoreList(CaptureField, "capture_fields"),
@@ -192,53 +196,75 @@ pub const Store = struct {
         self.types.deinit(self.allocator);
     }
 
+    /// The node storing `content`, appending a named or erased payload to its
+    /// side list. `previous` is the node being replaced, whose payload slot a
+    /// payload of the same kind takes over.
+    fn storeNode(self: *Store, content: Content, previous: ?StoredNode) std.mem.Allocator.Error!StoredNode {
+        return switch (content) {
+            .primitive => |primitive| .{ .primitive = primitive },
+            .named => |named| blk: {
+                if (previous) |node| if (node == .named) {
+                    self.named_payloads.set(node.named, named);
+                    break :blk node;
+                };
+                const index = std.math.cast(u32, self.named_payloads.len()) orelse return error.OutOfMemory;
+                try self.named_payloads.append(self.allocator, named);
+                break :blk .{ .named = index };
+            },
+            .record => |span_| .{ .record = span_ },
+            .capture_record => |span_| .{ .capture_record = span_ },
+            .tuple => |span_| .{ .tuple = span_ },
+            .tag_union => |span_| .{ .tag_union = span_ },
+            .callable => |span_| .{ .callable = span_ },
+            .list => |elem| .{ .list = elem },
+            .box => |elem| .{ .box = elem },
+            .erased_fn => |erased| blk: {
+                if (previous) |node| if (node == .erased_fn) {
+                    self.erased_fn_payloads.set(node.erased_fn, erased);
+                    break :blk node;
+                };
+                const index = std.math.cast(u32, self.erased_fn_payloads.len()) orelse return error.OutOfMemory;
+                try self.erased_fn_payloads.append(self.allocator, erased);
+                break :blk .{ .erased_fn = index };
+            },
+            .erased_capture_ptr => .erased_capture_ptr,
+            .zst => .zst,
+        };
+    }
+
+    /// The content `node` stores, reading its payload from the side lists.
+    fn contentOf(self: *const Store, node: StoredNode) Content {
+        return switch (node) {
+            .primitive => |primitive| .{ .primitive = primitive },
+            .named => |index| .{ .named = self.named_payloads.unsafeRawItemsForView()[index] },
+            .record => |span_| .{ .record = span_ },
+            .capture_record => |span_| .{ .capture_record = span_ },
+            .tuple => |span_| .{ .tuple = span_ },
+            .tag_union => |span_| .{ .tag_union = span_ },
+            .callable => |span_| .{ .callable = span_ },
+            .list => |elem| .{ .list = elem },
+            .box => |elem| .{ .box = elem },
+            .erased_fn => |index| .{ .erased_fn = self.erased_fn_payloads.unsafeRawItemsForView()[index] },
+            .erased_capture_ptr => .erased_capture_ptr,
+            .zst => .zst,
+        };
+    }
+
     pub fn add(self: *Store, content: Content) std.mem.Allocator.Error!TypeId {
-        const id: TypeId = @fromBackingInt(@intCast(@as(u32, @intCast(self.types.len()))));
-        try self.types.ensureUnusedCapacity(self.allocator, 1);
-        self.types.appendAssumeCapacity(try self.slotFor(null, content));
+        const id: TypeId = @fromBackingInt(std.math.cast(u32, self.types.len()) orelse return error.OutOfMemory);
+        const node = try self.storeNode(content, null);
+        try self.types.append(self.allocator, node);
         return id;
     }
 
     pub fn set(self: *Store, id: TypeId, content: Content) std.mem.Allocator.Error!void {
-        const index = @backingInt(id);
-        self.types.set(index, try self.slotFor(self.types.get(index), content));
+        const node = try self.storeNode(content, self.types.unsafeRawItemsForView()[@backingInt(id)]);
+        self.types.set(@backingInt(id), node);
         self.sets += 1;
     }
 
-    /// The slot holding `content`, in place of `previous` when the type
-    /// already has one: a payload goes into the entry `previous` holds, if it
-    /// holds one of the same kind.
-    fn slotFor(self: *Store, previous: ?Slot, content: Content) std.mem.Allocator.Error!Slot {
-        return switch (content) {
-            .named => |payload| .{ .named = try storePayload(NamedPayload, "named_payloads", self.allocator, &self.named_payloads, if (previous) |slot| if (slot == .named) slot.named else null else null, payload) },
-            .erased_fn => |payload| .{ .erased_fn = try storePayload(ErasedFnPayload, "erased_fn_payloads", self.allocator, &self.erased_fn_payloads, if (previous) |slot| if (slot == .erased_fn) slot.erased_fn else null else null, payload) },
-            inline .primitive, .record, .capture_record, .tuple, .tag_union, .callable, .list, .box, .erased_capture_ptr, .zst => |payload, tag| @unionInit(Slot, @tagName(tag), payload),
-        };
-    }
-
-    fn storePayload(
-        comptime T: type,
-        comptime field_name: []const u8,
-        allocator: std.mem.Allocator,
-        payloads: *StoreList(T, field_name),
-        reuse: ?u32,
-        payload: T,
-    ) std.mem.Allocator.Error!u32 {
-        if (reuse) |index| {
-            payloads.set(index, payload);
-            return index;
-        }
-        const index: u32 = @intCast(payloads.len());
-        try payloads.append(allocator, payload);
-        return index;
-    }
-
     pub fn get(self: *const Store, id: TypeId) Content {
-        return switch (self.types.unsafeRawItemsForView()[@backingInt(id)]) {
-            .named => |index| .{ .named = self.named_payloads.unsafeRawItemsForView()[index] },
-            .erased_fn => |index| .{ .erased_fn = self.erased_fn_payloads.unsafeRawItemsForView()[index] },
-            inline .primitive, .record, .capture_record, .tuple, .tag_union, .callable, .list, .box, .erased_capture_ptr, .zst => |payload, tag| @unionInit(Content, @tagName(tag), payload),
-        };
+        return self.contentOf(self.types.unsafeRawItemsForView()[@backingInt(id)]);
     }
 
     pub fn typeCount(self: *const Store) usize {
@@ -332,6 +358,9 @@ pub const Store = struct {
     }
 
     pub const View = struct {
+        types: []const StoredNode,
+        named_payloads: []const NamedContent,
+        erased_fn_payloads: []const ErasedFnContent,
         spans: []const TypeId,
         fields: []const Field,
         capture_fields: []const CaptureField,
@@ -342,6 +371,9 @@ pub const Store = struct {
 
     pub fn view(self: *const Store) View {
         return .{
+            .types = self.types.unsafeRawItemsForView(),
+            .named_payloads = self.named_payloads.unsafeRawItemsForView(),
+            .erased_fn_payloads = self.erased_fn_payloads.unsafeRawItemsForView(),
             .spans = self.spans.unsafeRawItemsForView(),
             .fields = self.fields.unsafeRawItemsForView(),
             .capture_fields = self.capture_fields.unsafeRawItemsForView(),

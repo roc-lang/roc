@@ -147,8 +147,8 @@ pub const Serialized = extern struct {
     ) Allocator.Error!CommonEnv {
         const frozen = self.deserializeInto(base_addr, source);
 
-        // `enableRuntimeInserts` copies the interner's bytes and hash table so
-        // `genUnique` can extend an owned store and `deinit` releases it.
+        // `enableRuntimeInserts` copies the interner's columns into owned,
+        // growable memory that `deinit` releases.
         var idents = frozen.idents;
         try idents.enableRuntimeInserts(gpa);
         errdefer idents.deinit(gpa);

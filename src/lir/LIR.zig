@@ -106,13 +106,32 @@ pub const ProcIdentity = extern struct {
     /// Identity of a procedure a pass derives from this one: the same role
     /// and key from the same origin yields the same identity.
     pub fn derived(self: ProcIdentity, role: []const u8, key: []const u8) ProcIdentity {
+        var builder = self.deriving(role);
+        builder.update(key);
+        return builder.finish();
+    }
+
+    /// Streams the key of a derived identity: `finish` returns `derived(role,
+    /// key)` for `key` the concatenation of every `update`.
+    pub fn deriving(self: ProcIdentity, role: []const u8) DerivedBuilder {
         var hasher = base.TypeDigestHasher.init();
         hasher.update("roc.proc.derived.v1");
         hasher.update(&self.bytes);
         hasher.update(role);
-        hasher.update(key);
-        return .{ .bytes = hasher.finalResult() };
+        return .{ .hasher = hasher };
     }
+
+    pub const DerivedBuilder = struct {
+        hasher: base.TypeDigestHasher,
+
+        pub fn update(self: *DerivedBuilder, key_part: []const u8) void {
+            self.hasher.update(key_part);
+        }
+
+        pub fn finish(self: *DerivedBuilder) ProcIdentity {
+            return .{ .bytes = self.hasher.finalResult() };
+        }
+    };
 
     /// Identity of a procedure that exists only within one program and is
     /// never an object-cache entry: Boxy lowering output, whose programs do
@@ -331,6 +350,36 @@ pub const OriginKind = union(enum(u8)) {
     pub const ArcLocal = struct {
         subject_local: LocalId,
     };
+
+    /// This kind in its eight-byte stored form.
+    pub fn pack(self: OriginKind) StoredOriginKind {
+        return switch (self) {
+            .arc_incref, .arc_decref => |rc| .{ .tag = std.meta.activeTag(self), .reason = @backingInt(rc.reason), .subject_local = @backingInt(rc.subject_local) },
+            .arc_dismantle => |glue| .{ .tag = .arc_dismantle, .subject_local = @backingInt(glue.subject_local) },
+            .source, .lowering_glue, .derived, .scaffold, .join_scalarize, .box_reuse, .return_slot, .str_append_fuse, .loop_append_promote, .tag_case_fusion, .forwarding_join_inline, .comptime_value_guard, .trmc, .range_prove => .{ .tag = std.meta.activeTag(self) },
+        };
+    }
+};
+
+/// A statement's `OriginKind` as its provenance column stores it: the tag,
+/// the RC reason and the subject local in eight bytes. Kinds without a
+/// reason or subject store zero for them, so every byte is defined.
+pub const StoredOriginKind = extern struct {
+    tag: std.meta.Tag(OriginKind),
+    /// An `RcReason` for `arc_incref` and `arc_decref`.
+    reason: u8 = 0,
+    padding: [2]u8 = .{ 0, 0 },
+    /// A `LocalId` for the ARC kinds.
+    subject_local: u32 = 0,
+
+    pub fn unpack(self: StoredOriginKind) OriginKind {
+        return switch (self.tag) {
+            .arc_incref => .{ .arc_incref = .{ .subject_local = @fromBackingInt(self.subject_local), .reason = @fromBackingInt(self.reason) } },
+            .arc_decref => .{ .arc_decref = .{ .subject_local = @fromBackingInt(self.subject_local), .reason = @fromBackingInt(self.reason) } },
+            .arc_dismantle => .{ .arc_dismantle = .{ .subject_local = @fromBackingInt(self.subject_local) } },
+            inline .source, .lowering_glue, .derived, .scaffold, .join_scalarize, .box_reuse, .return_slot, .str_append_fuse, .loop_append_promote, .tag_case_fusion, .forwarding_join_inline, .comptime_value_guard, .trmc, .range_prove => |tag| tag,
+        };
+    }
 };
 
 /// Solver decision that produced an ARC RC statement. Every value names the
@@ -418,6 +467,7 @@ pub const RcReason = enum(u8) {
 comptime {
     std.debug.assert(@sizeOf(RcReason) == 1);
     std.debug.assert(@sizeOf(OriginKind) == 12);
+    std.debug.assert(@sizeOf(StoredOriginKind) == 8);
 }
 
 /// Identifier of a compile-time-observed control-flow site.
@@ -1943,7 +1993,10 @@ pub const ProcShapes = packed struct(u16) {
     unsigned_compare: bool = false,
     /// A SIMD byte concat-shift, whose count a value-range proof can fix.
     simd_concat_shift: bool = false,
-    _padding: u2 = 0,
+    /// A checked integer division or remainder, whose divisor a value-range
+    /// proof can show nonzero.
+    checked_division: bool = false,
+    _padding: u1 = 0,
 
     pub fn merged(self: ProcShapes, other: ProcShapes) ProcShapes {
         return @bitCast(@as(u16, @bitCast(self)) | @as(u16, @bitCast(other)));
@@ -1989,12 +2042,13 @@ pub const LirProcSpec = struct {
     /// intentionally separate from externally resolvable `ret_desc`.
     runtime_ret_desc: ?LocalId = null,
     /// Keyed byte offsets of hidden descriptor fields in this erased worker's
-    /// capture value.
+    /// capture value, in increasing (argument, descriptor) key order.
     erased_arg_desc_offsets: BoxySpan = .{},
     /// Ordered runtime layouts expected in this erased worker's explicit
     /// argument buffer.
     erased_arg_layouts: BoxySpan = .{},
-    /// Hidden descriptor parameters supplied for this erased invocation.
+    /// Hidden descriptor parameters supplied for this erased invocation, in
+    /// increasing (argument, descriptor) key order.
     erased_arg_desc_params: BoxySpan = .{},
     /// Hidden capture-pointer parameter for an erased callable procedure.
     erased_capture_arg: ?LocalId = null,

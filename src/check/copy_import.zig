@@ -581,11 +581,9 @@ fn stepIdentity(ctx: *CopyContext, frame: *IdentityFrame) std.mem.Allocator.Erro
                 const source_constraint = frame.source_constraints[frame.idx];
                 frame.pending = source_constraint;
                 frame.pending.fn_name = try ctx.copyIdent(source_constraint.fn_name);
-                // Pooled payloads index the source store; the copy pools its
-                // own in the destination.
-                frame.pending.origin = try ctx.dest_store.internOrigin(ctx.source_store.resolveOrigin(source_constraint.origin));
+                // Pool indexes name the source store's entries; the copy
+                // re-pools its own.
                 frame.pending.interpolation = .none;
-                frame.pending.derived_map_plan = .none;
                 frame.stage = .await_fn;
                 if (!try request(ctx, source_constraint.fn_var)) return false;
             },
@@ -636,8 +634,13 @@ fn stepIdentity(ctx: *CopyContext, frame: *IdentityFrame) std.mem.Allocator.Erro
                 frame.stage = .finish_constraint;
             },
             .finish_constraint => {
-                if (ctx.source_store.getDerivedMapPlan(frame.source_constraints[frame.idx].derived_map_plan)) |plan| {
-                    frame.pending.derived_map_plan = try ctx.dest_store.appendDerivedMapPlan(.{
+                if (ctx.source_store.constraintNumeralInfo(frame.source_constraints[frame.idx])) |info| {
+                    frame.pending.numeral = try ctx.dest_store.appendNumeralInfo(info);
+                }
+                // A copy of a derived `map`/`map!` relation's callable joins
+                // the relation.
+                if (ctx.source_store.derivedMapPlan(frame.source_constraints[frame.idx].fn_var)) |plan| {
+                    try ctx.dest_store.setDerivedMapPlan(frame.pending.fn_var, .{
                         .tag_name = try ctx.copyIdent(plan.tag_name),
                         .payload_index = plan.payload_index,
                     });
@@ -863,7 +866,7 @@ fn requestRecordField(
 ) std.mem.Allocator.Error!bool {
     const machine = &ctx.scratch;
     // Indexing through the run's start only happens when the record has
-    // fields; start may be undefined when count is 0.
+    // fields; an empty run's start addresses no row.
     const field = ctx.source_store.record_fields.get(@fromBackingInt(@intCast(@backingInt(source_fields.start) + idx.*)));
     return switch (axis.*) {
         .type_var => blk: {
@@ -923,7 +926,7 @@ fn stepTagUnion(ctx: *CopyContext, frame: *TagUnionFrame) std.mem.Allocator.Erro
             },
             .tag_args => {
                 // Indexing through the run's start only happens when the tag
-                // union has tags; start may be undefined when count is 0.
+                // union has tags; an empty run's start addresses no row.
                 const tag = ctx.source_store.tags.get(@fromBackingInt(@intCast(@backingInt(frame.source_tags.start) + frame.tag_idx)));
                 const args_slice = ctx.source_store.sliceVars(tag.args);
                 if (frame.arg_idx < args_slice.len) {

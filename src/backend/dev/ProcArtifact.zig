@@ -852,6 +852,11 @@ pub fn extractPrepared(
     const unwind = codegen.getUnwindFunctions();
     const relocations = try codegen.artifactRelocations(allocator);
     defer allocator.free(relocations);
+    // Each symbol's name, copied into the set once however many relocations
+    // name it, by symbol id.
+    const owned_names = try allocator.alloc(?[]const u8, codegen.getSymbolNames().len);
+    defer allocator.free(owned_names);
+    @memset(owned_names, null);
     const refs = codegen.codeRefs();
     for (relocations) |relocation| switch (relocation) {
         .local_data, .jmp_to_return => return error.UnsupportedRelocation,
@@ -995,13 +1000,13 @@ pub fn extractPrepared(
             try region_relocations.append(arena_allocator, switch (relocation) {
                 .linked_function => |function| .{
                     .offset = @intCast(offset - region.start),
-                    .name = try arena_allocator.dupe(u8, codegen.symbolName(function.symbol)),
+                    .name = try ownedSymbolName(CG, arena_allocator, codegen, owned_names, function.symbol),
                     .scope = codegen.symbolScope(function.symbol),
                     .kind = .function,
                 },
                 .linked_data => |data| .{
                     .offset = @intCast(offset - region.start),
-                    .name = try arena_allocator.dupe(u8, codegen.symbolName(data.symbol)),
+                    .name = try ownedSymbolName(CG, arena_allocator, codegen, owned_names, data.symbol),
                     .scope = codegen.symbolScope(data.symbol),
                     .kind = .{ .data = data.kind },
                 },
@@ -1186,6 +1191,15 @@ fn firstAtOrAfter(comptime T: type, items: []const T, offset: usize) usize {
         if (items[mid].offset < offset) low = mid + 1 else high = mid;
     }
     return low;
+}
+
+/// `symbol`'s name, copied into the set's arena the first time it is asked for.
+fn ownedSymbolName(comptime CG: type, arena_allocator: Allocator, codegen: *const CG, owned_names: []?[]const u8, symbol: anytype) Allocator.Error![]const u8 {
+    const slot = &owned_names[@backingInt(symbol)];
+    if (slot.*) |name| return name;
+    const name = try arena_allocator.dupe(u8, codegen.symbolName(symbol));
+    slot.* = name;
+    return name;
 }
 
 fn captureData(

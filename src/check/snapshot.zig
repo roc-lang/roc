@@ -957,7 +957,7 @@ pub const Store = struct {
                 },
                 .tag_args => {
                     // Indexing through the run's start only happens when the
-                    // tag union has tags; start may be undefined when count is 0.
+                    // tag union has tags; an empty run's start addresses no row.
                     const tag = store.tags.get(@fromBackingInt(@intCast(@backingInt(frame.source_tags.start) + frame.tag_idx)));
                     const tag_args_slice = store.sliceVars(tag.args);
                     if (frame.arg_idx < tag_args_slice.len) {

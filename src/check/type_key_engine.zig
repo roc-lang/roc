@@ -349,6 +349,23 @@ pub fn describe(
     return desc;
 }
 
+/// Reusable storage for `appendIdentityOrder`. Nothing in it survives
+/// between requests; only its capacity does.
+pub const IdentityOrderScratch = struct {
+    store: Store = .{},
+    visited: collections.DenseMapUnmanaged(u32, void) = .empty,
+    frames: std.ArrayListUnmanaged(Frame) = .empty,
+
+    const Frame = struct { desc: Desc, item: u32 };
+
+    pub fn deinit(self: *IdentityOrderScratch, gpa: Allocator) void {
+        self.store.deinit(gpa);
+        self.visited.deinit(gpa);
+        self.frames.deinit(gpa);
+        self.* = .{};
+    }
+};
+
 /// Append the identity nodes reachable from `root` in depth-first
 /// first-encounter order over description children, entering each
 /// identity's constraints.
@@ -356,23 +373,23 @@ pub fn appendIdentityOrder(
     comptime Adapter: type,
     adapter: *Adapter,
     gpa: Allocator,
+    scratch: *IdentityOrderScratch,
     root: u32,
     out: *std.ArrayListUnmanaged(u32),
 ) Allocator.Error!void {
-    var store = Store{};
-    defer store.deinit(gpa);
-    var visited = std.AutoHashMapUnmanaged(u32, void).empty;
-    defer visited.deinit(gpa);
-    const Frame = struct { desc: Desc, item: u32 };
-    var frames = std.ArrayListUnmanaged(Frame).empty;
-    defer frames.deinit(gpa);
+    const store = &scratch.store;
+    const visited = &scratch.visited;
+    const frames = &scratch.frames;
+    store.clearRetainingCapacity();
+    visited.clearRetainingCapacity();
+    frames.clearRetainingCapacity();
 
     var next: ?u32 = adapter.resolve(root);
     while (true) {
         if (next) |node| {
             next = null;
             if (!(try visited.getOrPut(gpa, node)).found_existing) {
-                const desc = try describe(Adapter, adapter, gpa, &store, node, false);
+                const desc = try describe(Adapter, adapter, gpa, store, node, false);
                 if (desc.kind == .identity) try out.append(gpa, node);
                 if (desc.kind != .leaf) try frames.append(gpa, .{ .desc = desc, .item = 0 });
             }
@@ -478,8 +495,10 @@ pub fn Engine(comptime Adapter: type) type {
         local_globals: std.ArrayListUnmanaged(u32) = .empty,
         block_existing: std.ArrayListUnmanaged(u32) = .empty,
         next_local_class: std.ArrayListUnmanaged(u32) = .empty,
-        local_groups: std.StringHashMapUnmanaged(u32) = .empty,
-        local_group_arena: base.SingleThreadArena,
+        /// One refinement round's blocks by their signature in
+        /// `local_group_bytes`.
+        local_groups: std.HashMapUnmanaged(Span, u32, SpanContext, std.hash_map.default_max_load_percentage) = .empty,
+        local_group_bytes: std.ArrayListUnmanaged(u8) = .empty,
         dfs_index: collections.DenseMap(u32, u32),
         dfs_frames: std.ArrayListUnmanaged(DfsFrame) = .empty,
         buf: std.ArrayListUnmanaged(u8) = .empty,
@@ -577,7 +596,6 @@ pub fn Engine(comptime Adapter: type) type {
                 .node_info = collections.DenseMap(u32, NodeInfo).init(gpa),
                 .local_of = collections.DenseMap(u32, u32).init(gpa),
                 .state_of_class = collections.DenseMap(u32, u32).init(gpa),
-                .local_group_arena = base.SingleThreadArena.init(gpa),
                 .dfs_index = collections.DenseMap(u32, u32).init(gpa),
             };
         }
@@ -611,7 +629,7 @@ pub fn Engine(comptime Adapter: type) type {
             self.block_existing.deinit(gpa);
             self.next_local_class.deinit(gpa);
             self.local_groups.deinit(gpa);
-            self.local_group_arena.deinit();
+            self.local_group_bytes.deinit(gpa);
             self.dfs_index.deinit();
             self.dfs_frames.deinit(gpa);
             self.buf.deinit(gpa);
@@ -1001,32 +1019,43 @@ pub fn Engine(comptime Adapter: type) type {
         /// of blocks.
         fn partition(self: *Self, first: bool) Allocator.Error!u32 {
             self.local_groups.clearRetainingCapacity();
-            _ = self.local_group_arena.reset(.retain_capacity);
+            self.local_group_bytes.clearRetainingCapacity();
+            const signature = &self.local_group_bytes;
             var count: u32 = 0;
             for (0..self.state_nodes.items.len) |state| {
-                self.signature.clearRetainingCapacity();
-                if (!first) try appendVarint(&self.signature, self.gpa, self.local_class.items[state]);
+                const start: u32 = std.math.cast(u32, signature.items.len) orelse return error.OutOfMemory;
+                if (!first) try appendVarint(signature, self.gpa, self.local_class.items[state]);
                 for (self.store.itemsOf(self.stateDesc(@intCast(state)))) |item| {
                     if (item.isChild()) {
                         switch (self.stateChild(item.child)) {
                             .state => |child_state| {
-                                try self.signature.append(self.gpa, 3);
-                                if (!first) try appendVarint(&self.signature, self.gpa, self.local_class.items[child_state]);
+                                try signature.append(self.gpa, 3);
+                                if (!first) try appendVarint(signature, self.gpa, self.local_class.items[child_state]);
                             },
                             .fixed => |class| {
-                                try self.signature.append(self.gpa, 2);
-                                try appendVarint(&self.signature, self.gpa, class);
+                                try signature.append(self.gpa, 2);
+                                try appendVarint(signature, self.gpa, class);
                             },
                         }
                     } else if (first) {
-                        try self.signature.append(self.gpa, 1);
-                        try appendVarint(&self.signature, self.gpa, item.len);
-                        try self.signature.appendSlice(self.gpa, self.store.bytesOf(item));
+                        try signature.append(self.gpa, 1);
+                        try appendVarint(signature, self.gpa, item.len);
+                        try signature.appendSlice(self.gpa, self.store.bytesOf(item));
                     }
                 }
-                const group = try self.local_groups.getOrPut(self.gpa, self.signature.items);
-                if (!group.found_existing) {
-                    group.key_ptr.* = try self.local_group_arena.allocator().dupe(u8, self.signature.items);
+                const len: u32 = std.math.cast(u32, signature.items.len - start) orelse return error.OutOfMemory;
+                // Each new signature stays in place as its block's key; a
+                // repeated one is dropped.
+                const group = try self.local_groups.getOrPutContextAdapted(
+                    self.gpa,
+                    signature.items[start..],
+                    SignatureContext{ .bytes = signature.items },
+                    SpanContext{ .bytes = signature.items },
+                );
+                if (group.found_existing) {
+                    signature.shrinkRetainingCapacity(start);
+                } else {
+                    group.key_ptr.* = .{ .start = start, .len = len };
                     group.value_ptr.* = count;
                     count += 1;
                 }

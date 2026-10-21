@@ -310,8 +310,9 @@ const InlineAnalyzer = struct {
     };
 
     /// Decide every function. A function is inlined when it has a candidate
-    /// body that is closed and lies on no cycle of direct calls among such
-    /// bodies, so inlining always terminates. Cycles are the graph's strongly
+    /// body that is closed and leaving it inlined lets no cycle of direct
+    /// calls among such bodies inline without bound (`rejectCandidateCycles`),
+    /// so inlining always terminates. Cycles are the graph's strongly
     /// connected components, which depend on the call graph alone: a
     /// procedure's identity names the same bodies and calls in every program,
     /// so every program decides it the same way, whatever order its functions
@@ -346,7 +347,10 @@ const InlineAnalyzer = struct {
             });
         }
 
-        try self.rejectCandidateCycles(&graph);
+        try self.rejectCandidateCycles(&graph, .all);
+        // Rejecting a cycle's wrappers can leave a cycle of single-use
+        // bodies alone, which every member of then leaves.
+        try self.rejectCandidateCycles(&graph, .accepted);
     }
 
     const BodyShape = enum {
@@ -442,11 +446,25 @@ const InlineAnalyzer = struct {
         return .closed;
     }
 
-    /// Settle each node of `graph`: never when it lies on a cycle (a
-    /// strongly connected component of more than one node, or a node that
-    /// calls itself), otherwise its candidate. Tarjan's algorithm, run on an
-    /// explicit stack so call chains never become native call depth.
-    fn rejectCandidateCycles(self: *InlineAnalyzer, graph: *const CandidateGraph) std.mem.Allocator.Error!void {
+    /// Which nodes of the candidate graph one cycle pass considers.
+    const CyclePass = enum {
+        /// Every node: a node on no cycle takes its candidate, and a cycle
+        /// leaves only its wrappers, or every member when it has none.
+        all,
+        /// The nodes the first pass accepted: a cycle among them, which holds
+        /// no wrapper, leaves every member.
+        accepted,
+    };
+
+    /// Keep every cycle of candidates (a strongly connected component of more
+    /// than one node, or a node that calls itself) from inlining without
+    /// bound. Leaving any one member a procedure breaks a cycle, so a cycle
+    /// first rejects only its wrappers: a wrapper is inlined at every call as
+    /// an optimization, while a single-use body is lowered only at its one
+    /// call, and keeping those inlined keeps a recursion through a lambda a
+    /// self-call. Tarjan's algorithm, run on an explicit stack so call chains
+    /// never become native call depth.
+    fn rejectCandidateCycles(self: *InlineAnalyzer, graph: *const CandidateGraph, pass: CyclePass) std.mem.Allocator.Error!void {
         const node_count = graph.nodes.items.len;
         const unvisited = std.math.maxInt(u32);
         const order = try self.allocator.alloc(u32, node_count);
@@ -468,6 +486,7 @@ const InlineAnalyzer = struct {
         for (0..node_count) |root_index| {
             const root: u32 = @intCast(root_index);
             if (order[root] != unvisited) continue;
+            if (pass == .accepted and !self.acceptedNode(graph, root)) continue;
             order[root] = next_order;
             low[root] = next_order;
             next_order += 1;
@@ -483,6 +502,7 @@ const InlineAnalyzer = struct {
                     const callee_fn = callees[frame.next_callee];
                     frame.next_callee += 1;
                     const callee = graph.node_of[@backingInt(callee_fn)] orelse continue;
+                    if (pass == .accepted and !self.acceptedNode(graph, callee)) continue;
                     if (order[callee] == unvisited) {
                         order[callee] = next_order;
                         low[callee] = next_order;
@@ -512,16 +532,32 @@ const InlineAnalyzer = struct {
                 }
                 const component = component_stack.items[start..top];
                 const on_cycle = component.len > 1 or callsItself(graph, node);
+                var has_wrapper = false;
+                for (component) |member| {
+                    if (graph.nodes.items[member].candidate.kind == .wrapper) has_wrapper = true;
+                }
                 for (component) |member| {
                     const member_node = graph.nodes.items[member];
-                    self.decisions[@backingInt(member_node.fn_id)] = if (on_cycle)
-                        .never
-                    else
-                        .{ .inline_body = member_node.candidate };
+                    const index = @backingInt(member_node.fn_id);
+                    if (on_cycle) {
+                        if (!has_wrapper or member_node.candidate.kind == .wrapper) self.decisions[index] = .never;
+                    } else if (pass == .all) {
+                        self.decisions[index] = .{ .inline_body = member_node.candidate };
+                    }
                 }
+                // A cycle that kept its single-use bodies is settled by the
+                // second pass.
+                if (on_cycle and has_wrapper and pass == .all) for (component) |member| {
+                    const member_node = graph.nodes.items[member];
+                    if (member_node.candidate.kind != .wrapper) self.decisions[@backingInt(member_node.fn_id)] = .{ .inline_body = member_node.candidate };
+                };
                 component_stack.shrinkRetainingCapacity(start);
             }
         }
+    }
+
+    fn acceptedNode(self: *const InlineAnalyzer, graph: *const CandidateGraph, node: u32) bool {
+        return self.decisions[@backingInt(graph.nodes.items[node].fn_id)] != .never;
     }
 
     fn callsItself(graph: *const CandidateGraph, node: u32) bool {
@@ -782,8 +818,8 @@ const InlineAnalyzer = struct {
     }
 
     /// What a wrapper position must be: a whole wrapper body, a guard arm
-    /// (a literal crash or a wrapper body), or an operand a wrapper builds
-    /// its result from (an argument, a literal, or another wrapper body).
+    /// (a literal crash or an operand), or an operand a wrapper builds its
+    /// result from (an argument, a literal, or another wrapper body).
     const WrapperRole = enum { body, arm, operand };
 
     /// Whether a body is a checked wrapper: one operation, a constant, or a
@@ -801,8 +837,15 @@ const InlineAnalyzer = struct {
         try stack.append(self.allocator, .{ .role = .body, .expr = root });
         while (stack.pop()) |item| {
             const expr = lifted.getExpr(item.expr);
-            const role: WrapperRole = switch (item.role) {
-                .arm => if (self.isLiteralCrash(item.expr)) continue else .body,
+            // An arm that returns an argument or a literal, the bound of a
+            // saturating operation say, is as cheap as one that calls, so an
+            // arm qualifies as any operand does.
+            const position: WrapperRole = switch (item.role) {
+                .arm => if (self.isLiteralCrash(item.expr)) continue else .operand,
+                .operand, .body => item.role,
+            };
+            const role: WrapperRole = switch (position) {
+                .arm => unreachable,
                 .operand => switch (expr.data) {
                     .local,
                     .unit,

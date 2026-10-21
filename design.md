@@ -885,10 +885,25 @@ known-empty assumption merely because their immutable structure is equal.
 Analysis view identities never escape in returned diagnostic patterns or
 unions, and memo keys use the reader's stable identity namespace.
 
+A declaration's formal-dependency graph is a function of its formals and
+backing template alone. Each reader computes it on first opening the
+declaration, except that a declaration whose template the checker reports
+final has its graph computed once and shared by every later reader of the
+same type store. Finality is explicit checker data, never inferred from the
+template: a declaration of the module being checked is final once
+declaration validity is final (every declaration is generated, and every
+invalid one poisoned, before value checking) and its generation completed,
+unless it is a declaration inside a function that names the function's type
+variables, whose template value checking still writes through them; a
+declaration copied from another module is final once its copy returns. No
+other graph outlives its reader.
+
 An inhabitedness memo stores complete query answers, not provisional answers
 obtained by cutting an active recursive path. Its key includes the resolved
 root and the exact sorted, deduplicated known-empty assumptions; its lifetime is one
-mutation-free analysis. Shared DAG nodes are not recursive cycles. A cyclic
+mutation-free analysis. Constructor-payload and known-absent-payload queries,
+which carry no assumptions, keep one memo per query mode with the same
+lifetime. Shared DAG nodes are not recursive cycles. A cyclic
 query implementation must distinguish those states and establish its fixed-point
 or traversal rule before producing a reusable result. The same restriction
 applies to completion-relation memoization in Monotype: no result outlives the
@@ -4856,7 +4871,9 @@ unrepresentable one.
 
 Checked-module cache writes stream the header and the two relocatable
 bodies to a private staging file, then atomically rename it. They never gather
-another full-entry heap buffer. A failed write or rename removes the staging file
+another full-entry heap buffer. Each body starts at a 16-byte-aligned entry
+offset, so a cache hit relocates both bodies in place inside the entry's
+private mapping, which the installed module's environment storage owns. A failed write or rename removes the staging file
 and records a cache-write failure; partial data never becomes a cache entry.
 
 Serialization never writes spare capacity. A `SafeMultiList` persists its live
@@ -8267,9 +8284,13 @@ wrapper has multiple direct inline sites or also survives as a function value,
 the nested single-use body remains a procedure; a non-inlined owner establishes
 a single procedure-body boundary. Bodies with procedure-relative returns or
 loop control not owned by a loop inside the body remain procedures. A
-candidate body on a cycle of direct calls among closed candidate bodies (a
-strongly connected component of that call graph, or a body that calls itself)
-remains a procedure too, decided before lowering. The components depend on the
+cycle of direct calls among closed candidate bodies (a strongly connected
+component of that call graph, or a body that calls itself) is kept from
+inlining without bound, decided before lowering: leaving one member a
+procedure breaks a cycle, so a cycle's wrappers remain procedures and its
+single-use bodies stay inlined, which keeps a recursion through a lambda a
+self-call; a cycle with no wrapper, including one among the single-use bodies
+a first pass kept, leaves every member a procedure. The components depend on the
 call graph alone, never on the order a program numbers its functions in, so
 every program that contains a procedure makes the same decisions inside it. The
 analyzer records the complete decision before LIR generation; direct
@@ -9928,6 +9949,14 @@ marker, and the derivation decides its "flex or `[]`, per use" as `[]`. That
 rewrites the declaration itself, so a later use of the same alias sees the
 closed row. Rigid extensions are never closed: a polymorphic open row may
 hold tags no derivation was checked for, so it stays rejected.
+
+The selected payload belongs to the equivalence class of the relation's
+callable, which the type store keeps in a table keyed by class
+(`Store.derived_map_plans`): a merge keeps it, a member detached from the class
+keeps it, and a copy of a relation's callable, by instantiation or by
+cross-module import, carries it. Recording a selection and reading it for
+checked evidence are lookups of the callable's class, never scans of the
+store's constraints.
 
 Display follows the same polarity: an anonymous, unshared, unconstrained flex
 ext in an output position is not rendered as `..`; rigid extensions are
@@ -19846,6 +19875,44 @@ proves non-strict strict, so a counter tested against its limit with `!=` is
 known to lie strictly inside it. `bool_not` of a modeled comparison carries the
 complementary comparison, which is how `!=` reaches the prover.
 
+### Saturating results and the other integer operations in the prover
+
+A saturating operation is an overflow predicate whose true arm yields a
+constant bound and whose false arm yields the wrapping result, so its value
+reaches the prover as a merge of a constant edge with an exact edge. Merging
+those edges like any others would lose what the exact edge knows, since a
+constant proves little about another root, so constant edges take no part in
+the meet of a local's bounds: the bounds every non-constant edge proves are
+kept where each constant edge's value satisfies them by the bound root's own
+range. `min(a + b, highest)` is therefore at least `a` on every path, because
+`highest` is at least any value of `a`'s type. An upper bound that only a zero
+edge fails holds whenever the merged value is not zero: `max(len - k, 0)` is
+at most `len - k` on every path that sees it above zero. Such a bound is kept
+apart, and a branch edge whose ordering puts the value at or above one asserts
+it along that edge, taking the edge's origin. That is what lets a single
+comparison `index < len.minus_saturated(k - 1)` prove the read of `k`
+items at `index`, and the fixed-width reads and writes of the builtins
+bound their index exactly so: the saturating limit depends only on the list,
+so a loop hoists it and keeps one comparison per access.
+
+An overflow predicate's true edge asserts what overflowing means: a
+difference overflows when the subtrahend exceeds the minuend, a sum when the
+mathematical sum of its operands exceeds the type's highest value, and a
+product by a positive constant when the other operand exceeds the highest
+value divided by that constant.
+
+The remaining unsigned operations get the range their operands allow and the
+orderings they always have with them: a quotient is at most its dividend, a
+remainder or modulo is below its divisor and at most its dividend, a right
+shift is at most its operand and a left shift by a constant scales its range
+when that stays within the type, `or` is at least either operand, `xor` and
+`or` are within the all-ones value covering both operands, `not` mirrors its
+operand's range, a bit count is at most the operand's width, and an absolute
+difference is at most the operands' spread. A division or remainder survives
+only with a nonzero divisor, so past one the divisor is at least one, and a
+checked division or remainder whose divisor is proven at least one becomes
+its plain form. Signed operands are not modeled.
+
 ### Dec
 
 `Dec` is fixed-point over an `i128`. Its addition and subtraction are plain
@@ -19858,7 +19925,9 @@ multiplication requires rescaling, so it remains its own `dec_mul` operation.
 Division, remainder, modulo, negation, and absolute value keep their existing
 checked forms. Their overflow shape differs—the most negative value divided
 by negative one, and division by zero—and they are not part of this family.
-Shift operations do not yet assert no-wraparound where it would be provable.
+The range prover turns an unsigned checked division or remainder whose
+divisor it proves nonzero into the plain form (see above). Shift operations
+do not yet assert no-wraparound where it would be provable.
 
 ## ARC Borrow Inference
 
@@ -21202,8 +21271,12 @@ result by a take. A residual release reads a struct field whose slots are
 only partly residual as a view marked with its absent slots and releases the
 residual slots through it.
 
-A view whose value reaches an owned operand is first solved as a take of its
-whole range at its definition. While it is, it holds those slots: reads
+A view whose value reaches a consuming operand (the view itself or a
+borrowed pure same-value alias of it at an owned direct-call position, a
+borrowed position whose owned variant takes a field, or a consumed or
+retained low-level position, with no other mention of the view's borrow
+forest in the same statement) is first solved as a take of its whole range
+at its definition. While it is, it holds those slots: reads
 through it, through its aliases, and through views nested in it are reads of
 the view, not of its container, and once the take is committed the view is a
 container in its own right, solved right after the container it was taken
@@ -21219,15 +21292,18 @@ is a take decides, per emission, where every view nested in it reads its
 slots: in an emission where that take applies, the view holding the slots is
 no view, and a view nested in it reads that view's own container.
 
-Every read of a borrowed binding with an owned demand is solved as a take
-first. A read that the solve does not commit as a take leaves its binding
-borrowed from the container, so the binding and every binding borrowed onward
-from it observe its slots at each later mention, exactly like a read solved
-borrowed. Those mentions can reject other takes, including the take of a view
-that held the read, so the container is solved again with them until every
-read solved as a take is committed. Each round only rejects more reads, so
-this terminates, and a container with no rejected owned-demanded read solves
-once.
+Every such view is solved as a take first. A view that the solve does not
+commit as a take leaves its binding borrowed from the container, so the
+binding and every binding borrowed onward from it observe its slots at each
+later mention, exactly like any other read solved borrowed, and its consuming
+operands become use-point take candidates of its range (see the use-point
+take rules below). Those mentions can reject other takes, including the
+take of a view that held the read, so the container is solved again with them
+until every view solved as a take is committed. Each round only rejects more
+views, so this terminates, and a container with no rejected view solves once.
+A view that holds its slots is a container whose reads are the reads through
+it, so use-point takes out of it, and nested views held by it, are solved in
+the view's own solve exactly as in its container's.
 
 An owned same-value binding (`ref.local` solved owned) is bound exactly once
 and holds the unit its definition gave it, whether that definition moved the
@@ -21266,9 +21342,9 @@ that skips them releases the parameter whole.
 Because that owned variant is mandatory for a dying argument, a direct-call
 argument at a borrowed position whose parameter-benefit bit is set is an owned
 operand for take solving, exactly like an argument at an owned position: a
-field read flowing into it is consuming, so a container holding several
-refcounted fields hands that field over by a take and the call selects the
-owned variant. Without this, `{ list: acc.list, dict: acc.dict.insert(k, v) }`
+borrowed field read reaching it can take its field there, so a container
+holding several refcounted fields hands that field over by a take and the
+call selects the owned variant. Without this, `{ list: acc.list, dict: acc.dict.insert(k, v) }`
 would pass the dict borrowed while the dying record still held it, and every
 insert would copy. That demand needs the callee's benefits to be final before
 the caller's takes are solved, so takes are solved one call-graph component at
@@ -21276,9 +21352,11 @@ a time, callees first, and each component outputs its parameter benefits
 (its parameter containers, projected containers rooted at its parameters,
 complete field and tag payload reads of its parameters, and forwarding to beneficial callee
 positions) before any caller is solved. Procedures sharing statements form one
-node of that graph. A recursive component whose own new benefits demand a
-further argument retracts its committed plans and solves again; demand only
-grows, so this terminates, and a non-recursive component solves once.
+node of that graph. A benefit once published keeps classifying its positions
+as consuming operands. A recursive component whose own new benefits make a
+further refcounted argument a consuming operand retracts its committed plans
+and solves again; the consuming operands only grow, so this terminates, and a
+non-recursive component solves once.
 Admission of those mandatory owned variants uses the same definition-sensitive
 ownership-place query as complete payload transfers: scalar shell reads and
 uses after an explicit rebind do not retain the argument's old stored units.
@@ -21502,19 +21580,44 @@ Without that variant the caller must manufacture a second unit, which changes
 the runtime ownership schedule rather than merely foregoing optional inlining
 or uniqueness seeding.
 
-An owned read that has a later observation of the same stored field before
-reinitialization or an explicit outcome receipt keeps its ordinary retain.
-This does not prevent a later read from taking the field: an early read passed
-to an owned lookup can retain and release its own unit before a final mutation
-takes the container's unit. Candidate selection proves the absence of later
-observations over the explicit CFG, including borrowed descendants and whole
-container uses; it never guesses from operation names.
+A read solved owned that has a later observation of the same stored field
+before reinitialization or an explicit outcome receipt keeps its ordinary
+retain. This does not prevent a later read from taking the field: an early
+read passed to an owned lookup can retain and release its own unit before a
+final mutation takes the container's unit. Candidate selection proves the
+absence of later observations over the explicit CFG, including borrowed
+descendants and whole container uses; it never guesses from operation names.
+
+A read solved borrowed holds no unit, so it never consumes at the read, with
+one exception: a view whose value reaches a consuming operand is taken whole
+at its definition and then holds its slots (see the view rules above). Every
+other borrowed read's binding, and every borrowed pure same-value alias of
+it, carries the field to where the value is consumed: an owned direct-call
+position, a borrowed position whose owned variant takes a field, or a
+consumed or retained low-level position, with no other mention of the
+binding's borrow forest in the same statement. Each such operand is a
+use-point take candidate. A binding borrowed onward from the read through a
+field or payload read, a borrowed low-level result, or a lent call result
+holds a different value than the field (the payload unboxed out of a boxed
+field is not the box), so consuming it only observes the field, exactly like
+any other mention of the forest. It takes the
+field only where it is the last observation of that field on every path; an
+earlier one pays its ordinary retain at the operand, since the binding is
+read again afterwards. The take belongs at the operand, not at the read. A
+take at the read would leave the binding's later operands reading a field the
+container no longer holds, and retaining at the read instead would retain on
+paths that never consume the binding and force owned variants on calls that
+only borrow it, such as the lookup inside `Dict.insert`. When `use(next,
+use(next, 0))` reads a dying record's field twice, the inner call retains and
+the outer call takes the field. No field receipt names a use-point take, so
+its call does not admit the outcome convention, and a restoring branch that
+observes the field again leaves the operand retaining instead.
 
 Which remaining consuming reads become takes is decided per field by a forward
 dataflow from the container's definition over the control-flow graph,
 tracking for each refcounted field whether it may and whether it must have
-been taken on the paths reaching each point. A consuming read is a take only
-where the field cannot have been taken yet—a take where it may already be
+been taken on the paths reaching each point. A consuming read or use-point
+operand is a take only where the field cannot have been taken yet—a take where it may already be
 gone would double-consume its unit on that path. A borrow of the field, and
 any whole use of the container, must likewise run where no take can have
 happened: after a take, the container's bytes for that field can alias the
@@ -21522,9 +21625,11 @@ taker's mutation rather than the original value. A borrowing read binds a
 name that keeps reading the field's stored unit without holding a unit of its
 own, and so does every binding the solver anchors as a borrow through that
 name (its pure aliases, its own field and payload reads, and call results
-lent from it). Every operand mention of any of those bindings is therefore a
-borrow observation of the field at that statement, so a take the mention
-could follow is rejected exactly like a borrowing read placed there. An explicit outcome field
+lent from it). Every operand mention of any of those bindings other than a
+use-point take candidate is therefore a borrow observation of the field at
+that statement, so a take the mention could follow is rejected exactly like a
+borrowing read placed there. Binding an owned alias of one of them is such a
+mention, since the alias retains through it. An explicit outcome field
 receipt changes the matching edge state from taken back to available before
 that edge is walked. An explicit join-cell reinitialization starts a new
 definition after observing its value operand and clears that definition's
@@ -21537,14 +21642,16 @@ any rule simply stays residual—its reads keep their retains and its stored
 unit is released at the death point—and a container whose take set comes
 out empty keeps today's whole release exactly.
 
-Emission changes in exactly two places. A take's read emits no retain: the
-result's unit is the container's stored unit for that field, moved rather
-than duplicated. The container's release becomes its dismantling: at the
+Emission changes in exactly two places. A take emits no retain at its read or
+operand: the value's unit is the container's stored unit for that field,
+moved rather than duplicated. A use-point operand whose path no longer holds
+the field retains instead. The container's release becomes its dismantling: at the
 point its whole-value `decref` would have been placed, emission instead reads
 each refcounted field that was not taken into a fresh temporary and releases
 that temporary, using the field layout's helper and the container's
 atomicity. Fields that were taken need nothing: their units continue in the
-take targets, which are ordinary owned locals. Liveness, death placement, and
+take targets, which are ordinary owned locals, or in the consumers of the
+use-point operands. Liveness, death placement, and
 path balancing are untouched.
 
 Like precise lifetimes, take solving is order-sensitive and therefore runs in
