@@ -1065,11 +1065,11 @@ const EmissionOwner = struct {
         for (domain.frame_locals) |local| {
             if (dismantles.isTakeBinding(local)) try owned_binding_override.set(local);
         }
-        // A field read solved borrowed in the unconditional base signature
-        // becomes an owned binding exactly when the explicit dismantle plan
-        // says it takes a field from a parameter overridden to owned. This is
-        // part of the mandatory field-take variant, not optional inlining or
-        // specialization.
+        // A projected container solved borrowed in the unconditional base
+        // signature becomes an owned binding exactly when the explicit
+        // dismantle plan says its read moves the unit of a parameter
+        // overridden to owned. This is part of the mandatory field-take
+        // variant, not optional inlining or specialization.
         var binding_override_changed = true;
         while (binding_override_changed) {
             binding_override_changed = false;
@@ -3072,6 +3072,7 @@ const Inserter = struct {
                     const selected_effect = if (borrowed_variant != null) selected_op.rcEffect() else self.store.stmtRow(assign.rc_effect);
                     const transfer = try self.transferForLowLevel(
                         &segment.owned,
+                        segment.cursor,
                         assign.args,
                         selected_effect,
                         assign.target,
@@ -5047,6 +5048,7 @@ const Inserter = struct {
     fn transferForLowLevel(
         self: *Inserter,
         owned: *OwnedSet,
+        stmt: LIR.CFStmtId,
         args: LIR.LocalSpan,
         rc_effect: LIR.LowLevel.RcEffect,
         target: LIR.LocalId,
@@ -5057,9 +5059,22 @@ const Inserter = struct {
         if ((rc_effect.result_aliases_consumed_args & ~rc_effect.consume_args) != 0) {
             arcInvariant("ARC low-level result-token metadata referenced a non-consumed argument");
         }
+        // Operands carrying their container's stored field unit pay no
+        // retain and leave no unit of their own to move.
+        var operand_take_mask: u64 = 0;
+        {
+            const locals = self.store.getLocalSpan(args);
+            for (0..@min(GuardedList.borrowLen(locals), 64)) |position| {
+                const bit = argMaskBit(position);
+                if (((rc_effect.consume_args | rc_effect.retain_args) & bit) == 0) continue;
+                if ((rc_effect.consume_args & bit) == 0 and !self.localContainsRefcounted(target)) continue;
+                if (GuardedList.at(locals, position) == target) continue;
+                if (try self.applyOperandTake(owned, stmt, position)) operand_take_mask |= bit;
+            }
+        }
         var preserve_consumed_args = try self.preserveConsumedArgMask(
             args,
-            rc_effect.consume_args,
+            rc_effect.consume_args & ~operand_take_mask,
             rc_effect.result_aliases_consumed_args,
             next,
             target,
@@ -5068,7 +5083,7 @@ const Inserter = struct {
             const locals = self.store.getLocalSpan(args);
             for (0..@min(GuardedList.borrowLen(locals), 64)) |position| {
                 const bit = argMaskBit(position);
-                if ((rc_effect.consume_args & bit) == 0) continue;
+                if (((rc_effect.consume_args & ~operand_take_mask) & bit) == 0) continue;
                 if (!self.ownsUnit(owned, GuardedList.at(locals, position))) {
                     // The solved signature borrowed this argument. Retaining it
                     // here supplies the unit consumed by the owned operation.
@@ -5088,11 +5103,11 @@ const Inserter = struct {
             release_old_target = try self.takeRebindTarget(owned, target);
         }
         if (rc_effect.consume_args != 0) {
-            try self.unsetMaskedArgsExcept(owned, args, rc_effect.consume_args & ~preserve_consumed_args, target);
+            try self.unsetMaskedArgsExcept(owned, args, rc_effect.consume_args & ~preserve_consumed_args & ~operand_take_mask, target);
         }
-        var transfer_mask: u64 = 0;
+        var transfer_mask: u64 = operand_take_mask & rc_effect.retain_args;
         if (rc_effect.retain_args != 0) {
-            transfer_mask = try self.spanTransferMask(args, rc_effect.retain_args, next, target, owned, .yes);
+            transfer_mask |= try self.spanTransferMask(args, rc_effect.retain_args & ~operand_take_mask, next, target, owned, .yes);
         }
         try self.placeUnit(owned, target);
         return .{
@@ -6350,6 +6365,14 @@ const Inserter = struct {
             if ((outcome_mask & bit) == 0) continue;
             unchecked_outcome_positions &= ~bit;
             const local = GuardedList.at(locals, position);
+            if (call_stmt) |stmt_id| {
+                if (self.operandTakeForEmission(stmt_id, position) != null) {
+                    // The operand carries its container's stored field unit,
+                    // and no receipt returns it to that place.
+                    outcome_admissible = false;
+                    continue;
+                }
+            }
             if (!self.localContainsRefcounted(local) or callee_sig.paramMode(position) != .owned) {
                 outcome_admissible = false;
                 continue;
@@ -6404,6 +6427,20 @@ const Inserter = struct {
         for (0..GuardedList.borrowLen(locals)) |position| {
             const local = GuardedList.at(locals, position);
             if (!self.localContainsRefcounted(local)) continue;
+            if (call_stmt) |stmt_id| {
+                if (try self.applyOperandTake(owned, stmt_id, position)) {
+                    // The operand carries its container's stored field unit.
+                    if (callee_sig.paramMode(position) == .borrowed) {
+                        const bit = arc_sig.paramBit(position).?;
+                        demanded.borrowed_params &= ~bit;
+                        if (callee_sig.ret_mode == .borrowed and (callee_sig.ret_lenders & bit) != 0) {
+                            demanded.ret_mode = .owned;
+                            demanded.ret_lenders = 0;
+                        }
+                    }
+                    continue;
+                }
+            }
             if (callee_sig.paramMode(position) == .borrowed) {
                 // Borrowed positions keep the caller's ownership untouched.
                 const bit = arc_sig.paramBit(position) orelse continue;
@@ -7356,6 +7393,29 @@ const Inserter = struct {
             if (self.owned_binding_override.contains(take.root)) return take;
         }
         return null;
+    }
+
+    /// Whether this operand moves its container's stored field unit in the
+    /// current emission. Takes on containers solved borrowed apply only when
+    /// the variant demand vector overrides the root to owned.
+    fn operandTakeForEmission(self: *const Inserter, stmt: LIR.CFStmtId, position: usize) ?arc_dismantle.Take {
+        if (self.dismantles.operandTakeAt(stmt, position)) |take| return take;
+        if (self.dismantles.ownedOnlyOperandTake(stmt, position)) |take| {
+            if (self.owned_binding_override.contains(take.root)) return take;
+        }
+        return null;
+    }
+
+    /// Moves the committed field unit out of the container's residual mask
+    /// when the path still holds it; otherwise the operand pays its ordinary
+    /// retain.
+    fn applyOperandTake(self: *Inserter, owned: *OwnedSet, stmt: LIR.CFStmtId, position: usize) ResourceError!bool {
+        const take = self.operandTakeForEmission(stmt, position) orelse return false;
+        const root = self.unitOf(take.root);
+        if (!owned.contains(root)) return false;
+        if ((owned.residualMask(root) & take.field_mask) != take.field_mask) return false;
+        try owned.takeResidualField(root, take.field_mask);
+        return true;
     }
 
     /// Where a view reads its slots in the current emission: its container's,
@@ -8468,6 +8528,23 @@ const ArcTest = struct {
 
     /// Follows a linear fixture path of bindings and reference counts to its
     /// first direct call.
+    /// The direct call reachable from `proc`'s body that binds `target`.
+    fn directCallTo(self: *const ArcTest, proc: LIR.LirProcSpecId, target: LIR.LocalId) Allocator.Error!@FieldType(LIR.CFStmt, "assign_call") {
+        var work = std.ArrayList(LIR.CFStmtId).empty;
+        defer work.deinit(self.allocator);
+        var seen = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(self.allocator, self.store.cfStmtCount());
+        defer seen.deinit(self.allocator);
+        try work.append(self.allocator, self.store.getProcSpecImmediate(proc).body.?);
+        while (work.pop()) |cursor| {
+            if (seen.isSet(@backingInt(cursor))) continue;
+            seen.set(@backingInt(cursor));
+            const stmt = self.store.getCFStmt(cursor);
+            if (stmt == .assign_call and stmt.assign_call.target == target) return stmt.assign_call;
+            try body_clone.appendSuccessors(&self.store, &work, cursor, self.allocator);
+        }
+        std.debug.panic("test procedure has no direct call binding local {d}", .{@backingInt(target)});
+    }
+
     fn walkToDirectCall(self: *const ArcTest, start: LIR.CFStmtId) @FieldType(LIR.CFStmt, "assign_call") {
         var cursor = start;
         var remaining: usize = self.store.cfStmtCount() + 1;
@@ -14864,6 +14941,146 @@ test "RC Box.unbox normalizes consuming ownership to explicit RC statements" {
     try f.expectRc(payload, 1, 0, 0);
 }
 
+test "RC a consuming operand borrowed onward from a field read observes the field" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // The consumer borrows a pair of lists and appends to its first list, so
+    // its owned variant takes that list: a pair reaching it is a consuming
+    // operand.
+    const pair_param = try f.local(f.pair_list);
+    const pair_count = try f.local(.i64);
+    const pair_field = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const consumer_result = try f.local(.i64);
+    const consumer_ret = try f.ret(consumer_result);
+    const consumer_assign = try f.assignI64(consumer_result, 1, consumer_ret);
+    const append = try f.assignLowLevel(appended, &.{ pair_field, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), consumer_assign);
+    const elem_assign = try f.assignI64(elem, 5, append);
+    const read_pair_field = try f.assignRefField(pair_field, pair_param, 0, elem_assign);
+    const consumer = try f.addProc(&.{ pair_param, pair_count }, read_pair_field, .i64);
+
+    // The dispatcher borrows a record whose first field is a box of a tag
+    // union of pairs, unboxes the union, borrowed, and passes the matched
+    // variant's payload view to the consumer. The view is a value inside the
+    // box, not the record's box field: that call observes the box field
+    // rather than taking it at the operand, so the view stays lent to the
+    // consumer's borrowed base procedure and the record parameter earns no
+    // owned variant from the caller's dying record.
+    const tag_layout = try f.layouts.putTagUnion(&[_]layout_mod.Idx{ f.pair_list, f.pair_list });
+    const box_tag = try f.layouts.insertBox(tag_layout);
+    const record_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = box_tag },
+        .{ .index = 1, .layout = .str },
+    });
+    const param = try f.local(record_layout);
+    const alias = try f.local(record_layout);
+    const read_box = try f.local(box_tag);
+    const unboxed = try f.local(tag_layout);
+    const disc = try f.local(.u8);
+    const dispatch_result = try f.local(.i64);
+    const dispatch_ret = try f.ret(dispatch_result);
+    var views: [2]LIR.LocalId = undefined;
+    var branches: [2]LIR.CFSwitchBranch = undefined;
+    for (&views, &branches, 0..) |*view, *branch, variant| {
+        view.* = try f.local(f.pair_list);
+        const zero = try f.local(.i64);
+        const consume_view = try f.store.addCFStmt(.{ .assign_call = .{
+            .target = dispatch_result,
+            .proc = consumer,
+            .args = try f.span(&.{ view.*, zero }),
+            .next = dispatch_ret,
+        } }, .test_fixture);
+        const zero_assign = try f.assignI64(zero, 0, consume_view);
+        const view_read = try f.store.addCFStmt(.{ .assign_ref = .{
+            .target = view.*,
+            .op = .tagPayloadStruct(unboxed, @intCast(variant), @intCast(variant)),
+            .next = zero_assign,
+        } }, .test_fixture);
+        branch.* = .{ .value = @intCast(variant), .body = view_read };
+    }
+    const default_body = try f.assignI64(dispatch_result, 0, dispatch_ret);
+    const switch_stmt = try f.store.addCFStmt(.{ .switch_stmt = .{
+        .cond = disc,
+        .branches = try f.store.addCFSwitchBranches(&branches),
+        .default_branch = default_body,
+        .default_is_cold = false,
+        .continuation = null,
+    } }, .test_fixture);
+    const disc_read = try f.assignDiscriminant(disc, unboxed, switch_stmt);
+    const unbox = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = unboxed,
+        .op = .box_unbox,
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.box_unbox.rcEffect()),
+        .args = try f.span(&.{read_box}),
+        .next = disc_read,
+    } }, .test_fixture);
+    const read = try f.assignRefField(read_box, alias, 0, unbox);
+    const alias_bind = try f.assignRefLocal(alias, param, read);
+    const dispatcher = try f.addProc(&.{param}, alias_bind, .i64);
+
+    const a = try f.local(f.list_i64);
+    const b = try f.local(f.list_i64);
+    const pair = try f.local(f.pair_list);
+    const tag_value = try f.local(tag_layout);
+    const boxed = try f.local(box_tag);
+    const other = try f.local(.str);
+    const record = try f.local(record_layout);
+    const outer = try f.local(.i64);
+    const caller_ret = try f.ret(outer);
+    const outer_call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = outer,
+        .proc = dispatcher,
+        .args = try f.span(&.{record}),
+        .next = caller_ret,
+    } }, .test_fixture);
+    const make_record = try f.assignStruct(record, &.{ boxed, other }, outer_call);
+    const assign_other = try f.assignStr(other, "other", make_record);
+    const make_box = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = boxed,
+        .op = .box_box,
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.box_box.rcEffect()),
+        .args = try f.span(&.{tag_value}),
+        .next = assign_other,
+    } }, .test_fixture);
+    const tag_assign = try f.assignTag(tag_value, 1, pair, make_box);
+    const assign_pair = try f.assignStruct(pair, &.{ a, b }, tag_assign);
+    const b_assign = try f.assignList(b, &.{}, assign_pair);
+    const caller_body = try f.assignList(a, &.{}, b_assign);
+    _ = try f.addProc(&.{}, caller_body, .i64);
+
+    const base_proc_count = f.store.procSpecCount();
+    try insert(&f.store, &f.layouts, .{ .specialize = true, .consume_dead_boxes = false });
+
+    // No variant is emitted: the consumer's owned variant is demanded only by
+    // a dying pair, and the dispatcher's parameter has no take to activate.
+    try testing.expectEqual(base_proc_count, f.store.procSpecCount());
+    var unbox_ops: usize = 0;
+    {
+        var work = std.ArrayList(LIR.CFStmtId).empty;
+        defer work.deinit(testing.allocator);
+        var seen = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(testing.allocator, f.store.cfStmtCount());
+        defer seen.deinit(testing.allocator);
+        try work.append(testing.allocator, f.store.getProcSpecImmediate(dispatcher).body.?);
+        while (work.pop()) |cursor| {
+            if (seen.isSet(@backingInt(cursor))) continue;
+            seen.set(@backingInt(cursor));
+            const stmt = f.store.getCFStmt(cursor);
+            if (stmt == .assign_low_level and stmt.assign_low_level.target == unboxed) {
+                try testing.expectEqual(LIR.LowLevel.box_unbox_borrowed, stmt.assign_low_level.op);
+                unbox_ops += 1;
+            }
+            try body_clone.appendSuccessors(&f.store, &work, cursor, testing.allocator);
+        }
+    }
+    try testing.expectEqual(@as(usize, 1), unbox_ops);
+    for (views) |view| try f.expectRc(view, 0, 0, 0);
+    try f.expectRc(unboxed, 0, 0, 0);
+    try f.expectRc(read_box, 0, 0, 0);
+    try f.expectRc(record, 0, 1, 0);
+}
+
 test "RC Box.unbox keeps the payload borrowed while the box survives" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
@@ -16429,6 +16646,108 @@ test "RC field takes through repeated dominating complete projections" {
     const second_projection_stmt = f.store.getCFStmt(project_again);
     try testing.expect(second_projection_stmt == .assign_ref);
     try testing.expectEqual(first_view, second_projection_stmt.assign_ref.op.source);
+}
+
+test "RC borrowed field read takes its field at the last consuming operand" {
+    for ([_]bool{ false, true }) |consumed_after| {
+        try expectBorrowedReadTakesAtLastOperand(consumed_after);
+    }
+}
+
+/// With `consumed_after`, a third read of the same pair is passed to an
+/// owned position after both calls, so neither call is the pair's last use:
+/// both keep the borrowed base procedure and the third operand takes it.
+fn expectBorrowedReadTakesAtLastOperand(consumed_after: bool) (Allocator.Error || ResourceError || ArcTest.ExpectError)!void {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // Repro for https://github.com/roc-lang/roc/issues/12438:
+    // `next = choice.cur` followed by `use(next, use(next, 0))`. The callee
+    // borrows its pair, and its owned variant takes the pair's first list.
+    // Each use of `next` reads the dying record's pair again, borrowed, and
+    // reaches the callee through an alias. The first read's call runs last,
+    // so it takes the pair and selects the owned variant; the second read's
+    // call runs while the first read still observes the pair, so it keeps
+    // the borrowed base procedure.
+    const param = try f.local(f.pair_list);
+    const param_count = try f.local(.i64);
+    const param_field = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const appended = try f.local(f.list_i64);
+    const callee_result = try f.local(.i64);
+    const callee_ret = try f.ret(callee_result);
+    const result_assign = try f.assignI64(callee_result, 1, callee_ret);
+    const append = try f.assignLowLevel(appended, &.{ param_field, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const elem_assign = try f.assignI64(elem, 5, append);
+    const read_param = try f.assignRefField(param_field, param, 0, elem_assign);
+    const callee = try f.addProc(&.{ param, param_count }, read_param, .i64);
+
+    const record_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = f.pair_list },
+        .{ .index = 1, .layout = f.pair_list },
+    });
+    const a = try f.local(f.list_i64);
+    const b = try f.local(f.list_i64);
+    const c = try f.local(f.list_i64);
+    const d = try f.local(f.list_i64);
+    const first_pair = try f.local(f.pair_list);
+    const second_pair = try f.local(f.pair_list);
+    const record = try f.local(record_layout);
+    const early = try f.local(f.pair_list);
+    const late = try f.local(f.pair_list);
+    const early_arg = try f.local(f.pair_list);
+    const late_arg = try f.local(f.pair_list);
+    const zero = try f.local(.i64);
+    const inner = try f.local(.i64);
+    const outer = try f.local(.i64);
+    const tail = try f.local(f.pair_list);
+    const tail_result = try f.local(.i64);
+    const caller_ret = try f.ret(outer);
+    const after_outer = if (consumed_after) blk: {
+        const tail_call = try f.assignCall(tail_result, &.{tail}, caller_ret);
+        break :blk try f.assignRefField(tail, record, 0, tail_call);
+    } else caller_ret;
+    const outer_call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = outer,
+        .proc = callee,
+        .args = try f.span(&.{ early_arg, inner }),
+        .next = after_outer,
+    } }, .test_fixture);
+    const early_alias = try f.assignRefLocal(early_arg, early, outer_call);
+    const inner_call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = inner,
+        .proc = callee,
+        .args = try f.span(&.{ late_arg, zero }),
+        .next = early_alias,
+    } }, .test_fixture);
+    const zero_assign = try f.assignI64(zero, 0, inner_call);
+    const late_alias = try f.assignRefLocal(late_arg, late, zero_assign);
+    const read_late = try f.assignRefField(late, record, 0, late_alias);
+    const read_early = try f.assignRefField(early, record, 0, read_late);
+    const record_assign = try f.assignStruct(record, &.{ first_pair, second_pair }, read_early);
+    const second_assign = try f.assignStruct(second_pair, &.{ c, d }, record_assign);
+    const first_assign = try f.assignStruct(first_pair, &.{ a, b }, second_assign);
+    const d_assign = try f.assignList(d, &.{}, first_assign);
+    const c_assign = try f.assignList(c, &.{}, d_assign);
+    const b_assign = try f.assignList(b, &.{}, c_assign);
+    const caller_body = try f.assignList(a, &.{}, b_assign);
+    const caller = try f.addProc(&.{}, caller_body, .i64);
+
+    const base_proc_count = f.store.procSpecCount();
+    try insert(&f.store, &f.layouts, .{ .specialize = true });
+
+    // No read or alias in the caller retains: the borrowed base procedure
+    // retains the list it appends to, and the last operand takes the pair.
+    try testing.expectEqual(base_proc_count + @intFromBool(!consumed_after), f.store.procSpecCount());
+    for ([_]LIR.LocalId{ early, late, early_arg, late_arg, tail }) |local| try f.expectRc(local, 0, 0, 0);
+    try f.expectRc(record, 0, 0, 0);
+    try testing.expectEqual(callee, (try f.directCallTo(caller, inner)).proc);
+    const outer_proc = (try f.directCallTo(caller, outer)).proc;
+    if (consumed_after) {
+        try testing.expectEqual(callee, outer_proc);
+    } else {
+        try testing.expect(@backingInt(outer_proc) >= base_proc_count);
+    }
 }
 
 test "RC field take restores the exact aggregate field on checked failure without optional specialization" {

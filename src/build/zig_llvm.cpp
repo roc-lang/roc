@@ -35,6 +35,8 @@
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Transforms/Vectorize/LoopVectorize.h>
 #include <llvm/Transforms/Vectorize/SLPVectorizer.h>
+#include <llvm/Transforms/Scalar/LoopUnrollPass.h>
+#include <llvm/Transforms/Scalar/SROA.h>
 #include <llvm/Transforms/Scalar/SimplifyCFG.h>
 #include <llvm/Transforms/InstCombine/InstCombine.h>
 #include <llvm/Passes/StandardInstrumentations.h>
@@ -351,7 +353,15 @@ static bool emitWithBinStream(LLVMTargetMachineRef targ_machine_ref, LLVMModuleR
     // Pipeline configurations
     const OptimizationLevel opt_level = toLLVMOptimizationLevel(options->ir_opt_level);
     PipelineTuningOptions pipeline_opts;
-    pipeline_opts.LoopUnrolling = !options->is_debug;
+    // Loop unrolling is scheduled explicitly rather than by the pipeline: full
+    // unrolling keeps its place in the simplification pipeline (see the loop
+    // optimizer callback below), while runtime unrolling runs after the second
+    // vectorization attempt. The pipeline's own runtime unroll would run before
+    // that attempt, and a loop the vectorizer first sees already unrolled is
+    // vectorized as interleaved strided groups, spending a shuffle sequence
+    // per vector on a loop whose iterations are plain lane arithmetic.
+    const bool unroll_loops = !options->is_debug;
+    pipeline_opts.LoopUnrolling = false;
     pipeline_opts.SLPVectorization = !options->is_debug;
     pipeline_opts.LoopVectorization = false; // https://github.com/llvm/llvm-project/issues/186922
     pipeline_opts.LoopInterleaving = !options->is_debug;
@@ -397,6 +407,16 @@ static bool emitWithBinStream(LLVMTargetMachineRef targ_machine_ref, LLVMModuleR
         }
 
         module_pm.addPass(createModuleToFunctionPassAdaptor(AddDiscriminatorsPass()));
+    });
+
+    // `LoopUnrolling = false` limits the simplification pipeline's full unroll
+    // to loops whose metadata forces it. This callback runs immediately before
+    // that pass, so adding an unrestricted full unroll here restores it at the
+    // same position.
+    pass_builder.registerLoopOptimizerEndEPCallback([&](LoopPassManager &loop_pm, OptimizationLevel level) {
+        if (unroll_loops) {
+            loop_pm.addPass(LoopFullUnrollPass(level.getSpeedupLevel(), /*OnlyWhenForced=*/false, pipeline_opts.ForgetAllSCEVInLoopUnroll));
+        }
     });
 
     const bool early_san = options->is_debug;
@@ -479,6 +499,14 @@ static bool emitWithBinStream(LLVMTargetMachineRef targ_machine_ref, LLVMModuleR
         revectorize_pm.addPass(SLPVectorizerPass());
         revectorize_pm.addPass(InstCombinePass());
         revectorize_pm.addPass(SimplifyCFGPass());
+        // Runtime unrolling follows vectorization, as in LLVM's default
+        // pipeline, with the cleanup that pipeline runs after it.
+        if (unroll_loops) {
+            revectorize_pm.addPass(LoopUnrollPass(LoopUnrollOptions(opt_level.getSpeedupLevel(), /*OnlyWhenForced=*/false, pipeline_opts.ForgetAllSCEVInLoopUnroll)));
+            revectorize_pm.addPass(SROAPass(SROAOptions::PreserveCFG));
+            revectorize_pm.addPass(InstCombinePass());
+            revectorize_pm.addPass(SimplifyCFGPass());
+        }
 
         for (Function &function : llvm_module) {
             if (!function.isDeclaration()) {
