@@ -9144,7 +9144,7 @@ fn publishCompileTimePack(ctx: *CliCtx, build_env: *BuildEnv, root_artifact: *co
         if (builtin.mode == .debug) std.debug.panic("a program written to the object cache recorded no compile-time reads", .{});
         unreachable;
     };
-    const bytes = try packFileBytesOfPrograms(ctx.gpa, &combined, stages, comptime_reads);
+    const bytes = try packFileBytesOfPrograms(ctx.gpa, &combined, stages, comptime_reads, true);
     defer ctx.gpa.free(bytes);
     if (devDiagnosticEnv("ROC_PACK_TRACE") != null) std.debug.print("compile-time pack {d} bytes\n", .{bytes.len});
     store.write(placement.origin, placement.identity, key, bytes) catch |err| {
@@ -9201,17 +9201,19 @@ fn packFileBytes(
         if (builtin.mode == .debug) std.debug.panic("a program written to the object cache recorded no compile-time reads", .{});
         unreachable;
     };
-    return packFileBytesOfPrograms(allocator, set, &.{lowered}, comptime_reads);
+    return packFileBytesOfPrograms(allocator, set, &.{lowered}, comptime_reads, false);
 }
 
 /// Encode the artifacts of several programs lowered from one Solved program,
 /// compiled into one set, with the spec table of every procedure they offer.
-/// A key two programs offer names one procedure, offered once.
+/// A key two programs offer names one procedure, offered once. `evaluation`:
+/// the programs are compile-time evaluation's.
 fn packFileBytesOfPrograms(
     allocator: Allocator,
     set: *const backend.dev.ProcArtifact.Set,
     programs: []const *const lir.CheckedPipeline.LoweredProgram,
     comptime_reads: *const lir.CheckedPipeline.SpecComptimeReads,
+    evaluation: bool,
 ) Allocator.Error![]u8 {
     var artifact_by_identity = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator);
     defer artifact_by_identity.deinit();
@@ -9290,6 +9292,14 @@ fn packFileBytesOfPrograms(
         // "Demand-Driven Compile-Time Evaluation").
         const entry_reads = spec_proc.reads;
         if (!entry_reads.offerable) {
+            withheld += 1;
+            continue;
+        }
+        // Evaluation reads a compile-time value through its evaluation,
+        // where every other program reads it as a constant, and SpecConstr
+        // rewrites the two forms differently, so evaluation's code for such
+        // an entry is not the code another program compiles.
+        if (evaluation and entry_reads.evaluated) {
             withheld += 1;
             continue;
         }

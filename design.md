@@ -2302,7 +2302,13 @@ Solved program they share. Evaluation
 and a dev build for the host serve its entries exactly as they serve runtime
 packs' (see "Early Compile-Time Object Reuse"), so a later check whose roots
 must be evaluated again, or a build of the checked program, splices the code
-instead of lowering and compiling it.
+instead of lowering and compiling it. One exception keeps a build's code
+independent of which packs exist: evaluation reads a compile-time value
+through its evaluation, where every other program reads it as a constant,
+and SpecConstr rewrites the two forms differently. The pack therefore does
+not offer an entry whose code, through every procedure it reaches, reads a
+compile-time value, a literal root's included
+(`SpecComptimeReads.Lookup.evaluated`).
 
 Native compile-time instruction generation consumes an explicit, read-only LIR
 demand closure seeded by compile-time root procedures and materialized callable

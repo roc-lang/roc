@@ -391,7 +391,9 @@ const ComptimeDemandState = struct {
     /// `local` is set when the body evaluates a root in place: code that
     /// computes the root's value whenever it runs, which another program
     /// cannot link while it evaluates the root itself.
-    const Summary = struct { refs: Range, reads: Range, local: bool };
+    /// `literal` is set when the body reads a literal root's value, which
+    /// its reads do not name since the root's body is the reading body's code.
+    const Summary = struct { refs: Range, reads: Range, local: bool, literal: bool };
     const RootBytes = struct { module: [32]u8, root: u32 };
     const Visit = union(enum) { expr: Ast.ExprId, stmt: Ast.StmtId };
     /// Items number definitions first and nested definitions after them, in
@@ -430,6 +432,7 @@ const ComptimeDemandState = struct {
     generation: u32 = 0,
     visits: std.ArrayList(Visit) = .empty,
     summary_local: bool = false,
+    summary_literal: bool = false,
     closure_local: bool = false,
     items: std.ArrayList(u32) = .empty,
     closure: std.ArrayList(u32) = .empty,
@@ -592,6 +595,7 @@ const ComptimeDemandState = struct {
         const refs_start = self.summary_refs.items.len;
         const reads_start = self.summary_reads.items.len;
         self.summary_local = false;
+        self.summary_literal = false;
         self.visits.clearRetainingCapacity();
         if (body) |expr| try self.visits.append(allocator, .{ .expr = expr });
         if (item & nested_bit == 0) if (view.defs[item].fn_id) |fn_id| if (self.cached_fn_reads.get(fn_id)) |range| {
@@ -616,6 +620,7 @@ const ComptimeDemandState = struct {
             .refs = .{ .start = @intCast(refs_start), .len = @intCast(self.summary_refs.items.len - refs_start) },
             .reads = .{ .start = @intCast(reads_start), .len = @intCast(self.summary_reads.items.len - reads_start) },
             .local = self.summary_local,
+            .literal = self.summary_literal,
         };
         self.summarySlot(item).* = result;
         return result;
@@ -671,7 +676,10 @@ const ComptimeDemandState = struct {
                     .checked => |id| try self.summary_reads.append(allocator, try self.intern(allocator, .{ .module = root.module, .root = id })),
                     // A literal root's definition runs wherever its read is
                     // lowered, so its body is this body's code.
-                    .literal => |id| try self.summary_refs.append(allocator, defItem(view.literal_roots[@backingInt(id)].def)),
+                    .literal => |id| {
+                        self.summary_literal = true;
+                        try self.summary_refs.append(allocator, defItem(view.literal_roots[@backingInt(id)].def));
+                    },
                 }
             },
             .typed_boundary => |boundary| try self.pushExpr(allocator, boundary.value),
@@ -871,8 +879,11 @@ const ComptimeDemandState = struct {
 /// evaluates no root in place, and records the roots it reads, which a
 /// program taking the entry demands. A key with no row reads nothing.
 pub const SpecComptimeReads = struct {
-    pub const Row = struct { start: u32, len: u32, local: bool };
-    pub const Lookup = struct { offerable: bool, reads: []const Common.ComptimeRootRead };
+    /// `evaluated`: the code reads a compile-time value through its
+    /// evaluation, a literal root's included, through every procedure it
+    /// reaches.
+    pub const Row = struct { start: u32, len: u32, local: bool, evaluated: bool };
+    pub const Lookup = struct { offerable: bool, reads: []const Common.ComptimeRootRead, evaluated: bool = false };
 
     allocator: Allocator,
     rows: std.AutoHashMapUnmanaged([32]u8, Row) = .empty,
@@ -883,13 +894,13 @@ pub const SpecComptimeReads = struct {
 
     pub fn get(self: *const SpecComptimeReads, key: [32]u8) Lookup {
         const row = self.rows.get(key) orelse return .{ .offerable = true, .reads = &.{} };
-        return .{ .offerable = !row.local, .reads = self.reads.items[row.start..][0..row.len] };
+        return .{ .offerable = !row.local, .reads = self.reads.items[row.start..][0..row.len], .evaluated = row.evaluated };
     }
 
     /// The summary of the function `fn_id` names.
     pub fn fnReads(self: *const SpecComptimeReads, fn_id: u32) Lookup {
         const row = self.fn_rows.get(fn_id) orelse return .{ .offerable = true, .reads = &.{} };
-        return .{ .offerable = !row.local, .reads = self.reads.items[row.start..][0..row.len] };
+        return .{ .offerable = !row.local, .reads = self.reads.items[row.start..][0..row.len], .evaluated = row.evaluated };
     }
 
     pub fn clone(self: *const SpecComptimeReads, allocator: Allocator) Allocator.Error!SpecComptimeReads {
@@ -6542,19 +6553,36 @@ const Builder = struct {
                 try pending.append(self.allocator, referrer);
             }
         }
+        // Code that reads a literal root's value, which no read names.
+        const reaches_literal = try self.allocator.alloc(bool, item_count);
+        defer self.allocator.free(reaches_literal);
+        @memset(reaches_literal, false);
+        for (0..item_count) |index| {
+            if (!state.summarySlot(Dense.item(index, def_count)).*.?.literal) continue;
+            reaches_literal[index] = true;
+            try pending.append(self.allocator, @intCast(index));
+        }
+        while (pending.pop()) |index| {
+            for (referrers[counts[index]..counts[index + 1]]) |referrer| {
+                if (reaches_literal[referrer]) continue;
+                reaches_literal[referrer] = true;
+                try pending.append(self.allocator, referrer);
+            }
+        }
 
         var result: SpecComptimeReads = .{ .allocator = self.allocator };
         errdefer result.deinit();
         for (view.fns, 0..) |fn_, raw| {
             const item = state.fn_items.items[raw] orelse continue;
-            if (!reaches_read[Dense.of(item, def_count)]) continue;
+            const dense = Dense.of(item, def_count);
+            if (!reaches_read[dense] and !reaches_literal[dense]) continue;
             const reads = try state.rootReads(self.allocator, view, item);
             const start = result.reads.items.len;
             for (reads) |read| {
                 const root = state.roots.items[read];
                 try result.reads.append(self.allocator, .{ .module = root.module.bytes, .root = @backingInt(root.root) });
             }
-            const row: SpecComptimeReads.Row = .{ .start = @intCast(start), .len = @intCast(result.reads.items.len - start), .local = state.closure_local };
+            const row: SpecComptimeReads.Row = .{ .start = @intCast(start), .len = @intCast(result.reads.items.len - start), .local = state.closure_local, .evaluated = true };
             try result.fn_rows.put(self.allocator, @intCast(raw), row);
             const key = fn_.source.spec_key orelse continue;
             const entry = try result.rows.getOrPut(self.allocator, key.bytes);
