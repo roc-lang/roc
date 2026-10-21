@@ -1902,7 +1902,10 @@ pub const ProcShapes = packed struct(u16) {
     unsigned_compare: bool = false,
     /// A SIMD byte concat-shift, whose count a value-range proof can fix.
     simd_concat_shift: bool = false,
-    _padding: u2 = 0,
+    /// A checked integer division or remainder, whose divisor a value-range
+    /// proof can show nonzero.
+    checked_division: bool = false,
+    _padding: u1 = 0,
 
     pub fn merged(self: ProcShapes, other: ProcShapes) ProcShapes {
         return @bitCast(@as(u16, @bitCast(self)) | @as(u16, @bitCast(other)));

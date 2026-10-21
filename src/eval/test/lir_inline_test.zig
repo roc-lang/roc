@@ -3585,7 +3585,9 @@ test "single-use capturing lambda is inlined with its captures bound" {
 
 test "issue 12029: recursion through an inlined capturing lambda is a loop" {
     // The lambda captures `n` and is called once where it is written, so it
-    // is inlined and `capturing_lambda` calls itself in tail position.
+    // is inlined and `capturing_lambda` calls itself in tail position. The
+    // guard makes `capturing_lambda` a wrapper as well, and the two form a
+    // cycle; rejecting only the wrapper leaves the lambda inlined.
     const allocator = std.testing.allocator;
     for ([_]lir.CheckedPipeline.InlineMode{ .wrappers, .wrappers_and_source_single_use }) |inline_mode| {
         var lowered_source = try lowerModule(allocator,

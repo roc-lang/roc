@@ -25,6 +25,19 @@
 //! wrapping ops cannot carry. Bit operations assert constant ranges: masking
 //! with a literal bounds the result by that literal.
 //!
+//! An overflow predicate's true edge asserts what overflowing means (the
+//! subtrahend exceeds the minuend, the mathematical sum exceeds the type's
+//! highest value), and each other unsigned operation asserts the orderings it
+//! always has with its operands (a quotient is at most its dividend, a
+//! remainder is below its divisor, `or` is at least either operand).
+//!
+//! A merge meets a local's bounds over its non-constant edges, keeping each
+//! bound every constant edge satisfies by the bound root's own range; an
+//! upper bound only a zero edge fails holds whenever the merged value is not
+//! zero, and a branch edge that puts the value at or above one asserts it.
+//! That is the shape of a saturating subtraction, which bounds a fixed-width
+//! read with one comparison.
+//!
 //! Soundness rests on dominance by construction. Facts and value bindings are
 //! collected along single-predecessor statement chains and dropped at every
 //! merge (any statement with more than one predecessor, including join bodies
@@ -576,13 +589,15 @@ const Pred = struct {
 };
 
 /// The arithmetic question that defined a Bool local. Its false switch edge
-/// proves that the matching wrapping operation is exact on that path.
+/// proves that the matching wrapping operation is exact on that path, and
+/// its true edge asserts `holds_fact`, the ordering that overflowing means.
 const OverflowPred = struct {
     operation: CheckedArithmetic.Operation,
     lhs: NodeId,
     rhs: NodeId,
     operand_layout: layout_mod.Idx,
     predicate_stmt: CFStmtId,
+    holds_fact: ?Fact = null,
 };
 
 /// A false overflow-predicate edge that proves matching arithmetic exact.
@@ -913,7 +928,41 @@ const EnvMeet = struct {
     /// candidate is born here—its entry edge proves it before any back
     /// edge can—and only graduates through per-edge verification.
     len_bounds_any: MeetBounds,
+    /// Upper and lower bounds provable on every captured edge that binds the
+    /// local to something other than a constant. An edge binding a constant
+    /// takes no part in these meets; seeding keeps each bound that every
+    /// such constant satisfies by the bound root's own range, and an upper
+    /// bound that only a zero edge violates holds whenever the value is not
+    /// zero. That is the shape of a saturating operation: `max(a - b, 0)`
+    /// is `a - b` on every path that sees it above zero, and
+    /// `min(a + b, highest)` is at least `a` on every path.
+    nonconst_bounds: MeetBounds = .{},
+    nonconst_lower: MeetBounds = .{},
+    /// A non-constant edge has been captured, so the two lists above are a
+    /// meet rather than empty for lack of one.
+    nonconst_edges: bool = false,
+    /// The constants the constant edges bound the local to.
+    const_values: [meet_const_cap]i128 = undefined,
+    const_len: u8 = 0,
+    /// More distinct constants arrived than `const_values` holds, or an edge
+    /// carried no binding for the local, so the lists above say nothing.
+    const_unusable: bool = false,
+
+    fn noteConstant(self: *EnvMeet, value: i128) void {
+        for (self.const_values[0..self.const_len]) |seen| {
+            if (seen == value) return;
+        }
+        if (self.const_len == meet_const_cap) {
+            self.const_unusable = true;
+            return;
+        }
+        self.const_values[self.const_len] = value;
+        self.const_len += 1;
+    }
 };
+
+/// Distinct constant edges one met local keeps track of.
+const meet_const_cap: usize = 4;
 
 /// Bound on locals carried through one merge's environment meet.
 const merge_env_cap: usize = 128;
@@ -1126,6 +1175,10 @@ const Pass = struct {
     loop_facts: collections.DenseMap(JoinPointId, LoopFacts),
     /// The round's shared root for constant bounds, made on first use.
     zero_node: ?NodeId = null,
+    /// Upper bounds of a merged value that hold whenever the value is not
+    /// zero, keyed by the value's root (see `EnvMeet.nonconst_bounds`). A
+    /// branch edge that puts the value at or above one asserts them.
+    nonzero_bounds: collections.DenseMap(NodeId, MeetBounds),
     /// Per merge head: last round's all-edge fact intersection in stable
     /// form, seeded when the merge must walk before its captures complete
     /// (a forced loop-body or cycle-interior region). Facts held by every
@@ -1314,6 +1367,7 @@ const Pass = struct {
             .path_env = collections.DenseMap(LocalId, Binding).init(allocator),
             .undo = .empty,
             .len_terms = collections.DenseMap(NodeId, NodeId).init(allocator),
+            .nonzero_bounds = collections.DenseMap(NodeId, MeetBounds).init(allocator),
             .assign_counts = collections.DenseMap(LocalId, u32).init(allocator),
             .alias_of = collections.DenseMap(LocalId, LocalId).init(allocator),
             .pred_counts = collections.DenseMap(CFStmtId, u32).init(allocator),
@@ -1394,6 +1448,7 @@ const Pass = struct {
         self.path_env.deinit();
         self.undo.deinit(self.allocator);
         self.len_terms.deinit();
+        self.nonzero_bounds.deinit();
         self.assign_counts.deinit();
         self.alias_of.deinit();
         self.pred_counts.deinit();
@@ -1467,6 +1522,7 @@ const Pass = struct {
         self.query_used = 0;
         self.nodes.clearRetainingCapacity();
         self.zero_node = null;
+        self.nonzero_bounds.clearRetainingCapacity();
         self.truncateFacts(0);
         self.no_overflow_facts.clearRetainingCapacity();
         self.global_facts.clearRetainingCapacity();
@@ -3127,18 +3183,20 @@ const Pass = struct {
                 const node = self.nodes.items[kv.value_ptr.node];
                 const len_bounds = try self.localLenBounds(kv.value_ptr.node);
                 const local_lower = try self.valueLowerBounds(kv.key_ptr.*, kv.value_ptr.node);
+                const local_bounds = try self.reachableBounds(kv.value_ptr.node);
                 try state.env.append(self.allocator, .{
                     .local = kv.key_ptr.*,
                     .root = node.root,
                     .off_lo = node.off_lo,
                     .off_hi = node.off_hi,
                     .valid = true,
-                    .bounds = try self.reachableBounds(kv.value_ptr.node),
+                    .bounds = local_bounds,
                     .lower = local_lower,
                     .lower_any = local_lower,
                     .len_bounds = len_bounds,
                     .len_bounds_any = len_bounds,
                 });
+                self.noteEdgeValue(&state.env.items[state.env.items.len - 1], kv.value_ptr.node, local_bounds, local_lower);
                 // A struct's integer fields meet like locals of their own, so
                 // a loop exit that carries its state out through one record
                 // keeps each carried value's bounds.
@@ -3194,7 +3252,8 @@ const Pass = struct {
 
             const seed_join = self.body_joins.get(head);
             for (state.env.items) |*meet| {
-                if (!meet.valid and meet.bounds.len == 0 and meet.lower.len == 0 and meet.lower_any.len == 0 and meet.len_bounds.len == 0 and meet.len_bounds_any.len == 0) continue;
+                if (!meet.valid and meet.bounds.len == 0 and meet.lower.len == 0 and meet.lower_any.len == 0 and meet.len_bounds.len == 0 and meet.len_bounds_any.len == 0 and
+                    (meet.const_unusable or (meet.nonconst_edges and meet.nonconst_bounds.len == 0 and meet.nonconst_lower.len == 0))) continue;
                 const binding = self.path_env.get(meet.local);
                 const node_id: ?NodeId = if (binding) |b|
                     (if (meet.field) |field_idx| self.field_values.get((@as(u64, self.rootOf(b.node)) << 32) | field_idx) else b.node)
@@ -3248,6 +3307,7 @@ const Pass = struct {
                         }
                     }
                     meet.lower = kept_lower;
+                    if (meet.field == null) self.noteEdgeValue(meet, nid, mine, mine_lower);
                     for (mine_lower.slice()) |candidate| {
                         var merged = false;
                         for (meet.lower_any.items[0..meet.lower_any.len]) |*have| {
@@ -3293,10 +3353,112 @@ const Pass = struct {
                     meet.bounds = .{};
                     meet.lower = .{};
                     meet.len_bounds = .{};
+                    meet.const_unusable = true;
                 }
             }
         }
         state.captures += 1;
+    }
+
+    /// Fold one captured edge's value of a scalar local into the meet's
+    /// constant-edge bookkeeping: a constant joins the edge constants, any
+    /// other value meets `nonconst_bounds` and `nonconst_lower`.
+    fn noteEdgeValue(self: *const Pass, meet: *EnvMeet, node_id: NodeId, bounds: MeetBounds, lower: MeetBounds) void {
+        if (meet.const_unusable or meet.field != null) return;
+        if (trackedIntMax(self.localLayout(meet.local)) == null) {
+            meet.const_unusable = true;
+            return;
+        }
+        if (self.constValueOf(node_id)) |value| {
+            meet.noteConstant(value);
+            return;
+        }
+        if (!meet.nonconst_edges) {
+            meet.nonconst_edges = true;
+            meet.nonconst_bounds = bounds;
+            meet.nonconst_lower = lower;
+            return;
+        }
+        meet.nonconst_bounds = meetKept(meet.nonconst_bounds, bounds);
+        meet.nonconst_lower = meetKept(meet.nonconst_lower, lower);
+    }
+
+    /// The bounds of `have` whose root `mine` also bounds, weakened to cover
+    /// both.
+    fn meetKept(have: MeetBounds, mine: MeetBounds) MeetBounds {
+        var kept: MeetBounds = .{};
+        for (have.slice()) |bound| {
+            for (mine.slice()) |candidate| {
+                if (candidate.root == bound.root) {
+                    kept.append(.{ .root = bound.root, .c = @max(bound.c, candidate.c), .assumed = bound.assumed | candidate.assumed });
+                    break;
+                }
+            }
+        }
+        return kept;
+    }
+
+    /// Add a bound every edge proves to a meet's list, keeping the tighter
+    /// of two against one root.
+    fn addMetBound(list: *MeetBounds, bound: MeetBound) void {
+        for (list.items[0..list.len]) |*have| {
+            if (have.root == bound.root) {
+                if (bound.c < have.c) have.* = bound;
+                return;
+            }
+        }
+        list.append(bound);
+    }
+
+    /// Complete a meet whose edges mixed constants with other values. A
+    /// bound the non-constant edges proved holds on a constant edge too when
+    /// the bound root's own range guarantees it for that constant: `value <=
+    /// root + c` needs `root.lo + c >= value`, and `root <= value + c` needs
+    /// `root.hi <= value + c`. Those bounds join the meet's own lists. The
+    /// upper bounds only a zero edge fails are returned: they hold whenever
+    /// the merged value is not zero.
+    fn completeConstantEdges(self: *const Pass, meet: *EnvMeet) MeetBounds {
+        var nonzero: MeetBounds = .{};
+        if (meet.const_unusable or !meet.nonconst_edges or meet.const_len == 0) return nonzero;
+        const constants = meet.const_values[0..meet.const_len];
+        for (meet.nonconst_bounds.slice()) |bound| {
+            const root = self.nodes.items[bound.root];
+            var holds = true;
+            var fails_only_at_zero = true;
+            for (constants) |value| {
+                if (root.lo + bound.c >= value) continue;
+                holds = false;
+                if (value != 0) fails_only_at_zero = false;
+            }
+            if (holds) {
+                addMetBound(&meet.bounds, bound);
+            } else if (fails_only_at_zero) {
+                nonzero.append(bound);
+            }
+        }
+        for (meet.nonconst_lower.slice()) |bound| {
+            const root = self.nodes.items[bound.root];
+            var holds = true;
+            for (constants) |value| {
+                if (root.hi <= value + bound.c) continue;
+                holds = false;
+            }
+            if (holds) addMetBound(&meet.lower, bound);
+        }
+        return nonzero;
+    }
+
+    /// Assert a branch edge's ordering. `value(a) <= value(b) + c` puts `b`
+    /// at or above `a.lo - c`; when that is at least one and `b` is a merged
+    /// value with bounds that hold whenever it is not zero, those bounds hold
+    /// along this edge as well.
+    fn addEdgeOrdering(self: *Pass, fact: Fact) ResourceError!void {
+        try self.addFact(fact);
+        const bounds = self.nonzero_bounds.get(fact.b) orelse return;
+        if (self.nodes.items[fact.a].lo - fact.c < 1) return;
+        for (bounds.slice()) |bound| {
+            try self.addFact(.{ .a = fact.b, .b = bound.root, .c = bound.c, .origin = fact.origin, .assumed = fact.assumed | bound.assumed });
+        }
     }
 
     /// Expected incoming edge count of a merge head: jumps for a join body,
@@ -3474,8 +3636,12 @@ const Pass = struct {
             }
             // The edges bind different values, but each proves the same
             // bounds; a fresh value carrying those bounds preserves them.
-            const node = (try self.metScalarNode(meet)) orelse continue;
-            try self.bind(meet.local, .{ .node = node });
+            var met = meet;
+            const nonzero = self.completeConstantEdges(&met);
+            const node = (try self.metScalarNode(met)) orelse
+                (if (nonzero.len > 0) (try self.unknownFor(self.localLayout(met.local))) orelse continue else continue);
+            try self.bind(met.local, .{ .node = node });
+            if (nonzero.len > 0) try self.nonzero_bounds.put(self.rootOf(node), nonzero);
         }
     }
 
@@ -4715,7 +4881,7 @@ const Pass = struct {
         while (self.frames.pop()) |frame| {
             try self.rewindTo(frame.facts_len, frame.no_overflow_facts_len, frame.undo_len);
             if (frame.edge_fact) |fact| switch (fact) {
-                .ordering => |ordering| try self.addFact(ordering),
+                .ordering => |ordering| try self.addEdgeOrdering(ordering),
                 .no_overflow => |no_overflow| try self.no_overflow_facts.append(self.allocator, no_overflow),
                 .equal => |edge| try self.addEqualityEdge(edge, true),
                 .unequal => |edge| try self.addEqualityEdge(edge, false),
@@ -4954,12 +5120,17 @@ const Pass = struct {
                 .lt, .lte, .gt, .gte => .{ .ordering = self.predFact(pred, holds, switch_stmt) },
             };
         }
-        if (!holds) {
-            if (binding.overflow_pred) |overflow_pred| return .{ .no_overflow = .{
+        if (binding.overflow_pred) |overflow_pred| {
+            if (!holds) return .{ .no_overflow = .{
                 .predicate = overflow_pred,
                 .switch_stmt = switch_stmt,
                 .edge_head = edge_head,
             } };
+            if (overflow_pred.holds_fact) |fact| {
+                var ordering = fact;
+                ordering.origin = .{ .branch = switch_stmt };
+                return .{ .ordering = ordering };
+            }
         }
         return null;
     }
@@ -5407,23 +5578,25 @@ const Pass = struct {
                 }
                 try self.bindFresh(s.target);
             },
-            .num_shift_right_zf_by => {
-                if (arg_count == 2) {
-                    if (try self.valueOf(GuardedList.at(args, 1))) |amount_node| {
-                        if (self.constValueOf(amount_node)) |amount| {
-                            const max = trackedIntMax(self.localLayout(s.target));
-                            if (max != null and amount >= 0 and amount < 64) {
-                                const shifted = max.? >> @intCast(amount);
-                                if (try self.freshRoot(0, shifted)) |node| {
-                                    try self.bind(s.target, .{ .node = node });
-                                    return;
-                                }
-                            }
-                        }
-                    }
-                }
-                try self.bindFresh(s.target);
-            },
+            .num_div_by,
+            .num_div_by_checked,
+            .num_div_trunc_by,
+            .num_div_trunc_by_checked,
+            .num_rem_by,
+            .num_rem_by_checked,
+            .num_mod_by,
+            .num_mod_by_checked,
+            .num_shift_left_by,
+            .num_shift_right_by,
+            .num_shift_right_zf_by,
+            .num_bitwise_or,
+            .num_bitwise_xor,
+            .num_bitwise_not,
+            .num_count_one_bits,
+            .num_count_leading_zero_bits,
+            .num_count_trailing_zero_bits,
+            .num_abs_diff,
+            => try self.modelUnsignedArith(stmt, s, args, arg_count),
             .str_is_eq,
             .str_is_eq_static_small,
             .str_static_small_word_eq,
@@ -5525,19 +5698,10 @@ const Pass = struct {
             .crypto_blake3_hasher_finish,
             .num_negate,
             .num_abs,
-            .num_abs_diff,
             .num_float_add,
             .num_float_sub,
             .num_float_mul,
             .dec_mul,
-            .num_div_by,
-            .num_div_by_checked,
-            .num_div_trunc_by,
-            .num_div_trunc_by_checked,
-            .num_rem_by,
-            .num_rem_by_checked,
-            .num_mod_by,
-            .num_mod_by_checked,
             .num_negate_checked,
             .num_abs_checked,
             .num_pow,
@@ -5555,14 +5719,6 @@ const Pass = struct {
             .f32_from_bits,
             .f64_to_bits,
             .f64_from_bits,
-            .num_shift_left_by,
-            .num_shift_right_by,
-            .num_bitwise_or,
-            .num_bitwise_xor,
-            .num_bitwise_not,
-            .num_count_one_bits,
-            .num_count_leading_zero_bits,
-            .num_count_trailing_zero_bits,
             .num_from_le_bytes_unchecked,
             .simd_load_16_unchecked,
             .simd_store_16_unchecked,
@@ -6040,6 +6196,7 @@ const Pass = struct {
                 .rhs = rhs,
                 .operand_layout = operand_layout,
                 .predicate_stmt = stmt,
+                .holds_fact = try self.overflowHoldsFact(entry.operation, lhs, rhs, max.?),
             } });
             return;
         }
@@ -6071,6 +6228,189 @@ const Pass = struct {
             else
                 null,
         });
+    }
+
+    /// Bind the result of an integer operation outside the overflow
+    /// families. Only unsigned operands are modeled; each result gets the
+    /// range its operands' ranges allow, and the orderings it always has with
+    /// its operands become facts.
+    ///
+    /// Division and remainder by zero crash in their checked forms, so past
+    /// one the divisor is at least one; the plain forms are only ever the
+    /// checked ones with that already proven. A checked form whose divisor is
+    /// proven nonzero becomes the plain form.
+    fn modelUnsignedArith(self: *Pass, stmt: CFStmtId, s: anytype, args: anytype, arg_count: usize) ResourceError!void {
+        const operand_layout = if (arg_count > 0) self.localLayout(GuardedList.at(args, 0)) else self.localLayout(s.target);
+        const max = trackedIntMax(operand_layout) orelse {
+            if (try self.bitCountResult(s, operand_layout)) return;
+            return self.bindFresh(s.target);
+        };
+        const width: u7 = @intCast(std.math.log2_int(u128, @intCast(max + 1)));
+        const a = (if (arg_count > 0) try self.valueOf(GuardedList.at(args, 0)) else null) orelse return self.bindFresh(s.target);
+        const lo_a = self.absLoOf(a);
+        const hi_a = @min(self.absHiOf(a), max);
+        switch (s.op) {
+            .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits => {
+                const node = (try self.rangeRoot(0, width)) orelse return self.bindFresh(s.target);
+                return self.bind(s.target, .{ .node = node });
+            },
+            .num_bitwise_not => {
+                const node = (try self.rangeRoot(max - hi_a, max - lo_a)) orelse return self.bindFresh(s.target);
+                return self.bind(s.target, .{ .node = node });
+            },
+            else => {},
+        }
+        if (arg_count != 2) return self.bindFresh(s.target);
+        const b = (try self.valueOf(GuardedList.at(args, 1))) orelse return self.bindFresh(s.target);
+        const lo_b = self.absLoOf(b);
+        const hi_b = @min(self.absHiOf(b), max);
+        switch (s.op) {
+            .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked => {
+                try self.dischargeDivisor(stmt, s.op, b);
+                try self.assertNonzeroDivisor(b);
+                const divisor_lo = @max(lo_b, 1);
+                const divisor_hi = @max(hi_b, 1);
+                // Rounded up, so the bound covers a division that rounds up.
+                const node = (try self.rangeRoot(@divFloor(lo_a, divisor_hi), @divFloor(hi_a + divisor_lo - 1, divisor_lo))) orelse return self.bindFresh(s.target);
+                try self.addResultFact(s.target, self.orderingFact(node, a, 0, .meet));
+                return self.bind(s.target, .{ .node = node });
+            },
+            .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked => {
+                try self.dischargeDivisor(stmt, s.op, b);
+                try self.assertNonzeroDivisor(b);
+                const node = (try self.rangeRoot(0, @max(0, @min(hi_a, hi_b - 1)))) orelse return self.bindFresh(s.target);
+                try self.addResultFact(s.target, self.orderingFact(node, a, 0, .meet));
+                try self.addResultFact(s.target, self.orderingFact(node, b, -1, .meet));
+                return self.bind(s.target, .{ .node = node });
+            },
+            .num_shift_right_by, .num_shift_right_zf_by => {
+                // The count is taken modulo the width.
+                const node = if (self.constValueOf(b)) |count| blk: {
+                    const shift: u7 = @intCast(@mod(count, width));
+                    break :blk try self.rangeRoot(lo_a >> shift, hi_a >> shift);
+                } else try self.rangeRoot(0, hi_a);
+                const result = node orelse return self.bindFresh(s.target);
+                try self.addResultFact(s.target, self.orderingFact(result, a, 0, .meet));
+                return self.bind(s.target, .{ .node = result });
+            },
+            .num_shift_left_by => {
+                if (self.constValueOf(b)) |count| {
+                    const shift: u7 = @intCast(@mod(count, width));
+                    if (hi_a <= (max >> shift)) {
+                        const node = (try self.rangeRoot(lo_a << shift, hi_a << shift)) orelse return self.bindFresh(s.target);
+                        return self.bind(s.target, .{ .node = node });
+                    }
+                }
+                return self.bindFresh(s.target);
+            },
+            .num_bitwise_or => {
+                const node = (try self.rangeRoot(@max(lo_a, lo_b), lowBitsMask(@max(hi_a, hi_b)))) orelse return self.bindFresh(s.target);
+                try self.addResultFact(s.target, self.orderingFact(a, node, 0, .meet));
+                try self.addResultFact(s.target, self.orderingFact(b, node, 0, .meet));
+                return self.bind(s.target, .{ .node = node });
+            },
+            .num_bitwise_xor => {
+                const node = (try self.rangeRoot(0, lowBitsMask(@max(hi_a, hi_b)))) orelse return self.bindFresh(s.target);
+                return self.bind(s.target, .{ .node = node });
+            },
+            .num_abs_diff => {
+                const node = (try self.rangeRoot(0, @max(0, hi_a - lo_b, hi_b - lo_a))) orelse return self.bindFresh(s.target);
+                return self.bind(s.target, .{ .node = node });
+            },
+            else => unreachable,
+        }
+    }
+
+    /// A fresh root over `lo..hi`. On a path no execution takes, the operand
+    /// ranges can cross; the root is then empty and a single value stands in.
+    fn rangeRoot(self: *Pass, lo: i128, hi: i128) ResourceError!?NodeId {
+        return self.freshRoot(@min(lo, hi), hi);
+    }
+
+    /// A bit count is at most its operand's width, whatever its signedness.
+    fn bitCountResult(self: *Pass, s: anytype, operand_layout: layout_mod.Idx) ResourceError!bool {
+        switch (s.op) {
+            .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits => {},
+            else => return false,
+        }
+        const width: i128 = switch (operand_layout) {
+            .u8, .i8 => 8,
+            .u16, .i16 => 16,
+            .u32, .i32 => 32,
+            .u64, .i64 => 64,
+            .u128, .i128 => 128,
+            else => return false,
+        };
+        const node = (try self.freshRoot(0, width)) orelse return false;
+        try self.bind(s.target, .{ .node = node });
+        return true;
+    }
+
+    /// The smallest all-ones value at or above `value`.
+    fn lowBitsMask(value: i128) i128 {
+        if (value <= 0) return 0;
+        const bits = std.math.log2_int(u128, @intCast(value)) + 1;
+        return (@as(i128, 1) << bits) - 1;
+    }
+
+    /// Record a result's ordering with an operand, and replay it in regions
+    /// that read a single-assignment result through the global env.
+    fn addResultFact(self: *Pass, target: LocalId, fact: Fact) ResourceError!void {
+        try self.addFact(fact);
+        if (self.isSingleAssign(target)) try self.global_facts.append(self.allocator, fact);
+    }
+
+    /// Past a division or remainder the divisor is at least one.
+    fn assertNonzeroDivisor(self: *Pass, divisor: NodeId) ResourceError!void {
+        const zero = (try self.constantRoot()) orelse return;
+        try self.addFact(self.orderingFact(zero, divisor, -1, .meet));
+    }
+
+    /// Rewrite a checked division or remainder whose divisor is proven at
+    /// least one to its plain form.
+    fn dischargeDivisor(self: *Pass, stmt: CFStmtId, op: LIR.LowLevel, divisor: NodeId) ResourceError!void {
+        const plain = CheckedArithmetic.uncheckedOp(op) orelse return;
+        const one = (try self.constNode(1)) orelse return;
+        self.proof_assumed = 0;
+        if (!try self.proveLe(one, divisor, 0)) return;
+        if (self.proof_assumed != 0) {
+            self.deferred_rewrites = true;
+            return;
+        }
+        try self.recordProof(stmt);
+        const ptr = &self.store.getCFStmtPtr(stmt).assign_low_level;
+        ptr.op = plain;
+        ptr.rc_effect = try self.store.addRcEffect(plain.rcEffect());
+        self.rewrites += 1;
+    }
+
+    /// The ordering an unsigned overflow predicate's true edge asserts: a
+    /// difference overflows when the subtrahend exceeds the minuend, a sum
+    /// when the operands' mathematical sum exceeds the type's maximum, and a
+    /// product by a positive constant when the other operand exceeds the
+    /// maximum divided by that constant. A product of two dynamic values has
+    /// no such ordering. The origin is replaced by the switch that asserts it.
+    fn overflowHoldsFact(self: *Pass, operation: CheckedArithmetic.Operation, lhs: NodeId, rhs: NodeId, max: i128) ResourceError!?Fact {
+        const zero = (try self.constantRoot()) orelse return null;
+        switch (operation) {
+            .sub => return self.orderingFact(lhs, rhs, -1, .meet),
+            .add => {
+                if (self.constValueOf(rhs)) |constant| return self.orderingFact(zero, lhs, constant - max - 1, .meet);
+                if (self.constValueOf(lhs)) |constant| return self.orderingFact(zero, rhs, constant - max - 1, .meet);
+                const sum = (try self.sumNode(lhs, rhs)) orelse return null;
+                return self.orderingFact(zero, sum, -max - 1, .meet);
+            },
+            .mul => {
+                const constant, const other = if (self.constValueOf(rhs)) |c|
+                    .{ c, lhs }
+                else if (self.constValueOf(lhs)) |c|
+                    .{ c, rhs }
+                else
+                    return null;
+                if (constant < 1) return null;
+                return self.orderingFact(zero, other, -@divFloor(max, constant) - 1, .meet);
+            },
+        }
     }
 
     fn constantArithmeticChain(
