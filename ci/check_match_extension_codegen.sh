@@ -101,8 +101,13 @@ cd "$repo_root"
 # `ud2`, 94 to 95. On arm64musl the crash exit used to return a zeroed result
 # to the caller, which needed its own epilogue; it is now the call and a `brk`,
 # 94 to 90. The compare, byte-tail, and fill loops are unchanged.
+# Runtime unrolling moved after the late vectorization attempt, which now sees
+# the `List.repeat` fill loop before it is unrolled. On x64musl the fill goes
+# from eight bytes per iteration to four 32-byte vector stores per iteration
+# plus a byte-at-a-time remainder loop, 95 to 109. arm64musl is unchanged at
+# 90. The compare loop keeps its load, load, compare, advance shape.
 expectations=(
-    "x64musl:95"
+    "x64musl:109"
     "arm64musl:90"
 )
 
