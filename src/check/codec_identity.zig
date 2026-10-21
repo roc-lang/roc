@@ -22,7 +22,7 @@ pub fn intern(allocator: Allocator, types: checked.CheckedTypeStoreView, table: 
     defer buckets.deinit();
     const next = try allocator.alloc(?u32, table.generated_codec_derivations.len);
     defer allocator.free(next);
-    var comparer = Comparer{ .allocator = allocator, .types = types, .table = table };
+    var comparer = Comparer{ .allocator = allocator, .types = types, .table = table, .type_scratch = .init(allocator) };
     defer comparer.deinit();
     for (table.generated_codec_derivations, 0..) |*derivation, index| {
         const raw: u32 = @intCast(index);
@@ -73,6 +73,7 @@ pub fn digestContents(
         .names = names,
         .table = table,
         .keys = checked.CheckedTypeKeys.init(allocator, names, store),
+        .orderer = checked.CheckedIdentityOrderer.init(allocator, names, store),
     };
     defer digester.deinit();
     for (table.generated_codec_derivations, 0..) |*derivation, index| {
@@ -101,9 +102,12 @@ const ContentDigester = struct {
     codec_ordinals: std.AutoHashMapUnmanaged(u32, u32) = .empty,
     evidence_ordinals: std.AutoHashMapUnmanaged(u32, u32) = .empty,
     variable_ordinals: collections.DenseMapUnmanaged(TypeId, u32) = .empty,
-    /// Each root's variables in key order. Checked types are immutable here,
-    /// so the order is computed once per root for every contract.
-    identity_orders: collections.DenseMapUnmanaged(TypeId, []const TypeId) = .empty,
+    /// Each root's variables in key order, as a span of `identity_order_pool`.
+    /// Checked types are immutable here, so the order is computed once per
+    /// root for every contract.
+    identity_orders: collections.DenseMapUnmanaged(TypeId, Span) = .empty,
+    identity_order_pool: std.ArrayList(TypeId) = .empty,
+    orderer: checked.CheckedIdentityOrderer,
     tasks: std.ArrayList(Task) = .empty,
     children: std.ArrayList(Task) = .empty,
 
@@ -114,9 +118,9 @@ const ContentDigester = struct {
         self.codec_ordinals.deinit(self.allocator);
         self.evidence_ordinals.deinit(self.allocator);
         self.variable_ordinals.deinit(self.allocator);
-        var orders = self.identity_orders.valueIterator();
-        while (orders.next()) |order| self.allocator.free(order.*);
         self.identity_orders.deinit(self.allocator);
+        self.identity_order_pool.deinit(self.allocator);
+        self.orderer.deinit();
         self.tasks.deinit(self.allocator);
         self.children.deinit(self.allocator);
     }
@@ -301,9 +305,14 @@ const ContentDigester = struct {
         const entry = try self.identity_orders.getOrPut(self.allocator, ty);
         if (!entry.found_existing) {
             errdefer _ = self.identity_orders.remove(ty);
-            entry.value_ptr.* = try checked.collectCheckedIdentityRootsInKeyOrder(self.allocator, self.store, self.names, ty);
+            const order = try self.orderer.identityRoots(ty);
+            const start = std.math.cast(u32, self.identity_order_pool.items.len) orelse return error.OutOfMemory;
+            const len = std.math.cast(u32, order.len) orelse return error.OutOfMemory;
+            try self.identity_order_pool.appendSlice(self.allocator, order);
+            entry.value_ptr.* = .{ .start = start, .len = len };
         }
-        return entry.value_ptr.*;
+        const span = entry.value_ptr.*;
+        return self.identity_order_pool.items[span.start..][0..span.len];
     }
 
     fn writeText(self: *ContentDigester, text: []const u8) void {
@@ -339,7 +348,7 @@ pub fn callsEquivalent(
     left: dispatch.GeneratedCodecCall,
     right: dispatch.GeneratedCodecCall,
 ) Allocator.Error!bool {
-    var comparer = Comparer{ .allocator = allocator, .types = types, .table = table, .types_eql = .alias_transparent };
+    var comparer = Comparer{ .allocator = allocator, .types = types, .table = table, .types_eql = .alias_transparent, .type_scratch = .init(allocator) };
     defer comparer.deinit();
     if (left.method != right.method or std.meta.activeTag(left.resolution) != std.meta.activeTag(right.resolution)) return false;
     try comparer.typesPair(left.dispatcher_ty, right.dispatcher_ty);
@@ -370,8 +379,10 @@ const Comparer = struct {
     seen: std.AutoHashMapUnmanaged(Pair, void) = .empty,
     left_types: std.ArrayList(TypeId) = .empty,
     right_types: std.ArrayList(TypeId) = .empty,
+    type_scratch: checked.CheckedTypeStoreView.EqualityScratch,
 
     fn deinit(self: *Comparer) void {
+        self.type_scratch.deinit();
         self.work.deinit(self.allocator);
         self.seen.deinit(self.allocator);
         self.left_types.deinit(self.allocator);
@@ -503,8 +514,8 @@ const Comparer = struct {
         // One bijection covers all roots, including sharing across nested
         // evidence and source/frozen roles. Individual root equality is weaker.
         return switch (self.types_eql) {
-            .exact => self.types.rootsAlphaExactEql(self.allocator, self.left_types.items, self.right_types.items),
-            .alias_transparent => self.types.rootsAliasTransparentAlphaEql(self.allocator, self.left_types.items, self.right_types.items),
+            .exact => self.types.rootsAlphaExactEql(&self.type_scratch, self.left_types.items, self.right_types.items),
+            .alias_transparent => self.types.rootsAliasTransparentAlphaEql(&self.type_scratch, self.left_types.items, self.right_types.items),
         };
     }
 };

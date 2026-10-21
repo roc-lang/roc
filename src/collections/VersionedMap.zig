@@ -8,41 +8,45 @@ const Allocator = std.mem.Allocator;
 
 /// Versioned bindings indexed directly by compiler-owned integer IDs.
 pub fn VersionedDenseMap(comptime K: type, comptime V: type) type {
-    return VersionedMap(K, V, DenseMap(K, usize));
+    return VersionedMap(K, V, DenseMap(K, u32));
 }
 
 /// Versioned bindings whose keys have structural rather than dense identity.
 pub fn VersionedHashMap(comptime K: type, comptime V: type) type {
-    return VersionedMap(K, V, std.AutoHashMap(K, usize));
+    return VersionedMap(K, V, std.AutoHashMap(K, u32));
 }
 
 fn VersionedMap(comptime K: type, comptime V: type, comptime Index: type) type {
     return struct {
         const Self = @This();
-        const Slot = struct { key: K, value: ?V = null, position: usize = 0 };
+        /// Change ids, slot ids, and active positions are program-size counts,
+        /// so `u32` holds them; `put` refuses growth past that range.
+        /// `no_change` marks the base version (no parent, no redo successor).
+        const no_change: u32 = std.math.maxInt(u32);
+        const Slot = struct { key: K, value: ?V = null, position: u32 = 0 };
         const Change = struct {
-            parent: ?usize,
-            depth: usize,
-            slot: usize,
-            position: usize,
+            parent: u32,
+            depth: u32,
+            slot: u32,
+            position: u32,
             before: ?V,
             after: ?V,
-            redo_next: ?usize = null,
+            redo_next: u32 = no_change,
         };
         const Store = struct {
             allocator: Allocator,
             refs: usize = 1,
             index: Index,
             slots: std.ArrayList(Slot) = .empty,
-            active: std.ArrayList(usize) = .empty,
+            active: std.ArrayList(u32) = .empty,
             changes: std.ArrayList(Change) = .empty,
-            current: ?usize = null,
+            current: u32 = no_change,
             restore_credits: usize = 0,
             /// Deterministic work count, also used by the complexity tests.
             replayed_changes: usize = 0,
 
-            fn depth(self: *const Store, version: ?usize) usize {
-                return if (version) |id| self.changes.items[id].depth else 0;
+            fn depth(self: *const Store, version: u32) u32 {
+                return if (version == no_change) 0 else self.changes.items[version].depth;
             }
 
             fn apply(self: *Store, change: Change, forward: bool) void {
@@ -52,7 +56,7 @@ fn VersionedMap(comptime K: type, comptime V: type, comptime Index: type) type {
                 if (before == null and after != null) {
                     // Reverse a swap removal at its original position, keeping
                     // iteration order identical every time this version is read.
-                    const end = self.active.items.len;
+                    const end: u32 = @intCast(self.active.items.len);
                     self.active.appendAssumeCapacity(change.slot);
                     if (change.position != end) {
                         const displaced = self.active.items[change.position];
@@ -71,25 +75,25 @@ fn VersionedMap(comptime K: type, comptime V: type, comptime Index: type) type {
                 slot.value = after;
             }
 
-            fn activate(self: *Store, version: ?usize) void {
+            fn activate(self: *Store, version: u32) void {
                 var left = self.current;
                 var right = version;
-                var redo: ?usize = null;
+                var redo: u32 = no_change;
                 while (left != right) {
                     if (self.depth(left) >= self.depth(right)) {
-                        const change = self.changes.items[left.?];
+                        const change = self.changes.items[left];
                         self.apply(change, false);
                         if (@import("builtin").is_test) self.replayed_changes += 1;
                         left = change.parent;
                     } else {
-                        const change = &self.changes.items[right.?];
+                        const change = &self.changes.items[right];
                         change.redo_next = redo;
                         redo = right;
                         right = change.parent;
                     }
                 }
-                while (redo) |id| {
-                    const change = self.changes.items[id];
+                while (redo != no_change) {
+                    const change = self.changes.items[redo];
                     self.apply(change, true);
                     if (@import("builtin").is_test) self.replayed_changes += 1;
                     redo = change.redo_next;
@@ -97,14 +101,14 @@ fn VersionedMap(comptime K: type, comptime V: type, comptime Index: type) type {
                 self.current = version;
             }
 
-            fn recordChange(self: *Store, slot_id: usize, value: ?V) ?usize {
+            fn recordChange(self: *Store, slot_id: u32, value: ?V) u32 {
                 const slot = self.slots.items[slot_id];
-                const id = self.changes.items.len;
+                const id: u32 = @intCast(self.changes.items.len);
                 const change_ = Change{
                     .parent = self.current,
                     .depth = self.depth(self.current) + 1,
                     .slot = slot_id,
-                    .position = if (slot.value == null) self.active.items.len else slot.position,
+                    .position = if (slot.value == null) @intCast(self.active.items.len) else slot.position,
                     .before = slot.value,
                     .after = value,
                 };
@@ -113,8 +117,8 @@ fn VersionedMap(comptime K: type, comptime V: type, comptime Index: type) type {
                     // version the base without retaining an undo history.
                     self.changes.clearRetainingCapacity();
                     self.apply(change_, true);
-                    self.current = null;
-                    return null;
+                    self.current = no_change;
+                    return no_change;
                 }
                 self.changes.appendAssumeCapacity(change_);
                 self.apply(change_, true);
@@ -125,7 +129,7 @@ fn VersionedMap(comptime K: type, comptime V: type, comptime Index: type) type {
 
         allocator: Allocator,
         store: ?*Store = null,
-        version: ?usize = null,
+        version: u32 = no_change,
 
         pub fn init(allocator: Allocator) Self {
             return .{ .allocator = allocator };
@@ -153,9 +157,9 @@ fn VersionedMap(comptime K: type, comptime V: type, comptime Index: type) type {
             store.slots.clearRetainingCapacity();
             store.active.clearRetainingCapacity();
             store.changes.clearRetainingCapacity();
-            store.current = null;
+            store.current = no_change;
             store.restore_credits = 0;
-            self.version = null;
+            self.version = no_change;
         }
 
         /// Whether no other handle shares this map's storage, so emptying it
@@ -211,12 +215,16 @@ fn VersionedMap(comptime K: type, comptime V: type, comptime Index: type) type {
                 self.store = store;
             }
             const store = self.activeStore().?;
-            try store.changes.ensureUnusedCapacity(store.allocator, store.restore_credits + @intFromBool(store.refs != 1) + @intFromBool(cleanup));
+            const reserved_changes = store.restore_credits + @intFromBool(store.refs != 1) + @intFromBool(cleanup);
+            // Every id stays below `no_change`, so the change and slot counts
+            // (which also bound active positions) fit in `u32`.
+            if (store.changes.items.len + reserved_changes >= no_change or store.slots.items.len + 1 >= no_change) return error.OutOfMemory;
+            try store.changes.ensureUnusedCapacity(store.allocator, reserved_changes);
             try store.slots.ensureUnusedCapacity(store.allocator, 1);
             try store.active.ensureTotalCapacity(store.allocator, store.slots.items.len + 1);
             const entry = try store.index.getOrPut(key);
             if (!entry.found_existing) {
-                entry.value_ptr.* = store.slots.items.len;
+                entry.value_ptr.* = @intCast(store.slots.items.len);
                 store.slots.appendAssumeCapacity(.{ .key = key });
             }
             self.version = store.recordChange(entry.value_ptr.*, value);

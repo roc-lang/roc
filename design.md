@@ -770,10 +770,25 @@ known-empty assumption merely because their immutable structure is equal.
 Analysis view identities never escape in returned diagnostic patterns or
 unions, and memo keys use the reader's stable identity namespace.
 
+A declaration's formal-dependency graph is a function of its formals and
+backing template alone. Each reader computes it on first opening the
+declaration, except that a declaration whose template the checker reports
+final has its graph computed once and shared by every later reader of the
+same type store. Finality is explicit checker data, never inferred from the
+template: a declaration of the module being checked is final once
+declaration validity is final (every declaration is generated, and every
+invalid one poisoned, before value checking) and its generation completed,
+unless it is a declaration inside a function that names the function's type
+variables, whose template value checking still writes through them; a
+declaration copied from another module is final once its copy returns. No
+other graph outlives its reader.
+
 An inhabitedness memo stores complete query answers, not provisional answers
 obtained by cutting an active recursive path. Its key includes the resolved
 root and the exact sorted, deduplicated known-empty assumptions; its lifetime is one
-mutation-free analysis. Shared DAG nodes are not recursive cycles. A cyclic
+mutation-free analysis. Constructor-payload and known-absent-payload queries,
+which carry no assumptions, keep one memo per query mode with the same
+lifetime. Shared DAG nodes are not recursive cycles. A cyclic
 query implementation must distinguish those states and establish its fixed-point
 or traversal rule before producing a reusable result. The same restriction
 applies to completion-relation memoization in Monotype: no result outlives the
@@ -4454,7 +4469,9 @@ unrepresentable one.
 
 Checked-module cache writes stream the header and the two relocatable
 bodies to a private staging file, then atomically rename it. They never gather
-another full-entry heap buffer. A failed write or rename removes the staging file
+another full-entry heap buffer. Each body starts at a 16-byte-aligned entry
+offset, so a cache hit relocates both bodies in place inside the entry's
+private mapping, which the installed module's environment storage owns. A failed write or rename removes the staging file
 and records a cache-write failure; partial data never becomes a cache entry.
 
 Serialization never writes spare capacity. A `SafeMultiList` persists its live
@@ -9473,6 +9490,14 @@ marker, and the derivation decides its "flex or `[]`, per use" as `[]`. That
 rewrites the declaration itself, so a later use of the same alias sees the
 closed row. Rigid extensions are never closed: a polymorphic open row may
 hold tags no derivation was checked for, so it stays rejected.
+
+The selected payload belongs to the equivalence class of the relation's
+callable, which the type store keeps in a table keyed by class
+(`Store.derived_map_plans`): a merge keeps it, a member detached from the class
+keeps it, and a copy of a relation's callable, by instantiation or by
+cross-module import, carries it. Recording a selection and reading it for
+checked evidence are lookups of the callable's class, never scans of the
+store's constraints.
 
 Display follows the same polarity: an anonymous, unshared, unconstrained flex
 ext in an output position is not rendered as `..`; rigid extensions are

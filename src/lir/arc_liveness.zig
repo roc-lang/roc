@@ -26,36 +26,32 @@ const Allocator = std.mem.Allocator;
 const LoopForest = collections.LoopForest;
 
 /// A persistent bit row over an exact bit domain. Copies share structure;
-/// changing a bit allocates only that bit's path.
+/// changing a bit allocates only that bit's path, in the allocator the change
+/// names.
 pub const Row = struct {
-    bit_len: usize,
     words: ArcSnapshot(u64, 0),
+    bit_len: u32,
 
-    pub fn initEmpty(allocator: Allocator, bit_len: usize) Row {
+    /// A domain wider than `u32` bits is a compiler invariant violation: ARC
+    /// bit domains are bounded by a procedure's frame.
+    pub fn initEmpty(bit_len: usize) Row {
+        std.debug.assert(bit_len <= std.math.maxInt(u32));
         const word_len = (bit_len + 63) / 64;
-        std.debug.assert(word_len == 0 or word_len - 1 <= std.math.maxInt(u32));
-        return .{ .bit_len = bit_len, .words = ArcSnapshot(u64, 0).init(allocator, word_len) };
+        return .{ .bit_len = @intCast(bit_len), .words = ArcSnapshot(u64, 0).init(word_len) };
     }
 
-    /// The same bits, with further changes allocated in `allocator`.
-    pub fn clone(self: *const Row, allocator: Allocator) Row {
-        var cloned = self.*;
-        cloned.words.allocator = allocator;
-        return cloned;
-    }
-
-    pub fn set(self: *Row, bit: usize) Allocator.Error!void {
+    pub fn set(self: *Row, allocator: Allocator, bit: usize) Allocator.Error!void {
         std.debug.assert(bit < self.bit_len);
         const word: u32 = @intCast(bit / 64);
         const mask = @as(u64, 1) << @intCast(bit % 64);
-        try self.words.put(word, self.words.get(word) | mask);
+        try self.words.put(allocator, word, self.words.get(word) | mask);
     }
 
-    pub fn unset(self: *Row, bit: usize) Allocator.Error!void {
+    pub fn unset(self: *Row, allocator: Allocator, bit: usize) Allocator.Error!void {
         std.debug.assert(bit < self.bit_len);
         const word: u32 = @intCast(bit / 64);
         const mask = @as(u64, 1) << @intCast(bit % 64);
-        try self.words.put(word, self.words.get(word) & ~mask);
+        try self.words.put(allocator, word, self.words.get(word) & ~mask);
     }
 
     pub fn isSet(self: *const Row, bit: usize) bool {
@@ -82,25 +78,25 @@ pub const Row = struct {
         self.words.clear();
     }
 
-    pub fn setUnion(self: *Row, other: *const Row) Allocator.Error!void {
+    pub fn setUnion(self: *Row, allocator: Allocator, other: *const Row) Allocator.Error!void {
         std.debug.assert(self.bit_len == other.bit_len);
-        _ = try self.words.joinWith(&other.words, {}, unionWord);
+        _ = try self.words.joinWith(allocator, &other.words, {}, unionWord);
     }
 
-    pub fn setIntersection(self: *Row, other: *const Row) Allocator.Error!void {
+    pub fn setIntersection(self: *Row, allocator: Allocator, other: *const Row) Allocator.Error!void {
         std.debug.assert(self.bit_len == other.bit_len);
-        _ = try self.words.meetWith(&other.words, {}, intersectWord);
+        _ = try self.words.meetWith(allocator, &other.words, {}, intersectWord);
     }
 
     /// Whether any bit is set. The snapshot answers from its structure, so
     /// this costs the tree depth rather than the domain's width.
     pub fn isEmpty(self: *const Row) bool {
-        return !self.words.hasNonEmptyInRange(0, (self.bit_len + 63) / 64);
+        return !self.words.hasNonEmptyInRange(0, (@as(usize, self.bit_len) + 63) / 64);
     }
 
     pub fn count(self: *const Row) usize {
         var total: usize = 0;
-        for (0..(self.bit_len + 63) / 64) |word| total += @popCount(self.words.get(@intCast(word)));
+        for (0..(@as(usize, self.bit_len) + 63) / 64) |word| total += @popCount(self.words.get(@intCast(word)));
         return total;
     }
 
@@ -229,19 +225,19 @@ pub fn equationRow(
     rows: anytype,
     comptime rowOf: fn (@TypeOf(rows), u32) *const Row,
 ) Allocator.Error!Row {
-    var row = Row.initEmpty(allocator, graph.bit_len);
+    var row = Row.initEmpty(graph.bit_len);
     for (graph.successorsOf(node), graph.succ_starts[node]..) |successor, edge| {
         const kills = graph.killsOf(edge);
         if (kills.len == 0) {
-            try row.setUnion(rowOf(rows, successor));
+            try row.setUnion(allocator, rowOf(rows, successor));
             continue;
         }
-        var exposed = rowOf(rows, successor).clone(allocator);
-        for (kills) |bit| try exposed.unset(bit);
-        try row.setUnion(&exposed);
+        var exposed = rowOf(rows, successor).*;
+        for (kills) |bit| try exposed.unset(allocator, bit);
+        try row.setUnion(allocator, &exposed);
     }
-    for (graph.defsOf(node)) |bit| try row.unset(bit);
-    for (graph.readsOf(node)) |bit| try row.set(bit);
+    for (graph.defsOf(node)) |bit| try row.unset(allocator, bit);
+    for (graph.readsOf(node)) |bit| try row.set(allocator, bit);
     return row;
 }
 
@@ -261,6 +257,24 @@ pub fn certify(scratch_allocator: Allocator, graph: *const Graph, rows: []const 
     }
 }
 
+/// Chains `node` onto `bit`'s seeds, listing `bit` the first time it is seeded.
+fn noteSeed(
+    comptime SeedLink: type,
+    allocator: Allocator,
+    heads: []u32,
+    seeds: *std.ArrayList(SeedLink),
+    seed_bits: *std.ArrayList(u32),
+    node: u32,
+    bit: u32,
+) Allocator.Error!void {
+    const no_link = std.math.maxInt(u32);
+    const position = std.math.cast(u32, seeds.items.len) orelse return error.OutOfMemory;
+    if (position == no_link) return error.OutOfMemory;
+    if (heads[bit] == no_link) try seed_bits.append(allocator, bit);
+    try seeds.append(allocator, .{ .index = node, .next = heads[bit] });
+    heads[bit] = position;
+}
+
 /// Solves every node's row. Rows and their shared subtrees live in
 /// `allocator`; all other work uses `scratch_allocator` and is freed.
 pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const Graph) Allocator.Error![]Row {
@@ -271,49 +285,48 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
     const no_loop = LoopForest.none;
 
     const rows = try allocator.alloc(Row, node_count);
-    for (rows) |*row| row.* = Row.initEmpty(allocator, graph.bit_len);
+    for (rows) |*row| row.* = Row.initEmpty(graph.bit_len);
 
     var forest = try LoopForest.build(scratch, graph.succ_starts, graph.succs, graph.pred_starts, graph.preds);
     const loop_count = forest.loops.len;
 
-    // Edges entering a loop other than at its header, by loop.
+    // Edges entering a loop other than at its header, by loop, each loop's
+    // in the order they are found.
     const LoopEntry = struct { loop: u32, predecessor: u32, target: u32 };
-    var side_entries = std.ArrayList(LoopEntry).empty;
+    var found_entries = std.ArrayList(LoopEntry).empty;
     for (0..node_count) |target_index| {
         const target: u32 = @intCast(target_index);
         for (graph.predecessorsOf(target)) |predecessor| {
             var loop = forest.innermost[target];
             while (loop != no_loop and !forest.containsNode(loop, predecessor)) : (loop = forest.loops[loop].parent) {
                 if (forest.loops[loop].header != target) {
-                    try side_entries.append(scratch, .{ .loop = loop, .predecessor = predecessor, .target = target });
+                    try found_entries.append(scratch, .{ .loop = loop, .predecessor = predecessor, .target = target });
                 }
             }
         }
     }
-    std.mem.sort(LoopEntry, side_entries.items, {}, struct {
-        fn lessThan(_: void, lhs: LoopEntry, rhs: LoopEntry) bool {
-            return lhs.loop < rhs.loop;
-        }
-    }.lessThan);
     const side_entry_starts = try scratch.alloc(u32, loop_count + 1);
+    const side_entries = try scratch.alloc(LoopEntry, found_entries.items.len);
     {
-        var cursor: usize = 0;
-        for (0..loop_count) |loop| {
-            side_entry_starts[loop] = @intCast(cursor);
-            while (cursor < side_entries.items.len and side_entries.items[cursor].loop == loop) cursor += 1;
+        @memset(side_entry_starts, 0);
+        for (found_entries.items) |entry| side_entry_starts[entry.loop + 1] += 1;
+        for (1..side_entry_starts.len) |loop| side_entry_starts[loop] += side_entry_starts[loop - 1];
+        const fill = try scratch.dupe(u32, side_entry_starts[0..loop_count]);
+        for (found_entries.items) |entry| {
+            side_entries[fill[entry.loop]] = entry;
+            fill[entry.loop] += 1;
         }
-        side_entry_starts[loop_count] = @intCast(cursor);
     }
 
     // Bits each loop defines or kills: a node's definitions belong to its
     // innermost loop and to every loop around it, and an edge's kills to the
     // innermost loop holding both its ends.
     const written = try scratch.alloc(Row, loop_count);
-    for (written) |*bits| bits.* = Row.initEmpty(scratch, graph.bit_len);
+    for (written) |*bits| bits.* = Row.initEmpty(graph.bit_len);
     for (0..node_count) |node_index| {
         const loop = forest.innermost[node_index];
         if (loop == no_loop) continue;
-        for (graph.defsOf(node_index)) |bit| try written[loop].set(bit);
+        for (graph.defsOf(node_index)) |bit| try written[loop].set(scratch, bit);
         for (graph.successorsOf(node_index), graph.succ_starts[node_index]..) |successor, edge| {
             const kills = graph.killsOf(edge);
             if (kills.len == 0) continue;
@@ -322,7 +335,7 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
             var common = loop;
             while (common != no_loop and !forest.contains(common, target_loop)) common = forest.loops[common].parent;
             if (common == no_loop) continue;
-            for (kills) |bit| try written[common].set(bit);
+            for (kills) |bit| try written[common].set(scratch, bit);
         }
     }
     {
@@ -331,7 +344,7 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
             preorder_index -= 1;
             const loop = forest.preorder[preorder_index];
             const parent = forest.loops[loop].parent;
-            if (parent != no_loop) try written[parent].setUnion(&written[loop]);
+            if (parent != no_loop) try written[parent].setUnion(scratch, &written[loop]);
         }
     }
 
@@ -343,7 +356,10 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
     // node, or the largest loop around a node that defines nothing of the
     // bit, whose whole body shares one answer.
     const Unit = struct { loop: bool, index: u32 };
-    const BitAt = struct { index: u32, bit: u32 };
+    // One bit found exposed at a node or carried by a loop; `next` chains
+    // the other bits of the same node or loop from its head.
+    const BitLink = struct { index: u32, bit: u32, next: u32 };
+    const no_link = std.math.maxInt(u32);
     const Search = struct {
         graph_: *const Graph,
         forest_: *const LoopForest,
@@ -355,9 +371,18 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
         stamp: u32 = 0,
         bit: u32 = 0,
         work: std.ArrayList(Unit) = .empty,
-        node_bits: std.ArrayList(BitAt) = .empty,
-        loop_bits: std.ArrayList(BitAt) = .empty,
+        node_heads: []u32,
+        loop_heads: []u32,
+        node_bits: std.ArrayList(BitLink) = .empty,
+        loop_bits: std.ArrayList(BitLink) = .empty,
         allocator_: Allocator,
+
+        fn note(search: *@This(), heads: []u32, links: *std.ArrayList(BitLink), index: u32) Allocator.Error!void {
+            const position = std.math.cast(u32, links.items.len) orelse return error.OutOfMemory;
+            if (position == no_link) return error.OutOfMemory;
+            try links.append(search.allocator_, .{ .index = index, .bit = search.bit, .next = heads[index] });
+            heads[index] = position;
+        }
 
         fn transparent(search: *const @This(), loop: u32) bool {
             return !search.written_[loop].isSet(search.bit);
@@ -392,22 +417,23 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
         .component_of_ = component_of,
         .node_stamp = try scratch.alloc(u32, node_count),
         .loop_stamp = try scratch.alloc(u32, loop_count),
+        .node_heads = try scratch.alloc(u32, node_count),
+        .loop_heads = try scratch.alloc(u32, loop_count),
         .allocator_ = scratch,
     };
     @memset(search.node_stamp, std.math.maxInt(u32));
     @memset(search.loop_stamp, std.math.maxInt(u32));
+    @memset(search.node_heads, no_link);
+    @memset(search.loop_heads, no_link);
     const carried = try scratch.alloc(Row, loop_count);
-    const byIndex = struct {
-        fn lessThan(_: void, lhs: BitAt, rhs: BitAt) bool {
-            return if (lhs.index == rhs.index) lhs.bit < rhs.bit else lhs.index < rhs.index;
-        }
-    }.lessThan;
-    const byBit = struct {
-        fn lessThan(_: void, lhs: BitAt, rhs: BitAt) bool {
-            return if (lhs.bit == rhs.bit) lhs.index < rhs.index else lhs.bit < rhs.bit;
-        }
-    }.lessThan;
-    var seeds = std.ArrayList(BitAt).empty;
+    // A component's seed nodes grouped by bit: `seed_bits` lists each seeded
+    // bit once, and its nodes chain from `seed_heads[bit]` through `seeds`.
+    // Each bit's search is independent of the others and of seed order.
+    const SeedLink = struct { index: u32, next: u32 };
+    const seed_heads = try scratch.alloc(u32, graph.bit_len);
+    @memset(seed_heads, no_link);
+    var seeds = std.ArrayList(SeedLink).empty;
+    var seed_bits = std.ArrayList(u32).empty;
 
     var component_cursor = components.count();
     while (component_cursor > 0) {
@@ -427,38 +453,40 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
         // Seeds: reads inside the component, and bits exposed just past an
         // edge leaving it.
         seeds.clearRetainingCapacity();
+        seed_bits.clearRetainingCapacity();
         for (members) |member| {
-            for (graph.readsOf(member)) |bit| try seeds.append(scratch, .{ .index = member, .bit = bit });
+            for (graph.readsOf(member)) |bit| try noteSeed(SeedLink, scratch, seed_heads, &seeds, &seed_bits, member, bit);
             for (graph.successorsOf(member), graph.succ_starts[member]..) |successor, edge| {
                 if (component_of[successor] == component) continue;
                 const kills = graph.killsOf(edge);
                 var exposed = rows[successor].iterator();
                 while (exposed.next()) |bit| {
                     if (std.mem.findScalar(u32, kills, @intCast(bit)) != null) continue;
-                    try seeds.append(scratch, .{ .index = member, .bit = @intCast(bit) });
+                    try noteSeed(SeedLink, scratch, seed_heads, &seeds, &seed_bits, member, @intCast(bit));
                 }
             }
         }
-        std.mem.sort(BitAt, seeds.items, {}, byBit);
-        var seed_index: usize = 0;
-        while (seed_index < seeds.items.len) : (search.stamp += 1) {
-            search.bit = seeds.items[seed_index].bit;
-            while (seed_index < seeds.items.len and seeds.items[seed_index].bit == search.bit) : (seed_index += 1) {
-                const seed = seeds.items[seed_index].index;
+        for (seed_bits.items) |bit| {
+            defer search.stamp += 1;
+            search.bit = bit;
+            var cursor = seed_heads[bit];
+            seed_heads[bit] = no_link;
+            while (cursor != no_link) : (cursor = seeds.items[cursor].next) {
+                const seed = seeds.items[cursor].index;
                 // An exit seed is exposed at its node only through the node's
                 // definition; a read is exposed regardless.
                 if (graph.reads_(seed, search.bit) or !graph.defines(seed, search.bit)) try search.reach(seed);
             }
             while (search.work.pop()) |unit| {
                 if (unit.loop) {
-                    try search.loop_bits.append(scratch, .{ .index = unit.index, .bit = search.bit });
+                    try search.note(search.loop_heads, &search.loop_bits, unit.index);
                     try search.reachPredecessorsOf(forest.loops[unit.index].header, unit.index);
-                    for (side_entries.items[side_entry_starts[unit.index]..side_entry_starts[unit.index + 1]]) |entry| {
+                    for (side_entries[side_entry_starts[unit.index]..side_entry_starts[unit.index + 1]]) |entry| {
                         if (component_of[entry.predecessor] != component) continue;
                         if (graph.passes(entry.predecessor, entry.target, search.bit)) try search.reach(entry.predecessor);
                     }
                 } else {
-                    try search.node_bits.append(scratch, .{ .index = unit.index, .bit = search.bit });
+                    try search.note(search.node_heads, &search.node_bits, unit.index);
                     try search.reachPredecessorsOf(unit.index, null);
                 }
             }
@@ -466,34 +494,27 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
 
         // Rows: the bits whole loops carry, shared down the component's loop
         // tree, plus the bits exposed at the node itself.
-        std.mem.sort(BitAt, search.loop_bits.items, {}, byIndex);
-        std.mem.sort(BitAt, search.node_bits.items, {}, byIndex);
         var top = forest.innermost[first];
         while (forest.loops[top].parent != no_loop) top = forest.loops[top].parent;
         for (forest.preorder[forest.loops[top].enter .. forest.loops[top].exit + 1]) |loop| {
             const parent = forest.loops[loop].parent;
-            var row = if (parent != no_loop) carried[parent] else Row.initEmpty(allocator, graph.bit_len);
-            var low: usize = 0;
-            var high: usize = search.loop_bits.items.len;
-            while (low < high) {
-                const mid = low + (high - low) / 2;
-                if (search.loop_bits.items[mid].index < loop) low = mid + 1 else high = mid;
-            }
-            while (low < search.loop_bits.items.len and search.loop_bits.items[low].index == loop) : (low += 1) {
-                try row.set(search.loop_bits.items[low].bit);
+            var row = if (parent != no_loop) carried[parent] else Row.initEmpty(graph.bit_len);
+            var cursor = search.loop_heads[loop];
+            while (cursor != no_link) : (cursor = search.loop_bits.items[cursor].next) {
+                try row.set(allocator, search.loop_bits.items[cursor].bit);
             }
             carried[loop] = row;
         }
-        std.mem.sort(u32, members, {}, std.sort.asc(u32));
-        var bit_index: usize = 0;
         for (members) |member| {
             var row = carried[forest.innermost[member]];
-            while (bit_index < search.node_bits.items.len and search.node_bits.items[bit_index].index < member) bit_index += 1;
-            while (bit_index < search.node_bits.items.len and search.node_bits.items[bit_index].index == member) : (bit_index += 1) {
-                try row.set(search.node_bits.items[bit_index].bit);
+            var cursor = search.node_heads[member];
+            while (cursor != no_link) : (cursor = search.node_bits.items[cursor].next) {
+                try row.set(allocator, search.node_bits.items[cursor].bit);
             }
             rows[member] = row;
         }
+        for (search.loop_bits.items) |link| search.loop_heads[link.index] = no_link;
+        for (search.node_bits.items) |link| search.node_heads[link.index] = no_link;
     }
     try certify(scratch_allocator, graph, rows);
     return rows;
@@ -667,15 +688,15 @@ test "rows preserve operations across persistent forks" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     for ([_]usize{ 64, 65 }) |bit_len| {
-        var left = Row.initEmpty(arena.allocator(), bit_len);
-        var right = Row.initEmpty(arena.allocator(), bit_len);
-        try left.set(0);
-        try left.set(bit_len - 1);
-        try right.set(bit_len - 1);
-        try left.setIntersection(&right);
+        var left = Row.initEmpty(bit_len);
+        var right = Row.initEmpty(bit_len);
+        try left.set(arena.allocator(), 0);
+        try left.set(arena.allocator(), bit_len - 1);
+        try right.set(arena.allocator(), bit_len - 1);
+        try left.setIntersection(arena.allocator(), &right);
         try std.testing.expectEqual(@as(usize, 1), left.count());
         try std.testing.expect(left.isSet(bit_len - 1));
-        const cloned = left.clone(arena.allocator());
+        const cloned = left;
         try std.testing.expect(cloned.eql(&left));
         // A domain whose width is not a whole number of words must not
         // enumerate the padding bits above it.

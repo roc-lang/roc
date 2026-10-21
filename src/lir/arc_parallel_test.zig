@@ -289,7 +289,9 @@ test "ARC executor sweeps retained allocations through uniqueness source plannin
                 try expectSame(&source, &candidate);
             } else {
                 try result;
-                try testing.expect(fail_index > 1);
+                // A planning task of these return-only bodies retains a single
+                // arena chunk; its transient work lives in the task scratch.
+                try testing.expect(fail_index > 0);
                 try testing.expectEqual(@as(u64, 8), metrics.emission_tasks_committed);
                 break;
             }

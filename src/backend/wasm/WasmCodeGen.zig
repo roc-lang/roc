@@ -358,8 +358,12 @@ in_proc: bool = false,
 current_proc_id: ?LIR.LirProcSpecId = null,
 /// Map from JoinPointId → loop depth (for jump → br targeting).
 join_point_depths: collections.DenseMap(u32, u32),
-/// Map from JoinPointId → param local indices.
-join_point_param_locals: collections.DenseMap(u32, []u32),
+/// Saved field values of the struct literals being built, one run per
+/// literal.
+struct_field_values: std.ArrayList(StructFieldValue) = .empty,
+/// Scratch for the C-ABI lowering of one hosted function's import
+/// declaration or wrapper, reset for each.
+hosted_abi_arena: base.SingleThreadArena,
 /// Map from JoinPointId → state local selecting remainder or join body.
 join_point_state_locals: collections.DenseMap(u32, u32),
 /// Debug-only guard for recursive statement generation.
@@ -402,6 +406,8 @@ recorder: ?*BodyArtifact.Recorder = null,
 executor: ?tasks.Executor = null,
 /// The lane inline body generation uses, kept across waves like a worker's.
 sequential_lane: tasks.LaneState,
+/// The scratch arena every inline body wave reuses, as a worker does.
+sequential_scratch: base.SingleThreadArena,
 /// Generated RC helper bodies waiting for the commit that reserves them, by
 /// cache key.
 helper_artifacts: std.AutoHashMap(u64, BodyArtifact.Artifact),
@@ -448,12 +454,13 @@ pub fn init(
         .func_type_cache = std.StringHashMap(u32).init(allocator),
         .func_type_key_scratch = .empty,
         .join_point_depths = collections.DenseMap(u32, u32).init(allocator),
-        .join_point_param_locals = collections.DenseMap(u32, []u32).init(allocator),
         .join_point_state_locals = collections.DenseMap(u32, u32).init(allocator),
+        .hosted_abi_arena = base.SingleThreadArena.init(allocator),
         .active_stmt_generations = collections.DenseMap(u32, void).init(allocator),
         .stmt_generation_counts = collections.DenseMap(u32, u32).init(allocator),
         .precomputed_overflow_results = collections.DenseMap(u32, void).init(allocator),
         .sequential_lane = tasks.LaneState.init(allocator),
+        .sequential_scratch = base.SingleThreadArena.init(allocator),
         .helper_artifacts = std.AutoHashMap(u64, BodyArtifact.Artifact).init(allocator),
     };
 }
@@ -540,17 +547,14 @@ pub fn deinit(self: *Self) void {
     self.func_type_cache.deinit();
     self.func_type_key_scratch.deinit(self.allocator);
     self.join_point_depths.deinit();
-    // Free allocated param local arrays
-    var jp_it = self.join_point_param_locals.iterator();
-    while (jp_it.next()) |entry| {
-        self.allocator.free(entry.value_ptr.*);
-    }
-    self.join_point_param_locals.deinit();
     self.join_point_state_locals.deinit();
+    self.struct_field_values.deinit(self.allocator);
+    self.hosted_abi_arena.deinit();
     self.active_stmt_generations.deinit();
     self.stmt_generation_counts.deinit();
     self.precomputed_overflow_results.deinit();
     self.sequential_lane.deinit();
+    self.sequential_scratch.deinit();
     var helper_it = self.helper_artifacts.valueIterator();
     while (helper_it.next()) |artifact| artifact.deinit();
     self.helper_artifacts.deinit();
@@ -1994,10 +1998,9 @@ pub fn generateModule(
         ),
     };
 
-    const called_fns = self.allocator.alloc(bool, self.module.liveFunctionCount()) catch return error.OutOfMemory;
-    defer self.allocator.free(called_fns);
-    @memset(called_fns, false);
-    self.module.eliminateDeadCode(called_fns) catch return error.OutOfMemory;
+    // Exports, init functions and element-section entries seed the live
+    // set; no other function is seeded.
+    self.module.eliminateDeadCode(&.{}) catch return error.OutOfMemory;
     self.module.verifyNoBuiltinImports() catch {
         wasmInvariantFmt("WASM/codegen invariant violated: eval module retains a builtin host import", .{});
     };
@@ -5852,7 +5855,7 @@ fn runBodyWave(self: *Self, jobs: []BodyJob, kind: std.meta.Tag(BodyUnit)) Alloc
         };
         peak.* = @max(peak.*, admission.peak);
     }
-    try task_waves.execute(BodyJob, self.allocator, jobs, self.executor, &self.sequential_lane, &admission);
+    try task_waves.execute(BodyJob, self.allocator, jobs, self.executor, &self.sequential_lane, &self.sequential_scratch, &admission);
     switch (kind) {
         .proc => self.body_metrics.procedures_generated +|= jobs.len,
         .rc_helper => self.body_metrics.helpers_generated +|= jobs.len,
@@ -6321,8 +6324,11 @@ fn generateFrameReplacingCall(self: *Self, proc_id: LIR.LirProcSpecId, call_args
     const args = self.store.getLocalSpan(call_args);
     const params = self.store.getLocalSpan(proc.args);
     if (args.len != params.len) wasmInvariantFmt("WASM/codegen invariant violated: frame-replacing call arity mismatch", .{});
-    const offsets = try self.allocator.alloc(u32, params.len);
-    defer self.allocator.free(offsets);
+    var offsets_buffer: [16 * @sizeOf(u32)]u8 align(@alignOf(u32)) = undefined;
+    var offsets_sfa = std.heap.BufferFirstAllocator.init(&offsets_buffer, self.allocator);
+    const offsets_alloc = offsets_sfa.allocator();
+    const offsets = try offsets_alloc.alloc(u32, params.len);
+    defer offsets_alloc.free(offsets);
     _ = try self.tailArgOffsets(proc, offsets);
 
     for (0..args.len) |i| {
@@ -6756,11 +6762,10 @@ const HostedArgOrder = struct {
     size: u32,
 };
 
-fn computeHostedArgOffsets(self: *Self, arg_layouts: []const layout.Idx, offsets: []u32) Allocator.Error!u32 {
+fn computeHostedArgOffsets(self: *Self, arena: Allocator, arg_layouts: []const layout.Idx, offsets: []u32) Allocator.Error!u32 {
     std.debug.assert(arg_layouts.len == offsets.len);
 
-    var ordered = try self.allocator.alloc(HostedArgOrder, arg_layouts.len);
-    defer self.allocator.free(ordered);
+    var ordered = try arena.alloc(HostedArgOrder, arg_layouts.len);
 
     for (arg_layouts, 0..) |arg_layout, i| {
         const runtime_layout = self.runtimeRepresentationLayoutIdx(arg_layout);
@@ -7284,16 +7289,15 @@ pub fn registerHostedSymbolTargets(self: *Self, proc_specs: []const LIR.LirProcS
 /// The wasm C-ABI signature of a procedure called through the platform C
 /// ABI: its argument and return layouts classified by `layout.abi`.
 fn cAbiSignature(self: *Self, spec: LirProcSpec, params: *std.ArrayList(ValType), results: *std.ArrayList(ValType)) Allocator.Error!void {
+    _ = self.hosted_abi_arena.reset(.retain_capacity);
+    const arena = self.hosted_abi_arena.allocator();
     const param_locals = self.store.getLocalSpan(spec.args);
-    const arg_layouts = try self.allocator.alloc(layout.Idx, param_locals.len);
-    defer self.allocator.free(arg_layouts);
+    const arg_layouts = try arena.alloc(layout.Idx, param_locals.len);
     for (0..param_locals.len) |i| {
         arg_layouts[i] = self.procLocalLayoutIdx(GuardedList.at(param_locals, i));
     }
 
-    var arena_state = base.SingleThreadArena.init(self.allocator);
-    defer arena_state.deinit();
-    const lowered = layout.abi.lower(arena_state.allocator(), self.getLayoutStore(), if (self.cpu_level == .v1) .wasm32v1 else .wasm32, arg_layouts, spec.ret_layout, false) catch return error.OutOfMemory;
+    const lowered = layout.abi.lower(arena, self.getLayoutStore(), if (self.cpu_level == .v1) .wasm32v1 else .wasm32, arg_layouts, spec.ret_layout, false) catch return error.OutOfMemory;
 
     if (lowered.ret == .indirect) try params.append(self.allocator, .i32);
     for (lowered.args) |placement| {
@@ -7357,6 +7361,7 @@ fn hostedSymbolTarget(self: *const Self, hosted: LIR.HostedProc) HostedSymbolTar
 
 fn emitCAbiCall(
     self: *Self,
+    arena: Allocator,
     target: HostedSymbolTarget,
     args: anytype,
     arg_layouts: []const layout.Idx,
@@ -7370,9 +7375,8 @@ fn emitCAbiCall(
     const ret_slot = try self.allocStackMemory(@max(ret_size, 4), ret_align);
     const ret_ptr_local = try self.emitFpOffsetToNewLocal(ret_slot);
 
-    const arg_offsets = try self.allocator.alloc(u32, args.len);
-    defer self.allocator.free(arg_offsets);
-    const args_size = try self.computeHostedArgOffsets(arg_layouts, arg_offsets);
+    const arg_offsets = try arena.alloc(u32, args.len);
+    const args_size = try self.computeHostedArgOffsets(arena, arg_layouts, arg_offsets);
     // Pad by 8 bytes so a register piece loaded as a full 64-bit word from the tail of the
     // slot never reads past it.
     const args_slot = try self.allocStackMemory(@max(args_size, 4) + 8, 4);
@@ -7385,9 +7389,6 @@ fn emitCAbiCall(
     }
 
     // Lower the call to the wasm C ABI (shared classifier, same as the other backends).
-    var arena_state = base.SingleThreadArena.init(self.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
     const lowered = layout.abi.lower(arena, self.getLayoutStore(), if (self.cpu_level == .v1) .wasm32v1 else .wasm32, arg_layouts, ret_layout, false) catch return error.OutOfMemory;
 
     // An indirect return is passed as a result pointer (wasm has no sret register).
@@ -7450,15 +7451,16 @@ fn generateCAbiProcWrapper(
     params: anytype,
     ret_layout: layout.Idx,
 ) Allocator.Error!void {
-    const arg_layouts = try self.allocator.alloc(layout.Idx, params.len);
-    defer self.allocator.free(arg_layouts);
+    _ = self.hosted_abi_arena.reset(.retain_capacity);
+    const arena = self.hosted_abi_arena.allocator();
+    const arg_layouts = try arena.alloc(layout.Idx, params.len);
 
     for (0..params.len) |i| {
         const param = GuardedList.at(params, i);
         arg_layouts[i] = self.procLocalLayoutIdx(param);
     }
 
-    try self.emitCAbiCall(target, params, arg_layouts, ret_layout);
+    try self.emitCAbiCall(arena, target, params, arg_layouts, ret_layout);
     try self.emitLocalSet(self.proc_return_local);
 }
 
@@ -7823,10 +7825,7 @@ fn generateCFStmtUntil(self: *Self, stmt_id: CFStmtId, stop: ?CFStmtId) Allocato
                 // The join's lexical scope has ended: retire its bookkeeping so a
                 // later jump can only ever resolve a join that is still in scope,
                 // and so the locals/depths (which index only this proc) cannot be
-                // read by an unrelated proc. join_point_param_locals owns its array.
-                if (self.join_point_param_locals.fetchRemove(jp_key)) |entry| {
-                    self.allocator.free(entry.value);
-                }
+                // read by an unrelated proc.
                 _ = self.join_point_depths.remove(jp_key);
                 _ = self.join_point_state_locals.remove(jp_key);
             },
@@ -8192,14 +8191,12 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
         .join => |j| {
             const jp_key = @backingInt(j.id);
 
+            // Bind any unbound join parameter to a wasm local before the
+            // join's state local is allocated.
             const jp_params = self.store.getLocalSpan(j.params);
-            var param_locals = self.allocator.alloc(u32, jp_params.len) catch return error.OutOfMemory;
-
             for (0..jp_params.len) |i| {
-                const param = GuardedList.at(jp_params, i);
-                param_locals[i] = (try self.procLocalBinding(param)).idx;
+                _ = try self.procLocalBinding(GuardedList.at(jp_params, i));
             }
-            self.join_point_param_locals.put(jp_key, param_locals) catch return error.OutOfMemory;
             const state_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             self.join_point_state_locals.put(jp_key, state_local) catch return error.OutOfMemory;
 
@@ -9606,6 +9603,13 @@ fn emitZeroInit(self: *Self, base_local: u32, byte_count: u32) Allocator.Error!v
 /// Generate a struct construction expression (unified record/tuple/empty_record).
 /// Allocates stack memory, stores each field by its original semantic index,
 /// and returns a pointer to the result.
+/// A struct literal field's value, saved in a local until the struct's
+/// memory is initialized.
+const StructFieldValue = struct {
+    local: u32,
+    val_type: ValType,
+};
+
 fn generateStruct(self: *Self, r: anytype) Allocator.Error!void {
     const ls = self.getLayoutStore();
     const l = ls.getLayout(self.runtimeRepresentationLayoutIdx(r.struct_layout));
@@ -9635,10 +9639,11 @@ fn generateStruct(self: *Self, r: anytype) Allocator.Error!void {
     // to the same stack offset each iteration).
     const fields = self.store.getLocalSpan(r.fields);
 
-    const field_val_locals = self.allocator.alloc(u32, fields.len) catch return error.OutOfMemory;
-    defer self.allocator.free(field_val_locals);
-    const field_val_types = self.allocator.alloc(ValType, fields.len) catch return error.OutOfMemory;
-    defer self.allocator.free(field_val_types);
+    // Each field's saved value, in a run of `struct_field_values` released
+    // when this struct is built.
+    const saved_start = self.struct_field_values.items.len;
+    defer self.struct_field_values.shrinkRetainingCapacity(saved_start);
+    _ = self.struct_field_values.addManyAsSlice(self.allocator, fields.len) catch return error.OutOfMemory;
 
     for (0..fields.len) |i| {
         const field_expr_id = GuardedList.at(fields, i);
@@ -9673,8 +9678,7 @@ fn generateStruct(self: *Self, r: anytype) Allocator.Error!void {
         const save_vt: ValType = if (is_composite) .i32 else field_vt;
         const local_idx = try self.emitSetNewLocal(save_vt);
 
-        field_val_locals[i] = local_idx;
-        field_val_types[i] = save_vt;
+        self.struct_field_values.items[saved_start + i] = .{ .local = local_idx, .val_type = save_vt };
     }
 
     // Zero-initialize record memory for consistent padding in structural equality
@@ -9690,11 +9694,12 @@ fn generateStruct(self: *Self, r: anytype) Allocator.Error!void {
 
         if (is_composite and field_byte_size > 0) {
             // The local holds an i32 pointer to source data. Copy to record slot.
-            try self.emitMemCopy(base_local, field_offset, field_val_locals[i], field_byte_size);
+            try self.emitMemCopy(base_local, field_offset, self.struct_field_values.items[saved_start + i].local, field_byte_size);
         } else {
             // Primitive—push value from local, then store to record
-            try self.emitLocalGet(field_val_locals[i]);
-            try self.emitStoreToMemSized(base_local, field_offset, field_val_types[i], field_byte_size);
+            const saved = self.struct_field_values.items[saved_start + i];
+            try self.emitLocalGet(saved.local);
+            try self.emitStoreToMemSized(base_local, field_offset, saved.val_type, field_byte_size);
         }
     }
 

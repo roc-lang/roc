@@ -270,7 +270,7 @@ pub const ProgramView = struct {
     inline_scopes: []const InlineScope,
     expr_inline_scopes: []const InlineScopeId,
     stmt_inline_scopes: []const InlineScopeId,
-    local_names: []const []const u8,
+    local_names: []const Mono.StringLiteral,
 
     pub fn getComptimeValueRoot(self: ProgramView, id: Common.ComptimeValueRootId) Common.ComptimeValueRoot {
         return self.comptime_value_roots[@backingInt(id)];
@@ -301,13 +301,13 @@ pub const ProgramView = struct {
     }
 
     pub fn localName(self: ProgramView, id: LocalId) []const u8 {
-        return self.local_names[@backingInt(id)];
+        return self.local_names[@backingInt(id)].text();
     }
 
     /// The CaptureId of a local. Every local that participates in a capture set
     /// carries one; asserts it is present.
     pub fn captureIdOfLocal(self: ProgramView, id: LocalId) check.CheckedModule.CaptureId {
-        return self.locals[@backingInt(id)].capture_id orelse
+        return self.locals[@backingInt(id)].identity.captureId() orelse
             Common.invariant("lifted capture local had no CaptureId");
     }
 
@@ -488,7 +488,7 @@ pub const Program = struct {
     stmt_inline_scopes: ProgramList(InlineScopeId, "stmt_inline_scopes"),
     /// Source-level name per local, parallel to `locals` (empty for
     /// compiler-generated temporaries; moved from Monotype).
-    local_names: ProgramList([]const u8, "local_names"),
+    local_names: ProgramList(Mono.StringLiteral, "local_names"),
     /// Ambient location recorded by `addExpr`/`addStmt`. Passes that add
     /// nodes set this so synthetic nodes inherit a source location.
     current_loc: base.SourceLoc,
@@ -561,6 +561,36 @@ pub const Program = struct {
         // Empty spans carry no identity and may start at zero.
         const start = if (span_.len == 0) 0 else span_.start - prefix_len;
         return @field(self, field).borrowSpan(start, span_.len);
+    }
+
+    /// The rows of `span_` when it lies in the frozen source a body shard
+    /// borrows; null for a span the program owns. The frozen source never
+    /// changes while the shard is queried, so these rows stay valid across
+    /// appends to the shard.
+    pub fn frozenSpanRows(self: *const Program, comptime T: type, span_: Span(T)) ?[]const T {
+        const field = comptime spanField(T);
+        if (span_.len == 0) return &.{};
+        if (span_.start >= self.prefixLen(field)) return null;
+        std.debug.assert(span_.len <= self.prefixLen(field) - span_.start);
+        return @field(self.body_prefix.?.source, field).unsafeRawItemsForView()[span_.start..][0..span_.len];
+    }
+
+    /// Borrow the rows of any program span.
+    pub fn spanRows(self: *const Program, comptime T: type, span_: Span(T)) ProgramSpanBorrow(T, spanField(T)) {
+        return self.bodySpan(T, comptime spanField(T), span_);
+    }
+
+    fn spanField(comptime T: type) []const u8 {
+        if (T == ExprId) return "expr_ids";
+        if (T == PatId) return "pat_ids";
+        if (T == StmtId) return "stmt_ids";
+        if (T == TypedLocal) return "typed_locals";
+        if (T == FieldExpr) return "field_exprs";
+        if (T == CaptureOperand) return "capture_operands";
+        if (T == RecordDestruct) return "record_destructs";
+        if (T == Branch) return "branches";
+        if (T == IfBranch) return "if_branches";
+        @compileError("no program span stores " ++ @typeName(T));
     }
 
     fn appendBodySpan(self: *Program, comptime T: type, comptime field: []const u8, values: []const T) std.mem.Allocator.Error!Span(T) {
@@ -638,7 +668,7 @@ pub const Program = struct {
         inline_scopes: std.ArrayList(InlineScope),
         expr_inline_scopes: std.ArrayList(InlineScopeId),
         stmt_inline_scopes: std.ArrayList(InlineScopeId),
-        local_names: std.ArrayList([]const u8),
+        local_names: std.ArrayList(Mono.StringLiteral),
         static_data_values: std.ArrayList(StaticDataValue),
         comptime_sites: std.ArrayList(ComptimeSite),
         next_symbol: u32,
@@ -688,7 +718,7 @@ pub const Program = struct {
             .inline_scopes = ProgramList(InlineScope, "inline_scopes").fromArrayList(inline_scopes),
             .expr_inline_scopes = ProgramList(InlineScopeId, "expr_inline_scopes").fromArrayList(expr_inline_scopes),
             .stmt_inline_scopes = ProgramList(InlineScopeId, "stmt_inline_scopes").fromArrayList(stmt_inline_scopes),
-            .local_names = ProgramList([]const u8, "local_names").fromArrayList(local_names),
+            .local_names = ProgramList(Mono.StringLiteral, "local_names").fromArrayList(local_names),
             .current_loc = base.SourceLoc.none,
             .current_region = base.Region.zero(),
             .current_inline_scope = InlineScopeId.none,
@@ -696,9 +726,7 @@ pub const Program = struct {
     }
 
     pub fn deinit(self: *Program) void {
-        for (self.local_names.unsafeRawItemsForView()) |name| {
-            if (name.len > 0) self.allocator.free(name);
-        }
+        for (self.local_names.unsafeRawItemsForView()) |name| name.deinit(self.allocator);
         self.local_names.deinit(self.allocator);
         self.stmt_inline_scopes.deinit(self.allocator);
         self.expr_inline_scopes.deinit(self.allocator);
@@ -937,21 +965,27 @@ pub const Program = struct {
     }
 
     fn freeAnalysisLocalNames(self: *Program, start: usize) void {
-        for (self.local_names.unsafeRawItemsForView()[start..]) |name| {
-            if (name.len > 0) self.allocator.free(name);
-        }
+        for (self.local_names.unsafeRawItemsForView()[start..]) |name| name.deinit(self.allocator);
+    }
+
+    /// The id the next function takes. The largest `u32` is never a
+    /// function id, so it can mark an absent one.
+    fn nextFnId(self: *const Program) std.mem.Allocator.Error!FnId {
+        const raw = std.math.cast(u32, self.fns.len()) orelse return error.OutOfMemory;
+        if (raw == std.math.maxInt(u32)) return error.OutOfMemory;
+        return @fromBackingInt(raw);
     }
 
     pub fn addFn(self: *Program, fn_: Fn) std.mem.Allocator.Error!FnId {
         std.debug.assert(self.body_prefix == null);
-        const id: FnId = @fromBackingInt(@intCast(@as(u32, @intCast(self.fns.len()))));
+        const id = try self.nextFnId();
         try self.fns.append(self.allocator, fn_);
         return id;
     }
 
     pub fn reserveFnSlot(self: *Program) std.mem.Allocator.Error!FnId {
         std.debug.assert(self.body_prefix == null);
-        const id: FnId = @fromBackingInt(@intCast(@as(u32, @intCast(self.fns.len()))));
+        const id = try self.nextFnId();
         try self.fns.append(self.allocator, undefined);
         return id;
     }
@@ -1140,15 +1174,15 @@ pub const Program = struct {
 
     /// Source-level name of a local; empty for compiler-generated temporaries.
     pub fn localName(self: *const Program, id: LocalId) []const u8 {
-        return self.row("local_names", @backingInt(id));
+        return self.row("local_names", @backingInt(id)).text();
     }
 
     /// Replace a suffix local's diagnostic name with independently owned bytes.
     pub fn setLocalName(self: *Program, id: LocalId, text: []const u8) std.mem.Allocator.Error!void {
         const index = self.ownedIndex("local_names", @backingInt(id));
-        const owned = if (text.len == 0) "" else try self.allocator.dupe(u8, text);
+        const owned = try Mono.StringLiteral.initOwned(self.allocator, text);
         const old = self.local_names.get(index);
-        if (old.len > 0) self.allocator.free(old);
+        old.deinit(self.allocator);
         self.local_names.set(index, owned);
     }
 
@@ -1609,13 +1643,11 @@ pub const Program = struct {
             .id = id,
             .symbol = symbol,
             .ty = ty,
-            .binder = binder,
             // A binder-backed local carries the exact capture identity of
             // its binding, so any function that captures it joins by CaptureId.
-            .capture_id = checked_capture_id,
-            .checked_capture_id = checked_capture_id,
+            .identity = .init(binder, checked_capture_id, checked_capture_id),
         });
-        try self.local_names.append(self.allocator, "");
+        try self.local_names.append(self.allocator, .empty);
         return id;
     }
 
@@ -1652,12 +1684,10 @@ pub const Program = struct {
             .id = id,
             .symbol = symbol,
             .ty = ty,
-            .binder = binder,
-            .capture_id = capture_id,
-            .checked_capture_id = checked_capture_id,
+            .identity = .init(binder, capture_id, checked_capture_id),
             .capture_kind = capture_kind,
         });
-        try self.local_names.append(self.allocator, "");
+        try self.local_names.append(self.allocator, .empty);
         return id;
     }
 
@@ -1760,17 +1790,17 @@ pub const Program = struct {
     /// The CaptureId of a local. Every local that participates in a capture set
     /// carries one; asserts it is present.
     pub fn captureIdOfLocal(self: *const Program, id: LocalId) check.CheckedModule.CaptureId {
-        return self.getLocal(id).capture_id orelse
+        return self.getLocal(id).identity.captureId() orelse
             Common.invariant("lifted capture local had no CaptureId");
     }
 
     pub fn ensureLiftCaptureId(self: *Program, id: LocalId) check.CheckedModule.CaptureId {
         if (self.body_prefix != null) return self.captureIdOfLocal(id);
         const local = self.locals.getPtrImmediate(@backingInt(id));
-        if (local.capture_id == null) {
-            local.capture_id = self.nextLiftCaptureId();
+        if (local.identity.captureId() == null) {
+            local.identity.setCaptureId(self.nextLiftCaptureId());
         }
-        return local.capture_id.?;
+        return local.identity.captureId().?;
     }
 
     pub fn stmtSpan(self: *const Program, span_: Span(StmtId)) ProgramSpanBorrow(StmtId, "stmt_ids") {

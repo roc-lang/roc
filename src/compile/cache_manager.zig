@@ -114,32 +114,21 @@ pub const CacheManager = struct {
     pub fn computeCacheFilePathIn(allocator: Allocator, cache_key: [32]u8, entries_dir: []const u8) Allocator.Error![]u8 {
         var subdir_buf: [2]u8 = undefined;
         _ = std.fmt.bufPrint(&subdir_buf, "{x}", .{cache_key[0..1]}) catch unreachable;
-        const subdir = subdir_buf[0..];
 
-        var filename_buf: [62]u8 = undefined;
+        var filename_buf: [cache_file_name_len]u8 = undefined;
         _ = std.fmt.bufPrint(&filename_buf, "{x}", .{cache_key[1..32]}) catch unreachable;
-        const filename = filename_buf[0..];
 
-        const cache_subdir = try std.fs.path.join(allocator, &.{ entries_dir, subdir });
-        defer allocator.free(cache_subdir);
-
-        return std.fs.path.join(allocator, &.{ cache_subdir, filename });
+        return std.fs.path.join(allocator, &.{ entries_dir, &subdir_buf, &filename_buf });
     }
 
-    /// Create a cache entry's subdirectory using a caller-supplied allocator.
-    pub fn ensureCacheSubdirWith(
-        self: *Self,
-        allocator: Allocator,
-        cache_key: [32]u8,
-        entries_dir: []const u8,
-    ) (Allocator.Error || CoreCtx.MakePathError)!void {
-        var subdir_buf: [2]u8 = undefined;
-        _ = std.fmt.bufPrint(&subdir_buf, "{x}", .{cache_key[0..1]}) catch unreachable;
-        const subdir = subdir_buf[0..];
-        const full_subdir = try std.fs.path.join(allocator, &.{ entries_dir, subdir });
-        defer allocator.free(full_subdir);
+    /// Hex spelling of the key bytes after the subdirectory byte.
+    const cache_file_name_len = 62;
 
-        try self.roc_ctx.makePath(full_subdir);
+    /// The subdirectory holding the entry at `cache_path`, a path built by
+    /// `computeCacheFilePathIn`. The file name has no separators, so the join
+    /// put exactly one separator before it.
+    fn cacheSubdirOf(cache_path: []const u8) []const u8 {
+        return cache_path[0 .. cache_path.len - cache_file_name_len - 1];
     }
 
     pub fn storeRawBytes(self: *Self, cache_key: [32]u8, data: []const u8, entries_dir: []const u8, source_name: []const u8) void {
@@ -171,7 +160,22 @@ pub const CacheManager = struct {
         entries_dir: []const u8,
         source_name: []const u8,
     ) void {
-        self.storeEntry(self.allocator, .checked, cache_key, .{ .stream = stream }, size, entries_dir, source_name);
+        self.storeStreamIn(self.allocator, .checked, cache_key, stream, size, entries_dir, source_name);
+    }
+
+    /// `storeStream`, allocating path scratch from `allocator` and counting the
+    /// operation against `kind`'s counters.
+    pub fn storeStreamIn(
+        self: *Self,
+        allocator: Allocator,
+        kind: Kind,
+        cache_key: [32]u8,
+        stream: CoreCtx.FileStream,
+        size: usize,
+        entries_dir: []const u8,
+        source_name: []const u8,
+    ) void {
+        self.storeEntry(allocator, kind, cache_key, .{ .stream = stream }, size, entries_dir, source_name);
     }
 
     const EntrySource = union(enum) { bytes: []const u8, stream: CoreCtx.FileStream };
@@ -188,18 +192,18 @@ pub const CacheManager = struct {
     ) void {
         if (!self.config.enabled) return;
 
-        self.ensureCacheSubdirWith(allocator, cache_key, entries_dir) catch |err| {
+        const cache_path = computeCacheFilePathIn(allocator, cache_key, entries_dir) catch |err| {
             self.verboseLog(allocator, "Failed to create {s} cache subdirectory in {s} for {s} (key {x}): {}\n", .{ @tagName(kind), entries_dir, source_name, cache_key, err });
             self.recordStoreFailureFor(kind);
             return;
         };
+        defer allocator.free(cache_path);
 
-        const cache_path = computeCacheFilePathIn(allocator, cache_key, entries_dir) catch |err| {
-            self.verboseLog(allocator, "Failed to allocate cache path for {s}: {}\n", .{ source_name, err });
+        self.roc_ctx.makePath(cacheSubdirOf(cache_path)) catch |err| {
+            self.verboseLog(allocator, "Failed to create {s} cache subdirectory in {s} for {s} (key {x}): {}\n", .{ @tagName(kind), entries_dir, source_name, cache_key, err });
             self.recordStoreFailureFor(kind);
             return;
         };
-        defer allocator.free(cache_path);
 
         // Concurrent compilers can publish the same key. Each writer needs its
         // own staging file so one rename cannot remove another writer's input.

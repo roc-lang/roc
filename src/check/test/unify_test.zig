@@ -2651,7 +2651,8 @@ test "unify - rigid with from_numeral flex retains constraints on resolved rigid
     const to_str_constraint = types_mod.StaticDispatchConstraint{
         .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("to_str")),
         .fn_var = to_str_fn,
-        .origin = .{ .from_literal = .{ .numeral = types_mod.NumeralInfo.testOnlyInt(12345, false, base.Region.zero()) } },
+        .origin = .{ .from_literal = .numeral },
+        .numeral = try env.module_env.types.appendNumeralInfo(types_mod.NumeralInfo.testOnlyInt(12345, false, base.Region.zero())),
     };
     const constraints = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{to_str_constraint});
 
@@ -2699,9 +2700,7 @@ test "unify - non-numeric flex with rigid keeps constraints deferred-only" {
 
     const resolved = env.module_env.types.resolveVar(rigid_var);
     try std.testing.expect(resolved.desc.content == .rigid);
-    // Range.empty() leaves .start undefined; structural expectEqual would read it
-    // and fail under ReleaseFast. Check emptiness via count instead.
-    try std.testing.expectEqual(@as(u32, 0), resolved.desc.content.rigid.constraints.count);
+    try std.testing.expectEqual(types_mod.StaticDispatchConstraint.SafeList.Range.empty(), resolved.desc.content.rigid.constraints);
     try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
     try std.testing.expectEqual(constraints, env.scratch.deferred_constraints.items.items[0].constraints);
 }

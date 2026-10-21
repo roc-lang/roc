@@ -713,10 +713,11 @@ fn checkProgram(
         extra_modules.deinit(allocator);
     }
 
+    // Each module sees the modules checked before it, so one list grows as
+    // modules are checked.
+    var available_imports = try std.ArrayList(AvailableImport).initCapacity(allocator, imports.len);
+    defer available_imports.deinit(allocator);
     for (imports) |import_module| {
-        const available_imports = try availableImports(allocator, extra_modules.items);
-        defer allocator.free(available_imports);
-
         const checked = try parseCheckModule(
             allocator,
             import_module.name,
@@ -728,14 +729,14 @@ fn checkProgram(
             &.{},
             builtin_env,
             builtin_indices,
-            available_imports,
+            available_imports.items,
             roc_ctx,
         );
         try extra_modules.append(allocator, checked);
+        available_imports.appendAssumeCapacity(availableImport(checked));
     }
 
-    const main_imports = try availableImports(allocator, extra_modules.items);
-    defer allocator.free(main_imports);
+    const main_imports = available_imports.items;
 
     var executable_root_storage: [1]ExecutableRootInput = undefined;
     var executable_roots: []const ExecutableRootInput = &.{};
@@ -785,16 +786,12 @@ fn checkProgram(
     };
 }
 
-fn availableImports(allocator: Allocator, modules: []const CheckedModule) Error![]AvailableImport {
-    const available = try allocator.alloc(AvailableImport, modules.len);
-    for (modules, available) |module, *import| {
-        import.* = .{
-            .name = module.module_env.module_name,
-            .env = module.module_env,
-            .statement_idx = importStatementIdx(module.module_env, module.module_env.module_name),
-        };
-    }
-    return available;
+fn availableImport(module: CheckedModule) AvailableImport {
+    return .{
+        .name = module.module_env.module_name,
+        .env = module.module_env,
+        .statement_idx = importStatementIdx(module.module_env, module.module_env.module_name),
+    };
 }
 
 /// Lowering options the allocation-counting eval tests compile with.
