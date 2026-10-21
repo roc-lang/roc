@@ -322,7 +322,24 @@ pub const OwnedProcedureUsage = struct {
 /// specialization still runs in full; only the value chase narrows. Dev
 /// builds select this so their post-check time and emitted program size stay
 /// proportional to the iterator code the pass improves.
-pub const CloneInlining = enum { all_calls, iterator_fusion };
+pub const CloneInlining = enum {
+    all_calls,
+    iterator_fusion,
+
+    /// Whether SpecConstr clones workers for the call patterns and callables
+    /// the program's calls pass, and rewrites those calls to them. Which
+    /// clones a function gets depends on every call the program makes to it,
+    /// so a body rewritten to call one depends on the rest of the program.
+    /// Dev lowering (`iterator_fusion`) keeps every rewrite a function of the
+    /// function's own source, since the object cache serves one procedure's
+    /// code to every program that names it.
+    pub fn specializesCallPatterns(self: CloneInlining) bool {
+        return switch (self) {
+            .all_calls => true,
+            .iterator_fusion => false,
+        };
+    }
+};
 
 /// Independent work separated by coordinator-owned graph mutation barriers.
 pub const Phase = enum { discovery, unused_loop_results, iterator_fusion };
@@ -1970,8 +1987,10 @@ const Pass = struct {
 
         try self.specializeBranchAppendTails(original_fn_count);
         try self.collectArgUses(original_fn_count);
-        try self.collectCallPatterns(original_fn_count);
-        try self.collectValueAwareCallPatterns(original_fn_count);
+        if (self.clone_inlining.specializesCallPatterns()) {
+            try self.collectCallPatterns(original_fn_count);
+            try self.collectValueAwareCallPatterns(original_fn_count);
+        }
         try self.reserveSpecIds();
         try self.createSpecializations(original_fn_count);
         try self.rewriteExistingCalls();
@@ -4579,6 +4598,10 @@ const Pass = struct {
                     .iterator_fusion => .iterator_fusion,
                 };
                 cloner.inline_direct_requires_known_arg = true;
+                if (!self.clone_inlining.specializesCallPatterns()) {
+                    cloner.rewrite_call_patterns = false;
+                    cloner.emit_callable_workers = false;
+                }
             },
             .iterator_fusion => {
                 cloner.inline_calls = .iterator_fusion;

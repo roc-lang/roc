@@ -7985,7 +7985,11 @@ The explicit `InlineMode` controls the optional specialization work:
   decides single use by the source instead of the program (below). Dev mode
   selects this, because the object cache links dev procedures into programs
   other than the one compiling them, and only decisions that depend on source
-  alone are the same in all of them.
+  alone are the same in all of them. For the same reason dev SpecConstr
+  (`.iterator_fusion` clone inlining) clones no workers for call patterns or
+  callables (`CloneInlining.specializesCallPatterns`): which clones a function
+  gets depends on every call the program makes to it, so a body rewritten to
+  call one would depend on the rest of the program.
 - optimized eval and focused lowering tests may select `.wrappers` directly.
 
 The mode is compiler input supplied to the checked pipeline. SpecConstr and the
