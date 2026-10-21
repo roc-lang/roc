@@ -24206,7 +24206,10 @@ the prefix size (`LirProgram.Result.erased_capture_prefix`), and the frozen
 images written for that program reserve it before their captures. A static
 value is never dropped, so its reserved prefix stays zeroed. Optimized
 builds, other backends, and an interpreted evaluation reserve no prefix, and
-completed values are transcoded into a program whose prefix differs.
+completed values are transcoded into a program whose prefix differs. A dev code
+generator takes the program's prefix size when it is constructed, so the
+procedures it generates, the payloads they pack, and the erased procedures they
+register all agree with the program's values.
 
 Headerless default apps never hot reload. They compile through synthetic
 temporary source files that are discarded after each run, so there is nothing

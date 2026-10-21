@@ -404,6 +404,9 @@ pub const BoolRootModule = struct {
     store: *const lir.LirStore,
     layouts: *const LayoutStore,
     tables: boxy_runtime.BoxyTables,
+    /// Bytes the program's erased callables reserve before their captures
+    /// (`LirProgram.Result.erased_capture_prefix`).
+    erased_capture_prefix: u32,
     roots: []const BoolRoot,
     expect_site_count: usize = 0,
     static_data: RuntimeStaticData = .{},
@@ -1203,6 +1206,7 @@ pub fn devEvalTopLevelExpects(
         .store = &lowered.lir_result.store,
         .layouts = &lowered.lir_result.layouts,
         .tables = boxy_runtime.BoxyTables.fromResult(&lowered.lir_result),
+        .erased_capture_prefix = lowered.lir_result.erased_capture_prefix,
         .roots = roots,
         .expect_site_count = lowered.lir_result.expect_sites.items.len,
         .static_data = .{
@@ -2387,6 +2391,7 @@ pub fn devEvalSharedBoolRootModules(allocator: Allocator, modules: []const BoolR
             tables.erased_arg_desc_offsets,
             tables.erased_arg_desc_params,
             tables.worker_procs,
+            module.erased_capture_prefix,
             roc_target.host_cpu.level(),
         );
         defer codegen.deinit();
@@ -2793,6 +2798,7 @@ pub fn llvmEvalBoolRootsWithExpectSites(
     store: *const lir.LirStore,
     layouts: *const LayoutStore,
     tables: boxy_runtime.BoxyTables,
+    erased_capture_prefix: u32,
     roots: []const BoolRoot,
     expect_site_count: usize,
     opt: LlvmTestOpt,
@@ -2801,6 +2807,7 @@ pub fn llvmEvalBoolRootsWithExpectSites(
         .store = store,
         .layouts = layouts,
         .tables = tables,
+        .erased_capture_prefix = erased_capture_prefix,
         .roots = roots,
         .expect_site_count = expect_site_count,
     }};
@@ -2830,7 +2837,8 @@ fn validateSharedBoolRootModules(modules: []const BoolRootModule) Error!void {
     const program = modules[0];
     for (modules[1..]) |module| {
         if (module.store != program.store or module.layouts != program.layouts or
-            !std.meta.eql(module.tables, program.tables) or !std.meta.eql(module.static_data, program.static_data))
+            !std.meta.eql(module.tables, program.tables) or module.erased_capture_prefix != program.erased_capture_prefix or
+            !std.meta.eql(module.static_data, program.static_data))
             return error.Internal;
     }
 }
@@ -3039,6 +3047,9 @@ pub fn inspectedRunResult(allocator: Allocator, comptime backend_kind: Inspected
         .store = &lowered.view.store,
         .layouts = &lowered.view.layouts,
         .boxy_tables = boxy_runtime.BoxyTables.fromImageView(&lowered.view),
+        // An image's program reserves no capture prefix; writing the image
+        // checks that.
+        .erased_capture_prefix = 0,
         .boxy_sidecar_blob = lowered.shm.base_ptr[0..lowered.shm.getUsedSize()],
         .boxy_sidecar_desc = LirImage.BoxySidecar.fromHeader(lowered.image_header),
         .main_proc = lowered.mainProc(),
@@ -3228,6 +3239,9 @@ fn wasmProgram(lowered: *const LoweredProgram) InspectedRun.Program {
         .store = &lowered.view.store,
         .layouts = &lowered.view.layouts,
         .boxy_tables = boxy_runtime.BoxyTables.fromImageView(&lowered.view),
+        // An image's program reserves no capture prefix; writing the image
+        // checks that.
+        .erased_capture_prefix = 0,
         .boxy_sidecar_blob = lowered.shm.base_ptr[0..lowered.shm.getUsedSize()],
         .boxy_sidecar_desc = LirImage.BoxySidecar.fromHeader(lowered.image_header),
         .main_proc = lowered.mainProc(),

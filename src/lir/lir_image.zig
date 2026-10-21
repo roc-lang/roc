@@ -488,6 +488,9 @@ pub const BoxyTablesImage = extern struct {
     erased_arg_desc_params: ArrayRef,
 
     fn fromProgram(encoder: anytype, lowered: *const Program.Result) @TypeOf(encoder).Error!BoxyTablesImage {
+        // Every consumer of an image reads erased callables without a capture
+        // prefix, so only a program lowered without one is imaged.
+        std.debug.assert(lowered.erased_capture_prefix == 0);
         return fromView(encoder, .{
             .type_descs = lowered.boxy_type_descs.items,
             .dicts = lowered.boxy_dicts.items,

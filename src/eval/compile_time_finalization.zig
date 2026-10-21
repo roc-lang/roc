@@ -4667,6 +4667,7 @@ const DevProgram = struct {
             lowered.lir_result.boxy_erased_arg_desc_offsets.items,
             lowered.lir_result.boxy_erased_arg_desc_params.items,
             lowered.lir_result.boxy_worker_procs.items,
+            lowered.lir_result.erased_capture_prefix,
             roc_target.host_cpu.level(),
         );
         errdefer codegen.deinit();
@@ -4678,7 +4679,6 @@ const DevProgram = struct {
             .boxy_in_process => .native_execution,
         };
         try codegen.setStaticDataSymbols(materialized);
-        codegen.enable_hot_reload = lowered.lir_result.erased_capture_prefix != 0;
         var native_fns = boxyNativeFnTable();
         codegen.boxy_native_fns = &native_fns;
         const const_root_count = lowered.lir_result.const_roots.items.len;
@@ -6253,7 +6253,7 @@ test "CTFE native emission uses worker callbacks and retains reusable code witho
         defer executor.completions.deinit(allocator);
         var strings = try backend.StaticStringData.build(allocator, &program.store, backend.dev.LirCodeGenMod.host_lir_codegen_target);
         defer strings.deinit();
-        var codegen = try backend.HostLirCodeGen.initWithBoxyMetadata(allocator, &program.store, &program.layouts, strings.view(), &.{}, &.{}, &.{}, roc_target.host_cpu.level());
+        var codegen = try backend.HostLirCodeGen.initWithBoxyMetadata(allocator, &program.store, &program.layouts, strings.view(), &.{}, &.{}, &.{}, 0, roc_target.host_cpu.level());
         defer codegen.deinit();
         var artifacts = try DevProgram.compileProcedures(allocator, &codegen, &.{proc}, &.{}, .{ .post_check_executor = executor.executor(), .timing = &timing });
         errdefer artifacts.deinit();
@@ -6275,7 +6275,7 @@ test "CTFE native emission uses worker callbacks and retains reusable code witho
         if (iteration == 1) program.store.getProcSpecPtr(proc).native_code_revision += 1;
         var strings = try backend.StaticStringData.build(allocator, &program.store, backend.dev.LirCodeGenMod.host_lir_codegen_target);
         defer strings.deinit();
-        var codegen = try backend.HostLirCodeGen.initWithBoxyMetadata(allocator, &program.store, &program.layouts, strings.view(), &.{}, &.{}, &.{}, roc_target.host_cpu.level());
+        var codegen = try backend.HostLirCodeGen.initWithBoxyMetadata(allocator, &program.store, &program.layouts, strings.view(), &.{}, &.{}, &.{}, 0, roc_target.host_cpu.level());
         defer codegen.deinit();
         var metrics: NativeProcCompiler.Metrics = .{};
         var runtime_artifacts = try NativeProcCompiler.run(backend.HostLirCodeGen, allocator, &codegen, &.{proc}, .{
@@ -6638,7 +6638,7 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
 
     const Inspected = @import("inspected.zig");
     const roots = [_]Inspected.BoolRoot{.{ .symbol_name = "test_frozen_erased", .proc = caller, .arg_layouts = &.{}, .ret_layout = .bool }};
-    const module = Inspected.BoolRootModule{ .store = &program.store, .layouts = &program.layouts, .tables = Interpreter.BoxyTables.fromResult(&program), .roots = &roots, .static_data = .{ .exports = copied, .value_count = 1 } };
+    const module = Inspected.BoolRootModule{ .store = &program.store, .layouts = &program.layouts, .tables = Interpreter.BoxyTables.fromResult(&program), .erased_capture_prefix = program.erased_capture_prefix, .roots = &roots, .static_data = .{ .exports = copied, .value_count = 1 } };
     if (comptime backend.host_lir_codegen_available) {
         var dev_result = try Inspected.devEvalBoolRootModule(allocator, module, null, 1);
         defer dev_result.deinit(allocator);
@@ -6681,7 +6681,7 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
     inline for (.{ InspectedRun.Backend.interpreter, .dev, .llvm }) |kind| {
         if (comptime kind == .dev and !backend.host_lir_codegen_available) continue;
         if (comptime kind != .interpreter and builtin.os.tag == .freestanding) continue;
-        const result = try InspectedRun.run(allocator, kind, .{ .store = &program.store, .layouts = &program.layouts, .main_proc = inspected_root, .static_data = inspected_exports, .static_data_value_count = 2 }, if (kind == .interpreter) .reject else {});
+        const result = try InspectedRun.run(allocator, kind, .{ .store = &program.store, .layouts = &program.layouts, .erased_capture_prefix = program.erased_capture_prefix, .main_proc = inspected_root, .static_data = inspected_exports, .static_data_value_count = 2 }, if (kind == .interpreter) .reject else {});
         defer result.deinit(allocator);
         try std.testing.expect(result.outcome == .returned);
         try std.testing.expectEqualStrings("relocated", result.outcome.returned);
@@ -6713,7 +6713,7 @@ test "inspected runners consume frozen string slots on every backend" {
         @memcpy(bytes[0..6], "frozen");
         bytes[bytes.len - 1] = 0x80 | 6;
         const exports = [_]LirProgram.StaticDataExport{.{ .symbol_name = name, .value_id = slot, .bytes = bytes, .alignment = width.size(), .relocations = &.{} }};
-        const result = try InspectedRun.run(allocator, kind, .{ .store = &program.store, .layouts = &program.layouts, .main_proc = root, .static_data = &exports, .static_data_value_count = 1 }, if (kind == .interpreter) .reject else {});
+        const result = try InspectedRun.run(allocator, kind, .{ .store = &program.store, .layouts = &program.layouts, .erased_capture_prefix = program.erased_capture_prefix, .main_proc = root, .static_data = &exports, .static_data_value_count = 1 }, if (kind == .interpreter) .reject else {});
         defer result.deinit(allocator);
         try std.testing.expect(result.outcome == .returned);
         try std.testing.expectEqualStrings("frozen", result.outcome.returned);
@@ -6781,7 +6781,7 @@ test "LLVM test roots run a float remainder in process" {
         };
     }
 
-    const module = Inspected.BoolRootModule{ .store = &program.store, .layouts = &program.layouts, .tables = Interpreter.BoxyTables.fromResult(&program), .roots = &roots };
+    const module = Inspected.BoolRootModule{ .store = &program.store, .layouts = &program.layouts, .tables = Interpreter.BoxyTables.fromResult(&program), .erased_capture_prefix = program.erased_capture_prefix, .roots = &roots };
     inline for (.{ Inspected.LlvmTestOpt.size, Inspected.LlvmTestOpt.speed }) |opt| {
         const batch = try Inspected.llvmEvalBoolRootModules(allocator, &.{module}, opt, .{});
         defer allocator.free(batch.expect_counts);

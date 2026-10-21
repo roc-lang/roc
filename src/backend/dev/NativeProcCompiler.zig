@@ -170,12 +170,12 @@ fn Job(comptime CG: type) type {
                 source.erased_arg_desc_offsets,
                 source.erased_arg_desc_params,
                 source.boxy_worker_procs,
+                source.erased_capture_prefix,
                 source.cpu_level,
             );
             defer cg.deinit();
             cg.borrowStackPlanIndexes(try laneStackPlanIndexes(worker));
             cg.generation_mode = source.generation_mode;
-            cg.enable_hot_reload = source.enable_hot_reload;
             cg.enable_default_platform_runtime = source.enable_default_platform_runtime;
             cg.borrowStaticDataSymbolsFrom(source);
             self.fragment = if (self.proc) |id|
