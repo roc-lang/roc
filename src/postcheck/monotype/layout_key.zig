@@ -96,8 +96,9 @@ pub fn knownSized(allocator: Allocator, store: *const Type.Store, root: Type.Typ
 
 /// Whether Lambda Solved could change `root`: it holds a function anywhere
 /// (a boxed erased callable included), whose members lambda solving relates,
-/// or a tag row anywhere, which lambda solving joins with every row a value
-/// of it flows into or out of (design.md "Row Joins"). A demand-shaped call
+/// or a tag row anywhere outside a builtin of fixed layout, which lambda
+/// solving joins with every row a value of it flows into or out of
+/// (design.md "Row Joins"). A demand-shaped call
 /// relates nothing across it, so its signature must hold neither: a row on
 /// one side of the call could otherwise be widened without the other.
 pub fn solvingCanChange(allocator: Allocator, store: *const Type.Store, root: Type.TypeId) Allocator.Error!bool {
@@ -125,6 +126,10 @@ pub fn solvingCanChange(allocator: Allocator, store: *const Type.Store, root: Ty
                 for (0..span.len) |index| try pending.append(allocator, GuardedList.at(span, index));
             },
             .named => |named| {
+                // A builtin with a fixed layout (`Bool` among them, whose
+                // backing is a tag union) has one representation whatever
+                // solving does.
+                if (Builder.namedLayout(named) == .itself) continue;
                 const args = store.span(named.args);
                 for (0..args.len) |index| try pending.append(allocator, GuardedList.at(args, index));
                 if (named.backing) |backing| try pending.append(allocator, backing.ty);

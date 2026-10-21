@@ -15503,7 +15503,8 @@ its function is also used as a value (a value's type is the program's), when
 its identity depends on its lexical context or a codec contract, or when the
 shaped signature would hold, anywhere in an argument or the result, a type
 Lambda Solved could change (`LayoutKey.solvingCanChange`): a function, a boxed
-erased callable included, or a tag row. Lambda Solved relates nothing across
+erased callable included, or a tag row other than the backing of a builtin
+whose layout is fixed (`Bool`'s). Lambda Solved relates nothing across
 a shaped call, so no lambda set, and no erased callable's member set, ever
 crosses one; and a tag row is joined with every row a value of it flows into
 or out of (Row Joins), so a row on the caller's side of the call could be
