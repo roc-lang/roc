@@ -19315,7 +19315,13 @@ operands and to every other sum sharing an operand, since `a + y` and `a + z`
 order exactly as `y` and `z` do. A guard on `base + limit` established once
 therefore bounds every later `base + offset` whose `offset` a loop head keeps
 below `limit`, which is the shape of a word-at-a-time compare over two cursors
-into one buffer. The sum root stands for the exact sum; a wrapping addition
+into one buffer. Every use of a sum also relates it to each other sum whose
+operands the path's facts bound one by one: from `a <= p + c1` and
+`b <= q + c2`, `a + b <= p + q + c1 + c2`, and the same with the orderings
+reversed. A guard on `current + limit` thereby bounds a read at
+`candidate + len` when the candidate is at or before the current position and
+the length below the limit, with no sum sharing an operand in between. The sum
+root stands for the exact sum; a wrapping addition
 takes it only when those constraints bound the sum within the type, and a surviving
 checked addition takes it unconditionally.
 
