@@ -327,12 +327,7 @@ pub fn initWithExecutableRootNames(module_name: []const u8, source: []const u8, 
     );
     checker.fixupTypeWriter();
     for (explicit_root_names) |root_name| {
-        const root_def_idx = can.explicitRootDefByName(root_name) orelse {
-            if (@import("builtin").mode == .debug) {
-                std.debug.panic("test invariant violated: explicit executable root `{s}` was not found", .{root_name});
-            }
-            unreachable;
-        };
+        const root_def_idx = can.explicitRootDefByName(root_name) orelse return error.TestUnexpectedResult;
         try checker.addExecutableRootDef(root_def_idx);
     }
     errdefer checker.deinit();
@@ -605,7 +600,7 @@ fn findDefVar(self: *const TestEnv, target_def_name: []const u8) TestEnvError!Va
                 .str_literal,
                 .underscore,
                 .runtime_error,
-                => unreachable,
+                => unreachable, // appendPatternBinders collects only assign, var_assign and as patterns
                 .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
             };
             if (std.mem.eql(u8, target_def_name, idents.getText(ident))) {

@@ -8300,8 +8300,7 @@ fn expectRecordedRunsEqual(
         switch (expected_event) {
             .effect => |expected_effect| switch (actual_event) {
                 .effect => |actual_effect| try std.testing.expectEqualStrings(expected_effect.name, actual_effect.name),
-                // The activeTag equality above already proved both are effects.
-                .dbg, .expect_failed, .crashed => unreachable,
+                .dbg, .expect_failed, .crashed => unreachable, // the activeTag equality above proved both are effects
             },
             .dbg, .expect_failed, .crashed => {},
         }
@@ -9255,7 +9254,7 @@ test "custom literal field default gets an ordinary conversion root" {
         .for_,
         .hosted_lambda,
         .run_low_level,
-        => unreachable,
+        => return error.TestUnexpectedResult,
     };
     const plan = &artifact.static_dispatch_plans.plans[@backingInt(plan_id)];
     const saved = plan.resolution;

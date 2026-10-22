@@ -321,7 +321,7 @@ fn mul_u64_by_u128_wrapping(a: u64, b: u128) u128 {
 fn DoubleInt(comptime T: type) type {
     if (T == u32 or T == i32) return i64;
     if (T == u64 or T == i64) return i128;
-    unreachable;
+    @compileError("DoubleInt supports only 32-bit and 64-bit integer types");
 }
 
 fn muldXi(comptime T: type, a: T, b: T) DoubleInt(T) {

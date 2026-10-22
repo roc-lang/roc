@@ -1014,10 +1014,7 @@ fn repHasRecordFields(program: *const Plan.ProgramPlan, rep: Plan.TypeRepresenta
 }
 
 fn boxyLayoutInvariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .debug) {
-        base.invariant("boxy layout invariant violated: {s}", .{message});
-    }
-    unreachable;
+    base.invariant("boxy layout invariant violated: {s}", .{message});
 }
 
 test "boxy layout planner records dynamic worker boxes separately from storage layout" {

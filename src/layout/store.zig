@@ -507,7 +507,7 @@ pub const Store = struct {
 
     fn buildExistingLayoutInternKey(self: *Self, layout: Layout) std.mem.Allocator.Error!void {
         switch (layout.tag) {
-            .scalar => unreachable,
+            .scalar => base.invariant("layout.Store invariant violated: scalar layouts have fixed indices and no intern key", .{}),
             .zst => try self.startInternKey(.zst),
             .box => {
                 try self.startInternKey(.box);
@@ -1086,7 +1086,8 @@ pub const Store = struct {
         /// references resolved through nominals via `sink.child`.
         fn encodeNode(graph: *const LayoutGraph, node_index: u32, sink: anytype) Allocator.Error!void {
             switch (graph.getNode(@fromBackingInt(@intCast(node_index)))) {
-                .pending, .nominal, .committed => unreachable,
+                .nominal, .committed => unreachable, // the walk resolves children through nominals and pre-settles committed leaves
+                .pending => base.invariant("layout.Store invariant violated: commitGraph received a reserved node that was never filled", .{}),
                 .box => |child| {
                     try sink.writeByte(0);
                     try sink.child(resolveNominalRef(graph, child));
@@ -1398,7 +1399,7 @@ pub const Store = struct {
                     if (self_engine.low_link[node_index] == self_engine.visit_index[node_index]) {
                         self_engine.members.clearRetainingCapacity();
                         while (true) {
-                            const member = self_engine.stack.pop() orelse unreachable;
+                            const member = self_engine.stack.pop() orelse unreachable; // node_index is still on Tarjan's stack because its low link equals its visit index
                             self_engine.on_stack[member] = false;
                             try self_engine.members.append(self_engine.allocator, member);
                             if (member == node_index) break;
@@ -1551,14 +1552,14 @@ pub const Store = struct {
                 }
                 std.mem.sort(RecursiveKey, sorted_labels, {}, digestLessThan);
                 for (sorted_labels, 0..) |label, rank| {
-                    const slot = distinct_labels.getPtr(label) orelse unreachable;
+                    const slot = distinct_labels.getPtr(label) orelse unreachable; // sorted_labels holds exactly distinct_labels' keys
                     slot.* = @intCast(rank);
                 }
                 const rank_of_member = try scratch.alloc(u32, member_count);
                 const block_rep = try scratch.alloc(u32, block_count);
                 @memset(block_rep, no_component);
                 for (members, 0..) |member, pos| {
-                    const rank = distinct_labels.get(labels[pos]) orelse unreachable;
+                    const rank = distinct_labels.get(labels[pos]) orelse unreachable; // the final refinement round put every member's label
                     rank_of_member[pos] = rank;
                     if (block_rep[rank] == no_component) block_rep[rank] = member;
                 }
@@ -1709,13 +1710,13 @@ pub const Store = struct {
                             .canonical => |layout_idx| switch (expected) {
                                 .canonical => |expected_idx| if (expected_idx != layout_idx) return false,
                                 .settled, .member => return false,
-                                .component_node => unreachable,
+                                .component_node => unreachable, // settled group shapes are encoded with member ranks, so no child of one is a component node
                             },
                             .settled => |digest| switch (expected) {
                                 .settled => |expected_digest| if (!std.meta.eql(expected_digest, digest)) return false,
                                 .member => |expected_rank| if (!std.meta.eql(groups.rank(group, expected_rank).digest, digest)) return false,
                                 .canonical => return false,
-                                .component_node => unreachable,
+                                .component_node => unreachable, // settled group shapes are encoded with member ranks, so no child of one is a component node
                             },
                             .component_node => |child_index| switch (expected) {
                                 .member => |expected_rank| try pending.append(self_engine.allocator, .{
@@ -1723,9 +1724,9 @@ pub const Store = struct {
                                     .rank = expected_rank,
                                 }),
                                 .canonical, .settled => return false,
-                                .component_node => unreachable,
+                                .component_node => unreachable, // settled group shapes are encoded with member ranks, so no child of one is a component node
                             },
-                            .member => unreachable,
+                            .member => unreachable, // encodeComponentShape passes no member ranks, so no child it encodes is a member
                         }
                     }
                 }
@@ -1826,7 +1827,8 @@ pub const Store = struct {
             initialized[working_index] = true;
 
             const translated_node: graph_mod.Node = switch (node) {
-                .pending, .committed => unreachable,
+                .committed => unreachable, // the mapping loop above sends committed nodes to canonical refs
+                .pending => base.invariant("layout.Store invariant violated: commitGraph received a reserved node that was never filled", .{}),
                 .nominal => |child| .{ .nominal = translateGraphRef(mapping, child) },
                 .box => |child| .{ .box = translateGraphRef(mapping, child) },
                 .list => |child| .{ .list = translateGraphRef(mapping, child) },
@@ -2149,7 +2151,7 @@ pub const Store = struct {
                 defer component.deinit(self_finder.allocator);
 
                 while (true) {
-                    const member = self_finder.stack.pop() orelse unreachable;
+                    const member = self_finder.stack.pop() orelse unreachable; // node_id is still on Tarjan's stack because its lowlink equals its visit index
                     const member_index = @backingInt(member);
                     self_finder.on_stack[member_index] = false;
                     try component.append(self_finder.allocator, member);
@@ -2345,7 +2347,7 @@ pub const Store = struct {
                     const node = self_finalizer.graph.getNode(node_id);
                     // The next child to read, with how it is read.
                     const next: ?struct { ref: GraphRef, mode: ChildMode } = switch (node) {
-                        .pending, .committed => unreachable,
+                        .pending, .committed => unreachable, // commitGraph builds this working graph with committed leaves as canonical refs and every reserved node filled
                         .nominal => |child| if (frame.children.items.len == 0) .{ .ref = child, .mode = .value } else null,
                         .box, .list, .closure => |child| if (frame.children.items.len == 0) .{ .ref = child, .mode = .pointer } else null,
                         .erased_callable => null,
@@ -2381,7 +2383,7 @@ pub const Store = struct {
 
                     const children = frame.children.items;
                     const value_layout = switch (node) {
-                        .pending, .committed => unreachable,
+                        .pending, .committed => unreachable, // commitGraph builds this working graph with committed leaves as canonical refs and every reserved node filled
                         .nominal => children[0],
                         .box => if (self_finalizer.store.isZeroSized(self_finalizer.store.getLayout(children[0])))
                             try self_finalizer.store.insertLayout(Layout.boxOfZst())
@@ -2458,7 +2460,7 @@ pub const Store = struct {
         for (graph.nodes.items, reaches_cycle, 0..) |node, reaches, i| {
             if (!reaches) continue;
             raw_layouts[i] = try self.reserveLayout(switch (node) {
-                .pending, .committed => unreachable,
+                .pending, .committed => unreachable, // commitGraph builds this working graph with committed leaves as canonical refs and every reserved node filled
                 .nominal, .struct_, .tag_union => Layout.zst(),
                 .box => Layout.box(.zst),
                 .list => Layout.list(.zst),
@@ -2582,7 +2584,7 @@ pub const Store = struct {
                 if (self_resolver.resolved[index]) return false;
 
                 switch (self_resolver.graph.getNode(node_id)) {
-                    .pending, .committed => unreachable,
+                    .pending, .committed => unreachable, // commitGraph builds this working graph with committed leaves as canonical refs and every reserved node filled
                     .nominal => |child| {
                         if (!self_resolver.isValueReady(child)) return false;
                         const child_value_idx = self_resolver.valueIdx(child);
@@ -3137,7 +3139,7 @@ pub const Store = struct {
     pub fn listItemSizeAtMost(self: *const Self, list_layout_idx: Idx, bound: u128) layout_mod.WidthValues(bool) {
         const list_layout = self.getLayout(list_layout_idx);
         if (list_layout.tag == .list_of_zst) return layout_mod.WidthValues(bool).both(true, true);
-        if (list_layout.tag != .list) unreachable;
+        if (list_layout.tag != .list) base.invariant("layout.Store invariant violated: listItemSizeAtMost expects a list layout, got {s}", .{@tagName(list_layout.tag)});
         const elem = self.getLayout(self.runtimeRepresentationLayoutIdx(list_layout.getIdx()));
         return layout_mod.WidthValues(bool).both(self.sizeAt(elem, .u32) <= bound, self.sizeAt(elem, .u64) <= bound);
     }
@@ -3486,6 +3488,22 @@ pub const Store = struct {
         return if (resolved == Idx.none) null else resolved;
     }
 };
+
+fn askListItemSizeOfScalar() std.mem.Allocator.Error!void {
+    var store = try Store.init(std.testing.allocator, .u64);
+    defer store.deinit();
+    _ = store.listItemSizeAtMost(.u8, 8);
+}
+
+// In builds without runtime safety the invariant is the same `unreachable`
+// the site states, so release codegen of `listItemSizeAtMost` is unchanged.
+test "listItemSizeAtMost reports a non-list layout as a violated invariant" {
+    try base.death_test.expectPanic(
+        "layout.Store invariant violated: listItemSizeAtMost expects a list layout, got scalar",
+        askListItemSizeOfScalar,
+        .{},
+    );
+}
 
 test "layout store commits struct fields in canonical structural order" {
     const testing = std.testing;
@@ -4715,4 +4733,56 @@ test "tag union discriminant offsets beyond 16 bits are committed exactly" {
     });
     const with_str = try store.putTagUnion(&[_]Idx{ .zst, payload_with_str });
     try expectTagUnionMetrics(&store, with_str, 65_552, 65_560, 65_560, 65_568);
+}
+
+test "RC helper plans are noop exactly for layouts without refcounted data" {
+    const testing = std.testing;
+
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    const plain_struct = try store.putStructFields(&[_]StructField{
+        .{ .index = 0, .layout = .u8 },
+        .{ .index = 1, .layout = .u64 },
+    });
+    const str_struct = try store.putStructFields(&[_]StructField{
+        .{ .index = 0, .layout = .u64 },
+        .{ .index = 1, .layout = .str },
+    });
+    const elems = [_]Idx{
+        .bool,
+        .str,
+        .u64,
+        .dec,
+        .opaque_ptr,
+        .zst,
+        .u8x16,
+        try store.insertList(.u64),
+        try store.insertList(.str),
+        try store.insertBox(.u64),
+        try store.insertBox(.str),
+        try store.insertBox(.zst),
+        try store.insertPtr(.str),
+        try store.insertErasedCallable(),
+        plain_struct,
+        str_struct,
+        try store.putTagUnion(&[_]Idx{ .zst, .u64 }),
+        try store.putTagUnion(&[_]Idx{ .zst, str_struct }),
+    };
+
+    for (elems) |elem| {
+        const contains_refcounted = store.layoutContainsRefcounted(store.getLayout(elem));
+        for ([_]rc_helper.RcOp{ .incref, .decref, .free, .host_drop }) |op| {
+            const plan = store.rcHelperPlan(.{ .op = op, .layout_idx = elem });
+            try testing.expectEqual(!contains_refcounted, plan == .noop);
+        }
+
+        // A list builtin's "items are refcounted" flag agrees with whether
+        // its item callbacks exist.
+        const list = try store.insertList(elem);
+        if (store.getLayout(list).tag != .list) continue;
+        const abi = store.builtinListAbi(list);
+        const item_plan = store.rcHelperPlan(.{ .op = .decref, .layout_idx = abi.elem_layout_idx.? });
+        try testing.expectEqual(abi.contains_refcounted, item_plan != .noop);
+    }
 }

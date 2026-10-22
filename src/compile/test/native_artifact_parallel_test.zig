@@ -86,7 +86,7 @@ const ObservedExecutor = struct {
             self.outstanding += 1;
             return;
         }
-        unreachable;
+        @panic("ObservedExecutor.submit: every slot holds an outstanding task");
     }
 
     fn receive(context: *anyopaque) tasks.Completion {
@@ -125,7 +125,7 @@ const ObservedExecutor = struct {
                 }
             }
         }
-        unreachable;
+        @panic("ObservedExecutor.receive: completion matches no submitted task");
     }
 
     fn end(context: *anyopaque) void {

@@ -17,6 +17,14 @@ inline fn debugPrint(comptime fmt: []const u8, args: anytype) void {
     }
 }
 
+/// A violated compiler invariant inside a builtin (design.md). Builds with
+/// runtime safety crash through `roc_ops` with the message; optimized builds
+/// treat the path as unreachable, so release builds carry no runtime check.
+pub fn builtinInvariant(roc_ops: *RocOps, comptime message: []const u8) noreturn {
+    if (std.debug.runtime_safety) roc_ops.crash("builtin invariant violated: " ++ message);
+    unreachable; // only builds without runtime safety reach this, where design.md makes a violated invariant undefined
+}
+
 /// Performs a pointer cast with debug-mode alignment verification.
 ///
 /// In debug builds, verifies that the pointer is properly aligned for the target type
@@ -37,14 +45,9 @@ pub inline fn alignedPtrCast(comptime T: type, ptr: anytype, src: std.builtin.So
         const alignment = ptr_info.pointer.attrs.@"align" orelse 0;
         const ptr_int = @intFromPtr(ptr);
         if (alignment > 0 and ptr_int % alignment != 0) {
-            // Alignment errors indicate a bug in the caller.
-            // We use unreachable here because:
-            // 1. We don't have access to roc_ops in this utility function
-            // 2. This is a debug-only check (comptime builtin.mode == .debug)
-            // 3. On non-WASM, this will trigger a trap with a stack trace
-            // 4. The @src() parameter helps identify the call site in logs
+            // No roc_ops is available here, so the @src() call site is printed before trapping.
             debugPrint("alignedPtrCast alignment failure at {s}:{d}\n", .{ src.file, src.line });
-            unreachable;
+            unreachable; // callers pass only pointers aligned for T; this debug-only check names a caller that breaks that
         }
     }
     return @ptrCast(@alignCast(ptr));
@@ -117,10 +120,8 @@ pub const TestEnv = struct {
                 8 => self.allocator.free(@as([]align(8) u8, @alignCast(slice))),
                 16 => self.allocator.free(@as([]align(16) u8, @alignCast(slice))),
                 else => {
-                    // Use unreachable since we can't call roc_ops.crash in deinit
-                    // This should never happen in properly written tests
                     debugPrint("Unsupported alignment in test deallocator cleanup: {d}\n", .{entry.value_ptr.alignment});
-                    unreachable;
+                    @trap();
                 },
             }
         }
@@ -143,13 +144,12 @@ pub const TestEnv = struct {
             8 => self.allocator.alignedAlloc(u8, std.mem.Alignment.@"8", length),
             16 => self.allocator.alignedAlloc(u8, std.mem.Alignment.@"16", length),
             else => {
-                // Use unreachable since we can't call roc_ops.crash in test allocator
                 debugPrint("Unsupported alignment in test allocator: {d}\n", .{alignment});
-                unreachable;
+                @trap();
             },
         } catch {
             debugPrint("Test allocation failed\n", .{});
-            unreachable;
+            @trap();
         };
 
         // Cast the pointer to *anyopaque
@@ -162,7 +162,7 @@ pub const TestEnv = struct {
         }) catch {
             self.allocator.free(ptr);
             debugPrint("Failed to track test allocation\n", .{});
-            unreachable;
+            @trap();
         };
 
         return result;
@@ -183,7 +183,7 @@ pub const TestEnv = struct {
                 16 => self.allocator.free(@as([]align(16) u8, @alignCast(slice))),
                 else => {
                     debugPrint("Unsupported alignment in test deallocator: {d}\n", .{entry.value.alignment});
-                    unreachable;
+                    @trap();
                 },
             }
         }
@@ -206,11 +206,11 @@ pub const TestEnv = struct {
                 16 => self.allocator.realloc(@as([]align(16) u8, @alignCast(old_slice)), new_length),
                 else => {
                     debugPrint("Unsupported alignment in test reallocator: {d}\n", .{entry.value.alignment});
-                    unreachable;
+                    @trap();
                 },
             } catch {
                 debugPrint("Test reallocation failed\n", .{});
-                unreachable;
+                @trap();
             };
 
             const result: *anyopaque = @ptrCast(new_ptr.ptr);
@@ -222,13 +222,13 @@ pub const TestEnv = struct {
             }) catch {
                 self.allocator.free(new_ptr);
                 debugPrint("Failed to track test reallocation\n", .{});
-                unreachable;
+                @trap();
             };
 
             return result;
         } else {
             debugPrint("Test realloc: pointer not found in allocation map\n", .{});
-            unreachable;
+            @trap();
         }
     }
 
@@ -365,7 +365,7 @@ pub fn increfRcPtr(ptr_to_refcount: *isize, amount: isize, atomicity: RcAtomicit
                         }
                         roc_ops.crash("Use-after-free: incref on already-freed memory");
                     }
-                    unreachable;
+                    unreachable; // LIR ARC never increfs freed memory; only non-debug builds get past the crash above
                 }
             },
         }

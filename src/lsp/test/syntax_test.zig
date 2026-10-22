@@ -101,7 +101,7 @@ const TestHarness = struct {
             _ = self.completions.swapRemove(index);
             return;
         }
-        unreachable;
+        unreachable; // callers pass only items that getCompletions returned and that are not yet freed
     }
 
     /// Assert that every label in `expected` appears in `items`.

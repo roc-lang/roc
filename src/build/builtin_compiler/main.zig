@@ -209,7 +209,7 @@ fn findBuiltinTypeDeclaration(gpa: Allocator, env: *const ModuleEnv, spec: CIR.B
 }
 
 fn expectBuiltinIdent(env: *const ModuleEnv, text: []const u8) base.Ident.Idx {
-    return env.common.findIdent(text) orelse unreachable;
+    return env.common.findIdent(text) orelse base.invariant("builtin compiler invariant violated: the Builtin module env has no ident \"{s}\"", .{text});
 }
 
 fn installBuiltinNodeIndices(gpa: Allocator, env: *ModuleEnv, indices: BuiltinIndices) !void {

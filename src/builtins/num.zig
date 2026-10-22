@@ -139,7 +139,7 @@ fn scanRadixIntPrefix(comptime T: type, bytes: []const u8) ?decimal_parse.IntPre
         'b', 'B' => scanRadixDigits(T, 2, negative, bytes, digits_start),
         'o', 'O' => scanRadixDigits(T, 8, negative, bytes, digits_start),
         'x', 'X' => scanRadixDigits(T, 16, negative, bytes, digits_start),
-        else => unreachable,
+        else => unreachable, // scanIntPrefix calls this only when hasExplicitRadix saw a b, o, or x radix marker
     };
 }
 
@@ -185,7 +185,7 @@ fn radixDigitRun(comptime radix: u8, comptime limit: u128, bytes: []const u8, di
             continue;
         }
         if (!isRadixDigit(byte, radix)) break;
-        const digit = digitValue(byte) orelse unreachable;
+        const digit = digitValue(byte) orelse unreachable; // isRadixDigit accepted this byte just above, so it has a digit value
         if (magnitude) |value| {
             magnitude = if (value > max_before_mul or (value == max_before_mul and digit > max_digit))
                 null
@@ -216,7 +216,7 @@ fn radixIntPrefixLen(bytes: []const u8) usize {
         'b', 'B' => 2,
         'o', 'O' => 8,
         'x', 'X' => 16,
-        else => unreachable,
+        else => unreachable, // hasExplicitRadix accepted this byte as one of b, B, o, O, x, X
     };
 
     var end = digits_start;
