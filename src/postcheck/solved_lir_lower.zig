@@ -5032,7 +5032,7 @@ const Lowerer = struct {
             if (walk.frames.items.len == 0) return built;
             try walk.results.append(self.allocator, built);
         }
-        unreachable; // the loop returns once it pops the root frame enterNarrow pushed
+        unreachable; // enterNarrow pushed a frame, and the loop returns when it pops the last one
     }
 
     /// `pair`'s narrowed type when it needs no frame, or null after opening
@@ -5272,7 +5272,7 @@ const Lowerer = struct {
             if (walk.frames.items.len == 0) return answer;
             self.takeFitAnswer(walk, answer);
         }
-        unreachable; // the loop returns once it pops the root frame enterFit pushed
+        unreachable; // enterFit pushed a frame, and the loop returns when it pops the last one
     }
 
     const FitStep = union(enum) { pair: DeclaredTypePair, done: bool };
