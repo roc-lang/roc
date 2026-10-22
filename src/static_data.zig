@@ -696,6 +696,7 @@ const StaticInitializerMachine = struct {
         return switch (value.tag) {
             .box => self.layoutValue(self.layouts().builtinBoxAbi(layout_idx).elem_layout_idx orelse .zst),
             .zst, .box_of_zst, .struct_, .scalar, .erased_box, .list, .list_of_zst, .closure, .erased_callable, .ptr, .tag_union => value,
+            .hole => staticDataInvariant("a demand hole reached static data"),
         };
     }
 
@@ -704,6 +705,7 @@ const StaticInitializerMachine = struct {
             .struct_ => self.layouts().getStructFieldLayoutByOriginalIndex(base_layout.getStruct().idx, @intCast(index)),
             .zst, .box_of_zst => .zst,
             .box, .scalar, .erased_box, .list, .list_of_zst, .closure, .erased_callable, .ptr, .tag_union => staticDataInvariant("stored product had a non-struct layout"),
+            .hole => staticDataInvariant("a demand hole reached static data"),
         };
     }
 
