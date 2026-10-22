@@ -2833,9 +2833,15 @@ test "issue 9802 growing-structural map2 specialization counters are bounded" {
         // A template's interface relations' summarized expansion
         // instantiates its root once per summary, and summaries are keyed by
         // template and method scope rather than by each call site's spelling
-        // of the callee's type.
+        // of the callee's type. The `unwrap(v6)` request is shaped by demand
+        // (design.md "Specialization By Demand"): `unwrap` demands only the
+        // layout of its payload, so the record becomes its tuple
+        // representative, and instantiating the template's root at that
+        // substitution adds one nominal backing instantiation. `const` and
+        // `map2` are not shaped: a scalar is its own representative, and
+        // `map2`'s function argument demands all of every variable.
         .nominal_backing_reuses = 31,
-        .nominal_backing_instantiations = 58,
+        .nominal_backing_instantiations = 59,
     });
 }
 
@@ -3284,7 +3290,7 @@ test "differently ordered source record rows produce normalized monotype rows" {
     for (type_view.types) |content| {
         const span = switch (content) {
             .record => |fields| fields,
-            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => continue,
+            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => continue,
         };
         const fields = type_view.fieldSpan(span);
         if (fields.len != 2) continue;
@@ -4487,15 +4493,15 @@ fn countProcsNamed(store: *const lir.LirStore, name: []const u8) usize {
     return count;
 }
 
-test "layout-keyed builtin specializations share one procedure per layout" {
+test "demand-shaped builtin specializations share one procedure per demand shape" {
     const allocator = std.testing.allocator;
 
-    // `List.len` wraps `list_len`, which is on the layout-keyed allow list, so
-    // its specializations at `List({ a : U64 })` and `List({ b : U64 })`,
-    // whose item types differ but commit the same layout, are one
-    // procedure, while `List(Str)` gets its own. `List.is_empty` has a Roc
-    // body and no provided low-level operation, so it keeps one type-keyed
-    // procedure per item type even where the layouts agree.
+    // `List.len` and `List.is_empty` demand nothing of their item type
+    // (design.md "Specialization By Demand"): `list_len` reads the list
+    // header, and `List.is_empty`'s body only passes its list to `List.len`.
+    // Every direct call's request is shaped to `List(hole)`, so the three
+    // item types `{ a : U64 }`, `{ b : U64 }`, and `Str` share one
+    // specialization of each.
     const source =
         \\count_all : List({ a : U64 }), List({ b : U64 }), List(Str) -> U64
         \\count_all = |xs, ys, strs| List.len(xs) + List.len(ys) + List.len(strs)
@@ -4515,8 +4521,8 @@ test "layout-keyed builtin specializations share one procedure per layout" {
     defer lowered_source.deinit(allocator);
 
     const store = &lowered_source.lowered.lir_result.store;
-    try std.testing.expectEqual(@as(usize, 2), countProcsNamed(store, "Builtin.List.len"));
-    try std.testing.expectEqual(@as(usize, 2), countProcsNamed(store, "Builtin.List.is_empty"));
+    try std.testing.expectEqual(@as(usize, 1), countProcsNamed(store, "Builtin.List.len"));
+    try std.testing.expectEqual(@as(usize, 1), countProcsNamed(store, "Builtin.List.is_empty"));
 }
 
 test "referenced but uncalled function does not materialize a proc" {

@@ -1010,6 +1010,17 @@ pub fn solveWithOptions(
                     sig = sig.withBorrowedParam(position);
                 }
             }
+        } else {
+            // A pinned signature is the one the procedure's types determine,
+            // and a parameter holding a demand hole is borrowed by its type:
+            // the body demands nothing of the hole, and no refcount operation
+            // exists for a value holding one (design.md "Specialization By
+            // Demand"). The position is not tracked, so no demand flips it.
+            const params = store.getLocalSpan(proc.args);
+            for (0..@min(GuardedList.borrowLen(params), arc_sig.tracked_param_count)) |position| {
+                const param = GuardedList.at(params, position);
+                if (layouts.layoutHoldsHole(store.getLocal(param).layout_idx)) sig = sig.withBorrowedParam(position);
+            }
         }
         solver.sigs[proc_index] = sig;
     }

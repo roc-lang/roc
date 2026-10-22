@@ -1901,7 +1901,7 @@ pub const Interpreter = struct {
                     }
                 }
             },
-            .zst, .box_of_zst, .erased_box => return,
+            .zst, .hole, .box_of_zst, .erased_box => return,
             // Compiler-internal pointers (TRMC holes) are opaque here: the slot they
             // point at may be a not-yet-filled hole, so there is nothing to validate.
             .ptr => return,
@@ -3933,6 +3933,7 @@ pub const Interpreter = struct {
                     .closure,
                     .erased_callable,
                     .zst,
+                    .hole,
                     .tag_union,
                     .ptr,
                     => {
@@ -4771,7 +4772,7 @@ pub const Interpreter = struct {
     fn allocStructValue(self: *LirInterpreter, struct_layout: layout_mod.Idx) Error!AllocatedStruct {
         const struct_layout_val = self.layout_store.getLayout(struct_layout);
         switch (struct_layout_val.tag) {
-            .zst => return .{
+            .zst, .hole => return .{
                 .outer = Value.zst,
                 .base = Value.zst,
                 .base_layout = .zst,
@@ -5500,6 +5501,7 @@ pub const Interpreter = struct {
         val: Value,
         layout_idx: layout_mod.Idx,
     ) ?rc_conformance.Allocation {
+        if (self.layout_store.layoutHoldsHole(layout_idx)) return self.conformanceHoleAllocation(val, layout_idx);
         return switch (self.conformanceRcPlan(layout_idx)) {
             .str_decref => blk: {
                 const rs = valueToRocStr(val);
@@ -5528,6 +5530,25 @@ pub const Interpreter = struct {
         return self.layout_store.rcHelperPlan(.{ .op = .decref, .layout_idx = layout_idx });
     }
 
+    /// The allocation a value holding a demand hole owns. Such a value is a
+    /// list or box header whose items no code reads (design.md
+    /// "Specialization By Demand"): it has no refcount plan, it owns exactly
+    /// its own allocation, and the observer cannot name anything behind it.
+    fn conformanceHoleAllocation(
+        self: *LirInterpreter,
+        val: Value,
+        layout_idx: layout_mod.Idx,
+    ) ?rc_conformance.Allocation {
+        return switch (self.layout_store.getLayout(layout_idx).tag) {
+            .list => rc_conformance.allocationAt(valueToRocList(val).getAllocationDataPtr(&self.roc_ops)),
+            .box => rc_conformance.allocationAt(val.read(?[*]u8)),
+            .hole, .scalar, .box_of_zst, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr, .erased_box => self.invariantFailed(
+                "LIR/interpreter invariant violated: a value holding a demand hole had layout {d} ({s}), not a list or box",
+                .{ @backingInt(layout_idx), @tagName(self.layout_store.getLayout(layout_idx).tag) },
+            ),
+        };
+    }
+
     /// Collect every refcounted allocation reachable from a value.
     fn conformanceCollectAllocations(
         self: *LirInterpreter,
@@ -5535,6 +5556,10 @@ pub const Interpreter = struct {
         layout_idx: layout_mod.Idx,
         sink: *rc_conformance.AllocationSet,
     ) void {
+        if (self.layout_store.layoutHoldsHole(layout_idx)) {
+            if (self.conformanceHoleAllocation(val, layout_idx)) |found| sink.add(found.rc_addr);
+            return;
+        }
         self.conformanceCollectPlan(self.conformanceRcPlan(layout_idx), val, sink, 0);
     }
 
@@ -7823,7 +7848,7 @@ pub const Interpreter = struct {
         const layout_val = self.layout_store.getLayout(arg_layout);
 
         if (op == .eq and switch (layout_val.tag) {
-            .zst, .struct_, .list, .list_of_zst, .tag_union => true,
+            .zst, .hole, .struct_, .list, .list_of_zst, .tag_union => true,
             .scalar => layout_val.getScalar().tag == .str,
             .box, .box_of_zst, .erased_box, .closure, .erased_callable, .ptr => false,
         }) {
@@ -8891,6 +8916,7 @@ pub const Interpreter = struct {
             .closure,
             .erased_callable,
             .zst,
+            .hole,
             .tag_union,
             .ptr,
             => self.invariantFailed(
@@ -9029,6 +9055,7 @@ pub const Interpreter = struct {
             .closure,
             .erased_callable,
             .zst,
+            .hole,
             .tag_union,
             .ptr,
             => return error.RuntimeError,

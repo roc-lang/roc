@@ -31,6 +31,11 @@ pub const LayoutTag = enum(u4) {
     // tag payload, or list element. The pass author must uphold those invariants.
     ptr, // Compiler-internal pointer to a value of the element layout; never refcounted.
     erased_box, // Descriptor-backed refcounted box whose payload layout is known only at runtime.
+    // A demand-shaped procedure's stand-in for a list or box element type its
+    // body never reads, moves, or refcounts (design.md "Specialization By
+    // Demand"). Zero-sized and never refcounted; only ever a list or box
+    // element, never a value, struct field, or tag payload of its own.
+    hole,
 };
 
 /// The Layout untagged union should take up this many bits in memory.
@@ -743,7 +748,7 @@ pub const Layout = packed struct {
             .box, .box_of_zst, .erased_box, .list, .list_of_zst, .erased_callable, .closure, .ptr => target_usize.alignment(),
             .struct_ => self.getStruct().sort_key.alignment(target_usize),
             .tag_union => self.getTagUnion().sort_key.alignment(target_usize),
-            .zst => std.mem.Alignment.@"1",
+            .zst, .hole => std.mem.Alignment.@"1",
         };
     }
 
@@ -760,7 +765,7 @@ pub const Layout = packed struct {
                 .vector => .align_16,
             },
             .box, .box_of_zst, .erased_box, .list, .list_of_zst, .erased_callable, .ptr, .closure => .pointer,
-            .zst => .align_1,
+            .zst, .hole => .align_1,
             .struct_ => self.getStruct().sort_key,
             .tag_union => self.getTagUnion().sort_key,
         };
@@ -863,6 +868,11 @@ pub const Layout = packed struct {
         return .{ .data = 0, .tag = .zst };
     }
 
+    /// The element layout of a demand-shaped procedure's hole.
+    pub fn hole() Layout {
+        return .{ .data = 0, .tag = .hole };
+    }
+
     /// tag union layout with the given alignment class and tag union metadata
     pub fn tagUnion(tu_sort_key: SortKey, tu_idx: TagUnionIdx) Layout {
         return .{ .data = packData(TagUnionLayout{ .sort_key = tu_sort_key, .idx = tu_idx }), .tag = .tag_union };
@@ -888,7 +898,7 @@ pub const Layout = packed struct {
                 self.getStruct().idx.int_idx == other.getStruct().idx.int_idx,
             .closure => self.getClosure().captures_layout_idx == other.getClosure().captures_layout_idx,
             .erased_callable => true,
-            .zst => true, // No additional data
+            .zst, .hole => true, // No additional data
             .tag_union => self.getTagUnion().sort_key == other.getTagUnion().sort_key and
                 self.getTagUnion().idx.int_idx == other.getTagUnion().idx.int_idx,
         };

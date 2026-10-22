@@ -120,6 +120,10 @@ pub const Content = union(enum) {
     },
     erased_capture_ptr,
     zst,
+    /// A demand-shaped specialization's stand-in for a quantified variable its
+    /// body demands none of (design.md "Specialization By Demand"). Its layout
+    /// is the hole layout.
+    hole,
 };
 
 /// Payload stored by `Content.named`.
@@ -144,6 +148,7 @@ pub const StoredNode = union(enum(u8)) {
     erased_fn: u32,
     erased_capture_ptr,
     zst,
+    hole,
 };
 
 /// Store for Lambda Mono types and their shared spans.
@@ -229,6 +234,7 @@ pub const Store = struct {
             },
             .erased_capture_ptr => .erased_capture_ptr,
             .zst => .zst,
+            .hole => .hole,
         };
     }
 
@@ -247,6 +253,7 @@ pub const Store = struct {
             .erased_fn => |index| .{ .erased_fn = self.erased_fn_payloads.unsafeRawItemsForView()[index] },
             .erased_capture_ptr => .erased_capture_ptr,
             .zst => .zst,
+            .hole => .hole,
         };
     }
 
@@ -528,6 +535,7 @@ pub const Store = struct {
             },
             .erased_capture_ptr => writeBytes(hasher, "erased_capture_ptr"),
             .zst => writeBytes(hasher, "zst"),
+            .hole => writeBytes(hasher, "hole"),
         }
         scratch.graph.setScalar(scratch.node_by_type.get(ty).?, hasher.finalResult());
     }

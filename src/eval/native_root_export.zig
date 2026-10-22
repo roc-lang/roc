@@ -183,6 +183,7 @@ const Builder = struct {
                 .box_of_zst => self.graph.writeWord(job.dest, 0),
                 .box => try self.boxed(job, element, physical.getIdx()),
                 .erased_callable => try self.enqueue(element, job.layout_idx, job.source, job.dest, .value),
+                .hole => invariant("a demand hole reached a native root export"),
                 .scalar, .list, .list_of_zst, .struct_, .closure, .zst, .tag_union, .ptr, .erased_box => invariant("box export plan had incompatible layout"),
             },
             .tuple, .record => |child_plans| {

@@ -19548,10 +19548,26 @@ const Builder = struct {
     fn appendStoredUseSchemePair(self: *Builder, scheme_rep: TypeRepId, site_rep: TypeRepId, start: u32) Allocator.Error!void {
         for (self.plan.scheme_rep_substitutions.items[start..]) |pair| {
             if (pair.scheme_rep != scheme_rep) continue;
-            if (pair.site_rep != site_rep) boxyPlanInvariant("a stored function's use put two types in one variable's position");
+            if (!self.storedRepsSameType(pair.site_rep, site_rep)) boxyPlanInvariant("a stored function's use put two types in one variable's position");
             return;
         }
         try self.plan.scheme_rep_substitutions.append(self.allocator, .{ .scheme_rep = scheme_rep, .site_rep = site_rep });
+    }
+
+    /// Whether two representations are one stored type: one representation,
+    /// or two stored types of one module that are equal (`storedTypesEqual`),
+    /// the equality by which a stored type instantiates a checked type's
+    /// variable (`storedTypeInstantiatesCheckedType`). A compile-time value's
+    /// type holds one type at two positions as two ConstStore types when
+    /// Lambda Solved kept the positions apart.
+    fn storedRepsSameType(self: *Builder, left: TypeRepId, right: TypeRepId) bool {
+        if (left == right) return true;
+        const left_stored = self.stored_type_of_rep.get(left) orelse return false;
+        const right_stored = self.stored_type_of_rep.get(right) orelse return false;
+        if (left_stored.module != right_stored.module) return false;
+        const store = self.moduleForId(left_stored.module).const_store orelse
+            boxyPlanInvariant("stored representation had no ConstStore");
+        return storedTypesEqual(store, left_stored.ty, right_stored.ty, 0);
     }
 
     /// The closed row of the call row's variants that `row` does not list.

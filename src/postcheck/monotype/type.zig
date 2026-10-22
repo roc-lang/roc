@@ -299,6 +299,11 @@ pub const Content = union(enum(u8)) {
     },
     erased: names.TypeDigest,
     zst,
+    /// A demand-shaped specialization's stand-in for a quantified variable its
+    /// body demands none of (design.md "Specialization By Demand"). It only
+    /// appears in such a specialization's parameter types, as a `List` or
+    /// `Box` element, and equals only itself.
+    hole,
 };
 
 /// Payload stored by `Content.named`.
@@ -318,6 +323,7 @@ pub const StoredNode = union(enum(u8)) {
     func: @FieldType(Content, "func"),
     erased: u32,
     zst,
+    hole,
 };
 
 /// Store for monomorphic types and their shared spans.
@@ -785,7 +791,7 @@ pub const Store = struct {
         switch (content) {
             .named => try self.reservePrefixList(&self.named_nodes, self.unfinished_type_count + 1),
             .erased => try self.reservePrefixList(&self.erased_digests, self.unfinished_type_count + 1),
-            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .zst => {},
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .zst, .hole => {},
         }
     }
 
@@ -809,6 +815,7 @@ pub const Store = struct {
                 break :blk .{ .erased = index };
             },
             .zst => .zst,
+            .hole => .hole,
         };
     }
 
@@ -916,7 +923,7 @@ pub const Store = struct {
                 }
             }
             switch (self.get(ty)) {
-                .primitive, .erased, .zst => {},
+                .primitive, .erased, .zst, .hole => {},
                 .list, .box => |child| try self.iterator_interface_pending.append(self.allocator, child),
                 .tuple => |items| {
                     const item_types = self.span(items);
@@ -1129,7 +1136,7 @@ pub const Store = struct {
         const declared_limit = end.declared_fields;
         for (begin.types..end.types) |index| {
             switch (self.get(@fromBackingInt(@intCast(index)))) {
-                .primitive, .erased, .zst => {},
+                .primitive, .erased, .zst, .hole => {},
                 .named => |named| {
                     requireEpochSpan(named.args, span_limit);
                     requireEpochSpan(named.declared_order, declared_limit);
@@ -1832,7 +1839,7 @@ pub const Store = struct {
         allocator: std.mem.Allocator,
     ) std.mem.Allocator.Error!void {
         switch (source.get(ty)) {
-            .primitive, .erased, .zst => {},
+            .primitive, .erased, .zst, .hole => {},
             .list, .box => |child| try enqueueImportType(
                 source,
                 relocation,
@@ -2011,6 +2018,7 @@ pub const Store = struct {
             .primitive => |value| .{ .primitive = value },
             .erased => |value| .{ .erased = value },
             .zst => .zst,
+            .hole => .hole,
             .list => |ty| .{ .list = importType(source_offsets, relocation, reserved, ty) },
             .box => |ty| .{ .box = importType(source_offsets, relocation, reserved, ty) },
             .tuple => |span_| .{ .tuple = try self.importTypeSpan(source, source_offsets, relocation, reserved, scratch, span_) },
@@ -2136,7 +2144,7 @@ pub const Store = struct {
     /// Append every type `ty`'s content refers to.
     fn appendChildTypes(self: *const Store, ty: TypeId, out: *std.ArrayList(TypeId)) std.mem.Allocator.Error!void {
         switch (self.get(ty)) {
-            .primitive, .erased, .zst => {},
+            .primitive, .erased, .zst, .hole => {},
             .list, .box => |child| try out.append(self.allocator, child),
             .tuple => |span_| try self.appendSpanTypes(span_, out),
             .func => |func| {
@@ -2197,7 +2205,7 @@ pub const Store = struct {
                 ty = (named.backing orelse return .none).ty;
                 continue;
             } else .{ .named_type = named.def },
-            .record, .tuple, .tag_union, .func, .erased, .zst => .none,
+            .record, .tuple, .tag_union, .func, .erased, .zst, .hole => .none,
         };
     }
 
@@ -2340,10 +2348,10 @@ pub const Store = struct {
                 switch (node) {
                     .named => |named_index| if (named_index >= self.named_nodes.len) return .type_ref_out_of_bounds,
                     .erased => |erased_index| if (erased_index >= self.erased_digests.len) return .type_ref_out_of_bounds,
-                    .primitive, .zst, .list, .box, .tuple, .record, .tag_union, .func => {},
+                    .primitive, .zst, .hole, .list, .box, .tuple, .record, .tag_union, .func => {},
                 }
                 switch (self.get(@fromBackingInt(@intCast(index)))) {
-                    .primitive, .erased, .zst => {},
+                    .primitive, .erased, .zst, .hole => {},
                     .list, .box => |ty| if (!self.typeRefInBounds(ty)) return .type_ref_out_of_bounds,
                     .tuple => |span_| if (self.verifyTypeSpan(span_)) |err| return err,
                     .record => |span_| if (self.verifyFieldSpan(name_store, span_)) |err| return err,
@@ -2575,6 +2583,12 @@ pub const Store = struct {
         return try self.internCandidate(name_store, mark_, ty);
     }
 
+    pub fn internHole(self: *Store, name_store: *const names.NameStore) std.mem.Allocator.Error!TypeId {
+        const mark_ = self.mark();
+        const ty = try self.add(.hole);
+        return try self.internCandidate(name_store, mark_, ty);
+    }
+
     pub fn internList(self: *Store, name_store: *const names.NameStore, elem: TypeId) std.mem.Allocator.Error!TypeId {
         const mark_ = self.mark();
         const ty = try self.add(.{ .list = elem });
@@ -2716,7 +2730,7 @@ pub const Store = struct {
         errdefer captured.deinit(self.allocator);
 
         switch (self.get(ty)) {
-            .primitive, .erased, .zst, .list, .box => captured.content = self.get(ty),
+            .primitive, .erased, .zst, .hole, .list, .box => captured.content = self.get(ty),
             .tuple => |span_| {
                 captured.type_refs = try self.spans.dupeSpan(self.allocator, span_.start, span_.len);
                 captured.content = .{ .tuple = .{ .start = 0, .len = span_.len } };
@@ -2807,6 +2821,7 @@ pub const Store = struct {
             .primitive => |value| .{ .primitive = value },
             .erased => |value| .{ .erased = value },
             .zst => .zst,
+            .hole => .hole,
             .list => |ty| .{ .list = transactionType(mark_, remap, ty) },
             .box => |ty| .{ .box = transactionType(mark_, remap, ty) },
             .tuple => |span_| .{ .tuple = try self.rebuildTransactionTypeSpan(mark_, span_, snapshot_spans, remap) },
@@ -3161,6 +3176,7 @@ pub const Store = struct {
                 try sink.writeBytes(&erased.bytes);
             },
             .zst => try sink.writeBytes("zst"),
+            .hole => try sink.writeBytes("roc.monotype.hole"),
         }
     }
 
@@ -4022,7 +4038,7 @@ const TypeViewEqlScan = struct {
         switch (lhs_content) {
             .primitive => |lhs| return .{ .value = lhs == rhs_content.primitive },
             .erased => |lhs| return .{ .value = std.mem.eql(u8, lhs.bytes[0..], rhs_content.erased.bytes[0..]) },
-            .zst => return .{ .value = true },
+            .zst, .hole => return .{ .value = true },
             .named => |lhs| if (!try scan.addNamedChecks(items, lhs, rhs_content.named)) return .{ .value = false },
             .record => |lhs| {
                 const lhs_fields = type_view.fieldSpan(lhs);
@@ -4239,6 +4255,7 @@ fn decodeNode(node: StoredNode, named_nodes: []const NamedContent, erased_digest
         .func => |func| .{ .func = func },
         .erased => |index| .{ .erased = erased_digests[index] },
         .zst => .zst,
+        .hole => .hole,
     };
 }
 

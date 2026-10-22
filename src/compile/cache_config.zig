@@ -349,7 +349,9 @@ pub const Constants = struct {
     ///      and file-level diagnostics store no region.
     /// 158: Module environments record row-coerced results in place of
     ///      row-coerced callees and closed-result definitions.
-    pub const CACHE_VERSION = 158;
+    /// 159: procedure templates record how much of each quantified variable
+    ///      their bodies demand.
+    pub const CACHE_VERSION = 159;
 };
 
 /// Configuration for the Roc cache system.

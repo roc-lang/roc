@@ -619,6 +619,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
                 break :blk queued;
             } else break;
             const spec = store.getProcSpecPtr(job.variant);
+            if (@import("builtin").mode == .debug) requireHoleParamsBorrowed(store, layouts, spec.args, job.sig);
             spec.rc_borrowed_params = job.sig.borrowed_params;
             spec.rc_ret_borrowed = job.sig.ret_mode == .borrowed;
             spec.rc_ret_lenders = job.sig.ret_lenders;
@@ -687,6 +688,18 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
 /// `callArgOwnership` consults before upgrading a borrowed position or
 /// seeding an owned one, and the outcome spans it can select). A body-less
 /// proc keeps the facts its cache entry supplied.
+/// A demand-shaped procedure never consumes a value holding a hole: its
+/// body demands nothing of the hole's type, so its signature borrows every
+/// such parameter (design.md "Specialization By Demand").
+fn requireHoleParamsBorrowed(store: *const LirStore, layouts: *const layout_mod.Store, args: LIR.LocalSpan, sig: arc_sig.RcSig) void {
+    const params = store.getLocalSpan(args);
+    for (0..params.len) |index| {
+        const param = GuardedList.at(params, index);
+        if (!layouts.layoutHoldsHole(store.getLocal(param).layout_idx)) continue;
+        if (sig.paramMode(index) != .borrowed) arcInvariant("a parameter holding a demand hole was not borrowed");
+    }
+}
+
 fn recordObjectCacheFacts(
     store: *LirStore,
     solution: *const arc_solve.Solution,
@@ -7721,6 +7734,10 @@ const Inserter = struct {
     }
 
     fn rcHelperForLayout(self: *const Inserter, root_op: layout_mod.RcOp, root_layout: layout_mod.Idx) layout_mod.RcHelper {
+        // A demand-shaped procedure borrows every value holding a hole, so
+        // no refcount operation ever reaches one (design.md "Specialization
+        // By Demand").
+        if (self.layouts.layoutHoldsHole(root_layout)) arcInvariant("ARC requested a refcount operation on a value holding a demand hole");
         var op = root_op;
         var layout_idx = root_layout;
         while (true) {
@@ -18082,6 +18099,58 @@ test "RC alias of a parameter consumed in the body solves the parameter owned" {
     try f.expectRc(list, 0, 0, 0);
     try f.expectRc(appended, 0, 0, 0);
     try f.expectRc(call_result, 0, 0, 0);
+}
+
+test "RC pinned signature borrows a parameter holding a demand hole" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    const hole = try f.layouts.insertLayout(layout_mod.Layout.hole());
+    const list_hole = try f.layouts.insertList(hole);
+
+    // A demand-shaped procedure whose list parameter holds a hole: its body
+    // reads the list header and nothing else. It carries a code key, so ARC
+    // pins it to the signature its types determine instead of solving it.
+    const param = try f.local(list_hole);
+    const view = try f.local(list_hole);
+    const len = try f.local(.u64);
+    const callee_ret = try f.ret(len);
+    const read_len = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = len,
+        .op = .list_len,
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.RcEffect.none()),
+        .args = try f.span(&.{view}),
+        .next = callee_ret,
+    } }, .test_fixture);
+    const view_assign = try f.assignRefLocal(view, param, read_len);
+    const callee = try f.addProc(&.{param}, view_assign, .u64);
+    f.store.getProcSpecPtr(callee).code_key = @splat(1);
+
+    // The caller passes a dying list of strings where the hole is expected.
+    const list = try f.local(f.list_str);
+    const result = try f.local(.u64);
+    const caller_ret = try f.ret(result);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = result,
+        .proc = callee,
+        .args = try f.span(&.{list}),
+        .next = caller_ret,
+    } }, .test_fixture);
+    const caller_body = try f.assignList(list, &.{}, call);
+    _ = try f.addProc(&.{}, caller_body, .u64);
+
+    try f.run();
+
+    // The pinned signature borrows the hole-holding position by its type, so
+    // the callee touches no refcount and the caller releases its own list
+    // after the call.
+    const pinned: arc_sig.RcSig = .{
+        .borrowed_params = @intCast(f.store.getProcSpecImmediate(callee).rc_borrowed_params),
+    };
+    try testing.expectEqual(arc_sig.Mode.borrowed, pinned.paramMode(0));
+    try f.expectRc(param, 0, 0, 0);
+    try f.expectRc(view, 0, 0, 0);
+    try f.expectRc(list, 0, 1, 0);
 }
 
 test "ARC ownership iteration skips absent resources and preserves release order" {

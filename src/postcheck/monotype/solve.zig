@@ -416,6 +416,8 @@ pub const InstNode = union(enum) {
     /// Stored out of line for the same reason as `named`.
     erased: *const names.TypeDigest,
     zst,
+    /// A demand hole (`Type.Content.hole`): it equals only itself.
+    hole,
 };
 
 /// A checked type instantiated under one binding environment, by the plain
@@ -982,7 +984,7 @@ pub const InterfaceConstraints = struct {
                 switch (open.content) {
                     .unresolved => continue,
                     .named => |named| if (named.generated_iterator != null) continue,
-                    .redirect, .leaf, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => {},
+                    .redirect, .leaf, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => {},
                 }
                 const vacuous_group = if (open.related_group.get()) |group| self.group_sizes.get(group).? == 1 else true;
                 if (open.source != .none or open.constructor_evidence or open.private_backing or !vacuous_group) continue;
@@ -1047,7 +1049,7 @@ pub const InterfaceConstraints = struct {
             while (pending.pop()) |ty| {
                 if ((try visited.getOrPut(self.allocator, ty)).found_existing) continue;
                 switch (self.types.get(ty)) {
-                    .primitive, .erased, .zst => {},
+                    .primitive, .erased, .zst, .hole => {},
                     .list, .box => |child| try pending.append(self.allocator, child),
                     .tuple => |items| {
                         const item_types = self.types.span(items);
@@ -1102,7 +1104,7 @@ pub const InterfaceConstraints = struct {
                     std.mem.sortUnstable(InstTag, tags, self.name_store, instTagLessThan);
                     result.content = .{ .tag_union = .{ .tags = tags, .ext = row.ext, .tags_sorted = true } };
                 },
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .empty_tag_union, .empty_record, .named, .erased, .zst => {},
+                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => {},
             }
             return result;
         }
@@ -1614,6 +1616,7 @@ pub const InterfaceConstraints = struct {
                     .empty_record,
                     .erased,
                     .zst,
+                    .hole,
                     => {},
                 }
                 try addScanLeaves(items, InstNode, content, .neutral);
@@ -1780,6 +1783,7 @@ pub const InterfaceConstraints = struct {
                     .empty_record,
                     .erased,
                     .zst,
+                    .hole,
                     => {},
                 }
                 return true;
@@ -3124,7 +3128,7 @@ pub const InstGraph = struct {
     ) Allocator.Error!?NodeId {
         const public_named = switch ((try self.content(public_node))) {
             .named => |named| named,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => return null,
         };
         if (public_named.args.len == 0) return null;
         self.countDiagnostic("generated_iterator_lookups");
@@ -3399,7 +3403,7 @@ pub const InstGraph = struct {
             if (entry.found_existing) continue;
             const named = switch ((try self.content(node))) {
                 .named => |named| named,
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => continue,
+                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => continue,
             };
             if (named.generated_iterator == null) continue;
 
@@ -3415,7 +3419,7 @@ pub const InstGraph = struct {
             const node = self.find(item.node);
             var named = switch ((try self.content(node))) {
                 .named => |named| named.*,
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator representation target stopped being named"),
+                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => Common.invariant("generated iterator representation target stopped being named"),
             };
             named.def.generated = null;
             if (item.force_dynamic or item.depth > generated_iterator_mint_depth_limit) {
@@ -3696,7 +3700,7 @@ pub const InstGraph = struct {
                 .checked_variable, .row_extension => .{ .fixed = 0 },
                 .placeholder => Common.invariant("placeholder reached generated iterator representation finalization"),
             },
-            .primitive, .empty_tag_union, .empty_record, .erased, .zst, .func => .{ .fixed = 0 },
+            .primitive, .empty_tag_union, .empty_record, .erased, .zst, .hole, .func => .{ .fixed = 0 },
             .list, .box => .{ .children = .{ .count = 1, .increment = 0 } },
             .tuple => |items| .{ .children = .{ .count = items.len, .increment = 0 } },
             .tag_union => |row| .{ .children = .{
@@ -3756,7 +3760,7 @@ pub const InstGraph = struct {
                 named.args[child_index + 1]
             else
                 named.args[child_index],
-            .redirect, .leaf, .unresolved, .primitive, .func, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator depth frame had no structural child"),
+            .redirect, .leaf, .unresolved, .primitive, .func, .empty_tag_union, .empty_record, .erased, .zst, .hole => Common.invariant("generated iterator depth frame had no structural child"),
         };
     }
 
@@ -3805,7 +3809,7 @@ pub const InstGraph = struct {
             if (entry.found_existing) continue;
             const named = switch ((try self.content(node))) {
                 .named => |named| named,
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => continue,
+                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => continue,
             };
             const provenance = named.generated_iterator orelse continue;
             var hasher = TypeDigestHasher.init();
@@ -3835,7 +3839,7 @@ pub const InstGraph = struct {
         for (pending.items) |item| {
             var named = switch ((try self.content(item.node))) {
                 .named => |named| named.*,
-                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("generated iterator identity target stopped being named"),
+                .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => Common.invariant("generated iterator identity target stopped being named"),
             };
             named.def.generated = item.digest;
             try self.setContent(item.node, try self.namedContent(named));
@@ -3874,6 +3878,7 @@ pub const InstGraph = struct {
                 .empty_record,
                 .erased,
                 .zst,
+                .hole,
                 => return false,
             }
         }
@@ -3892,7 +3897,7 @@ pub const InstGraph = struct {
                     if (backing.use != .inspectable) return false;
                     ty = backing.ty;
                 },
-                .primitive, .list, .box, .tuple, .func, .record, .erased, .zst => return false,
+                .primitive, .list, .box, .tuple, .func, .record, .erased, .zst, .hole => return false,
             }
         }
         Common.invariant("named Monotype backing cycle reached final demand validation");
@@ -4273,7 +4278,7 @@ pub const InstGraph = struct {
                 try self.drainLeafScopeCellJoins();
                 break :blk expanded;
             },
-            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => root_content,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => root_content,
         };
     }
 
@@ -4282,7 +4287,7 @@ pub const InstGraph = struct {
     pub fn leafType(self: *InstGraph, id: NodeId) ?Type.TypeId {
         return switch (self.nodes.items[@backingInt(self.find(id))]) {
             .leaf => |leaf| leaf.ty,
-            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => null,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => null,
         };
     }
 
@@ -4559,7 +4564,7 @@ pub const InstGraph = struct {
     fn joinedLeaf(self: *InstGraph, root: NodeId) ?InstLeaf {
         const leaf = switch (self.nodes.items[@backingInt(root)]) {
             .leaf => |leaf| leaf,
-            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => return null,
         };
         if (!self.leaf_alias_origins.contains(root)) return null;
         return leaf;
@@ -4992,11 +4997,11 @@ pub const InstGraph = struct {
         const right_node = self.find(raw_right);
         const left = switch ((try self.content(left_node))) {
             .named => |named| named,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("named-instance relation received a non-named left node"),
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => Common.invariant("named-instance relation received a non-named left node"),
         };
         const right = switch ((try self.content(right_node))) {
             .named => |named| named,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("named-instance relation received a non-named right node"),
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => Common.invariant("named-instance relation received a non-named right node"),
         };
         if (left.kind != right.kind or
             !sameTypeDef(left.def, right.def) or
@@ -5020,11 +5025,11 @@ pub const InstGraph = struct {
         const right = self.find(raw_right);
         const left_named = switch ((try self.content(left))) {
             .named => |named| named,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return false,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => return false,
         };
         const right_named = switch ((try self.content(right))) {
             .named => |named| named,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return false,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => return false,
         };
         if (left_named.kind != right_named.kind or
             !sameTypeDef(left_named.def, right_named.def) or
@@ -5152,7 +5157,7 @@ pub const InstGraph = struct {
                 // A finished Monotype is resolved throughout.
                 .leaf => {},
                 .unresolved => return false,
-                .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
+                .primitive, .empty_tag_union, .empty_record, .erased, .zst, .hole => {},
                 .list, .box => |child| try pending.append(pending_allocator, child),
                 .tuple => |items| try pending.appendSlice(pending_allocator, items),
                 .func => |function| {
@@ -5254,7 +5259,7 @@ pub const InstGraph = struct {
                         false;
                     if (!numeric_default and variable.row_default == null and variable.origin != .checked_variable) return false;
                 },
-                .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
+                .primitive, .empty_tag_union, .empty_record, .erased, .zst, .hole => {},
                 .list, .box => |child| try pending.append(self.allocator, child),
                 .tuple => |items| try pending.appendSlice(self.allocator, items),
                 .func => |function| {
@@ -5313,6 +5318,7 @@ pub const InstGraph = struct {
                 .named,
                 .erased,
                 .zst,
+                .hole,
                 => return false,
             }
         }
@@ -5366,7 +5372,7 @@ pub const InstGraph = struct {
         try copies.put(node, reserved);
         const copied: InstNode = switch (original) {
             .redirect, .leaf => unreachable, // content reads the class root and expands a leaf, so it returns structure
-            .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("a leaf class reported generated-private containment"),
+            .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst, .hole => Common.invariant("a leaf class reported generated-private containment"),
             .list => |elem| .{ .list = try self.copyPrivateWitness(elem, copies) },
             .box => |elem| .{ .box = try self.copyPrivateWitness(elem, copies) },
             .tuple => |items| .{ .tuple = try self.copyPrivateWitnessSpan(items, copies) },
@@ -5503,7 +5509,7 @@ pub const InstGraph = struct {
                     entry.verified_epoch = self.structure_epoch;
                     return true;
                 },
-                .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
+                .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst, .hole => {},
                 .list, .box => |child| try self.containment_pending.append(self.allocator, child),
                 .tuple => |items| try self.containment_pending.appendSlice(self.allocator, items),
                 .func => |function| {
@@ -5594,7 +5600,7 @@ pub const InstGraph = struct {
                 // components expand into the same leaf scope, so it reaches
                 // no finished Monotype.
                 .leaf => |leaf| if (leaf.origin != .checked) Common.invariant("finished Monotype leaf was not registered as its class witness"),
-                .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
+                .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst, .hole => {},
                 .list, .box => |child| try pending.append(self.allocator, child),
                 .tuple => |items| try pending.appendSlice(self.allocator, items),
                 .func => |function| {
@@ -5839,6 +5845,8 @@ pub const InstGraph = struct {
                 }
             },
             .zst => if (private_content != .zst)
+                Common.invariant("opaque interface relation received different type structure"),
+            .hole => if (private_content != .hole)
                 Common.invariant("opaque interface relation received different type structure"),
         }
         if (!private_contains_generated) {
@@ -6171,7 +6179,7 @@ pub const InstGraph = struct {
     ) Allocator.Error!bool {
         switch (private_content) {
             .list, .box, .tuple, .record, .tag_union => {},
-            .redirect, .leaf, .unresolved, .primitive, .named, .func, .empty_tag_union, .empty_record, .erased, .zst => return false,
+            .redirect, .leaf, .unresolved, .primitive, .named, .func, .empty_tag_union, .empty_record, .erased, .zst, .hole => return false,
         }
         if (public_var.numeric_default_phase != null or public_var.row_default != null) {
             Common.invariant("structural request interface relation received a defaultable public variable");
@@ -6237,7 +6245,7 @@ pub const InstGraph = struct {
                 }
                 try self.relateOpaqueChild(ext, private_row.ext, row_width, pending);
             },
-            .redirect, .leaf, .unresolved, .primitive, .named, .func, .empty_tag_union, .empty_record, .erased, .zst => unreachable, // the switch above returned false for every other variant
+            .redirect, .leaf, .unresolved, .primitive, .named, .func, .empty_tag_union, .empty_record, .erased, .zst, .hole => unreachable, // the switch above returned false for every other variant
         }
         return true;
     }
@@ -6753,7 +6761,7 @@ pub const InstGraph = struct {
         return switch (self.nodes.items[@backingInt(root)]) {
             .unresolved => true,
             inline .tag_union, .record => |row| self.nodes.items[@backingInt(self.find(row.ext))] == .unresolved,
-            .redirect, .leaf, .primitive, .list, .box, .tuple, .func, .empty_tag_union, .empty_record, .named, .erased, .zst => false,
+            .redirect, .leaf, .primitive, .list, .box, .tuple, .func, .empty_tag_union, .empty_record, .named, .erased, .zst, .hole => false,
         };
     }
 
@@ -6851,7 +6859,7 @@ pub const InstGraph = struct {
         return switch (node_content) {
             .named => true,
             .leaf => |leaf| self.types.get(leaf.ty) == .named,
-            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => false,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => false,
         };
     }
 
@@ -6983,7 +6991,7 @@ pub const InstGraph = struct {
         const node = self.find(raw_named);
         const named = switch (try self.rootContent(node)) {
             .named => |named| named,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => Common.invariant("named argument rewrite received a non-named node"),
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => Common.invariant("named argument rewrite received a non-named node"),
         };
         if (arg_index >= named.args.len) Common.invariant("named argument rewrite indexed past the node's arguments");
         var widened = named.*;
@@ -7067,6 +7075,7 @@ pub const InstGraph = struct {
             .named,
             .erased,
             .zst,
+            .hole,
             => Common.invariant("request container join received a non-container public type"),
         }
         try self.union_(request_root, public_root);
@@ -7207,7 +7216,7 @@ pub const InstGraph = struct {
         if (other != .unresolved) return false;
         return switch (self.types.get(leaf.ty)) {
             .named => |named| named.kind != .alias,
-            .primitive, .zst, .erased, .func, .record, .tuple, .tag_union, .list, .box => true,
+            .primitive, .zst, .hole, .erased, .func, .record, .tuple, .tag_union, .list, .box => true,
         };
     }
 
@@ -7218,9 +7227,9 @@ pub const InstGraph = struct {
             .named => |named| if (named.backing) |backing| backing.authority == .generated_private else false,
             .leaf => |leaf| switch (self.types.get(leaf.ty)) {
                 .named => |named| if (named.backing) |backing| backing.authority == .generated_private else false,
-                .primitive, .zst, .erased, .func, .record, .tuple, .tag_union, .list, .box => false,
+                .primitive, .zst, .hole, .erased, .func, .record, .tuple, .tag_union, .list, .box => false,
             },
-            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => false,
+            .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => false,
         };
     }
 
@@ -7506,6 +7515,10 @@ pub const InstGraph = struct {
                     Common.invariant("instantiation unified an erased type with an incompatible type");
                 }
             },
+            .hole => {
+                if (right_content != .hole) Common.invariant("instantiation unified a demand hole with another type");
+                try self.union_(left, right);
+            },
             .zst => {
                 if (right_content == .zst) {
                     try self.union_(left, right);
@@ -7737,6 +7750,7 @@ pub const InstGraph = struct {
             .named,
             .erased,
             .zst,
+            .hole,
             => Common.invariant("flattened row did not terminate in an unresolved or empty extension"),
         };
     }
@@ -7895,6 +7909,7 @@ pub const InstGraph = struct {
                 .named,
                 .erased,
                 .zst,
+                .hole,
                 => Common.invariant("instantiation tag row extended into a non-tag-union type"),
             }
         }
@@ -7981,6 +7996,7 @@ pub const InstGraph = struct {
                 .empty_tag_union,
                 .erased,
                 .zst,
+                .hole,
                 => Common.invariant("instantiation record row extended into a non-record type"),
             }
         }
@@ -8414,7 +8430,7 @@ pub const InstGraph = struct {
         const types = self.types;
         const allocator = self.allocator;
         switch (types.get(ty)) {
-            .primitive, .erased, .zst => {},
+            .primitive, .erased, .zst, .hole => {},
             .list, .box => |elem| try out.append(allocator, .{ .ty = elem }),
             .tuple => |items| try appendGuardedTypes(allocator, out, types.span(items)),
             .func => |func| {
@@ -8466,6 +8482,7 @@ pub const InstGraph = struct {
         };
         return switch (types.get(ty)) {
             .primitive => |primitive| .{ .primitive = primitive },
+            .hole => .hole,
             .list => .{ .list = nodes[0] },
             .box => .{ .box = nodes[0] },
             .tuple => |items| .{ .tuple = try take.slice(self, nodes, &next, types.span(items).len) },
@@ -8710,7 +8727,7 @@ pub const InstGraph = struct {
             // next.
             const children_start = pending.items.len;
             switch (self.types.get(current)) {
-                .primitive, .erased, .zst => {},
+                .primitive, .erased, .zst, .hole => {},
                 .list, .box => |elem| try pending.append(self.allocator, elem),
                 .tuple => |items| try self.appendTypeSpan(&pending, items),
                 .func => |func| {
@@ -8858,6 +8875,7 @@ const GraphUninhabitedScan = struct {
             .empty_record,
             .erased,
             .zst,
+            .hole,
             => .{ .value = false },
         };
         if (expansion == .group) {
@@ -8948,7 +8966,8 @@ const TypeUninhabitedScan = struct {
                 }
                 break :blk .{ .group = .all };
             },
-            .primitive, .list, .func, .erased, .zst => .{ .value = false },
+            // A hole stands for every type, so it is not provably uninhabited.
+            .primitive, .list, .func, .erased, .zst, .hole => .{ .value = false },
         };
         if (expansion == .group) try self.visiting.put(self.graph.allocator, ty, self.cycle_hits);
         return expansion;
@@ -9448,7 +9467,7 @@ pub const GraphTypeFinals = struct {
         switch (node_content) {
             .redirect, .leaf => unreachable, // nodeEntry builds a node only for a find root whose leafType is null
             .unresolved => if (self.mode == .settled_interface) Common.invariant("open cell reached settled interface interning"),
-            .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
+            .primitive, .empty_tag_union, .empty_record, .erased, .zst, .hole => {},
             .list, .box => |elem| try self.addSealPart(build, .{ .node = elem }),
             .tuple => |items| try self.addNodeSpanParts(build, &start, items),
             .func => |func| {
@@ -9495,7 +9514,7 @@ pub const GraphTypeFinals = struct {
         build.content = .{ .ty = type_content };
         var start: usize = 0;
         switch (type_content) {
-            .primitive, .erased, .zst => {},
+            .primitive, .erased, .zst, .hole => {},
             .list, .box => |elem| try self.addSealPart(build, .{ .ty = elem }),
             .tuple => |items| try self.addTypeSpanParts(build, &start, items),
             .func => |func| {
@@ -9606,6 +9625,7 @@ pub const GraphTypeFinals = struct {
             },
             .erased => |digest| .{ .erased = digest.* },
             .zst => .zst,
+            .hole => .hole,
         };
     }
 
@@ -9676,6 +9696,7 @@ pub const GraphTypeFinals = struct {
         const types = self.graph.types;
         return switch (build.content.ty) {
             .primitive => |primitive| .{ .primitive = primitive },
+            .hole => .hole,
             .list => .{ .list = reader.next() },
             .box => .{ .box = reader.next() },
             .tuple => .{ .tuple = reader.nextSpan() },
@@ -10019,6 +10040,7 @@ const OpenFunctionInterfaceShapeWriter = struct {
                 try self.writeBytes(&digest.bytes);
             },
             .zst => try actions.append(allocator, .{ .bytes = "zst" }),
+            .hole => try actions.append(allocator, .{ .bytes = "hole" }),
         }
         std.mem.reverse(ShapeAction, actions.items[start + 1 ..]);
     }
@@ -10231,6 +10253,7 @@ fn instNodeEql(left: InstNode, right: InstNode) bool {
         .named => |left_named| right == .named and instNamedEql(left_named, right.named),
         .erased => |left_digest| right == .erased and std.mem.eql(u8, left_digest.bytes[0..], right.erased.bytes[0..]),
         .zst => right == .zst,
+        .hole => right == .hole,
     };
 }
 
