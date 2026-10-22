@@ -8547,10 +8547,18 @@ and ordinary value flow expose a known iterator constructor, SpecConstr can:
 - supply each reachable `continue` edge with the scalar leaves required by the
   loop fixed point.
 
-When the continuation observes only part of a tuple loop result, SpecConstr
-may narrow the loop's exit ABI without narrowing its back-edge state. This
-applies equally to source tuples and compiler-generated state tuples; tuple
-type does not imply a statically visible tuple constructor.
+When the continuation never observes a tuple loop result whole, SpecConstr
+gives the loop an exit ABI of the components it reads, dropping any it cannot
+observe, without narrowing its back-edge state. A result whose every component
+is read takes that ABI too unless every component is a scalar (a primitive
+other than `Str`, or zero-sized): built as a tuple at each exit and read back
+field by field, each read would retain and release every refcounted component,
+which a loop left by `break` from inside an enclosing loop pays on every pass.
+A tuple of scalars costs nothing to build and take apart, and keeping it leaves
+each exit its own copy of the continuation, where values the exit fixes stay
+constants. This applies equally to source tuples and
+compiler-generated state tuples; tuple type does not imply a statically
+visible tuple constructor.
 
 Exit selection is a distinct final phase after the specialization graph is
 complete. One source-order traversal of each finalized function records loop
@@ -19499,7 +19507,13 @@ operands and to every other sum sharing an operand, since `a + y` and `a + z`
 order exactly as `y` and `z` do. A guard on `base + limit` established once
 therefore bounds every later `base + offset` whose `offset` a loop head keeps
 below `limit`, which is the shape of a word-at-a-time compare over two cursors
-into one buffer. The sum root stands for the exact sum; a wrapping addition
+into one buffer. Every use of a sum also relates it to each other sum whose
+operands the path's facts bound one by one: from `a <= p + c1` and
+`b <= q + c2`, `a + b <= p + q + c1 + c2`, and the same with the orderings
+reversed. A guard on `current + limit` thereby bounds a read at
+`candidate + len` when the candidate is at or before the current position and
+the length below the limit, with no sum sharing an operand in between. The sum
+root stands for the exact sum; a wrapping addition
 takes it only when those constraints bound the sum within the type, and a surviving
 checked addition takes it unconditionally.
 
