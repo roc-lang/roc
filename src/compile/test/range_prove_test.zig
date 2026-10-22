@@ -2068,3 +2068,46 @@ test "a bit count is at most its operand's width and an absolute difference at m
     const diff_wide = try ruleCounts("calc : U8, U8 -> U8\ncalc = |a, b| a.bitwise_and(31).abs_diff(b.bitwise_and(15)) + 240\n", two_bytes, "num_abs_diff(");
     try std.testing.expectEqual(@as(usize, 1), diff_wide.add_crash);
 }
+
+fn operandwiseSumApp(comptime len_guard: []const u8) []const u8 {
+    return "probe : List(U8), U64, U64, U64, U64 -> U64\n" ++
+        "probe = |input, cur, back, limit, len| {\n" ++
+        "    if cur + limit > List.len(input) or " ++ len_guard ++ " {\n" ++
+        "        return 0\n" ++
+        "    } else {\n" ++
+        "    }\n" ++
+        "    cand = cur.minus_saturated(back)\n" ++
+        "    (List.get(input, cand.plus_wrap(len)) ?? 0).to_u64()\n" ++
+        "}\n" ++
+        "\n" ++
+        "main! : List(Str) => Try({}, [Exit(I8), ..])\n" ++
+        "main! = |args| {\n" ++
+        "    bytes = Str.to_utf8(Str.join_with(args, \",\"))\n" ++
+        "    echo!(Str.inspect(probe(bytes, args.len(), 3, args.len() + 2, 7)))\n" ++
+        "    Ok({})\n" ++
+        "}\n";
+}
+
+// The read's index sums two values no other sum shares: a candidate at or
+// before the current position, by its saturating subtract, and a length
+// below the limit. The guard bounds the current position plus the limit by
+// the length, so the index is below it operand by operand. With the length
+// allowed to reach the limit the index can reach the length, and the read
+// keeps its bounds test.
+test "a guard on one sum bounds a read whose index sums values each bounded by one of its operands" {
+    marked_op = "list_get_unsafe";
+    try harness.expectLirInspectionWithOptions(
+        operandwiseSumApp("len > limit"),
+        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        countMarkedShape,
+    );
+    try std.testing.expect(marked_shape.found);
+    const unproven = marked_shape;
+    try harness.expectLirInspectionWithOptions(
+        operandwiseSumApp("len >= limit"),
+        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        countMarkedShape,
+    );
+    try std.testing.expect(marked_shape.found);
+    try std.testing.expectEqual(unproven.is_lt - 1, marked_shape.is_lt);
+}
