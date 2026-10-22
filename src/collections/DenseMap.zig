@@ -26,6 +26,7 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
 
         const empty_position = std.math.maxInt(u32);
         const SparseChunk = [chunk_len]u32;
+        const DenseIndex = DenseIndexOf(K);
 
         /// Entry returned by map iterators.
         pub const Entry = struct {
@@ -52,7 +53,7 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
         /// with large IDs costs a few slots rather than a slot for every
         /// chunk between ID zero and the highest touched ID.
         chunk_base: usize = 0,
-        active_indices: std.ArrayList(usize) = .empty,
+        active_indices: std.ArrayList(DenseIndex) = .empty,
         values: std.ArrayList(V) = .empty,
 
         pub fn init(allocator: Allocator) Self {
@@ -122,7 +123,7 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
             try self.active_indices.ensureUnusedCapacity(self.allocator, 1);
             try self.values.ensureUnusedCapacity(self.allocator, 1);
             const position: u32 = @intCast(self.active_indices.items.len);
-            self.active_indices.appendAssumeCapacity(index);
+            self.active_indices.appendAssumeCapacity(@intCast(index));
             self.values.appendAssumeCapacity(undefined);
             slot.* = position;
             return .{
@@ -147,7 +148,7 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
             const slot = self.sparseSlotPtr(index) orelse
                 collectionsInvariant("{s}", .{"DenseMap.getOrPutInReservedPage reached a page no earlier entry reserved"});
             const position: u32 = @intCast(self.active_indices.items.len);
-            self.active_indices.appendAssumeCapacity(index);
+            self.active_indices.appendAssumeCapacity(@intCast(index));
             self.values.appendAssumeCapacity(undefined);
             slot.* = position;
             return .{
@@ -596,26 +597,51 @@ pub fn DenseMapPool(comptime K: type, comptime V: type) type {
     };
 }
 
+/// Whether `K` is a packed struct ID that supplies its own bijection to a
+/// dense index (`denseIndex` / `fromDenseIndex`).
+fn isPackedDenseKey(comptime K: type) bool {
+    const type_info = @typeInfo(K);
+    return type_info == .@"struct" and type_info.@"struct".layout == .@"packed" and
+        @hasDecl(K, "denseIndex") and @hasDecl(K, "fromDenseIndex");
+}
+
 fn assertDenseKey(comptime K: type) void {
     const type_info = @typeInfo(K);
-    if (type_info != .int and type_info != .@"enum") {
-        @compileError("DenseMap keys must be integer or enum IDs, not " ++ @typeName(K));
+    if (type_info != .int and type_info != .@"enum" and !isPackedDenseKey(K)) {
+        @compileError("DenseMap keys must be integer or enum IDs, or packed IDs with a dense index bijection, not " ++ @typeName(K));
     }
+}
+
+/// The narrowest of `u32` and `usize` holding every dense index of `K`: a
+/// key's own `denseIndex` result type, or its integer width.
+fn DenseIndexOf(comptime K: type) type {
+    const has_dense_index = (comptime isPackedDenseKey(K)) or
+        (@typeInfo(K) == .@"enum" and @hasDecl(K, "denseIndex"));
+    const Index = if (has_dense_index)
+        @typeInfo(@TypeOf(K.denseIndex)).@"fn".return_type.?
+    else if (@typeInfo(K) == .@"enum")
+        @typeInfo(K).@"enum".tag_type
+    else
+        K;
+    const bits = @typeInfo(Index).int.bits;
+    return if (bits <= 32) u32 else usize;
 }
 
 fn keyIndex(key: anytype) usize {
     const K = @TypeOf(key);
+    if (comptime isPackedDenseKey(K)) return key.denseIndex();
     if (comptime @typeInfo(K) == .@"enum" and @hasDecl(K, "denseIndex")) return key.denseIndex();
     if (comptime @typeInfo(K) == .int) return @intCast(key);
     if (comptime @typeInfo(K) == .@"enum") return @intCast(@backingInt(key));
-    unreachable;
+    @compileError("DenseMap keys must be integer or enum IDs, not " ++ @typeName(K));
 }
 
 fn keyFromIndex(comptime K: type, index: usize) K {
+    if (comptime isPackedDenseKey(K)) return K.fromDenseIndex(index);
     if (comptime @typeInfo(K) == .@"enum" and @hasDecl(K, "fromDenseIndex")) return K.fromDenseIndex(index);
     if (comptime @typeInfo(K) == .int) return @intCast(index);
     if (comptime @typeInfo(K) == .@"enum") return @fromBackingInt(@intCast(index));
-    unreachable;
+    @compileError("DenseMap keys must be integer or enum IDs, not " ++ @typeName(K));
 }
 
 test "DenseMap directly indexes integer and enum IDs" {
@@ -753,7 +779,7 @@ test "DenseMapPool reuses released map storage and supports nested acquires" {
 /// panic with this message, and optimized builds treat it as unreachable.
 inline fn collectionsInvariant(comptime fmt: []const u8, args: anytype) noreturn {
     if (std.debug.runtime_safety) std.debug.panic(fmt, args);
-    unreachable;
+    unreachable; // design.md: optimized builds carry no runtime check for a violated compiler invariant
 }
 
 test "DenseMapUnmanaged starts empty and takes its allocator per call" {

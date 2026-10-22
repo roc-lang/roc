@@ -17,6 +17,9 @@ const LirStore = core.LirStore;
 const GuardedList = collections.GuardedList;
 const BodyClone = @import("body_clone.zig");
 
+/// `Pass.old_stmt_to_new` entry of a statement no procedure reaches.
+const pruned_stmt: LIR.CFStmtId = @fromBackingInt(std.math.maxInt(u32));
+
 /// Remove proc specs unreachable from roots, closed static initializers, and
 /// explicit constant callable plans, then rewrite every retained proc reference
 /// to the compact id space.
@@ -88,9 +91,10 @@ const Pass = struct {
     allocator: Allocator,
     reachable: []bool,
     old_to_new: []?LIR.LirProcSpecId,
-    reachable_stmts: []bool,
-    old_stmt_to_new: []?LIR.CFStmtId,
-    visited_stmts: []bool,
+    reachable_stmts: std.bit_set.DynamicBitSetUnmanaged,
+    /// The compact id of each reachable statement; `pruned_stmt` for the rest.
+    old_stmt_to_new: []LIR.CFStmtId,
+    visited_stmts: std.bit_set.DynamicBitSetUnmanaged,
     visited_plans: []bool,
     reachable_static_data: []bool,
     old_static_data_to_new: []?LIR.StaticDataId,
@@ -119,17 +123,15 @@ const Pass = struct {
         errdefer allocator.free(old_to_new);
         @memset(old_to_new, null);
 
-        const visited_stmts = try allocator.alloc(bool, stmt_count);
-        errdefer allocator.free(visited_stmts);
-        @memset(visited_stmts, false);
+        var visited_stmts = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, stmt_count);
+        errdefer visited_stmts.deinit(allocator);
 
-        const reachable_stmts = try allocator.alloc(bool, stmt_count);
-        errdefer allocator.free(reachable_stmts);
-        @memset(reachable_stmts, false);
+        var reachable_stmts = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, stmt_count);
+        errdefer reachable_stmts.deinit(allocator);
 
-        const old_stmt_to_new = try allocator.alloc(?LIR.CFStmtId, stmt_count);
+        const old_stmt_to_new = try allocator.alloc(LIR.CFStmtId, stmt_count);
         errdefer allocator.free(old_stmt_to_new);
-        @memset(old_stmt_to_new, null);
+        @memset(old_stmt_to_new, pruned_stmt);
 
         const visited_plans = try allocator.alloc(bool, plan_count);
         errdefer allocator.free(visited_plans);
@@ -222,9 +224,9 @@ const Pass = struct {
         self.allocator.free(self.old_static_data_to_new);
         self.allocator.free(self.reachable_static_data);
         self.allocator.free(self.visited_plans);
-        self.allocator.free(self.visited_stmts);
+        self.visited_stmts.deinit(self.allocator);
         self.allocator.free(self.old_stmt_to_new);
-        self.allocator.free(self.reachable_stmts);
+        self.reachable_stmts.deinit(self.allocator);
         self.allocator.free(self.old_to_new);
         self.allocator.free(self.reachable);
     }
@@ -292,7 +294,7 @@ const Pass = struct {
     }
 
     fn markProcBodyEdges(self: *Pass, proc_id: LIR.LirProcSpecId) Allocator.Error!void {
-        const proc = self.store.getProcSpec(proc_id);
+        const proc = self.store.getProcSpecImmediate(proc_id);
         // A served entry is body-less; its code's calls by identity are
         // edges of their own.
         if (self.served_starts.len != 0) {
@@ -308,10 +310,10 @@ const Pass = struct {
 
         while (self.stmt_stack.pop()) |stmt_id| {
             const stmt_index = @backingInt(stmt_id);
-            if (stmt_index >= self.visited_stmts.len) reachableProcInvariant("stmt reference exceeds cf_stmts len");
-            if (self.visited_stmts[stmt_index]) continue;
-            self.visited_stmts[stmt_index] = true;
-            self.reachable_stmts[stmt_index] = true;
+            if (stmt_index >= self.visited_stmts.bit_length) reachableProcInvariant("stmt reference exceeds cf_stmts len");
+            if (self.visited_stmts.isSet(stmt_index)) continue;
+            self.visited_stmts.set(stmt_index);
+            self.reachable_stmts.set(stmt_index);
 
             // The fresh form of a literal stays available until ARC chooses.
             const refs = stmtRefs(self.store, self.store.getCFStmt(stmt_id));
@@ -434,8 +436,8 @@ const Pass = struct {
 
     fn assignCompactStmtIds(self: *Pass) void {
         var next: u32 = 0;
-        for (self.reachable_stmts, 0..) |is_reachable, old_index| {
-            if (!is_reachable) continue;
+        var reachable = self.reachable_stmts.iterator(.{});
+        while (reachable.next()) |old_index| {
             self.old_stmt_to_new[old_index] = @fromBackingInt(@intCast(next));
             next += 1;
         }
@@ -451,7 +453,7 @@ const Pass = struct {
     }
 
     fn remapReachableProcBodies(self: *Pass) Allocator.Error!void {
-        @memset(self.visited_stmts, false);
+        self.visited_stmts.unsetAll();
         for (0..self.store.procSpecCount()) |index| {
             if (!self.reachable[index]) continue;
             const proc = self.store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
@@ -468,8 +470,8 @@ const Pass = struct {
         try self.stmt_stack.append(self.allocator, body);
         while (self.stmt_stack.pop()) |stmt_id| {
             const stmt_index = @backingInt(stmt_id);
-            if (self.visited_stmts[stmt_index]) continue;
-            self.visited_stmts[stmt_index] = true;
+            if (self.visited_stmts.isSet(stmt_index)) continue;
+            self.visited_stmts.set(stmt_index);
 
             // The successors are pushed before the edges are remapped, so
             // the walk follows the old ids this table is indexed by.
@@ -844,7 +846,7 @@ const Pass = struct {
     }
 
     fn compactCFStmts(self: *Pass) Allocator.Error!void {
-        try self.store.compactCFStmts(self.reachable_stmts);
+        try self.store.compactCFStmts(&self.reachable_stmts);
     }
 
     fn compactStaticDataValues(self: *Pass) void {
@@ -893,7 +895,7 @@ const Pass = struct {
             if (entry.proc >= proc_count) reachableProcInvariant("proc debug name exceeds compact proc_specs len");
         }
         for (0..self.store.procSpecCount()) |proc_index| {
-            const proc = self.store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
+            const proc = self.store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
             if (proc.body) |body| self.verifyStmtRef(body, stmt_count) else if (proc.hosted == null and !proc.external) {
                 reachableProcInvariant("retained Roc proc has no body");
             }
@@ -927,7 +929,9 @@ const Pass = struct {
     fn remapStmt(self: *Pass, old: LIR.CFStmtId) LIR.CFStmtId {
         const index = @backingInt(old);
         if (index >= self.old_stmt_to_new.len) reachableProcInvariant("stmt reference exceeds old cf_stmts len");
-        return self.old_stmt_to_new[index] orelse reachableProcInvariant("reachable stmt edge pointed at pruned stmt");
+        const new = self.old_stmt_to_new[index];
+        if (new == pruned_stmt) reachableProcInvariant("reachable stmt edge pointed at pruned stmt");
+        return new;
     }
 
     fn verifyProcRef(_: *Pass, proc: LIR.LirProcSpecId, proc_count: usize) void {
@@ -1022,10 +1026,7 @@ fn stmtRefs(store: *const LirStore, stmt: LIR.CFStmt) StmtRefs {
 }
 
 fn reachableProcInvariant(msg: []const u8) noreturn {
-    if (@import("builtin").mode == .debug) {
-        base.invariant("reachable procs invariant violated: {s}", .{msg});
-    }
-    unreachable;
+    base.invariant("reachable procs invariant violated: {s}", .{msg});
 }
 
 test "reachable proc pass compacts proc specs and remaps root ids" {

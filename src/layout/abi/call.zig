@@ -13,6 +13,7 @@
 //! consumer so they agree by construction.
 
 const std = @import("std");
+const base = @import("base");
 const collections = @import("collections");
 
 const layout = @import("../layout.zig");
@@ -339,7 +340,7 @@ pub fn markRegisterOverflow(target: Target, lowered: LoweredCall, trailing_point
                 }
             }
         },
-        .wasm32, .wasm32v1, .wasm64 => unreachable,
+        .wasm32, .wasm32v1, .wasm64 => unreachable, // the LLVM backend calls this only when usesTailDrivers is false, which excludes wasm
     }
 }
 
@@ -439,7 +440,7 @@ pub fn assignPhysicalArgs(
             win_position = 1;
         },
         .aarch64, .aarch64_macho, .aarch64_windows => {}, // AAPCS64 uses the dedicated x8 indirect-result register.
-        .wasm32, .wasm32v1, .wasm64 => unreachable,
+        .wasm32, .wasm32v1, .wasm64 => unreachable, // the entry assertion rejects wasm targets
     };
     if (lowered.leading_ops) switch (target) {
         .x86_64_windows => {
@@ -447,7 +448,7 @@ pub fn assignPhysicalArgs(
             win_position += 1;
         },
         .x86_64_sysv, .aarch64, .aarch64_macho, .aarch64_windows => gp_used += 1,
-        .wasm32, .wasm32v1, .wasm64 => unreachable,
+        .wasm32, .wasm32v1, .wasm64 => unreachable, // the entry assertion rejects wasm targets
     };
 
     for (lowered.args, arg_idxs, args) |placement, arg_idx, *assigned| {
@@ -482,7 +483,7 @@ pub fn assignPhysicalArgs(
                     win_position += 1;
                     gp_used = win_position;
                 },
-                .wasm32, .wasm32v1, .wasm64 => unreachable,
+                .wasm32, .wasm32v1, .wasm64 => unreachable, // the entry assertion rejects wasm targets
             },
             .registers => |registers| switch (target) {
                 .x86_64_windows => {
@@ -558,7 +559,7 @@ pub fn assignPhysicalArgs(
                         }
                     }
                 },
-                .wasm32, .wasm32v1, .wasm64 => unreachable,
+                .wasm32, .wasm32v1, .wasm64 => unreachable, // the entry assertion rejects wasm targets
             },
         }
     }
@@ -744,7 +745,7 @@ fn placementAarch64(
                 return integerPieces(arena, size, if (size == 16) .integer else .piecewise, extend);
             },
             .box, .box_of_zst, .erased_box, .ptr => return integerPieces(arena, size, .piecewise, .none),
-            .list, .list_of_zst, .struct_, .tag_union, .closure, .erased_callable, .zst => unreachable,
+            .list, .list_of_zst, .struct_, .tag_union, .closure, .erased_callable, .zst => unreachable, // aarch64.classifyType returns byval only for scalar and pointer-like layouts
         },
     }
 }
@@ -779,7 +780,8 @@ fn placementSysV(
                         .class = .vector,
                         .offset = offset,
                         .size = @intCast(@min(@as(u32, 16), size - offset)),
-                        .vector_kind = try findVectorKind(arena, store, idx) orelse unreachable,
+                        .vector_kind = try findVectorKind(arena, store, idx) orelse
+                            base.invariant("layout ABI invariant violated: System V SSE+SSEUP eightbytes have no vector member", .{}),
                     });
                     i += 1;
                 } else {
@@ -822,7 +824,7 @@ fn placementWin64(
                 .class = .vector,
                 .offset = 0,
                 .size = 16,
-                .vector_kind = cAbiI128VectorKind(store, idx) orelse unreachable,
+                .vector_kind = cAbiI128VectorKind(store, idx) orelse unreachable, // win_i128 that is no C aggregate and holds no vector is a 16-byte int scalar
             };
             return .{ .registers = .{ .pieces = pieces } };
         } else return .indirect,

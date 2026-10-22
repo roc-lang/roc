@@ -78,6 +78,15 @@ pub const SharedLiteralBacking = struct {
         self.* = .{ .allocator = allocator, .bytes = owned };
         return self;
     }
+
+    /// A backing of `len` bytes for the caller to fill before adding views.
+    pub fn initUnfilled(allocator: std.mem.Allocator, len: usize) std.mem.Allocator.Error!struct { owner: *SharedLiteralBacking, bytes: []u8 } {
+        const bytes = try allocator.alloc(u8, len);
+        errdefer allocator.free(bytes);
+        const self = try allocator.create(SharedLiteralBacking);
+        self.* = .{ .allocator = allocator, .bytes = bytes };
+        return .{ .owner = self, .bytes = bytes };
+    }
     /// Retain the immutable backing when another IR takes ownership.
     pub fn retain(self: *SharedLiteralBacking) void {
         _ = self.refs.fetchAdd(1, .monotonic);
@@ -115,6 +124,15 @@ pub const StringLiteral = struct {
 
     pub fn text(self: StringLiteral) []const u8 {
         return self.backing[self.offset..][0..self.len];
+    }
+
+    /// No bytes and no backing to free; a local's name when it has none.
+    pub const empty: StringLiteral = .{ .backing = "", .offset = 0, .len = 0 };
+
+    /// An owned copy of `bytes`.
+    pub fn initOwned(allocator: std.mem.Allocator, bytes: []const u8) std.mem.Allocator.Error!StringLiteral {
+        if (bytes.len == 0) return .empty;
+        return .{ .backing = try allocator.dupe(u8, bytes), .offset = 0, .len = @intCast(bytes.len) };
     }
 };
 
@@ -678,7 +696,7 @@ pub fn valueEql(left: anytype, right: @TypeOf(left)) bool {
                     return valueEql(@field(left, field_name), @field(right, field_name));
                 }
             }
-            unreachable;
+            unreachable; // the loop visits every union field, so one of them is the active tag
         },
         .array => |info| {
             if (info.child == u8) return std.mem.eql(u8, &left, &right);
@@ -926,19 +944,66 @@ pub const Local = struct {
     id: LocalId,
     symbol: Common.Symbol,
     ty: Type.TypeId,
-    binder: ?checked.PatternBinderId = null,
-    /// Identity of this local as a closure capture. During construction this
-    /// may be a checked binder/generated identity; final Monotype output
-    /// replaces every non-null value with the final local's program-global
-    /// post-check identity.
-    capture_id: ?checked.CaptureId = null,
-    /// Checked capture provenance for pre-lift target-key normalization and
-    /// `ConstStore` publication. Alternative binders use their arm's
-    /// representative key; durable runtime capture identity remains separate.
-    checked_capture_id: ?checked.CaptureId = null,
+    identity: LocalIdentity = .{},
     /// Whether this local, when captured, is a lexical value or a top-level
     /// root's recursive binding; carried to `ConstStore` captures.
     capture_kind: checked.ConstCaptureKind = .lexical,
+};
+
+/// A local's optional checked identities. `CaptureId` uses every `u32`
+/// value, so each identity's presence is its own bit beside its raw value.
+pub const LocalIdentity = struct {
+    binder_raw: u32 = 0,
+    capture_raw: u32 = 0,
+    checked_capture_raw: u32 = 0,
+    present: packed struct(u8) {
+        binder: bool = false,
+        capture: bool = false,
+        checked_capture: bool = false,
+        _: u5 = 0,
+    } = .{},
+
+    pub fn init(binder_id: ?checked.PatternBinderId, capture_id: ?checked.CaptureId, checked_capture_id: ?checked.CaptureId) LocalIdentity {
+        var result: LocalIdentity = .{};
+        result.setBinder(binder_id);
+        result.setCaptureId(capture_id);
+        result.setCheckedCaptureId(checked_capture_id);
+        return result;
+    }
+
+    pub fn binder(self: LocalIdentity) ?checked.PatternBinderId {
+        return if (self.present.binder) @fromBackingInt(self.binder_raw) else null;
+    }
+
+    /// Identity of this local as a closure capture. During construction this
+    /// may be a checked binder/generated identity; final Monotype output
+    /// replaces every present value with the final local's program-global
+    /// post-check identity.
+    pub fn captureId(self: LocalIdentity) ?checked.CaptureId {
+        return if (self.present.capture) @fromBackingInt(self.capture_raw) else null;
+    }
+
+    /// Checked capture provenance for pre-lift target-key normalization and
+    /// `ConstStore` publication. Alternative binders use their arm's
+    /// representative key; durable runtime capture identity remains separate.
+    pub fn checkedCaptureId(self: LocalIdentity) ?checked.CaptureId {
+        return if (self.present.checked_capture) @fromBackingInt(self.checked_capture_raw) else null;
+    }
+
+    pub fn setBinder(self: *LocalIdentity, value: ?checked.PatternBinderId) void {
+        self.present.binder = value != null;
+        self.binder_raw = if (value) |id| @backingInt(id) else 0;
+    }
+
+    pub fn setCaptureId(self: *LocalIdentity, value: ?checked.CaptureId) void {
+        self.present.capture = value != null;
+        self.capture_raw = if (value) |id| @backingInt(id) else 0;
+    }
+
+    pub fn setCheckedCaptureId(self: *LocalIdentity, value: ?checked.CaptureId) void {
+        self.present.checked_capture = value != null;
+        self.checked_capture_raw = if (value) |id| @backingInt(id) else 0;
+    }
 };
 
 /// Local id paired with its monomorphic type.
@@ -1658,7 +1723,7 @@ pub const ProgramView = struct {
     expr_regions: []const base.Region,
     stmt_locs: []const base.SourceLoc,
     stmt_regions: []const base.Region,
-    local_names: []const []const u8,
+    local_names: []const StringLiteral,
     next_symbol: u32,
 
     pub fn getComptimeValueRoot(self: ProgramView, id: Common.ComptimeValueRootId) Common.ComptimeValueRoot {
@@ -1852,8 +1917,9 @@ pub const ProgramBuilder = struct {
     /// Checked source region per statement, parallel to `stmts`.
     stmt_regions: ProgramList(base.Region, "stmt_regions"),
     /// Source-level name per local, parallel to `locals` (empty for
-    /// compiler-generated temporaries; owned by this program).
-    local_names: ProgramList([]const u8, "local_names"),
+    /// compiler-generated temporaries). A sealed body's names share one
+    /// backing, like its string literals.
+    local_names: ProgramList(StringLiteral, "local_names"),
     /// Ambient location recorded by `addExpr`/`addStmt`. Lowering sets this on
     /// entry to each source node, so synthetic glue nodes inherit the location
     /// of the source node they were derived from.
@@ -1953,9 +2019,9 @@ pub const ProgramBuilder = struct {
             };
         }
         for (self.local_names.unsafeRawItemsForView()) |name| {
-            const copied = try allocator.dupe(u8, name);
+            const copied = try name.clone(allocator);
             result.local_names.append(allocator, copied) catch |err| {
-                allocator.free(copied);
+                copied.deinit(allocator);
                 return err;
             };
         }
@@ -1966,9 +2032,7 @@ pub const ProgramBuilder = struct {
     }
 
     pub fn deinit(self: *ProgramBuilder) void {
-        for (self.local_names.unsafeRawItemsForView()) |name| {
-            if (name.len > 0) self.allocator.free(name);
-        }
+        for (self.local_names.unsafeRawItemsForView()) |name| name.deinit(self.allocator);
         self.local_names.deinit(self.allocator);
         self.stmt_regions.deinit(self.allocator);
         self.stmt_locs.deinit(self.allocator);
@@ -2313,6 +2377,19 @@ pub const ProgramBuilder = struct {
         return id;
     }
 
+    /// A literal whose backing is the `backing_len` bytes of `owner` at
+    /// `backing_start`, retaining `owner` for as long as the literal lives.
+    /// Many literals sharing one allocation cost one allocation while each
+    /// keeps its own backing.
+    pub fn addSharedStringView(self: *ProgramBuilder, owner: *SharedLiteralBacking, backing_start: u32, backing_len: u32, offset: u32, len: u32) std.mem.Allocator.Error!StringLiteralId {
+        if (@as(u64, backing_start) + backing_len > owner.bytes.len) Common.invariant("string literal backing exceeded its shared allocation");
+        if (@as(u64, offset) + len > backing_len) Common.invariant("string literal view exceeded its backing");
+        const id: StringLiteralId = @fromBackingInt(@intCast(@as(u32, @intCast(self.string_literals.len()))));
+        try self.string_literals.append(self.allocator, .{ .backing = owner.bytes[backing_start..][0..backing_len], .shared = owner, .offset = offset, .len = len });
+        owner.retain();
+        return id;
+    }
+
     pub fn addStringView(self: *ProgramBuilder, backing: []const u8, offset: u32, len: u32) std.mem.Allocator.Error!StringLiteralId {
         const offset_usize: usize = offset;
         const len_usize: usize = len;
@@ -2355,13 +2432,11 @@ pub const ProgramBuilder = struct {
             .id = id,
             .symbol = symbol,
             .ty = ty,
-            .binder = binder,
             // A binder-backed local carries the exact capture identity of
             // its binding, so any function that captures it joins by CaptureId.
-            .capture_id = checked_capture_id,
-            .checked_capture_id = checked_capture_id,
+            .identity = .init(binder, checked_capture_id, checked_capture_id),
         });
-        try self.local_names.append(self.allocator, "");
+        try self.local_names.append(self.allocator, .empty);
         return id;
     }
 
@@ -2371,21 +2446,22 @@ pub const ProgramBuilder = struct {
     pub fn setLocalCaptureId(self: *ProgramBuilder, id: LocalId, capture_id: u32) void {
         const checked_id = checked.CaptureId.generatedCheck(capture_id);
         const local = self.locals.getPtrImmediate(@backingInt(id));
-        local.capture_id = checked_id;
-        local.checked_capture_id = checked_id;
+        local.identity.setCaptureId(checked_id);
+        local.identity.setCheckedCaptureId(checked_id);
     }
 
     /// Record the source-level name of a local (dupes; empty means none).
     pub fn setLocalName(self: *ProgramBuilder, id: LocalId, name: []const u8) std.mem.Allocator.Error!void {
         if (name.len == 0) return;
+        const owned = try StringLiteral.initOwned(self.allocator, name);
         const slot = self.local_names.getPtrImmediate(@backingInt(id));
-        if (slot.len > 0) self.allocator.free(slot.*);
-        slot.* = try self.allocator.dupe(u8, name);
+        slot.deinit(self.allocator);
+        slot.* = owned;
     }
 
     /// Source-level name of a local; empty for compiler-generated temporaries.
     pub fn localName(self: *const ProgramBuilder, id: LocalId) []const u8 {
-        return self.local_names.unsafeRawItemsForView()[@backingInt(id)];
+        return self.local_names.unsafeRawItemsForView()[@backingInt(id)].text();
     }
 
     pub fn localCount(self: *const ProgramBuilder) usize {
@@ -2586,14 +2662,14 @@ pub const ProgramBuilder = struct {
         defer durable_by_checked.deinit();
         for (0..self.locals.len()) |index| {
             const local = self.locals.getPtrImmediate(index);
-            const provisional = local.capture_id orelse continue;
+            const provisional = local.identity.captureId() orelse continue;
             if (provisional.isGeneratedLift()) continue;
             if (index > checked.CaptureId.max_generated_index) {
                 Common.invariant("Monotype program had too many locals for durable capture identity");
             }
             const entry = try durable_by_checked.getOrPut(provisional);
             if (!entry.found_existing) entry.value_ptr.* = checked.CaptureId.generatedLift(@intCast(index));
-            local.capture_id = entry.value_ptr.*;
+            local.identity.setCaptureId(entry.value_ptr.*);
         }
     }
 
@@ -2644,13 +2720,13 @@ test "final Monotype capture identities preserve direct aliases" {
 
     try program.sealRemainingCaptureIdentities();
 
-    try std.testing.expectEqual(checked.CaptureId.generatedLift(@backingInt(first)), program.getLocal(first).capture_id.?);
-    try std.testing.expectEqual(program.getLocal(first).capture_id, program.getLocal(second).capture_id);
-    try std.testing.expectEqual(checked.CaptureId.fromBinder(binder), program.getLocal(first).checked_capture_id.?);
-    try std.testing.expectEqual(checked.CaptureId.fromBinder(binder), program.getLocal(second).checked_capture_id.?);
-    try std.testing.expectEqual(@as(?checked.CaptureId, null), program.getLocal(uncaptured).capture_id);
-    try std.testing.expectEqual(checked.CaptureId.generatedLift(@backingInt(generated)), program.getLocal(generated).capture_id.?);
-    try std.testing.expectEqual(checked.CaptureId.generatedCheck(0), program.getLocal(generated).checked_capture_id.?);
+    try std.testing.expectEqual(checked.CaptureId.generatedLift(@backingInt(first)), program.getLocal(first).identity.captureId().?);
+    try std.testing.expectEqual(program.getLocal(first).identity.captureId(), program.getLocal(second).identity.captureId());
+    try std.testing.expectEqual(checked.CaptureId.fromBinder(binder), program.getLocal(first).identity.checkedCaptureId().?);
+    try std.testing.expectEqual(checked.CaptureId.fromBinder(binder), program.getLocal(second).identity.checkedCaptureId().?);
+    try std.testing.expectEqual(@as(?checked.CaptureId, null), program.getLocal(uncaptured).identity.captureId());
+    try std.testing.expectEqual(checked.CaptureId.generatedLift(@backingInt(generated)), program.getLocal(generated).identity.captureId().?);
+    try std.testing.expectEqual(checked.CaptureId.generatedCheck(0), program.getLocal(generated).identity.checkedCaptureId().?);
 }
 
 test "monotype program view exposes read-only side arrays" {

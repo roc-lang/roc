@@ -69,10 +69,7 @@ fn exportBlockers(store: *TypeStore, blockers: *std.ArrayList(Var)) void {
 }
 
 fn exhaustiveInvariant(comptime message: []const u8, args: anytype) noreturn {
-    if (builtin.mode == .debug) {
-        base.invariant(message, args);
-    }
-    unreachable;
+    base.invariant(message, args);
 }
 
 /// Frozen analysis state scoped to one exhaustiveness entry point.
@@ -81,23 +78,39 @@ fn exhaustiveInvariant(comptime message: []const u8, args: anytype) noreturn {
 pub const NominalOpenCache = struct {
     allocator: std.mem.Allocator,
     /// Complete queries only; shares the opening cache's mutation-free lifetime.
+    /// General queries carry their known-empty assumptions in the key;
+    /// constructor-payload and known-absent-payload queries carry none.
     inhabitedness: InhabitednessMemo = .{},
+    payload_inhabitedness: InhabitednessMemo = .{},
+    known_absent_inhabitedness: InhabitednessMemo = .{},
     views: ?TypeView = null,
+    /// Declaration dependency graphs kept across reads, if the caller keeps any.
+    shared: ?TypeView.Shared = null,
 
     /// Own nothing until analysis starts.
     pub fn init(allocator: std.mem.Allocator) NominalOpenCache {
         return .{ .allocator = allocator };
     }
 
+    /// Like `init`, with readers that reuse and extend `shared`'s graphs.
+    pub fn initShared(allocator: std.mem.Allocator, shared: TypeView.Shared) NominalOpenCache {
+        return .{ .allocator = allocator, .shared = shared };
+    }
+
     /// Release views and complete-query answers together.
     pub fn deinit(self: *NominalOpenCache) void {
         if (self.views) |*views| views.deinit();
         self.inhabitedness.deinit(self.allocator);
+        self.payload_inhabitedness.deinit(self.allocator);
+        self.known_absent_inhabitedness.deinit(self.allocator);
     }
 
     /// One namespace for the complete mutation-free analysis.
     fn reader(self: *NominalOpenCache, source: *types.Store) *TypeStore {
-        if (self.views == null) self.views = TypeView.init(self.allocator, source);
+        if (self.views == null) self.views = if (self.shared) |shared|
+            TypeView.initShared(self.allocator, source, shared)
+        else
+            TypeView.init(self.allocator, source);
         std.debug.assert(self.views.?.source == source);
         return &self.views.?;
     }
@@ -108,8 +121,18 @@ pub const NominalOpenCache = struct {
         self.views = null;
         self.inhabitedness.deinit(self.allocator);
         self.inhabitedness = .{};
+        self.payload_inhabitedness.deinit(self.allocator);
+        self.payload_inhabitedness = .{};
+        self.known_absent_inhabitedness.deinit(self.allocator);
+        self.known_absent_inhabitedness = .{};
     }
 };
+
+/// Declaration dependency graphs kept across reads of one source store
+/// (`TypeView.SharedDependencies`).
+pub const SharedNominalDependencies = TypeView.SharedDependencies;
+/// A reader's access to `SharedNominalDependencies` (`TypeView.Shared`).
+pub const SharedNominalDependenciesAccess = TypeView.Shared;
 
 /// Identifiers and per-entry-point state the exhaustiveness analysis needs
 /// from its caller: builtin type names for classifying nominal types, the
@@ -298,10 +321,8 @@ pub const Pattern = union(enum) {
         while (pending.pop()) |pattern| {
             const children: []const Pattern = switch (pattern) {
                 .anything => |maybe_type| {
-                    // Wildcards without type info should only occur in intermediate patterns
-                    // during matrix specialization, which should never be checked for inhabitedness.
-                    // Missing patterns should always have type info from ColumnTypes.
-                    const type_var = maybe_type orelse unreachable;
+                    const type_var = maybe_type orelse
+                        exhaustiveInvariant("a wildcard checked for inhabitedness has no column type", .{});
                     if (!try isTypeInhabitedWithKnownEmpty(type_store, builtin_idents, type_var, known_empty_vars)) return false;
                     continue;
                 },
@@ -589,12 +610,42 @@ pub const UnresolvedRows = struct {
 /// occurrence identity.
 pub const NumeralKeyInterner = struct {
     module_env: *const Can.ModuleEnv,
-    map: std.StringHashMapUnmanaged(u32) = .empty,
+    /// Keys borrow the module's digit bytes, which outlive the check.
+    map: std.HashMapUnmanaged(types.numeral.Exact, u32, ExactContext, std.hash_map.default_max_load_percentage) = .empty,
     next_id: u32 = 0,
 
-    /// `allocator` must be the same arena the surrounding check uses: interned
-    /// key bytes live in it until the check completes, and are never freed
-    /// individually.
+    const ExactContext = struct {
+        pub fn hash(_: ExactContext, exact: types.numeral.Exact) u64 {
+            var hasher = std.hash.Wyhash.init(0);
+            std.hash.autoHash(&hasher, exact.before.len);
+            hasher.update(exact.before);
+            hasher.update(exact.after);
+            std.hash.autoHash(&hasher, exact.scale);
+            std.hash.autoHash(&hasher, exact.is_negative);
+            std.hash.autoHash(&hasher, exact.is_fractional);
+            return hasher.final();
+        }
+
+        pub fn eql(_: ExactContext, a: types.numeral.Exact, b: types.numeral.Exact) bool {
+            return a.scale == b.scale and
+                a.is_negative == b.is_negative and
+                a.is_fractional == b.is_fractional and
+                bytesEql(a.before, b.before) and
+                bytesEql(a.after, b.after);
+        }
+
+        fn bytesEql(a: []const u8, b: []const u8) bool {
+            // Local byte compare: `std.mem.eql` is banned in src/check.
+            if (a.len != b.len) return false;
+            for (a, b) |x, y| {
+                if (x != y) return false;
+            }
+            return true;
+        }
+    };
+
+    /// `allocator` must be the same arena the surrounding check uses: the
+    /// map's storage lives in it until the check completes.
     fn idFor(
         self: *NumeralKeyInterner,
         allocator: std.mem.Allocator,
@@ -602,20 +653,7 @@ pub const NumeralKeyInterner = struct {
     ) error{OutOfMemory}!u32 {
         const literal = self.module_env.numeralLiteralForNode(Can.ModuleEnv.nodeIdxFrom(pattern_idx)) orelse
             return self.freshId();
-        const exact = self.module_env.exactNumeral(literal);
-
-        // Unambiguous key: length-prefixed `before` digits, then `after`
-        // digits, then scale and sign/fractional flags.
-        var key: std.ArrayList(u8) = .empty;
-        try key.ensureTotalCapacity(allocator, 4 + exact.before.len + exact.after.len + 5);
-        key.appendSliceAssumeCapacity(&u32LeBytes(@intCast(exact.before.len)));
-        key.appendSliceAssumeCapacity(exact.before);
-        key.appendSliceAssumeCapacity(exact.after);
-        key.appendSliceAssumeCapacity(&u32LeBytes(exact.scale));
-        key.appendAssumeCapacity(@as(u8, @intFromBool(exact.is_negative)) |
-            (@as(u8, @intFromBool(exact.is_fractional)) << 1));
-
-        const entry = try self.map.getOrPut(allocator, key.items);
+        const entry = try self.map.getOrPut(allocator, self.module_env.exactNumeral(literal));
         if (!entry.found_existing) entry.value_ptr.* = self.freshId();
         return entry.value_ptr.*;
     }
@@ -624,15 +662,6 @@ pub const NumeralKeyInterner = struct {
         const id = self.next_id;
         self.next_id += 1;
         return id;
-    }
-
-    fn u32LeBytes(value: u32) [4]u8 {
-        return .{
-            @truncate(value),
-            @truncate(value >> 8),
-            @truncate(value >> 16),
-            @truncate(value >> 24),
-        };
     }
 };
 
@@ -1550,6 +1579,22 @@ const InhabitedGraph = struct {
     }
 };
 
+/// A constructor-payload or known-absent-payload query without assumptions,
+/// answered once per root within one read.
+fn memoizedPayloadQuery(store: *TypeStore, idents: BuiltinIdents, root: Var, comptime mode: InhabitedMode) Allocator.Error!bool {
+    const cache = idents.open_cache;
+    const memo = switch (mode) {
+        .payload => &cache.payload_inhabitedness,
+        .known_absent => &cache.known_absent_inhabitedness,
+        .general => @compileError("general queries are memoized with their assumptions"),
+    };
+    const key: InhabitednessMemo.Key = .{ .root = resolveRoot(store, root), .known_empty = &.{} };
+    if (memo.get(key)) |answer| return answer;
+    const answer = try solveInhabitedGraph(store, idents, root, mode, &.{});
+    try memo.put(cache.allocator, key, answer);
+    return answer;
+}
+
 fn solveInhabitedGraph(store: *TypeStore, idents: BuiltinIdents, root: Var, mode: InhabitedMode, assumptions: []const Var) Allocator.Error!bool {
     var arena = base.SingleThreadArena.init(store.gpa);
     defer arena.deinit();
@@ -1598,7 +1643,7 @@ pub fn isCtorPayloadTypeInhabited(
     builtin_idents: BuiltinIdents,
     type_var: Var,
 ) error{OutOfMemory}!bool {
-    return solveInhabitedGraph(type_store, builtin_idents, type_var, .payload, &.{});
+    return memoizedPayloadQuery(type_store, builtin_idents, type_var, .payload);
 }
 
 /// Collects unresolved unbound type variables that make a constructor payload uninhabited.
@@ -1644,7 +1689,7 @@ fn collectCtorPayloadBlockersHelp(
     if (gop.found_existing) return;
 
     switch (content) {
-        .flex, .rigid, .err, .field_presence => unreachable,
+        .flex, .rigid, .err, .field_presence => unreachable, // the switch above returns for these contents
         .alias => |alias| {
             if (builtin_idents.isBuiltinNumericIdent(alias.ident.ident_idx)) return;
             try collectCtorPayloadBlockersHelp(
@@ -1711,11 +1756,11 @@ fn collectRecordPayloadBlockers(
                 const presence = type_store.getRecordFieldAt(fields, @intCast(offset)).presence;
                 if (!try fieldIsAlwaysPresent(type_store, presence)) continue;
                 const field_var = presence.typeVar();
-                if (try solveInhabitedGraph(type_store, builtin_idents, field_var, mode, &.{})) continue;
+                if (try memoizedPayloadQuery(type_store, builtin_idents, field_var, mode)) continue;
                 switch (mode) {
                     .payload => try collectCtorPayloadBlockersHelp(type_store, builtin_idents, field_var, out, seen),
                     .known_absent => try collectKnownAbsentCtorPayloadBlockersHelp(allocator, type_store, builtin_idents, field_var, out, seen),
-                    .general => unreachable,
+                    .general => @compileError("general mode collects no record payload blockers"),
                 }
             }
         }
@@ -1803,7 +1848,7 @@ fn isKnownAbsentCtorPayloadTypeInhabited(
     builtin_idents: BuiltinIdents,
     type_var: Var,
 ) error{OutOfMemory}!bool {
-    return solveInhabitedGraph(type_store, builtin_idents, type_var, .known_absent, &.{});
+    return memoizedPayloadQuery(type_store, builtin_idents, type_var, .known_absent);
 }
 
 fn collectKnownAbsentCtorPayloadBlockers(
@@ -1849,7 +1894,7 @@ fn collectKnownAbsentCtorPayloadBlockersHelp(
     if (gop.found_existing) return;
 
     switch (content) {
-        .flex, .rigid, .err, .field_presence => unreachable,
+        .flex, .rigid, .err, .field_presence => unreachable, // the switch above returns for these contents
         .alias => |alias| {
             if (builtin_idents.isBuiltinNumericIdent(alias.ident.ident_idx)) return;
             try collectKnownAbsentCtorPayloadBlockersHelp(
@@ -2171,7 +2216,7 @@ const CtorArgTypes = union(enum) {
         return switch (self) {
             .vars => |range| type_store.getVarAt(range, @intCast(offset)),
             .record_fields => |range| type_store.getRecordFieldAt(range, @intCast(offset)).presence.typeVar(),
-            .none => unreachable,
+            .none => unreachable, // .none has len 0, so no caller indexes an argument of it
         };
     }
 };
@@ -2438,6 +2483,28 @@ pub const ColumnTypes = struct {
     }
 };
 
+/// The arities of `column`'s list patterns, in order, followed by `last`.
+fn listAritiesWith(
+    allocator: std.mem.Allocator,
+    column: []const UnresolvedPattern,
+    last: ListArity,
+) Allocator.Error![]ListArity {
+    var count: usize = 0;
+    for (column) |p| {
+        if (p == .list) count += 1;
+    }
+    const arities = try allocator.alloc(ListArity, count + 1);
+    var i: usize = 0;
+    for (column) |p| {
+        if (p == .list) {
+            arities[i] = p.list.arity;
+            i += 1;
+        }
+    }
+    arities[count] = last;
+    return arities;
+}
+
 /// Build the list of list arities we need to check for exhaustiveness.
 /// This handles the complexity of variable-length list patterns.
 fn buildListCtorsForChecking(
@@ -2465,11 +2532,9 @@ fn buildListCtorsForChecking(
 
     if (!has_slice) {
         // Only exact patterns - check each length from 0 to max+1
-        var result: std.ArrayList(ListArity) = .empty;
-        for (0..max_exact_len + 2) |len| {
-            try result.append(allocator, .{ .exact = len });
-        }
-        return try result.toOwnedSlice(allocator);
+        const result = try allocator.alloc(ListArity, max_exact_len + 2);
+        for (result, 0..) |*arity, len| arity.* = .{ .exact = len };
+        return result;
     }
 
     // Has slice patterns - check each length from 0 to the point where slices take over.
@@ -2480,20 +2545,17 @@ fn buildListCtorsForChecking(
     // pattern's suffix without the two overlapping. That requires
     // `check_until >= max_prefix + max_suffix`; with any less, a prefix element
     // of one pattern and a suffix element of another would share a column.
-    var result: std.ArrayList(ListArity) = .empty;
     const check_until = @max(max_exact_len + 1, max_prefix + max_suffix);
-
-    for (0..check_until) |len| {
-        try result.append(allocator, .{ .exact = len });
-    }
+    const result = try allocator.alloc(ListArity, check_until + 1);
+    for (result[0..check_until], 0..) |*arity, len| arity.* = .{ .exact = len };
 
     // Add one slice pattern to cover all remaining lengths
-    try result.append(allocator, .{ .slice = .{
+    result[check_until] = .{ .slice = .{
         .prefix = check_until - max_suffix,
         .suffix = max_suffix,
-    } });
+    } };
 
-    return try result.toOwnedSlice(allocator);
+    return result;
 }
 
 // Sketched Pattern Path
@@ -2677,18 +2739,12 @@ fn collectCtorsSketched(
         // Previously this returned .non_exhaustive_wildcards when wildcards were
         // present, which caused false non-exhaustive errors because wildcards
         // covering all list arities weren't being considered.
-        var arities: std.ArrayList(ListArity) = .empty;
-        for (first_col) |p| {
-            if (p == .list) {
-                try arities.append(allocator, p.list.arity);
-            }
-        }
-        try arities.append(allocator, .{ .slice = .{
+        const arities = try listAritiesWith(allocator, first_col, .{ .slice = .{
             .prefix = 0,
             .suffix = 0,
         } });
 
-        return .{ .lists = try arities.toOwnedSlice(allocator) };
+        return .{ .lists = arities };
     }
 
     if (found_literal) {
@@ -2700,6 +2756,53 @@ fn collectCtorsSketched(
 
     return .non_exhaustive_wildcards;
 }
+
+/// `prefix` followed by `rest`. A row with nothing in front of `rest` is
+/// `rest` itself, shared rather than copied.
+fn concatRow(
+    allocator: std.mem.Allocator,
+    prefix: []const UnresolvedPattern,
+    rest: []const UnresolvedPattern,
+) error{OutOfMemory}![]const UnresolvedPattern {
+    if (prefix.len == 0) return rest;
+    const row = try allocator.alloc(UnresolvedPattern, prefix.len + rest.len);
+    @memcpy(row[0..prefix.len], prefix);
+    @memcpy(row[prefix.len..], rest);
+    return row;
+}
+
+/// `count` wildcards followed by `rest`, sharing `rest` when `count` is 0.
+fn wildcardRow(
+    allocator: std.mem.Allocator,
+    count: usize,
+    rest: []const UnresolvedPattern,
+) error{OutOfMemory}![]const UnresolvedPattern {
+    if (count == 0) return rest;
+    const row = try allocator.alloc(UnresolvedPattern, count + rest.len);
+    @memset(row[0..count], .anything);
+    @memcpy(row[count..], rest);
+    return row;
+}
+
+/// The rows of a matrix being specialized, at most one per source row, in
+/// one slice sized for every source row.
+const SpecializedRows = struct {
+    rows: [][]const UnresolvedPattern,
+    len: usize = 0,
+
+    fn init(allocator: std.mem.Allocator, source_rows: usize) error{OutOfMemory}!SpecializedRows {
+        return .{ .rows = try allocator.alloc([]const UnresolvedPattern, source_rows) };
+    }
+
+    fn append(self: *SpecializedRows, row: []const UnresolvedPattern) void {
+        self.rows[self.len] = row;
+        self.len += 1;
+    }
+
+    fn matrix(self: SpecializedRows, allocator: std.mem.Allocator) SketchedMatrix {
+        return SketchedMatrix.init(allocator, self.rows[0..self.len]);
+    }
+};
 
 /// Specialize a sketched matrix by a constructor.
 /// Keeps patterns in unresolved form until needed.
@@ -2713,7 +2816,10 @@ fn specializeByConstructorSketched(
     union_info: Union,
     tag_ids_by_name: *const TagIdsByName,
 ) error{OutOfMemory}!SketchedMatrix {
-    var new_rows: std.ArrayList([]const UnresolvedPattern) = .empty;
+    var new_rows = try SpecializedRows.init(allocator, matrix.rows.len);
+    // A record row's field name -> its position among the row's fields.
+    var pat_positions: collections.DenseMapUnmanaged(u29, usize) = .empty;
+    defer pat_positions.deinit(allocator);
 
     // For records, get the target field names we're specializing by
     const target_fields: ?[]const Ident.Idx = switch (union_info.render_as) {
@@ -2731,10 +2837,7 @@ fn specializeByConstructorSketched(
             .ctor => |c| {
                 const pat_tag_id = tag_ids_by_name.get(c.tag_name.idx) orelse continue;
                 if (@backingInt(pat_tag_id) == @backingInt(tag_id)) {
-                    const new_row = try allocator.alloc(UnresolvedPattern, c.args.len + rest.len);
-                    @memcpy(new_row[0..c.args.len], c.args);
-                    @memcpy(new_row[c.args.len..], rest);
-                    try new_rows.append(allocator, new_row);
+                    new_rows.append(try concatRow(allocator, c.args, rest));
                 }
             },
             .known_ctor => |kc| {
@@ -2751,9 +2854,8 @@ fn specializeByConstructorSketched(
                         // Build the new row with fields aligned to target order
                         const new_row = try allocator.alloc(UnresolvedPattern, arity + rest.len);
 
-                        var pat_positions: collections.DenseMapUnmanaged(u29, usize) = .empty;
-                        defer pat_positions.deinit(allocator);
-                        try pat_positions.ensureTotalCapacity(allocator, @intCast(pat_fields.len));
+                        pat_positions.clearRetainingCapacity();
+                        try pat_positions.ensureTotalCapacity(allocator, pat_fields.len);
                         for (pat_fields, 0..) |pat_field, j| {
                             const gop = try pat_positions.getOrPut(allocator, pat_field.idx);
                             if (!gop.found_existing) gop.value_ptr.* = j;
@@ -2768,43 +2870,33 @@ fn specializeByConstructorSketched(
                         }
 
                         @memcpy(new_row[arity..], rest);
-                        try new_rows.append(allocator, new_row);
+                        new_rows.append(new_row);
                     } else {
                         // Non-record: use positional matching
-                        const new_row = try allocator.alloc(UnresolvedPattern, kc.args.len + rest.len);
-                        @memcpy(new_row[0..kc.args.len], kc.args);
-                        @memcpy(new_row[kc.args.len..], rest);
-                        try new_rows.append(allocator, new_row);
+                        new_rows.append(try concatRow(allocator, kc.args, rest));
                     }
                 }
             },
-            .anything => {
-                const new_row = try allocator.alloc(UnresolvedPattern, arity + rest.len);
-                for (0..arity) |i| {
-                    new_row[i] = .anything;
-                }
-                @memcpy(new_row[arity..], rest);
-                try new_rows.append(allocator, new_row);
-            },
+            .anything => new_rows.append(try wildcardRow(allocator, arity, rest)),
             .literal, .str_pattern, .list => {},
         }
     }
 
-    return SketchedMatrix.init(allocator, try new_rows.toOwnedSlice(allocator));
+    return new_rows.matrix(allocator);
 }
 
 /// Specialize the sketched matrix for wildcard - keep only rows starting with wildcard
 fn specializeByAnythingSketched(allocator: std.mem.Allocator, matrix: SketchedMatrix) error{OutOfMemory}!SketchedMatrix {
-    var new_rows: std.ArrayList([]const UnresolvedPattern) = .empty;
+    var new_rows = try SpecializedRows.init(allocator, matrix.rows.len);
 
     for (matrix.rows) |row| {
         if (row.len == 0) continue;
         if (row[0] == .anything) {
-            try new_rows.append(allocator, row[1..]);
+            new_rows.append(row[1..]);
         }
     }
 
-    return SketchedMatrix.init(allocator, try new_rows.toOwnedSlice(allocator));
+    return new_rows.matrix(allocator);
 }
 
 /// Specialize the sketched matrix by a list arity.
@@ -2813,7 +2905,7 @@ fn specializeByListAritySketched(
     matrix: SketchedMatrix,
     arity: ListArity,
 ) error{OutOfMemory}!SketchedMatrix {
-    var new_rows: std.ArrayList([]const UnresolvedPattern) = .empty;
+    var new_rows = try SpecializedRows.init(allocator, matrix.rows.len);
 
     const target_len = arity.minLen();
 
@@ -2846,22 +2938,15 @@ fn specializeByListAritySketched(
                     }
 
                     @memcpy(new_row[target_len..], rest);
-                    try new_rows.append(allocator, new_row);
+                    new_rows.append(new_row);
                 }
             },
-            .anything => {
-                const new_row = try allocator.alloc(UnresolvedPattern, target_len + rest.len);
-                for (0..target_len) |i| {
-                    new_row[i] = .anything;
-                }
-                @memcpy(new_row[target_len..], rest);
-                try new_rows.append(allocator, new_row);
-            },
+            .anything => new_rows.append(try wildcardRow(allocator, target_len, rest)),
             .literal, .str_pattern, .ctor, .known_ctor => {},
         }
     }
 
-    return SketchedMatrix.init(allocator, try new_rows.toOwnedSlice(allocator));
+    return new_rows.matrix(allocator);
 }
 
 /// Walk a tag union's ext var chain and collect any flex ext vars.
@@ -3455,11 +3540,7 @@ fn usefulNext(
                 .tag, .opaque_type, .tuple => try frame.column_types.specializeByConstructor(allocator, alt.tag_id, alt.arity),
             };
 
-            const extended = try allocator.alloc(UnresolvedPattern, alt.arity + rest.len);
-            for (0..alt.arity) |i| {
-                extended[i] = .anything;
-            }
-            @memcpy(extended[alt.arity..], rest);
+            const extended = try wildcardRow(allocator, alt.arity, rest);
 
             return .{ .matrix = specialized, .row = extended, .column_types = specialized_types, .close_open_extension = false };
         },
@@ -3477,11 +3558,7 @@ fn usefulNext(
             const specialized = try specializeByListAritySketched(allocator, frame.matrix, list_arity);
             const specialized_types = try frame.column_types.specializeForList(allocator, lists.elem_type, min_len);
 
-            const extended = try allocator.alloc(UnresolvedPattern, min_len + rest.len);
-            for (0..min_len) |i| {
-                extended[i] = .anything;
-            }
-            @memcpy(extended[min_len..], rest);
+            const extended = try wildcardRow(allocator, min_len, rest);
 
             return .{ .matrix = specialized, .row = extended, .column_types = specialized_types, .close_open_extension = false };
         },
@@ -3567,9 +3644,7 @@ fn usefulEnter(
             );
             const specialized_types = try column_types.specializeByConstructor(allocator, tag_id, c.args.len);
 
-            const extended_row = try allocator.alloc(UnresolvedPattern, c.args.len + rest.len);
-            @memcpy(extended_row[0..c.args.len], c.args);
-            @memcpy(extended_row[c.args.len..], rest);
+            const extended_row = try concatRow(allocator, c.args, rest);
 
             return .{ .call = .{ .matrix = specialized, .row = extended_row, .column_types = specialized_types, .close_open_extension = false } };
         },
@@ -3670,12 +3745,7 @@ fn usefulEnter(
                     @memcpy(row[arity..], rest);
                     break :blk row;
                 },
-                .tag, .opaque_type, .tuple, .guard => blk: {
-                    const row = try allocator.alloc(UnresolvedPattern, kc.args.len + rest.len);
-                    @memcpy(row[0..kc.args.len], kc.args);
-                    @memcpy(row[kc.args.len..], rest);
-                    break :blk row;
-                },
+                .tag, .opaque_type, .tuple, .guard => try concatRow(allocator, kc.args, rest),
             };
 
             return .{ .call = .{ .matrix = specialized, .row = extended_row, .column_types = specialized_types, .close_open_extension = false } };
@@ -3844,15 +3914,8 @@ fn usefulEnter(
                     }
 
                     const first_col = try existing_matrix.firstColumn();
-                    var arities_list: std.ArrayList(ListArity) = .empty;
-                    for (first_col) |p| {
-                        if (p == .list) {
-                            try arities_list.append(allocator, p.list.arity);
-                        }
-                    }
-                    try arities_list.append(allocator, l.arity);
-
-                    const check_arities = try buildListCtorsForChecking(allocator, arities_list.items);
+                    const pattern_arities = try listAritiesWith(allocator, first_col, l.arity);
+                    const check_arities = try buildListCtorsForChecking(allocator, pattern_arities);
 
                     try frames.append(allocator, .{
                         .matrix = existing_matrix,
@@ -4942,7 +5005,7 @@ fn recordTailBlockersCase(analysis_allocator: Allocator, depth: usize) (Allocato
             switch (mode) {
                 .payload => try collectCtorPayloadBlockers(reader, test_idents, payload, &blockers),
                 .known_absent => try collectKnownAbsentCtorPayloadBlockers(query_arena.allocator(), reader, test_idents, payload, &blockers),
-                .general => unreachable,
+                .general => return error.TestUnexpectedResult,
             }
             try std.testing.expectEqualSlices(Var, &.{blocker}, blockers.items);
             try std.testing.expect(!try isTypeInhabitedWithKnownEmpty(reader, test_idents, payload, blockers.items));
@@ -4956,7 +5019,7 @@ fn recordTailBlockersCase(analysis_allocator: Allocator, depth: usize) (Allocato
             switch (mode) {
                 .payload => try collectCtorPayloadBlockers(reader, test_idents, payload, &blockers),
                 .known_absent => try collectKnownAbsentCtorPayloadBlockers(query_arena.allocator(), reader, test_idents, payload, &blockers),
-                .general => unreachable,
+                .general => return error.TestUnexpectedResult,
             }
             // Neither optional fields nor an unresolved record tail is a blocker.
             try std.testing.expectEqual(@as(usize, 0), blockers.items.len);

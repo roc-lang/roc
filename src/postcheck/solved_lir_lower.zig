@@ -336,7 +336,18 @@ const CaptureSpanId = struct {
     fn fromOwn(start: u32, len: u32) CaptureSpanId {
         return .{ .source = .own, .start = start, .len = len };
     }
+
+    /// Marks a column slot whose span is not computed yet; no span starts at
+    /// this offset.
+    const unset: CaptureSpanId = .{ .source = .own, .start = std.math.maxInt(u32), .len = 0 };
+
+    fn isUnset(self: CaptureSpanId) bool {
+        return self.source == .own and self.start == std.math.maxInt(u32);
+    }
 };
+
+/// Marks a compile-time site column slot whose LIR site is not added yet.
+const no_comptime_site: LIR.ComptimeSiteId = @fromBackingInt(std.math.maxInt(u32));
 
 /// A capture span identifies its captures structurally (source, start and
 /// length) rather than as a dense index, so it is a hashable key.
@@ -596,6 +607,76 @@ const TypedLiftedLocal = struct {
     ty: Type.TypeId,
 };
 
+/// A map over a pair key whose `primary` field is a dense id that rarely
+/// pairs with more than one value of the key's other fields. The primary id
+/// indexes a dense column of chain heads, and each chain threads that id's
+/// entries through one shared node list, so a lookup reads a column slot and
+/// walks a chain of a few nodes, and clearing is proportional to the live
+/// entries.
+fn DenseChainMap(comptime Key: type, comptime primary: []const u8, comptime V: type) type {
+    return struct {
+        const Self = @This();
+        const Primary = @FieldType(Key, primary);
+        const end: u32 = std.math.maxInt(u32);
+        const Node = struct { key: Key, value: V, next: u32 };
+
+        heads: collections.DenseMap(Primary, u32),
+        nodes: std.ArrayList(Node) = .empty,
+
+        fn init(allocator: std.mem.Allocator) Self {
+            return .{ .heads = collections.DenseMap(Primary, u32).init(allocator) };
+        }
+
+        fn deinit(self: *Self) void {
+            self.nodes.deinit(self.heads.allocator);
+            self.heads.deinit();
+        }
+
+        fn clearRetainingCapacity(self: *Self) void {
+            self.heads.clearRetainingCapacity();
+            self.nodes.clearRetainingCapacity();
+        }
+
+        fn find(self: *const Self, key: Key) ?u32 {
+            var index = self.heads.get(@field(key, primary)) orelse return null;
+            while (index != end) {
+                const node = self.nodes.items[index];
+                if (std.meta.eql(node.key, key)) return index;
+                index = node.next;
+            }
+            return null;
+        }
+
+        fn get(self: *const Self, key: Key) ?V {
+            const index = self.find(key) orelse return null;
+            return self.nodes.items[index].value;
+        }
+
+        fn contains(self: *const Self, key: Key) bool {
+            return self.find(key) != null;
+        }
+
+        fn put(self: *Self, key: Key, value: V) std.mem.Allocator.Error!void {
+            if (self.find(key)) |index| {
+                self.nodes.items[index].value = value;
+                return;
+            }
+            if (self.nodes.items.len >= end) return error.OutOfMemory;
+            try self.nodes.ensureUnusedCapacity(self.heads.allocator, 1);
+            const head = try self.heads.getOrPut(@field(key, primary));
+            const index: u32 = @intCast(self.nodes.items.len);
+            self.nodes.appendAssumeCapacity(.{
+                .key = key,
+                .value = value,
+                .next = if (head.found_existing) head.value_ptr.* else end,
+            });
+            head.value_ptr.* = index;
+        }
+    };
+}
+
+const TypedLocalMap = DenseChainMap(TypedLiftedLocal, "local", LIR.LocalId);
+
 const EquivalentNamedLayout = struct {
     ty: Type.TypeId,
     layout_idx: layout.Idx,
@@ -672,8 +753,12 @@ const NamedRepresentationKeyContext = struct {
     }
 };
 
+/// Identity of a packed literal's bytes. A literal viewing a shared
+/// allocation is named by its own backing's position in that allocation, so
+/// views with distinct backings stay distinct and views of one backing share
+/// a conversion; any other literal is named by its id.
 const PackedLiteralKey = struct {
-    owner: ?*Mono.SharedLiteralBacking,
+    shared_backing: ?[*]const u8,
     literal: ?Mono.StringLiteralId,
     offset: u32,
     byte_len: u32,
@@ -796,7 +881,7 @@ const Lowerer = struct {
     served_member_fns: std.ArrayList(ServedMember) = .empty,
     served_member_index: usize = 0,
     inline_plan: SolvedInline.Plan,
-    inline_scope_rebases: std.AutoHashMap(InlineScopeRebaseKey, LIR.InlineScopeId),
+    inline_scope_rebases: InlineScopeRebases,
     inline_expects: InlineExpectMode,
     observe_expects: bool,
     list_in_place_map: bool,
@@ -834,7 +919,8 @@ const Lowerer = struct {
     recursive_value_capture_ids: collections.DenseMap(check.CheckedModule.CaptureId, void),
     recursive_slot_types: collections.DenseMap(Type.TypeId, Type.TypeId),
     own_captures: std.ArrayList(SolvedType.Capture),
-    own_capture_spans: []?CaptureSpanId,
+    /// Each lifted function's own capture span, or `CaptureSpanId.unset`.
+    own_capture_spans: []CaptureSpanId,
     roots: std.ArrayList(RootEntry),
     literal_roots: std.ArrayList(LiteralRootEntry),
     layout_requests: std.ArrayList(LayoutRequest),
@@ -871,23 +957,25 @@ const Lowerer = struct {
     root_requests: Common.RootRequests,
     symbols: Common.SymbolGen,
     local_map: collections.DenseMap(Lifted.LocalId, LIR.LocalId),
-    typed_local_map: std.AutoHashMap(TypedLiftedLocal, LIR.LocalId),
+    typed_local_map: TypedLocalMap,
     /// Producer-authored initialization condition for every loop-carried
     /// payload cell. This dense index is built once from loop initializers so
     /// enclosing shared continuations can preserve the exact condition even
     /// when their definition precedes the loop in expression order.
-    payload_conditions: []?PayloadCondition,
+    payload_conditions: collections.DenseMap(Lifted.LocalId, PayloadCondition),
     /// Dense lexical index for sparse loop updates. Local ids are globally
     /// unique, so entering and leaving a loop installs and clears its exact
     /// parameters without scanning enclosing parameter spans per jump.
     active_loop_params: collections.DenseMap(Lifted.LocalId, ActiveLoopParam),
     local_types: collections.DenseMap(LIR.LocalId, Type.TypeId),
-    comptime_site_map: []?LIR.ComptimeSiteId,
+    /// Each lifted compile-time site's LIR site, or `no_comptime_site`.
+    comptime_site_map: []LIR.ComptimeSiteId,
     next_join_point: u32 = 0,
     loop_stack: std.ArrayList(LoopContext),
     join_stack: std.ArrayList(JoinContext),
     current_ret_ty: ?Type.TypeId = null,
     current_proc_locals: ?*ProcLocalSet = null,
+    lane_scratch: LaneScratch,
     current_fn: ?Type.FnId = null,
     current_proc: ?LIR.LirProcSpecId = null,
     current_erased_reuse: ?LIR.LocalId = null,
@@ -942,14 +1030,77 @@ const Lowerer = struct {
 
     aggregate_bindings: ?*AggregateBindings = null,
 
-    const ProcLocalSet = std.AutoArrayHashMapUnmanaged(u32, void);
+    const ProcLocalSet = collections.DenseMap(LIR.LocalId, void);
+
+    /// Scratch one lowering lane reuses across the procedures and
+    /// expressions it lowers. Every use is scoped to one procedure or one
+    /// task frame and leaves the scratch as it found it.
+    const LaneScratch = struct {
+        allocator: std.mem.Allocator,
+        /// Each lowered procedure's set of the locals it touches.
+        proc_locals: collections.DenseMapPool(LIR.LocalId, void),
+        /// A procedure's touched locals in id order, while they are written
+        /// as its frame span.
+        frame_locals: std.ArrayList(LIR.LocalId) = .empty,
+        /// The argument positions inlined calls bound directly to caller
+        /// locals. A known call's positions occupy one run from the start
+        /// its task records until the call finishes, and inner calls stack
+        /// their runs above it.
+        inline_substitutions: std.ArrayList(bool) = .empty,
+        /// Arenas a finished match or constant query released, kept for the
+        /// next one. Each is heap-allocated so an arena's allocator stays
+        /// valid while its owning task frame moves.
+        spare_arenas: std.ArrayList(*base.SingleThreadArena) = .empty,
+
+        const spare_arena_capacity = 256 * 1024;
+
+        fn init(allocator: std.mem.Allocator) LaneScratch {
+            return .{
+                .allocator = allocator,
+                .proc_locals = collections.DenseMapPool(LIR.LocalId, void).init(allocator),
+            };
+        }
+
+        fn deinit(self: *LaneScratch) void {
+            for (self.spare_arenas.items) |arena| self.destroyArena(arena);
+            self.spare_arenas.deinit(self.allocator);
+            self.inline_substitutions.deinit(self.allocator);
+            self.frame_locals.deinit(self.allocator);
+            self.proc_locals.deinit();
+        }
+
+        /// An empty arena, reusing a released arena's buffers when one is
+        /// spare.
+        fn acquireArena(self: *LaneScratch) std.mem.Allocator.Error!*base.SingleThreadArena {
+            if (self.spare_arenas.pop()) |arena| return arena;
+            const arena = try self.allocator.create(base.SingleThreadArena);
+            arena.* = base.SingleThreadArena.init(self.allocator);
+            return arena;
+        }
+
+        /// Empty an arena from `acquireArena` and keep its buffers for the
+        /// next one. An arena that grew large is freed instead, as is one the
+        /// spare list has no room for.
+        fn releaseArena(self: *LaneScratch, arena: *base.SingleThreadArena) void {
+            if (arena.queryCapacity() > spare_arena_capacity or !arena.reset(.retain_capacity)) {
+                self.destroyArena(arena);
+                return;
+            }
+            self.spare_arenas.append(self.allocator, arena) catch self.destroyArena(arena);
+        }
+
+        fn destroyArena(self: *LaneScratch, arena: *base.SingleThreadArena) void {
+            arena.deinit();
+            self.allocator.destroy(arena);
+        }
+    };
 
     const FnBodyWorkspace = struct {
         allocator: std.mem.Allocator,
-        inline_scope_rebases: std.AutoHashMap(InlineScopeRebaseKey, LIR.InlineScopeId),
+        inline_scope_rebases: InlineScopeRebases,
         captures: collections.DenseMap(Lifted.LocalId, CaptureBinding),
         local_map: collections.DenseMap(Lifted.LocalId, LIR.LocalId),
-        typed_local_map: std.AutoHashMap(TypedLiftedLocal, LIR.LocalId),
+        typed_local_map: TypedLocalMap,
         local_types: collections.DenseMap(LIR.LocalId, Type.TypeId),
         active_loop_params: collections.DenseMap(Lifted.LocalId, ActiveLoopParam),
         loop_stack: std.ArrayList(LoopContext),
@@ -958,16 +1109,17 @@ const Lowerer = struct {
         /// Erased-result demands already classified; see the lowerer's.
         erased_demands: collections.DenseMap(Type.TypeId, ErasedResultDemand),
         tail_call_scratch: lir_core.TailCallBuilder,
+        lane_scratch: LaneScratch,
         erased_owner_states: std.ArrayList(ErasedOwnerState),
         erased_call_owner_uses: std.ArrayList(ErasedCallOwnerUse),
 
         fn init(allocator: std.mem.Allocator) FnBodyWorkspace {
             return .{
                 .allocator = allocator,
-                .inline_scope_rebases = std.AutoHashMap(InlineScopeRebaseKey, LIR.InlineScopeId).init(allocator),
+                .inline_scope_rebases = InlineScopeRebases.init(allocator),
                 .captures = collections.DenseMap(Lifted.LocalId, CaptureBinding).init(allocator),
                 .local_map = collections.DenseMap(Lifted.LocalId, LIR.LocalId).init(allocator),
-                .typed_local_map = std.AutoHashMap(TypedLiftedLocal, LIR.LocalId).init(allocator),
+                .typed_local_map = TypedLocalMap.init(allocator),
                 .local_types = collections.DenseMap(LIR.LocalId, Type.TypeId).init(allocator),
                 .active_loop_params = collections.DenseMap(Lifted.LocalId, ActiveLoopParam).init(allocator),
                 .loop_stack = .empty,
@@ -975,6 +1127,7 @@ const Lowerer = struct {
                 .return_forwarding_locals = collections.DenseMap(LIR.LocalId, void).init(allocator),
                 .erased_demands = collections.DenseMap(Type.TypeId, ErasedResultDemand).init(allocator),
                 .tail_call_scratch = lir_core.TailCallBuilder.initScratch(allocator),
+                .lane_scratch = LaneScratch.init(allocator),
                 .erased_owner_states = .empty,
                 .erased_call_owner_uses = .empty,
             };
@@ -986,6 +1139,7 @@ const Lowerer = struct {
             self.return_forwarding_locals.deinit();
             self.erased_demands.deinit();
             self.tail_call_scratch.deinit();
+            self.lane_scratch.deinit();
             self.join_stack.deinit(self.allocator);
             self.loop_stack.deinit(self.allocator);
             self.active_loop_params.deinit();
@@ -1001,6 +1155,8 @@ const Lowerer = struct {
         source: Lifted.InlineScopeId,
         outer: LIR.InlineScopeId,
     };
+
+    const InlineScopeRebases = DenseChainMap(InlineScopeRebaseKey, "source", LIR.InlineScopeId);
 
     const LoopContext = struct {
         join_id: LIR.JoinPointId,
@@ -1029,9 +1185,8 @@ const Lowerer = struct {
         solved: *const Solved.Program,
         options: Options,
     ) Common.LowerError!Lowerer {
-        const payload_conditions = try allocator.alloc(?PayloadCondition, solved.lifted.localCount());
-        errdefer allocator.free(payload_conditions);
-        @memset(payload_conditions, null);
+        var payload_conditions = collections.DenseMap(Lifted.LocalId, PayloadCondition).init(allocator);
+        errdefer payload_conditions.deinit();
         for (0..solved.lifted.exprCount()) |raw_expr| {
             const expr_id: Lifted.ExprId = @fromBackingInt(@intCast(@as(u32, @intCast(raw_expr))));
             const expr = solved.lifted.getExpr(expr_id);
@@ -1045,21 +1200,21 @@ const Lowerer = struct {
                 if (initial.data != .uninitialized_payload) continue;
                 const param = GuardedList.at(params, index);
                 const condition = initial.data.uninitialized_payload;
-                const slot = &payload_conditions[@backingInt(param.local)];
-                if (slot.* != null and (slot.*.?.condition != condition.condition or slot.*.?.mask != condition.mask)) {
+                const slot = try payload_conditions.getOrPut(param.local);
+                if (slot.found_existing and (slot.value_ptr.condition != condition.condition or slot.value_ptr.mask != condition.mask)) {
                     Common.invariant("one loop payload local had conflicting initialization conditions");
                 }
-                slot.* = .{ .condition = condition.condition, .mask = condition.mask };
+                slot.value_ptr.* = .{ .condition = condition.condition, .mask = condition.mask };
             }
         }
 
-        const comptime_site_map = try allocator.alloc(?LIR.ComptimeSiteId, solved.lifted.comptimeSiteCount());
+        const comptime_site_map = try allocator.alloc(LIR.ComptimeSiteId, solved.lifted.comptimeSiteCount());
         errdefer allocator.free(comptime_site_map);
-        @memset(comptime_site_map, null);
+        @memset(comptime_site_map, no_comptime_site);
 
-        const own_capture_spans = try allocator.alloc(?CaptureSpanId, solved.lifted.fnCount());
+        const own_capture_spans = try allocator.alloc(CaptureSpanId, solved.lifted.fnCount());
         errdefer allocator.free(own_capture_spans);
-        @memset(own_capture_spans, null);
+        @memset(own_capture_spans, CaptureSpanId.unset);
 
         var recursive_value_locals = collections.DenseMap(Lifted.LocalId, void).init(allocator);
         errdefer recursive_value_locals.deinit();
@@ -1098,7 +1253,7 @@ const Lowerer = struct {
             .kept_spec_fns = .empty,
             .kept_spec_index = 0,
             .inline_plan = options.inline_plan,
-            .inline_scope_rebases = std.AutoHashMap(InlineScopeRebaseKey, LIR.InlineScopeId).init(allocator),
+            .inline_scope_rebases = InlineScopeRebases.init(allocator),
             .inline_expects = options.inline_expects,
             .observe_expects = try consumerRunsTests(allocator, solved.lifted.rootsView().len, options),
             .list_in_place_map = options.list_in_place_map,
@@ -1147,7 +1302,7 @@ const Lowerer = struct {
             .packed_literals = std.AutoHashMap(PackedLiteralKey, LIR.ListLiteral).init(allocator),
             .symbols = .{ .next = solved.lifted.next_symbol },
             .local_map = collections.DenseMap(Lifted.LocalId, LIR.LocalId).init(allocator),
-            .typed_local_map = std.AutoHashMap(TypedLiftedLocal, LIR.LocalId).init(allocator),
+            .typed_local_map = TypedLocalMap.init(allocator),
             .payload_conditions = payload_conditions,
             .active_loop_params = collections.DenseMap(Lifted.LocalId, ActiveLoopParam).init(allocator),
             .local_types = collections.DenseMap(LIR.LocalId, Type.TypeId).init(allocator),
@@ -1163,6 +1318,7 @@ const Lowerer = struct {
             .prep_statement_pool = collections.DenseMapPool(Lifted.StmtId, void).init(allocator),
             .prep_local_pool = collections.DenseMapPool(Lifted.LocalId, void).init(allocator),
             .tail_call_scratch = lir_core.TailCallBuilder.initScratch(allocator),
+            .lane_scratch = LaneScratch.init(allocator),
             .erased_owner_state_prefix = &.{},
             .erased_owner_states = .empty,
             .erased_call_owner_uses = .empty,
@@ -1183,7 +1339,7 @@ const Lowerer = struct {
     fn packedListLiteral(self: *Lowerer, literal: Mono.PackedListLiteral, element: layout.Idx) Common.LowerError!LIR.ListLiteral {
         const source = self.stringLiteral(literal.literal);
         const key = PackedLiteralKey{
-            .owner = source.shared,
+            .shared_backing = if (source.shared != null) source.backing.ptr else null,
             .literal = if (source.shared == null) literal.literal else null,
             .offset = source.offset,
             .byte_len = source.len,
@@ -1255,13 +1411,14 @@ const Lowerer = struct {
         self.prep_statement_pool.deinit();
         self.prep_local_pool.deinit();
         self.tail_call_scratch.deinit();
+        self.lane_scratch.deinit();
         self.erased_call_owner_uses.deinit(self.allocator);
         self.erased_owner_states.deinit(self.allocator);
         self.join_stack.deinit(self.allocator);
         self.loop_stack.deinit(self.allocator);
         self.allocator.free(self.comptime_site_map);
         self.typed_local_map.deinit();
-        self.allocator.free(self.payload_conditions);
+        self.payload_conditions.deinit();
         self.active_loop_params.deinit();
         self.local_types.deinit();
         self.local_map.deinit();
@@ -1341,14 +1498,14 @@ const Lowerer = struct {
         self.result = undefined;
         self.runtime_schemas = RuntimeSchemaStore.init(self.allocator);
         self.local_map = collections.DenseMap(Lifted.LocalId, LIR.LocalId).init(self.allocator);
-        self.payload_conditions = &.{};
+        self.payload_conditions = collections.DenseMap(Lifted.LocalId, PayloadCondition).init(self.allocator);
         self.active_loop_params = collections.DenseMap(Lifted.LocalId, ActiveLoopParam).init(self.allocator);
         self.own_capture_spans = &.{};
         self.own_captures = .empty;
         self.recursive_slot_types = collections.DenseMap(Type.TypeId, Type.TypeId).init(self.allocator);
         self.recursive_value_capture_ids = collections.DenseMap(check.CheckedModule.CaptureId, void).init(self.allocator);
         self.recursive_value_locals = collections.DenseMap(Lifted.LocalId, void).init(self.allocator);
-        self.typed_local_map = std.AutoHashMap(TypedLiftedLocal, LIR.LocalId).init(self.allocator);
+        self.typed_local_map = TypedLocalMap.init(self.allocator);
         self.local_types = collections.DenseMap(LIR.LocalId, Type.TypeId).init(self.allocator);
         self.static_initializer_queue = .empty;
         self.packed_plans = collections.DenseMap(layout.Idx, lir_core.PackedData.Plan).init(self.allocator);
@@ -1371,6 +1528,7 @@ const Lowerer = struct {
         self.prep_statement_pool = collections.DenseMapPool(Lifted.StmtId, void).init(self.allocator);
         self.prep_local_pool = collections.DenseMapPool(Lifted.LocalId, void).init(self.allocator);
         self.tail_call_scratch = lir_core.TailCallBuilder.initScratch(self.allocator);
+        self.lane_scratch = LaneScratch.init(self.allocator);
         self.return_forwarding_ambiguous = false;
         self.return_forwarding_repeatable_depth = 0;
         self.erased_owner_states = .empty;
@@ -1667,7 +1825,7 @@ const Lowerer = struct {
         capture_ids: *collections.DenseMap(check.CheckedModule.CaptureId, void),
     ) std.mem.Allocator.Error!void {
         try locals.put(local, {});
-        if (lifted.getLocal(local).capture_id) |capture_id| try capture_ids.put(capture_id, {});
+        if (lifted.getLocal(local).identity.captureId()) |capture_id| try capture_ids.put(capture_id, {});
     }
 
     fn initFnBodyWorker(
@@ -1714,6 +1872,7 @@ const Lowerer = struct {
         worker.prep_statement_pool = collections.DenseMapPool(Lifted.StmtId, void).init(workspace.allocator);
         worker.prep_local_pool = collections.DenseMapPool(Lifted.LocalId, void).init(workspace.allocator);
         worker.tail_call_scratch = workspace.tail_call_scratch;
+        worker.lane_scratch = workspace.lane_scratch;
         worker.return_forwarding_ambiguous = false;
         worker.return_forwarding_repeatable_depth = 0;
         // Packed literal ids name string views in the body shard's own store,
@@ -1759,6 +1918,7 @@ const Lowerer = struct {
         workspace.return_forwarding_locals = self.return_forwarding_locals;
         workspace.erased_demands = self.erased_demands;
         workspace.tail_call_scratch = self.tail_call_scratch;
+        workspace.lane_scratch = self.lane_scratch;
         workspace.erased_owner_states = self.erased_owner_states;
         workspace.erased_call_owner_uses = self.erased_call_owner_uses;
         if (deinit_store) self.result.store.deinit();
@@ -2536,8 +2696,8 @@ const Lowerer = struct {
         const saved_proc_locals = self.current_proc_locals;
         const saved_current_fn = self.current_fn;
         const saved_current_proc = self.current_proc;
-        var proc_locals: ProcLocalSet = .{};
-        defer proc_locals.deinit(self.allocator);
+        var proc_locals = self.lane_scratch.proc_locals.acquire();
+        defer self.lane_scratch.proc_locals.release(&proc_locals);
         defer {
             self.current_ret_ty = saved_ret_ty;
             self.current_proc_locals = saved_proc_locals;
@@ -2680,8 +2840,8 @@ const Lowerer = struct {
                 const saved_current_fn = self.current_fn;
                 const saved_current_proc = self.current_proc;
                 const saved_erased_reuse = self.current_erased_reuse;
-                var proc_locals: ProcLocalSet = .{};
-                defer proc_locals.deinit(self.allocator);
+                var proc_locals = self.lane_scratch.proc_locals.acquire();
+                defer self.lane_scratch.proc_locals.release(&proc_locals);
 
                 self.current_proc_locals = &proc_locals;
                 self.current_ret_ty = entry.ret;
@@ -2789,8 +2949,8 @@ const Lowerer = struct {
         const saved_proc_locals = self.current_proc_locals;
         const saved_current_fn = self.current_fn;
         const saved_current_proc = self.current_proc;
-        var proc_locals: ProcLocalSet = .{};
-        defer proc_locals.deinit(self.allocator);
+        var proc_locals = self.lane_scratch.proc_locals.acquire();
+        defer self.lane_scratch.proc_locals.release(&proc_locals);
         self.current_proc_locals = &proc_locals;
         self.current_ret_ty = ret_ty;
         self.current_fn = fn_id;
@@ -3167,7 +3327,8 @@ const Lowerer = struct {
     fn ownCaptureSpanForFn(self: *Lowerer, fn_id: Lifted.FnId) std.mem.Allocator.Error!CaptureSpanId {
         const raw_fn = @backingInt(fn_id);
         if (raw_fn >= self.own_capture_spans.len) Common.invariant("own capture span requested for a missing lifted function");
-        if (self.own_capture_spans[raw_fn]) |existing| return existing;
+        const existing = self.own_capture_spans[raw_fn];
+        if (!existing.isUnset()) return existing;
 
         const fn_ = self.solved.lifted.getFn(fn_id);
         const capture_locals = self.solved.lifted.typedLocalSpan(fn_.captures);
@@ -3187,9 +3348,9 @@ const Lowerer = struct {
             self.own_captures.appendAssumeCapacity(.{
                 .local = capture.local,
                 .symbol = local.symbol,
-                .binder = local.binder,
-                .capture_id = local.capture_id,
-                .checked_capture_id = local.checked_capture_id,
+                .binder = local.identity.binder(),
+                .capture_id = local.identity.captureId(),
+                .checked_capture_id = local.identity.checkedCaptureId(),
                 .capture_kind = local.capture_kind,
                 .ty = self.solved.local_tys.items[@backingInt(capture.local)],
             });
@@ -3300,7 +3461,7 @@ const Lowerer = struct {
         // function's own capture set, where CaptureIds are unique.
         const local = self.solved.lifted.getLocal(local_id);
         const capture = self.solved.lifted.getLocal(capture_local);
-        return local.capture_id != null and capture.capture_id != null and local.capture_id.? == capture.capture_id.?;
+        return local.identity.captureId() != null and capture.identity.captureId() != null and local.identity.captureId().? == capture.identity.captureId().?;
     }
 
     /// Whether two lifted locals are aliases of the same lowered binding, used
@@ -3358,8 +3519,8 @@ const Lowerer = struct {
     /// from a frozen image does (see `ComptimeScalarValues`); null leaves the
     /// value to its slot.
     fn lowerConstructionExprInto(self: *Lowerer, where: LowerSite, target: LIR.LocalId, expr_id: Lifted.ExprId, ty: Type.TypeId, next: LIR.CFStmtId) Common.LowerError!?LIR.CFStmtId {
-        var arena = base.SingleThreadArena.init(self.allocator);
-        defer arena.deinit();
+        const arena = try self.lane_scratch.acquireArena();
+        defer self.lane_scratch.releaseArena(arena);
         const layout_idx = self.result.store.getLocal(target).layout_idx;
         const construction = try self.constructionOfExpr(arena.allocator(), expr_id, ty, layout_idx) orelse return null;
         // The rebuilt constant carries the restored constant expression's
@@ -3555,7 +3716,7 @@ const Lowerer = struct {
         return switch (expr.data) {
             .list => |items| try self.uniformListOfItems(arena, items, ty, value_layout),
             .bytes_lit => |literal| try self.uniformListOfPackedItems(arena, literal, ty, value_layout),
-            .nominal, .static_data_candidate => unreachable,
+            .nominal, .static_data_candidate => unreachable, // the loop above unwraps every nominal and static_data_candidate
             .unit,
             .int_lit,
             .frac_f32_lit,
@@ -3867,7 +4028,7 @@ const Lowerer = struct {
                     if (access.elem_index >= items.len) Common.invariant("tuple access index exceeded tuple type");
                     ty = GuardedList.at(items, @intCast(access.elem_index));
                 },
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable, // path holds only the field and tuple accesses collected above
             }
             try self.expr_context_tys.put(path.items[index], ty);
         }
@@ -4062,7 +4223,7 @@ const Lowerer = struct {
 
     fn finishTypeVar(self: *Lowerer, task: *TypeVarTask, content: Type.Content) Common.LowerError!TypeStep {
         const root = task.root;
-        self.types.set(task.reserved, content);
+        try self.types.set(task.reserved, content);
         const solved_content = self.solved.types.get(root);
         if (solved_content == .named and solved_content.named.backing != null) {
             const backing_root = self.solved.types.root(solved_content.named.backing.?.ty);
@@ -4144,7 +4305,7 @@ const Lowerer = struct {
                         .members = members,
                     } },
                     .lambda_set => .{ .callable = members },
-                    .link, .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .zst, .mono => unreachable,
+                    .link, .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .zst, .mono => unreachable, // TypeVarCursor.callable is set only for func, erased, and lambda_set contents
                 });
             },
             TypeVarCursor.children => try self.acceptTypeChild(frame, task, input.?.ty),
@@ -4181,7 +4342,7 @@ const Lowerer = struct {
                     .declared_order = input.?.span,
                 } });
             },
-            TypeVarCursor.named_declared_order + 1...std.math.maxInt(u8) => unreachable,
+            TypeVarCursor.named_declared_order + 1...std.math.maxInt(u8) => unreachable, // frame.cursor is only ever set to a TypeVarCursor constant
         }
         return try self.nextTypeChild(frame, task);
     }
@@ -4206,7 +4367,7 @@ const Lowerer = struct {
                 frame.index += 1;
             },
             .tag_union => try task.tys.append(self.allocator, lowered),
-            .link, .unbound, .forall, .primitive, .func, .lambda_set, .erased, .zst, .mono => unreachable,
+            .link, .unbound, .forall, .primitive, .func, .lambda_set, .erased, .zst, .mono => unreachable, // TypeVarCursor.children is set only for list, box, tuple, record, tag_union, and named contents
         }
     }
 
@@ -4300,7 +4461,7 @@ const Lowerer = struct {
                 frame.cursor = TypeVarCursor.named_declared_order;
                 return .{ .call = .{ .declared_order = .{ .span = named.declared_order } } };
             },
-            .link, .unbound, .forall, .primitive, .func, .lambda_set, .erased, .zst, .mono => unreachable,
+            .link, .unbound, .forall, .primitive, .func, .lambda_set, .erased, .zst, .mono => unreachable, // cursor start returns for every content without children
         }
     }
 
@@ -4402,7 +4563,7 @@ const Lowerer = struct {
         }
         const capture_items = self.captureSpan(task.captures);
         if (task.fields.items.len < capture_items.len) return typeVarStep(capture_items[task.fields.items.len].ty);
-        self.types.set(task.ty, .{ .capture_record = try self.types.addCaptureFields(task.fields.items) });
+        try self.types.set(task.ty, .{ .capture_record = try self.types.addCaptureFields(task.fields.items) });
         return .{ .ret = .{ .ty = task.ty } };
     }
 
@@ -4468,9 +4629,9 @@ const Lowerer = struct {
         types: SolvedType.Store.View,
         owners: *collections.DenseMap(SolvedType.TypeVarId, SolvedType.TypeVarId),
     ) Common.LowerError!void {
-        for (types.vars, 0..) |content, index| {
-            if (content != .named) continue;
-            const named = content.named;
+        for (types.vars, 0..) |node, index| {
+            if (node != .named) continue;
+            const named = types.named_payloads[node.named];
             if (named.kind == .alias or named.declared_order.len == 0) continue;
             const backing = named.backing orelse continue;
             const backing_root = types.root(backing.ty);
@@ -4488,6 +4649,12 @@ const Lowerer = struct {
         return self.stringLiteral(id).text();
     }
 
+    /// The lifted program's rows. Lowering never changes the lifted program,
+    /// so these slices stay valid for the whole lowering.
+    fn liftedView(self: *const Lowerer) Lifted.ProgramView {
+        return self.solved.lifted.view();
+    }
+
     fn stringLiteral(self: *const Lowerer, id: Lifted.StringLiteralId) Mono.StringLiteral {
         return self.solved.lifted.getStringLiteral(id);
     }
@@ -4500,7 +4667,7 @@ const Lowerer = struct {
 
     fn noteLocal(self: *Lowerer, local: LIR.LocalId) Common.LowerError!void {
         if (self.current_proc_locals) |locals| {
-            try locals.put(self.allocator, @backingInt(local), {});
+            try locals.put(local, {});
         }
     }
 
@@ -4514,7 +4681,8 @@ const Lowerer = struct {
 
     fn lowerComptimeSite(self: *Lowerer, site: Lifted.ComptimeSiteId) Common.LowerError!LIR.ComptimeSiteId {
         const index = @backingInt(site);
-        if (self.comptime_site_map[index]) |existing| return existing;
+        const existing = self.comptime_site_map[index];
+        if (existing != no_comptime_site) return existing;
         if (self.worker_callback) {
             self.missingWorkerPreparation("Solved-LIR worker referenced an unprepared compile-time site");
         }
@@ -4553,15 +4721,14 @@ const Lowerer = struct {
         Common.invariant("test-plan expect has no prepared observation site");
     }
 
-    fn writeFrameLocals(self: *Lowerer, locals: *ProcLocalSet) Common.LowerError!LIR.LocalSpan {
-        const raw_ids = locals.keys();
-        const sorted = try self.allocator.alloc(LIR.LocalId, raw_ids.len);
-        defer self.allocator.free(sorted);
-        for (raw_ids, 0..) |raw_id, i| {
-            sorted[i] = @fromBackingInt(@intCast(raw_id));
-        }
-        std.mem.sort(LIR.LocalId, sorted, {}, localIdLessThan);
-        return try self.result.store.addLocalSpan(sorted);
+    fn writeFrameLocals(self: *Lowerer, locals: *const ProcLocalSet) Common.LowerError!LIR.LocalSpan {
+        const sorted = &self.lane_scratch.frame_locals;
+        sorted.clearRetainingCapacity();
+        try sorted.ensureTotalCapacity(self.allocator, locals.count());
+        var keys = locals.constKeyIterator();
+        while (keys.next()) |local| sorted.appendAssumeCapacity(local);
+        std.mem.sort(LIR.LocalId, sorted.items, {}, localIdLessThan);
+        return try self.result.store.addLocalSpan(sorted.items);
     }
 
     fn stackProbeForProc(self: *Lowerer, args: LIR.LocalSpan, frame_locals: LIR.LocalSpan, ret_layout: layout.Idx) LIR.StackProbe {
@@ -4601,7 +4768,7 @@ const Lowerer = struct {
                     .request = root.request,
                     .proc = proc,
                     .ret_layout = ret_layout,
-                    .ret_type = try self.constTypeOfType(entry.ret),
+                    .ret_type = try self.constTypeOfType(try self.declaredRootType(entry.ret, self.solved.lifted.getFn(self.solved.lifted.rootsView()[root.request_index].fn_id).ret)),
                     .plan = try self.constPlanOfType(entry.ret),
                     .value_slot = if (completed_values.get(root.request_index)) |value_root|
                         try self.comptimeValueSlot(value_root, entry.ret, ret_layout)
@@ -4662,6 +4829,574 @@ const Lowerer = struct {
 
     fn constTypeOfType(self: *Lowerer, ty: Type.TypeId) Common.LowerError!const_store.ConstTypeId {
         return (try self.runConstSchema(.{ .ty = .{ .ty = ty } })).get(.ty);
+    }
+
+    /// A program type paired with the declared Monotype type it was lowered
+    /// from.
+    const DeclaredTypePair = struct { program: Type.TypeId, declared: MonoType.TypeId };
+
+    /// The type a compile-time root is stored at: `program_ty`, the root's
+    /// return in this program, with every tag union brought back to the row
+    /// `declared_ty`, the root's lifted Monotype return, declares. The type a
+    /// root is stored and cached at is a function of its declaring module
+    /// alone (design.md "Row Joins"), while this program's joins may have
+    /// widened the root's rows, even to one label at two payload types. A
+    /// value of the declared row inhabits only its tags, so the stored value
+    /// is unchanged, and a program restoring it widens it to its own row.
+    /// Only the parts a join widened are copied. Each walk keeps its own
+    /// explicit stack, so type nesting never becomes native call depth.
+    fn declaredRootType(self: *Lowerer, program_ty: Type.TypeId, declared_ty: MonoType.TypeId) Common.LowerError!Type.TypeId {
+        var walk = DeclaredWalk.init(self.allocator);
+        defer walk.deinit();
+        return try self.narrowToDeclared(&walk, .{ .program = program_ty, .declared = declared_ty });
+    }
+
+    /// The state of one `declaredRootType` walk.
+    const DeclaredWalk = struct {
+        /// Whether each pair analyzed reaches a row the program widened.
+        widened: std.AutoHashMap(DeclaredTypePair, bool),
+        /// Each pair's type at the declared rows, once built. A named
+        /// type's entry is its copy from the moment the copy begins, so a
+        /// recursive reference reaches it.
+        narrowed: std.AutoHashMap(DeclaredTypePair, Type.TypeId),
+        /// Pairs whose narrowed type is being built.
+        active: std.AutoHashMap(DeclaredTypePair, void),
+        /// Scratch for one widening query.
+        visited: std.AutoHashMap(DeclaredTypePair, void),
+        pending: std.ArrayList(DeclaredTypePair) = .empty,
+        children: std.ArrayList(DeclaredTypePair) = .empty,
+        /// The narrowing build: open frames, their child pairs, the chosen
+        /// variant of each declared tag, and finished children's types.
+        frames: std.ArrayList(NarrowFrame) = .empty,
+        frame_pairs: std.ArrayList(DeclaredTypePair) = .empty,
+        frame_tags: std.ArrayList(Type.Tag) = .empty,
+        results: std.ArrayList(Type.TypeId) = .empty,
+
+        fn init(allocator: Allocator) DeclaredWalk {
+            return .{
+                .widened = std.AutoHashMap(DeclaredTypePair, bool).init(allocator),
+                .narrowed = std.AutoHashMap(DeclaredTypePair, Type.TypeId).init(allocator),
+                .active = std.AutoHashMap(DeclaredTypePair, void).init(allocator),
+                .visited = std.AutoHashMap(DeclaredTypePair, void).init(allocator),
+            };
+        }
+
+        fn deinit(self: *DeclaredWalk) void {
+            const allocator = self.widened.allocator;
+            self.widened.deinit();
+            self.narrowed.deinit();
+            self.active.deinit();
+            self.visited.deinit();
+            self.pending.deinit(allocator);
+            self.children.deinit(allocator);
+            self.frames.deinit(allocator);
+            self.frame_pairs.deinit(allocator);
+            self.frame_tags.deinit(allocator);
+            self.results.deinit(allocator);
+        }
+    };
+
+    /// One pair whose narrowed type waits for its children's.
+    const NarrowFrame = struct {
+        pair: DeclaredTypePair,
+        /// `DeclaredWalk.frame_pairs[children_start..][0..children_len]`.
+        children_start: u32,
+        children_len: u32,
+        next: u32 = 0,
+        /// Where this frame's children's types start in `DeclaredWalk.results`.
+        results_start: u32,
+        /// Where a tag union's chosen variants start in `DeclaredWalk.frame_tags`.
+        tags_start: u32,
+        /// A named type's copy.
+        copy: ?Type.TypeId = null,
+    };
+
+    /// Whether a pair reaches a tag union whose program row lists a tag its
+    /// declaration does not, or a label twice.
+    fn widenedBeyondDeclared(self: *Lowerer, walk: *DeclaredWalk, start: DeclaredTypePair) Common.LowerError!bool {
+        if (walk.widened.get(start)) |known| return known;
+        const allocator = self.allocator;
+        walk.visited.clearRetainingCapacity();
+        walk.pending.clearRetainingCapacity();
+        try walk.visited.put(start, {});
+        try walk.pending.append(allocator, start);
+        while (walk.pending.pop()) |pair| {
+            if (walk.widened.get(pair)) |known| {
+                if (known) {
+                    try walk.widened.put(start, true);
+                    return true;
+                }
+                // Nothing this pair reaches is widened.
+                continue;
+            }
+            walk.children.clearRetainingCapacity();
+            if (try self.widenedHere(pair, &walk.children)) {
+                try walk.widened.put(start, true);
+                return true;
+            }
+            for (walk.children.items) |child| {
+                if ((try walk.visited.getOrPut(child)).found_existing) continue;
+                try walk.pending.append(allocator, child);
+            }
+        }
+        // Every pair this query reached reaches only pairs it reached.
+        var reached = walk.visited.keyIterator();
+        while (reached.next()) |pair| try walk.widened.put(pair.*, false);
+        return false;
+    }
+
+    /// Whether `pair`'s own row is widened beyond its declaration; appends
+    /// the pairs beneath it to `children` otherwise.
+    fn widenedHere(self: *Lowerer, pair: DeclaredTypePair, children: *std.ArrayList(DeclaredTypePair)) Common.LowerError!bool {
+        const allocator = self.allocator;
+        const declared_types = self.solved.lifted.types.view();
+        const declared = declared_types.get(pair.declared);
+        switch (self.types.get(pair.program)) {
+            .tag_union => |span| {
+                if (declared != .tag_union) return false;
+                const declared_tags = declared_types.tagSpan(declared.tag_union);
+                if (span.len != declared_tags.len) return true;
+                for (declared_tags, 0..) |declared_tag, index| {
+                    const tag = self.types.tagAt(span, index);
+                    if (tag.name != declared_tag.name) return true;
+                    const declared_payloads = declared_types.span(declared_tag.payloads);
+                    if (declared_payloads.len != tag.payloads.len) return false;
+                    for (declared_payloads, 0..) |declared_payload, payload_index| {
+                        try children.append(allocator, .{ .program = self.types.typeAt(tag.payloads, payload_index), .declared = declared_payload });
+                    }
+                }
+                return false;
+            },
+            .record => |span| {
+                if (declared != .record) return false;
+                const declared_fields = declared_types.fieldSpan(declared.record);
+                if (declared_fields.len != span.len) return false;
+                for (declared_fields, 0..) |declared_field, index| {
+                    try children.append(allocator, .{ .program = self.types.fieldAt(span, index).ty, .declared = declared_field.ty });
+                }
+                return false;
+            },
+            .tuple => |span| {
+                if (declared != .tuple) return false;
+                const declared_items = declared_types.span(declared.tuple);
+                if (declared_items.len != span.len) return false;
+                for (declared_items, 0..) |declared_item, index| {
+                    try children.append(allocator, .{ .program = self.types.typeAt(span, index), .declared = declared_item });
+                }
+                return false;
+            },
+            .list => |elem| {
+                if (declared == .list) try children.append(allocator, .{ .program = elem, .declared = declared.list });
+                return false;
+            },
+            .box => |elem| {
+                if (declared == .box) try children.append(allocator, .{ .program = elem, .declared = declared.box });
+                return false;
+            },
+            .named => |named| {
+                if (declared != .named) return false;
+                const declared_args = declared_types.span(declared.named.args);
+                if (declared_args.len != named.args.len) return false;
+                for (declared_args, 0..) |declared_arg, index| {
+                    try children.append(allocator, .{ .program = self.types.typeAt(named.args, index), .declared = declared_arg });
+                }
+                const backing = named.backing orelse return false;
+                const declared_backing = declared.named.backing orelse return false;
+                try children.append(allocator, .{ .program = backing.ty, .declared = declared_backing.ty });
+                return false;
+            },
+            .primitive, .capture_record, .callable, .erased_fn, .erased_capture_ptr, .zst => return false,
+        }
+    }
+
+    /// `pair.program` with every widened row brought back to its
+    /// declaration.
+    fn narrowToDeclared(self: *Lowerer, walk: *DeclaredWalk, root: DeclaredTypePair) Common.LowerError!Type.TypeId {
+        if (try self.enterNarrow(walk, root)) |done| return done;
+        while (walk.frames.items.len != 0) {
+            const top = &walk.frames.items[walk.frames.items.len - 1];
+            if (top.next < top.children_len) {
+                const child = walk.frame_pairs.items[top.children_start + top.next];
+                top.next += 1;
+                if (try self.enterNarrow(walk, child)) |done| try walk.results.append(self.allocator, done);
+                continue;
+            }
+            const frame = walk.frames.pop().?;
+            const built = try self.finishNarrow(walk, frame);
+            walk.results.shrinkRetainingCapacity(frame.results_start);
+            walk.frame_pairs.shrinkRetainingCapacity(frame.children_start);
+            walk.frame_tags.shrinkRetainingCapacity(frame.tags_start);
+            _ = walk.active.remove(frame.pair);
+            try walk.narrowed.put(frame.pair, built);
+            if (walk.frames.items.len == 0) return built;
+            try walk.results.append(self.allocator, built);
+        }
+        unreachable; // enterNarrow pushed a frame, and the loop returns when it pops the last one
+    }
+
+    /// `pair`'s narrowed type when it needs no frame, or null after opening
+    /// one whose children follow.
+    fn enterNarrow(self: *Lowerer, walk: *DeclaredWalk, pair: DeclaredTypePair) Common.LowerError!?Type.TypeId {
+        if (walk.narrowed.get(pair)) |done| return done;
+        if (!try self.widenedBeyondDeclared(walk, pair)) {
+            try walk.narrowed.put(pair, pair.program);
+            return pair.program;
+        }
+        // Types reach themselves only through named types, whose copies
+        // are entered before their children.
+        if ((try walk.active.getOrPut(pair)).found_existing) Common.invariant("a compile-time root's type reached itself outside a named type");
+        const allocator = self.allocator;
+        const declared_types = self.solved.lifted.types.view();
+        const declared = declared_types.get(pair.declared);
+        var frame: NarrowFrame = .{
+            .pair = pair,
+            .children_start = @intCast(walk.frame_pairs.items.len),
+            .children_len = 0,
+            .results_start = @intCast(walk.results.items.len),
+            .tags_start = @intCast(walk.frame_tags.items.len),
+        };
+        switch (self.types.get(pair.program)) {
+            .tag_union => |span| {
+                const declared_tags = switch (declared) {
+                    .tag_union => |tags| declared_types.tagSpan(tags),
+                    .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => Common.invariant("a compile-time root's tag union was declared as another kind of type"),
+                };
+                for (declared_tags) |declared_tag| {
+                    // A label is two variants only where their payloads
+                    // conflict, so exactly one variant fits the declared
+                    // payloads.
+                    var chosen: ?Type.Tag = null;
+                    for (0..span.len) |index| {
+                        const program_tag = self.types.tagAt(span, index);
+                        if (program_tag.name != declared_tag.name) continue;
+                        if (!try self.fitsDeclaredPayloads(program_tag.payloads, declared_tag.payloads)) continue;
+                        if (chosen != null) Common.invariant("two variants of one label both fit a compile-time root's declared payloads");
+                        chosen = program_tag;
+                    }
+                    const tag = chosen orelse Common.invariant("a compile-time root's declared tag has no variant in its program row");
+                    try walk.frame_tags.append(allocator, tag);
+                    for (declared_types.span(declared_tag.payloads), 0..) |declared_payload, index| {
+                        try walk.frame_pairs.append(allocator, .{ .program = self.types.typeAt(tag.payloads, index), .declared = declared_payload });
+                    }
+                }
+            },
+            .record => |span| {
+                const declared_fields = switch (declared) {
+                    .record => |fields| declared_types.fieldSpan(fields),
+                    .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("a compile-time root's record was declared as another kind of type"),
+                };
+                if (declared_fields.len != span.len) Common.invariant("a compile-time root's record has other fields than its declaration");
+                for (declared_fields, 0..) |declared_field, index| {
+                    try walk.frame_pairs.append(allocator, .{ .program = self.types.fieldAt(span, index).ty, .declared = declared_field.ty });
+                }
+            },
+            .tuple => |span| {
+                const declared_items = switch (declared) {
+                    .tuple => |items| declared_types.span(items),
+                    .primitive, .named, .record, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("a compile-time root's tuple was declared as another kind of type"),
+                };
+                if (declared_items.len != span.len) Common.invariant("a compile-time root's tuple has another arity than its declaration");
+                for (declared_items, 0..) |declared_item, index| {
+                    try walk.frame_pairs.append(allocator, .{ .program = self.types.typeAt(span, index), .declared = declared_item });
+                }
+            },
+            .list => |elem| {
+                const declared_elem = switch (declared) {
+                    .list => |item| item,
+                    .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst => Common.invariant("a compile-time root's list was declared as another kind of type"),
+                };
+                try walk.frame_pairs.append(allocator, .{ .program = elem, .declared = declared_elem });
+            },
+            .box => |elem| {
+                const declared_elem = switch (declared) {
+                    .box => |item| item,
+                    .primitive, .named, .record, .tuple, .tag_union, .list, .func, .erased, .zst => Common.invariant("a compile-time root's box was declared as another kind of type"),
+                };
+                try walk.frame_pairs.append(allocator, .{ .program = elem, .declared = declared_elem });
+            },
+            .named => |named| {
+                const declared_named = switch (declared) {
+                    .named => |declared_named| declared_named,
+                    .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("a compile-time root's named type was declared as another kind of type"),
+                };
+                // A recursive named type reaches itself again through its
+                // backing; that reference is this copy.
+                const copy = try self.types.add(.zst);
+                try walk.narrowed.put(pair, copy);
+                frame.copy = copy;
+                const declared_args = declared_types.span(declared_named.args);
+                if (declared_args.len != named.args.len) Common.invariant("a compile-time root's named type has other arguments than its declaration");
+                for (declared_args, 0..) |declared_arg, index| {
+                    try walk.frame_pairs.append(allocator, .{ .program = self.types.typeAt(named.args, index), .declared = declared_arg });
+                }
+                if (named.backing) |backing| {
+                    const declared_backing = declared_named.backing orelse Common.invariant("a compile-time root's named type has a backing its declaration lacks");
+                    try walk.frame_pairs.append(allocator, .{ .program = backing.ty, .declared = declared_backing.ty });
+                }
+            },
+            // Callables, erased values and scalars hold no row a join widens
+            // at the root's own type, so none is ever widened.
+            .primitive, .capture_record, .callable, .erased_fn, .erased_capture_ptr, .zst => Common.invariant("a compile-time root's leaf type was widened"),
+        }
+        frame.children_len = @as(u32, @intCast(walk.frame_pairs.items.len)) - frame.children_start;
+        try walk.frames.append(allocator, frame);
+        return null;
+    }
+
+    /// Build a frame's narrowed type from its children's.
+    fn finishNarrow(self: *Lowerer, walk: *DeclaredWalk, frame: NarrowFrame) Common.LowerError!Type.TypeId {
+        const children = walk.frame_pairs.items[frame.children_start..][0..frame.children_len];
+        const results = walk.results.items[frame.results_start..];
+        if (results.len != children.len) Common.invariant("a narrowed compile-time root type lost a child's type");
+        var changed = false;
+        for (children, results) |child, result| changed = changed or result != child.program;
+        switch (self.types.get(frame.pair.program)) {
+            .tag_union => |span| {
+                const chosen = walk.frame_tags.items[frame.tags_start..];
+                if (chosen.len != span.len) changed = true;
+                if (!changed) return frame.pair.program;
+                const kept = try self.allocator.alloc(Type.Tag, chosen.len);
+                defer self.allocator.free(kept);
+                var next: usize = 0;
+                for (chosen, kept) |tag, *out| {
+                    const payloads = results[next..][0..tag.payloads.len];
+                    const program_payloads = children[next..][0..tag.payloads.len];
+                    next += tag.payloads.len;
+                    var payloads_changed = false;
+                    for (program_payloads, payloads) |program_payload, payload| payloads_changed = payloads_changed or payload != program_payload.program;
+                    out.* = .{ .name = tag.name, .checked_name = tag.checked_name, .payloads = if (payloads_changed) try self.types.addSpan(payloads) else tag.payloads };
+                }
+                return try self.types.add(.{ .tag_union = try self.types.addTags(kept) });
+            },
+            .record => |span| {
+                if (!changed) return frame.pair.program;
+                const fields = try self.allocator.alloc(Type.Field, span.len);
+                defer self.allocator.free(fields);
+                for (fields, results, 0..) |*field, result, index| {
+                    field.* = self.types.fieldAt(span, index);
+                    field.ty = result;
+                }
+                return try self.types.add(.{ .record = try self.types.addFields(fields) });
+            },
+            .tuple => {
+                if (!changed) return frame.pair.program;
+                return try self.types.add(.{ .tuple = try self.types.addSpan(results) });
+            },
+            .list => return if (changed) try self.types.add(.{ .list = results[0] }) else frame.pair.program,
+            .box => return if (changed) try self.types.add(.{ .box = results[0] }) else frame.pair.program,
+            .named => |named| {
+                const copy = frame.copy orelse Common.invariant("a narrowed named type had no copy");
+                var narrowed = named;
+                narrowed.args = try self.types.addSpan(results[0..named.args.len]);
+                if (narrowed.backing) |*backing| backing.ty = results[named.args.len];
+                try self.types.set(copy, .{ .named = narrowed });
+                return copy;
+            },
+            .primitive, .capture_record, .callable, .erased_fn, .erased_capture_ptr, .zst => Common.invariant("a compile-time root's leaf type was widened"),
+        }
+    }
+
+    /// One requirement of a pair fitting its declaration: it holds when one
+    /// of its alternatives does. `FitAlternative`s are spans of pairs that
+    /// must all fit.
+    const FitRequirement = struct { alternatives_start: u32, alternatives_len: u32 };
+    const FitAlternative = struct { pairs_start: u32, pairs_len: u32 };
+
+    /// One pair being checked: every requirement must hold.
+    const FitFrame = struct {
+        pair: DeclaredTypePair,
+        requirements_start: u32,
+        requirements_len: u32,
+        requirement: u32 = 0,
+        alternative: u32 = 0,
+        pair_index: u32 = 0,
+    };
+
+    /// The state of one fit check.
+    const FitWalk = struct {
+        /// Each pair's finished answer; a pair still being checked fits as
+        /// far as its other parts do.
+        answers: std.AutoHashMap(DeclaredTypePair, bool),
+        active: std.AutoHashMap(DeclaredTypePair, void),
+        frames: std.ArrayList(FitFrame) = .empty,
+        requirements: std.ArrayList(FitRequirement) = .empty,
+        alternatives: std.ArrayList(FitAlternative) = .empty,
+        pairs: std.ArrayList(DeclaredTypePair) = .empty,
+
+        fn deinit(self: *FitWalk) void {
+            const allocator = self.answers.allocator;
+            self.answers.deinit();
+            self.active.deinit();
+            self.frames.deinit(allocator);
+            self.requirements.deinit(allocator);
+            self.alternatives.deinit(allocator);
+            self.pairs.deinit(allocator);
+        }
+    };
+
+    /// Whether a variant's program payloads fit its declared payloads: the
+    /// same kinds of type, primitives, record fields, arities and labels,
+    /// the checks that keep two variants of one label apart (design.md "Row
+    /// Joins").
+    fn fitsDeclaredPayloads(self: *Lowerer, program_payloads: Type.Span, declared_payloads: MonoType.Span) Common.LowerError!bool {
+        const declared = self.solved.lifted.types.view().span(declared_payloads);
+        if (declared.len != program_payloads.len) return false;
+        var walk: FitWalk = .{
+            .answers = std.AutoHashMap(DeclaredTypePair, bool).init(self.allocator),
+            .active = std.AutoHashMap(DeclaredTypePair, void).init(self.allocator),
+        };
+        defer walk.deinit();
+        for (declared, 0..) |declared_payload, index| {
+            if (!try self.fitsDeclared(&walk, .{ .program = self.types.typeAt(program_payloads, index), .declared = declared_payload })) return false;
+        }
+        return true;
+    }
+
+    fn fitsDeclared(self: *Lowerer, walk: *FitWalk, root: DeclaredTypePair) Common.LowerError!bool {
+        var answer: bool = if (try self.enterFit(walk, root)) |done| return done else undefined;
+        while (walk.frames.items.len != 0) {
+            const top = &walk.frames.items[walk.frames.items.len - 1];
+            const step = self.nextFitPair(walk, top);
+            switch (step) {
+                .pair => |pair| {
+                    if (try self.enterFit(walk, pair)) |done| self.takeFitAnswer(walk, done);
+                    continue;
+                },
+                .done => |fits| answer = fits,
+            }
+            const frame = walk.frames.pop().?;
+            walk.requirements.shrinkRetainingCapacity(frame.requirements_start);
+            _ = walk.active.remove(frame.pair);
+            try walk.answers.put(frame.pair, answer);
+            if (walk.frames.items.len == 0) return answer;
+            self.takeFitAnswer(walk, answer);
+        }
+        unreachable; // enterFit pushed a frame, and the loop returns when it pops the last one
+    }
+
+    const FitStep = union(enum) { pair: DeclaredTypePair, done: bool };
+
+    /// The next pair the top frame waits on, or its answer once every
+    /// requirement held or one could not.
+    fn nextFitPair(_: *Lowerer, walk: *FitWalk, frame: *FitFrame) FitStep {
+        while (true) {
+            if (frame.requirement == frame.requirements_len) return .{ .done = true };
+            const requirement = walk.requirements.items[frame.requirements_start + frame.requirement];
+            if (frame.alternative == requirement.alternatives_len) return .{ .done = false };
+            const alternative = walk.alternatives.items[requirement.alternatives_start + frame.alternative];
+            if (frame.pair_index == alternative.pairs_len) {
+                frame.requirement += 1;
+                frame.alternative = 0;
+                frame.pair_index = 0;
+                continue;
+            }
+            return .{ .pair = walk.pairs.items[alternative.pairs_start + frame.pair_index] };
+        }
+    }
+
+    /// Advance the top frame past the pair it waited on.
+    fn takeFitAnswer(_: *Lowerer, walk: *FitWalk, fits: bool) void {
+        const frame = &walk.frames.items[walk.frames.items.len - 1];
+        if (fits) {
+            frame.pair_index += 1;
+        } else {
+            frame.alternative += 1;
+            frame.pair_index = 0;
+        }
+    }
+
+    /// `pair`'s answer when it needs no frame, or null after opening one.
+    fn enterFit(self: *Lowerer, walk: *FitWalk, pair: DeclaredTypePair) Common.LowerError!?bool {
+        if (walk.answers.get(pair)) |known| return known;
+        // A pair met again inside itself fits as far as its other parts do.
+        if (walk.active.contains(pair)) return true;
+        const allocator = self.allocator;
+        const declared_types = self.solved.lifted.types.view();
+        const declared = declared_types.get(pair.declared);
+        const requirements_start: u32 = @intCast(walk.requirements.items.len);
+        const Single = struct {
+            fn add(w: *FitWalk, a: Allocator, child: DeclaredTypePair) Allocator.Error!void {
+                try w.requirements.append(a, .{ .alternatives_start = @intCast(w.alternatives.items.len), .alternatives_len = 1 });
+                try w.alternatives.append(a, .{ .pairs_start = @intCast(w.pairs.items.len), .pairs_len = 1 });
+                try w.pairs.append(a, child);
+            }
+        };
+        switch (self.types.get(pair.program)) {
+            .primitive => |primitive| return declared == .primitive and std.meta.eql(primitive, declared.primitive),
+            .record => |span| {
+                if (declared != .record) return false;
+                const declared_fields = declared_types.fieldSpan(declared.record);
+                if (declared_fields.len != span.len) return false;
+                for (declared_fields, 0..) |declared_field, index| {
+                    const field = self.types.fieldAt(span, index);
+                    if (field.name != declared_field.name) {
+                        walk.requirements.shrinkRetainingCapacity(requirements_start);
+                        return false;
+                    }
+                    try Single.add(walk, allocator, .{ .program = field.ty, .declared = declared_field.ty });
+                }
+            },
+            .tuple => |span| {
+                if (declared != .tuple) return false;
+                const declared_items = declared_types.span(declared.tuple);
+                if (declared_items.len != span.len) return false;
+                for (declared_items, 0..) |declared_item, index| {
+                    try Single.add(walk, allocator, .{ .program = self.types.typeAt(span, index), .declared = declared_item });
+                }
+            },
+            .tag_union => |span| {
+                if (declared != .tag_union) return false;
+                for (declared_types.tagSpan(declared.tag_union)) |declared_tag| {
+                    const declared_payloads = declared_types.span(declared_tag.payloads);
+                    const alternatives_start: u32 = @intCast(walk.alternatives.items.len);
+                    for (0..span.len) |index| {
+                        const tag = self.types.tagAt(span, index);
+                        if (tag.name != declared_tag.name or tag.payloads.len != declared_payloads.len) continue;
+                        try walk.alternatives.append(allocator, .{ .pairs_start = @intCast(walk.pairs.items.len), .pairs_len = @intCast(declared_payloads.len) });
+                        for (declared_payloads, 0..) |declared_payload, payload_index| {
+                            try walk.pairs.append(allocator, .{ .program = self.types.typeAt(tag.payloads, payload_index), .declared = declared_payload });
+                        }
+                    }
+                    const alternatives_len = @as(u32, @intCast(walk.alternatives.items.len)) - alternatives_start;
+                    if (alternatives_len == 0) {
+                        walk.requirements.shrinkRetainingCapacity(requirements_start);
+                        return false;
+                    }
+                    try walk.requirements.append(allocator, .{ .alternatives_start = alternatives_start, .alternatives_len = alternatives_len });
+                }
+            },
+            .list => |elem| {
+                if (declared != .list) return false;
+                try Single.add(walk, allocator, .{ .program = elem, .declared = declared.list });
+            },
+            .box => |elem| {
+                if (declared != .box) return false;
+                try Single.add(walk, allocator, .{ .program = elem, .declared = declared.box });
+            },
+            .named => |named| {
+                if (declared != .named or !std.meta.eql(named.def, declared.named.def)) return false;
+                const declared_args = declared_types.span(declared.named.args);
+                if (declared_args.len != named.args.len) return false;
+                for (declared_args, 0..) |declared_arg, index| {
+                    try Single.add(walk, allocator, .{ .program = self.types.typeAt(named.args, index), .declared = declared_arg });
+                }
+            },
+            .callable, .erased_fn => return declared == .func or declared == .erased,
+            .zst => return switch (declared) {
+                .zst => true,
+                .record => |fields| fields.len == 0,
+                .tuple => |items| items.len == 0,
+                .primitive, .named, .tag_union, .list, .box, .func, .erased => false,
+            },
+            .capture_record, .erased_capture_ptr => return false,
+        }
+        try walk.active.put(pair, {});
+        try walk.frames.append(allocator, .{
+            .pair = pair,
+            .requirements_start = requirements_start,
+            .requirements_len = @as(u32, @intCast(walk.requirements.items.len)) - requirements_start,
+        });
+        return null;
     }
 
     // Const schemas //
@@ -4868,11 +5603,17 @@ const Lowerer = struct {
                     task.plans[task.index] = component.get(.plan);
                     task.index += 1;
                 }
-                if (task.index < task.plans.len) return .{ .call = .{ .plan = .{ .ty = switch (content) {
-                    .tuple => |items| self.types.typeAt(items, task.index),
-                    .record => |fields| self.types.fieldAt(fields, task.index).ty,
-                    .primitive, .named, .capture_record, .tag_union, .callable, .list, .box, .erased_fn, .erased_capture_ptr, .zst => unreachable,
-                } } } };
+                if (task.index < task.plans.len) return .{
+                    .call = .{
+                        .plan = .{
+                            .ty = switch (content) {
+                                .tuple => |items| self.types.typeAt(items, task.index),
+                                .record => |fields| self.types.fieldAt(fields, task.index).ty,
+                                .primitive, .named, .capture_record, .tag_union, .callable, .list, .box, .erased_fn, .erased_capture_ptr, .zst => unreachable, // this switch is inside the .tuple, .record prong
+                            },
+                        },
+                    },
+                };
                 const plans = task.plans;
                 task.plans = &.{};
                 break :blk if (content == .tuple) .{ .tuple = plans } else .{ .record = plans };
@@ -5030,7 +5771,7 @@ const Lowerer = struct {
                         }
                     },
                     .tuple, .tag_union, .callable, .erased_fn => try task.ids.append(allocator, component),
-                    .primitive, .zst, .capture_record, .erased_capture_ptr => unreachable,
+                    .primitive, .zst, .capture_record, .erased_capture_ptr => unreachable, // cursor start returns for primitive and zst and rejects capture_record and erased_capture_ptr
                 }
             },
             ConstTypeCursor.field_value => {
@@ -5067,7 +5808,7 @@ const Lowerer = struct {
                     .ret = input.?.get(.ty),
                 } });
             },
-            ConstTypeCursor.callable_ret + 1...std.math.maxInt(u8) => unreachable,
+            ConstTypeCursor.callable_ret + 1...std.math.maxInt(u8) => unreachable, // task.cursor is only ever set to a ConstTypeCursor constant
         }
 
         switch (content) {
@@ -5145,7 +5886,7 @@ const Lowerer = struct {
                 task.cursor = ConstTypeCursor.callable_ret;
                 return constTypeStep(try self.lowerType(func.ret));
             },
-            .primitive, .zst, .list, .box, .capture_record, .erased_capture_ptr => unreachable,
+            .primitive, .zst, .list, .box, .capture_record, .erased_capture_ptr => unreachable, // cursor start returns for primitive, zst, and capture contents, and cursor components returns for list and box
         }
     }
 
@@ -6156,10 +6897,10 @@ const Lowerer = struct {
         target: LIR.LocalId,
         result_ty: Type.TypeId,
         callee: Lifted.FnId,
-        /// Owned.
-        args: []Lifted.ExprId,
-        /// Owned.
-        capture_operands: []Lifted.CaptureOperand,
+        /// Borrowed from the lifted program.
+        args: []const Lifted.ExprId,
+        /// Borrowed from the lifted program.
+        capture_operands: []const Lifted.CaptureOperand,
         is_cold: bool,
         next: LIR.CFStmtId,
         target_fn: Type.FnId = undefined,
@@ -6173,8 +6914,8 @@ const Lowerer = struct {
         target: LIR.LocalId,
         result_ty: Type.TypeId,
         callee: Type.FnId,
-        /// Owned.
-        args: []Lifted.ExprId,
+        /// Borrowed from the lifted program.
+        args: []const Lifted.ExprId,
         capture_arg: ?LIR.LocalId,
         is_cold: bool,
         next: LIR.CFStmtId,
@@ -6186,19 +6927,22 @@ const Lowerer = struct {
         /// The capture value types, then the argument types.
         arg_tys: []Type.TypeId = &.{},
         lowered: ?LoweredExprLocals = null,
-        /// The argument positions an inlined call bound directly to the
-        /// caller locals they read.
-        substituted: ?[]bool = null,
+        /// Where the argument positions an inlined call bound directly to
+        /// the caller locals they read start in the lane's
+        /// `inline_substitutions`.
+        substituted_start: ?usize = null,
     };
 
     const InlineCallTask = struct {
         where: LowerSite,
         target: LIR.LocalId,
         callee: Type.FnId,
-        /// Owned.
-        arg_locals: []LIR.LocalId,
-        /// Owned. One local per callee capture, in capture order.
-        capture_locals: []LIR.LocalId,
+        /// Borrowed from the calling known call's lowered arguments, which
+        /// outlive this task.
+        arg_locals: []const LIR.LocalId,
+        /// Borrowed like `arg_locals`. One local per callee capture, in
+        /// capture order.
+        capture_locals: []const LIR.LocalId,
         body_expr: Lifted.ExprId,
         next: LIR.CFStmtId,
         /// The bindings the callee's arguments and captures shadowed, once
@@ -6214,8 +6958,8 @@ const Lowerer = struct {
         callee_ty: Type.TypeId,
         /// Owned.
         variants: []Type.FnVariant,
-        /// Owned.
-        args: []Lifted.ExprId,
+        /// Borrowed from the lifted program.
+        args: []const Lifted.ExprId,
         next: LIR.CFStmtId,
         callee: LIR.LocalId = undefined,
         done: LIR.JoinPointId = undefined,
@@ -6642,44 +7386,25 @@ const Lowerer = struct {
                 if (task.forwarding) |scope| self.leaveReturnForwarding(scope);
                 task.forwarding = null;
             },
-            .direct_call => |*task| {
-                self.allocator.free(task.args);
-                task.args = &.{};
-                self.allocator.free(task.capture_operands);
-                task.capture_operands = &.{};
-            },
             .known_call => |*task| {
-                self.allocator.free(task.args);
-                task.args = &.{};
                 self.allocator.free(task.capture_values);
                 task.capture_values = &.{};
                 self.allocator.free(task.arg_tys);
                 task.arg_tys = &.{};
                 if (task.lowered) |lowered| lowered.deinit(self.allocator);
                 task.lowered = null;
-                if (task.substituted) |mask| self.allocator.free(mask);
-                task.substituted = null;
+                if (task.substituted_start) |start| self.lane_scratch.inline_substitutions.shrinkRetainingCapacity(start);
+                task.substituted_start = null;
             },
-            .inline_call => |*task| {
-                self.restoreInlineCallArgs(task);
-                self.allocator.free(task.arg_locals);
-                task.arg_locals = &.{};
-                self.allocator.free(task.capture_locals);
-                task.capture_locals = &.{};
-            },
+            .inline_call => |*task| self.restoreInlineCallArgs(task),
             .callable_call => |*task| {
                 self.allocator.free(task.variants);
                 task.variants = &.{};
-                self.allocator.free(task.args);
-                task.args = &.{};
                 self.allocator.free(task.bodies);
                 task.bodies = &.{};
             },
             .match_ => |*task| {
-                if (task.arena) |arena| {
-                    arena.deinit();
-                    self.allocator.destroy(arena);
-                }
+                if (task.arena) |arena| self.lane_scratch.releaseArena(arena);
                 task.arena = null;
             },
             .block => |*task| {
@@ -6693,10 +7418,7 @@ const Lowerer = struct {
             },
             .loop_ => |*task| self.leaveLoop(task),
             .join_point => |*task| self.leaveJoinPoint(task),
-            .callable_variant => |*task| {
-                if (task.call) |call| self.allocator.free(call.args);
-                task.call = null;
-            },
+            .callable_variant => |*task| task.call = null,
             .recursive_let => |*task| {
                 self.allocator.free(task.slots);
                 task.slots = &.{};
@@ -6708,6 +7430,7 @@ const Lowerer = struct {
             .payload_switch,
             .try_sequence,
             .try_record_sequence,
+            .direct_call,
             => {},
         }
     }
@@ -7213,8 +7936,8 @@ const Lowerer = struct {
             const id = try self.lirStaticDataFor(candidate, ty, layout_idx);
             // A list of copies keeps its slot and also names its fresh form
             // and its item count.
-            var arena = base.SingleThreadArena.init(self.allocator);
-            defer arena.deinit();
+            const arena = try self.lane_scratch.acquireArena();
+            defer self.lane_scratch.releaseArena(arena);
             var fresh_alternative: ?LIR.LirProcSpecId = null;
             var list_len: ?u64 = null;
             if (try self.uniformListOfExpr(arena.allocator(), candidate.runtime_expr, ty, layout_idx)) |uniform| {
@@ -7939,9 +8662,9 @@ const Lowerer = struct {
         call: @FieldType(Lifted.ExprData, "call_proc"),
         next: LIR.CFStmtId,
     ) Common.LowerError!LowerStep {
-        const args = try GuardedList.dupe(self.allocator, Lifted.ExprId, self.solved.lifted.exprSpan(call.args));
-        errdefer self.allocator.free(args);
-        const capture_operands = try GuardedList.dupe(self.allocator, Lifted.CaptureOperand, self.solved.lifted.captureOperandSpan(call.captures));
+        const lifted = self.liftedView();
+        const args = lifted.exprSpan(call.args);
+        const capture_operands = lifted.captureOperandSpan(call.captures);
         return .{ .tail = .{ .direct_call = .{
             .where = where,
             .target = target,
@@ -7976,8 +8699,7 @@ const Lowerer = struct {
         };
         task.captures = try self.capturesForFn(callee);
         const capture_items = self.captureSpan(task.captures);
-        const args = try self.allocator.dupe(Lifted.ExprId, task.args);
-        errdefer self.allocator.free(args);
+        const args = task.args;
         if (capture_items.len == 0) {
             if (task.capture_operands.len != 0) Common.invariant("direct call carried capture operands for a capture-free callee");
             return .{ .tail = .{ .known_call = .{
@@ -8033,7 +8755,9 @@ const Lowerer = struct {
     fn stepKnownCall(self: *Lowerer, frame: *LowerFrame, task: *KnownCallTask, input: ?LIR.CFStmtId) Common.LowerError!LowerStep {
         if (frame.cursor == 1) {
             const lowered = task.lowered.?;
-            return .{ .tail = try self.operandChainSkipping(task.where, lowered, task.arg_tys, task.substituted, null, input.?) };
+            const start = task.substituted_start.?;
+            const substituted = self.lane_scratch.inline_substitutions.items[start..][0..lowered.ids.len];
+            return .{ .tail = try self.operandChainSkipping(task.where, lowered, task.arg_tys, substituted, null, input.?) };
         }
         const callee = task.callee;
         const where = task.where;
@@ -8084,16 +8808,17 @@ const Lowerer = struct {
                 // the body's branches, so a caller that keeps the local on
                 // one outcome would retain it across every other outcome's
                 // consuming use.
-                const substituted = try self.allocator.alloc(bool, lowered.ids.len);
-                task.substituted = substituted;
+                const substitutions = &self.lane_scratch.inline_substitutions;
+                const start = substitutions.items.len;
+                try substitutions.ensureUnusedCapacity(self.allocator, lowered.ids.len);
+                task.substituted_start = start;
                 for (lowered.exprs, task.arg_tys, 0..) |arg_expr, arg_ty, i| {
                     const source = try self.inlineArgumentLocal(arg_expr, arg_ty, lowered.ids[i], call_target);
-                    substituted[i] = source != null;
+                    substitutions.appendAssumeCapacity(source != null);
                     if (source) |local| lowered.ids[i] = local;
                 }
-                const capture_locals = try self.allocator.dupe(LIR.LocalId, lowered.ids[0..capture_count]);
-                errdefer self.allocator.free(capture_locals);
-                const arg_locals = try self.allocator.dupe(LIR.LocalId, lowered.ids[capture_count..]);
+                const capture_locals = lowered.ids[0..capture_count];
+                const arg_locals = lowered.ids[capture_count..];
                 frame.cursor = 1;
                 return .{ .call = .{ .inline_call = .{
                     .where = where,
@@ -8239,8 +8964,7 @@ const Lowerer = struct {
             // Branch lowering can lower argument types that append more variants to
             // self.types, so keep this iteration independent of the store backing.
             const variants = try GuardedList.dupe(self.allocator, Type.FnVariant, self.types.fnVariantSpan(content.callable));
-            errdefer self.allocator.free(variants);
-            const args = try GuardedList.dupe(self.allocator, Lifted.ExprId, self.solved.lifted.exprSpan(arg_span));
+            const args = self.liftedView().exprSpan(arg_span);
             return .{ .tail = .{ .callable_call = .{
                 .where = where,
                 .target = target,
@@ -8393,9 +9117,8 @@ const Lowerer = struct {
         arg_exprs: []const Lifted.ExprId,
         next: LIR.CFStmtId,
     ) Common.LowerError!LowerTask {
-        const args = try self.allocator.dupe(Lifted.ExprId, arg_exprs);
+        const args = arg_exprs;
         if (variant.capture_ty) |_| {
-            errdefer self.allocator.free(args);
             const payload = try self.addLocalForLayout(self.tagUnionPayloadLayout(self.result.store.getLocal(callee).layout_idx, variant_index));
             return .{ .callable_variant = .{
                 .where = where,
@@ -8717,12 +9440,8 @@ const Lowerer = struct {
         // (src/postcheck/match_tree.zig): one multiway test per tested
         // occurrence, one discriminant/length/field read per position, and
         // branch bodies lowered exactly once.
-        const arena_state = try self.allocator.create(base.SingleThreadArena);
-        arena_state.* = base.SingleThreadArena.init(self.allocator);
-        errdefer {
-            arena_state.deinit();
-            self.allocator.destroy(arena_state);
-        }
+        const arena_state = try self.lane_scratch.acquireArena();
+        errdefer self.lane_scratch.releaseArena(arena_state);
         const arena = arena_state.allocator();
 
         const shapes = try arena.create(MatchTreeCtx.ShapeInterner);
@@ -8781,10 +9500,7 @@ const Lowerer = struct {
                     .literal_guard => Common.invariant("guarded literal pattern reached solved match lowering"),
                 },
                 .done => |branch_chain| {
-                    if (task.arena) |arena| {
-                        arena.deinit();
-                        self.allocator.destroy(arena);
-                    }
+                    if (task.arena) |arena| self.lane_scratch.releaseArena(arena);
                     task.arena = null;
                     frame.cursor = 1;
                     return .{ .call = exprTask(task.where, task.scrutinee_local, task.scrutinee, task.scrutinee_ty, branch_chain) };
@@ -9267,7 +9983,7 @@ const Lowerer = struct {
                     if (!has_lexical_binding and try self.captureBindingForLocal(retained_local.local) != null) continue;
                     const lir_local = try self.localFor(retained_local.local);
                     try retained_locals.append(self.allocator, lir_local);
-                    if (self.payload_conditions[@backingInt(retained_local.local)]) |payload| {
+                    if (self.payload_conditions.get(retained_local.local)) |payload| {
                         try maybe_uninitialized_retained.append(self.allocator, lir_local);
                         try maybe_uninitialized_conditions.append(self.allocator, try self.localFor(payload.condition));
                         try maybe_uninitialized_condition_masks.append(self.allocator, payload.mask);
@@ -9924,7 +10640,7 @@ const Lowerer = struct {
                             .done => |done| result = done,
                         }
                     },
-                    .erased_fn, .primitive, .callable, .erased_capture_ptr, .zst => unreachable,
+                    .erased_fn, .primitive, .callable, .erased_capture_ptr, .zst => unreachable, // frames are pushed only for named, box, list, record, capture_record, tuple, and tag_union types
                 }
                 if (exhaustions == top.exhaustions_before) try self.erased_demands.put(top.ty, result);
                 _ = frames.pop();
@@ -9979,7 +10695,7 @@ const Lowerer = struct {
                 }
                 return .{ .done = if (any_single_variant.*) .single_slot else .none };
             },
-            .erased_fn, .named, .box, .list, .primitive, .callable, .erased_capture_ptr, .zst => unreachable,
+            .erased_fn, .named, .box, .list, .primitive, .callable, .erased_capture_ptr, .zst => unreachable, // callers pass only record, capture_record, tuple, and tag_union types
         }
     }
 
@@ -11128,7 +11844,7 @@ const Lowerer = struct {
                 .frac_f64_lit,
                 .str_lit,
                 .str_pattern,
-                => unreachable,
+                => unreachable, // PatternRefutability calls child only after patternClass reports .child
             };
         }
 
@@ -11324,15 +12040,17 @@ const Lowerer = struct {
             },
             .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => switch (task.lowering) {
                 .bind => return .{ .ret = task.next },
-                .test_then => return .{ .ret = switch (pat_data) {
-                    .int_lit => |value| try self.lowerLiteralPatternThen(where, task.source, task.ty, .{ .int_lit = value }, task.next, task.miss),
-                    .dec_lit => |value| try self.lowerLiteralPatternThen(where, task.source, task.ty, .{ .dec_lit = value }, task.next, task.miss),
-                    .frac_f32_lit => |value| try self.lowerLiteralPatternThen(where, task.source, task.ty, .{ .frac_f32_lit = value }, task.next, task.miss),
-                    .frac_f64_lit => |value| try self.lowerLiteralPatternThen(where, task.source, task.ty, .{ .frac_f64_lit = value }, task.next, task.miss),
-                    .str_lit => |value| try self.lowerLiteralPatternThen(where, task.source, task.ty, .{ .str_lit = value }, task.next, task.miss),
-                    .str_pattern => |str| try self.lowerStrPatternThen(where, str, task.source, task.next, task.miss),
-                    .bind, .wildcard, .as, .record, .tuple, .tag, .list, .nominal => unreachable,
-                } },
+                .test_then => return .{
+                    .ret = switch (pat_data) {
+                        .int_lit => |value| try self.lowerLiteralPatternThen(where, task.source, task.ty, .{ .int_lit = value }, task.next, task.miss),
+                        .dec_lit => |value| try self.lowerLiteralPatternThen(where, task.source, task.ty, .{ .dec_lit = value }, task.next, task.miss),
+                        .frac_f32_lit => |value| try self.lowerLiteralPatternThen(where, task.source, task.ty, .{ .frac_f32_lit = value }, task.next, task.miss),
+                        .frac_f64_lit => |value| try self.lowerLiteralPatternThen(where, task.source, task.ty, .{ .frac_f64_lit = value }, task.next, task.miss),
+                        .str_lit => |value| try self.lowerLiteralPatternThen(where, task.source, task.ty, .{ .str_lit = value }, task.next, task.miss),
+                        .str_pattern => |str| try self.lowerStrPatternThen(where, str, task.source, task.next, task.miss),
+                        .bind, .wildcard, .as, .record, .tuple, .tag, .list, .nominal => unreachable, // this switch is inside the literal-pattern prong
+                    },
+                },
             },
         }
     }
@@ -11364,7 +12082,7 @@ const Lowerer = struct {
                     if (items.len != self.tupleItemTypes(task.source_ty).len) Common.invariant("tuple pattern arity differed from target tuple type");
                     break :blk items.len;
                 },
-                .bind, .wildcard, .as, .list, .tag, .nominal, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => unreachable,
+                .bind, .wildcard, .as, .list, .tag, .nominal, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => unreachable, // stepStructPattern is called only for record and tuple patterns
             };
         }
         if (task.index == 0) return .{ .ret = task.current };
@@ -11382,7 +12100,7 @@ const Lowerer = struct {
                 task.part_ty = GuardedList.at(self.tupleItemTypes(task.source_ty), i);
                 break :blk GuardedList.at(self.solved.lifted.patSpan(span), i);
             },
-            .bind, .wildcard, .as, .list, .tag, .nominal, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => unreachable,
+            .bind, .wildcard, .as, .list, .tag, .nominal, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => unreachable, // stepStructPattern is called only for record and tuple patterns
         };
         task.part_local = try self.addTemp(task.part_ty);
         return .{ .call = subpatternTask(task, child_pat, task.part_ty, task.part_local, task.current) };
@@ -11518,7 +12236,7 @@ const Lowerer = struct {
                     task.current = try self.assignU64Literal(where, index_local, @intCast(i), task.current);
                 }
             },
-            ListPatternCursor.element + 1...std.math.maxInt(u8) => unreachable,
+            ListPatternCursor.element + 1...std.math.maxInt(u8) => unreachable, // task.cursor is only ever set to a ListPatternCursor constant
         }
 
         if (task.index != 0) {
@@ -11986,7 +12704,7 @@ const Lowerer = struct {
         const eq_op: LIR.LowLevel = switch (primitive) {
             .str => .str_is_eq,
             .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => .num_is_eq,
-            .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .bool => unreachable,
+            .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .bool => unreachable, // bool returned above, and SIMD vectors returned through the U128 comparison
         };
         const args = [_]LIR.LocalId{ lhs, rhs };
         const not_op: LIR.LowLevel = .bool_not;
@@ -12623,18 +13341,15 @@ const Lowerer = struct {
             return .{ .ret = try self.assignLocal(where, target, backing_local, next) };
         }
 
-        if (@import("builtin").mode == .debug) {
-            base.invariant(
-                "postcheck invariant violated: LIR lowering expected nominal layouts to stay on one side of layout boxing, target={d} ({s}) source={d} ({s})",
-                .{
-                    @backingInt(target_layout),
-                    @tagName(target_content.tag),
-                    @backingInt(backing_layout),
-                    @tagName(backing_content.tag),
-                },
-            );
-        }
-        unreachable;
+        base.invariant(
+            "postcheck invariant violated: LIR lowering expected nominal layouts to stay on one side of layout boxing, target={d} ({s}) source={d} ({s})",
+            .{
+                @backingInt(target_layout),
+                @tagName(target_content.tag),
+                @backingInt(backing_layout),
+                @tagName(backing_content.tag),
+            },
+        );
     }
 
     fn runBoundary(self: *Lowerer, where: LowerSite, root: BoundaryTask) Common.LowerError!?LIR.CFStmtId {
@@ -12824,7 +13539,7 @@ const Lowerer = struct {
                 return .{ .call = .{ .box = .{ .target = frame.first, .source = task.source, .source_layout = self.result.store.getLocal(task.source).layout_idx, .next = current } } };
             },
             IntoStorageCursor.unboxed => return .{ .ret = input.?.? },
-            IntoStorageCursor.unboxed + 1...std.math.maxInt(u8) => unreachable,
+            IntoStorageCursor.unboxed + 1...std.math.maxInt(u8) => unreachable, // frame.cursor is only ever set to an IntoStorageCursor constant
         }
     }
 
@@ -12867,7 +13582,7 @@ const Lowerer = struct {
             },
             BoxCursor.struct_layout => if (input.?) |converted| return .{ .ret = converted },
             BoxCursor.tag_union_layout => if (input.?) |converted| return .{ .ret = converted },
-            BoxCursor.tag_union_layout + 1...std.math.maxInt(u8) => unreachable,
+            BoxCursor.tag_union_layout + 1...std.math.maxInt(u8) => unreachable, // frame.cursor is only ever set to a BoxCursor constant
         }
         if (frame.cursor != BoxCursor.tag_union_layout and target_content.tag == .tag_union and source_content.tag == .tag_union) {
             frame.cursor = BoxCursor.tag_union_layout;
@@ -12883,18 +13598,15 @@ const Lowerer = struct {
             return .{ .ret = try self.assignZst(where, target, next) };
         }
 
-        if (@import("builtin").mode == .debug) {
-            base.invariant(
-                "postcheck invariant violated: LIR lowering expected layouts to match or differ by an explicit Box edge, target={d} ({s}) source={d} ({s})",
-                .{
-                    @backingInt(target_layout),
-                    @tagName(target_content.tag),
-                    @backingInt(task.source_layout),
-                    @tagName(source_content.tag),
-                },
-            );
-        }
-        unreachable;
+        base.invariant(
+            "postcheck invariant violated: LIR lowering expected layouts to match or differ by an explicit Box edge, target={d} ({s}) source={d} ({s})",
+            .{
+                @backingInt(target_layout),
+                @tagName(target_content.tag),
+                @backingInt(task.source_layout),
+                @tagName(source_content.tag),
+            },
+        );
     }
 
     /// A record's, tuple's, or capture record's fields, last to first: each
@@ -12908,7 +13620,7 @@ const Lowerer = struct {
                     .record => self.types.fieldSpan(task.target_span).len,
                     .capture_record => self.types.captureFieldSpan(task.target_span).len,
                     .tuple => self.types.span(task.target_span).len,
-                    .tag_union, .callable, .callable_to_erased => unreachable,
+                    .tag_union, .callable, .callable_to_erased => unreachable, // fields boundaries are built only for record, tuple, and capture_record kinds
                 };
                 if (task.kind == .tuple and target_len != self.types.span(task.source_span).len) Common.invariant("tuple boundary saw different arities");
                 frame.locals = try self.allocator.alloc(LIR.LocalId, target_len);
@@ -12958,7 +13670,7 @@ const Lowerer = struct {
                 target_ty = GuardedList.at(self.types.span(task.target_span), i);
                 source_ty = GuardedList.at(self.types.span(task.source_span), i);
             },
-            .tag_union, .callable, .callable_to_erased => unreachable,
+            .tag_union, .callable, .callable_to_erased => unreachable, // fields boundaries are built only for record, tuple, and capture_record kinds
         }
         frame.source_index = @intCast(source_index);
         frame.layout_idx = self.localFieldLayout(task.source, frame.source_index);
@@ -12974,7 +13686,7 @@ const Lowerer = struct {
         const source_len: usize = switch (task.kind) {
             .tag_union => self.types.tagSpan(task.source_span).len,
             .callable, .callable_to_erased => self.types.fnVariantSpan(task.source_span).len,
-            .record, .tuple, .capture_record => unreachable,
+            .record, .tuple, .capture_record => unreachable, // variants boundaries are built only for tag_union, callable, and callable_to_erased kinds
         };
         if (input) |branch| {
             frame.branches[frame.index] = .{ .value = @intCast(frame.index), .body = branch.? };
@@ -12999,13 +13711,13 @@ const Lowerer = struct {
                     if (self.isZstLocal(task.source)) return .{ .ret = try self.assignZst(where, task.target, task.next) };
                 },
                 .callable_to_erased => if (source_len == 0) Common.invariant("callable-to-erased boundary saw an empty source callable set"),
-                .record, .tuple, .capture_record => unreachable,
+                .record, .tuple, .capture_record => unreachable, // variants boundaries are built only for tag_union, callable, and callable_to_erased kinds
             }
             if (self.isZstLocal(task.source)) {
                 switch (task.kind) {
                     .tag_union => if (source_len != 1) Common.invariant("zero-sized source tag union had multiple variants"),
                     .callable_to_erased => if (source_len != 1) Common.invariant("zero-sized callable-to-erased boundary saw multiple source variants"),
-                    .callable, .record, .tuple, .capture_record => unreachable,
+                    .callable, .record, .tuple, .capture_record => unreachable, // a zero-sized .callable source returned above, and variants boundaries carry no struct kinds
                 }
                 return .{ .tail = .{ .variant = self.variantConversion(task, 0) } };
             }
@@ -13059,7 +13771,7 @@ const Lowerer = struct {
                     .next = task.next,
                 };
             },
-            .record, .tuple, .capture_record => unreachable,
+            .record, .tuple, .capture_record => unreachable, // variants boundaries are built only for tag_union, callable, and callable_to_erased kinds
         }
     }
 
@@ -13087,7 +13799,7 @@ const Lowerer = struct {
                 .op = .tagPayloadStruct(task.source, task.source_index, task.source_index),
                 .next = input.?.?,
             } } },
-            VariantCursor.payload + 1...std.math.maxInt(u8) => unreachable,
+            VariantCursor.payload + 1...std.math.maxInt(u8) => unreachable, // frame.cursor is only ever set to a VariantCursor constant
         }
         const target = task.target;
         const next = task.next;
@@ -14562,7 +15274,7 @@ const Lowerer = struct {
         fn beginNodeContent(self: *LayoutGraphBuilder, ty: Type.TypeId, node: layout.GraphNodeId) Common.LowerError!BuildStep {
             const types = &self.lowerer.types;
             switch (types.get(ty)) {
-                .primitive, .zst, .erased_capture_ptr => unreachable,
+                .primitive, .zst, .erased_capture_ptr => unreachable, // beginInput answers primitive, zst, and erased_capture_ptr types without reserving a node
                 .named => |named| return .{ .child = (named.backing orelse Common.invariant("named type without runtime backing reached layout selection")).ty },
                 .record => |fields| {
                     const field_span = types.fieldSpan(fields);
@@ -14623,7 +15335,7 @@ const Lowerer = struct {
                 .tag_union, .callable => .{ .tag_union = result.refs },
                 .list => .{ .list = result.input },
                 .box => .{ .box = result.input },
-                .primitive, .zst, .erased_capture_ptr, .erased_fn => unreachable,
+                .primitive, .zst, .erased_capture_ptr, .erased_fn => unreachable, // beginInput reserves no node for primitive, zst, or erased_capture_ptr, and beginNodeContent finishes erased_fn nodes itself
             };
         }
 
@@ -14932,7 +15644,7 @@ const Lowerer = struct {
                 if (variant_index >= variants.len) Common.invariant("tag payload variant exceeded committed tag-union layout");
                 break :blk variants.get(@intCast(variant_index)).payload_layout;
             },
-            .box => unreachable,
+            .box => unreachable, // the loop above unwraps every box layout
             .box_of_zst, .zst, .scalar => .zst,
             .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => Common.invariant("tag payload operation expected tag-union layout"),
         };
@@ -15661,7 +16373,7 @@ test "named layout index reuses structurally equivalent recursive types" {
     const first_backing = try lowerer.types.add(.{ .record = first_fields });
     const equivalent_backing = try lowerer.types.add(.{ .record = equivalent_fields });
 
-    lowerer.types.set(first_ty, .{
+    try lowerer.types.set(first_ty, .{
         .named = .{
             .named_type = .{ .module = .{}, .ty = undefined },
             .def = .{ .module = module_identity, .type_name = first_name, .source_decl = 43 },
@@ -15670,7 +16382,7 @@ test "named layout index reuses structurally equivalent recursive types" {
             .backing = .{ .ty = first_backing, .use = .inspectable },
         },
     });
-    lowerer.types.set(equivalent_ty, .{
+    try lowerer.types.set(equivalent_ty, .{
         .named = .{
             .named_type = .{ .module = .{}, .ty = undefined },
             .def = .{ .module = module_identity, .type_name = equivalent_name, .source_decl = 43 },
@@ -15872,7 +16584,7 @@ test "layout lowering preserves recursive slots across cached children (issue 11
             .{ .name = first, .ty = union_ty, .default = null },
             .{ .name = second, .ty = union_ty, .default = null },
         });
-        lowerer.types.set(record, .{ .record = fields });
+        try lowerer.types.set(record, .{ .record = fields });
         const unrolled = try lowerer.types.add(.{ .record = fields });
 
         const first_layout = try lowerer.layoutOfType(if (unrolled_first) unrolled else record);

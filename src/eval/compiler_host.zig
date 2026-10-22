@@ -70,6 +70,15 @@ pub fn deinit(self: *CompilerHost) void {
     self.* = CompilerHost.init(self.allocator);
 }
 
+/// Release everything one evaluation left in this host, keeping its RocOps
+/// table and interpreter binding for the next evaluation.
+pub fn reset(self: *CompilerHost) void {
+    self.freeRemainingAllocations();
+    self.clearDebugMessages();
+    if (self.expect_message) |msg| self.allocator.free(msg);
+    self.expect_message = null;
+}
+
 /// Return the RocOps table used by compiler-owned evaluation.
 pub fn ops(self: *CompilerHost) *RocOps {
     if (self.roc_ops == null) {

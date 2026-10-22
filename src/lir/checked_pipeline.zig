@@ -1167,20 +1167,14 @@ pub const RuntimeValueSchemaStore = struct {
         for (self.records.items) |schema| {
             if (std.mem.eql(u8, schema.type_name, type_name)) return schema;
         }
-        if (builtin.mode == .debug) {
-            base.invariant("runtime schema invariant violated: missing record schema for {s}", .{type_name});
-        }
-        unreachable;
+        base.invariant("runtime schema invariant violated: missing record schema for {s}", .{type_name});
     }
 
     pub fn tagUnion(self: *const RuntimeValueSchemaStore, type_name: []const u8) RuntimeTagUnionSchema {
         for (self.tag_unions.items) |schema| {
             if (std.mem.eql(u8, schema.type_name, type_name)) return schema;
         }
-        if (builtin.mode == .debug) {
-            base.invariant("runtime schema invariant violated: missing tag union schema for {s}", .{type_name});
-        }
-        unreachable;
+        base.invariant("runtime schema invariant violated: missing tag union schema for {s}", .{type_name});
     }
 };
 
@@ -2358,10 +2352,7 @@ fn convertRuntimeSchemas(
 }
 
 fn checkedPipelineInvariant(comptime message: []const u8) noreturn {
-    if (builtin.mode == .debug) {
-        base.invariant("checked pipeline invariant violated: {s}", .{message});
-    }
-    unreachable;
+    base.invariant("checked pipeline invariant violated: {s}", .{message});
 }
 
 test "checked pipeline declarations are referenced" {
@@ -2947,7 +2938,7 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
         const store = &result.store;
         for (0..store.procSpecCount()) |index| {
             const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
-            const spec = store.getProcSpec(proc_id);
+            const spec = store.getProcSpecImmediate(proc_id);
             const name = store.procDebugName(proc_id) orelse "?";
             if (spec.body == null) {
                 std.debug.print("CENSUS_PROC\t{d}\t{s}\t0\t0\t{s}\n", .{ index, name, if (spec.is_static_initializer) "nobody-init" else "nobody" });

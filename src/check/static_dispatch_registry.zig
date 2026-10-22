@@ -5,7 +5,6 @@
 //! chooses the dispatcher type variable explicitly.
 
 const std = @import("std");
-const builtin_config = @import("builtin");
 const base = @import("base");
 const can = @import("can");
 const types = @import("types");
@@ -834,13 +833,10 @@ pub const MethodRegistry = struct {
 
         const module_idx = module.moduleIndex();
         if (module_idx != local_templates.module_idx) {
-            if (@import("builtin").mode == .debug) {
-                base.invariant(
-                    "checked static dispatch registry invariant violated: template lookup module {d} does not match module {d}",
-                    .{ local_templates.module_idx, module_idx },
-                );
-            }
-            unreachable;
+            base.invariant(
+                "checked static dispatch registry invariant violated: template lookup module {d} does not match module {d}",
+                .{ local_templates.module_idx, module_idx },
+            );
         }
 
         const module_env = module.moduleEnvConst();
@@ -849,13 +845,10 @@ pub const MethodRegistry = struct {
 
         for (module.methodDefEntries()) |entry| {
             const method_ident = module_env.lookupMethodIdentForMethodOwnerConst(entry.key.ownerIdent(), entry.key.methodIdent()) orelse {
-                if (@import("builtin").mode == .debug) {
-                    base.invariant(
-                        "checked static dispatch registry invariant violated: method def for owner {d} method {d} has no method ident",
-                        .{ @backingInt(entry.key.owner), entry.key.method_ident_bits },
-                    );
-                }
-                unreachable;
+                base.invariant(
+                    "checked static dispatch registry invariant violated: method def for owner {d} method {d} has no method ident",
+                    .{ @backingInt(entry.key.owner), entry.key.method_ident_bits },
+                );
             };
             const def_idx = entry.value.def_idx;
             if (unsupportedGeneratedMethodBinding(module, entry.value)) continue;
@@ -988,7 +981,9 @@ fn methodTargetCallableVar(
             const raw_node = @backingInt(binding.type_node_idx);
             const statement: CIR.Statement.Idx = @fromBackingInt(@intCast(raw_node));
             const statement_data = module.getStatement(statement);
-            if (std.meta.activeTag(statement_data) != .s_decl) unreachable;
+            if (std.meta.activeTag(statement_data) != .s_decl) {
+                base.invariant("checked static dispatch registry invariant violated: local procedure method binding is not a declaration statement", .{});
+            }
             const decl = statement_data.s_decl;
             break :blk module.exprType(decl.expr);
         },
@@ -1020,13 +1015,10 @@ fn methodBindingExpr(
 ) ?CIR.Expr.Idx {
     const raw_node = @backingInt(binding.type_node_idx);
     if (raw_node >= module.nodeCount()) {
-        if (@import("builtin").mode == .debug) {
-            base.invariant(
-                "checked static dispatch registry invariant violated: method binding node {d} is outside the module node store",
-                .{raw_node},
-            );
-        }
-        unreachable;
+        base.invariant(
+            "checked static dispatch registry invariant violated: method binding node {d} is outside the module node store",
+            .{raw_node},
+        );
     }
 
     const node_tag = module.nodeTag(binding.type_node_idx);
@@ -1075,13 +1067,10 @@ fn localProcedureTargetForMethodBinding(
 ) ?LocalProcedureMethodTarget {
     const raw_node = @backingInt(binding.type_node_idx);
     if (raw_node >= module.nodeCount()) {
-        if (@import("builtin").mode == .debug) {
-            base.invariant(
-                "checked static dispatch registry invariant violated: method binding node {d} is outside the module node store",
-                .{raw_node},
-            );
-        }
-        unreachable;
+        base.invariant(
+            "checked static dispatch registry invariant violated: method binding node {d} is outside the module node store",
+            .{raw_node},
+        );
     }
     if (module.nodeTag(binding.type_node_idx) != .statement_decl) return null;
 
@@ -1094,23 +1083,17 @@ fn localProcedureTargetForMethodBinding(
 
     const expr = checked_bodies.exprIdForSource(decl.expr) orelse return null;
     const binder = checked_bodies.patternBinderForSource(decl.pattern) orelse {
-        if (@import("builtin").mode == .debug) {
-            base.invariant(
-                "checked static dispatch registry invariant violated: local method pattern {d} has no checked binder",
-                .{@backingInt(decl.pattern)},
-            );
-        }
-        unreachable;
+        base.invariant(
+            "checked static dispatch registry invariant violated: local method pattern {d} has no checked binder",
+            .{@backingInt(decl.pattern)},
+        );
     };
 
     const context_anchor = checked_bodies.statementIdForSource(owner_statement) orelse {
-        if (@import("builtin").mode == .debug) {
-            base.invariant(
-                "checked static dispatch registry invariant violated: local method owner statement {d} has no checked statement",
-                .{@backingInt(owner_statement)},
-            );
-        }
-        unreachable;
+        base.invariant(
+            "checked static dispatch registry invariant violated: local method owner statement {d} has no checked statement",
+            .{@backingInt(owner_statement)},
+        );
     };
 
     return .{
@@ -1257,23 +1240,17 @@ fn methodOwnerForRegistryEntry(
     }
 
     const identity_hash = owner_env.contentIdentityHash() orelse {
-        if (@import("builtin").mode == .debug) {
-            base.invariant(
-                "checked static dispatch registry invariant violated: module '{s}' has no content identity",
-                .{owner_env.module_name},
-            );
-        }
-        unreachable;
+        base.invariant(
+            "checked static dispatch registry invariant violated: module '{s}' has no content identity",
+            .{owner_env.module_name},
+        );
     };
     const stmt_tag = std.meta.activeTag(owner_env.store.getStatement(owner.owner));
     if (stmt_tag != .s_nominal_decl and stmt_tag != .s_alias_decl) {
-        if (@import("builtin").mode == .debug) {
-            base.invariant(
-                "checked static dispatch registry invariant violated: method owner statement {d} is not a type declaration",
-                .{@backingInt(owner.owner)},
-            );
-        }
-        unreachable;
+        base.invariant(
+            "checked static dispatch registry invariant violated: method owner statement {d} is not a type declaration",
+            .{@backingInt(owner.owner)},
+        );
     }
     return .{ .nominal = .{
         .module = try names.internModuleIdentity(identity_hash),
@@ -1296,13 +1273,10 @@ fn methodOwnerEnvForRegistryEntry(
         if (ownerEnvIdentityMatches(candidate, owner_hash)) return candidate;
     }
 
-    if (@import("builtin").mode == .debug) {
-        base.invariant(
-            "checked static dispatch registry invariant violated: could not find owner module for receiver method on declaration {d} of module '{s}'",
-            .{ @backingInt(owner.owner), module_env.module_name },
-        );
-    }
-    unreachable;
+    base.invariant(
+        "checked static dispatch registry invariant violated: could not find owner module for receiver method on declaration {d} of module '{s}'",
+        .{ @backingInt(owner.owner), module_env.module_name },
+    );
 }
 
 fn methodOwnerIdentityHashForRegistryEntry(
@@ -1311,13 +1285,10 @@ fn methodOwnerIdentityHashForRegistryEntry(
 ) *const base.ModuleIdentity.Hash {
     const owner_identity = owner.moduleIdentity() orelse {
         return module_env.contentIdentityHash() orelse {
-            if (@import("builtin").mode == .debug) {
-                base.invariant(
-                    "checked static dispatch registry invariant violated: local module '{s}' has no content identity",
-                    .{module_env.module_name},
-                );
-            }
-            unreachable;
+            base.invariant(
+                "checked static dispatch registry invariant violated: local module '{s}' has no content identity",
+                .{module_env.module_name},
+            );
         };
     };
     return module_env.moduleIdentityHash(owner_identity);
@@ -1405,10 +1376,7 @@ fn assertMethodRegistryKeysUnique(entries: []const MethodRegistryEntry) void {
     var i: usize = 1;
     while (i < entries.len) : (i += 1) {
         if (methodKeyOrder(entries[i - 1].key, entries[i].key) != .eq) continue;
-        if (@import("builtin").mode == .debug) {
-            base.invariant("checked static dispatch registry invariant violated: duplicate method registry key", .{});
-        }
-        unreachable;
+        base.invariant("checked static dispatch registry invariant violated: duplicate method registry key", .{});
     }
 }
 
@@ -2117,16 +2085,25 @@ fn pushOperands(comptime T: type, pool: *std.ArrayList(T), allocator: Allocator,
     return artifact_serialize.appendSpan(artifact_serialize.Span, T, pool, allocator, ops);
 }
 
-fn sortedFromMap(allocator: Allocator, map: anytype) Allocator.Error![]PlanKV {
-    const out = try allocator.alloc(PlanKV, map.count());
-    errdefer allocator.free(out);
-    var it = map.iterator();
-    var i: usize = 0;
-    while (it.next()) |entry| : (i += 1) {
-        out[i] = .{ .key = @backingInt(entry.key_ptr.*), .val = @backingInt(entry.value_ptr.*) };
+/// Take `entries` as a slice sorted by key. A key recorded more than once
+/// keeps the value recorded last.
+fn sortedPlanKVs(allocator: Allocator, entries: *std.ArrayListUnmanaged(PlanKV)) Allocator.Error![]PlanKV {
+    const items = entries.items;
+    if (!std.sort.isSorted(PlanKV, items, {}, planKvLessThan)) {
+        // The sort is stable, so equal keys stay in recording order.
+        std.mem.sort(PlanKV, items, {}, planKvLessThan);
     }
-    std.mem.sort(PlanKV, out, {}, planKvLessThan);
-    return out;
+    var len: usize = 0;
+    for (items) |entry| {
+        if (len > 0 and items[len - 1].key == entry.key) {
+            items[len - 1] = entry;
+        } else {
+            items[len] = entry;
+            len += 1;
+        }
+    }
+    entries.shrinkRetainingCapacity(len);
+    return entries.toOwnedSlice(allocator);
 }
 
 /// Resolved static-dispatch plans for a checked module: the per-call-site plans, the
@@ -2230,12 +2207,14 @@ pub const StaticDispatchPlanTable = struct {
         errdefer operand_pool.deinit(allocator);
         var iter_operand_pool = std.ArrayList(IteratorDispatchOperand).empty;
         errdefer iter_operand_pool.deinit(allocator);
-        var by_expr: std.AutoHashMapUnmanaged(CIR.Expr.Idx, StaticDispatchPlanId) = .{};
-        errdefer by_expr.deinit(allocator);
-        var numeral_by_node: std.AutoHashMapUnmanaged(CIR.Node.Idx, StaticDispatchPlanId) = .{};
-        errdefer numeral_by_node.deinit(allocator);
-        var quote_by_node: std.AutoHashMapUnmanaged(CIR.Node.Idx, StaticDispatchPlanId) = .{};
-        errdefer quote_by_node.deinit(allocator);
+        // Each source node -> plan index is recorded as it is planned and
+        // ordered by key once every plan is known.
+        var by_expr: std.ArrayListUnmanaged(PlanKV) = .empty;
+        defer by_expr.deinit(allocator);
+        var numeral_by_node: std.ArrayListUnmanaged(PlanKV) = .empty;
+        defer numeral_by_node.deinit(allocator);
+        var quote_by_node: std.ArrayListUnmanaged(PlanKV) = .empty;
+        defer quote_by_node.deinit(allocator);
         var iterator_for_plans = std.ArrayList(IteratorForPlan).empty;
         errdefer iterator_for_plans.deinit(allocator);
         var generated_codec_derivations = std.ArrayList(GeneratedCodecDerivation).empty;
@@ -2258,8 +2237,8 @@ pub const StaticDispatchPlanTable = struct {
                 .rest_field = try names.internRecordFieldLabel("rest"),
             };
         }
-        var iterator_for_by_node: std.AutoHashMapUnmanaged(CIR.Node.Idx, IteratorForPlanId) = .{};
-        errdefer iterator_for_by_node.deinit(allocator);
+        var iterator_for_by_node: std.ArrayListUnmanaged(PlanKV) = .empty;
+        defer iterator_for_by_node.deinit(allocator);
 
         var constraint_index = try StaticDispatchConstraintIndex.fromModule(allocator, module, checked_bodies);
         defer constraint_index.deinit(allocator);
@@ -2279,18 +2258,12 @@ pub const StaticDispatchPlanTable = struct {
             const checked_expr_data = checked_bodies.expr(checked_expr).data;
             const idents = module.identStoreConst();
             const plan_id: StaticDispatchPlanId = @fromBackingInt(@intCast(@as(u32, @intCast(plans.items.len))));
-            const dispatch_expr_tag = std.meta.stringToEnum(DispatchExprTag, @tagName(std.meta.activeTag(expr.data))) orelse unreachable;
+            const dispatch_expr_tag = std.meta.stringToEnum(DispatchExprTag, @tagName(std.meta.activeTag(expr.data))) orelse unreachable; // the node-tag filter above admits only nodes that decode to these expression tags
             switch (dispatch_expr_tag) {
                 .e_dispatch_call => {
                     const dispatch_call = expr.data.e_dispatch_call;
                     const explicit_args = module.sliceExpr(dispatch_call.args);
-                    const args = try allocator.alloc(StaticDispatchOperand, explicit_args.len + 1);
-                    defer allocator.free(args);
-                    args[0] = .{ .checked_expr = checkedExprIdForSource(checked_bodies, dispatch_call.receiver) };
-                    for (explicit_args, 0..) |arg, i| {
-                        args[i + 1] = .{ .checked_expr = checkedExprIdForSource(checked_bodies, arg) };
-                    }
-                    const ar = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, args);
+                    const ar = try pushExprOperands(&operand_pool, allocator, checked_bodies, dispatch_call.receiver, explicit_args);
 
                     try plans.append(allocator, .{
                         .expr = checked_expr,
@@ -2311,8 +2284,10 @@ pub const StaticDispatchPlanTable = struct {
                     if (std.meta.activeTag(checked_expr_data) != .interpolation) continue;
                     const args = [_]StaticDispatchOperand{.{ .generated_interpolation_segments = checked_expr }};
                     const from_interpolation = try names.internMethodName("from_interpolation");
-                    const constraint_fn_var = interpolation.constraint_fn_var orelse unreachable;
-                    const dispatcher_var = interpolation.dispatcher_var orelse unreachable;
+                    const constraint_fn_var = interpolation.constraint_fn_var orelse
+                        base.invariant("checked static dispatch registry invariant violated: checked interpolation has no constraint function variable", .{});
+                    const dispatcher_var = interpolation.dispatcher_var orelse
+                        base.invariant("checked static dispatch registry invariant violated: checked interpolation has no dispatcher variable", .{});
                     const ar = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, &args);
 
                     try plans.append(allocator, .{
@@ -2332,9 +2307,7 @@ pub const StaticDispatchPlanTable = struct {
                 },
                 .e_type_dispatch_call => {
                     const dispatch_call = expr.data.e_type_dispatch_call;
-                    const args = try staticDispatchOperandsForSlice(allocator, checked_bodies, module.sliceExpr(dispatch_call.args));
-                    defer allocator.free(args);
-                    const ar = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, args);
+                    const ar = try pushExprOperands(&operand_pool, allocator, checked_bodies, null, module.sliceExpr(dispatch_call.args));
 
                     try plans.append(allocator, .{
                         .expr = checked_expr,
@@ -2352,9 +2325,7 @@ pub const StaticDispatchPlanTable = struct {
                 },
                 .e_method_eq => {
                     const eq = expr.data.e_method_eq;
-                    const args = try staticDispatchOperandsForSlice(allocator, checked_bodies, &.{ eq.lhs, eq.rhs });
-                    defer allocator.free(args);
-                    const ar = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, args);
+                    const ar = try pushExprOperands(&operand_pool, allocator, checked_bodies, eq.lhs, &.{eq.rhs});
 
                     try plans.append(allocator, .{
                         .expr = checked_expr,
@@ -2380,36 +2351,42 @@ pub const StaticDispatchPlanTable = struct {
                     });
                 },
             }
-            try by_expr.put(allocator, expr_idx, plan_id);
+            try by_expr.append(allocator, .{ .key = @backingInt(expr_idx), .val = @backingInt(plan_id) });
         }
 
         const module_env = module.moduleEnvConst();
         const checked_type_view = checked_types.store.view();
         var subject_scratch = @TypeOf(checked_type_view).EqualityScratch.init(allocator);
         defer subject_scratch.deinit();
+        // Roles are keyed by the type a subject denotes, so subjects
+        // spelled through different transparent aliases share a role.
+        // Canonical keys retain alias identity and cannot bucket them.
+        const GeneratedCodecRoleKey = struct {
+            method: canonical.MethodNameId,
+            has_subject: bool,
+            subject_bucket: u64,
+        };
+        const no_role_candidate = std.math.maxInt(u32);
+        const GeneratedCodecRoleCandidate = struct {
+            subject_ty: ?CheckedTypeId,
+            role: u32,
+            next: u32 = no_role_candidate,
+        };
+        // A role key's candidates, chained through `role_candidate_pool` in
+        // the order they were added.
+        const GeneratedCodecRoleChain = struct { first: u32, last: u32 };
+        var role_candidates: std.AutoHashMapUnmanaged(GeneratedCodecRoleKey, GeneratedCodecRoleChain) = .empty;
+        defer role_candidates.deinit(allocator);
+        var role_candidate_pool: std.ArrayListUnmanaged(GeneratedCodecRoleCandidate) = .empty;
+        defer role_candidate_pool.deinit(allocator);
+        var next_role_by_method = collections.DenseMap(canonical.MethodNameId, u32).init(allocator);
+        defer next_role_by_method.deinit();
         for (module_env.generated_codec_derivations.items.items) |derivation| {
             const source_calls = module_env.generated_codec_calls.items.items[derivation.calls_start..][0..derivation.calls_len];
             const calls_start: u32 = @intCast(generated_codec_calls.items.len);
-            // Roles are keyed by the type a subject denotes, so subjects
-            // spelled through different transparent aliases share a role.
-            // Canonical keys retain alias identity and cannot bucket them.
-            const GeneratedCodecRoleKey = struct {
-                method: canonical.MethodNameId,
-                has_subject: bool,
-                subject_bucket: u64,
-            };
-            const GeneratedCodecRoleCandidate = struct {
-                subject_ty: ?CheckedTypeId,
-                role: u32,
-            };
-            var role_candidates = std.AutoHashMap(GeneratedCodecRoleKey, std.ArrayListUnmanaged(GeneratedCodecRoleCandidate)).init(allocator);
-            defer {
-                var candidate_lists = role_candidates.valueIterator();
-                while (candidate_lists.next()) |list| list.deinit(allocator);
-                role_candidates.deinit();
-            }
-            var next_role_by_method = collections.DenseMap(canonical.MethodNameId, u32).init(allocator);
-            defer next_role_by_method.deinit();
+            role_candidates.clearRetainingCapacity();
+            role_candidate_pool.clearRetainingCapacity();
+            next_role_by_method.clearRetainingCapacity();
             for (source_calls) |call| {
                 const method = try names.internMethodIdent(module.identStoreConst(), @bitCast(call.method_ident));
                 const dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, @fromBackingInt(@intCast(call.dispatcher_var)));
@@ -2423,10 +2400,12 @@ pub const StaticDispatchPlanTable = struct {
                     .has_subject = subject_ty != null,
                     .subject_bucket = if (subject_ty) |subject| checked_type_view.aliasTransparentBucketKey(subject) else 0,
                 };
-                const candidates_entry = try role_candidates.getOrPut(role_key);
-                if (!candidates_entry.found_existing) candidates_entry.value_ptr.* = .empty;
+                const candidates_entry = try role_candidates.getOrPut(allocator, role_key);
+                if (!candidates_entry.found_existing) candidates_entry.value_ptr.* = .{ .first = no_role_candidate, .last = no_role_candidate };
                 var method_role: ?u32 = null;
-                for (candidates_entry.value_ptr.items) |candidate| {
+                var candidate_index = candidates_entry.value_ptr.first;
+                while (candidate_index != no_role_candidate) : (candidate_index = role_candidate_pool.items[candidate_index].next) {
+                    const candidate = role_candidate_pool.items[candidate_index];
                     if (subject_ty == null) {
                         method_role = candidate.role;
                         break;
@@ -2443,10 +2422,18 @@ pub const StaticDispatchPlanTable = struct {
                     if (!next_entry.found_existing) next_entry.value_ptr.* = 0;
                     method_role = next_entry.value_ptr.*;
                     next_entry.value_ptr.* += 1;
-                    try candidates_entry.value_ptr.append(allocator, .{
+                    const added = std.math.cast(u32, role_candidate_pool.items.len) orelse return error.OutOfMemory;
+                    try role_candidate_pool.append(allocator, .{
                         .subject_ty = subject_ty,
                         .role = method_role.?,
                     });
+                    const chain = candidates_entry.value_ptr;
+                    if (chain.last == no_role_candidate) {
+                        chain.first = added;
+                    } else {
+                        role_candidate_pool.items[chain.last].next = added;
+                    }
+                    chain.last = added;
                 }
                 try generated_codec_calls.append(allocator, .{
                     .method = method,
@@ -2484,9 +2471,7 @@ pub const StaticDispatchPlanTable = struct {
             switch (numeral_plan.dispatchResolution()) {
                 .builtin_direct, .checked_error => continue,
                 .custom_dispatch, .specialization_dispatch => {},
-                .unresolved => if (@import("builtin").mode == .debug) {
-                    base.invariant("unresolved numeral dispatch plan reached checked publication", .{});
-                } else unreachable,
+                .unresolved => base.invariant("unresolved numeral dispatch plan reached checked publication", .{}),
             }
             const node: CIR.Node.Idx = @fromBackingInt(@intCast(numeral_plan.node_idx));
             const checked_expr = checked_bodies.exprIdAtRawNode(numeral_plan.node_idx) orelse
@@ -2496,31 +2481,22 @@ pub const StaticDispatchPlanTable = struct {
             const checked_expr_tag = std.meta.activeTag(checked_expr_data);
             if (checked_expr_tag == .runtime_error) continue;
             if (checked_expr_tag != .numeral) {
-                if (@import("builtin").mode == .debug) {
-                    base.invariant(
-                        "checked static dispatch invariant violated: numeral dispatch plan {d} points at a non-numeric checked expression ({s})",
-                        .{ numeral_plan.node_idx, @tagName(checked_expr_tag) },
-                    );
-                }
-                unreachable;
+                base.invariant(
+                    "checked static dispatch invariant violated: numeral dispatch plan {d} points at a non-numeric checked expression ({s})",
+                    .{ numeral_plan.node_idx, @tagName(checked_expr_tag) },
+                );
             }
             const literal = module_env.numeralLiteralForNode(node) orelse {
-                if (@import("builtin").mode == .debug) {
-                    base.invariant(
-                        "checked static dispatch invariant violated: runtime from_numeral plan {d} has no exact literal",
-                        .{numeral_plan.node_idx},
-                    );
-                }
-                unreachable;
+                base.invariant(
+                    "checked static dispatch invariant violated: runtime from_numeral plan {d} has no exact literal",
+                    .{numeral_plan.node_idx},
+                );
             };
             if (!literal.isMaterialized()) {
-                if (@import("builtin").mode == .debug) {
-                    base.invariant(
-                        "checked static dispatch invariant violated: runtime from_numeral plan {d} has an unmaterialized literal",
-                        .{numeral_plan.node_idx},
-                    );
-                }
-                unreachable;
+                base.invariant(
+                    "checked static dispatch invariant violated: runtime from_numeral plan {d} has an unmaterialized literal",
+                    .{numeral_plan.node_idx},
+                );
             }
             var args = [_]StaticDispatchOperand{.{ .generated_numeral = literal }};
             const ar = try pushOperands(StaticDispatchOperand, &operand_pool, allocator, &args);
@@ -2541,7 +2517,7 @@ pub const StaticDispatchPlanTable = struct {
                 .target_selected_by_checking = numeral_plan.dispatchResolution() != .specialization_dispatch,
                 .literal_kind = .numeral,
             });
-            try numeral_by_node.put(allocator, node, plan_id);
+            try numeral_by_node.append(allocator, .{ .key = @backingInt(node), .val = @backingInt(plan_id) });
         }
 
         for (module_env.store.literalDispatchPlans()) |quote_plan| {
@@ -2549,9 +2525,7 @@ pub const StaticDispatchPlanTable = struct {
             switch (quote_plan.dispatchResolution()) {
                 .builtin_direct, .checked_error => continue,
                 .custom_dispatch, .specialization_dispatch => {},
-                .unresolved => if (@import("builtin").mode == .debug) {
-                    base.invariant("unresolved quote dispatch plan reached checked publication", .{});
-                } else unreachable,
+                .unresolved => base.invariant("unresolved quote dispatch plan reached checked publication", .{}),
             }
             const node: CIR.Node.Idx = @fromBackingInt(@intCast(quote_plan.node_idx));
             const checked_expr = checked_bodies.exprIdAtRawNode(quote_plan.node_idx) orelse
@@ -2561,22 +2535,16 @@ pub const StaticDispatchPlanTable = struct {
             const checked_expr_tag = std.meta.activeTag(checked_expr_data);
             if (checked_expr_tag == .runtime_error) continue;
             if (checked_expr_tag == .str or checked_expr_tag == .str_segment) {
-                if (@import("builtin").mode == .debug) {
-                    base.invariant(
-                        "checked static dispatch invariant violated: non-builtin quote target {d} lost its from_quote expression",
-                        .{quote_plan.node_idx},
-                    );
-                }
-                unreachable;
+                base.invariant(
+                    "checked static dispatch invariant violated: non-builtin quote target {d} lost its from_quote expression",
+                    .{quote_plan.node_idx},
+                );
             }
             if (checked_expr_tag != .str_from_quote) {
-                if (@import("builtin").mode == .debug) {
-                    base.invariant(
-                        "checked static dispatch invariant violated: quote dispatch plan {d} points at a non-string checked expression ({s})",
-                        .{ quote_plan.node_idx, @tagName(checked_expr_tag) },
-                    );
-                }
-                unreachable;
+                base.invariant(
+                    "checked static dispatch invariant violated: quote dispatch plan {d} points at a non-string checked expression ({s})",
+                    .{ quote_plan.node_idx, @tagName(checked_expr_tag) },
+                );
             }
             const literal = checked_expr_data.str_from_quote.literal;
             var args = [_]StaticDispatchOperand{.{ .generated_quote = literal }};
@@ -2598,14 +2566,14 @@ pub const StaticDispatchPlanTable = struct {
                 .target_selected_by_checking = quote_plan.dispatchResolution() != .specialization_dispatch,
                 .literal_kind = .quote,
             });
-            try quote_by_node.put(allocator, node, plan_id);
+            try quote_by_node.append(allocator, .{ .key = @backingInt(node), .val = @backingInt(plan_id) });
         }
 
         // Only custom/generalized literal patterns have these synthesized
         // guards. Builtin patterns produce neither a guard nor an equality plan.
         for (checked_bodies.literal_pattern_exprs.items) |literal| {
-            const source = module_env.store.literalDispatchPlanForNode(@fromBackingInt(@intCast(literal.raw_node))) orelse unreachable;
-            const context = source.patternContext(&module_env.store) orelse unreachable;
+            const source = module_env.store.literalDispatchPlanForNode(@fromBackingInt(@intCast(literal.raw_node))) orelse unreachable; // literalPatternGuard records only pattern nodes that carry a literal dispatch plan
+            const context = source.patternContext(&module_env.store) orelse unreachable; // recordLiteralDispatchPlan allocates a pattern context for every pattern node's plan
             std.debug.assert(context.equality_fn_var_plus_one != 0);
             const constraint_fn: Var = @fromBackingInt(@intCast(context.equality_fn_var_plus_one - 1));
             const args = [_]StaticDispatchOperand{
@@ -2696,23 +2664,19 @@ pub const StaticDispatchPlanTable = struct {
                     .next_fn_var = @fromBackingInt(@intCast(for_plan.next_fn_var)),
                 });
             }
-            try iterator_for_by_node.put(allocator, for_node_idx, iterator_for_id);
+            try iterator_for_by_node.append(allocator, .{ .key = @backingInt(for_node_idx), .val = @backingInt(iterator_for_id) });
         }
 
-        // Convert the construction-time hashmaps into sorted, relocatable
-        // PlanKV slices (transform D), then release the maps.
-        const by_expr_sorted = try sortedFromMap(allocator, by_expr);
+        // Order the recorded entries into sorted, relocatable PlanKV slices
+        // (transform D).
+        const by_expr_sorted = try sortedPlanKVs(allocator, &by_expr);
         errdefer allocator.free(by_expr_sorted);
-        const numeral_sorted = try sortedFromMap(allocator, numeral_by_node);
+        const numeral_sorted = try sortedPlanKVs(allocator, &numeral_by_node);
         errdefer allocator.free(numeral_sorted);
-        const quote_sorted = try sortedFromMap(allocator, quote_by_node);
+        const quote_sorted = try sortedPlanKVs(allocator, &quote_by_node);
         errdefer allocator.free(quote_sorted);
-        const iterator_for_sorted = try sortedFromMap(allocator, iterator_for_by_node);
+        const iterator_for_sorted = try sortedPlanKVs(allocator, &iterator_for_by_node);
         errdefer allocator.free(iterator_for_sorted);
-        by_expr.deinit(allocator);
-        numeral_by_node.deinit(allocator);
-        quote_by_node.deinit(allocator);
-        iterator_for_by_node.deinit(allocator);
 
         build_data.* = .{
             .plan_sources = try plan_sources.toOwnedSlice(allocator),
@@ -2748,10 +2712,7 @@ pub const StaticDispatchPlanTable = struct {
         const span = switch (node.nested) {
             .resolved => |resolved| resolved,
             .from_callable => {
-                if (builtin_config.mode == .debug) {
-                    base.invariant("callable-derived target evidence has no resolved checked-evidence span", .{});
-                }
-                unreachable;
+                base.invariant("callable-derived target evidence has no resolved checked-evidence span", .{});
             },
         };
         return self.evidence_refs[span.start .. span.start + span.len];
@@ -2761,22 +2722,13 @@ pub const StaticDispatchPlanTable = struct {
         const node = switch (call.resolution) {
             .callable => |node_id| self.evidenceNode(node_id),
             .pending => {
-                if (builtin_config.mode == .debug) {
-                    base.invariant("unlinked generated codec call had no checked evidence", .{});
-                }
-                unreachable;
+                base.invariant("unlinked generated codec call had no checked evidence", .{});
             },
             .checked_error => {
-                if (builtin_config.mode == .debug) {
-                    base.invariant("rejected generated codec call had no checked evidence", .{});
-                }
-                unreachable;
+                base.invariant("rejected generated codec call had no checked evidence", .{});
             },
             .structural => {
-                if (builtin_config.mode == .debug) {
-                    base.invariant("structural generated codec call had no callable evidence", .{});
-                }
-                unreachable;
+                base.invariant("structural generated codec call had no callable evidence", .{});
             },
         };
         return self.nestedEvidence(node);
@@ -2897,11 +2849,11 @@ pub const PlanTableBuildData = struct {
 
 const StaticDispatchConstraintIndex = struct {
     constraints: []const types.StaticDispatchConstraint = &.{},
-    by_fn_var: std.AutoHashMapUnmanaged(Var, u32) = .{},
+    by_fn_var: collections.DenseMapUnmanaged(Var, u32) = .empty,
 
     fn fromModule(allocator: Allocator, module: TypedCIR.Module, checked_bodies: anytype) Allocator.Error!StaticDispatchConstraintIndex {
         const store = module.typeStoreConst();
-        var live_fn_vars: std.AutoHashMapUnmanaged(Var, void) = .{};
+        var live_fn_vars: collections.DenseMapUnmanaged(Var, void) = .empty;
         defer live_fn_vars.deinit(allocator);
 
         var node_idx: u32 = 0;
@@ -2931,13 +2883,13 @@ const StaticDispatchConstraintIndex = struct {
         };
         errdefer index.deinit(allocator);
 
-        try index.by_fn_var.ensureTotalCapacity(allocator, @intCast(live_fn_vars.count()));
+        try index.by_fn_var.ensureTotalCapacity(allocator, live_fn_vars.count());
         for (index.constraints, 0..) |constraint, i| {
             if (!live_fn_vars.contains(constraint.fn_var)) continue;
             const entry = try index.by_fn_var.getOrPut(allocator, constraint.fn_var);
             if (entry.found_existing) {
                 const existing = index.constraints[entry.value_ptr.*];
-                if (staticDispatchConstraintsEquivalent(existing, constraint)) continue;
+                if (staticDispatchConstraintsEquivalent(store, existing, constraint)) continue;
                 if (@import("builtin").mode == .debug) {
                     base.invariant(
                         "checked static dispatch constraint invariant violated: duplicate fn_var {d}; existing idx={d} name={s} origin={s} negated={} new idx={d} name={s} origin={s} negated={}",
@@ -2973,12 +2925,13 @@ const StaticDispatchConstraintIndex = struct {
     }
 };
 
-fn staticDispatchConstraintsEquivalent(a: types.StaticDispatchConstraint, b: types.StaticDispatchConstraint) bool {
-    // origin now carries the binop-negation and literal payloads, so structural
-    // equality of origin subsumes the former separate field comparisons.
+fn staticDispatchConstraintsEquivalent(store: *const types.Store, a: types.StaticDispatchConstraint, b: types.StaticDispatchConstraint) bool {
+    // origin carries the binop-negation and literal-kind flags; a numeral's
+    // facts are compared by content, wherever each constraint's row is.
     return a.fn_name == b.fn_name and
         a.fn_var == b.fn_var and
-        std.meta.eql(a.origin, b.origin);
+        std.meta.eql(a.origin, b.origin) and
+        std.meta.eql(store.constraintNumeralInfo(a), store.constraintNumeralInfo(b));
 }
 
 fn staticDispatchResultModeForCheckedValueCall(
@@ -3074,10 +3027,7 @@ fn sourceCallableHasEqualityShape(
 fn checkedTypeIsBuiltinBool(checked_types: anytype, ty: CheckedTypeId) bool {
     const raw = @backingInt(ty);
     if (raw >= checked_types.store.payloadCount()) {
-        if (@import("builtin").mode == .debug) {
-            base.invariant("checked static dispatch invariant violated: equality return type root was outside the checked type store", .{});
-        }
-        unreachable;
+        base.invariant("checked static dispatch invariant violated: equality return type root was outside the checked type store", .{});
     }
     const payload = checked_types.store.payload(ty);
     if (std.meta.activeTag(payload) != .nominal) return false;
@@ -3153,10 +3103,7 @@ fn checkedTypeThroughAliases(checked_types: anytype, ty: CheckedTypeId) CheckedT
         const payload = checked_types.store.payload(current);
         if (std.meta.activeTag(payload) != .alias) return current;
         if (remaining == 0) {
-            if (@import("builtin").mode == .debug) {
-                base.invariant("checked static dispatch invariant violated: checked type alias chain was cyclic", .{});
-            }
-            unreachable;
+            base.invariant("checked static dispatch invariant violated: checked type alias chain was cyclic", .{});
         }
         remaining -= 1;
         current = payload.alias.backing;
@@ -3194,7 +3141,7 @@ pub fn builtinOwnerForCheckedBuiltin(builtin: anytype) BuiltinOwner {
         .f32 => .f32,
         .f64 => .f64,
         .dec => .dec,
-        .try_ => unreachable,
+        .try_ => unreachable, // every caller routes Try to its nominal owner before asking for a builtin owner
         .u8x16 => .u8x16,
         .i8x16 => .i8x16,
         .u16x8 => .u16x8,
@@ -3272,25 +3219,27 @@ fn checkedTypeIdForVar(
     var_: Var,
 ) Allocator.Error!CheckedTypeId {
     return checked_types.rootForSourceVar(module, var_) orelse {
-        if (@import("builtin").mode == .debug) {
-            base.invariant("checked static dispatch invariant violated: dispatch type root was not published", .{});
-        }
-        unreachable;
+        base.invariant("checked static dispatch invariant violated: dispatch type root was not published", .{});
     };
 }
 
-fn staticDispatchOperandsForSlice(
+/// Append one checked-expression operand per source expression, `first`
+/// (when present) before `rest`, directly to `pool`.
+fn pushExprOperands(
+    pool: *std.ArrayList(StaticDispatchOperand),
     allocator: Allocator,
     checked_bodies: anytype,
-    exprs: []const CIR.Expr.Idx,
-) Allocator.Error![]const StaticDispatchOperand {
-    if (exprs.len == 0) return &.{};
-    const out = try allocator.alloc(StaticDispatchOperand, exprs.len);
-    errdefer allocator.free(out);
-    for (exprs, 0..) |expr, i| {
-        out[i] = .{ .checked_expr = checkedExprIdForSource(checked_bodies, expr) };
-    }
-    return out;
+    first: ?CIR.Expr.Idx,
+    rest: []const CIR.Expr.Idx,
+) Allocator.Error!artifact_serialize.Span {
+    const count = rest.len + @intFromBool(first != null);
+    if (count == 0) return .{ .start = 0, .len = 0 };
+    const start = std.math.cast(u32, pool.items.len) orelse return error.OutOfMemory;
+    const len = std.math.cast(u32, count) orelse return error.OutOfMemory;
+    try pool.ensureUnusedCapacity(allocator, count);
+    if (first) |expr| pool.appendAssumeCapacity(.{ .checked_expr = checkedExprIdForSource(checked_bodies, expr) });
+    for (rest) |expr| pool.appendAssumeCapacity(.{ .checked_expr = checkedExprIdForSource(checked_bodies, expr) });
+    return .{ .start = start, .len = len };
 }
 
 fn zeroPayloadTagIdent(module: TypedCIR.Module, expr_idx: CIR.Expr.Idx) ?Ident.Idx {
@@ -3302,13 +3251,10 @@ fn zeroPayloadTagIdent(module: TypedCIR.Module, expr_idx: CIR.Expr.Idx) ?Ident.I
 
 fn checkedExprIdForSource(checked_bodies: anytype, expr: CIR.Expr.Idx) CheckedExprId {
     return checked_bodies.exprIdForSource(expr) orelse {
-        if (@import("builtin").mode == .debug) {
-            base.invariant(
-                "checked static dispatch invariant violated: dispatch expression {d} has no checked expression id",
-                .{@backingInt(expr)},
-            );
-        }
-        unreachable;
+        base.invariant(
+            "checked static dispatch invariant violated: dispatch expression {d} has no checked expression id",
+            .{@backingInt(expr)},
+        );
     };
 }
 

@@ -8,6 +8,7 @@ const std = @import("std");
 const shim_symbols = @import("builtins").shim_symbols;
 const Allocator = std.mem.Allocator;
 const roc_base = @import("base");
+const collections = @import("collections");
 const WasmLinking = @import("WasmLinking.zig");
 const StaticDataExport = @import("../dev/StaticDataExport.zig").StaticDataExport;
 const StaticDataRelocation = @import("../dev/StaticDataExport.zig").StaticDataRelocation;
@@ -412,9 +413,10 @@ pub const Export = struct {
     idx: u32,
 };
 
-/// A function body (code)
+/// A function body (code): a run of `func_body_bytes`.
 const FuncBody = struct {
-    body: []const u8,
+    start: u32,
+    len: u32,
 };
 
 /// A defined global variable (beyond the built-in __stack_pointer).
@@ -488,6 +490,8 @@ func_types: std.ArrayList(FuncType),
 func_type_results: std.ArrayList(?ValType), // parallel to func_types
 func_type_indices: std.ArrayList(u32), // func_idx -> type_idx
 func_bodies: std.ArrayList(FuncBody),
+/// The bytes of every function body in `func_bodies`.
+func_body_bytes: std.ArrayList(u8) = .empty,
 exports: std.ArrayList(Export),
 /// Function imports (indices 0..import_fn_count-1 in the function index space).
 imports: std.ArrayList(Import),
@@ -596,12 +600,8 @@ pub fn deinit(self: *Self) void {
     self.func_types.deinit(self.allocator);
     self.func_type_results.deinit(self.allocator);
     self.func_type_indices.deinit(self.allocator);
-    for (self.func_bodies.items) |fb| {
-        if (fb.body.len > 0) {
-            self.allocator.free(fb.body);
-        }
-    }
     self.func_bodies.deinit(self.allocator);
+    self.func_body_bytes.deinit(self.allocator);
     self.exports.deinit(self.allocator);
     self.imports.deinit(self.allocator);
     self.global_imports.deinit(self.allocator);
@@ -1005,16 +1005,30 @@ pub fn functionType(self: *const Self, function: FunctionIndex) u32 {
 /// Set the body of a function. Takes a global function index (as returned by addFunction).
 pub fn setFunctionBody(self: *Self, global_func_idx: u32, body: []const u8) Allocator.Error!void {
     const local_idx = global_func_idx - self.importCount();
-    const body_copy = try self.allocator.dupe(u8, body);
     // Ensure we have enough slots
     while (self.func_bodies.items.len <= local_idx) {
-        try self.func_bodies.append(self.allocator, .{ .body = &.{} });
+        try self.func_bodies.append(self.allocator, .{ .start = 0, .len = 0 });
     }
-    // Free any old body
-    if (self.func_bodies.items[local_idx].body.len > 0) {
-        self.allocator.free(self.func_bodies.items[local_idx].body);
-    }
-    self.func_bodies.items[local_idx] = .{ .body = body_copy };
+    self.func_bodies.items[local_idx] = try self.storeFuncBodyBytes(body);
+}
+
+/// Append a function body after the existing ones.
+fn appendFuncBody(self: *Self, body: []const u8) Allocator.Error!void {
+    try self.func_bodies.ensureUnusedCapacity(self.allocator, 1);
+    self.func_bodies.appendAssumeCapacity(try self.storeFuncBodyBytes(body));
+}
+
+fn storeFuncBodyBytes(self: *Self, body: []const u8) Allocator.Error!FuncBody {
+    const start = self.func_body_bytes.items.len;
+    if (body.len > std.math.maxInt(u32) - start) return error.OutOfMemory;
+    try self.func_body_bytes.appendSlice(self.allocator, body);
+    return .{ .start = @intCast(start), .len = @intCast(body.len) };
+}
+
+/// The bytes of the function body at `index` in `func_bodies`.
+pub fn funcBody(self: *const Self, index: usize) []const u8 {
+    const fb = self.func_bodies.items[index];
+    return self.func_body_bytes.items[fb.start..][0..fb.len];
 }
 
 /// Add an export.
@@ -1290,10 +1304,9 @@ fn staticDataRelocationSymbol(
         .address => .data,
         .function_pointer => .function,
     };
-    const kind_index = switch (kind) {
-        .data => data_index,
-        .function => function_index,
-        .global, .section, .event, .table => unreachable,
+    const kind_index = switch (relocation.kind) {
+        .address => data_index,
+        .function_pointer => function_index,
     };
     if (kind_index.first(relocation.target_symbol_name)) |symbol_index| {
         return SymbolIndex.fromRaw(symbol_index);
@@ -2324,30 +2337,31 @@ pub fn materializeFuncBodies(self: *Self) Allocator.Error!void {
     const defined_count = self.func_type_indices.items.len;
 
     // Clear existing func_bodies.
-    for (self.func_bodies.items) |fb| {
-        if (fb.body.len > 0) gpa.free(fb.body);
-    }
     self.func_bodies.clearRetainingCapacity();
+    self.func_body_bytes.clearRetainingCapacity();
+
+    // The bodies are the code bytes less their length prefixes, plus a fixed
+    // body per dummy.
+    const real_count = defined_count - self.dead_import_dummy_count;
+    try self.func_bodies.ensureTotalCapacity(gpa, defined_count);
+    try self.func_body_bytes.ensureTotalCapacity(gpa, self.code_bytes.items.len + self.dead_import_dummy_count * DUMMY_FUNCTION.len);
 
     // First dead_import_dummy_count entries in func_type_indices are dummies.
     for (0..self.dead_import_dummy_count) |_| {
-        const body_copy = try gpa.dupe(u8, &DUMMY_FUNCTION);
-        try self.func_bodies.append(gpa, .{ .body = body_copy });
+        try self.appendFuncBody(&DUMMY_FUNCTION);
     }
 
     // The real functions follow the dummies.
-    const real_count = defined_count - self.dead_import_dummy_count;
     for (0..real_count) |i| {
         const fn_offset = self.function_offsets.items[i];
 
         // Parse the body length from the code_bytes (LEB128 encoded at fn_offset).
         var cursor: usize = @intCast(fn_offset);
-        const body_len = readU32(self.code_bytes.items, &cursor) catch unreachable;
+        const body_len = readU32(self.code_bytes.items, &cursor) catch unreachable; // every function_offsets entry starts a body-size LEB128 that parseCodeSection read or the dead-function rebuild wrote
         const body_start: usize = cursor;
         const body_end: usize = body_start + body_len;
 
-        const body_copy = try gpa.dupe(u8, self.code_bytes.items[body_start..body_end]);
-        try self.func_bodies.append(gpa, .{ .body = body_copy });
+        try self.appendFuncBody(self.code_bytes.items[body_start..body_end]);
     }
 }
 
@@ -2737,7 +2751,7 @@ pub fn eliminateDeadCode(self: *Self, called_fns: []const bool) Allocator.Error!
         if (live_flags[global_fn_idx]) {
             // Parse body length to advance offset.
             var cursor: usize = offset;
-            const body_len = readU32(self.code_bytes.items, &cursor) catch unreachable;
+            const body_len = readU32(self.code_bytes.items, &cursor) catch unreachable; // live bodies were copied verbatim from offsets whose body-size LEB128 parseCodeSection already read
             offset = @intCast(cursor + body_len);
         } else {
             // Dummy: 1 byte LEB128 size + 3 bytes body = 4 bytes.
@@ -2823,6 +2837,18 @@ fn markRelocationDataTarget(self: *const Self, live_segments: []bool, entry: Was
     return !was_live;
 }
 
+const LiveFunctionTracer = struct {
+    live_flags: []bool,
+    /// Functions marked live whose callees are not yet traced.
+    pending: std.ArrayList(u32) = .empty,
+
+    fn mark(self: *LiveFunctionTracer, gpa: Allocator, fi: u32) Allocator.Error!void {
+        if (fi >= self.live_flags.len or self.live_flags[fi]) return;
+        self.live_flags[fi] = true;
+        try self.pending.append(gpa, fi);
+    }
+};
+
 /// Trace the call graph starting from called functions, exports, init funcs,
 /// and element section entries. Returns a bool slice where `result[fn_index]`
 /// is true if the function is reachable.
@@ -2834,10 +2860,6 @@ fn traceLiveFunctions(
 ) Allocator.Error![]bool {
     const gpa = self.allocator;
 
-    // --- Categorize relocation entries ---
-    // We iterate the relocation entries directly in the inner loop rather
-    // than copying them, to avoid needing temporary ArrayLists of anonymous structs.
-
     // Build symbol_index → function_index lookup.
     const sym_fn_indices = try gpa.alloc(u32, self.linking.symbol_table.items.len);
     defer gpa.free(sym_fn_indices);
@@ -2845,112 +2867,107 @@ fn traceLiveFunctions(
         sym_fn_indices[i] = if (sym.isFunction()) sym.index else std.math.maxInt(u32);
     }
 
-    // --- Iterative live-function tracing ---
+    // Each direct call and indirect call site, by its offset in the code
+    // bytes, so a function's sites are the run inside its body.
+    const CallSite = struct {
+        offset: u32,
+        kind: enum { direct, indirect },
+        /// The callee's symbol index, or the call's type index.
+        target: u32,
+
+        fn lessThan(_: void, a: @This(), b: @This()) bool {
+            return a.offset < b.offset;
+        }
+    };
+    var call_sites: std.ArrayList(CallSite) = .empty;
+    defer call_sites.deinit(gpa);
+    for (self.reloc_code.entries.items) |entry| {
+        switch (entry) {
+            .index => |idx| switch (idx.type_id) {
+                .function_index_leb => try call_sites.append(gpa, .{ .offset = idx.offset, .kind = .direct, .target = idx.symbol_index }),
+                .type_index_leb => try call_sites.append(gpa, .{ .offset = idx.offset, .kind = .indirect, .target = idx.symbol_index }),
+                .table_index_sleb,
+                .table_index_i32,
+                .global_index_leb,
+                .event_index_leb,
+                .table_index_rel_sleb,
+                .global_index_i32,
+                .table_number_leb,
+                => {},
+            },
+            .offset => {},
+        }
+    }
+    std.mem.sort(CallSite, call_sites.items, {}, CallSite.lessThan);
+
+    // --- Live-function tracing: each function's callees are traced once,
+    // when it is first marked live ---
     const live_flags = try gpa.alloc(bool, fn_count);
+    errdefer gpa.free(live_flags);
     @memset(live_flags, false);
-
-    const current_pass = try gpa.alloc(bool, fn_count);
-    defer gpa.free(current_pass);
-    @memset(current_pass, false);
-
-    const next_pass = try gpa.alloc(bool, fn_count);
-    defer gpa.free(next_pass);
-    @memset(next_pass, false);
+    var tracer: LiveFunctionTracer = .{ .live_flags = live_flags };
+    defer tracer.pending.deinit(gpa);
 
     // Seed with called_fns.
     for (called_fns, 0..) |is_called, i| {
-        if (is_called and i < fn_count) current_pass[i] = true;
+        if (is_called and i < fn_count) try tracer.mark(gpa, @intCast(i));
     }
 
     // Seed with exported functions.
     for (self.exports.items) |exp| {
-        if (exp.kind == .func and exp.idx < fn_count) {
-            current_pass[exp.idx] = true;
-        }
+        if (exp.kind == .func) try tracer.mark(gpa, exp.idx);
     }
 
     // Seed with init functions.
     for (self.linking.init_funcs.items) |init_fn| {
         const sym = self.linking.symbol_table.items[init_fn.symbol_index];
-        if (sym.isFunction() and sym.index < fn_count) {
-            current_pass[sym.index] = true;
-        }
+        if (sym.isFunction()) try tracer.mark(gpa, sym.index);
     }
 
     // Seed with element section entries (indirect call targets).
     for (self.table_func_indices.items) |fi| {
-        if (fi < fn_count) current_pass[fi] = true;
+        try tracer.mark(gpa, fi);
     }
 
-    // Iterate until no new functions are discovered.
-    while (true) {
-        const any_new = std.mem.findScalar(bool, current_pass, true) != null;
-        if (!any_new) break;
+    // An indirect call conservatively makes every element-section function
+    // of its type live; each type needs that only once.
+    var traced_indirect_types = collections.DenseMap(u32, void).init(gpa);
+    defer traced_indirect_types.deinit();
 
-        // Mark current pass as live.
-        for (current_pass, 0..) |is_current, i| {
-            if (is_current) live_flags[i] = true;
-        }
+    while (tracer.pending.pop()) |fi| {
+        if (fi < fn_index_min) continue;
 
-        // For each live function in this pass, find its callees.
-        for (current_pass, 0..) |is_current, fi| {
-            if (!is_current) continue;
-            if (fi < fn_index_min or fi >= fn_count) continue;
+        // Find function body byte range.
+        const offset_index = fi - fn_index_min;
+        const code_start = self.function_offsets.items[offset_index];
+        const code_end: u32 = if (offset_index + 1 < self.function_offsets.items.len)
+            self.function_offsets.items[offset_index + 1]
+        else
+            @intCast(self.code_bytes.items.len);
 
-            // Find function body byte range.
-            const offset_index = fi - fn_index_min;
-            const code_start = self.function_offsets.items[offset_index];
-            const code_end: u32 = if (offset_index + 1 < self.function_offsets.items.len)
-                self.function_offsets.items[offset_index + 1]
-            else
-                @intCast(self.code_bytes.items.len);
-
-            // Scan relocation entries within this function body.
-            for (self.reloc_code.entries.items) |entry| {
-                switch (entry) {
-                    .index => |idx| {
-                        if (idx.offset > code_start and idx.offset < code_end) {
-                            switch (idx.type_id) {
-                                .function_index_leb => {
-                                    // Direct call: mark the callee as live.
-                                    const callee = sym_fn_indices[idx.symbol_index];
-                                    if (callee < fn_count and !live_flags[callee]) {
-                                        next_pass[callee] = true;
-                                    }
-                                },
-                                .type_index_leb => {
-                                    // Indirect call: conservatively mark all element-section
-                                    // functions with matching type signature as live.
-                                    const type_idx = idx.symbol_index;
-                                    for (self.table_func_indices.items) |tfi| {
-                                        if (tfi >= fn_index_min and tfi < fn_count) {
-                                            const local = tfi - fn_index_min;
-                                            const tfi_type = self.func_type_indices.items[self.dead_import_dummy_count + local];
-                                            if (tfi_type == type_idx and !live_flags[tfi]) {
-                                                next_pass[tfi] = true;
-                                            }
-                                        }
-                                    }
-                                },
-                                .table_index_sleb,
-                                .table_index_i32,
-                                .global_index_leb,
-                                .event_index_leb,
-                                .table_index_rel_sleb,
-                                .global_index_i32,
-                                .table_number_leb,
-                                => {},
-                            }
+        // The call sites strictly inside this function body.
+        var site_index = std.sort.upperBound(CallSite, call_sites.items, code_start, struct {
+            fn order(start: u32, site: CallSite) std.math.Order {
+                return std.math.order(start, site.offset);
+            }
+        }.order);
+        while (site_index < call_sites.items.len and call_sites.items[site_index].offset < code_end) : (site_index += 1) {
+            const site = call_sites.items[site_index];
+            switch (site.kind) {
+                .direct => try tracer.mark(gpa, sym_fn_indices[site.target]),
+                .indirect => {
+                    const type_idx = site.target;
+                    if ((try traced_indirect_types.getOrPut(type_idx)).found_existing) continue;
+                    for (self.table_func_indices.items) |tfi| {
+                        if (tfi >= fn_index_min and tfi < fn_count) {
+                            const local = tfi - fn_index_min;
+                            const tfi_type = self.func_type_indices.items[self.dead_import_dummy_count + local];
+                            if (tfi_type == type_idx) try tracer.mark(gpa, tfi);
                         }
-                    },
-                    .offset => {},
-                }
+                    }
+                },
             }
         }
-
-        // Swap passes.
-        @memcpy(current_pass, next_pass);
-        @memset(next_pass, false);
     }
 
     return live_flags;
@@ -3619,11 +3636,13 @@ pub fn encodeRelocatable(self: *Self, allocator: Allocator) RelocatableEncodeErr
     try self.encodeLinkingSection(allocator, &output, symbol_encode_map);
     section_index += 1;
     if (self.reloc_code.entries.items.len > 0) {
-        try self.encodeRelocationSection(allocator, &output, "reloc.CODE", code_section_index orelse unreachable, self.reloc_code.entries.items, code_fn_count_leb_size, symbol_encode_map);
+        const code_index = code_section_index orelse roc_base.invariant("WASM module invariant violated: reloc.CODE has {d} entries but the module encodes no code section", .{self.reloc_code.entries.items.len});
+        try self.encodeRelocationSection(allocator, &output, "reloc.CODE", code_index, self.reloc_code.entries.items, code_fn_count_leb_size, symbol_encode_map);
         section_index += 1;
     }
     if (self.reloc_data.entries.items.len > 0) {
-        try self.encodeRelocationSection(allocator, &output, "reloc.DATA", data_section_index orelse unreachable, self.reloc_data.entries.items, 0, symbol_encode_map);
+        const data_index = data_section_index orelse roc_base.invariant("WASM module invariant violated: reloc.DATA has {d} entries but the module encodes no data section", .{self.reloc_data.entries.items.len});
+        try self.encodeRelocationSection(allocator, &output, "reloc.DATA", data_index, self.reloc_data.entries.items, 0, symbol_encode_map);
         section_index += 1;
     }
 
@@ -4079,9 +4098,10 @@ fn encodeCodeSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) Al
     defer section_data.deinit(gpa);
 
     try leb128WriteU32(gpa, &section_data, @intCast(self.func_bodies.items.len));
-    for (self.func_bodies.items) |fb| {
-        try leb128WriteU32(gpa, &section_data, @intCast(fb.body.len));
-        try section_data.appendSlice(gpa, fb.body);
+    for (0..self.func_bodies.items.len) |i| {
+        const body = self.funcBody(i);
+        try leb128WriteU32(gpa, &section_data, @intCast(body.len));
+        try section_data.appendSlice(gpa, body);
     }
 
     try output.append(gpa, @backingInt(SectionId.code_section));
@@ -4792,7 +4812,7 @@ test "preload—parses reloc.CODE section entries" {
             try std.testing.expectEqual(@as(u32, 1), idx.offset);
             try std.testing.expectEqual(@as(u32, 0), idx.symbol_index);
         },
-        .offset => unreachable,
+        .offset => return error.TestUnexpectedResult,
     }
 }
 
@@ -6099,8 +6119,8 @@ test "parseElementSection_—parses function indices into table_func_indices" {
     try source.func_type_indices.append(allocator, 0); // fn 2
 
     // Minimal function bodies
-    try source.func_bodies.append(allocator, .{ .body = try allocator.dupe(u8, &.{ 0x00, Op.end }) });
-    try source.func_bodies.append(allocator, .{ .body = try allocator.dupe(u8, &.{ 0x00, Op.end }) });
+    try source.appendFuncBody(&.{ 0x00, Op.end });
+    try source.appendFuncBody(&.{ 0x00, Op.end });
 
     _ = try source.addTableElement(1); // table idx 0 → fn 1
     _ = try source.addTableElement(2); // table idx 1 → fn 2
@@ -6369,7 +6389,7 @@ test "materializeFuncBodies—produces correct function bodies from code_bytes" 
     try std.testing.expectEqual(@as(usize, 1), module.func_bodies.items.len);
 
     // The body should be 8 bytes: [0x00 (locals), Op.call, 5 bytes LEB128, Op.end]
-    try std.testing.expectEqual(@as(usize, 8), module.func_bodies.items[0].body.len);
+    try std.testing.expectEqual(@as(usize, 8), module.funcBody(0).len);
 }
 
 test "materializeFuncBodies—includes dummy functions for dead imports" {
@@ -6387,7 +6407,7 @@ test "materializeFuncBodies—includes dummy functions for dead imports" {
     try std.testing.expectEqual(@as(usize, 3), module.func_bodies.items.len);
 
     // First should be the dummy (unreachable + end)
-    try std.testing.expectEqualSlices(u8, &DUMMY_FUNCTION, module.func_bodies.items[0].body);
+    try std.testing.expectEqualSlices(u8, &DUMMY_FUNCTION, module.funcBody(0));
 }
 
 test "verifyNoBuiltinImports—passes when only RocOps imports remain" {
@@ -7131,8 +7151,8 @@ test "eliminateDeadCode—exported function and its callees are preserved" {
     // Check that main_fn and helper_fn bodies are NOT dummy.
     const dummy_count = module.dead_import_dummy_count;
     // main_fn is at func_type_indices[dummy_count + 0], helper_fn at [dummy_count + 1]
-    const main_body = module.func_bodies.items[dummy_count + 0].body;
-    const helper_body = module.func_bodies.items[dummy_count + 1].body;
+    const main_body = module.funcBody(dummy_count + 0);
+    const helper_body = module.funcBody(dummy_count + 1);
 
     // Live bodies should be longer than the 3-byte dummy.
     try std.testing.expect(main_body.len > DUMMY_FUNCTION.len);
@@ -7152,7 +7172,7 @@ test "eliminateDeadCode—unreachable function body replaced with unreachable st
     // dead_fn (5) is not exported and not called by any live function.
     // Its body should be the dummy stub.
     const dummy_count = module.dead_import_dummy_count;
-    const dead_body = module.func_bodies.items[dummy_count + 2].body;
+    const dead_body = module.funcBody(dummy_count + 2);
     try std.testing.expectEqualSlices(u8, &DUMMY_FUNCTION, dead_body);
 }
 
@@ -7218,7 +7238,7 @@ test "eliminateDeadCode—indirect call targets (element section) preserved" {
 
     // dead_fn should now be live (its body is NOT the dummy).
     const dummy_count = module.dead_import_dummy_count;
-    const dead_body = module.func_bodies.items[dummy_count + 2].body;
+    const dead_body = module.funcBody(dummy_count + 2);
     try std.testing.expect(dead_body.len > DUMMY_FUNCTION.len);
 }
 
@@ -7276,12 +7296,12 @@ test "eliminateDeadCode—init functions preserved" {
 
     // dead_fn (index 5, third defined function) should be live.
     const dummy_count = module.dead_import_dummy_count;
-    const init_body = module.func_bodies.items[dummy_count + 2].body;
+    const init_body = module.funcBody(dummy_count + 2);
     try std.testing.expect(init_body.len > DUMMY_FUNCTION.len);
 
     // main_fn and helper_fn should now be dead (no export, no callers).
-    const main_body = module.func_bodies.items[dummy_count + 0].body;
-    const helper_body = module.func_bodies.items[dummy_count + 1].body;
+    const main_body = module.funcBody(dummy_count + 0);
+    const helper_body = module.funcBody(dummy_count + 1);
     try std.testing.expectEqualSlices(u8, &DUMMY_FUNCTION, main_body);
     try std.testing.expectEqualSlices(u8, &DUMMY_FUNCTION, helper_body);
 }
@@ -7322,7 +7342,7 @@ test "eliminateDeadCode—call_indirect conservatively keeps matching-signature 
     // dead_fn (type 1) is in element section AND there's a call_indirect
     // with matching type 1 in a live function → should be live.
     const dummy_count = module.dead_import_dummy_count;
-    const dead_body = module.func_bodies.items[dummy_count + 2].body;
+    const dead_body = module.funcBody(dummy_count + 2);
     try std.testing.expect(dead_body.len > DUMMY_FUNCTION.len);
 }
 
@@ -7453,7 +7473,7 @@ test "encode—output is valid WASM (magic, version, section ordering)" {
 
         // Read section size (LEB128)
         var cursor: usize = pos;
-        const section_size = readU32(output, &cursor) catch unreachable;
+        const section_size = try readU32(output, &cursor);
         pos = cursor + section_size;
     }
 
@@ -7477,7 +7497,7 @@ test "encode—code section function count includes dummies" {
         const section_id = output[pos];
         pos += 1;
         var cursor: usize = pos;
-        const section_size = readU32(output, &cursor) catch unreachable;
+        const section_size = try readU32(output, &cursor);
         if (section_id == @backingInt(SectionId.code_section)) {
             code_section_start = cursor;
             break;
@@ -7489,7 +7509,7 @@ test "encode—code section function count includes dummies" {
 
     // Read function count from the code section
     var cursor = code_section_start.?;
-    const func_count = readU32(output, &cursor) catch unreachable;
+    const func_count = try readU32(output, &cursor);
 
     // Should be dummies (1) + real functions (2) = 3
     try std.testing.expectEqual(@as(u32, 3), func_count);
@@ -7511,10 +7531,10 @@ test "encode—dummy functions prepended before real functions in code section" 
         const section_id = output[pos];
         pos += 1;
         var cursor: usize = pos;
-        const section_size = readU32(output, &cursor) catch unreachable;
+        const section_size = try readU32(output, &cursor);
         if (section_id == @backingInt(SectionId.code_section)) {
             // Skip the function count
-            _ = readU32(output, &cursor) catch unreachable;
+            _ = try readU32(output, &cursor);
             code_body_start = cursor;
             break;
         }
@@ -7525,13 +7545,13 @@ test "encode—dummy functions prepended before real functions in code section" 
     var cursor = code_body_start.?;
 
     // First function should be the dummy: body size = 3, body = DUMMY_FUNCTION
-    const dummy_size = readU32(output, &cursor) catch unreachable;
+    const dummy_size = try readU32(output, &cursor);
     try std.testing.expectEqual(@as(u32, DUMMY_FUNCTION.len), dummy_size);
     try std.testing.expectEqualSlices(u8, &DUMMY_FUNCTION, output[cursor .. cursor + dummy_size]);
     cursor += dummy_size;
 
     // Second function (main): body size = 3, body = [0x00, nop, end]
-    const main_size = readU32(output, &cursor) catch unreachable;
+    const main_size = try readU32(output, &cursor);
     try std.testing.expectEqual(@as(u32, 3), main_size);
     try std.testing.expectEqual(@as(u8, 0x00), output[cursor]); // no locals
     try std.testing.expectEqual(Op.nop, output[cursor + 1]);
@@ -7539,7 +7559,7 @@ test "encode—dummy functions prepended before real functions in code section" 
     cursor += main_size;
 
     // Third function (helper): body size = 4, body = [0x00, nop, nop, end]
-    const helper_size = readU32(output, &cursor) catch unreachable;
+    const helper_size = try readU32(output, &cursor);
     try std.testing.expectEqual(@as(u32, 4), helper_size);
     try std.testing.expectEqual(@as(u8, 0x00), output[cursor]); // no locals
     try std.testing.expectEqual(Op.nop, output[cursor + 1]);
@@ -7565,12 +7585,12 @@ test "encode—linking section NOT present in output" {
         const section_id = output[pos];
         pos += 1;
         var cursor: usize = pos;
-        const section_size = readU32(output, &cursor) catch unreachable;
+        const section_size = try readU32(output, &cursor);
         const section_end = cursor + section_size;
 
         if (section_id == @backingInt(SectionId.custom_section)) {
             // Read custom section name
-            const name_len = readU32(output, &cursor) catch unreachable;
+            const name_len = try readU32(output, &cursor);
             const name = output[cursor .. cursor + name_len];
             try std.testing.expect(!std.mem.eql(u8, name, "linking"));
         }
@@ -7597,12 +7617,12 @@ test "encode—reloc.CODE section NOT present in output" {
         const section_id = output[pos];
         pos += 1;
         var cursor: usize = pos;
-        const section_size = readU32(output, &cursor) catch unreachable;
+        const section_size = try readU32(output, &cursor);
         const section_end = cursor + section_size;
 
         if (section_id == @backingInt(SectionId.custom_section)) {
             // Read custom section name
-            const name_len = readU32(output, &cursor) catch unreachable;
+            const name_len = try readU32(output, &cursor);
             const name = output[cursor .. cursor + name_len];
             try std.testing.expect(!std.mem.eql(u8, name, "reloc.CODE"));
         }

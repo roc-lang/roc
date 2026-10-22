@@ -186,6 +186,10 @@ const ParsedArgs = struct {
     build_args: []const []const u8,
     selection: Selection,
     skip_build: bool,
+    /// The runner image `build-ci` ran on, as `--minici-build-runner-image`
+    /// states it (CI reads it from `minici-build-runner-image` in the build
+    /// artifact). Null when the build ran here or nothing recorded its image.
+    build_runner_image: ?[]const u8 = null,
     shard: ?Shard = null,
     /// The lane whose jobs run: the chosen shard's lane, or the one named by
     /// `--minici-lane`. Null runs every selected job.
@@ -250,6 +254,7 @@ const jobs = [_]Job{
     .{ .name = "run-check-semantic-audit", .placement = .source },
     .{ .name = "run-check-postcheck-architecture", .placement = .source },
     .{ .name = "run-check-panic", .placement = .source },
+    .{ .name = "run-check-unreachable-rationale", .placement = .source },
     .{ .name = "run-check-cli-global-stdio", .placement = .source },
     .{ .name = "run-check-test-wiring" },
     .{ .name = "run-check-builtin-format", .placement = .primary_host },
@@ -321,6 +326,9 @@ fn printSelectionUsage() void {
         \\  --minici-shard <name> execute one CI shard (see `shards` in src/build/minici.zig)
         \\  --minici-lane <lane>  execute every job one lane runs (source, primary, or secondary)
         \\  --minici-skip-build   assume `build-ci` already ran and run selected jobs only
+        \\  --minici-build-runner-image <image>
+        \\                        the runner image `build-ci` ran on (needs --minici-skip-build); the
+        \\                        cache-reuse canary is not enforced on a different image
         \\  --minici-verify-workflows
         \\                        check that the CI files in `workflows` run MiniCI as declared, then exit
         \\
@@ -485,6 +493,7 @@ fn parseMiniArgs(allocator: std.mem.Allocator, args: []const []const u8) !Parsed
     errdefer build_args.deinit(allocator);
     var selection = Selection{};
     var skip_build = false;
+    var build_runner_image: ?[]const u8 = null;
     var shard: ?Shard = null;
     var lane: ?Lane = null;
     var verify_workflows = false;
@@ -494,6 +503,12 @@ fn parseMiniArgs(allocator: std.mem.Allocator, args: []const []const u8) !Parsed
         const arg = args[i];
         if (std.mem.eql(u8, arg, "--minici-skip-build")) {
             skip_build = true;
+        } else if (try optionValue(args, &i, "--minici-build-runner-image")) |value| {
+            if (build_runner_image != null) {
+                printSelectionConflict("conflicting option `{s}`; use --minici-build-runner-image once", arg);
+                return error.InvalidMiniCiArgument;
+            }
+            build_runner_image = value;
         } else if (try optionValue(args, &i, "--minici-from")) |value| {
             try rejectRangeWithShard(shard, arg);
             try setSelectionFrom(&selection, value, arg);
@@ -520,11 +535,18 @@ fn parseMiniArgs(allocator: std.mem.Allocator, args: []const []const u8) !Parsed
         }
     }
 
+    if (build_runner_image != null and !skip_build) {
+        std.debug.print("MiniCI argument error: `--minici-build-runner-image` describes the job that ran `build-ci`, so it needs `--minici-skip-build`\n", .{});
+        printSelectionUsage();
+        return error.InvalidMiniCiArgument;
+    }
+
     return .{
         .zig_exe = zig_exe,
         .build_args = try build_args.toOwnedSlice(allocator),
         .selection = if (shard) |chosen| chosen.selection else selection,
         .skip_build = skip_build,
+        .build_runner_image = build_runner_image,
         .shard = shard,
         .lane = if (shard) |chosen| chosen.lane else lane,
         .verify_workflows = verify_workflows,
@@ -876,6 +898,52 @@ fn buildCiPrecedesPhases(parsed_args: ParsedArgs) bool {
     return shard.lane.needsBuildCi();
 }
 
+/// Whether a phase that compiles what `build-ci` builds fails the cache-reuse
+/// canary, and why not when it does not.
+const CacheReuseEnforcement = union(enum) {
+    /// `build-ci` ran before the phases on this same machine image, so
+    /// everything it built is reusable here and a phase that compiles it fails.
+    enforced,
+    /// No `build-ci` ran before the phases: the source lane's checks build
+    /// their own tools.
+    no_build_ci,
+    /// `build-ci` ran on another runner image than the phases. Its cache
+    /// recorded that image's system headers and libraries, which this
+    /// machine's differ from, so every compile step that reads them misses
+    /// for a reason that is not build.zig's. Holds both images.
+    runner_image_differs: struct { built_on: []const u8, running_on: []const u8 },
+
+    fn isEnforced(self: @This()) bool {
+        return self == .enforced;
+    }
+};
+
+/// The hosted runner image this process runs on, `ImageOS/ImageVersion` as
+/// GitHub's runners export them (`ubuntu24/20261012.601`), in the form
+/// `minici-build-runner-image` records for the build job. Null off a hosted
+/// runner, where neither variable exists.
+fn runnerImage(allocator: std.mem.Allocator, environ_map: *const std.process.Environ.Map) std.mem.Allocator.Error!?[]const u8 {
+    const os = environ_map.get("ImageOS") orelse return null;
+    const version = environ_map.get("ImageVersion") orelse return null;
+    return try std.fmt.allocPrint(allocator, "{s}/{s}", .{ os, version });
+}
+
+/// Decides the canary's enforcement for this invocation: off when no
+/// `build-ci` precedes the phases, off when `--minici-build-runner-image`
+/// names an image other than this machine's, and on otherwise. An invocation
+/// that states no build image runs where `build-ci` ran.
+fn cacheReuseEnforcement(
+    allocator: std.mem.Allocator,
+    parsed_args: ParsedArgs,
+    environ_map: *const std.process.Environ.Map,
+) std.mem.Allocator.Error!CacheReuseEnforcement {
+    if (!buildCiPrecedesPhases(parsed_args)) return .no_build_ci;
+    const built_on = parsed_args.build_runner_image orelse return .enforced;
+    const running_on = (try runnerImage(allocator, environ_map)) orelse "none (no ImageOS/ImageVersion in this environment)";
+    if (std.mem.eql(u8, built_on, running_on)) return .enforced;
+    return .{ .runner_image_differs = .{ .built_on = built_on, .running_on = running_on } };
+}
+
 /// Whether `name` is one of `names`, compared exactly.
 fn containsName(names: []const []const u8, name: []const u8) bool {
     for (names) |candidate| {
@@ -979,10 +1047,9 @@ fn writeProgressPrefix(writer: *std.Io.Writer, progress: Progress) std.Io.Writer
 }
 
 fn printProgressPrefix(progress: Progress) void {
-    // Two 20-digit numbers, up to 20 bytes of padding, and the fixed text.
     var buf: [96]u8 = undefined;
     var writer = std.Io.Writer.fixed(&buf);
-    writeProgressPrefix(&writer, progress) catch unreachable;
+    writeProgressPrefix(&writer, progress) catch unreachable; // buf fits two 20-digit numbers, up to 20 bytes of padding, and the fixed text
     std.debug.print("{s}", .{writer.buffered()});
 }
 
@@ -1368,10 +1435,11 @@ fn appendCacheReuseFailure(out: *std.ArrayList(u8), allocator: std.mem.Allocator
 fn appendCacheReuseSummary(
     out: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
-    enforced: bool,
+    enforcement: CacheReuseEnforcement,
     build_result: CommandResult,
     results: []const CommandResult,
 ) !void {
+    const enforced = enforcement.isEnforced();
     var measured: usize = 0;
     var reused: usize = 0;
     var compiled: usize = 0;
@@ -1403,10 +1471,14 @@ fn appendCacheReuseSummary(
     } else if (measured == 0) {
         try out.appendSlice(allocator, "no run phase was measured\n");
         return;
-    } else if (enforced) {
-        try out.appendSlice(allocator, "ok");
-    } else {
-        try out.appendSlice(allocator, "not enforced (no `build-ci` before these phases)");
+    } else switch (enforcement) {
+        .enforced => try out.appendSlice(allocator, "ok"),
+        .no_build_ci => try out.appendSlice(allocator, "not enforced (no `build-ci` before these phases)"),
+        .runner_image_differs => |images| try out.print(
+            allocator,
+            "not enforced (`build-ci` ran on runner image {s} and these phases on {s}, whose system headers and libraries differ)",
+            .{ images.built_on, images.running_on },
+        ),
     }
     try out.print(
         allocator,
@@ -1438,7 +1510,7 @@ fn appendCacheReuseSummary(
 fn printSummary(
     allocator: std.mem.Allocator,
     total_phases: usize,
-    cache_reuse_enforced: bool,
+    cache_reuse_enforced: CacheReuseEnforcement,
     build_result: CommandResult,
     results: []const CommandResult,
     wall_ns: u64,
@@ -1702,7 +1774,7 @@ fn writeReportJson(
     allocator: std.mem.Allocator,
     io: std.Io,
     run_started_unix_ms: u64,
-    cache_reuse_enforced: bool,
+    cache_reuse_enforced: CacheReuseEnforcement,
     build_result: CommandResult,
     results: []const CommandResult,
 ) !void {
@@ -1793,19 +1865,33 @@ fn appendScriptJsonBytes(out: *std.ArrayList(u8), allocator: std.mem.Allocator, 
 
 /// Appends the report object that `report.json` holds and `index.html` embeds.
 /// Schema version 2 added `cache_reuse_enforced`, and `compile_work` and
-/// `cache_reuse_failure` on `build_ci` and on every job.
+/// `cache_reuse_failure` on `build_ci` and on every job. Version 3 added
+/// `cache_reuse_not_enforced`: null when enforced, otherwise the reason and,
+/// for `runner_image_differs`, both images.
 fn appendReportJsonObject(
     out: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
     run_started_unix_ms: u64,
-    cache_reuse_enforced: bool,
+    cache_reuse_enforced: CacheReuseEnforcement,
     build_result: CommandResult,
     results: []const CommandResult,
 ) !void {
-    try out.appendSlice(allocator, "{\n  \"schema_version\": 2,\n  \"run_started_unix_ms\": ");
+    try out.appendSlice(allocator, "{\n  \"schema_version\": 3,\n  \"run_started_unix_ms\": ");
     try appendU64(out, allocator, run_started_unix_ms);
     try out.appendSlice(allocator, ",\n  \"cache_reuse_enforced\": ");
-    try out.appendSlice(allocator, if (cache_reuse_enforced) "true" else "false");
+    try out.appendSlice(allocator, if (cache_reuse_enforced.isEnforced()) "true" else "false");
+    try out.appendSlice(allocator, ",\n  \"cache_reuse_not_enforced\": ");
+    switch (cache_reuse_enforced) {
+        .enforced => try out.appendSlice(allocator, "null"),
+        .no_build_ci => try out.appendSlice(allocator, "{\"reason\": \"no_build_ci\"}"),
+        .runner_image_differs => |images| {
+            try out.appendSlice(allocator, "{\"reason\": \"runner_image_differs\", \"built_on\": ");
+            try appendJsonString(out, allocator, images.built_on);
+            try out.appendSlice(allocator, ", \"running_on\": ");
+            try appendJsonString(out, allocator, images.running_on);
+            try out.appendSlice(allocator, "}");
+        },
+    }
     try out.appendSlice(allocator, ",\n  \"build_ci\": ");
     try appendResultJson(out, allocator, build_result);
     try out.appendSlice(allocator, ",\n  \"jobs\": [\n");
@@ -1845,7 +1931,7 @@ fn writeHtml(
     allocator: std.mem.Allocator,
     io: std.Io,
     run_started_unix_ms: u64,
-    cache_reuse_enforced: bool,
+    cache_reuse_enforced: CacheReuseEnforcement,
     build_result: CommandResult,
     results: []const CommandResult,
 ) !void {
@@ -2451,7 +2537,7 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
     const lane = parsed_args.lane;
-    const cache_reuse_enforced = buildCiPrecedesPhases(parsed_args);
+    const cache_reuse_enforced = try cacheReuseEnforcement(allocator, parsed_args, init.environ_map);
     const selected_jobs = resolveSelection(parsed_args.selection) catch |err| {
         printSelectionError(parsed_args.selection, err);
         printSelectionUsage();
@@ -2538,7 +2624,7 @@ pub fn main(init: std.process.Init) !void {
         // fails the run at the end, with its own exit status; the remaining
         // phases still run, so one run reports every such phase. A job with
         // build options of its own has no `build-ci` outputs to reuse.
-        const compile_expectation: CompileExpectation = if (cache_reuse_enforced and !result.own_configuration)
+        const compile_expectation: CompileExpectation = if (cache_reuse_enforced.isEnforced() and !result.own_configuration)
             .{ .only = job.expected_compiles }
         else
             .unrestricted;
@@ -3646,6 +3732,94 @@ test "cache reuse is enforced whenever build-ci precedes the phases" {
     }
 }
 
+test "cache reuse is enforced only on the runner image build-ci ran on" {
+    var same = std.process.Environ.Map.init(std.testing.allocator);
+    defer same.deinit();
+    try same.put("ImageOS", "ubuntu24");
+    try same.put("ImageVersion", "20261012.601");
+    var other = std.process.Environ.Map.init(std.testing.allocator);
+    defer other.deinit();
+    try other.put("ImageOS", "ubuntu24");
+    try other.put("ImageVersion", "20261018.339.1");
+    var none = std.process.Environ.Map.init(std.testing.allocator);
+    defer none.deinit();
+
+    const shard_args = [_][]const u8{ "minici", "zig", "--minici-skip-build", "--minici-build-runner-image", "ubuntu24/20261012.601", "--minici-shard", "linux-core" };
+    const parsed = try parseMiniArgs(std.testing.allocator, &shard_args);
+    defer std.testing.allocator.free(parsed.build_args);
+    try std.testing.expectEqualStrings("ubuntu24/20261012.601", parsed.build_runner_image.?);
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    try std.testing.expectEqual(CacheReuseEnforcement.enforced, try cacheReuseEnforcement(arena.allocator(), parsed, &same));
+
+    const differs = try cacheReuseEnforcement(arena.allocator(), parsed, &other);
+    try std.testing.expectEqualStrings("ubuntu24/20261012.601", differs.runner_image_differs.built_on);
+    try std.testing.expectEqualStrings("ubuntu24/20261018.339.1", differs.runner_image_differs.running_on);
+
+    // Off a hosted runner nothing names this machine's image, which is as
+    // different from the recorded one as another image is.
+    const unnamed = try cacheReuseEnforcement(arena.allocator(), parsed, &none);
+    try std.testing.expectEqualStrings("none (no ImageOS/ImageVersion in this environment)", unnamed.runner_image_differs.running_on);
+
+    // Without a recorded image, `build-ci` ran here: enforced on any machine.
+    const local_args = [_][]const u8{ "minici", "zig", "--minici-skip-build", "--minici-shard", "linux-core" };
+    const local = try parseMiniArgs(std.testing.allocator, &local_args);
+    defer std.testing.allocator.free(local.build_args);
+    try std.testing.expectEqual(CacheReuseEnforcement.enforced, try cacheReuseEnforcement(arena.allocator(), local, &other));
+
+    // The source lane has no `build-ci` to compare images for.
+    const source_args = [_][]const u8{ "minici", "zig", "--minici-skip-build", "--minici-build-runner-image", "ubuntu24/20261012.601", "--minici-shard", "source" };
+    const source = try parseMiniArgs(std.testing.allocator, &source_args);
+    defer std.testing.allocator.free(source.build_args);
+    try std.testing.expectEqual(CacheReuseEnforcement.no_build_ci, try cacheReuseEnforcement(arena.allocator(), source, &other));
+}
+
+test "the build runner image option needs the build to have run elsewhere" {
+    try std.testing.expectError(
+        error.InvalidMiniCiArgument,
+        parseMiniArgs(std.testing.allocator, &.{ "minici", "zig", "--minici-build-runner-image", "ubuntu24/20261012.601", "--minici-shard", "linux-core" }),
+    );
+    try std.testing.expectError(
+        error.InvalidMiniCiArgument,
+        parseMiniArgs(std.testing.allocator, &.{ "minici", "zig", "--minici-skip-build", "--minici-build-runner-image", "a", "--minici-build-runner-image", "b" }),
+    );
+}
+
+test "appendCacheReuseSummary explains compiles on another runner image" {
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(std.testing.allocator);
+
+    const results = [_]CommandResult{
+        measuredResult("run-test-eval", "pass", 16, &.{"compile lib zstd debug native-native-musl"}),
+    };
+    const enforcement: CacheReuseEnforcement = .{ .runner_image_differs = .{ .built_on = "ubuntu24/20261012.601", .running_on = "ubuntu24/20261018.339.1" } };
+    try appendCacheReuseSummary(&out, std.testing.allocator, enforcement, testResult("skip", 1), &results);
+    try std.testing.expectEqualStrings(
+        "MiniCI cache reuse: not enforced (`build-ci` ran on runner image ubuntu24/20261012.601 and these phases on ubuntu24/20261018.339.1, " ++
+            "whose system headers and libraries differ); 1 run phase measured, 16 compile steps reused, 1 compiled\n",
+        out.items,
+    );
+}
+
+test "report.json names the runner images when they keep the canary from being enforced" {
+    var out = std.ArrayList(u8).empty;
+    defer out.deinit(std.testing.allocator);
+
+    const enforcement: CacheReuseEnforcement = .{ .runner_image_differs = .{ .built_on = "ubuntu24/20261012.601", .running_on = "ubuntu24/20261018.339.1" } };
+    try appendReportJsonObject(&out, std.testing.allocator, 1, enforcement, testResult("skip", 1), &.{});
+    try std.testing.expect(std.mem.find(u8, out.items, "\"cache_reuse_enforced\": false,") != null);
+    try std.testing.expect(std.mem.find(
+        u8,
+        out.items,
+        "\"cache_reuse_not_enforced\": {\"reason\": \"runner_image_differs\", \"built_on\": \"ubuntu24/20261012.601\", \"running_on\": \"ubuntu24/20261018.339.1\"},",
+    ) != null);
+
+    out.clearRetainingCapacity();
+    try appendReportJsonObject(&out, std.testing.allocator, 1, .no_build_ci, testResult("skip", 1), &.{});
+    try std.testing.expect(std.mem.find(u8, out.items, "\"cache_reuse_not_enforced\": {\"reason\": \"no_build_ci\"},") != null);
+}
+
 test "appendCompileWorkReport lists the compiled steps under the result line" {
     var out = std.ArrayList(u8).empty;
     defer out.deinit(std.testing.allocator);
@@ -3694,14 +3868,14 @@ test "appendCacheReuseSummary reports a run that reused everything" {
         testResult("skip", 1),
         measuredResult("run-check-simd-codegen", "pass", 210, &.{}),
     };
-    try appendCacheReuseSummary(&out, std.testing.allocator, true, testResult("skip", 1), &results);
+    try appendCacheReuseSummary(&out, std.testing.allocator, .enforced, testResult("skip", 1), &results);
     try std.testing.expectEqualStrings(
         "MiniCI cache reuse: ok; 2 run phases measured, 293 compile steps reused, 0 compiled\n",
         out.items,
     );
 
     out.clearRetainingCapacity();
-    try appendCacheReuseSummary(&out, std.testing.allocator, true, testResult("fail", 1), &.{});
+    try appendCacheReuseSummary(&out, std.testing.allocator, .enforced, testResult("fail", 1), &.{});
     try std.testing.expectEqualStrings("MiniCI cache reuse: no run phase was measured\n", out.items);
 }
 
@@ -3720,7 +3894,7 @@ test "appendCacheReuseSummary keeps a job's own configuration out of the reuse t
         measuredResult("run-check-test-wiring", "pass", 83, &.{}),
         own,
     };
-    try appendCacheReuseSummary(&out, std.testing.allocator, true, testResult("skip", 1), &results);
+    try appendCacheReuseSummary(&out, std.testing.allocator, .enforced, testResult("skip", 1), &results);
     try std.testing.expectEqualStrings(
         \\MiniCI cache reuse: ok; 1 run phase measured, 83 compile steps reused, 0 compiled
         \\  Not counted above: 2 compile steps in jobs that build a configuration of their own.
@@ -3757,7 +3931,7 @@ test "appendCacheReuseSummary names each phase that did not reuse its cache" {
     silent.cache_reuse_failure = .missing_summary;
     const results = [_]CommandResult{ wiring, measuredResult("run-check-simd-codegen", "pass", 210, &.{}), silent };
 
-    try appendCacheReuseSummary(&out, std.testing.allocator, true, testResult("skip", 1), &results);
+    try appendCacheReuseSummary(&out, std.testing.allocator, .enforced, testResult("skip", 1), &results);
     try std.testing.expectEqualStrings(
         \\MiniCI cache reuse: FAILED in 2 phases; 2 run phases measured, 264 compile steps reused, 2 compiled
         \\  `run-check-test-wiring` compiled 2 steps that `build-ci` should have built:
@@ -3785,7 +3959,7 @@ test "appendCacheReuseSummary does not flag compiles in the lane without build-c
     const results = [_]CommandResult{
         measuredResult("run-check-tidy", "pass", 0, &.{"compile exe tidy debug native"}),
     };
-    try appendCacheReuseSummary(&out, std.testing.allocator, false, testResult("skip", 1), &results);
+    try appendCacheReuseSummary(&out, std.testing.allocator, .no_build_ci, testResult("skip", 1), &results);
     try std.testing.expectEqualStrings(
         "MiniCI cache reuse: not enforced (no `build-ci` before these phases); 1 run phase measured, 0 compile steps reused, 1 compiled\n",
         out.items,
@@ -3804,10 +3978,11 @@ test "report.json carries compile work and the canary's verdict" {
     unreadable.cache_reuse_failure = .{ .unreadable_summary = "unrecognized step line `x`" };
     const results = [_]CommandResult{ wiring, unreadable };
 
-    try appendReportJsonObject(&out, std.testing.allocator, 1, true, testResult("skip", 1), &results);
+    try appendReportJsonObject(&out, std.testing.allocator, 1, .enforced, testResult("skip", 1), &results);
     const expected = [_][]const u8{
-        "\"schema_version\": 2,",
+        "\"schema_version\": 3,",
         "\"cache_reuse_enforced\": true,",
+        "\"cache_reuse_not_enforced\": null,",
         // A command that did not run has no counts, rather than counts of zero.
         "\"compile_work\": {\"summary\": \"not_run\"},\n    \"cache_reuse_failure\": null",
         "\"compile_work\": {\"summary\": \"measured\", \"reused\": 54, \"compiled\": 1, " ++

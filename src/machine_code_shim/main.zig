@@ -702,10 +702,7 @@ fn executeDevEntrypoint(
     arg_ptr: ?*anyopaque,
 ) void {
     const entrypoint = devEntrypointForOrdinal(program.entrypoints, entry_idx) orelse {
-        if (builtin.mode == .debug) {
-            invariant("machine-code shim invariant violated: missing dev entrypoint ordinal {d}", .{entry_idx});
-        }
-        unreachable;
+        invariant("machine-code shim invariant violated: missing dev entrypoint ordinal {d}", .{entry_idx});
     };
     if (entrypoint.code_offset > std.math.maxInt(usize)) {
         ops.crash("Machine-code shim received an invalid dev entrypoint offset");
@@ -747,10 +744,7 @@ fn acquireDevProgramRef(program: *DevProgram) void {
         hot_reload.retainDescriptor(descriptor);
         return;
     } else if (program.descriptor_offset != hot_reload.invalid_descriptor_offset) {
-        if (builtin.mode == .debug) {
-            invariant("machine-code shim invariant violated: hot reload program has no descriptor", .{});
-        }
-        unreachable;
+        invariant("machine-code shim invariant violated: hot reload program has no descriptor", .{});
     }
 
     const previous = program.local_refs.fetchAdd(1, .acquire);
@@ -763,10 +757,7 @@ fn releaseDevProgramRefLocked(state: *RuntimeState, program: *DevProgram) void {
     if (program.descriptor) |descriptor| {
         hot_reload.releaseDescriptor(descriptor);
     } else if (program.descriptor_offset != hot_reload.invalid_descriptor_offset) {
-        if (builtin.mode == .debug) {
-            invariant("machine-code shim invariant violated: hot reload program has no descriptor", .{});
-        }
-        unreachable;
+        invariant("machine-code shim invariant violated: hot reload program has no descriptor", .{});
     } else {
         const previous = program.local_refs.fetchSub(1, .acq_rel);
         if (builtin.mode == .debug and previous == 0) {
@@ -783,10 +774,7 @@ fn releaseDevProgramRef(program: *DevProgram) void {
     if (program.descriptor) |descriptor| {
         hot_reload.releaseDescriptor(descriptor);
     } else if (program.descriptor_offset != hot_reload.invalid_descriptor_offset) {
-        if (builtin.mode == .debug) {
-            invariant("machine-code shim invariant violated: hot reload program has no descriptor", .{});
-        }
-        unreachable;
+        invariant("machine-code shim invariant violated: hot reload program has no descriptor", .{});
     } else {
         const previous = program.local_refs.fetchSub(1, .acq_rel);
         if (builtin.mode == .debug and previous == 0) {

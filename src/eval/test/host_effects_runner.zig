@@ -176,7 +176,7 @@ fn appendEncodedRun(
             .dbg => 0,
             .expect_failed => 1,
             .crashed => 2,
-            .effect => unreachable,
+            .effect => @panic("host-effects runner invariant violated: a run recorded a hosted effect event"),
         };
         const payload = event.bytes();
         const event_header: EventHeader = .{
@@ -529,7 +529,7 @@ fn runSingleTest(io: std.Io, allocator: std.mem.Allocator, tc: TestCase) TestOut
             continue;
         }
 
-        var timer = Timer.start() catch unreachable;
+        var timer = Timer.start() catch unreachable; // Timer.start always returns a timer; its error set is never produced
         const lowered = &compiled.lowered;
         const fork_result = forkAndEval(backend_spec.eval_fn, lowered);
         const duration_ns = timer.read();
@@ -692,7 +692,7 @@ fn deserializeOutcome(buf: []const u8, gpa: std.mem.Allocator) ?TestResult {
 }
 
 fn runTestForPool(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, _: u64) TestResult {
-    var timer = Timer.start() catch unreachable;
+    var timer = Timer.start() catch unreachable; // Timer.start always returns a timer; its error set is never produced
     const outcome = runSingleTest(io, allocator, tc);
     const duration_ns = timer.read();
     return .{
@@ -893,7 +893,7 @@ fn printRecordedRun(run: RuntimeHostEnv.RecordedRun) void {
                 std.debug.print("crashed=", .{});
                 printEscapedBytes(msg);
             },
-            .effect => unreachable,
+            .effect => @panic("host-effects runner invariant violated: a run recorded a hosted effect event"),
         }
     }
     std.debug.print("]", .{});
@@ -1150,7 +1150,7 @@ pub fn main(init: std.process.Init) RunnerMainError!void {
     defer gpa.free(spans);
     @memset(spans, null);
 
-    var wall_timer = Timer.start() catch unreachable;
+    var wall_timer = Timer.start() catch unreachable; // Timer.start always returns a timer; its error set is never produced
     const hang_timeout_ms: u64 = if (cli.timeout_provided and cli.timeout_ms > 0)
         cli.timeout_ms
     else if (max_children <= 1)

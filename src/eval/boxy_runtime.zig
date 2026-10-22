@@ -485,12 +485,7 @@ pub const BoxyRuntime = struct {
     }
 
     fn invariantFailed(_: *const BoxyRuntime, comptime fmt: []const u8, args: anytype) noreturn {
-        if (builtin.mode == .debug) {
-            debugPrint(fmt, args);
-            debugPrint("\n", .{});
-            std.debug.assert(false);
-        }
-        unreachable;
+        base.invariant(fmt, args);
     }
 
     fn invariantFailedError(self: *const BoxyRuntime, comptime fmt: []const u8, args: anytype) Error {
@@ -607,6 +602,14 @@ pub const BoxyRuntime = struct {
         discriminant: u32,
     ) LirProgram.BoxyTagVariant {
         if (self.findBoxyTagVariantByDiscriminant(desc, discriminant)) |variant| return variant;
+        self.missingBoxyTagVariant(desc, discriminant);
+    }
+
+    fn missingBoxyTagVariant(
+        self: *const BoxyRuntime,
+        desc: *const LirProgram.BoxyTypeDesc,
+        discriminant: u32,
+    ) noreturn {
         self.invariantFailed(
             "LIR/interpreter invariant violated: boxy descriptor had no tag variant with discriminant {d} payload_layout={d} checked_type={any} variants={any} ext={any}",
             .{
@@ -699,18 +702,16 @@ pub const BoxyRuntime = struct {
     }
 
     pub fn readPointerInt(self: *const BoxyRuntime, value: Value) usize {
-        return switch (self.layout_store.targetUsize().size()) {
-            4 => value.read(u32),
-            8 => value.read(usize),
-            else => unreachable,
+        return switch (self.layout_store.targetUsize()) {
+            .u32 => value.read(u32),
+            .u64 => value.read(usize),
         };
     }
 
     pub fn writePointerInt(self: *const BoxyRuntime, value: Value, raw_ptr: usize) void {
-        switch (self.layout_store.targetUsize().size()) {
-            4 => value.write(u32, @intCast(raw_ptr)),
-            8 => value.write(usize, raw_ptr),
-            else => unreachable,
+        switch (self.layout_store.targetUsize()) {
+            .u32 => value.write(u32, @intCast(raw_ptr)),
+            .u64 => value.write(usize, raw_ptr),
         }
     }
 
@@ -1248,10 +1249,13 @@ pub const BoxyRuntime = struct {
         switch (template.closure) {
             .closed => return template,
             .captures => if (captures.len != 0) {
-                const capture_ids = try self.scratch.alloc(u32, captures.len);
-                defer self.scratch.free(capture_ids);
-                const capture_descs = try self.scratch.alloc(?*const LirProgram.BoxyTypeDesc, captures.len);
-                defer self.scratch.free(capture_descs);
+                var stack_first_buffer: [512]u8 align(@alignOf(usize)) = undefined;
+                var stack_first = std.heap.BufferFirstAllocator.init(&stack_first_buffer, self.scratch);
+                const key_allocator = stack_first.allocator();
+                const capture_ids = try key_allocator.alloc(u32, captures.len);
+                defer key_allocator.free(capture_ids);
+                const capture_descs = try key_allocator.alloc(?*const LirProgram.BoxyTypeDesc, captures.len);
+                defer key_allocator.free(capture_descs);
                 try hooks.captureDescs(captures, capture_ids, capture_descs);
                 const key = DescMaterializationKey{
                     .desc_id = @backingInt(desc_id),
@@ -1581,10 +1585,12 @@ pub const BoxyRuntime = struct {
             }
         }
 
-        const source_nested = try self.scratch.dupe(LIR.BoxyDescRef, self.requireBoxyDescRefs(source.nested_descs));
-        defer self.scratch.free(source_nested);
-        const target_nested = try self.scratch.dupe(LIR.BoxyDescRef, self.requireBoxyDescRefs(target.nested_descs));
-        defer self.scratch.free(target_nested);
+        // Merging children appends to the runtime descriptor tables, which
+        // can move a borrowed table slice, so the nested references and
+        // variants below are re-read from their spans by index after every
+        // merge.
+        const source_nested = source.nested_descs;
+        const target_nested = target.nested_descs;
         if (target_nested.len != 0) {
             const start = self.runtime_boxy_desc_refs.items.len;
             try self.runtime_boxy_desc_refs.appendNTimes(self.scratch, undefined, target_nested.len);
@@ -1597,8 +1603,8 @@ pub const BoxyRuntime = struct {
                         .{},
                     );
                 }
-                const source_child = try hooks.resolveDescRef(source_nested[0]);
-                const target_child = try hooks.resolveDescRef(target_nested[0]);
+                const source_child = try hooks.resolveDescRef(self.requireBoxyDescRefs(source_nested)[0]);
+                const target_child = try hooks.resolveDescRef(self.requireBoxyDescRefs(target_nested)[0]);
                 const child_id = try self.mergeAdapterTargetDesc(hooks, source_child, target_child, merged, changed);
                 self.runtime_boxy_desc_refs.items[start] = .{ .runtime = child_id };
             } else if (source_layout.tag == .struct_ and target_layout.tag == .struct_) {
@@ -1612,7 +1618,8 @@ pub const BoxyRuntime = struct {
                         .{ target_nested.len, target_field_count, source_nested.len, source_field_count },
                     );
                 }
-                for (target_nested, 0..) |target_ref, target_field_index| {
+                for (0..target_nested.len) |target_field_index| {
+                    const target_ref = self.requireBoxyDescRefs(target_nested)[target_field_index];
                     const target_field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(target_struct, @intCast(target_field_index));
                     if (!self.layoutNeedsBoxyStructuralDesc(target_field_layout)) {
                         // A field whose storage carries no runtime descriptor
@@ -1634,14 +1641,14 @@ pub const BoxyRuntime = struct {
                         self.runtime_boxy_desc_refs.items[start + target_field_index] = target_ref;
                         continue;
                     };
-                    const source_child = try hooks.resolveDescRef(source_nested[source_field_index]);
+                    const source_child = try hooks.resolveDescRef(self.requireBoxyDescRefs(source_nested)[source_field_index]);
                     const child_id = try self.mergeAdapterTargetDesc(hooks, source_child, target_child, merged, changed);
                     self.runtime_boxy_desc_refs.items[start + target_field_index] = .{ .runtime = child_id };
                 }
-            } else for (target_nested, 0..) |target_ref, index| {
-                const target_child = try hooks.resolveDescRef(target_ref);
+            } else for (0..target_nested.len) |index| {
+                const target_child = try hooks.resolveDescRef(self.requireBoxyDescRefs(target_nested)[index]);
                 const source_child = if (index < source_nested.len)
-                    try hooks.resolveDescRef(source_nested[index])
+                    try hooks.resolveDescRef(self.requireBoxyDescRefs(source_nested)[index])
                 else
                     target_child;
                 const child_id = try self.mergeAdapterTargetDesc(hooks, source_child, target_child, merged, changed);
@@ -1650,27 +1657,23 @@ pub const BoxyRuntime = struct {
             result.nested_descs = makeRuntimeBoxySpan(start, target_nested.len);
         }
 
-        const target_variants = try self.scratch.dupe(LirProgram.BoxyTagVariant, self.requireBoxyTagVariants(target.tag_variants));
-        defer self.scratch.free(target_variants);
+        const target_variants = target.tag_variants;
         if (target_variants.len != 0) {
             var source_variants = try self.adapterSourceTagVariants(hooks, source);
             defer source_variants.deinit(self.scratch);
             const variants_start = self.runtime_boxy_tag_variants.items.len;
             try self.runtime_boxy_tag_variants.appendNTimes(self.scratch, undefined, target_variants.len);
-            for (target_variants, 0..) |target_variant, variant_index| {
+            for (0..target_variants.len) |variant_index| {
+                const target_variant = self.requireBoxyTagVariants(target_variants)[variant_index];
                 var specialized = target_variant;
                 const source_variant = source_variants.get(target_variant.name);
-                const target_payloads = try self.scratch.dupe(LirProgram.BoxyTagPayloadDesc, self.requireBoxyTagPayloadDescs(target_variant.payload_descs));
-                defer self.scratch.free(target_payloads);
+                const target_payloads = target_variant.payload_descs;
                 if (target_payloads.len != 0) {
-                    const source_payloads = if (source_variant) |variant|
-                        try self.scratch.dupe(LirProgram.BoxyTagPayloadDesc, self.requireBoxyTagPayloadDescs(variant.payload_descs))
-                    else
-                        try self.scratch.alloc(LirProgram.BoxyTagPayloadDesc, 0);
-                    defer self.scratch.free(source_payloads);
+                    const source_payloads = if (source_variant) |variant| variant.payload_descs else LIR.BoxySpan.empty();
                     const payload_start = self.runtime_boxy_tag_payload_descs.items.len;
                     try self.runtime_boxy_tag_payload_descs.appendNTimes(self.scratch, undefined, target_payloads.len);
-                    for (target_payloads, 0..) |target_payload, payload_index| {
+                    for (0..target_payloads.len) |payload_index| {
+                        const target_payload = self.requireBoxyTagPayloadDescs(target_payloads)[payload_index];
                         // An inline source value supplies a target presence
                         // slot's Present payload. The payload keeps the target's
                         // storage; the source only completes its erased children.
@@ -1679,7 +1682,7 @@ pub const BoxyRuntime = struct {
                             target_payload.payload_index == 0;
                         var target_child = try hooks.resolveDescRef(target_payload.desc);
                         var source_child: ?*const LirProgram.BoxyTypeDesc = if (wraps_presence_payload) source else null;
-                        for (source_payloads) |source_payload| {
+                        for (self.requireBoxyTagPayloadDescs(source_payloads)) |source_payload| {
                             if (source_payload.payload_index != target_payload.payload_index) continue;
                             source_child = try hooks.resolveDescRef(source_payload.desc);
                             break;
@@ -2172,7 +2175,7 @@ pub const BoxyRuntime = struct {
         }
 
         const should_drop_elements = switch (op) {
-            .incref => unreachable,
+            .incref => unreachable, // the incref case returned above
             .decref => rl.isUnique(self.roc_ops),
             .free => true,
             .host_drop => hostDropInRcStatement(),
@@ -2238,14 +2241,9 @@ pub const BoxyRuntime = struct {
         if (self.helper.sizeOf(actual_payload_layout) == 0) return;
 
         const variant = self.findBoxyTagVariantByDiscriminant(desc, discriminant) orelse {
-            const ext_discriminant = self.boxyTagExtDiscriminant(desc) orelse {
-                _ = self.requireBoxyTagVariantByDiscriminant(desc, discriminant);
-                unreachable;
-            };
-            if (discriminant != ext_discriminant) {
-                _ = self.requireBoxyTagVariantByDiscriminant(desc, discriminant);
-                unreachable;
-            }
+            const ext_discriminant = self.boxyTagExtDiscriminant(desc) orelse
+                self.missingBoxyTagVariant(desc, discriminant);
+            if (discriminant != ext_discriminant) self.missingBoxyTagVariant(desc, discriminant);
             const ext_desc = try self.resolveBoxyTagExtDesc(hooks, desc);
             const ext_value = try self.materializeLocalValue(hooks, tag_base.value, actual_payload_layout);
             try self.performBoxyLayoutDrop(hooks, ext_value, actual_payload_layout, ext_desc, op, count, atomicity);
@@ -3160,7 +3158,7 @@ pub const BoxyRuntime = struct {
                     .zst,
                     .tag_union,
                     .ptr,
-                    => unreachable,
+                    => unreachable, // target_is_box limits target_layout_val to box layouts
                 };
                 const target_ptr = self.readBoxedDataPointer(target) orelse {
                     if (self.helper.sizeOf(target_payload_layout) == 0) return;
@@ -3219,7 +3217,7 @@ pub const BoxyRuntime = struct {
                 .zst,
                 .tag_union,
                 .ptr,
-                => unreachable,
+                => unreachable, // target_is_box limits target_layout_val to box layouts
             };
             const target_ptr = self.readBoxedDataPointer(target) orelse {
                 if (self.helper.sizeOf(target_payload_layout) == 0) return;
@@ -3795,7 +3793,7 @@ pub const BoxyRuntime = struct {
                     .zst,
                     .tag_union,
                     .ptr,
-                    => unreachable,
+                    => unreachable, // expected_is_box limits expected_layout_val to box layouts
                 }
             };
             const source_payload = try self.boxyPayloadValueForTargetDesc(
@@ -5512,9 +5510,12 @@ pub const BoxyRuntime = struct {
                     }
                 }
                 const name = self.requireBoxyTagVariantByDiscriminant(tag.desc, discriminant).name;
+                var stack_first_buffer: [256]u8 align(@alignOf(usize)) = undefined;
+                var stack_first = std.heap.BufferFirstAllocator.init(&stack_first_buffer, self.scratch);
+                const row_allocator = stack_first.allocator();
                 var row_names = std.ArrayList(LIR.BoxyNameId).empty;
-                defer row_names.deinit(self.scratch);
-                try self.collectBoxyRowTagNames(shapes.hooks, tag.row, &row_names);
+                defer row_names.deinit(row_allocator);
+                try self.collectBoxyRowTagNames(shapes.hooks, tag.row, row_allocator, &row_names);
                 return .{ .variant = .{ .discriminant = discriminant, .row_index = self.rowTagIndex(row_names.items, name) } };
             }
 
@@ -5590,20 +5591,30 @@ pub const BoxyRuntime = struct {
         self: *const BoxyRuntime,
         hooks: anytype,
         desc: *const LirProgram.BoxyTypeDesc,
+        names_allocator: Allocator,
         names: *std.ArrayList(LIR.BoxyNameId),
     ) Error!void {
         var current = desc;
         while (true) {
-            for (self.requireBoxyTagVariants(current.tag_variants)) |variant| {
-                const name = variant.name;
-                for (names.items) |existing| {
-                    if (existing == name) break;
-                } else try names.append(self.scratch, name);
-            }
-            if (current.tag_ext_desc == null) return;
+            const variants = self.requireBoxyTagVariants(current.tag_variants);
+            try names.ensureUnusedCapacity(names_allocator, variants.len);
+            for (variants) |variant| names.appendAssumeCapacity(variant.name);
+            if (current.tag_ext_desc == null) break;
             const ext_desc = try self.resolveBoxyTagExtDesc(hooks, current);
             current = try self.boxyRowDescThroughStorage(hooks, ext_desc);
         }
+        std.mem.sortUnstable(LIR.BoxyNameId, names.items, {}, boxyNameIdLessThan);
+        var unique_len: usize = 0;
+        for (names.items) |name| {
+            if (unique_len != 0 and names.items[unique_len - 1] == name) continue;
+            names.items[unique_len] = name;
+            unique_len += 1;
+        }
+        names.shrinkRetainingCapacity(unique_len);
+    }
+
+    fn boxyNameIdLessThan(_: void, a: LIR.BoxyNameId, b: LIR.BoxyNameId) bool {
+        return @backingInt(a) < @backingInt(b);
     }
 
     /// The tag-row descriptor a row extension's descriptor stores: an erased
@@ -5863,7 +5874,7 @@ pub const BoxyRuntime = struct {
             .primitive => |stored| switch (self.layout_store.getLayout(stored.layout).getScalar().tag) {
                 .str => try self.appendQuotedInspectBytes(out, readRocStr(stored.value)),
                 .int, .frac, .opaque_ptr => try self.appendScalarInspect(out, stored.value, stored.layout),
-                .vector => unreachable,
+                .vector => unreachable, // inspectShape rejects a vector before yielding a primitive shape
             },
             .record => |record| {
                 var sink = InspectStructSink(@TypeOf(hooks)){ .runtime = self, .hooks = hooks, .out = out, .aggregate = record };
@@ -6160,6 +6171,7 @@ pub const BoxyRuntime = struct {
         // renders fractions everywhere else.
         var float_buf: [builtins.compiler_rt_128.float_string_capacity]u8 = undefined;
         var int_buf: [builtins.compiler_rt_128.int_string_capacity(i128)]u8 = undefined;
+        var dec_buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
         const size = self.helper.sizeOf(layout_idx);
         const text = switch (size) {
             1, 2, 4, 8, 16 => blk: {
@@ -6169,12 +6181,11 @@ pub const BoxyRuntime = struct {
                     const layout_val = self.layout_store.getLayout(layout_idx);
                     if (layout_val.tag == .scalar and layout_val.getScalar().tag == .frac) {
                         break :blk switch (size) {
-                            4 => try self.eval_arena.dupe(u8, builtins.compiler_rt_128.f32_to_str(&float_buf, value.read(f32))),
-                            8 => try self.eval_arena.dupe(u8, builtins.compiler_rt_128.f64_to_str(&float_buf, value.read(f64))),
+                            4 => builtins.compiler_rt_128.f32_to_str(&float_buf, value.read(f32)),
+                            8 => builtins.compiler_rt_128.f64_to_str(&float_buf, value.read(f64)),
                             else => dec: {
-                                var dec_buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
                                 const dec = builtins.dec.RocDec{ .num = value.read(i128) };
-                                break :dec try self.eval_arena.dupe(u8, dec.format_to_buf(&dec_buf));
+                                break :dec dec.format_to_buf(&dec_buf);
                             },
                         };
                     }
@@ -6187,7 +6198,7 @@ pub const BoxyRuntime = struct {
                         8 => value.read(u64),
                         else => value.read(u128),
                     };
-                    break :blk try self.eval_arena.dupe(u8, builtins.compiler_rt_128.u128_to_str(&int_buf, widened).str);
+                    break :blk builtins.compiler_rt_128.u128_to_str(&int_buf, widened).str;
                 }
                 const widened: i128 = switch (size) {
                     1 => value.read(i8),
@@ -6196,22 +6207,26 @@ pub const BoxyRuntime = struct {
                     8 => value.read(i64),
                     else => value.read(i128),
                 };
-                break :blk try self.eval_arena.dupe(u8, builtins.compiler_rt_128.i128_to_str(&int_buf, widened).str);
+                break :blk builtins.compiler_rt_128.i128_to_str(&int_buf, widened).str;
             },
-            else => try self.eval_arena.dupe(u8, "0"),
+            else => "0",
         };
-        defer self.eval_arena.free(text);
         try out.appendSlice(self.eval_arena, text);
     }
 
     /// Quotes a string exactly as the `str_escape_and_quote` builtin behind
     /// `Str.inspect` does: only `"` and `\` are escaped.
     fn appendQuotedInspectBytes(self: *const BoxyRuntime, out: *std.ArrayList(u8), bytes: []const u8) Error!void {
-        try out.append(self.eval_arena, '"');
-        for (bytes) |byte| {
-            if (byte == '"' or byte == '\\') try out.append(self.eval_arena, '\\');
-            try out.append(self.eval_arena, byte);
+        try out.ensureUnusedCapacity(self.eval_arena, bytes.len + 2);
+        out.appendAssumeCapacity('"');
+        var run_start: usize = 0;
+        for (bytes, 0..) |byte, index| {
+            if (byte != '"' and byte != '\\') continue;
+            try out.appendSlice(self.eval_arena, bytes[run_start..index]);
+            try out.append(self.eval_arena, '\\');
+            run_start = index;
         }
+        try out.appendSlice(self.eval_arena, bytes[run_start..]);
         try out.append(self.eval_arena, '"');
     }
 

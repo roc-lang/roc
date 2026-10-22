@@ -676,7 +676,7 @@ test "boxy abi box and unbox round-trip a string payload with balanced refcounts
         boxed_desc.?,
         null,
         str_layout,
-        0, // borrow
+        1, // copy
     );
     try std.testing.expectEqualStrings(source_str.asSlice(), unboxed.asSlice());
 

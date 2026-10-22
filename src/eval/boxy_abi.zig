@@ -24,6 +24,8 @@
 
 const std = @import("std");
 const invariant = @import("base").invariant;
+const SingleThreadArena = @import("base").SingleThreadArena;
+const collections = @import("collections");
 const builtin = @import("builtin");
 const backend = @import("backend");
 const layout_mod = @import("layout");
@@ -116,12 +118,13 @@ pub const GlobalBoxyRuntime = struct {
     runtime_boxy_tag_payload_descs: std.ArrayList(LirProgram.BoxyTagPayloadDesc) = .empty,
     runtime_boxy_dicts: boxy_runtime.RuntimeBoxyDicts = .{},
     /// Backs runtime-materialized descriptors; they live until deinit.
-    desc_arena: std.heap.ArenaAllocator,
+    desc_arena: SingleThreadArena,
     /// Backs value temporaries; reset when the outermost wrapper call
     /// returns.
-    value_scratch: std.heap.ArenaAllocator,
+    value_scratch: SingleThreadArena,
     call_depth: usize = 0,
-    procs: std.AutoHashMapUnmanaged(u32, RegisteredProc) = .empty,
+    /// Registered dictionary workers, by LIR proc id.
+    procs: collections.DenseMapUnmanaged(u32, RegisteredProc) = .empty,
     /// Return layout of each Roc-created erased-callable proc, keyed by the
     /// worker's runtime code address. An erased call reads the actual return
     /// layout here to materialize the worker's result into the caller's
@@ -510,8 +513,8 @@ fn createRuntime(
     g.* = .{
         .gpa = gpa,
         .store_shell = LirStore.init(gpa),
-        .desc_arena = std.heap.ArenaAllocator.init(gpa),
-        .value_scratch = std.heap.ArenaAllocator.init(gpa),
+        .desc_arena = SingleThreadArena.init(gpa),
+        .value_scratch = SingleThreadArena.init(gpa),
         .runtime = .{
             .store = store,
             .layout_store = layout_store,
@@ -708,7 +711,7 @@ const AbiHooks = struct {
     /// Crash at code checking rejected and already reported.
     pub fn crashCheckedError(_: AbiHooks, message: []const u8) Error {
         builtins.dev_wrappers.roc_builtins_checked_error_crashed(message.ptr, message.len);
-        unreachable;
+        unreachable; // roc_builtins_checked_error_crashed ends in the noreturn RocOps.crash
     }
 
     /// Call the `kind` method slot the first argument's descriptor carries
@@ -784,7 +787,7 @@ const AbiHooks = struct {
             .@"4" => scratch.alignedAlloc(u8, .@"4", sa.size),
             .@"8" => scratch.alignedAlloc(u8, .@"8", sa.size),
             .@"16" => scratch.alignedAlloc(u8, .@"16", sa.size),
-            _ => unreachable,
+            _ => invariant("boxy ABI layout alignment {d} exceeds 16 bytes", .{sa.alignment.toByteUnits()}),
         } catch return error.OutOfMemory;
         return Value.fromSlice(slice);
     }
@@ -2465,10 +2468,9 @@ pub fn roc_boxy_call_dict(
     }
     const raw_hidden: []const usize = if (hidden_args) |h| h[0..hidden_len] else &.{};
     const hidden_values = scratch.alloc(Value, raw_hidden.len) catch abiCrash(g, "dictionary call hidden argument collection");
-    for (raw_hidden, 0..) |raw, i| {
-        const slot = scratch.alloc(usize, 1) catch abiCrash(g, "dictionary call hidden argument collection");
-        slot[0] = raw;
-        hidden_values[i] = .{ .ptr = @ptrCast(slot.ptr) };
+    const hidden_slots = scratch.dupe(usize, raw_hidden) catch abiCrash(g, "dictionary call hidden argument collection");
+    for (hidden_slots, 0..) |*slot, i| {
+        hidden_values[i] = .{ .ptr = @ptrCast(slot) };
     }
 
     const call = g.runtime.prepareDictCall(

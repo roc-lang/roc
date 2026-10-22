@@ -433,6 +433,7 @@ const CustomCase = enum {
     boxed_closure_object_cache,
     spliced_procedure_debug_lines,
     linked_object_pack,
+    package_dev_packs,
     wasm_linked_object_pack,
     wasm32v1_vector_lowering,
     run_object_cache,
@@ -495,6 +496,7 @@ const CustomCase = enum {
     cache_passing_results,
     cache_failing_results,
     cache_invalidated_by_source_change,
+    stored_root_declared_row,
     issue_11389_check_after_test_shared_cache,
     issue_11495_paired_body_types,
     issue_11065_duplicate_module_name_across_packages,
@@ -576,6 +578,7 @@ const forced_ice_skip: Skip = if (builtin.mode == .debug) .never else .{ .always
 /// honors the developer-diagnostic environment variables. Each case listed
 /// here sets one of them and checks what it changes or prints.
 const dev_diagnostics_cases = [_]CustomCase{
+    .package_dev_packs,
     .native_build_artifact_round_trip,
     .native_build_pack_objects,
     .native_build_pack_hits,
@@ -2317,6 +2320,9 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 12436: fields of a dying record read again after a take (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/FieldReadAgainAfterTake.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (3) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12436: fields of a dying record read again after a take (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/FieldReadAgainAfterTake.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (3) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12436: fields of a dying record read again after a take (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "test", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/FieldReadAgainAfterTake.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (3) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12471: a scalar read through a Try payload whose list fields were moved out (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/ScalarReadThroughSpentPayload.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12471: a scalar read through a Try payload whose list fields were moved out (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/ScalarReadThroughSpentPayload.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12471: a scalar read through a Try payload whose list fields were moved out (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "test", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/ScalarReadThroughSpentPayload.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "boxy lambda use supplies every dictionary its worker takes (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/BoxyGenericLambdaDictionaries.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "boxy call keeps a value it both gives and lends to its callee (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/BoxySharedCallOperand.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "boxy lambda use supplies every dictionary its worker takes (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/BoxyGenericLambdaDictionaries.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
@@ -3156,6 +3162,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "object cache: editing an app module keeps package specializations at its own types cached unless the type changes", .timeout_ms = 600_000, .body = .{ .custom = .edited_nominal_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: editing an app lambda's body keeps the package specializations that receive it cached, calling the edited lambda", .timeout_ms = 600_000, .body = .{ .custom = .edited_lambda_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: an edited app is served higher-order specializations by their procedure identity", .timeout_ms = 600_000, .body = .{ .custom = .proc_identity_object_cache } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12374: checking a URL package prepares reusable dev packs before the first app build", .timeout_ms = 600_000, .body = .{ .custom = .package_dev_packs } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: a dev build links a URL package's optimized object pack and behaves like the uncached build", .timeout_ms = 900_000, .body = .{ .custom = .linked_object_pack } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: a wasm32 dev build composes a URL package's size-optimized object pack and behaves like the uncached build", .timeout_ms = 900_000, .backend = .size, .body = .{ .custom = .wasm_linked_object_pack } },
     .{ .id = 0, .suite = .subcommands, .name = "wasm32v1 builds lower vector code to WebAssembly 1.0 at every optimization level", .timeout_ms = 900_000, .backend = .size, .body = .{ .custom = .wasm32v1_vector_lowering } },
@@ -3561,6 +3568,8 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc test caches failing results (dev)", .backend = .dev, .body = .{ .custom = .cache_failing_results } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test cache invalidated by source change (interpreter)", .backend = .interpreter, .body = .{ .custom = .cache_invalidated_by_source_change } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test cache invalidated by source change (dev)", .backend = .dev, .body = .{ .custom = .cache_invalidated_by_source_change } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12503: a cached constant read at joined rows with a repeated label is restored at its declared row (interpreter)", .backend = .interpreter, .body = .{ .custom = .stored_root_declared_row } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12503: a cached constant read at joined rows with a repeated label is restored at its declared row (dev)", .backend = .dev, .body = .{ .custom = .stored_root_declared_row } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11389: roc check succeeds on a cache roc test wrote", .body = .{ .custom = .issue_11389_check_after_test_shared_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11495: Boxy pairing keeps app body types across shared platform cache hits", .body = .{ .custom = .issue_11495_paired_body_types } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test result cache is per execution mode", .backend = .speed, .body = .{ .custom = .cache_is_per_execution_mode } },
@@ -4409,7 +4418,7 @@ fn runInterpreterTest(
             argv_buf[argc] = io_spec;
             argc += 1;
         },
-        .cross_compile => unreachable,
+        .cross_compile => unreachable, // runSingleTest sends cross_compile cases to runCrossCompileTest instead
     }
 
     var run_timer = harness.Timer.start() catch return .{ .status = .infra_error, .phase = .run, .duration_ns = timer.read(), .message = "no clock" };
@@ -4513,7 +4522,7 @@ fn runCompiledTest(
             run_argv_buf[argc] = io_spec;
             argc += 1;
         },
-        .cross_compile => unreachable,
+        .cross_compile => unreachable, // runSingleTest sends cross_compile cases to runCrossCompileTest instead
     }
 
     var run_timer = harness.Timer.start() catch return .{ .status = .infra_error, .phase = .run, .duration_ns = timer.read(), .build_ns = build_ns, .message = "no clock" };
@@ -5112,6 +5121,7 @@ fn runCustomCase(
         .native_build_pack_store_thread_count_reproducible => customNativeBuildPackStoreThreadCountReproducible(io, allocator, &env, &timer, timeout_ms),
         .boxed_closure_object_cache => customBoxedClosureObjectCache(io, allocator, &env, &timer, timeout_ms),
         .spliced_procedure_debug_lines => customSplicedProcedureDebugLines(io, allocator, &env, &timer, timeout_ms),
+        .package_dev_packs => customPackageDevPacks(io, allocator, &env, &timer, timeout_ms),
         .linked_object_pack => customLinkedObjectPack(io, allocator, &env, &timer, timeout_ms),
         .wasm_linked_object_pack => customWasmLinkedObjectPack(io, allocator, &env, &timer, timeout_ms),
         .wasm32v1_vector_lowering => customWasm32v1VectorLowering(io, allocator, &env, &timer, timeout_ms),
@@ -5185,6 +5195,7 @@ fn runCustomCase(
         .cache_passing_results => customCachePassingResults(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
         .cache_failing_results => customCacheFailingResults(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
         .cache_invalidated_by_source_change => customCacheInvalidated(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
+        .stored_root_declared_row => customStoredRootDeclaredRow(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
         .issue_11389_check_after_test_shared_cache => customIssue11389CheckAfterTestSharedCache(io, allocator, &env, &timer, timeout_ms),
         .issue_11495_paired_body_types => customIssue11495PairedBodyTypes(io, allocator, &env, &timer, timeout_ms),
         .issue_11065_duplicate_module_name_across_packages => customIssue11065DuplicateModuleNameAcrossPackages(io, allocator, &env, &timer, timeout_ms),
@@ -8403,6 +8414,95 @@ fn seedLinkedObjectPackage(io: std.Io, allocator: Allocator, cache_root: []const
         const destination = try std.fs.path.join(allocator, &.{ package_dir, name });
         try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = destination, .data = bytes });
     }
+}
+
+/// Checking alone prepares the URL package's dev packs; an uncached check
+/// does not, and neither another check nor the first app build recompiles them.
+fn customPackageDevPacks(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const cache_root = std.fmt.allocPrint(allocator, "{s}/package_dev_pack_cache", .{env.dirs.work_dir}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate cache root: {}", .{err});
+    seedLinkedObjectPackage(io, allocator, cache_root) catch |err|
+        return customInfraFailure(allocator, timer, "failed to seed the URL package: {}", .{err});
+    var trace_env = CaseEnv{
+        .dirs = env.dirs,
+        .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "failed to clone the environment: {}", .{err}),
+    };
+    defer trace_env.env_map.deinit();
+    for ([_][]const u8{ "ROC_CACHE_DIR", "XDG_CACHE_HOME" }) |key| {
+        trace_env.env_map.put(key, cache_root) catch |err|
+            return customInfraFailure(allocator, timer, "failed to set cache root: {}", .{err});
+    }
+    trace_env.env_map.put("ROC_PACK_TRACE", "1") catch |err|
+        return customInfraFailure(allocator, timer, "failed to enable pack tracing: {}", .{err});
+    trace_env.env_map.put("ROC_BACKGROUND_OBJECTS", "off") catch |err|
+        return customInfraFailure(allocator, timer, "failed to disable background compilation: {}", .{err});
+    const roc_file = "test/cli/linked_object_pack/App.roc";
+    const exe = std.fmt.allocPrint(allocator, "{s}/prepared_package", .{env.dirs.work_dir}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+    const out_arg = outputArg(allocator, exe) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output argument: {}", .{err});
+    var prepared: PackStoreFiles = .{};
+    defer prepared.deinit(allocator);
+    const commands = [_][]const []const u8{
+        &.{ "check", "--no-cache" },
+        &.{"check"},
+        &.{"check"},
+        &.{ "build", "--opt=dev", out_arg },
+    };
+    for (commands, 0..) |args, index| {
+        const command_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a command");
+        const ran = runRocInEnv(io, allocator, &trace_env, args, roc_file, .relative, &.{}, null, command_timeout) catch |err|
+            return customInfraFailure(allocator, timer, "command spawn error: {}", .{err});
+        if (!processSucceeded(ran.term) or std.mem.find(u8, ran.stderr, "panic") != null) {
+            return failureFromRun(allocator, timer, ran, "command did not succeed");
+        }
+        var files = PackStoreFiles.read(io, allocator, cache_root) catch |err|
+            return customInfraFailure(allocator, timer, "failed to read packs: {}", .{err});
+        defer files.deinit(allocator);
+        if (index == 0) {
+            if (files.paths.items.len != 0) return failureFromRun(allocator, timer, ran, "--no-cache check wrote an object pack");
+            continue;
+        }
+        if (index == 1) {
+            if (std.mem.find(u8, ran.stderr, "package dev pack Numeric") == null) {
+                var listing = std.ArrayList(u8).empty;
+                for (files.paths.items) |path| {
+                    listing.appendSlice(allocator, "\n  ") catch {};
+                    listing.appendSlice(allocator, path) catch {};
+                }
+                const message = std.fmt.allocPrint(allocator, "checking did not prepare the URL package's dev pack; the cache holds {d} pack files:{s}", .{ files.paths.items.len, listing.items }) catch "checking did not prepare the URL package's dev pack";
+                return failureFromRun(allocator, timer, ran, message);
+            }
+            var package_packs: usize = 0;
+            for (files.paths.items) |path| {
+                if (std.mem.find(u8, path, "-dev") != null and std.mem.find(u8, path, std.fs.path.sep_str ++ "pkg" ++ std.fs.path.sep_str) != null) package_packs += 1;
+            }
+            if (package_packs == 0) return failureFromRun(allocator, timer, ran, "checking wrote no pkg dev packs");
+            prepared = files;
+            files = .{};
+            continue;
+        }
+        if (std.mem.find(u8, ran.stderr, "package dev pack ") != null or std.mem.find(u8, ran.stderr, "module pack Numeric") != null) {
+            return failureFromRun(allocator, timer, ran, "a later command recompiled the package's dev pack");
+        }
+        for (prepared.paths.items, prepared.contents.items) |path, bytes| {
+            const current = files.find(path) orelse
+                return failureFromRun(allocator, timer, ran, "a prepared dev pack disappeared");
+            if (!std.mem.eql(u8, bytes, current)) return failureFromRun(allocator, timer, ran, "a prepared dev pack changed");
+        }
+    }
+    return runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{
+        .args = &.{},
+        .stdout_exact = "sum of squares to 10: 385\n506\n29\n",
+    });
 }
 
 /// A dev build whose store lacks a URL package's optimized object pack
@@ -12149,6 +12249,52 @@ fn customCacheInvalidated(io: std.Io, allocator: Allocator, env: *const CaseEnv,
     return null;
 }
 
+/// `SharedVal`'s constant is evaluated while `Main` reads it at two joined
+/// rows that hold `Conflict` at two payload types. Editing only `Main` makes
+/// the second run restore the constant from the cache, at the row its
+/// declaring module gives it, and widen it into `Main`'s joined row.
+fn customStoredRootDeclaredRow(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64, backend: OptMode) ?TestResult {
+    const opt_arg = backendOptArg(allocator, backend) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate opt arg: {}", .{err});
+    const dir = createWorkSubdir(io, allocator, env, "stored_root_declared_row") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create fixture dir: {}", .{err});
+    var main_source: []const u8 = "";
+    for ([_][]const u8{ "SharedVal.roc", "Main.roc" }) |name| {
+        const from = std.fs.path.join(allocator, &.{ "test/cli/stored_root_declared_row", name }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate fixture path: {}", .{err});
+        const from_abs = absoluteFromProjectRoot(allocator, from) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate fixture path: {}", .{err});
+        const source = std.Io.Dir.cwd().readFileAlloc(io, from_abs, allocator, .limited(1024 * 1024)) catch |err|
+            return customInfraFailure(allocator, timer, "failed to read {s}: {}", .{ from_abs, err });
+        if (writeCaseFile(io, allocator, timer, dir, name, source)) |failure| return failure;
+        if (std.mem.eql(u8, name, "Main.roc")) main_source = source;
+    }
+    const main_path = std.fs.path.join(allocator, &.{ dir, "Main.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate main path: {}", .{err});
+    const not_contains = [_]OutputNeedle{
+        .{ .stream = .stderr, .text = "panic" },
+        .{ .stream = .stderr, .text = "invariant violated" },
+    };
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "test", opt_arg },
+        .roc_file = main_path,
+        .exit = .success,
+        .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }},
+        .not_contains = &not_contains,
+    })) |failure| return failure;
+    const edited = std.fmt.allocPrint(allocator, "{s}\nexpect describe_b(fwd_b({{}})) != \"conflict\"\n", .{main_source}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate edited main: {}", .{err});
+    if (writeCaseFile(io, allocator, timer, dir, "Main.roc", edited)) |failure| return failure;
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "test", opt_arg },
+        .roc_file = main_path,
+        .exit = .success,
+        .contains = &.{.{ .stream = .stdout, .text = "All (3) tests passed" }},
+        .not_contains = &not_contains,
+    })) |failure| return failure;
+    return null;
+}
+
 // Test and executable checking must accept each other's partial module caches.
 fn customIssue11389CheckAfterTestSharedCache(
     io: std.Io,
@@ -12960,7 +13106,7 @@ fn customIssue10015UrlRandomTestSize(
         \\}
         \\
     else
-        unreachable;
+        unreachable; // the target_dir_name check above skips every architecture except aarch64 and x86_64
 
     const cache_platform_dir = std.fs.path.join(allocator, &.{ env.dirs.roc_cache_dir, "roc", "packages", platform_hash }) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate cached platform path: {}", .{err});
@@ -14307,13 +14453,12 @@ fn runGlueRuntimeCase(
         };
     }
 
-    // Zig 0.16.0 and 0.17.0-dev.1464 mislower two natural C ABI aggregate
-    // signatures exercised by layout-probe. On x64mac, Zig splits a two-f64
-    // aggregate after FP-register exhaustion instead of rolling the whole
-    // aggregate back to the stack. On arm64musl, Zig starts a 16-byte-aligned
-    // Dec aggregate in x5 instead of rounding up to x6. CGlue and RustGlue
-    // continue to exercise both signatures on these targets.
-    // TODO #10392: Remove this skip after Roc uses a Zig version that lowers both signatures correctly.
+    // Zig 0.17.0 mislowers a natural C ABI aggregate signature exercised by
+    // layout-probe on arm64musl: after five integer arguments occupy x0-x4,
+    // Zig passes the 16-byte-aligned Dec aggregate in x5/x6 instead of
+    // rounding up to the even pair x6/x7 as AAPCS64 requires. CGlue and
+    // RustGlue continue to exercise this signature on arm64musl.
+    // TODO #10392: Remove this skip after Roc uses a Zig version that lowers this signature correctly.
     if (native_target) |target| {
         if (runtime.language == .zig and std.mem.eql(u8, runtime.platform.name, "layout-probe")) {
             if (zigCompilerMislowersLayoutProbeAbi(target.roc_target)) {
@@ -14477,8 +14622,7 @@ fn zigGlueUnsupportedVectorAggregates(language: GlueLanguage, platform_name: []c
 }
 
 fn zigCompilerMislowersLayoutProbeAbi(roc_target_name: []const u8) bool {
-    return std.mem.eql(u8, roc_target_name, "x64mac") or
-        std.mem.eql(u8, roc_target_name, "arm64musl");
+    return std.mem.eql(u8, roc_target_name, "arm64musl");
 }
 
 fn runGlueRuntimeCommand(
@@ -17297,9 +17441,9 @@ test "Zig vector aggregate exclusion is limited to the Zig layout-probe host" {
 }
 
 test "Zig layout-probe ABI skip is limited to affected native targets" {
-    try std.testing.expect(zigCompilerMislowersLayoutProbeAbi("x64mac"));
     try std.testing.expect(zigCompilerMislowersLayoutProbeAbi("arm64musl"));
 
+    try std.testing.expect(!zigCompilerMislowersLayoutProbeAbi("x64mac"));
     try std.testing.expect(!zigCompilerMislowersLayoutProbeAbi("x64musl"));
     try std.testing.expect(!zigCompilerMislowersLayoutProbeAbi("arm64mac"));
     try std.testing.expect(!zigCompilerMislowersLayoutProbeAbi("x64win"));

@@ -423,7 +423,7 @@ const Builder = struct {
             .in_progress => boxyLayoutInvariant("in-progress representation reached boxy layout planning"),
             .dynamic => .{ .layout = .{ .dynamic_box = .{
                 .storage_layout = try self.dynamicStorageLayout(),
-                .desc = rep.descriptor orelse boxyLayoutInvariant("dynamic layout had no descriptor requirement"),
+                .desc = rep.descriptor.get() orelse boxyLayoutInvariant("dynamic layout had no descriptor requirement"),
             } } },
             .primitive => |primitive| .{ .layout = .{ .concrete = Common.primitiveLayout(primitive) } },
             .bool_tag_union => .{ .layout = .{ .concrete = .bool } },
@@ -528,7 +528,7 @@ const Builder = struct {
         var at_root = true;
         while (true) : (at_root = false) {
             const rep = self.program.representations.items[@backingInt(rep_id)];
-            if (rep.descriptor == null) {
+            if (rep.descriptor.get() == null) {
                 if (at_root) return null;
                 return (try self.runtimeLayoutForRep(rep_id)).layoutIdx();
             }
@@ -739,7 +739,7 @@ const GraphBuilder = struct {
                         .opaque_nominal, .builtin_other => {},
                     }
                 }
-                if (rep.kind == .dynamic and rep.descriptor != null) {
+                if (rep.kind == .dynamic and rep.descriptor.get() != null) {
                     if (rep.tag_variants.len != 0) {
                         const node = try self.reserveLocalNode(rep_id);
                         try self.pushGraphFrame(frames, .{ .tag = .{ .node = node, .rep_id = rep_id, .mode = .descriptor_payload } });
@@ -1014,10 +1014,7 @@ fn repHasRecordFields(program: *const Plan.ProgramPlan, rep: Plan.TypeRepresenta
 }
 
 fn boxyLayoutInvariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .debug) {
-        base.invariant("boxy layout invariant violated: {s}", .{message});
-    }
-    unreachable;
+    base.invariant("boxy layout invariant violated: {s}", .{message});
 }
 
 test "boxy layout planner records dynamic worker boxes separately from storage layout" {
@@ -1312,7 +1309,7 @@ test "boxy layout planner records private worker function arg and return layouts
         .id = @fromBackingInt(@intCast(1)),
         .root_request = roots[0],
         .source = extra_source,
-        .checked_type = .{ .ty = @fromBackingInt(@intCast(2)) },
+        .checked_type = .{ .module = .root, .ty = @fromBackingInt(@intCast(2)) },
         .rep = extra_rep,
     });
 

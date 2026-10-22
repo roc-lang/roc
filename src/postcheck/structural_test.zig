@@ -77,8 +77,7 @@ test "Monotype record expression lowering does not keep mutable field-store slic
 
     try expectContains(lower_record_expr, "const target_fields");
     try expectContains(lower_record_expr, "const target_field_count");
-    try expectContains(lower_record_expr, "const target_field_list = try GuardedList.dupe(self.allocator, Type.Field, self.typeStore().fieldSpan(target_fields));");
-    try expectContains(lower_record_expr, "const field = target_field_list[i];");
+    try expectContains(lower_record_expr, "const field = self.spanFieldAt(target_fields, i);");
     try std.testing.expect(std.mem.find(u8, lower_record_expr, "target_field_borrow") == null);
     try std.testing.expect(std.mem.find(u8, lower_record_expr, "for (target_fields") == null);
 }
@@ -620,7 +619,8 @@ test "Monotype pairs stored record children in lexicographic field order" {
         "fn finishConstAtNode",
     );
     try expectContains(restore_record, "const graph_fields = (try self.graph.recordNodes(record_node)).fields");
-    try expectContains(restore_record, "const fields = try self.allocator.dupe(InstField, graph_fields)");
+    try expectContains(restore_record, "std.sort.isSorted(InstField, graph_fields, self.nameStore(), instRecordFieldLessThan)");
+    try expectContains(restore_record, "std.mem.sort(InstField, copied, self.nameStore(), instRecordFieldLessThan)");
     try expectContains(restore_record, "instRecordFieldLessThan");
 }
 
@@ -979,9 +979,9 @@ test "Monotype closed direct low-level lowering stays sealed and allocation disc
         "fn stepClosedOperandsAtTypes(",
         "fn stepClosedProcedure(",
     );
-    try expectContains(sealed_operands, "self.typeIsProvenUninhabited(arg_ty)");
+    try expectContains(sealed_operands, "self.typeIsProvenUninhabited(self.spanTypeAt(task.arg_types, uninhabited_index))");
     try expectContains(sealed_operands, "self.reserveExprSpan(operands.len)");
-    try expectContains(sealed_operands, ".operand_at_type = .{ .operand = operands[task.index], .ty = stable_types[task.index] }");
+    try expectContains(sealed_operands, ".operand_at_type = .{ .operand = operands[task.index], .ty = self.spanTypeAt(task.arg_types, task.index) }");
     try expectNotContains(sealed_operands, "InstGraph");
     try expectNotContains(sealed_operands, "activeNodeFromType");
 

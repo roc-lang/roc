@@ -87,8 +87,9 @@ pub const ResourceError = Allocator.Error;
 pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!void {
     var analysis = body_clone.AnalysisScratch.init(store.allocator);
     defer analysis.deinit();
-    var pass = Pass.init(store, layouts, store.allocator, &analysis);
+    var pass = Pass.init(store.allocator);
     defer pass.deinit();
+    pass.attach(store, layouts, &analysis);
     const proc_count = store.procSpecCount();
     var proc_index: usize = 0;
     while (proc_index < proc_count) : (proc_index += 1) {
@@ -112,7 +113,11 @@ pub fn prepareCallees(store: *LirStore, allocator: Allocator) ResourceError!Prep
         .store = store,
         .allocator = allocator,
         .append_kind = collections.DenseMap(LIR.LirProcSpecId, ?ProcKind).init(allocator),
+        .env = collections.DenseMap(LocalId, Pass.CalleeClassifier.Abstract).init(allocator),
+        .provenance = collections.DenseMap(LocalId, usize).init(allocator),
     };
+    defer classifier.env.deinit();
+    defer classifier.provenance.deinit();
     errdefer classifier.append_kind.deinit();
     for (0..store.procSpecCount()) |i| {
         _ = try classifier.classifyProc(@fromBackingInt(@intCast(i)));
@@ -129,8 +134,30 @@ pub fn runProc(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.
 
 /// Rewrite with independent pooled counts for the procedure and its loop body.
 pub fn runProcWithScratch(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, scratch_allocator: Allocator, analysis: *body_clone.AnalysisScratch) ResourceError!void {
-    var pass = Pass.init(store, layouts, scratch_allocator, analysis);
-    defer pass.deinit();
+    var lane = LaneScratch.init(scratch_allocator);
+    defer lane.deinit();
+    try runProcInLane(store, layouts, proc_id, &lane, analysis);
+}
+
+/// Promotion storage one executor lane retains across procedures; only
+/// empty storage survives a procedure.
+pub const LaneScratch = struct {
+    pass: Pass,
+
+    pub fn init(allocator: Allocator) LaneScratch {
+        return .{ .pass = Pass.init(allocator) };
+    }
+
+    pub fn deinit(self: *LaneScratch) void {
+        self.pass.deinit();
+    }
+};
+
+/// `runProcWithScratch` with lane-retained promotion storage.
+pub fn runProcInLane(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, lane: *LaneScratch, analysis: *body_clone.AnalysisScratch) ResourceError!void {
+    const pass = &lane.pass;
+    pass.attach(store, layouts, analysis);
+    defer pass.release();
     try pass.transformProc(proc_id);
 }
 
@@ -355,19 +382,39 @@ const Pass = struct {
     family_split: collections.DenseMap(LocalId, void),
     family_consumes: collections.DenseMap(CFStmtId, void),
     family_occurrences: collections.DenseMap(CFStmtId, usize),
+    /// `transformProc`'s per-round scan, its edge index, the procedure's
+    /// argument set, the parameters already attempted, and the locals the
+    /// rewrites create.
+    scan: Scan,
+    edge_index: EdgeIndex,
+    proc_args: collections.DenseMap(LocalId, void),
+    attempted: collections.DenseMap(LocalId, void),
+    new_locals: std.ArrayList(LocalId) = .empty,
+    /// `scanProc`'s work stack, visited statements, open join bodies, and
+    /// the stack depth at which each open body ends.
+    scan_stack: std.ArrayList(CFStmtId) = .empty,
+    scan_visited: collections.DenseMap(CFStmtId, void),
+    scan_scopes: std.ArrayList(BodyScope) = .empty,
+    scan_active_bodies: collections.DenseMap(LIR.JoinPointId, ?usize),
 
     analysis: *body_clone.AnalysisScratch,
 
-    fn init(store: *LirStore, layouts: *const layout_mod.Store, allocator: Allocator, analysis: *body_clone.AnalysisScratch) Pass {
+    const BodyScope = struct { id: LIR.JoinPointId, stack_depth: usize };
+
+    /// Empty promotion storage; `attach` names the store a procedure is
+    /// rewritten in.
+    fn init(allocator: Allocator) Pass {
         return .{
-            .store = store,
-            .analysis = analysis,
-            .layouts = layouts,
+            .store = undefined,
+            .analysis = undefined,
+            .layouts = undefined,
             .allocator = allocator,
             .classifier = .{
-                .store = store,
+                .store = undefined,
                 .allocator = allocator,
                 .append_kind = collections.DenseMap(LIR.LirProcSpecId, ?ProcKind).init(allocator),
+                .env = collections.DenseMap(LocalId, CalleeClassifier.Abstract).init(allocator),
+                .provenance = collections.DenseMap(LocalId, usize).init(allocator),
             },
             .owned_defs = collections.DenseMap(LocalId, std.ArrayList(OwnedSource)).init(allocator),
             .set_dispatches = collections.DenseMap(CFStmtId, void).init(allocator),
@@ -379,12 +426,60 @@ const Pass = struct {
             .family_split = collections.DenseMap(LocalId, void).init(allocator),
             .family_consumes = collections.DenseMap(CFStmtId, void).init(allocator),
             .family_occurrences = collections.DenseMap(CFStmtId, usize).init(allocator),
+            .scan = .{
+                .total_uses = collections.DenseMap(LocalId, u32).init(allocator),
+                .tracked_uses = collections.DenseMap(LocalId, u32).init(allocator),
+                .param_join = collections.DenseMap(LocalId, CFStmtId).init(allocator),
+                .literals = collections.DenseMap(LocalId, u64).init(allocator),
+                .scalar_aliases = collections.DenseMap(LocalId, LocalId).init(allocator),
+                .dirty_targets = collections.DenseMap(LocalId, void).init(allocator),
+                .assigned_targets = collections.DenseMap(LocalId, u32).init(allocator),
+            },
+            .edge_index = .{ .heads = collections.DenseMap(LocalId, usize).init(allocator), .next = &.{} },
+            .proc_args = collections.DenseMap(LocalId, void).init(allocator),
+            .attempted = collections.DenseMap(LocalId, void).init(allocator),
+            .scan_visited = collections.DenseMap(CFStmtId, void).init(allocator),
+            .scan_active_bodies = collections.DenseMap(LIR.JoinPointId, ?usize).init(allocator),
         };
+    }
+
+    fn attach(self: *Pass, store: *LirStore, layouts: *const layout_mod.Store, analysis: *body_clone.AnalysisScratch) void {
+        self.store = store;
+        self.layouts = layouts;
+        self.analysis = analysis;
+        self.classifier.store = store;
+    }
+
+    /// Empty every table for the next procedure, keeping capacity: the
+    /// helper memo too, since the next procedure may read another store.
+    fn release(self: *Pass) void {
+        self.resetProcState();
+        self.classifier.append_kind.clearRetainingCapacity();
+        self.family_parents.clearRetainingCapacity();
+        self.family_members.clearRetainingCapacity();
+        self.family_split.clearRetainingCapacity();
+        self.family_consumes.clearRetainingCapacity();
+        self.family_occurrences.clearRetainingCapacity();
+        self.store = undefined;
+        self.layouts = undefined;
+        self.analysis = undefined;
+        self.classifier.store = undefined;
     }
 
     fn deinit(self: *Pass) void {
         self.resetProcState();
         self.classifier.append_kind.deinit();
+        self.classifier.env.deinit();
+        self.classifier.provenance.deinit();
+        self.scan.deinit(self.allocator);
+        self.edge_index.deinit(self.allocator);
+        self.proc_args.deinit();
+        self.attempted.deinit();
+        self.new_locals.deinit(self.allocator);
+        self.scan_stack.deinit(self.allocator);
+        self.scan_visited.deinit();
+        self.scan_scopes.deinit(self.allocator);
+        self.scan_active_bodies.deinit();
         self.owned_defs.deinit();
         self.set_dispatches.deinit();
         self.loop_versions.deinit();
@@ -410,6 +505,11 @@ const Pass = struct {
         var slack = self.slack_loops.valueIterator();
         while (slack.next()) |loop| loop.deinit(allocator);
         self.slack_loops.clearRetainingCapacity();
+        self.scan.clear();
+        self.edge_index.heads.clearRetainingCapacity();
+        self.proc_args.clearRetainingCapacity();
+        self.attempted.clearRetainingCapacity();
+        self.new_locals.clearRetainingCapacity();
     }
 
     fn slackLoop(self: *Pass, loop_stmt: CFStmtId) ResourceError!*SlackLoop {
@@ -438,6 +538,10 @@ const Pass = struct {
         store: *LirStore,
         allocator: Allocator,
         append_kind: collections.DenseMap(LIR.LirProcSpecId, ?ProcKind),
+        /// One helper body's symbolic values and the operation each list
+        /// value extends, refilled per classified helper.
+        env: collections.DenseMap(LocalId, Abstract),
+        provenance: collections.DenseMap(LocalId, usize),
 
         /// Symbolic value of a local inside a linear helper body.
         const Abstract = union(enum) {
@@ -532,12 +636,12 @@ const Pass = struct {
             const params = self.store.getLocalSpan(proc.args);
             if (GuardedList.borrowLen(params) != 2) return null;
 
-            var env = collections.DenseMap(LocalId, Abstract).init(self.allocator);
-            defer env.deinit();
+            const env = &self.env;
+            env.clearRetainingCapacity();
             // Every operation must extend the latest list value, which must be
             // returned. Aliases preserve identity, not merely abstract shape.
-            var provenance = collections.DenseMap(LocalId, usize).init(self.allocator);
-            defer provenance.deinit();
+            const provenance = &self.provenance;
+            provenance.clearRetainingCapacity();
             var last_operation: usize = 0;
             try env.put(GuardedList.at(params, 0), .{ .arg = 0 });
             try env.put(GuardedList.at(params, 1), .{ .arg = 1 });
@@ -572,7 +676,7 @@ const Pass = struct {
                         current = assign.next;
                     },
                     .assign_low_level => |assign| {
-                        const value = try self.classifyStep(&env, assign.op, assign.args, null);
+                        const value = try self.classifyStep(env, assign.op, assign.args, null);
                         if (value == .other) return null;
                         const source = GuardedList.at(self.store.getLocalSpan(assign.args), 0);
                         if ((provenance.get(source) orelse 0) != last_operation) return null;
@@ -582,7 +686,7 @@ const Pass = struct {
                         current = assign.next;
                     },
                     .assign_call => |assign| {
-                        const value = try self.classifyStep(&env, null, assign.args, assign.proc);
+                        const value = try self.classifyStep(env, null, assign.args, assign.proc);
                         if (value == .other) return null;
                         const source = GuardedList.at(self.store.getLocalSpan(assign.args), 0);
                         if ((provenance.get(source) orelse 0) != last_operation) return null;
@@ -813,15 +917,20 @@ const Pass = struct {
 
     fn scanProc(self: *Pass, body: CFStmtId, scan: *Scan) ResourceError!void {
         const allocator = self.allocator;
-        var stack = std.ArrayList(CFStmtId).empty;
-        defer stack.deinit(allocator);
-        var visited = collections.DenseMap(CFStmtId, void).init(allocator);
-        defer visited.deinit();
-        const BodyScope = struct { id: LIR.JoinPointId, stack_depth: usize };
-        var scopes = std.ArrayList(BodyScope).empty;
-        defer scopes.deinit(allocator);
-        var active_bodies = collections.DenseMap(LIR.JoinPointId, ?usize).init(allocator);
-        defer active_bodies.deinit();
+        const stack = &self.scan_stack;
+        const visited = &self.scan_visited;
+        const scopes = &self.scan_scopes;
+        const active_bodies = &self.scan_active_bodies;
+        stack.clearRetainingCapacity();
+        visited.clearRetainingCapacity();
+        scopes.clearRetainingCapacity();
+        active_bodies.clearRetainingCapacity();
+        defer {
+            stack.clearRetainingCapacity();
+            visited.clearRetainingCapacity();
+            scopes.clearRetainingCapacity();
+            active_bodies.clearRetainingCapacity();
+        }
         try stack.append(allocator, body);
         while (stack.items.len > 0) {
             while (scopes.items.len > 0 and scopes.items[scopes.items.len - 1].stack_depth == stack.items.len) {
@@ -955,15 +1064,15 @@ const Pass = struct {
                 },
                 .switch_stmt => |s| {
                     try noteUse(scan, s.cond, false);
-                    try body_clone.appendSuccessorsInOrder(self.store, &stack, current, allocator, .{ .switch_edges = .arms_first });
+                    try body_clone.appendSuccessorsInOrder(self.store, stack, current, allocator, .{ .switch_edges = .arms_first });
                 },
                 .switch_initialized_payload => |s| {
                     try noteUse(scan, s.cond, false);
-                    try body_clone.appendSuccessorsInOrder(self.store, &stack, current, allocator, .{ .switch_edges = .arms_first });
+                    try body_clone.appendSuccessorsInOrder(self.store, stack, current, allocator, .{ .switch_edges = .arms_first });
                 },
                 .boxy_tag_match => |s| {
                     try noteUse(scan, s.source, false);
-                    try body_clone.appendSuccessorsInOrder(self.store, &stack, current, allocator, .{ .switch_edges = .arms_first });
+                    try body_clone.appendSuccessorsInOrder(self.store, stack, current, allocator, .{ .switch_edges = .arms_first });
                 },
                 .jump => |jump| {
                     scan.jump_visits += 1;
@@ -1020,7 +1129,7 @@ const Pass = struct {
                 => {
                     if (body_clone.definedTarget(stmt)) |target| try bumpUse(&scan.assigned_targets, target);
                     try body_clone.tryForEachStmtRead(self.store, stmt, scan, noteUntrackedUse);
-                    try body_clone.appendSuccessorsInOrder(self.store, &stack, current, allocator, .{ .switch_edges = .arms_first });
+                    try body_clone.appendSuccessorsInOrder(self.store, stack, current, allocator, .{ .switch_edges = .arms_first });
                 },
             }
         }
@@ -1096,16 +1205,16 @@ const Pass = struct {
                 const member = member_entry.local;
                 for (order.topology.reads_of.row(member)) |raw| {
                     const stmt_id: CFStmtId = @fromBackingInt(@intCast(raw));
-                    const stmt = self.store.getCFStmt(stmt_id);
+                    const stmt = self.store.getCFStmtImmediate(stmt_id);
                     // A transparent alias names the same value; account for
                     // its actual uses, including ones after its source dies.
-                    if (stmt == .assign_ref and stmt.assign_ref.op.kind == .local and
+                    if (stmt.* == .assign_ref and stmt.assign_ref.op.kind == .local and
                         parents.contains(stmt.assign_ref.target) and
                         Family.root(parents, stmt.assign_ref.target) == group_root) continue;
                     const occurrence = try occurrences.getOrPut(stmt_id);
                     if (!occurrence.found_existing) occurrence.value_ptr.* = 0;
                     occurrence.value_ptr.* += 1;
-                    if (stmt == .assign_low_level) {
+                    if (stmt.* == .assign_low_level) {
                         const op = stmt.assign_low_level.op;
                         if (op == .list_len or op == .list_get_unsafe or op == .list_prefetch or
                             op == .list_slack_unique or op == .list_owned_unique) continue;
@@ -1155,51 +1264,38 @@ const Pass = struct {
     // Per-parameter qualification and rewrite
 
     fn transformProc(self: *Pass, proc_id: LIR.LirProcSpecId) ResourceError!void {
-        const proc = self.store.getProcSpec(proc_id);
+        const proc = self.store.getProcSpecImmediate(proc_id);
         if (proc.body == null or proc.hosted != null) return;
         const allocator = self.allocator;
         self.resetProcState();
 
-        var proc_args = collections.DenseMap(LocalId, void).init(allocator);
-        defer proc_args.deinit();
+        const proc_args = &self.proc_args;
         {
             const args = self.store.getLocalSpan(proc.args);
             for (0..GuardedList.borrowLen(args)) |i| try proc_args.put(GuardedList.at(args, i), {});
         }
 
-        var new_locals = std.ArrayList(LocalId).empty;
-        defer new_locals.deinit(allocator);
+        const new_locals = &self.new_locals;
         // A promotion rewrites statements the scan indexed, so each round
         // works from a fresh scan and promotes at most one parameter;
         // already-promoted parameters are skipped by identity on later
         // rounds.
-        var attempted = collections.DenseMap(LocalId, void).init(allocator);
-        defer attempted.deinit();
+        const attempted = &self.attempted;
 
         var max_join_id: u32 = 0;
         var promoting = true;
         // The scan and its index are emptied and refilled per round rather
         // than remade: a procedure may promote hundreds of parameters, and
         // on an arena every round's fresh tables would stay allocated.
-        var scan = Scan{
-            .total_uses = collections.DenseMap(LocalId, u32).init(allocator),
-            .tracked_uses = collections.DenseMap(LocalId, u32).init(allocator),
-            .param_join = collections.DenseMap(LocalId, CFStmtId).init(allocator),
-            .literals = collections.DenseMap(LocalId, u64).init(allocator),
-            .scalar_aliases = collections.DenseMap(LocalId, LocalId).init(allocator),
-            .dirty_targets = collections.DenseMap(LocalId, void).init(allocator),
-            .assigned_targets = collections.DenseMap(LocalId, u32).init(allocator),
-        };
-        defer scan.deinit(allocator);
-        var edge_index = try EdgeIndex.init(allocator, &.{});
-        defer edge_index.deinit(allocator);
+        const scan = &self.scan;
+        const edge_index = &self.edge_index;
         while (promoting) {
             promoting = false;
             scan.clear();
-            try self.scanProc(self.store.getProcSpecImmediate(proc_id).body.?, &scan);
+            try self.scanProc(self.store.getProcSpecImmediate(proc_id).body.?, scan);
             max_join_id = @max(max_join_id, scan.max_join_id);
             if (scan.edges.items.len == 0) break;
-            try self.classifyMetadataTransfers(&scan, proc_id);
+            try self.classifyMetadataTransfers(scan, proc_id);
             try edge_index.rebuild(allocator, scan.edges.items);
             outer: for (scan.joins.items) |info| {
                 if (!info.has_back_edge) continue;
@@ -1212,7 +1308,7 @@ const Pass = struct {
                     if (!self.isListLocal(param)) continue;
                     if (attempted.contains(param)) continue;
                     try attempted.put(param, {});
-                    if (try self.promoteParam(&scan, &edge_index, &proc_args, info.stmt, param, &max_join_id, &new_locals)) {
+                    if (try self.promoteParam(scan, edge_index, proc_args, info.stmt, param, &max_join_id, new_locals)) {
                         promoting = true;
                         break :outer;
                     }
@@ -1220,11 +1316,11 @@ const Pass = struct {
             }
         }
 
-        try self.versionLoops(self.store.getProcSpecImmediate(proc_id).body.?, &max_join_id, &new_locals);
-        try self.versionSlackLoops(self.store.getProcSpecImmediate(proc_id).body.?, &max_join_id, &new_locals);
+        try self.versionLoops(self.store.getProcSpecImmediate(proc_id).body.?, &max_join_id, new_locals);
+        try self.versionSlackLoops(self.store.getProcSpecImmediate(proc_id).body.?, &max_join_id, new_locals);
 
         if (new_locals.items.len > 0) {
-            const spec = self.store.getProcSpec(proc_id);
+            const spec = self.store.getProcSpecImmediate(proc_id);
             const frame = self.store.getLocalSpan(spec.frame_locals);
             var combined = std.ArrayList(LocalId).empty;
             defer combined.deinit(allocator);
@@ -1505,7 +1601,7 @@ const Pass = struct {
                         .alias => stmt.assign_ref.next,
                         .append_call => stmt.assign_call.next,
                         .refresh_op, .range_append, .set_op, .le_bytes_append, .reserve_op, .unsafe_append => stmt.assign_low_level.next,
-                        .param_write => unreachable,
+                        .param_write => unreachable, // the loop skips param_write edges above
                     };
                     const seed = try self.seedMetadata(edge.target, limit, owned, next, new_locals, origin);
                     switch (edge.kind) {
@@ -1521,7 +1617,7 @@ const Pass = struct {
                         } }, origin),
                         .append_call => self.store.getCFStmtPtr(edge.stmt).assign_call.next = seed,
                         .refresh_op, .range_append, .set_op, .le_bytes_append, .reserve_op, .unsafe_append => self.store.getCFStmtPtr(edge.stmt).assign_low_level.next = seed,
-                        .param_write => unreachable,
+                        .param_write => unreachable, // the loop skips param_write edges above
                     }
                     try slack_of.put(edge.target, limit);
                     if (owned) |flag| try owned_of.put(edge.target, flag);
@@ -3315,7 +3411,7 @@ const VersionRewriter = struct {
                 .extra = try cloner.mapJoinExtra(s.extra),
             } }, origin),
             .switch_stmt => return cloned[0],
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_initialized_payload, .str_match, .str_match_set, .jump, .ret, .crash => unreachable,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_initialized_payload, .str_match, .str_match_set, .jump, .ret, .crash => unreachable, // interceptStmt returns children only for join and switch_stmt
         }
     }
 };
@@ -3411,7 +3507,7 @@ const SlackVersionRewriter = struct {
     ) ResourceError!CFStmtId {
         const s = switch (stmt) {
             .join => |join| join,
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .jump, .ret, .crash => unreachable,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .jump, .ret, .crash => unreachable, // interceptStmt returns children only for join
         };
         if (self.sites.get(old_id)) |site| {
             var next = cloned[0];
@@ -3512,8 +3608,9 @@ test "promote carrier index visits reverse ordered edges once and excludes unrel
 fn expectLoopScan(f: *PromoteTest, body: CFStmtId, statements: usize, jumps: usize, loops: usize) (Allocator.Error || error{TestExpectedEqual})!void {
     var analysis = body_clone.AnalysisScratch.init(testing.allocator);
     defer analysis.deinit();
-    var pass = Pass.init(&f.store, &f.layouts, testing.allocator, &analysis);
+    var pass = Pass.init(testing.allocator);
     defer pass.deinit();
+    pass.attach(&f.store, &f.layouts, &analysis);
     var scan = Pass.Scan{
         .total_uses = collections.DenseMap(LocalId, u32).init(testing.allocator),
         .tracked_uses = collections.DenseMap(LocalId, u32).init(testing.allocator),
@@ -3916,8 +4013,9 @@ fn testMetadataTransfer(f: *PromoteTest, proc: LIR.LirProcSpecId, site_entry: CF
     const allocator = testing.allocator;
     var analysis = body_clone.AnalysisScratch.init(allocator);
     defer analysis.deinit();
-    var pass = Pass.init(&f.store, &f.layouts, allocator, &analysis);
+    var pass = Pass.init(allocator);
     defer pass.deinit();
+    pass.attach(&f.store, &f.layouts, &analysis);
     var scan = Pass.Scan{
         .total_uses = collections.DenseMap(LocalId, u32).init(allocator),
         .tracked_uses = collections.DenseMap(LocalId, u32).init(allocator),

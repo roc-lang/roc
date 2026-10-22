@@ -430,7 +430,7 @@ pub const ModuleType = enum {
             },
             .lsp => .{
                 .root = "src/lsp/mod.zig",
-                .deps = &.{ .compile, .reporting, .build_options, .ctx, .base, .parse, .can, .types, .fmt, .eval, .roc_target },
+                .deps = &.{ .collections, .compile, .reporting, .build_options, .ctx, .base, .parse, .can, .types, .fmt, .eval, .roc_target },
                 .tests = .{ .unit = .{} },
                 .available = .native,
             },
@@ -716,7 +716,7 @@ pub const RocModules = struct {
         inline for (comptime std.enums.values(ModuleType)) |candidate| {
             if (module_type == candidate) return @field(self, @tagName(candidate));
         }
-        unreachable;
+        unreachable; // the loop covers every ModuleType value
     }
 
     /// Add dependencies for a specific module type to a compile step

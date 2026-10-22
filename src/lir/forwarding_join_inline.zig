@@ -67,7 +67,7 @@ pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!voi
 
 /// The same explicit eligibility contract is used by serial and worker drivers.
 pub fn rewritableProcBody(store: *const LirStore, proc: LIR.LirProcSpecId) ?LIR.CFStmtId {
-    const spec = store.getProcSpec(proc);
+    const spec = store.getProcSpecImmediate(proc);
     return if (spec.iterator_fusion_scope) spec.body else null;
 }
 
@@ -82,9 +82,23 @@ pub fn runProc(
     scratch_allocator: Allocator,
     join_params: *body_clone.JoinParamIndex,
 ) ResourceError!void {
+    var analysis = body_clone.AnalysisScratch.init(scratch_allocator);
+    defer analysis.deinit();
+    try runProcWithScratch(store, layouts, proc, scratch_allocator, join_params, &analysis);
+}
+
+/// `runProc` with lane-retained walk storage.
+pub fn runProcWithScratch(
+    store: *LirStore,
+    layouts: *const layout_mod.Store,
+    proc: LIR.LirProcSpecId,
+    scratch_allocator: Allocator,
+    join_params: *body_clone.JoinParamIndex,
+    analysis: *body_clone.AnalysisScratch,
+) ResourceError!void {
     const body = rewritableProcBody(store, proc) orelse return;
     var indexed = false;
-    while (try findCandidate(store, layouts, proc, scratch_allocator)) |found| {
+    while (try findCandidate(store, layouts, proc, scratch_allocator, analysis)) |found| {
         var candidate = found;
         defer candidate.moved.deinit();
         if (!indexed) {
@@ -95,19 +109,19 @@ pub fn runProc(
     }
 }
 
-fn findCandidate(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, allocator: Allocator) ResourceError!?Candidate {
-    const proc = store.getProcSpec(proc_id);
+fn findCandidate(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, allocator: Allocator, analysis: *body_clone.AnalysisScratch) ResourceError!?Candidate {
+    const proc = store.getProcSpecImmediate(proc_id);
     const proc_body = proc.body orelse return null;
-    var incoming_edges = try reachableIncomingEdgeCounts(store, proc_body, allocator);
+    var incoming_edges = try reachableIncomingEdgeCounts(store, proc_body, allocator, analysis);
     defer incoming_edges.deinit();
-    var forwarded = try forwardedJoins(store, proc_body, allocator);
+    var forwarded = try forwardedJoins(store, proc_body, allocator, analysis);
     defer forwarded.deinit();
 
-    var walk = try body_clone.ReachableStmts.initWithAllocator(store, proc_body, allocator);
+    var walk = try body_clone.ReachableStmts.initWithScratch(store, proc_body, analysis);
     defer walk.deinit();
     while (try walk.next()) |outer_stmt| {
-        const outer_node = store.getCFStmt(outer_stmt);
-        if (outer_node != .join) continue;
+        const outer_node = store.getCFStmtImmediate(outer_stmt);
+        if (outer_node.* != .join) continue;
         const outer = outer_node.join;
         const outer_params = store.getLocalSpan(outer.params);
         if (outer_params.len != 1) continue;
@@ -115,7 +129,7 @@ fn findCandidate(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LI
         // Only a join that some reachable one-parameter join forwards into
         // can be selected below; every other join is settled without walking
         // its body and remainder.
-        if (!forwarded.contains(.{ .join = outer.id, .param = outer_param })) continue;
+        if (!forwarded.contains(outer.id, outer_param)) continue;
 
         // Before ARC, moving a continuation that consumes an owning value can
         // change the dominance facts ARC uses to certify the join parameter's
@@ -130,31 +144,31 @@ fn findCandidate(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LI
         // the declaration that edge targets. Recursive joins are loop
         // headers, not one-shot continuations, even when their initial entry
         // happens to pass through a single forwarding join.
-        if (try subtreeJumpsTo(store, outer.body, outer.id, allocator)) continue;
+        if (try subtreeJumpsTo(store, outer.body, outer.id, analysis)) continue;
 
         var incoming_count: usize = 0;
         var selected: ?Candidate = null;
-        var remainder_walk = try body_clone.ReachableStmts.initWithAllocator(store, outer.remainder, allocator);
+        var remainder_walk = try body_clone.ReachableStmts.initWithScratch(store, outer.remainder, analysis);
         defer remainder_walk.deinit();
         while (try remainder_walk.next()) |inner_stmt| {
-            const inner_node = store.getCFStmt(inner_stmt);
-            if (inner_node == .jump and inner_node.jump.target == outer.id) {
+            const inner_node = store.getCFStmtImmediate(inner_stmt);
+            if (inner_node.* == .jump and inner_node.jump.target == outer.id) {
                 incoming_count += 1;
                 continue;
             }
-            if (inner_node != .join) continue;
+            if (inner_node.* != .join) continue;
             const inner = inner_node.join;
             const inner_params = store.getLocalSpan(inner.params);
             if (inner_params.len != 1) continue;
             const inner_param = GuardedList.at(inner_params, 0);
             if (!forwardsToJoin(store, inner.body, inner_param, outer_param, outer.id)) continue;
-            const forwarding = store.getCFStmt(inner.body);
-            const terminal = if (forwarding == .assign_ref)
+            const forwarding = store.getCFStmtImmediate(inner.body);
+            const terminal = if (forwarding.* == .assign_ref)
                 forwarding.assign_ref.next
-            else if (forwarding == .set_local)
+            else if (forwarding.* == .set_local)
                 forwarding.set_local.next
             else
-                unreachable;
+                unreachable; // forwardsToJoin accepted inner.body only as an assign_ref or set_local
             // Replacing only the inner join's body must make the forwarding
             // chain unreachable. LIR permits shared statement tails, so a
             // statement-occurrence count is insufficient: require both nodes
@@ -179,7 +193,7 @@ fn findCandidate(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LI
         // or bypass that source.
         if (incoming_count == 1) {
             if (selected) |*candidate| {
-                candidate.moved = try collectMovedBody(store, outer.body, &incoming_edges, allocator);
+                candidate.moved = try collectMovedBody(store, outer.body, &incoming_edges, allocator, analysis);
                 return candidate.*;
             }
         }
@@ -189,44 +203,81 @@ fn findCandidate(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LI
 
 const IncomingEdges = collections.DenseMap(LIR.CFStmtId, u32);
 
-const ForwardTarget = struct { join: LIR.JoinPointId, param: LIR.LocalId };
+/// The (join, parameter) pairs some reachable one-parameter join forwards
+/// into: each join's parameters chain through one shared node list, so a
+/// lookup reads the join's head and walks the few parameters forwarded to it.
+const ForwardTargets = struct {
+    const end: u32 = std.math.maxInt(u32);
+    const Node = struct { param: LIR.LocalId, next: u32 };
+
+    heads: collections.DenseMap(LIR.JoinPointId, u32),
+    nodes: std.ArrayList(Node) = .empty,
+
+    fn init(allocator: Allocator) ForwardTargets {
+        return .{ .heads = collections.DenseMap(LIR.JoinPointId, u32).init(allocator) };
+    }
+
+    fn deinit(self: *ForwardTargets) void {
+        self.nodes.deinit(self.heads.allocator);
+        self.heads.deinit();
+    }
+
+    fn contains(self: *const ForwardTargets, join: LIR.JoinPointId, param: LIR.LocalId) bool {
+        var index = self.heads.get(join) orelse return false;
+        while (index != end) {
+            const node = self.nodes.items[index];
+            if (node.param == param) return true;
+            index = node.next;
+        }
+        return false;
+    }
+
+    fn put(self: *ForwardTargets, join: LIR.JoinPointId, param: LIR.LocalId) ResourceError!void {
+        if (self.contains(join, param)) return;
+        if (self.nodes.items.len >= end) return error.OutOfMemory;
+        try self.nodes.ensureUnusedCapacity(self.heads.allocator, 1);
+        const head = try self.heads.getOrPut(join);
+        self.nodes.appendAssumeCapacity(.{ .param = param, .next = if (head.found_existing) head.value_ptr.* else end });
+        head.value_ptr.* = @intCast(self.nodes.items.len - 1);
+    }
+};
 
 /// Each join parameter that a reachable one-parameter join's body forwards
 /// its own parameter into (`forwardsToJoin`).
-fn forwardedJoins(store: *LirStore, body: LIR.CFStmtId, allocator: Allocator) ResourceError!std.AutoHashMap(ForwardTarget, void) {
-    var targets = std.AutoHashMap(ForwardTarget, void).init(allocator);
+fn forwardedJoins(store: *LirStore, body: LIR.CFStmtId, allocator: Allocator, analysis: *body_clone.AnalysisScratch) ResourceError!ForwardTargets {
+    var targets = ForwardTargets.init(allocator);
     errdefer targets.deinit();
-    var walk = try body_clone.ReachableStmts.initWithAllocator(store, body, allocator);
+    var walk = try body_clone.ReachableStmts.initWithScratch(store, body, analysis);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
-        const node = store.getCFStmt(stmt_id);
-        if (node != .join) continue;
+        const node = store.getCFStmtImmediate(stmt_id);
+        if (node.* != .join) continue;
         const params = store.getLocalSpan(node.join.params);
         if (params.len != 1) continue;
         const source = GuardedList.at(params, 0);
-        const first = store.getCFStmt(node.join.body);
-        const target: LIR.LocalId, const terminal_id = if (first == .assign_ref) blk: {
+        const first = store.getCFStmtImmediate(node.join.body);
+        const target: LIR.LocalId, const terminal_id = if (first.* == .assign_ref) blk: {
             const assign = first.assign_ref;
             if (assign.op.kind != .local or assign.op.source != source) continue;
             break :blk .{ assign.target, assign.next };
-        } else if (first == .set_local) blk: {
+        } else if (first.* == .set_local) blk: {
             const set = first.set_local;
             if (set.value != source or set.mode != .initialize_join_param) continue;
             break :blk .{ set.target, set.next };
         } else continue;
-        const terminal = store.getCFStmt(terminal_id);
-        if (terminal != .jump) continue;
-        try targets.put(.{ .join = terminal.jump.target, .param = target }, {});
+        const terminal = store.getCFStmtImmediate(terminal_id);
+        if (terminal.* != .jump) continue;
+        try targets.put(terminal.jump.target, target);
     }
     return targets;
 }
 
-fn reachableIncomingEdgeCounts(store: *LirStore, body: LIR.CFStmtId, allocator: Allocator) ResourceError!IncomingEdges {
+fn reachableIncomingEdgeCounts(store: *LirStore, body: LIR.CFStmtId, allocator: Allocator, analysis: *body_clone.AnalysisScratch) ResourceError!IncomingEdges {
     var counts = IncomingEdges.init(allocator);
     errdefer counts.deinit();
     var successors = std.ArrayList(LIR.CFStmtId).empty;
     defer successors.deinit(allocator);
-    var walk = try body_clone.ReachableStmts.initWithAllocator(store, body, allocator);
+    var walk = try body_clone.ReachableStmts.initWithScratch(store, body, analysis);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
         successors.clearRetainingCapacity();
@@ -240,12 +291,12 @@ fn reachableIncomingEdgeCounts(store: *LirStore, body: LIR.CFStmtId, allocator: 
     return counts;
 }
 
-fn subtreeJumpsTo(store: *LirStore, body: LIR.CFStmtId, target: LIR.JoinPointId, allocator: Allocator) ResourceError!bool {
-    var walk = try body_clone.ReachableStmts.initWithAllocator(store, body, allocator);
+fn subtreeJumpsTo(store: *LirStore, body: LIR.CFStmtId, target: LIR.JoinPointId, analysis: *body_clone.AnalysisScratch) ResourceError!bool {
+    var walk = try body_clone.ReachableStmts.initWithScratch(store, body, analysis);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
-        const stmt = store.getCFStmt(stmt_id);
-        if (stmt == .jump and stmt.jump.target == target) return true;
+        const stmt = store.getCFStmtImmediate(stmt_id);
+        if (stmt.* == .jump and stmt.jump.target == target) return true;
     }
     return false;
 }
@@ -255,6 +306,7 @@ fn collectMovedBody(
     root: LIR.CFStmtId,
     proc_incoming_edges: *const IncomingEdges,
     allocator: Allocator,
+    analysis: *body_clone.AnalysisScratch,
 ) ResourceError!MovedBody {
     var internal_incoming = IncomingEdges.init(allocator);
     defer internal_incoming.deinit();
@@ -263,7 +315,7 @@ fn collectMovedBody(
     defer nodes.deinit(allocator);
     var successors = std.ArrayList(LIR.CFStmtId).empty;
     defer successors.deinit(allocator);
-    var walk = try body_clone.ReachableStmts.initWithAllocator(store, root, allocator);
+    var walk = try body_clone.ReachableStmts.initWithScratch(store, root, analysis);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
         try nodes.append(allocator, stmt_id);
@@ -523,15 +575,15 @@ fn testSoleConsumer(scratch_allocator: Allocator, mode: TestMode, unrelated_coun
 
     try testRun(&store, &layouts, proc, scratch_allocator, mode);
 
-    const rewritten_outer = store.getCFStmt(store.getProcSpecImmediate(proc).body.?);
-    try testing.expect(rewritten_outer == .join);
+    const rewritten_outer = store.getCFStmtImmediate(store.getProcSpecImmediate(proc).body.?);
+    try testing.expect(rewritten_outer.* == .join);
     try testing.expectEqual(inner_id, rewritten_outer.join.id);
-    const moved = store.getCFStmt(rewritten_outer.join.body);
-    try testing.expect(moved == .assign_ref);
+    const moved = store.getCFStmtImmediate(rewritten_outer.join.body);
+    try testing.expect(moved.* == .assign_ref);
     try testing.expectEqual(copied, moved.assign_ref.target);
     try testing.expectEqual(inner_param, moved.assign_ref.op.source);
-    const moved_ret = store.getCFStmt(moved.assign_ref.next);
-    try testing.expect(moved_ret == .ret);
+    const moved_ret = store.getCFStmtImmediate(moved.assign_ref.next);
+    try testing.expect(moved_ret.* == .ret);
     try testing.expectEqual(moved.assign_ref.target, moved_ret.ret.value);
     const rewritten_frame = store.getLocalSpan(store.getProcSpecImmediate(proc).frame_locals);
     try testing.expectEqual(@as(usize, 4), rewritten_frame.len);
@@ -619,16 +671,16 @@ fn testSharedTail(scratch_allocator: Allocator, mode: TestMode) TestError!void {
 
     try testRun(&store, &layouts, proc, scratch_allocator, mode);
 
-    const rewritten = store.getCFStmt(store.getProcSpecImmediate(proc).body.?);
-    try testing.expect(rewritten == .join);
+    const rewritten = store.getCFStmtImmediate(store.getProcSpecImmediate(proc).body.?);
+    try testing.expect(rewritten.* == .join);
     try testing.expectEqual(inner_id, rewritten.join.id);
-    const moved_prefix = store.getCFStmt(rewritten.join.body);
-    try testing.expect(moved_prefix == .assign_ref);
+    const moved_prefix = store.getCFStmtImmediate(rewritten.join.body);
+    try testing.expect(moved_prefix.* == .assign_ref);
     try testing.expectEqual(copied, moved_prefix.assign_ref.target);
     try testing.expectEqual(inner_param, moved_prefix.assign_ref.op.source);
     try testing.expectEqual(shared_tail, moved_prefix.assign_ref.next);
 
-    const original_tail = store.getCFStmt(shared_tail);
+    const original_tail = store.getCFStmtImmediate(shared_tail);
     try testing.expectEqual(shared_result, original_tail.assign_ref.target);
     try testing.expectEqual(shared_ret, original_tail.assign_ref.next);
     const rewritten_frame = store.getLocalSpan(store.getProcSpecImmediate(proc).frame_locals);
