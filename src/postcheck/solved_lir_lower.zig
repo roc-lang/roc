@@ -5189,7 +5189,7 @@ const Lowerer = struct {
                 var narrowed = named;
                 narrowed.args = try self.types.addSpan(results[0..named.args.len]);
                 if (narrowed.backing) |*backing| backing.ty = results[named.args.len];
-                self.types.set(copy, .{ .named = narrowed });
+                try self.types.set(copy, .{ .named = narrowed });
                 return copy;
             },
             .primitive, .capture_record, .callable, .erased_fn, .erased_capture_ptr, .zst => Common.invariant("a compile-time root's leaf type was widened"),
