@@ -866,16 +866,9 @@ pub fn spliceExternalProcs(
     for (external_procs) |proc_id| {
         const proc = proc_specs[@backingInt(proc_id)];
         if (!proc.external) invariant("procedure {d} was offered for splicing but is not an object-cache entry", .{@backingInt(proc_id)});
-        const key = proc.cache_key orelse {
-            if (builtin.mode == .debug) invariant("object-cache procedure {d} had no cache key", .{@backingInt(proc_id)});
-            unreachable;
-        };
-        const located = source.find(source.context, key) orelse {
-            if (builtin.mode == .debug) {
-                invariant("object cache served a specialization whose artifact {s} is not in any loaded pack", .{&proc.identity.symbolHex()});
-            }
-            unreachable;
-        };
+        const key = proc.cache_key orelse invariant("object-cache procedure {d} had no cache key", .{@backingInt(proc_id)});
+        const located = source.find(source.context, key) orelse
+            invariant("object cache served a specialization whose artifact {s} is not in any loaded pack", .{&proc.identity.symbolHex()});
         const gop = try packs.getOrPut(located.set);
         if (!gop.found_existing) gop.value_ptr.* = .{ .placed = std.AutoHashMap(u32, usize).init(allocator) };
         try ProcArtifact.splice(CodeGen, allocator, codegen, located.set, &.{located.index}, &procs_by_identity, &gop.value_ptr.placed, data_out);

@@ -53,10 +53,10 @@ fn materializedAmong(
     stages: *const CompletedStages,
     module: CheckedArtifact.ModuleId,
     requests: []const CheckedArtifact.RootRequest,
-) usize {
+) error{TestUnexpectedResult}!usize {
     var count: usize = 0;
     for (requests) |request| {
-        if (materializingStage(stages, module, rootIdentity(request)) != null) count += 1;
+        if (materializingStage(stages, module, try rootIdentity(request)) != null) count += 1;
     }
     return count;
 }
@@ -149,8 +149,8 @@ fn countProcsNaming(store: *const lir.LirStore, fragment: []const u8) usize {
     return count;
 }
 
-fn rootIdentity(request: CheckedArtifact.RootRequest) CheckedArtifact.ComptimeRootId {
-    return request.compile_time_root orelse unreachable;
+fn rootIdentity(request: CheckedArtifact.RootRequest) error{TestUnexpectedResult}!CheckedArtifact.ComptimeRootId {
+    return request.compile_time_root orelse error.TestUnexpectedResult;
 }
 
 /// The request for the root declared at `order` in its module.
@@ -253,7 +253,7 @@ test "a build evaluates and materializes only the compile-time values its progra
     // stays explicitly unevaluated. Transcoding rejects a read whose value
     // the host did not materialize, so the runtime continuation below also
     // fails if the wrong root were the evaluated one.
-    try std.testing.expectEqual(@as(usize, 1), materializedAmong(host, helper.key.digest(), helper_roots));
+    try std.testing.expectEqual(@as(usize, 1), try materializedAmong(host, helper.key.digest(), helper_roots));
     var unevaluated: usize = 0;
     for (helper_roots) |request| {
         if (helper.compile_time_roots.root(request.compile_time_root.?).payload == .unevaluated) unevaluated += 1;
@@ -338,19 +338,19 @@ test "one evaluated root has one completed-value slot however many places read i
     // read by `doubled`, at compile time. No program has two slots for one
     // concrete value, however many places in it read the value.
     for (helper_roots) |request| {
-        const root = rootIdentity(request);
+        const root = try rootIdentity(request);
         try std.testing.expect(materializingStage(stages, helper.key.digest(), root) != null);
         for (stages.programs()) |program| try std.testing.expect(valueSlotsForRoot(program, helper.key.digest(), root) <= 1);
     }
-    try std.testing.expectEqual(@as(usize, 3), materializedAmong(stages, helper.key.digest(), helper_roots));
+    try std.testing.expectEqual(@as(usize, 3), try materializedAmong(stages, helper.key.digest(), helper_roots));
 
     // `doubled` reads `base_value` once it has completed: in a later stage
     // than the one evaluating `base_value`, where the completed scalar is a
     // literal and needs no slot. A root nothing evaluated later reads has a
     // slot only where it runs.
-    const base_root = rootIdentity(try rootWithOrder(helper_roots, 0));
-    const doubled_root = rootIdentity(try rootWithOrder(helper_roots, 1));
-    const offset_root = rootIdentity(try rootWithOrder(helper_roots, 2));
+    const base_root = try rootIdentity(try rootWithOrder(helper_roots, 0));
+    const doubled_root = try rootIdentity(try rootWithOrder(helper_roots, 1));
+    const offset_root = try rootIdentity(try rootWithOrder(helper_roots, 2));
     const base_stage = materializingStage(stages, helper.key.digest(), base_root).?;
     const doubled_stage = materializingStage(stages, helper.key.digest(), doubled_root).?;
     try std.testing.expect(doubled_stage > base_stage);

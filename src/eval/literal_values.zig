@@ -271,7 +271,7 @@ pub const LiteralValues = struct {
         }
         const store_bytes = try allocator.alignedAlloc(u8, alignment, writer.total_bytes);
         defer allocator.free(store_bytes);
-        _ = writer.writeToBuffer(store_bytes) catch unreachable;
+        _ = writer.writeToBuffer(store_bytes) catch unreachable; // store_bytes was allocated with writer.total_bytes, the size writeToBuffer requires
         @memcpy(bytes[store_offset..], store_bytes);
         return bytes;
     }

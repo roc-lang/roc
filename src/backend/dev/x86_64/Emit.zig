@@ -1000,6 +1000,26 @@ pub fn Emit(comptime target: RocTarget) type {
             });
         }
 
+        /// Packed shift by immediate in the legacy SSE encoding. ModR/M.reg
+        /// selects the shift operation, and `dst` is both the shifted source
+        /// and the destination.
+        pub fn ssePackedShiftImm8(
+            self: *Self,
+            opcode: u8,
+            digit: u3,
+            dst: FloatReg,
+            imm: u8,
+        ) Allocator.Error!void {
+            try self.buf.append(self.allocator, 0x66);
+            if (dst.rexB() == 1) try self.buf.append(self.allocator, rex(0, 0, 0, 1));
+            try self.buf.appendSlice(self.allocator, &.{
+                0x0F,
+                opcode,
+                modRM(0b11, digit, dst.enc()),
+                imm,
+            });
+        }
+
         pub fn movVectorFromGeneral(self: *Self, dst: FloatReg, src: GeneralReg, qword: bool) Allocator.Error!void {
             try self.buf.append(self.allocator, 0x66);
             const w: u1 = @intFromBool(qword);
@@ -1771,6 +1791,25 @@ test "sse2 packed mask ops" {
     emit.buf.clearRetainingCapacity();
     try emit.pslldRegImm8(.XMM0, 31);
     try std.testing.expectEqualSlices(u8, &[_]u8{ 0x66, 0x0F, 0x72, 0xF0, 31 }, emit.buf.items);
+}
+
+test "legacy SSE2 shuffles and immediate packed shifts" {
+    var emit = LinuxEmit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    // psrldq xmm9, 8
+    try emit.ssePackedShiftImm8(0x73, 3, .XMM9, 8);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x66, 0x41, 0x0F, 0x73, 0xD9, 8 }, emit.buf.items);
+
+    emit.buf.clearRetainingCapacity();
+    // psraw xmm2, 15
+    try emit.ssePackedShiftImm8(0x71, 4, .XMM2, 15);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x66, 0x0F, 0x71, 0xE2, 15 }, emit.buf.items);
+
+    emit.buf.clearRetainingCapacity();
+    // pshuflw xmm1, xmm10, 0x1b: the mandatory prefix precedes REX.
+    try emit.sseRegRegImm8(.map_0f, .pf2, 0x70, .XMM1, .XMM10, 0x1B);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xF2, 0x41, 0x0F, 0x70, 0xCA, 0x1B }, emit.buf.items);
 }
 
 test "function prologue sequence" {
