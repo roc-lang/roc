@@ -40,17 +40,15 @@ test {
     try std.testing.expectEqual(24, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
     try std.testing.expectEqual(20, @sizeOf(NominalType)); // Increased from 16 due to source identity and opacity bits
-    // Folding `binop_negated` and `num_literal` into the `origin` union is a
-    // semantic regrouping (kind-specific payloads now live inside their variant),
-    // not a size win: the literal-origin variant still embeds a full `NumeralInfo`,
-    // so the `Origin` union dominates the struct. Provenance adds one raw expr
-    // index (4B); expect effects live in checker-owned slots because they belong
-    // to call occurrences, not copied type constraints. The optional derived-map
-    // payload selection adds its tag, payload index, and optional discriminant
-    // without affecting type identity. Interpolation metadata records whose
-    // source its regions point into, so reports never render another module's
-    // positions against this module's source.
-    try std.testing.expectEqual(92, @sizeOf(StaticDispatchConstraint));
+    // A constraint keeps its name, callable, origin kind, and introducing
+    // expression inline. A numeric literal's facts live in the type store's
+    // `numeral_infos` and interpolation metadata in its
+    // `interpolation_metadata`, so the constraint holds one 4-byte row index
+    // for each. A derived map's payload selection belongs to its callable's
+    // class in the type store, not to each constraint. Expect effects live in
+    // checker-owned slots because they belong to call occurrences, not copied
+    // type constraints.
+    try std.testing.expectEqual(24, @sizeOf(StaticDispatchConstraint));
     // Directed effect dependencies must survive type generalization,
     // instantiation, and cross-module copying, so they live with the function
     // payload rather than in checker-only side state.
@@ -101,7 +99,7 @@ pub const VarMap = std.hash_map.HashMap(Var, Var, std.hash_map.AutoContext(Var),
 /// Checker decisions a descriptor carries alongside its content. Descriptors
 /// live in a struct-of-arrays keyed by every union-find resolve, so these share
 /// one byte-wide column instead of one column each.
-pub const DescriptorFlags = packed struct(u8) {
+pub const DescriptorFlags = packed struct(u16) {
     /// The checker closed this otherwise-unresolved variable to `[]` after
     /// proving that no runtime constructor can inhabit it. The checked output
     /// preserves the variable identity and carries `[]` only as its row default.
@@ -143,6 +141,14 @@ pub const DescriptorFlags = packed struct(u8) {
     /// requirement records; the checker links it to the callable's copy
     /// before anything reads it, and reading it unlinked is a compiler bug.
     deferred_callable: bool = false,
+    /// A tag row a host-boundary annotation (a hosted declaration or a
+    /// `provides` definition) wrote. The host was compiled against this row's
+    /// representation, so the row never joins a wider one (design.md "Row
+    /// Joins"): a value carrying it is never widened, and whatever it flows
+    /// into must have exactly this row. A copy of the row is the same host
+    /// row, so instantiation carries the flag.
+    host_fixed_row: bool = false,
+    _padding: u7 = 0,
 
     /// The flags a copy of this class carries: those that describe its type.
     /// The others record what happened to this class itself—a rejection, a
@@ -155,6 +161,7 @@ pub const DescriptorFlags = packed struct(u8) {
         return .{
             .empty_tag_union_is_default = self.empty_tag_union_is_default,
             .nominal_backing_structure = self.nominal_backing_structure,
+            .host_fixed_row = self.host_fixed_row,
         };
     }
 
@@ -1059,6 +1066,27 @@ pub const NumeralInfo = struct {
         return sum[0];
     }
 
+    /// A type store's numeral facts, one row per numeric literal (and per
+    /// merge of two literals' facts).
+    pub const SafeList = MkSafeList(NumeralInfo);
+
+    /// A row of a type store's `numeral_infos`, or none. A constraint carries
+    /// one exactly when its origin is a numeric literal conversion.
+    pub const OptIdx = enum(u32) {
+        none = std.math.maxInt(u32),
+        _,
+
+        pub fn from(idx: SafeList.Idx) OptIdx {
+            std.debug.assert(@backingInt(idx) != std.math.maxInt(u32));
+            return @fromBackingInt(@backingInt(idx));
+        }
+
+        /// The row, or null when absent.
+        pub fn get(self: OptIdx) ?SafeList.Idx {
+            return if (self == .none) null else @fromBackingInt(@backingInt(self));
+        }
+    };
+
     /// Test-only convenience: facts for an integer literal given as a value,
     /// for unit tests that need a numeral constraint without parsing source.
     pub fn testOnlyInt(value: u128, is_negative: bool, region: base.Region) NumeralInfo {
@@ -1072,10 +1100,9 @@ pub const NumeralInfo = struct {
             .is_negative = is_negative,
             .is_fractional = false,
         };
-        // Integer fit computation never allocates.
         var no_heap: [0]u8 = .{};
         var fba = std.heap.FixedBufferAllocator.init(&no_heap);
-        const fit_set = numeral_mod.computeFitSet(fba.allocator(), exact) catch unreachable;
+        const fit_set = numeral_mod.computeFitSet(fba.allocator(), exact) catch unreachable; // integer fit computation never allocates
         return fromExact(exact, fit_set, true, region);
     }
 };
@@ -1102,9 +1129,14 @@ pub const StaticDispatchConstraint = struct {
     /// the dispatch fn var, a function
     fn_var: Var,
     /// the origin of this constraint (operator, method call, where clause, or
-    /// literal). Kind-specific payloads (binop negation, literal info) live
+    /// literal). Kind-specific flags (binop negation, literal kind) live
     /// *inside* the variant, so they can't exist without or apart from it.
     origin: Origin,
+    /// A numeric literal conversion's facts in the owning type store's
+    /// `numeral_infos`; present exactly when `origin` is the `numeral`
+    /// literal kind. Like the interpolation part range, it is relative to the
+    /// owning store, so a copy into another store copies the facts too.
+    numeral: NumeralInfo.OptIdx = .none,
     /// Where this constraint was introduced, so ambiguity can be reported at the
     /// user's own expression without reconstructing var->expr maps after the
     /// fact. Copied verbatim by instantiation and cross-module import. This is
@@ -1113,15 +1145,12 @@ pub const StaticDispatchConstraint = struct {
     /// so two structurally identical constraints with different provenance stay
     /// equal.
     provenance: Provenance = .{},
-    /// The direct tag payload selected by checked derived `map`/`map!`.
-    /// This is checker-owned derivation metadata and, like `provenance`, does
-    /// not participate in type identity or constraint equality.
-    derived_map_plan: ?DerivedMapPlan = null,
-    /// Extra checking metadata for `from_interpolation`. This travels with the
-    /// constraint because the checker must re-check interpolated part types
-    /// after instantiation and cross-module copying. It is metadata, not type
-    /// identity: canonical type keys and constraint equivalence do not read it.
-    interpolation: InterpolationMetadata = .none,
+    /// Extra checking metadata for `from_interpolation`, in the owning type
+    /// store's pool. This travels with the constraint because the checker
+    /// must re-check interpolated part types after instantiation and
+    /// cross-module copying. It is metadata, not type identity: canonical
+    /// type keys and constraint equivalence do not read it.
+    interpolation: InterpolationMetadata.OptIdx = .none,
 
     /// The introducing site of a static dispatch constraint. `intro_expr` is the
     /// raw `CIR.Expr.Idx` of the expression that created the constraint, stored
@@ -1202,6 +1231,29 @@ pub const StaticDispatchConstraint = struct {
         pub fn isPresent(self: InterpolationMetadata) bool {
             return self.expr_region.get() != null;
         }
+
+        /// The type store's pool of interpolation metadata.
+        pub const MetadataList = MkSafeList(@This());
+
+        /// Interpolation metadata in its type store's pool, or `none`.
+        pub const OptIdx = enum(u32) {
+            none = std.math.maxInt(u32),
+            _,
+
+            pub fn from(idx: MetadataList.Idx) OptIdx {
+                std.debug.assert(@backingInt(idx) != std.math.maxInt(u32));
+                return @fromBackingInt(@backingInt(idx));
+            }
+
+            /// The pool index, or null when absent.
+            pub fn get(self: OptIdx) ?MetadataList.Idx {
+                return if (self == .none) null else @fromBackingInt(@backingInt(self));
+            }
+
+            pub fn isPresent(self: OptIdx) bool {
+                return self != .none;
+            }
+        };
     };
 
     /// The kinds of literal that desugar to open literal-conversion constraints.
@@ -1211,18 +1263,6 @@ pub const StaticDispatchConstraint = struct {
         numeral, // numeric literal, dispatches `from_numeral`
         quote, // string literal, dispatches `from_quote`
         interpolation, // interpolated string literal, dispatches `from_interpolation`
-    };
-
-    /// The per-kind payload carried by a literal-conversion origin. The payload can't
-    /// exist without its kind, nor a literal-origin without its payload.
-    pub const LiteralInfo = union(LiteralKind) {
-        numeral: NumeralInfo,
-        /// No payload here; a string literal's bytes live in the dispatch plan,
-        /// not the type store.
-        quote,
-        /// Interpolated string literals carry no payload here either; like
-        /// quotes they default to Str.
-        interpolation,
     };
 
     /// Tracks where a static dispatch constraint originated from
@@ -1239,31 +1279,30 @@ pub const StaticDispatchConstraint = struct {
         /// implementation actually dispatches (so an unpinnable instantiated
         /// receiver is a genuine ambiguity) from a phantom contract the body never
         /// uses (which stays a valid polymorphic signature). The bit rides the
-        /// constraint itself through instantiation and unification merges (see
-        /// unify.zig), including across module boundaries where the originating
-        /// scheme's body is not otherwise visible—module-local provenance like
-        /// `intro_expr` cannot substitute for it.
+        /// constraint itself through instantiation, including across module
+        /// boundaries where the originating scheme's body is not otherwise
+        /// visible—module-local provenance like `intro_expr` cannot substitute
+        /// for it.
         where_clause: struct { body_required: bool = false },
-        from_literal: LiteralInfo, // From a literal conversion (from_numeral, from_quote, or from_interpolation)
-
-        /// The numeral payload, if this origin is a numeric literal conversion;
-        /// null otherwise.
-        pub fn numeralInfo(self: Origin) ?NumeralInfo {
-            return switch (self) {
-                .from_literal => |lit| switch (lit) {
-                    .numeral => |info| info,
-                    .quote => null,
-                    .interpolation => null,
-                },
-                .desugared_binop, .desugared_unaryop, .method_call, .where_clause => null,
-            };
-        }
+        /// From a literal conversion (from_numeral, from_quote, or
+        /// from_interpolation). A numeral's facts are the constraint's
+        /// `numeral`; a string literal's bytes live in the dispatch plan, not
+        /// the type store.
+        from_literal: LiteralKind,
 
         /// The literal kind, if this origin is a literal conversion; null otherwise.
         pub fn literalKind(self: Origin) ?LiteralKind {
             return switch (self) {
                 .from_literal => |lit| lit,
                 .desugared_binop, .desugared_unaryop, .method_call, .where_clause => null,
+            };
+        }
+
+        /// Whether this relation came from a desugared operator.
+        pub fn isOperator(self: Origin) bool {
+            return switch (self) {
+                .desugared_binop, .desugared_unaryop => true,
+                .method_call, .where_clause, .from_literal => false,
             };
         }
 
@@ -1285,7 +1324,9 @@ pub const StaticDispatchConstraint = struct {
 };
 
 /// Source-type identity for the payload slot selected by derived mapping.
-/// The checked artifact translates `tag_name` into its canonical tag name.
+/// The type store keeps one for each class of relation callables
+/// (`Store.derived_map_plans`). The checked artifact translates `tag_name`
+/// into its canonical tag name.
 pub const DerivedMapPlan = struct {
     tag_name: Ident.Idx,
     payload_index: u32,

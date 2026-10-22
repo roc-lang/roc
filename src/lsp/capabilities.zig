@@ -36,6 +36,20 @@ pub const ServerCapabilities = struct {
     codeActionProvider: ?CodeActionOptions = null,
     renameProvider: ?RenameOptions = null,
 
+    /// Omits unset capabilities: LSP allows these properties to be absent, not null.
+    pub fn jsonStringify(self: ServerCapabilities, jw: anytype) error{WriteFailed}!void {
+        const info = @typeInfo(ServerCapabilities).@"struct";
+        try jw.beginObject();
+        inline for (info.field_names, info.field_types) |name, field_type| {
+            const value = @field(self, name);
+            if (@typeInfo(field_type) != .optional or value != null) {
+                try jw.objectField(name);
+                try jw.write(value);
+            }
+        }
+        try jw.endObject();
+    }
+
     pub const TextDocumentSyncOptions = struct {
         openClose: bool = false,
         change: u32 = @backingInt(TextDocumentSyncKind.none),
@@ -76,31 +90,37 @@ pub const ServerCapabilities = struct {
     };
 };
 
-/// Returns the server capabilities currently implemented.
-pub fn buildCapabilities() ServerCapabilities {
-    return .{
+/// Returns the capabilities for a session. Untrusted sessions only advertise the
+/// parse-only features, so clients don't send requests the server would refuse.
+/// Keep this in sync with `requires_trust` in `server.zig`.
+pub fn buildCapabilities(trusted_workspace: bool) ServerCapabilities {
+    const parse_only: ServerCapabilities = .{
         .textDocumentSync = .{
             .openClose = true,
             .change = @backingInt(ServerCapabilities.TextDocumentSyncKind.incremental),
         },
-        .semanticTokensProvider = .{
-            .legend = .{
-                .tokenTypes = &TOKEN_TYPES,
-                .tokenModifiers = &TOKEN_MODIFIERS,
-            },
-            .full = true,
-        },
-        .hoverProvider = true,
-        .definitionProvider = true,
         .documentFormattingProvider = true,
-        .documentSymbolProvider = true,
         .foldingRangeProvider = true,
         .selectionRangeProvider = true,
-        .documentHighlightProvider = true,
-        .completionProvider = .{},
-        .referencesProvider = true,
-        .inlayHintProvider = true,
-        .codeActionProvider = .{},
-        .renameProvider = .{},
     };
+    if (!trusted_workspace) return parse_only;
+
+    var all = parse_only;
+    all.semanticTokensProvider = .{
+        .legend = .{
+            .tokenTypes = &TOKEN_TYPES,
+            .tokenModifiers = &TOKEN_MODIFIERS,
+        },
+        .full = true,
+    };
+    all.hoverProvider = true;
+    all.definitionProvider = true;
+    all.documentSymbolProvider = true;
+    all.documentHighlightProvider = true;
+    all.completionProvider = .{};
+    all.referencesProvider = true;
+    all.inlayHintProvider = true;
+    all.codeActionProvider = .{};
+    all.renameProvider = .{};
+    return all;
 }

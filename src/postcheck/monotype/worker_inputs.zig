@@ -44,19 +44,19 @@ fn Prefix(comptime T: type) type {
 
 const NamePrefix = struct {
     bytes: Prefix(u8) = .{},
-    ranges: Prefix(names.NameInterner.Range) = .{},
+    ends: Prefix(u32) = .{},
 
     fn capture(self: *NamePrefix, allocator: Allocator, source: *const names.NameInterner) Allocator.Error!names.NameInterner {
         return .{
             .bytes = .{ .items = std.ArrayList(u8).fromOwnedSlice(try self.bytes.capture(allocator, source.bytes.items.items)) },
-            .ranges = .{ .items = std.ArrayList(names.NameInterner.Range).fromOwnedSlice(try self.ranges.capture(allocator, source.ranges.items.items)) },
+            .ends = .{ .items = std.ArrayList(u32).fromOwnedSlice(try self.ends.capture(allocator, source.ends.items.items)) },
             .supports_inserts = false,
         };
     }
 
     fn deinit(self: *NamePrefix, allocator: Allocator) void {
         self.bytes.deinit(allocator);
-        self.ranges.deinit(allocator);
+        self.ends.deinit(allocator);
     }
 };
 
@@ -66,6 +66,8 @@ pub const Snapshot = struct {
     types: Type.Store,
     names: names.NameStore,
     const_fn_evidence: []const checked.ConstStore.ConstFnEvidence,
+    const_fn_evidence_targets: []const checked.ConstStore.ConstFnTargetEvidence,
+    const_fn_evidence_structurals: []const checked.ConstStore.ConstFnStructuralEvidence,
     const_fn_evidence_frames: []const checked.ConstStore.ConstFnEvidenceFrame,
     current_loc: @import("base").SourceLoc,
     current_region: @import("base").Region,
@@ -82,7 +84,7 @@ pub const Snapshot = struct {
         program.names = self.names;
         program.names.allocator = allocator;
         program.names.proc_base_by_key = std.StringHashMap(names.ProcBaseKeyRef).init(allocator);
-        inline for (.{ "const_fn_evidence", "const_fn_evidence_frames" }) |field| {
+        inline for (.{ "const_fn_evidence", "const_fn_evidence_targets", "const_fn_evidence_structurals", "const_fn_evidence_frames" }) |field| {
             @field(program, field) = @TypeOf(@field(program, field)).fromOwnedSlice(@constCast(@field(self, field)));
         }
         program.current_loc = self.current_loc;
@@ -112,6 +114,8 @@ pub const ProgramInputs = struct {
     external_symbol_names: NamePrefix = .{},
     proc_bases: Prefix(names.ProcBaseKey) = .{},
     const_fn_evidence: Prefix(checked.ConstStore.ConstFnEvidence) = .{},
+    const_fn_evidence_targets: Prefix(checked.ConstStore.ConstFnTargetEvidence) = .{},
+    const_fn_evidence_structurals: Prefix(checked.ConstStore.ConstFnStructuralEvidence) = .{},
     const_fn_evidence_frames: Prefix(checked.ConstStore.ConstFnEvidenceFrame) = .{},
 
     pub fn capture(self: *ProgramInputs, allocator: Allocator, source: *const Ast.Program) Allocator.Error!Snapshot {
@@ -120,6 +124,8 @@ pub const ProgramInputs = struct {
             .types = Type.Store.init(allocator),
             .names = names.NameStore.init(allocator),
             .const_fn_evidence = &.{},
+            .const_fn_evidence_targets = &.{},
+            .const_fn_evidence_structurals = &.{},
             .const_fn_evidence_frames = &.{},
             .current_loc = source.current_loc,
             .current_region = source.current_region,
@@ -134,7 +140,7 @@ pub const ProgramInputs = struct {
         }
         view.names.proc_bases.items = std.ArrayList(names.ProcBaseKey).fromOwnedSlice(try self.proc_bases.capture(allocator, source.names.proc_bases.items.items));
         view.names.serialized = true;
-        inline for (.{ "const_fn_evidence", "const_fn_evidence_frames" }) |field| {
+        inline for (.{ "const_fn_evidence", "const_fn_evidence_targets", "const_fn_evidence_structurals", "const_fn_evidence_frames" }) |field| {
             @field(view, field) = try @field(self, field).capture(allocator, @field(source, field).unsafeRawItemsForView());
         }
         return view;

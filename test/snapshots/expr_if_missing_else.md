@@ -69,7 +69,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+foo = if (tru) 0
 ~~~
 # CANONICALIZE
 ~~~clojure

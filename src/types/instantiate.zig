@@ -31,12 +31,13 @@ const Rank = types_mod.Rank;
 const Polarity = types_mod.Polarity;
 const Ident = base.Ident;
 
-/// Where a position sits relative to the result row the Monotype result-row
-/// widening adapter can re-tag (design.md "Result-Row Widening Adapter"). The
-/// checker's annotation walk makes this decision for rows written inline in a
-/// signature; this axis makes the same decision for rows a referenced type
-/// declaration contributes, so the set of positions a use may WIDEN stays equal
-/// to the set lowering can ADAPT no matter how the row was spelled.
+/// Where a position sits relative to the result rows a where-method use may
+/// widen: the signature's direct result row and a `Try` result's error row
+/// (design.md "Closed Result Rows At Template Boundaries"). The checker's
+/// annotation walk makes this decision for rows written inline in a signature;
+/// this axis makes the same decision for rows a referenced type declaration
+/// contributes, so the set of positions a use may WIDEN stays within the row
+/// coercion's reach no matter how the row was spelled.
 pub const AdapterReachPosition = enum {
     /// The entire method signature, whose function return is reachable.
     signature,
@@ -144,7 +145,6 @@ pub const Scratch = struct {
     value_stack: std.ArrayListUnmanaged(Var) = .empty,
     pending_tags: std.ArrayListUnmanaged(Tag) = .empty,
     pending_fields: std.ArrayListUnmanaged(RecordField) = .empty,
-    pending_constraints: std.ArrayListUnmanaged(StaticDispatchConstraint) = .empty,
     pending_parts: std.ArrayListUnmanaged(InterpolationPartMetadata) = .empty,
     /// Buffers for the scheme pre-walk that decides which monomorphic nodes a
     /// scheme instantiation copies. `reach_state` maps every visited root to
@@ -172,7 +172,6 @@ pub const Scratch = struct {
         self.value_stack.deinit(gpa);
         self.pending_tags.deinit(gpa);
         self.pending_fields.deinit(gpa);
-        self.pending_constraints.deinit(gpa);
         self.pending_parts.deinit(gpa);
         self.reach_edges.deinit(gpa);
         if (self.reach_heads) |*heads| heads.deinit();
@@ -245,8 +244,10 @@ const FlexLikeFrame = struct {
     cons_start: u32,
     cons_len: u32,
     cons_idx: u32 = 0,
-    /// Base of this frame's collected constraints in `Scratch.pending_constraints`.
-    cons_base: u32,
+    /// Raw base index of the fresh constraint run in the store: a copy of the
+    /// source run, appended when the frame starts, whose callables (and
+    /// interpolation metadata) are rewritten in place as their copies finish.
+    fresh_start: u32,
     fresh_fn_var: Var = undefined,
     /// Base of the current constraint's collected interpolation parts in
     /// `Scratch.pending_parts`.
@@ -311,7 +312,7 @@ const FuncFrame = struct {
 };
 
 /// Source runs are held as whole ranges, never as an unpacked start index:
-/// `SafeRange.empty()` leaves `start` undefined, so `start` may only be read
+/// an empty range's `start` addresses no row, so `start` may only be read
 /// under a `count` guard, which the step functions below apply.
 const RecordFrame = struct {
     common: FillCommon,
@@ -340,6 +341,9 @@ const TagUnionFrame = struct {
     /// nested positions.
     saved_reach: AdapterReachPosition,
 };
+
+/// Rigid variable name -> the var each occurrence of that rigid becomes.
+pub const RigidSubstitutions = @import("collections").DenseMapUnmanaged(Ident.Idx, Var);
 
 /// Type to manage instantiation.
 ///
@@ -462,10 +466,10 @@ pub const Instantiator = struct {
     /// requests.
     current_polarity: Polarity = .pos,
     /// Where the position currently being instantiated sits relative to the
-    /// row the Monotype result-row widening adapter can re-tag. Starts at the
-    /// reach of the instantiation ROOT (callers using `.defer_open` set it) and
-    /// demotes to `.nested` under every constructor except the two the adapter
-    /// reaches through. Only consulted by `.defer_open`.
+    /// rows a where-method use may widen. Starts at the reach of the
+    /// instantiation ROOT (callers using `.defer_open` set it) and demotes to
+    /// `.nested` under every constructor except a function's result and a
+    /// `Try`'s error argument. Only consulted by `.defer_open`.
     current_reach: AdapterReachPosition = .nested,
     /// Identity of the builtin `Try(ok, err)` nominal. When null, no nominal is
     /// treated as a `Try`, so a `Try` error row reached through a declaration
@@ -531,7 +535,7 @@ pub const Instantiator = struct {
         /// In this mode, all rigids  we be substituted with values in the provided map.
         /// If a rigid var is not in the map, then that variable will be set to
         /// `.err` & in debug mode it will error
-        substitute_rigids: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
+        substitute_rigids: *RigidSubstitutions,
 
         /// In this mode, rigids present in the provided map are substituted,
         /// and any other rigids are instantiated as fresh rigid variables.
@@ -582,8 +586,8 @@ pub const Instantiator = struct {
         /// input position closes while the callback's argument opens.
         resolve_by_polarity,
         /// Like `resolve_by_polarity` for negative positions (closed), but a
-        /// marker in a positive position that the result-row widening adapter
-        /// could re-tag is copied as a fresh marker: the copy is itself a
+        /// marker in a positive position a where-method use may widen is
+        /// copied as a fresh marker: the copy is itself a
         /// deferred signature whose own uses decide (a where-alias
         /// declaration's method signature copied into a referencing
         /// annotation, or an alias body embedded in one).
@@ -593,8 +597,9 @@ pub const Instantiator = struct {
         /// declaration mints a marker for every extensionless tag union at any
         /// depth, so `Statuses : List([Ok(Str), Err(Str)])` as a where-method
         /// result would otherwise let a use widen the row inside the `List`.
-        /// The set of positions a use may WIDEN is kept equal to the set
-        /// lowering can ADAPT (design.md "Result-Row Widening Adapter").
+        /// The set of positions a use may WIDEN is kept within the row
+        /// coercion's reach (design.md "Closed Result Rows At Template
+        /// Boundaries").
         defer_open,
     };
 
@@ -801,7 +806,7 @@ pub const Instantiator = struct {
             const constraint = self.store.static_dispatch_constraints.items.items[@backingInt(constraints.start) + i];
             try self.visitReachChild(parent, constraint.fn_var);
             if (constraint.interpolation.isPresent()) {
-                const metadata = constraint.interpolation;
+                const metadata = self.store.getInterpolationMetadata(constraint.interpolation);
                 var part_idx: u32 = 0;
                 while (part_idx < metadata.interpolated_parts.len()) : (part_idx += 1) {
                     try self.visitReachChild(parent, self.store.getInterpolationPartAt(metadata.interpolated_parts, part_idx).var_);
@@ -873,7 +878,7 @@ pub const Instantiator = struct {
                     const first = switch (self.polarity_var_behavior) {
                         .preserve_one_sided => item.polarity == .pos,
                         .resolve_by_polarity, .defer_open => item.polarity == .pos and (self.polarity_var_behavior != .defer_open or item.reach != .nested),
-                        .close, .preserve => unreachable,
+                        .close, .preserve => unreachable, // instantiateVarHelp calls collectMarkerChoices only for the per-occurrence behaviors
                     };
                     if (first) entry.value_ptr.first = true else entry.value_ptr.second = true;
                 } else {
@@ -950,7 +955,7 @@ pub const Instantiator = struct {
             try choices.put(allocator, entry.key_ptr.*, switch (self.polarity_var_behavior) {
                 .preserve_one_sided => !(seen.first and seen.second),
                 .resolve_by_polarity, .defer_open => seen.first and !seen.second,
-                .close, .preserve => unreachable,
+                .close, .preserve => unreachable, // instantiateVarHelp calls collectMarkerChoices only for the per-occurrence behaviors
             });
         }
         // Checked only in safe builds: in an unchecked build the assertion
@@ -977,7 +982,7 @@ pub const Instantiator = struct {
             // output polarity whatever position its dispatcher occupies.
             try pending.append(allocator, .{ .var_ = constraint.fn_var, .polarity = .pos, .reach = .nested });
             if (constraint.interpolation.isPresent()) {
-                const metadata = constraint.interpolation;
+                const metadata = self.store.getInterpolationMetadata(constraint.interpolation);
                 var part_idx: u32 = 0;
                 while (part_idx < metadata.interpolated_parts.len()) : (part_idx += 1) {
                     try pending.append(allocator, .{ .var_ = self.store.getInterpolationPartAt(metadata.interpolated_parts, part_idx).var_, .polarity = polarity, .reach = .nested });
@@ -1019,14 +1024,12 @@ pub const Instantiator = struct {
         // entry-length invariant on both exit paths.
         const tags_base = machine.pending_tags.items.len;
         const fields_base = machine.pending_fields.items.len;
-        const constraints_base = machine.pending_constraints.items.len;
         const parts_base = machine.pending_parts.items.len;
         errdefer {
             machine.frames.items.len = frames_base;
             machine.value_stack.items.len = values_base;
             machine.pending_tags.items.len = tags_base;
             machine.pending_fields.items.len = fields_base;
-            machine.pending_constraints.items.len = constraints_base;
             machine.pending_parts.items.len = parts_base;
         }
 
@@ -1243,7 +1246,7 @@ pub const Instantiator = struct {
                     .name = rigid.name,
                     .cons_start = @backingInt(rigid.constraints.start),
                     .cons_len = @intCast(rigid.constraints.len()),
-                    .cons_base = @intCast(machine.pending_constraints.items.len),
+                    .fresh_start = try self.appendConstraintRunCopy(rigid.constraints),
                 } });
                 return false;
             },
@@ -1269,7 +1272,7 @@ pub const Instantiator = struct {
                     .name = flex.name,
                     .cons_start = @backingInt(flex.constraints.start),
                     .cons_len = @intCast(flex.constraints.len()),
-                    .cons_base = @intCast(machine.pending_constraints.items.len),
+                    .fresh_start = try self.appendConstraintRunCopy(flex.constraints),
                 } });
                 return false;
             },
@@ -1465,16 +1468,35 @@ pub const Instantiator = struct {
     // slice. Source entries are append-only, so index-based re-fetching
     // always sees the original values.
 
+    /// Append a copy of the constraint run `source` for a flex-like frame to
+    /// rewrite in place, returning its raw base index.
+    fn appendConstraintRunCopy(self: *Self, source: StaticDispatchConstraint.SafeList.Range) std.mem.Allocator.Error!u32 {
+        const constraints = &self.store.static_dispatch_constraints.items;
+        const fresh_start = std.math.cast(u32, constraints.items.len) orelse return error.OutOfMemory;
+        try constraints.ensureUnusedCapacity(self.store.gpa, source.count);
+        // The source run lives in the same list, so it is sliced only once
+        // the list can no longer move.
+        const source_start: usize = @backingInt(source.start);
+        constraints.appendSliceAssumeCapacity(constraints.items[source_start..][0..source.count]);
+        return fresh_start;
+    }
+
+    /// The fresh copy of the frame's current constraint. Re-fetched on every
+    /// use, since child copies append to the same list.
+    fn freshConstraint(self: *Self, frame: *const FlexLikeFrame) *StaticDispatchConstraint {
+        return &self.store.static_dispatch_constraints.items.items[frame.fresh_start + frame.cons_idx];
+    }
+
     fn stepFlexLike(self: *Self, frame: *FlexLikeFrame) std.mem.Allocator.Error!bool {
         const machine = self.scratch();
         while (true) {
             switch (frame.stage) {
                 .dispatch_fn => {
                     if (frame.cons_idx == frame.cons_len) {
-                        const fresh_range = try self.store.appendStaticDispatchConstraints(
-                            machine.pending_constraints.items[frame.cons_base..],
-                        );
-                        machine.pending_constraints.items.len = frame.cons_base;
+                        const fresh_range: StaticDispatchConstraint.SafeList.Range = .{
+                            .start = @fromBackingInt(frame.fresh_start),
+                            .count = frame.cons_len,
+                        };
                         if (frame.has_deferred) try self.recordDeferredSlots(fresh_range);
                         const fresh_content = switch (frame.result) {
                             .flex => Content{ .flex = Flex{ .name = frame.name, .constraints = fresh_range } },
@@ -1499,10 +1521,9 @@ pub const Instantiator = struct {
                 .await_fn => {
                     frame.fresh_fn_var = machine.value_stack.pop().?;
                     const constraint = self.store.static_dispatch_constraints.items.items[frame.cons_start + frame.cons_idx];
+                    try self.carryDerivedMapPlan(constraint.fn_var, frame.fresh_fn_var);
                     if (!constraint.interpolation.isPresent()) {
-                        var fresh_constraint = constraint;
-                        fresh_constraint.fn_var = frame.fresh_fn_var;
-                        try machine.pending_constraints.append(self.store.gpa, fresh_constraint);
+                        self.freshConstraint(frame).fn_var = frame.fresh_fn_var;
                         frame.cons_idx += 1;
                         frame.stage = .dispatch_fn;
                     } else {
@@ -1513,7 +1534,7 @@ pub const Instantiator = struct {
                 },
                 .dispatch_part_or_item => {
                     const constraint = self.store.static_dispatch_constraints.items.items[frame.cons_start + frame.cons_idx];
-                    const metadata = constraint.interpolation;
+                    const metadata = self.store.getInterpolationMetadata(constraint.interpolation);
                     self.current_reach = .nested;
                     if (frame.part_idx == metadata.interpolated_parts.len()) {
                         frame.stage = .await_item;
@@ -1527,7 +1548,7 @@ pub const Instantiator = struct {
                 .await_part => {
                     const fresh_part_var = machine.value_stack.pop().?;
                     const constraint = self.store.static_dispatch_constraints.items.items[frame.cons_start + frame.cons_idx];
-                    const part = self.store.getInterpolationPartAt(constraint.interpolation.interpolated_parts, frame.part_idx);
+                    const part = self.store.getInterpolationPartAt(self.store.getInterpolationMetadata(constraint.interpolation).interpolated_parts, frame.part_idx);
                     try machine.pending_parts.append(self.store.gpa, .{
                         .var_ = fresh_part_var,
                         .region = part.region,
@@ -1541,16 +1562,16 @@ pub const Instantiator = struct {
                         machine.pending_parts.items[frame.parts_base..],
                     );
                     machine.pending_parts.items.len = frame.parts_base;
-                    const constraint = self.store.static_dispatch_constraints.items.items[frame.cons_start + frame.cons_idx];
-                    var fresh_constraint = constraint;
-                    fresh_constraint.fn_var = frame.fresh_fn_var;
-                    fresh_constraint.interpolation = .{
-                        .expr_region = constraint.interpolation.expr_region,
+                    const metadata = self.store.getInterpolationMetadata(self.freshConstraint(frame).interpolation);
+                    const fresh_interpolation = try self.store.appendInterpolationMetadata(.{
+                        .expr_region = metadata.expr_region,
                         .item_var = fresh_item_var,
                         .interpolated_parts = fresh_parts_range,
-                        .regions = constraint.interpolation.regions,
-                    };
-                    try machine.pending_constraints.append(self.store.gpa, fresh_constraint);
+                        .regions = metadata.regions,
+                    });
+                    const fresh_constraint = self.freshConstraint(frame);
+                    fresh_constraint.fn_var = frame.fresh_fn_var;
+                    fresh_constraint.interpolation = fresh_interpolation;
                     frame.cons_idx += 1;
                     frame.stage = .dispatch_fn;
                 },
@@ -1684,10 +1705,10 @@ pub const Instantiator = struct {
             const arrived: u32 = @intCast(machine.value_stack.items.len - frame.vars_base);
             if (arrived < args_count) {
                 const arg_var = self.store.vars.items.items[@backingInt(frame.func.args.start) + arrived];
-                // Argument positions flip the surrounding polarity. No
-                // position inside a function is adapter-reachable: the adapter
-                // re-tags the result it is generated for, never a row inside a
-                // function that result contains.
+                // Argument positions flip the surrounding polarity, and no
+                // row inside an argument is one a use may widen: a use widens
+                // the result, never a row inside a function that result
+                // contains.
                 self.current_polarity = frame.saved_polarity.flip();
                 self.current_reach = .nested;
                 if (!try self.requestVar(arg_var, false)) return false;
@@ -1738,8 +1759,8 @@ pub const Instantiator = struct {
                 .fields => {
                     if (frame.field_idx < frame.source_fields.count) {
                         // Indexing through the run's start only happens when
-                        // the record has fields; start may be undefined when
-                        // count is 0.
+                        // the record has fields; an empty run's start
+                        // addresses no row.
                         const field = self.store.record_fields.get(@fromBackingInt(@intCast(@backingInt(frame.source_fields.start) + frame.field_idx)));
                         const child_var = switch (frame.field_axis) {
                             .type_var => blk: {
@@ -1790,7 +1811,7 @@ pub const Instantiator = struct {
         var vars_idx: usize = vars_base;
         for (0..source_fields.count) |i| {
             // The loop body runs only for a non-empty run, so reading the
-            // run's start here never reads an empty range's undefined start.
+            // run's start here never reads an empty range's start.
             const field = self.store.record_fields.get(@fromBackingInt(@intCast(@backingInt(source_fields.start) + i)));
             const fresh_type_var = machine.value_stack.items[vars_idx];
             vars_idx += 1;
@@ -1828,12 +1849,12 @@ pub const Instantiator = struct {
                         continue;
                     }
                     // Indexing through the run's start only happens when the
-                    // union has tags; start may be undefined when count is 0.
+                    // union has tags; an empty run's start addresses no row.
                     const tag = self.store.tags.get(@fromBackingInt(@intCast(@backingInt(frame.source_tags.start) + frame.tag_idx)));
                     const arrived: u32 = @intCast(machine.value_stack.items.len - frame.vars_base);
                     if (arrived < tag.args.count) {
                         // Indexing through tag.args.start only happens when the
-                        // tag has payloads; start may be undefined when count is 0.
+                        // tag has payloads; an empty run's start addresses no row.
                         const arg_var = self.store.vars.items.items[@backingInt(tag.args.start) + arrived];
                         self.current_reach = .nested;
                         if (!try self.requestVar(arg_var, false)) return false;
@@ -1894,15 +1915,24 @@ pub const Instantiator = struct {
             return result;
         }
         result.fn_var = try self.instantiateVarHelp(constraint.fn_var, force_root_copy);
+        try self.carryDerivedMapPlan(constraint.fn_var, result.fn_var);
         result.interpolation = try self.instantiateInterpolationMetadata(constraint.interpolation);
         return result;
     }
 
+    /// A copy of a derived `map`/`map!` relation's callable joins the
+    /// relation: its class selects the same payload.
+    fn carryDerivedMapPlan(self: *Self, source_fn_var: Var, fresh_fn_var: Var) std.mem.Allocator.Error!void {
+        const plan = self.store.derivedMapPlan(source_fn_var) orelse return;
+        try self.store.setDerivedMapPlan(fresh_fn_var, plan);
+    }
+
     fn instantiateInterpolationMetadata(
         self: *Self,
-        metadata: StaticDispatchConstraint.InterpolationMetadata,
-    ) std.mem.Allocator.Error!StaticDispatchConstraint.InterpolationMetadata {
-        if (!metadata.isPresent()) return metadata;
+        source: StaticDispatchConstraint.InterpolationMetadata.OptIdx,
+    ) std.mem.Allocator.Error!StaticDispatchConstraint.InterpolationMetadata.OptIdx {
+        if (!source.isPresent()) return source;
+        const metadata = self.store.getInterpolationMetadata(source);
 
         const machine = self.scratch();
         const parts_len = metadata.interpolated_parts.len();
@@ -1922,12 +1952,12 @@ pub const Instantiator = struct {
         const fresh_item_var = try self.instantiateVarHelp(metadata.item_var, false);
         const fresh_parts_range = try self.store.appendInterpolationParts(machine.pending_parts.items[parts_base..]);
         machine.pending_parts.items.len = parts_base;
-        return .{
+        return try self.store.appendInterpolationMetadata(.{
             .expr_region = metadata.expr_region,
             .item_var = fresh_item_var,
             .interpolated_parts = fresh_parts_range,
             .regions = metadata.regions,
-        };
+        });
     }
 };
 

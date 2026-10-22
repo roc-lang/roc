@@ -337,7 +337,7 @@ const InlineAnalyzer = struct {
         switch (self.decisions[index]) {
             .unknown => {},
             .visiting => {
-                self.markCycle(fn_id);
+                self.markCycle(fn_id, visits.items);
                 return .{ .decided = null };
             },
             .never => return .{ .decided = null },
@@ -355,9 +355,9 @@ const InlineAnalyzer = struct {
 
         // Visit every proc called anywhere in the candidate body, including calls
         // nested inside low-level operands or other call arguments. A self-call
-        // re-enters this function while it is `.visiting`, so `markCycle` marks
-        // the whole cycle `.never` and keeps it out of the inline plan instead
-        // of inlining it without bound.
+        // re-enters this function while it is `.visiting`, so `markCycle` keeps
+        // enough of the cycle out of the inline plan to stop it inlining
+        // without bound.
         var walk: std.ArrayList(WalkItem) = .empty;
         errdefer walk.deinit(self.allocator);
         try walk.append(self.allocator, .{ .child = .{ .expr = candidate.body }, .loop_depth = 0 });
@@ -460,7 +460,6 @@ const InlineAnalyzer = struct {
                     .expect,
                     .expect_err,
                     .literal_rejected,
-                    .comptime_branch_taken,
                     .let_,
                     .call_value,
                     .low_level,
@@ -696,7 +695,6 @@ const InlineAnalyzer = struct {
                 .return_,
                 .expect_err,
                 .literal_rejected,
-                .comptime_branch_taken,
                 .call_value,
                 .low_level,
                 .field_access,
@@ -748,8 +746,8 @@ const InlineAnalyzer = struct {
     }
 
     /// What a wrapper position must be: a whole wrapper body, a guard arm
-    /// (a literal crash or a wrapper body), or an operand a wrapper builds
-    /// its result from (an argument, a literal, or another wrapper body).
+    /// (a literal crash or an operand), or an operand a wrapper builds its
+    /// result from (an argument, a literal, or another wrapper body).
     const WrapperRole = enum { body, arm, operand };
 
     /// Whether a body is a checked wrapper: one operation, a constant, or a
@@ -767,8 +765,15 @@ const InlineAnalyzer = struct {
         try stack.append(self.allocator, .{ .role = .body, .expr = root });
         while (stack.pop()) |item| {
             const expr = lifted.getExpr(item.expr);
-            const role: WrapperRole = switch (item.role) {
-                .arm => if (self.isLiteralCrash(item.expr)) continue else .body,
+            // An arm that returns an argument or a literal, the bound of a
+            // saturating operation say, is as cheap as one that calls, so an
+            // arm qualifies as any operand does.
+            const position: WrapperRole = switch (item.role) {
+                .arm => if (self.isLiteralCrash(item.expr)) continue else .operand,
+                .operand, .body => item.role,
+            };
+            const role: WrapperRole = switch (position) {
+                .arm => unreachable, // the switch above maps an arm to .operand or skips it
                 .operand => switch (expr.data) {
                     .local,
                     .unit,
@@ -804,7 +809,6 @@ const InlineAnalyzer = struct {
                     .return_,
                     .expect_err,
                     .literal_rejected,
-                    .comptime_branch_taken,
                     .call_value,
                     .field_access,
                     .tuple_access,
@@ -847,7 +851,7 @@ const InlineAnalyzer = struct {
                     if (lifted.stmtSpan(block.statements).len != 0) return false;
                     try stack.append(self.allocator, .{ .role = .body, .expr = block.final_expr });
                 },
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return false,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return false,
             }
         }
         return true;
@@ -882,7 +886,7 @@ const InlineAnalyzer = struct {
                         .uninitialized, .let_, .expect, .dbg, .return_ => return false,
                     }
                 },
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .loop_, .break_, .continue_, .join_point, .jump, .return_, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return false,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .loop_, .break_, .continue_, .join_point, .jump, .return_, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return false,
             }
         }
     }
@@ -894,12 +898,18 @@ const InlineAnalyzer = struct {
                 .str_lit => return true,
                 .nominal => |backing| expr_id = backing,
                 .typed_boundary => |boundary| expr_id = boundary.value,
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .bytes_lit, .static_data_candidate, .comptime_value, .row_widen, .list, .tuple, .record, .record_update, .tag, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return false,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .bytes_lit, .static_data_candidate, .comptime_value, .row_widen, .list, .tuple, .record, .record_update, .tag, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return false,
             }
         }
     }
 
-    fn markCycle(self: *InlineAnalyzer, repeated: Lifted.FnId) void {
+    /// Keep a cycle of candidates from inlining without bound. Leaving any
+    /// one member a procedure breaks the cycle, so only the wrappers in it
+    /// are rejected: a wrapper is inlined at every call as an optimization,
+    /// while a single-use body is lowered only at its one call, and keeping
+    /// those inlined keeps a recursion through a lambda a self-call. A cycle
+    /// with no wrapper rejects every member.
+    fn markCycle(self: *InlineAnalyzer, repeated: Lifted.FnId, visits: []const Visit) void {
         var cycle_start: ?usize = null;
         for (self.stack.items, 0..) |fn_id, index| {
             if (fn_id == repeated) {
@@ -908,8 +918,21 @@ const InlineAnalyzer = struct {
             }
         }
         const start = cycle_start orelse Common.invariant("inline cycle did not refer to a visiting function");
-        for (self.stack.items[start..]) |fn_id| {
-            self.decisions[@backingInt(fn_id)] = .never;
+        const members = self.stack.items[start..];
+        var has_wrapper = false;
+        for (members) |fn_id| {
+            if (visitKind(visits, fn_id) == .wrapper) has_wrapper = true;
         }
+        for (members) |fn_id| {
+            if (!has_wrapper or visitKind(visits, fn_id) == .wrapper) self.decisions[@backingInt(fn_id)] = .never;
+        }
+    }
+
+    /// The candidate kind of a function whose visit is in progress.
+    fn visitKind(visits: []const Visit, fn_id: Lifted.FnId) InlineKind {
+        for (visits) |visit| {
+            if (visit.fn_id == fn_id) return visit.candidate.kind;
+        }
+        Common.invariant("inline cycle member had no visit in progress");
     }
 };

@@ -4,79 +4,124 @@
 const std = @import("std");
 const collections = @import("collections");
 const LoopForest = collections.LoopForest;
-const lir = @import("lir");
+const core = @import("lir_core");
+const body_clone = @import("body_clone.zig");
+const LIR = core.LIR;
+const LirStore = core.LirStore;
+const LocalId = LIR.LocalId;
+const CFStmtId = LIR.CFStmtId;
 const Allocator = std.mem.Allocator;
 const none = std.math.maxInt(u32);
 const Self = @This();
 
 allocator: Allocator,
-/// Each local's index in `values`, by local id, or `none`. Planning hands one
-/// column from plan to plan (see `Indexes`).
-local_indices: std.ArrayList(u32) = .empty,
+/// Each local's index in `values`, by local id. Planning hands one map from
+/// plan to plan (see `Indexes`).
+local_indices: LocalIndices,
 values: std.ArrayList(Value) = .empty,
 nodes: std.ArrayList(Node) = .empty,
 edges: std.ArrayList(Edge) = .empty,
 accesses: std.ArrayList(Access) = .empty,
 slots: std.ArrayList(Slot) = .empty,
+/// Every value's live ranges, one contiguous run per value.
+ranges: std.ArrayList(Range) = .empty,
+
+// Solving's working storage, kept with the plan so a plan reused for the
+// next procedure (see `Indexes`) allocates only past its earlier sizes.
+blocks: std.ArrayList(Block) = .empty,
+block_states: std.ArrayList(BlockState) = .empty,
+loop_epochs: std.ArrayList(u32) = .empty,
+units: std.ArrayList(Unit) = .empty,
+write_loops: std.ArrayList(u32) = .empty,
+slot_order: std.ArrayList(u32) = .empty,
+size_classes: std.ArrayList(SizeClass) = .empty,
+/// Each slot size's class in `size_classes`. Sizes are structural keys, not
+/// compiler identities.
+class_of_size: std.AutoHashMapUnmanaged(u32, u32) = .empty,
+reservations: std.ArrayList(Reservations) = .empty,
+reservation_nodes: std.ArrayList(Reservations.Node) = .empty,
+
+/// A local's index in a plan's `values`, by local id.
+pub const LocalIndices = collections.DenseMap(LocalId, u32);
 
 /// Indexes from store ids to a procedure's plan, which planning keeps empty
 /// between procedures. A procedure's statement, join, and local ids can be
 /// spread across their whole domains, so one set of indexes serves every
-/// procedure a worker plans, and each procedure costs only its own entries.
+/// procedure a worker plans. The maps are paged, so each procedure costs only
+/// the pages its own ids touch, never the whole id domain of the program.
 pub const Indexes = struct {
     allocator: Allocator,
-    /// A plan's local indices (see `Self.local_indices`).
-    local_indices: std.ArrayList(u32) = .empty,
-    /// Each planned statement's node, by statement id, or `none`.
-    node_of_stmt: std.ArrayList(u32) = .empty,
+    /// The plan storage handed from procedure to procedure (see `takePlan`).
+    plan: Self,
+    /// Each planned statement's node, by statement id.
+    node_of_stmt: collections.DenseMap(CFStmtId, u32),
     /// Each declared join's body.
-    joins: collections.DenseMap(lir.LIR.JoinPointId, lir.CFStmtId),
+    joins: collections.DenseMap(LIR.JoinPointId, CFStmtId),
 
     pub fn init(allocator: Allocator) Indexes {
-        return .{ .allocator = allocator, .joins = collections.DenseMap(lir.LIR.JoinPointId, lir.CFStmtId).init(allocator) };
+        return .{
+            .allocator = allocator,
+            .plan = Self.init(allocator),
+            .node_of_stmt = collections.DenseMap(CFStmtId, u32).init(allocator),
+            .joins = collections.DenseMap(LIR.JoinPointId, CFStmtId).init(allocator),
+        };
     }
 
     pub fn deinit(self: *Indexes) void {
-        self.local_indices.deinit(self.allocator);
-        self.node_of_stmt.deinit(self.allocator);
+        self.plan.deinit();
+        self.node_of_stmt.deinit();
         self.joins.deinit();
     }
 
+    /// An empty plan holding the storage of the procedures planned before.
+    pub fn takePlan(self: *Indexes) Self {
+        const plan = self.plan;
+        self.plan = Self.init(self.allocator);
+        return plan;
+    }
+
+    /// Empty `plan` and keep its storage for the next procedure.
+    pub fn keepPlan(self: *Indexes, plan: *Self) void {
+        plan.clearRetainingCapacity();
+        self.plan.deinit();
+        self.plan = plan.*;
+        plan.* = Self.init(self.allocator);
+    }
+
     /// The node planned for `stmt`.
-    pub fn nodeOf(self: *const Indexes, stmt: lir.CFStmtId) ?u32 {
-        const raw = @backingInt(stmt);
-        if (raw >= self.node_of_stmt.items.len) return null;
-        const index = self.node_of_stmt.items[raw];
-        return if (index == none) null else index;
+    pub fn nodeOf(self: *const Indexes, stmt: CFStmtId) ?u32 {
+        return self.node_of_stmt.get(stmt);
     }
 
     /// Record `stmt`'s node.
-    pub fn setNode(self: *Indexes, stmt: lir.CFStmtId, index: u32) Allocator.Error!void {
-        const raw = @backingInt(stmt);
-        if (raw >= self.node_of_stmt.items.len) {
-            const old_len = self.node_of_stmt.items.len;
-            try self.node_of_stmt.resize(self.allocator, @max(raw + 1, old_len * 2));
-            @memset(self.node_of_stmt.items[old_len..], none);
-        }
-        self.node_of_stmt.items[raw] = index;
+    pub fn setNode(self: *Indexes, stmt: CFStmtId, index: u32) Allocator.Error!void {
+        try self.node_of_stmt.put(stmt, index);
     }
 
-    /// Empty the statement nodes `planned` recorded and the joins.
-    pub fn clear(self: *Indexes, planned: []const lir.CFStmtId) void {
-        for (planned) |stmt| self.node_of_stmt.items[@backingInt(stmt)] = none;
+    /// Empty the statement nodes and the joins.
+    pub fn clear(self: *Indexes) void {
+        self.node_of_stmt.clearRetainingCapacity();
         self.joins.clearRetainingCapacity();
     }
 };
 
 /// One local, or the representative of a proven immutable alias group.
 pub const Value = struct {
-    local: lir.LocalId,
+    local: LocalId,
     representative: u32,
     definitions: u32 = 0,
     mutable: bool = false,
     size: u32 = 0,
-    slot: ?u32 = null,
-    ranges: Ranges = .{},
+    /// The value's physical slot, or `none`.
+    slot: u32 = none,
+    /// The value's run in `ranges`.
+    range_start: u32 = 0,
+    range_len: u32 = 0,
+
+    /// The value's physical slot.
+    pub fn slotIndex(self: Value) ?u32 {
+        return if (self.slot == none) null else self.slot;
+    }
 };
 const Node = struct {
     succ: u32 = none,
@@ -87,41 +132,15 @@ const Node = struct {
     position: u32 = none,
 };
 const Edge = struct { from: u32, to: u32, next_succ: u32, next_pred: u32 };
-const Access = struct { node: u32, value: u32, read: bool, write: bool };
+/// One explicit read and/or write of a value at a node.
+pub const Access = struct { node: u32, value: u32, read: bool, write: bool };
 const Block = struct { first: u32, start: u32, end: u32 };
-const Range = struct { start: u32, end: u32 };
-// Most locals have one interval. Keep it inline so a long straight-line
-// procedure never performs one heap allocation per temporary or stack slot.
-const Ranges = struct {
-    single: [1]Range = undefined,
-    single_len: usize = 0,
-    multiple: std.ArrayList(Range) = .empty,
-
-    fn items(self: *const Ranges) []const Range {
-        return if (self.multiple.capacity == 0) self.single[0..self.single_len] else self.multiple.items;
-    }
-    fn mutableItems(self: *Ranges) []Range {
-        return if (self.multiple.capacity == 0) self.single[0..self.single_len] else self.multiple.items;
-    }
-    fn truncate(self: *Ranges, len: usize) void {
-        if (self.multiple.capacity == 0) self.single_len = len else self.multiple.items.len = len;
-    }
-    fn append(self: *Ranges, allocator: Allocator, range: Range) Allocator.Error!void {
-        if (self.multiple.capacity == 0) {
-            if (self.single_len == 0) {
-                self.single[0] = range;
-                self.single_len = 1;
-                return;
-            }
-            try self.multiple.ensureTotalCapacity(allocator, 2);
-            self.multiple.appendAssumeCapacity(self.single[0]);
-        }
-        try self.multiple.append(allocator, range);
-    }
-    fn deinit(self: *Ranges, allocator: Allocator) void {
-        self.multiple.deinit(allocator);
-    }
-};
+/// A half-open span of solved positions.
+pub const Range = struct { start: u32, end: u32 };
+const BlockState = struct { epoch: u32 = none, last_write: ?u32 = null, propagated: bool = false };
+/// A unit of propagation: a block, or a loop that writes the value nowhere
+/// and so holds it at every position or at none.
+const Unit = struct { loop: bool, index: u32 };
 /// A physical slot's size.
 pub const Slot = struct {
     size: u32,
@@ -134,53 +153,56 @@ fn rangeOrder(a: Range, b: Range) std.math.Order {
 
 /// Start an empty procedure plan.
 pub fn init(allocator: Allocator) Self {
-    return .{ .allocator = allocator };
+    return .{ .allocator = allocator, .local_indices = LocalIndices.init(allocator) };
 }
-/// A plan indexing its locals in `local_indices`, which holds no entries.
-pub fn initWithLocalIndices(allocator: Allocator, local_indices: std.ArrayList(u32)) Self {
-    return .{ .allocator = allocator, .local_indices = local_indices };
-}
-/// Release all procedure-owned analysis storage.
+/// Release all storage.
 pub fn deinit(self: *Self) void {
-    self.local_indices.deinit(self.allocator);
-    self.deinitAnalysis();
+    const a = self.allocator;
+    self.local_indices.deinit();
+    self.values.deinit(a);
+    self.nodes.deinit(a);
+    self.edges.deinit(a);
+    self.accesses.deinit(a);
+    self.slots.deinit(a);
+    self.ranges.deinit(a);
+    self.blocks.deinit(a);
+    self.block_states.deinit(a);
+    self.loop_epochs.deinit(a);
+    self.units.deinit(a);
+    self.write_loops.deinit(a);
+    self.slot_order.deinit(a);
+    for (self.size_classes.items) |*class| class.deinit(a);
+    self.size_classes.deinit(a);
+    self.class_of_size.deinit(a);
+    self.reservations.deinit(a);
+    self.reservation_nodes.deinit(a);
 }
-/// Release the analysis storage and return the local index column holding
-/// no entries, for the next plan.
-pub fn deinitKeepingLocalIndices(self: *Self) std.ArrayList(u32) {
-    for (self.values.items) |v| self.local_indices.items[@backingInt(v.local)] = none;
-    const local_indices = self.local_indices;
-    self.deinitAnalysis();
-    return local_indices;
-}
-fn deinitAnalysis(self: *Self) void {
-    for (self.values.items) |*v| v.ranges.deinit(self.allocator);
-    self.values.deinit(self.allocator);
-    self.nodes.deinit(self.allocator);
-    self.edges.deinit(self.allocator);
-    self.accesses.deinit(self.allocator);
-    self.slots.deinit(self.allocator);
+/// Empty the plan for another procedure, keeping its storage.
+pub fn clearRetainingCapacity(self: *Self) void {
+    self.local_indices.clearRetainingCapacity();
+    self.values.clearRetainingCapacity();
+    self.nodes.clearRetainingCapacity();
+    self.edges.clearRetainingCapacity();
+    self.accesses.clearRetainingCapacity();
+    self.slots.clearRetainingCapacity();
+    self.ranges.clearRetainingCapacity();
+    // `size_classes` keeps its entries (and their storage) past the classes
+    // in use; `assignSlots` empties each class it takes into use.
+    self.class_of_size.clearRetainingCapacity();
 }
 /// Intern a local in the compact procedure domain.
-pub fn local(self: *Self, id: lir.LocalId) Allocator.Error!u32 {
-    if (self.localIndex(id)) |index| return index;
-    const raw = @backingInt(id);
-    if (raw >= self.local_indices.items.len) {
-        const old_len = self.local_indices.items.len;
-        try self.local_indices.resize(self.allocator, @max(raw + 1, old_len * 2));
-        @memset(self.local_indices.items[old_len..], none);
-    }
+pub fn local(self: *Self, id: LocalId) Allocator.Error!u32 {
+    const entry = try self.local_indices.getOrPut(id);
+    if (entry.found_existing) return entry.value_ptr.*;
     const index: u32 = @intCast(self.values.items.len);
+    errdefer _ = self.local_indices.remove(id);
     try self.values.append(self.allocator, .{ .local = id, .representative = index });
-    self.local_indices.items[raw] = index;
+    entry.value_ptr.* = index;
     return index;
 }
 /// The index of an interned local.
-pub fn localIndex(self: *const Self, id: lir.LocalId) ?u32 {
-    const raw = @backingInt(id);
-    if (raw >= self.local_indices.items.len) return null;
-    const index = self.local_indices.items[raw];
-    return if (index == none) null else index;
+pub fn localIndex(self: *const Self, id: LocalId) ?u32 {
+    return self.local_indices.get(id);
 }
 /// Add an instruction-selection region. Reads and writes in one region overlap.
 pub fn node(self: *Self) Allocator.Error!u32 {
@@ -198,7 +220,7 @@ pub fn edge(self: *Self, from: u32, to: u32) Allocator.Error!void {
     self.nodes.items[to].pred_count += 1;
 }
 /// Record an explicit local access. A write kills only that local's old value.
-pub fn access(self: *Self, at: u32, id: lir.LocalId, read: bool, write: bool) Allocator.Error!void {
+pub fn access(self: *Self, at: u32, id: LocalId, read: bool, write: bool) Allocator.Error!void {
     const index = try self.local(id);
     try self.accesses.append(self.allocator, .{ .node = at, .value = index, .read = read, .write = write });
     if (write) self.values.items[index].definitions += 1;
@@ -214,6 +236,214 @@ pub fn representative(self: *Self, index: u32) u32 {
         current = next;
     }
     return root;
+}
+
+/// Add the runtime control-flow graph of the procedure body rooted at `root`:
+/// one node per reachable statement, and every runtime successor edge, back
+/// edges included. A join declaration has no edge to its body, which is
+/// entered only through jumps, and a switch has none to its continuation,
+/// which its branches reach themselves. Each pattern-match arm adds one node,
+/// between the match and the arm's body, that writes the arm's captures: they
+/// are written on the successful edge only.
+///
+/// Accesses come from the shared LIR read/definition inventories, for the
+/// locals `extra.tracks(local)` accepts. `extra.statement(plan, at, stmt)` then
+/// adds a backend's own explicit accesses for each statement. Every planned
+/// statement is appended to `planned`, which owns this plan's allocator, so
+/// the caller can empty `indexes` with `Indexes.clear` afterwards.
+pub fn addProcGraph(
+    self: *Self,
+    store: *const LirStore,
+    indexes: *Indexes,
+    root: CFStmtId,
+    planned: *std.ArrayList(CFStmtId),
+    extra: anytype,
+) Allocator.Error!void {
+    const Context = struct {
+        plan: *Self,
+        at: u32,
+        extra: @TypeOf(extra),
+        failure: ?Allocator.Error = null,
+
+        fn read(ctx: *@This(), id: LocalId) void {
+            ctx.note(id, true, false);
+        }
+        fn write(ctx: *@This(), id: LocalId) void {
+            ctx.note(id, false, true);
+        }
+        fn note(ctx: *@This(), id: LocalId, reads: bool, writes: bool) void {
+            if (ctx.failure != null or !ctx.extra.tracks(id)) return;
+            ctx.plan.access(ctx.at, id, reads, writes) catch |err| {
+                ctx.failure = err;
+            };
+        }
+    };
+    var successors: std.ArrayList(CFStmtId) = .empty;
+    defer successors.deinit(self.allocator);
+    const joins = &indexes.joins;
+    std.debug.assert(joins.count() == 0);
+    _ = try self.stmtNode(indexes, planned, root);
+    var cursor: usize = 0;
+    while (cursor < planned.items.len) : (cursor += 1) {
+        const id = planned.items[cursor];
+        const at = indexes.nodeOf(id).?;
+        const stmt = store.getCFStmt(id);
+        var ctx = Context{ .plan = self, .at = at, .extra = extra };
+        body_clone.forEachStmtRead(store, stmt, &ctx, Context.read);
+        // Join parameters are declarations, not writes at the join's entry.
+        // Pattern captures are written on the successful edge only.
+        switch (stmt) {
+            .join => |j| {
+                try joins.put(j.id, j.body);
+            },
+            .str_match, .str_match_set => {},
+            .init_uninitialized,
+            .assign_ref,
+            .assign_literal,
+            .assign_call,
+            .assign_call_erased,
+            .assign_packed_erased_fn,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_record_update,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_hash,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
+            .assign_call_dict,
+            .assign_low_level,
+            .assign_list,
+            .assign_struct,
+            .assign_tag,
+            .store_struct,
+            .store_tag,
+            .set_local,
+            .debug,
+            .expect,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .incref,
+            .decref,
+            .decref_if_initialized,
+            .free,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .jump,
+            .ret,
+            .crash,
+            => body_clone.forEachStmtDef(store, stmt, &ctx, Context.write),
+        }
+        if (ctx.failure) |err| return err;
+        try extra.statement(self, at, stmt);
+        successors.clearRetainingCapacity();
+        switch (stmt) {
+            .join => |j| {
+                _ = try self.stmtNode(indexes, planned, j.body);
+                try successors.append(self.allocator, j.remainder);
+            },
+            .switch_stmt => |s| {
+                const branches = store.getCFSwitchBranches(s.branches);
+                for (0..branches.len) |i| try successors.append(self.allocator, LirStore.GuardedList.at(branches, i).body);
+                try successors.append(self.allocator, s.default_branch);
+            },
+            .str_match => |s| {
+                const capture = try self.captureNode(store, at, s.source, store.stmtRow(s.data).steps, extra);
+                const next = try self.stmtNode(indexes, planned, s.on_match);
+                try self.edge(capture, next);
+                try successors.append(self.allocator, s.on_miss);
+            },
+            .str_match_set => |s| {
+                const arms = store.getStrMatchArms(s.arms);
+                for (0..arms.len) |i| {
+                    const arm = LirStore.GuardedList.at(arms, i);
+                    const capture = try self.captureNode(store, at, s.source, arm.steps, extra);
+                    const next = try self.stmtNode(indexes, planned, arm.on_match);
+                    try self.edge(capture, next);
+                }
+                try successors.append(self.allocator, s.on_miss);
+            },
+            .jump => {}, // Resolved after every join has been declared.
+            .init_uninitialized,
+            .assign_ref,
+            .assign_literal,
+            .assign_call,
+            .assign_call_erased,
+            .assign_packed_erased_fn,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_record_update,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_hash,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .boxy_tag_match,
+            .assign_call_dict,
+            .assign_low_level,
+            .assign_list,
+            .assign_struct,
+            .assign_tag,
+            .store_struct,
+            .store_tag,
+            .set_local,
+            .debug,
+            .expect,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .incref,
+            .decref,
+            .decref_if_initialized,
+            .free,
+            .switch_initialized_payload,
+            .ret,
+            .crash,
+            => try body_clone.appendSuccessors(store, &successors, id, self.allocator),
+        }
+        for (successors.items) |next| {
+            const to = try self.stmtNode(indexes, planned, next);
+            try self.edge(at, to);
+        }
+    }
+    for (planned.items) |id| {
+        const stmt = store.getCFStmt(id);
+        if (stmt == .jump) {
+            try self.edge(indexes.nodeOf(id).?, indexes.nodeOf(joins.get(stmt.jump.target).?).?);
+        }
+    }
+}
+
+fn stmtNode(self: *Self, indexes: *Indexes, planned: *std.ArrayList(CFStmtId), stmt: CFStmtId) Allocator.Error!u32 {
+    if (indexes.nodeOf(stmt)) |index| return index;
+    try planned.ensureUnusedCapacity(self.allocator, 1);
+    const index = try self.node();
+    try indexes.setNode(stmt, index);
+    planned.appendAssumeCapacity(stmt);
+    return index;
+}
+
+fn captureNode(self: *Self, store: *const LirStore, at: u32, source: LocalId, steps: LIR.StrMatchStepSpan, extra: anytype) Allocator.Error!u32 {
+    const capture_node = try self.node();
+    try self.edge(at, capture_node);
+    if (extra.tracks(source)) try self.access(capture_node, source, true, false);
+    const captures = store.getStrMatchSteps(steps);
+    for (0..captures.len) |i| switch (LirStore.GuardedList.at(captures, i).capture) {
+        .discard => {},
+        .view => |view| if (extra.tracks(view)) {
+            try self.access(capture_node, view, false, true);
+            self.values.items[try self.local(view)].mutable = true;
+        },
+    };
+    return capture_node;
 }
 
 fn appendBlock(self: *Self, blocks: *std.ArrayList(Block), first: u32, position: *u32) Allocator.Error!void {
@@ -239,18 +469,19 @@ fn accessLess(self: *Self, a: Access, b: Access) bool {
 fn rangeLess(_: void, a: Range, b: Range) bool {
     return a.start < b.start;
 }
-fn compactRanges(ranges: *Ranges) void {
-    std.mem.sort(Range, ranges.mutableItems(), {}, rangeLess);
+/// Sort and merge `ranges` in place; returns how many remain.
+fn compactRanges(ranges: []Range) usize {
+    std.mem.sort(Range, ranges, {}, rangeLess);
     var count: usize = 0;
-    for (ranges.items()) |r| {
-        if (count > 0 and r.start <= ranges.items()[count - 1].end) {
-            ranges.mutableItems()[count - 1].end = @max(r.end, ranges.items()[count - 1].end);
+    for (ranges) |r| {
+        if (count > 0 and r.start <= ranges[count - 1].end) {
+            ranges[count - 1].end = @max(r.end, ranges[count - 1].end);
         } else {
-            ranges.mutableItems()[count] = r;
+            ranges[count] = r;
             count += 1;
         }
     }
-    ranges.truncate(count);
+    return count;
 }
 /// The block graph of a procedure, its loop-nesting forest, and each loop's
 /// position coverage.
@@ -483,7 +714,7 @@ const BlockStructure = struct {
     }
 
     /// Append every position a loop's blocks cover.
-    fn appendCoverage(self: *const BlockStructure, allocator: Allocator, loop: u32, blocks: []const Block, ranges: *Ranges) Allocator.Error!void {
+    fn appendCoverage(self: *const BlockStructure, allocator: Allocator, loop: u32, blocks: []const Block, ranges: *std.ArrayList(Range)) Allocator.Error!void {
         if (self.contiguous[loop]) {
             try ranges.append(allocator, .{ .start = self.first_position[loop], .end = self.end_position[loop] });
             return;
@@ -541,17 +772,25 @@ fn lastNodeOf(self: *const Self, block: Block) u32 {
 /// Solve exact read-before-write lifetimes and assign reusable physical slots.
 /// `size == 0` values have externally assigned storage or no represented bytes.
 pub fn solve(self: *Self) Allocator.Error!void {
-    var blocks: std.ArrayList(Block) = .empty;
-    defer blocks.deinit(self.allocator);
+    try self.solveLifetimes();
+    try self.assignSlots();
+}
+
+/// Solve exact read-before-write lifetimes without assigning slots. Each
+/// value whose `size` is nonzero gets its sorted, disjoint `liveRanges`; the
+/// accesses end up sorted by value, then position.
+pub fn solveLifetimes(self: *Self) Allocator.Error!void {
+    const blocks = &self.blocks;
+    blocks.clearRetainingCapacity();
     var position: u32 = 0;
     for (self.nodes.items, 0..) |n, i| {
         if (n.block != none) continue;
         if (n.pred_count == 1 and self.nodes.items[self.edges.items[n.pred].from].succ_count == 1) continue;
-        try self.appendBlock(&blocks, @intCast(i), &position);
+        try self.appendBlock(blocks, @intCast(i), &position);
     }
     // A component consisting entirely of a cycle has no distinguished entry.
     for (self.nodes.items, 0..) |n, i| if (n.block == none) {
-        try self.appendBlock(&blocks, @intCast(i), &position);
+        try self.appendBlock(blocks, @intCast(i), &position);
     };
     for (self.accesses.items) |*a| {
         const root = self.representative(a.value);
@@ -565,20 +804,18 @@ pub fn solve(self: *Self) Allocator.Error!void {
     var structure = try BlockStructure.init(self, blocks.items);
     defer structure.deinit(self.allocator);
     std.mem.sort(Access, self.accesses.items, self, accessLess);
-    const BlockState = struct { epoch: u32 = none, last_write: ?u32 = null, propagated: bool = false };
-    const states = try self.allocator.alloc(BlockState, blocks.items.len);
-    defer self.allocator.free(states);
+    try self.block_states.resize(self.allocator, blocks.items.len);
+    const states = self.block_states.items;
     @memset(states, .{});
-    const loop_epochs = try self.allocator.alloc(u32, structure.forest.loops.len);
-    defer self.allocator.free(loop_epochs);
+    try self.loop_epochs.resize(self.allocator, structure.forest.loops.len);
+    const loop_epochs = self.loop_epochs.items;
     @memset(loop_epochs, none);
-    // A unit of propagation: a block, or a loop that writes the value nowhere
-    // and so holds it at every position or at none.
-    const Unit = struct { loop: bool, index: u32 };
-    var work: std.ArrayList(Unit) = .empty;
-    defer work.deinit(self.allocator);
-    var write_loops: std.ArrayList(u32) = .empty;
-    defer write_loops.deinit(self.allocator);
+    const work = &self.units;
+    work.clearRetainingCapacity();
+    const write_loops = &self.write_loops;
+    write_loops.clearRetainingCapacity();
+    const ranges = &self.ranges;
+    std.debug.assert(ranges.items.len == 0);
     var begin: usize = 0;
     while (begin < self.accesses.items.len) {
         const value = self.accesses.items[begin].value;
@@ -586,7 +823,7 @@ pub fn solve(self: *Self) Allocator.Error!void {
         while (end < self.accesses.items.len and self.accesses.items[end].value == value) : (end += 1) {}
         defer begin = end;
         if (self.values.items[value].size == 0) continue;
-        const ranges = &self.values.items[value].ranges;
+        const range_start = ranges.items.len;
 
         // The loop-tree positions of the loops holding the value's writes:
         // a loop is transparent to the value when none lies within it.
@@ -659,10 +896,151 @@ pub fn solve(self: *Self) Allocator.Error!void {
                 if (state.last_write == null) try work.append(self.allocator, .{ .loop = false, .index = pred });
             }
         }
-        compactRanges(ranges);
+        const range_len = compactRanges(ranges.items[range_start..]);
+        ranges.shrinkRetainingCapacity(range_start + range_len);
+        const v = &self.values.items[value];
+        v.range_start = std.math.cast(u32, range_start) orelse return error.OutOfMemory;
+        v.range_len = std.math.cast(u32, range_len) orelse return error.OutOfMemory;
     }
-    try self.assignSlots();
 }
+
+/// A point where a solved value's storage begins or ends its lifetime, at the
+/// entry of `node`.
+pub const Boundary = struct {
+    node: u32,
+    value: u32,
+    kind: Kind,
+
+    /// Ends come first at one node: it may end a value's old lifetime and
+    /// start its new one.
+    pub const Kind = enum(u1) { end, start };
+};
+
+/// After `solveLifetimes`, append the lifetime boundaries of every solved
+/// value that is not live on entry to `entry`, the procedure's first node. A
+/// start lies at each node that writes the value without finding it live, and
+/// an end at each node that does not find live a value some predecessor still
+/// holds. Every access then lies within a lifetime on every path, and no start
+/// lies where the value is needed. An end may also be reached along a path on
+/// which the value has no lifetime.
+pub fn appendLifetimeBoundaries(self: *const Self, entry: u32, out: *std.ArrayList(Boundary)) Allocator.Error!void {
+    const position_nodes = try self.allocator.alloc(u32, self.nodes.items.len);
+    defer self.allocator.free(position_nodes);
+    for (self.nodes.items, 0..) |n, i| position_nodes[n.position] = @intCast(i);
+    const accesses = self.accesses.items;
+    var begin: usize = 0;
+    while (begin < accesses.len) {
+        const value = accesses[begin].value;
+        var end = begin;
+        while (end < accesses.len and accesses[end].value == value) : (end += 1) {}
+        defer begin = end;
+        if (self.values.items[value].size == 0) continue;
+        const lifetime = Lifetime{ .plan = self, .ranges = self.liveRanges(value), .accesses = accesses[begin..end] };
+        // Some path reads the value before any write.
+        if (lifetime.liveIn(entry)) continue;
+
+        var i: usize = 0;
+        while (i < lifetime.accesses.len) {
+            const at = lifetime.accesses[i].node;
+            var writes = false;
+            while (i < lifetime.accesses.len and lifetime.accesses[i].node == at) : (i += 1) {
+                writes = writes or lifetime.accesses[i].write;
+            }
+            if (writes and !lifetime.liveIn(at)) try out.append(self.allocator, .{ .node = at, .value = value, .kind = .start });
+        }
+        for (lifetime.ranges) |range| {
+            for (range.start..range.end) |position| {
+                var successors = self.nodeSuccessors(position_nodes[position]);
+                while (successors.next()) |successor| {
+                    if (!lifetime.liveIn(successor)) try out.append(self.allocator, .{ .node = successor, .value = value, .kind = .end });
+                }
+            }
+        }
+    }
+}
+
+/// One solved value's lifetime.
+const Lifetime = struct {
+    plan: *const Self,
+    /// Positions at which the value is live on entry or written.
+    ranges: []const Range,
+    /// The value's accesses, sorted by position.
+    accesses: []const Access,
+
+    /// Whether the value is needed on entry to `at`: it is occupied there,
+    /// and not only because the node writes it without reading it.
+    fn liveIn(self: Lifetime, at: u32) bool {
+        const position = self.plan.nodePosition(at);
+        if (!self.occupied(position)) return false;
+        var low: usize = 0;
+        var high: usize = self.accesses.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            if (self.plan.nodePosition(self.accesses[mid].node) < position) low = mid + 1 else high = mid;
+        }
+        var reads = false;
+        var writes = false;
+        while (low < self.accesses.len and self.accesses[low].node == at) : (low += 1) {
+            reads = reads or self.accesses[low].read;
+            writes = writes or self.accesses[low].write;
+        }
+        return reads or !writes;
+    }
+
+    fn occupied(self: Lifetime, position: u32) bool {
+        var low: usize = 0;
+        var high: usize = self.ranges.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            if (self.ranges[mid].end <= position) low = mid + 1 else high = mid;
+        }
+        return low < self.ranges.len and self.ranges[low].start <= position;
+    }
+};
+
+/// After `solveLifetimes`, every recorded access, sorted by value and then by
+/// position.
+pub fn sortedAccesses(self: *const Self) []const Access {
+    return self.accesses.items;
+}
+
+/// After `solveLifetimes`, whether `value` is needed on entry to `at`: some
+/// path from the entry of `at` reads it before writing it. `value_accesses`
+/// is the value's run of `sortedAccesses`.
+pub fn liveIn(self: *const Self, value: u32, value_accesses: []const Access, at: u32) bool {
+    const lifetime = Lifetime{ .plan = self, .ranges = self.liveRanges(value), .accesses = value_accesses };
+    return lifetime.liveIn(at);
+}
+
+/// The positions at which a solved value is occupied: where it is live on
+/// entry, plus where it is written.
+pub fn liveRanges(self: *const Self, value: u32) []const Range {
+    const v = self.values.items[value];
+    return self.ranges.items[v.range_start..][0..v.range_len];
+}
+
+/// A node's position in the solved layout.
+pub fn nodePosition(self: *const Self, at: u32) u32 {
+    return self.nodes.items[at].position;
+}
+
+/// A node's runtime successors.
+pub fn nodeSuccessors(self: *const Self, at: u32) SuccessorIterator {
+    return .{ .plan = self, .edge = self.nodes.items[at].succ };
+}
+
+/// Walks one node's runtime successors.
+pub const SuccessorIterator = struct {
+    plan: *const Self,
+    edge: u32,
+
+    pub fn next(self: *SuccessorIterator) ?u32 {
+        if (self.edge == none) return null;
+        const e = self.plan.edges.items[self.edge];
+        self.edge = e.next_succ;
+        return e.to;
+    }
+};
 const Busy = struct { end: u32, slot: u32 };
 fn busyOrder(_: void, a: Busy, b: Busy) std.math.Order {
     return std.math.order(a.end, b.end);
@@ -670,46 +1048,52 @@ fn busyOrder(_: void, a: Busy, b: Busy) std.math.Order {
 const SizeClass = struct {
     busy: std.PriorityQueue(Busy, void, busyOrder),
     available: std.ArrayList(u32) = .empty,
+
+    fn deinit(self: *SizeClass, allocator: Allocator) void {
+        self.busy.deinit(allocator);
+        self.available.deinit(allocator);
+    }
 };
 fn valueLess(self: *Self, a: u32, b: u32) bool {
-    const x = self.values.items[a].ranges.items()[0].start;
-    const y = self.values.items[b].ranges.items()[0].start;
+    const x = self.liveRanges(a)[0].start;
+    const y = self.liveRanges(b)[0].start;
     return if (x == y) a < b else x < y;
 }
 fn assignSlots(self: *Self) Allocator.Error!void {
-    var order: std.ArrayList(u32) = .empty;
-    defer order.deinit(self.allocator);
-    for (self.values.items, 0..) |v, i| if (v.ranges.items().len != 0) {
+    const order = &self.slot_order;
+    order.clearRetainingCapacity();
+    for (self.values.items, 0..) |v, i| if (v.range_len != 0) {
         try order.append(self.allocator, @intCast(i));
     };
     std.mem.sort(u32, order.items, self, valueLess);
-    // Sizes are structural keys, not compiler identities.
-    var classes = std.AutoHashMap(u32, SizeClass).init(self.allocator);
-    defer {
-        var it = classes.valueIterator();
-        while (it.next()) |c| {
-            c.busy.deinit(self.allocator);
-            c.available.deinit(self.allocator);
-        }
-        classes.deinit();
-    }
+    std.debug.assert(self.class_of_size.count() == 0);
     // Each slot's reservations. Every live range of every ordered value gets
-    // exactly one node, so the nodes are one allocation that lives only
-    // while slots are assigned.
-    var reservations: std.ArrayList(Reservations) = .empty;
-    defer reservations.deinit(self.allocator);
+    // exactly one node, so the nodes are one block that lives only while
+    // slots are assigned.
+    const reservations = &self.reservations;
+    reservations.clearRetainingCapacity();
     var node_count: usize = 0;
-    for (order.items) |index| node_count += self.values.items[index].ranges.items().len;
-    const nodes = try self.allocator.alloc(Reservations.Node, node_count);
-    defer self.allocator.free(nodes);
+    for (order.items) |index| node_count += self.values.items[index].range_len;
+    try self.reservation_nodes.resize(self.allocator, node_count);
+    const nodes = self.reservation_nodes.items;
     var next_node: usize = 0;
     for (order.items) |index| {
         const value = &self.values.items[index];
-        const ranges = value.ranges.items();
+        const ranges = self.liveRanges(index);
         const start = ranges[0].start;
-        const entry = try classes.getOrPut(value.size);
-        if (!entry.found_existing) entry.value_ptr.* = .{ .busy = std.PriorityQueue(Busy, void, busyOrder).initContext({}) };
-        const class = entry.value_ptr;
+        const entry = try self.class_of_size.getOrPut(self.allocator, value.size);
+        if (!entry.found_existing) {
+            // Classes past those in use hold an earlier procedure's storage.
+            const class_index = self.class_of_size.count() - 1;
+            if (class_index == self.size_classes.items.len) {
+                try self.size_classes.append(self.allocator, .{ .busy = std.PriorityQueue(Busy, void, busyOrder).initContext({}) });
+            } else {
+                self.size_classes.items[class_index].busy.clearRetainingCapacity();
+                self.size_classes.items[class_index].available.clearRetainingCapacity();
+            }
+            entry.value_ptr.* = std.math.cast(u32, class_index) orelse return error.OutOfMemory;
+        }
+        const class = &self.size_classes.items[entry.value_ptr.*];
         while (class.busy.peek()) |busy| {
             if (busy.end > start) break;
             _ = class.busy.pop();
@@ -780,7 +1164,7 @@ fn reservationsOverlap(tree: *const Reservations, ranges: []const Range) bool {
     return false;
 }
 
-fn testLocal(index: u32) lir.LocalId {
+fn testLocal(index: u32) LocalId {
     return @fromBackingInt(@intCast(index));
 }
 
@@ -843,7 +1227,7 @@ test "stack plan matches exact liveness on generated typed scalar graphs" {
             const occupied = live_in[i] | live_out[i] | writes[i];
             for (0..locals_count) |v| {
                 var planned_live = false;
-                for (plan.values.items[v].ranges.items()) |range| {
+                for (plan.liveRanges(@intCast(v))) |range| {
                     const pos = plan.nodes.items[i].position;
                     planned_live = planned_live or (range.start <= pos and pos < range.end);
                 }
@@ -855,6 +1239,113 @@ test "stack plan matches exact liveness on generated typed scalar graphs" {
                         try std.testing.expect(plan.values.items[v].slot != plan.values.items[w].slot);
                     }
                 }
+            }
+        }
+    }
+}
+
+// Executions are simulated against the same dense oracle: every access must
+// find its value inside a lifetime, and no start may discard a needed value.
+test "stack plan lifetime boundaries bracket every access on every path" {
+    var rng = std.Random.DefaultPrng.init(0x12423);
+    const random = rng.random();
+    for (0..200) |_| {
+        var plan = init(std.testing.allocator);
+        defer plan.deinit();
+        const count = 20;
+        const locals_count = 7;
+        var reads = @as([count]u8, @splat(0));
+        var writes = @as([count]u8, @splat(0));
+        var successors = @as([count]u32, @splat(0));
+        for (0..count) |_| _ = try plan.node();
+        for (0..count) |i| {
+            if (random.boolean()) {
+                const a = random.uintLessThan(u3, locals_count);
+                reads[i] |= @as(u8, 1) << a;
+                try plan.access(@intCast(i), testLocal(a), true, false);
+            }
+            if (random.boolean()) {
+                const result = random.uintLessThan(u3, locals_count);
+                writes[i] |= @as(u8, 1) << result;
+                try plan.access(@intCast(i), testLocal(result), false, true);
+            }
+        }
+        for (0..count - 1) |i| {
+            if (random.uintLessThan(u8, 8) != 0) {
+                try plan.edge(@intCast(i), @intCast(i + 1));
+                successors[i] |= @as(u32, 1) << @intCast(i + 1);
+            }
+            if (random.boolean()) {
+                const next = 1 + random.uintLessThan(u32, count - 1);
+                if (successors[i] & (@as(u32, 1) << @intCast(next)) == 0) {
+                    try plan.edge(@intCast(i), next);
+                    successors[i] |= @as(u32, 1) << @intCast(next);
+                }
+            }
+        }
+        var live_in = @as([count]u8, @splat(0));
+        var changed = true;
+        while (changed) {
+            changed = false;
+            for (0..count) |i| {
+                var out: u8 = 0;
+                for (0..count) |j| if (successors[i] & (@as(u32, 1) << @intCast(j)) != 0) {
+                    out |= live_in[j];
+                };
+                const in = reads[i] | (out & ~writes[i]);
+                changed = changed or in != live_in[i];
+                live_in[i] = in;
+            }
+        }
+        for (plan.values.items) |*v| v.size = 8;
+        try plan.solveLifetimes();
+        var boundaries: std.ArrayList(Boundary) = .empty;
+        defer boundaries.deinit(std.testing.allocator);
+        try plan.appendLifetimeBoundaries(0, &boundaries);
+
+        var bounded: u8 = 0;
+        for (boundaries.items) |b| bounded |= @as(u8, 1) << @intCast(@backingInt(plan.values.items[b.value].local));
+        // A value live on entry keeps its storage for the whole activation.
+        try std.testing.expectEqual(@as(u8, 0), bounded & live_in[0]);
+        for (boundaries.items) |b| {
+            const bit = @as(u8, 1) << @intCast(@backingInt(plan.values.items[b.value].local));
+            if (b.kind == .start) try std.testing.expect(live_in[b.node] & bit == 0);
+        }
+
+        for (0..50) |_| {
+            var alive: u8 = 0;
+            var holds: u8 = 0;
+            var at: u32 = 0;
+            for (0..3 * count) |_| {
+                for ([_]Boundary.Kind{ .end, .start }) |kind| {
+                    for (boundaries.items) |b| if (b.node == at and b.kind == kind) {
+                        const bit = @as(u8, 1) << @intCast(@backingInt(plan.values.items[b.value].local));
+                        switch (kind) {
+                            .end => {
+                                alive &= ~bit;
+                                holds &= ~bit;
+                            },
+                            .start => {
+                                try std.testing.expect(alive & bit == 0);
+                                alive |= bit;
+                                holds &= ~bit;
+                            },
+                        }
+                    };
+                }
+                try std.testing.expectEqual(reads[at] & bounded, reads[at] & bounded & alive & holds);
+                try std.testing.expectEqual(writes[at] & bounded, writes[at] & bounded & alive);
+                holds |= writes[at];
+                const options = successors[at];
+                if (options == 0) break;
+                var pick = random.uintLessThan(u32, @popCount(options));
+                var next: u32 = 0;
+                while (true) : (next += 1) {
+                    if (options & (@as(u32, 1) << @intCast(next)) == 0) continue;
+                    if (pick == 0) break;
+                    pick -= 1;
+                }
+                at = next;
             }
         }
     }
@@ -907,7 +1398,7 @@ test "stack plan uses linear interval storage for a wide straight-line block" {
     }
     try plan.solve();
     try std.testing.expectEqual(@as(usize, count), plan.slots.items.len);
-    for (plan.values.items) |v| try std.testing.expectEqual(@as(usize, 1), v.ranges.items().len);
+    for (plan.values.items) |v| try std.testing.expectEqual(@as(u32, 1), v.range_len);
 }
 
 fn checkLifetimeHoles(allocator: Allocator) (Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {

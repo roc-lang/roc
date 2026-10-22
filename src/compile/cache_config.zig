@@ -333,7 +333,30 @@ pub const Constants = struct {
     ///      resolution selected for them.
     /// 152: a nested procedure site records whether its module's source
     ///      calls it at exactly one site.
-    pub const CACHE_VERSION = 152;
+    /// 153: a package or platform header's qualified exposures record a
+    ///      deferred reference, and canonical diagnostics gain
+    ///      `public_type_not_defined`.
+    /// 154: Type stores keep each slot's kind in a column beside its payload,
+    ///      and numeric literal facts in a table that static dispatch
+    ///      constraints index.
+    /// 155: Identifier stores assign serial indices, keep each name's end
+    ///      offset and probe fingerprints in columns of their own, and drop
+    ///      the per-identifier attribute column.
+    /// 156: Type stores keep each derived map payload selection in a table
+    ///      keyed by its callable's class instead of on every static
+    ///      dispatch constraint.
+    /// 157: canonical diagnostics drop `execution_requires_app_or_default_app`,
+    ///      and file-level diagnostics store no region.
+    /// 158: Module environments record row-coerced results in place of
+    ///      row-coerced callees and closed-result definitions.
+    /// 159: a module records which top-level definitions' calls can invoke a
+    ///      function value they do not name, and its strict-demand relation
+    ///      follows function values and every selected dispatch; type stores
+    ///      keep interpolation metadata in a table that static dispatch
+    ///      constraints index.
+    /// 160: procedure templates record how much of each quantified variable
+    ///      their bodies demand.
+    pub const CACHE_VERSION = 160;
 };
 
 /// Configuration for the Roc cache system.
@@ -425,6 +448,25 @@ pub const CacheConfig = struct {
         defer allocator.free(version_dir);
 
         return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "mod" });
+    }
+
+    /// Pointers from a module's placement to the key of its most recently
+    /// stored checked entry (design.md "Compile-Time Value Reuse Across
+    /// Edits").
+    pub fn getCheckedPlacementDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
+        const version_dir = try self.getVersionCacheDir(allocator);
+        defer allocator.free(version_dir);
+
+        return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "mod-latest" });
+    }
+
+    /// The literal values of each program root module, by the module's
+    /// placement (design.md "Compile-Time Value Reuse Across Edits").
+    pub fn getLiteralValuesDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
+        const version_dir = try self.getVersionCacheDir(allocator);
+        defer allocator.free(version_dir);
+
+        return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "literals" });
     }
 
     /// Exact platform/app composition results, separate from reusable modules.

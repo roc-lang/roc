@@ -87,8 +87,9 @@ pub const ResourceError = Allocator.Error;
 pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!void {
     var analysis = body_clone.AnalysisScratch.init(store.allocator);
     defer analysis.deinit();
-    var pass = Pass.init(store, layouts, store.allocator, &analysis);
+    var pass = Pass.init(store.allocator);
     defer pass.deinit();
+    pass.attach(store, layouts, &analysis);
     const proc_count = store.procSpecCount();
     var proc_index: usize = 0;
     while (proc_index < proc_count) : (proc_index += 1) {
@@ -112,7 +113,11 @@ pub fn prepareCallees(store: *LirStore, allocator: Allocator) ResourceError!Prep
         .store = store,
         .allocator = allocator,
         .append_kind = collections.DenseMap(LIR.LirProcSpecId, ?ProcKind).init(allocator),
+        .env = collections.DenseMap(LocalId, Pass.CalleeClassifier.Abstract).init(allocator),
+        .provenance = collections.DenseMap(LocalId, usize).init(allocator),
     };
+    defer classifier.env.deinit();
+    defer classifier.provenance.deinit();
     errdefer classifier.append_kind.deinit();
     for (0..store.procSpecCount()) |i| {
         _ = try classifier.classifyProc(@fromBackingInt(@intCast(i)));
@@ -129,8 +134,30 @@ pub fn runProc(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.
 
 /// Rewrite with independent pooled counts for the procedure and its loop body.
 pub fn runProcWithScratch(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, scratch_allocator: Allocator, analysis: *body_clone.AnalysisScratch) ResourceError!void {
-    var pass = Pass.init(store, layouts, scratch_allocator, analysis);
-    defer pass.deinit();
+    var lane = LaneScratch.init(scratch_allocator);
+    defer lane.deinit();
+    try runProcInLane(store, layouts, proc_id, &lane, analysis);
+}
+
+/// Promotion storage one executor lane retains across procedures; only
+/// empty storage survives a procedure.
+pub const LaneScratch = struct {
+    pass: Pass,
+
+    pub fn init(allocator: Allocator) LaneScratch {
+        return .{ .pass = Pass.init(allocator) };
+    }
+
+    pub fn deinit(self: *LaneScratch) void {
+        self.pass.deinit();
+    }
+};
+
+/// `runProcWithScratch` with lane-retained promotion storage.
+pub fn runProcInLane(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, lane: *LaneScratch, analysis: *body_clone.AnalysisScratch) ResourceError!void {
+    const pass = &lane.pass;
+    pass.attach(store, layouts, analysis);
+    defer pass.release();
     try pass.transformProc(proc_id);
 }
 
@@ -355,19 +382,39 @@ const Pass = struct {
     family_split: collections.DenseMap(LocalId, void),
     family_consumes: collections.DenseMap(CFStmtId, void),
     family_occurrences: collections.DenseMap(CFStmtId, usize),
+    /// `transformProc`'s per-round scan, its edge index, the procedure's
+    /// argument set, the parameters already attempted, and the locals the
+    /// rewrites create.
+    scan: Scan,
+    edge_index: EdgeIndex,
+    proc_args: collections.DenseMap(LocalId, void),
+    attempted: collections.DenseMap(LocalId, void),
+    new_locals: std.ArrayList(LocalId) = .empty,
+    /// `scanProc`'s work stack, visited statements, open join bodies, and
+    /// the stack depth at which each open body ends.
+    scan_stack: std.ArrayList(CFStmtId) = .empty,
+    scan_visited: collections.DenseMap(CFStmtId, void),
+    scan_scopes: std.ArrayList(BodyScope) = .empty,
+    scan_active_bodies: collections.DenseMap(LIR.JoinPointId, ?usize),
 
     analysis: *body_clone.AnalysisScratch,
 
-    fn init(store: *LirStore, layouts: *const layout_mod.Store, allocator: Allocator, analysis: *body_clone.AnalysisScratch) Pass {
+    const BodyScope = struct { id: LIR.JoinPointId, stack_depth: usize };
+
+    /// Empty promotion storage; `attach` names the store a procedure is
+    /// rewritten in.
+    fn init(allocator: Allocator) Pass {
         return .{
-            .store = store,
-            .analysis = analysis,
-            .layouts = layouts,
+            .store = undefined,
+            .analysis = undefined,
+            .layouts = undefined,
             .allocator = allocator,
             .classifier = .{
-                .store = store,
+                .store = undefined,
                 .allocator = allocator,
                 .append_kind = collections.DenseMap(LIR.LirProcSpecId, ?ProcKind).init(allocator),
+                .env = collections.DenseMap(LocalId, CalleeClassifier.Abstract).init(allocator),
+                .provenance = collections.DenseMap(LocalId, usize).init(allocator),
             },
             .owned_defs = collections.DenseMap(LocalId, std.ArrayList(OwnedSource)).init(allocator),
             .set_dispatches = collections.DenseMap(CFStmtId, void).init(allocator),
@@ -379,12 +426,60 @@ const Pass = struct {
             .family_split = collections.DenseMap(LocalId, void).init(allocator),
             .family_consumes = collections.DenseMap(CFStmtId, void).init(allocator),
             .family_occurrences = collections.DenseMap(CFStmtId, usize).init(allocator),
+            .scan = .{
+                .total_uses = collections.DenseMap(LocalId, u32).init(allocator),
+                .tracked_uses = collections.DenseMap(LocalId, u32).init(allocator),
+                .param_join = collections.DenseMap(LocalId, CFStmtId).init(allocator),
+                .literals = collections.DenseMap(LocalId, u64).init(allocator),
+                .scalar_aliases = collections.DenseMap(LocalId, LocalId).init(allocator),
+                .dirty_targets = collections.DenseMap(LocalId, void).init(allocator),
+                .assigned_targets = collections.DenseMap(LocalId, u32).init(allocator),
+            },
+            .edge_index = .{ .heads = collections.DenseMap(LocalId, usize).init(allocator), .next = &.{} },
+            .proc_args = collections.DenseMap(LocalId, void).init(allocator),
+            .attempted = collections.DenseMap(LocalId, void).init(allocator),
+            .scan_visited = collections.DenseMap(CFStmtId, void).init(allocator),
+            .scan_active_bodies = collections.DenseMap(LIR.JoinPointId, ?usize).init(allocator),
         };
+    }
+
+    fn attach(self: *Pass, store: *LirStore, layouts: *const layout_mod.Store, analysis: *body_clone.AnalysisScratch) void {
+        self.store = store;
+        self.layouts = layouts;
+        self.analysis = analysis;
+        self.classifier.store = store;
+    }
+
+    /// Empty every table for the next procedure, keeping capacity: the
+    /// helper memo too, since the next procedure may read another store.
+    fn release(self: *Pass) void {
+        self.resetProcState();
+        self.classifier.append_kind.clearRetainingCapacity();
+        self.family_parents.clearRetainingCapacity();
+        self.family_members.clearRetainingCapacity();
+        self.family_split.clearRetainingCapacity();
+        self.family_consumes.clearRetainingCapacity();
+        self.family_occurrences.clearRetainingCapacity();
+        self.store = undefined;
+        self.layouts = undefined;
+        self.analysis = undefined;
+        self.classifier.store = undefined;
     }
 
     fn deinit(self: *Pass) void {
         self.resetProcState();
         self.classifier.append_kind.deinit();
+        self.classifier.env.deinit();
+        self.classifier.provenance.deinit();
+        self.scan.deinit(self.allocator);
+        self.edge_index.deinit(self.allocator);
+        self.proc_args.deinit();
+        self.attempted.deinit();
+        self.new_locals.deinit(self.allocator);
+        self.scan_stack.deinit(self.allocator);
+        self.scan_visited.deinit();
+        self.scan_scopes.deinit(self.allocator);
+        self.scan_active_bodies.deinit();
         self.owned_defs.deinit();
         self.set_dispatches.deinit();
         self.loop_versions.deinit();
@@ -410,6 +505,11 @@ const Pass = struct {
         var slack = self.slack_loops.valueIterator();
         while (slack.next()) |loop| loop.deinit(allocator);
         self.slack_loops.clearRetainingCapacity();
+        self.scan.clear();
+        self.edge_index.heads.clearRetainingCapacity();
+        self.proc_args.clearRetainingCapacity();
+        self.attempted.clearRetainingCapacity();
+        self.new_locals.clearRetainingCapacity();
     }
 
     fn slackLoop(self: *Pass, loop_stmt: CFStmtId) ResourceError!*SlackLoop {
@@ -438,6 +538,10 @@ const Pass = struct {
         store: *LirStore,
         allocator: Allocator,
         append_kind: collections.DenseMap(LIR.LirProcSpecId, ?ProcKind),
+        /// One helper body's symbolic values and the operation each list
+        /// value extends, refilled per classified helper.
+        env: collections.DenseMap(LocalId, Abstract),
+        provenance: collections.DenseMap(LocalId, usize),
 
         /// Symbolic value of a local inside a linear helper body.
         const Abstract = union(enum) {
@@ -491,7 +595,6 @@ const Pass = struct {
                         .expect_err,
                         .runtime_error,
                         .comptime_exhaustiveness_failed,
-                        .comptime_branch_taken,
                         .incref,
                         .decref,
                         .decref_if_initialized,
@@ -532,12 +635,12 @@ const Pass = struct {
             const params = self.store.getLocalSpan(proc.args);
             if (GuardedList.borrowLen(params) != 2) return null;
 
-            var env = collections.DenseMap(LocalId, Abstract).init(self.allocator);
-            defer env.deinit();
+            const env = &self.env;
+            env.clearRetainingCapacity();
             // Every operation must extend the latest list value, which must be
             // returned. Aliases preserve identity, not merely abstract shape.
-            var provenance = collections.DenseMap(LocalId, usize).init(self.allocator);
-            defer provenance.deinit();
+            const provenance = &self.provenance;
+            provenance.clearRetainingCapacity();
             var last_operation: usize = 0;
             try env.put(GuardedList.at(params, 0), .{ .arg = 0 });
             try env.put(GuardedList.at(params, 1), .{ .arg = 1 });
@@ -546,13 +649,13 @@ const Pass = struct {
             while (true) {
                 switch (self.store.getCFStmtImmediate(current).*) {
                     .assign_ref => |assign| {
-                        const value: Abstract = switch (assign.op) {
-                            .local => |src| env.get(src) orelse .other,
+                        const value: Abstract = switch (assign.op.kind) {
+                            .local => env.get(assign.op.source) orelse .other,
                             .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => .other,
                         };
                         try env.put(assign.target, value);
-                        const origin = switch (assign.op) {
-                            .local => |src| provenance.get(src) orelse 0,
+                        const origin = switch (assign.op.kind) {
+                            .local => provenance.get(assign.op.source) orelse 0,
                             .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => 0,
                         };
                         try provenance.put(assign.target, origin);
@@ -561,7 +664,10 @@ const Pass = struct {
                     .assign_literal => |assign| {
                         const value: Abstract = switch (assign.value) {
                             .i64_literal => |lit| if (lit.value >= 0) .{ .literal = @intCast(lit.value) } else Abstract.other,
-                            .i128_literal => |lit| if (lit.value >= 0 and lit.value <= std.math.maxInt(u64)) .{ .literal = @intCast(lit.value) } else Abstract.other,
+                            .i128_literal => |lit_id| blk_lit: {
+                                const lit = self.store.stmtRow(lit_id);
+                                break :blk_lit if (lit.value >= 0 and lit.value <= std.math.maxInt(u64)) .{ .literal = @intCast(lit.value) } else Abstract.other;
+                            },
                             .f64_literal, .f32_literal, .dec_literal, .str_literal, .static_data, .bytes_literal, .proc_ref, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal => .other,
                         };
                         try env.put(assign.target, value);
@@ -569,7 +675,7 @@ const Pass = struct {
                         current = assign.next;
                     },
                     .assign_low_level => |assign| {
-                        const value = try self.classifyStep(&env, assign.op, assign.args, null);
+                        const value = try self.classifyStep(env, assign.op, assign.args, null);
                         if (value == .other) return null;
                         const source = GuardedList.at(self.store.getLocalSpan(assign.args), 0);
                         if ((provenance.get(source) orelse 0) != last_operation) return null;
@@ -579,7 +685,7 @@ const Pass = struct {
                         current = assign.next;
                     },
                     .assign_call => |assign| {
-                        const value = try self.classifyStep(&env, null, assign.args, assign.proc);
+                        const value = try self.classifyStep(env, null, assign.args, assign.proc);
                         if (value == .other) return null;
                         const source = GuardedList.at(self.store.getLocalSpan(assign.args), 0);
                         if ((provenance.get(source) orelse 0) != last_operation) return null;
@@ -612,7 +718,6 @@ const Pass = struct {
                     .expect_err,
                     .runtime_error,
                     .comptime_exhaustiveness_failed,
-                    .comptime_branch_taken,
                     .incref,
                     .decref,
                     .decref_if_initialized,
@@ -810,15 +915,20 @@ const Pass = struct {
 
     fn scanProc(self: *Pass, body: CFStmtId, scan: *Scan) ResourceError!void {
         const allocator = self.allocator;
-        var stack = std.ArrayList(CFStmtId).empty;
-        defer stack.deinit(allocator);
-        var visited = collections.DenseMap(CFStmtId, void).init(allocator);
-        defer visited.deinit();
-        const BodyScope = struct { id: LIR.JoinPointId, stack_depth: usize };
-        var scopes = std.ArrayList(BodyScope).empty;
-        defer scopes.deinit(allocator);
-        var active_bodies = collections.DenseMap(LIR.JoinPointId, ?usize).init(allocator);
-        defer active_bodies.deinit();
+        const stack = &self.scan_stack;
+        const visited = &self.scan_visited;
+        const scopes = &self.scan_scopes;
+        const active_bodies = &self.scan_active_bodies;
+        stack.clearRetainingCapacity();
+        visited.clearRetainingCapacity();
+        scopes.clearRetainingCapacity();
+        active_bodies.clearRetainingCapacity();
+        defer {
+            stack.clearRetainingCapacity();
+            visited.clearRetainingCapacity();
+            scopes.clearRetainingCapacity();
+            active_bodies.clearRetainingCapacity();
+        }
         try stack.append(allocator, body);
         while (stack.items.len > 0) {
             while (scopes.items.len > 0 and scopes.items[scopes.items.len - 1].stack_depth == stack.items.len) {
@@ -833,18 +943,18 @@ const Pass = struct {
             switch (stmt) {
                 .assign_ref => |assign| {
                     try bumpUse(&scan.assigned_targets, assign.target);
-                    switch (assign.op) {
-                        .local => |src| {
-                            if (self.isListLocal(src) and self.isListLocal(assign.target)) {
-                                try scan.edges.append(allocator, .{ .kind = .alias, .stmt = current, .source = src, .target = assign.target });
-                                try noteUse(scan, src, true);
+                    switch (assign.op.kind) {
+                        .local => {
+                            if (self.isListLocal(assign.op.source) and self.isListLocal(assign.target)) {
+                                try scan.edges.append(allocator, .{ .kind = .alias, .stmt = current, .source = assign.op.source, .target = assign.target });
+                                try noteUse(scan, assign.op.source, true);
                             } else {
-                                if (!self.isListLocal(src) and !self.isListLocal(assign.target)) try scan.scalar_aliases.put(assign.target, src);
-                                try noteUse(scan, src, false);
+                                if (!self.isListLocal(assign.op.source) and !self.isListLocal(assign.target)) try scan.scalar_aliases.put(assign.target, assign.op.source);
+                                try noteUse(scan, assign.op.source, false);
                             }
                         },
-                        inline .discriminant, .field, .tag_payload, .tag_payload_struct => |op| try noteUse(scan, op.source, false),
-                        inline .list_reinterpret, .nominal => |op| try noteUse(scan, op.backing_ref, false),
+                        inline .discriminant, .field, .tag_payload, .tag_payload_struct => try noteUse(scan, assign.op.source, false),
+                        inline .list_reinterpret, .nominal => try noteUse(scan, assign.op.source, false),
                     }
                     try stack.append(allocator, assign.next);
                 },
@@ -952,15 +1062,15 @@ const Pass = struct {
                 },
                 .switch_stmt => |s| {
                     try noteUse(scan, s.cond, false);
-                    try body_clone.appendSuccessorsInOrder(self.store, &stack, current, allocator, .{ .switch_edges = .arms_first });
+                    try body_clone.appendSuccessorsInOrder(self.store, stack, current, allocator, .{ .switch_edges = .arms_first });
                 },
                 .switch_initialized_payload => |s| {
                     try noteUse(scan, s.cond, false);
-                    try body_clone.appendSuccessorsInOrder(self.store, &stack, current, allocator, .{ .switch_edges = .arms_first });
+                    try body_clone.appendSuccessorsInOrder(self.store, stack, current, allocator, .{ .switch_edges = .arms_first });
                 },
                 .boxy_tag_match => |s| {
                     try noteUse(scan, s.source, false);
-                    try body_clone.appendSuccessorsInOrder(self.store, &stack, current, allocator, .{ .switch_edges = .arms_first });
+                    try body_clone.appendSuccessorsInOrder(self.store, stack, current, allocator, .{ .switch_edges = .arms_first });
                 },
                 .jump => |jump| {
                     scan.jump_visits += 1;
@@ -972,7 +1082,10 @@ const Pass = struct {
                     try bumpUse(&scan.assigned_targets, assign.target);
                     const literal: ?u64 = switch (assign.value) {
                         .i64_literal => |lit| if (lit.value >= 0) @intCast(lit.value) else null,
-                        .i128_literal => |lit| if (lit.value >= 0 and lit.value <= std.math.maxInt(u64)) @intCast(lit.value) else null,
+                        .i128_literal => |lit_id| blk_lit: {
+                            const lit = self.store.stmtRow(lit_id);
+                            break :blk_lit if (lit.value >= 0 and lit.value <= std.math.maxInt(u64)) @intCast(lit.value) else null;
+                        },
                         .f64_literal, .f32_literal, .dec_literal, .str_literal, .static_data, .bytes_literal, .proc_ref, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal => null,
                     };
                     if (literal) |value| try scan.literals.put(assign.target, value);
@@ -1003,7 +1116,6 @@ const Pass = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -1014,7 +1126,7 @@ const Pass = struct {
                 => {
                     if (body_clone.definedTarget(stmt)) |target| try bumpUse(&scan.assigned_targets, target);
                     try body_clone.tryForEachStmtRead(self.store, stmt, scan, noteUntrackedUse);
-                    try body_clone.appendSuccessorsInOrder(self.store, &stack, current, allocator, .{ .switch_edges = .arms_first });
+                    try body_clone.appendSuccessorsInOrder(self.store, stack, current, allocator, .{ .switch_edges = .arms_first });
                 },
             }
         }
@@ -1090,16 +1202,16 @@ const Pass = struct {
                 const member = member_entry.local;
                 for (order.topology.reads_of.row(member)) |raw| {
                     const stmt_id: CFStmtId = @fromBackingInt(@intCast(raw));
-                    const stmt = self.store.getCFStmt(stmt_id);
+                    const stmt = self.store.getCFStmtImmediate(stmt_id);
                     // A transparent alias names the same value; account for
                     // its actual uses, including ones after its source dies.
-                    if (stmt == .assign_ref and stmt.assign_ref.op == .local and
+                    if (stmt.* == .assign_ref and stmt.assign_ref.op.kind == .local and
                         parents.contains(stmt.assign_ref.target) and
                         Family.root(parents, stmt.assign_ref.target) == group_root) continue;
                     const occurrence = try occurrences.getOrPut(stmt_id);
                     if (!occurrence.found_existing) occurrence.value_ptr.* = 0;
                     occurrence.value_ptr.* += 1;
-                    if (stmt == .assign_low_level) {
+                    if (stmt.* == .assign_low_level) {
                         const op = stmt.assign_low_level.op;
                         if (op == .list_len or op == .list_get_unsafe or op == .list_prefetch or
                             op == .list_slack_unique or op == .list_owned_unique) continue;
@@ -1149,51 +1261,38 @@ const Pass = struct {
     // Per-parameter qualification and rewrite
 
     fn transformProc(self: *Pass, proc_id: LIR.LirProcSpecId) ResourceError!void {
-        const proc = self.store.getProcSpec(proc_id);
+        const proc = self.store.getProcSpecImmediate(proc_id);
         if (proc.body == null or proc.hosted != null) return;
         const allocator = self.allocator;
         self.resetProcState();
 
-        var proc_args = collections.DenseMap(LocalId, void).init(allocator);
-        defer proc_args.deinit();
+        const proc_args = &self.proc_args;
         {
             const args = self.store.getLocalSpan(proc.args);
             for (0..GuardedList.borrowLen(args)) |i| try proc_args.put(GuardedList.at(args, i), {});
         }
 
-        var new_locals = std.ArrayList(LocalId).empty;
-        defer new_locals.deinit(allocator);
+        const new_locals = &self.new_locals;
         // A promotion rewrites statements the scan indexed, so each round
         // works from a fresh scan and promotes at most one parameter;
         // already-promoted parameters are skipped by identity on later
         // rounds.
-        var attempted = collections.DenseMap(LocalId, void).init(allocator);
-        defer attempted.deinit();
+        const attempted = &self.attempted;
 
         var max_join_id: u32 = 0;
         var promoting = true;
         // The scan and its index are emptied and refilled per round rather
         // than remade: a procedure may promote hundreds of parameters, and
         // on an arena every round's fresh tables would stay allocated.
-        var scan = Scan{
-            .total_uses = collections.DenseMap(LocalId, u32).init(allocator),
-            .tracked_uses = collections.DenseMap(LocalId, u32).init(allocator),
-            .param_join = collections.DenseMap(LocalId, CFStmtId).init(allocator),
-            .literals = collections.DenseMap(LocalId, u64).init(allocator),
-            .scalar_aliases = collections.DenseMap(LocalId, LocalId).init(allocator),
-            .dirty_targets = collections.DenseMap(LocalId, void).init(allocator),
-            .assigned_targets = collections.DenseMap(LocalId, u32).init(allocator),
-        };
-        defer scan.deinit(allocator);
-        var edge_index = try EdgeIndex.init(allocator, &.{});
-        defer edge_index.deinit(allocator);
+        const scan = &self.scan;
+        const edge_index = &self.edge_index;
         while (promoting) {
             promoting = false;
             scan.clear();
-            try self.scanProc(self.store.getProcSpecImmediate(proc_id).body.?, &scan);
+            try self.scanProc(self.store.getProcSpecImmediate(proc_id).body.?, scan);
             max_join_id = @max(max_join_id, scan.max_join_id);
             if (scan.edges.items.len == 0) break;
-            try self.classifyMetadataTransfers(&scan, proc_id);
+            try self.classifyMetadataTransfers(scan, proc_id);
             try edge_index.rebuild(allocator, scan.edges.items);
             outer: for (scan.joins.items) |info| {
                 if (!info.has_back_edge) continue;
@@ -1206,7 +1305,7 @@ const Pass = struct {
                     if (!self.isListLocal(param)) continue;
                     if (attempted.contains(param)) continue;
                     try attempted.put(param, {});
-                    if (try self.promoteParam(&scan, &edge_index, &proc_args, info.stmt, param, &max_join_id, &new_locals)) {
+                    if (try self.promoteParam(scan, edge_index, proc_args, info.stmt, param, &max_join_id, new_locals)) {
                         promoting = true;
                         break :outer;
                     }
@@ -1214,11 +1313,11 @@ const Pass = struct {
             }
         }
 
-        try self.versionLoops(self.store.getProcSpecImmediate(proc_id).body.?, &max_join_id, &new_locals);
-        try self.versionSlackLoops(self.store.getProcSpecImmediate(proc_id).body.?, &max_join_id, &new_locals);
+        try self.versionLoops(self.store.getProcSpecImmediate(proc_id).body.?, &max_join_id, new_locals);
+        try self.versionSlackLoops(self.store.getProcSpecImmediate(proc_id).body.?, &max_join_id, new_locals);
 
         if (new_locals.items.len > 0) {
-            const spec = self.store.getProcSpec(proc_id);
+            const spec = self.store.getProcSpecImmediate(proc_id);
             const frame = self.store.getLocalSpan(spec.frame_locals);
             var combined = std.ArrayList(LocalId).empty;
             defer combined.deinit(allocator);
@@ -1293,7 +1392,7 @@ const Pass = struct {
             var it = chain_params.valueIterator();
             while (it.next()) |owner| {
                 const join = self.store.getCFStmtImmediate(owner.*).join;
-                const maybe = self.store.getLocalSpan(join.maybe_uninitialized_params);
+                const maybe = self.store.getLocalSpan(self.store.stmtRowOrDefault(join.extra).maybe_uninitialized_params);
                 for (0..GuardedList.borrowLen(maybe)) |i| {
                     if (carriers.contains(GuardedList.at(maybe, i))) return false;
                 }
@@ -1499,7 +1598,7 @@ const Pass = struct {
                         .alias => stmt.assign_ref.next,
                         .append_call => stmt.assign_call.next,
                         .refresh_op, .range_append, .set_op, .le_bytes_append, .reserve_op, .unsafe_append => stmt.assign_low_level.next,
-                        .param_write => unreachable,
+                        .param_write => unreachable, // the loop skips param_write edges above
                     };
                     const seed = try self.seedMetadata(edge.target, limit, owned, next, new_locals, origin);
                     switch (edge.kind) {
@@ -1509,13 +1608,13 @@ const Pass = struct {
                         .alias => try self.store.replaceCFStmt(edge.stmt, .{ .assign_low_level = .{
                             .target = edge.target,
                             .op = .list_map_prepare_reuse,
-                            .rc_effect = LowLevelOp.list_map_prepare_reuse.rcEffect(),
+                            .rc_effect = try self.store.addRcEffect(LowLevelOp.list_map_prepare_reuse.rcEffect()),
                             .args = try self.store.addLocalSpan(&.{edge.source}),
                             .next = seed,
                         } }, origin),
                         .append_call => self.store.getCFStmtPtr(edge.stmt).assign_call.next = seed,
                         .refresh_op, .range_append, .set_op, .le_bytes_append, .reserve_op, .unsafe_append => self.store.getCFStmtPtr(edge.stmt).assign_low_level.next = seed,
-                        .param_write => unreachable,
+                        .param_write => unreachable, // the loop skips param_write edges above
                     }
                     try slack_of.put(edge.target, limit);
                     if (owned) |flag| try owned_of.put(edge.target, flag);
@@ -1538,13 +1637,13 @@ const Pass = struct {
                                 try self.noteOwnedDef(flag, .{ .local = source_owned });
                                 next = try self.store.addCFStmt(.{ .assign_ref = .{
                                     .target = flag,
-                                    .op = .{ .local = source_owned },
+                                    .op = .local(source_owned),
                                     .next = next,
                                 } }, origin);
                             }
                             const copy = try self.store.addCFStmt(.{ .assign_ref = .{
                                 .target = sx,
-                                .op = .{ .local = source_slack },
+                                .op = .local(source_slack),
                                 .next = next,
                             } }, origin);
                             self.store.getCFStmtPtr(edge.stmt).assign_ref.next = copy;
@@ -1608,13 +1707,13 @@ const Pass = struct {
                                 try self.noteOwnedDef(flag, .{ .local = source_owned });
                                 next = try self.store.addCFStmt(.{ .assign_ref = .{
                                     .target = flag,
-                                    .op = .{ .local = source_owned },
+                                    .op = .local(source_owned),
                                     .next = next,
                                 } }, origin);
                             }
                             const copy = try self.store.addCFStmt(.{ .assign_ref = .{
                                 .target = sx,
-                                .op = .{ .local = source_slack },
+                                .op = .local(source_slack),
                                 .next = next,
                             } }, origin);
                             self.store.getCFStmtPtr(edge.stmt).assign_low_level.next = copy;
@@ -1739,7 +1838,7 @@ const Pass = struct {
                 try self.store.replaceCFStmt(edge.stmt, .{ .assign_low_level = .{
                     .target = incoming,
                     .op = .list_map_prepare_reuse,
-                    .rc_effect = LowLevelOp.list_map_prepare_reuse.rcEffect(),
+                    .rc_effect = try self.store.addRcEffect(LowLevelOp.list_map_prepare_reuse.rcEffect()),
                     .args = try self.store.addLocalSpan(&.{edge.source}),
                     .next = seed,
                 } }, origin);
@@ -1787,7 +1886,7 @@ const Pass = struct {
         // the same spare capacity.
         const slack_copy = try self.store.addCFStmt(.{ .assign_ref = .{
             .target = slack_out,
-            .op = .{ .local = slack_in },
+            .op = .local(slack_in),
             .next = call.next,
         } }, origin);
         try self.noteOwnedDef(owned_out, .one);
@@ -1801,7 +1900,7 @@ const Pass = struct {
         const hot_set = try self.store.addCFStmt(.{ .assign_low_level = .{
             .target = call.target,
             .op = .list_set_in_place_unsafe,
-            .rc_effect = LowLevelOp.list_set_in_place_unsafe.rcEffect(),
+            .rc_effect = try self.store.addRcEffect(LowLevelOp.list_set_in_place_unsafe.rcEffect()),
             .args = call.args,
             .next = hot_jump,
         } }, origin);
@@ -1866,7 +1965,7 @@ const Pass = struct {
         // fill cursor, so the limit passes through untouched.
         const forward_limit = try self.store.addCFStmt(.{ .assign_ref = .{
             .target = slack_out,
-            .op = .{ .local = merged_slack },
+            .op = .local(merged_slack),
             .next = call.next,
         } }, origin);
         const unsafe_append = try self.store.addLowLevelStmt(call.target, .list_append_unsafe, &.{ merged_list, elem_arg }, forward_limit, origin);
@@ -1993,12 +2092,12 @@ const Pass = struct {
         // limit that vouches for it.
         const forward_limit = try self.store.addCFStmt(.{ .assign_ref = .{
             .target = slack_out,
-            .op = .{ .local = merged_slack },
+            .op = .local(merged_slack),
             .next = append.next,
         } }, origin);
         const forward_list = try self.store.addCFStmt(.{ .assign_ref = .{
             .target = append.target,
-            .op = .{ .local = merged_list },
+            .op = .local(merged_list),
             .next = forward_limit,
         } }, origin);
 
@@ -2115,12 +2214,12 @@ const Pass = struct {
         // the limit that vouches for it.
         const forward_limit = try self.store.addCFStmt(.{ .assign_ref = .{
             .target = slack_out,
-            .op = .{ .local = merged_slack },
+            .op = .local(merged_slack),
             .next = reserve.next,
         } }, origin);
         const forward_list = try self.store.addCFStmt(.{ .assign_ref = .{
             .target = reserve.target,
-            .op = .{ .local = merged_list },
+            .op = .local(merged_list),
             .next = forward_limit,
         } }, origin);
 
@@ -2233,13 +2332,13 @@ const Pass = struct {
         const hot_jump = try self.store.addCFStmt(.{ .jump = .{ .target = join_id } }, origin);
         const hot_forward = try self.store.addCFStmt(.{ .assign_ref = .{
             .target = slack_out,
-            .op = .{ .local = slack_in },
+            .op = .local(slack_in),
             .next = hot_jump,
         } }, origin);
         const hot_append = try self.store.addCFStmt(.{ .assign_low_level = .{
             .target = call.target,
             .op = .list_append_range_within_unsafe,
-            .rc_effect = LowLevelOp.list_append_range_within_unsafe.rcEffect(),
+            .rc_effect = try self.store.addRcEffect(LowLevelOp.list_append_range_within_unsafe.rcEffect()),
             .args = call.args,
             .next = hot_forward,
         } }, origin);
@@ -2306,7 +2405,7 @@ const Pass = struct {
         while (true) {
             switch (self.store.getCFStmtImmediate(current).*) {
                 .jump => return current,
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict => |s| current = s.next,
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict => |s| current = s.next,
                 .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .boxy_tag_match, .join, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed => return null,
             }
         }
@@ -2345,8 +2444,8 @@ const Pass = struct {
             // Retained and conditionally initialized environments are
             // released per join under conditions ARC tracks; the copy would
             // need that environment duplicated, which is not modeled here.
-            if (self.store.getLocalSpan(join.retained).len != 0) continue;
-            if (self.store.getLocalSpan(join.maybe_uninitialized_params).len != 0) continue;
+            if (self.store.getLocalSpan(self.store.stmtRowOrDefault(join.extra).retained).len != 0) continue;
+            if (self.store.getLocalSpan(self.store.stmtRowOrDefault(join.extra).maybe_uninitialized_params).len != 0) continue;
             var stmts = try body_clone.ReachableStmts.initWithScratch(self.store, join.body, self.analysis);
             defer stmts.deinit();
             var size: u32 = 0;
@@ -2389,7 +2488,6 @@ const Pass = struct {
                     .expect_err,
                     .runtime_error,
                     .comptime_exhaustiveness_failed,
-                    .comptime_branch_taken,
                     .incref,
                     .decref,
                     .decref_if_initialized,
@@ -2506,7 +2604,7 @@ const Pass = struct {
             defer stmts.deinit();
             while (try stmts.next()) |stmt_id| switch (self.store.getCFStmt(stmt_id)) {
                 .join => |inner| try inner_joins.put(inner.id, inner.body),
-                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_call_dict, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .jump, .ret, .crash, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match => {},
+                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_call_dict, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .jump, .ret, .crash, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match => {},
             };
         }
 
@@ -2531,7 +2629,7 @@ const Pass = struct {
                 // A join's body runs only when something jumps to it.
                 .join => |inner| try work.append(allocator, inner.remainder),
                 .ret, .crash, .runtime_error, .comptime_exhaustiveness_failed, .expect_err => ends.exit = true,
-                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_call_dict, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match => try body_clone.appendSuccessors(self.store, &work, stmt_id, allocator),
+                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_call_dict, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match => try body_clone.appendSuccessors(self.store, &work, stmt_id, allocator),
             }
         }
         return ends;
@@ -2580,8 +2678,8 @@ const Pass = struct {
                 if (version.owned_params.items.len != 0) continue;
             }
             const join = self.store.getCFStmtImmediate(entry.key_ptr.*).join;
-            if (self.store.getLocalSpan(join.retained).len != 0) continue;
-            if (self.store.getLocalSpan(join.maybe_uninitialized_params).len != 0) continue;
+            if (self.store.getLocalSpan(self.store.stmtRowOrDefault(join.extra).retained).len != 0) continue;
+            if (self.store.getLocalSpan(self.store.stmtRowOrDefault(join.extra).maybe_uninitialized_params).len != 0) continue;
             try candidates.append(allocator, entry.key_ptr.*);
         }
         // Deterministic order: statement ids are allocation order.
@@ -2640,7 +2738,7 @@ const Pass = struct {
                         if (self.append_sites.contains(inner_id)) return false;
                     }
                 },
-                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_call_dict, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .jump, .ret, .crash, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match => {},
+                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_call_dict, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .jump, .ret, .crash, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match => {},
             }
         }
         return true;
@@ -2653,7 +2751,7 @@ const Pass = struct {
         while (try stmts.next()) |stmt_id| {
             switch (self.store.getCFStmtImmediate(stmt_id).*) {
                 .jump => |jump| if (jump.target == id) return true,
-                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .ret, .crash, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict => {},
+                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .ret, .crash, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict => {},
             }
         }
         return false;
@@ -2667,8 +2765,8 @@ const Pass = struct {
         while (hops < 64) : (hops += 1) {
             const definition = (defs.get(current) orelse return current) orelse return current;
             switch (self.store.getCFStmtImmediate(definition).*) {
-                .assign_ref => |s| switch (s.op) {
-                    .local => |source| current = source,
+                .assign_ref => |s| switch (s.op.kind) {
+                    .local => current = s.op.source,
                     .field, .discriminant, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return current,
                 },
                 .assign_low_level => |s| {
@@ -2677,7 +2775,7 @@ const Pass = struct {
                     if (GuardedList.borrowLen(args) != 1) return current;
                     current = GuardedList.at(args, 0);
                 },
-                .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict => return current,
+                .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict => return current,
             }
         }
         return current;
@@ -2689,10 +2787,14 @@ const Pass = struct {
         const definition = (defs.get(local) orelse return null) orelse return null;
         switch (self.store.getCFStmtImmediate(definition).*) {
             .assign_literal => |s| return switch (s.value) {
-                inline .i64_literal, .i128_literal => |lit| lit.value,
+                .i64_literal => |lit| lit.value,
+                .i128_literal => |lit_id| blk_lit: {
+                    const lit = self.store.stmtRow(lit_id);
+                    break :blk_lit lit.value;
+                },
                 .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .bytes_literal, .proc_ref, .static_data => null,
             },
-            .init_uninitialized, .assign_ref, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict => return null,
+            .init_uninitialized, .assign_ref, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict => return null,
         }
     }
 
@@ -2746,7 +2848,7 @@ const Pass = struct {
                     .jump => |jump| if (jump.target == join.id) {
                         back_edges += 1;
                     },
-                    .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .boxy_tag_match, .ret, .crash => {},
+                    .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .boxy_tag_match, .ret, .crash => {},
                 }
             }
         }
@@ -2762,7 +2864,7 @@ const Pass = struct {
                     if (self.append_sites.contains(current)) return null;
                     current = inner.remainder;
                 },
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload => |st| current = st.next,
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload => |st| current = st.next,
                 .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_call_dict, .switch_initialized_payload, .str_match, .str_match_set, .boxy_tag_match, .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed => return null,
             }
         };
@@ -2785,7 +2887,7 @@ const Pass = struct {
         while (negations < 8) : (negations += 1) {
             const negation = switch (self.store.getCFStmtImmediate(cond_def).*) {
                 .assign_low_level => |st| if (st.op == .bool_not) st else break,
-                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict => break,
+                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict => break,
             };
             const negation_args = self.store.getLocalSpan(negation.args);
             if (GuardedList.borrowLen(negation_args) != 1) return null;
@@ -2795,7 +2897,7 @@ const Pass = struct {
         }
         const compare = switch (self.store.getCFStmtImmediate(cond_def).*) {
             .assign_low_level => |st| st,
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict => return null,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict => return null,
         };
         const compare_args = self.store.getLocalSpan(compare.args);
         if (GuardedList.borrowLen(compare_args) != 2) return null;
@@ -2843,7 +2945,7 @@ const Pass = struct {
             const value_def = (defs.get(value_root) orelse return null) orelse return null;
             const step = switch (self.store.getCFStmtImmediate(value_def).*) {
                 .assign_low_level => |st| st,
-                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict => return null,
+                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict => return null,
             };
             const step_direction: @FieldType(TripBound, "direction") = if (step.op == .num_int_add_wrap or step.op == .num_int_add_crash_on_overflow or step.op == .num_int_add_proven_cannot_overflow)
                 .up
@@ -2885,7 +2987,7 @@ const Pass = struct {
                             if (GuardedList.at(inner_params, i) == counter) direct_defs += 1;
                         }
                     },
-                    .store_struct, .store_tag, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .boxy_tag_match, .jump, .ret, .crash => {},
+                    .store_struct, .store_tag, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .boxy_tag_match, .jump, .ret, .crash => {},
                 }
             }
         }
@@ -2968,14 +3070,14 @@ const Pass = struct {
         head = try self.store.addCFStmt(.{ .assign_low_level = .{
             .target = remaining,
             .op = .num_int_sub_wrap,
-            .rc_effect = LowLevelOp.num_int_sub_wrap.rcEffect(),
+            .rc_effect = try self.store.addRcEffect(LowLevelOp.num_int_sub_wrap.rcEffect()),
             .args = try self.store.addLocalSpan(&operands),
             .next = head,
         } }, origin);
         if (bound.limit == .literal) {
             head = try self.store.addCFStmt(.{ .assign_literal = .{
                 .target = limit_local,
-                .value = .{ .i128_literal = .{ .value = bound.limit.literal, .layout_idx = .u64 } },
+                .value = .{ .i128_literal = try self.store.addStmtRow(LIR.I128Literal, .{ .value = bound.limit.literal, .layout_idx = .u64 }) },
                 .next = head,
             } }, origin);
         }
@@ -3042,7 +3144,7 @@ const Pass = struct {
     fn literalU64(self: *Pass, target: LocalId, value: u32, next: CFStmtId, origin: LIR.StmtOrigin) ResourceError!CFStmtId {
         return try self.store.addCFStmt(.{ .assign_literal = .{
             .target = target,
-            .value = .{ .i128_literal = .{ .value = value, .layout_idx = .u64 } },
+            .value = .{ .i128_literal = try self.store.addStmtRow(LIR.I128Literal, .{ .value = value, .layout_idx = .u64 }) },
             .next = next,
         } }, origin);
     }
@@ -3185,7 +3287,7 @@ const Pass = struct {
             head = try self.store.addCFStmt(.{ .assign_low_level = .{
                 .target = combined.items[index],
                 .op = .num_bitwise_and,
-                .rc_effect = LowLevelOp.num_bitwise_and.rcEffect(),
+                .rc_effect = try self.store.addRcEffect(LowLevelOp.num_bitwise_and.rcEffect()),
                 .args = try self.store.addLocalSpan(&.{ left, flags[index + 1] }),
                 .next = head,
             } }, origin);
@@ -3261,7 +3363,6 @@ const VersionRewriter = struct {
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .incref,
             .decref,
             .decref_if_initialized,
@@ -3300,15 +3401,12 @@ const VersionRewriter = struct {
             .join => |s| return try cloner.store.addCFStmt(.{ .join = .{
                 .id = self.join_map.get(s.id).?,
                 .params = try cloner.mapLocalSpan(s.params),
-                .retained = try cloner.mapLocalSpan(s.retained),
-                .maybe_uninitialized_params = try cloner.mapLocalSpan(s.maybe_uninitialized_params),
-                .maybe_uninitialized_conditions = try cloner.mapLocalSpan(s.maybe_uninitialized_conditions),
-                .maybe_uninitialized_condition_masks = s.maybe_uninitialized_condition_masks,
                 .body = cloned[0],
                 .remainder = cloned[1],
+                .extra = try cloner.mapJoinExtra(s.extra),
             } }, origin),
             .switch_stmt => return cloned[0],
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_initialized_payload, .str_match, .str_match_set, .jump, .ret, .crash => unreachable,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_initialized_payload, .str_match, .str_match_set, .jump, .ret, .crash => unreachable, // interceptStmt returns children only for join and switch_stmt
         }
     }
 };
@@ -3366,7 +3464,6 @@ const SlackVersionRewriter = struct {
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .incref,
             .decref,
             .decref_if_initialized,
@@ -3404,7 +3501,7 @@ const SlackVersionRewriter = struct {
     ) ResourceError!CFStmtId {
         const s = switch (stmt) {
             .join => |join| join,
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .jump, .ret, .crash => unreachable,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .jump, .ret, .crash => unreachable, // interceptStmt returns children only for join
         };
         if (self.sites.get(old_id)) |site| {
             var next = cloned[0];
@@ -3417,13 +3514,13 @@ const SlackVersionRewriter = struct {
             }
             next = try cloner.store.addCFStmt(.{ .assign_ref = .{
                 .target = try cloner.mapLocal(site.slack_out),
-                .op = .{ .local = try cloner.mapLocal(site.slack_in) },
+                .op = .local(try cloner.mapLocal(site.slack_in)),
                 .next = next,
             } }, origin);
             return try cloner.store.addCFStmt(.{ .assign_low_level = .{
                 .target = try cloner.mapLocal(site.target),
                 .op = .list_append_unsafe,
-                .rc_effect = LowLevelOp.list_append_unsafe.rcEffect(),
+                .rc_effect = try cloner.store.addRcEffect(LowLevelOp.list_append_unsafe.rcEffect()),
                 .args = try cloner.store.addLocalSpan(&.{ try cloner.mapLocal(site.list), try cloner.mapLocal(site.elem) }),
                 .next = next,
             } }, origin);
@@ -3431,12 +3528,9 @@ const SlackVersionRewriter = struct {
         return try cloner.store.addCFStmt(.{ .join = .{
             .id = self.join_map.get(s.id).?,
             .params = try cloner.mapLocalSpan(s.params),
-            .retained = try cloner.mapLocalSpan(s.retained),
-            .maybe_uninitialized_params = try cloner.mapLocalSpan(s.maybe_uninitialized_params),
-            .maybe_uninitialized_conditions = try cloner.mapLocalSpan(s.maybe_uninitialized_conditions),
-            .maybe_uninitialized_condition_masks = s.maybe_uninitialized_condition_masks,
             .body = cloned[0],
             .remainder = cloned[1],
+            .extra = try cloner.mapJoinExtra(s.extra),
         } }, origin);
     }
 };
@@ -3449,7 +3543,7 @@ fn testEdge(store: *LirStore, source: LocalId, target: LocalId) Allocator.Error!
     const ret = try store.addCFStmt(.{ .ret = .{ .value = target } }, .test_fixture);
     const stmt = try store.addCFStmt(.{ .assign_ref = .{
         .target = target,
-        .op = .{ .local = source },
+        .op = .local(source),
         .next = ret,
     } }, .test_fixture);
     return .{ .kind = .alias, .stmt = stmt, .source = source, .target = target };
@@ -3508,8 +3602,9 @@ test "promote carrier index visits reverse ordered edges once and excludes unrel
 fn expectLoopScan(f: *PromoteTest, body: CFStmtId, statements: usize, jumps: usize, loops: usize) (Allocator.Error || error{TestExpectedEqual})!void {
     var analysis = body_clone.AnalysisScratch.init(testing.allocator);
     defer analysis.deinit();
-    var pass = Pass.init(&f.store, &f.layouts, testing.allocator, &analysis);
+    var pass = Pass.init(testing.allocator);
     defer pass.deinit();
+    pass.attach(&f.store, &f.layouts, &analysis);
     var scan = Pass.Scan{
         .total_uses = collections.DenseMap(LocalId, u32).init(testing.allocator),
         .tracked_uses = collections.DenseMap(LocalId, u32).init(testing.allocator),
@@ -3652,20 +3747,20 @@ const PromoteTest = struct {
         const unsafe_append = try store.addCFStmt(.{ .assign_low_level = .{
             .target = appended,
             .op = .list_append_unsafe,
-            .rc_effect = LowLevelOp.list_append_unsafe.rcEffect(),
+            .rc_effect = try store.addRcEffect(LowLevelOp.list_append_unsafe.rcEffect()),
             .args = try store.addLocalSpan(&.{ reserved, elem_arg }),
             .next = ret,
         } }, .test_fixture);
         const reserve = try store.addCFStmt(.{ .assign_low_level = .{
             .target = reserved,
             .op = .list_reserve_for_append,
-            .rc_effect = LowLevelOp.list_reserve_for_append.rcEffect(),
+            .rc_effect = try store.addRcEffect(LowLevelOp.list_reserve_for_append.rcEffect()),
             .args = try store.addLocalSpan(&.{ list_arg, spare }),
             .next = unsafe_append,
         } }, .test_fixture);
         const spare_lit = try store.addCFStmt(.{ .assign_literal = .{
             .target = spare,
-            .value = .{ .i128_literal = .{ .value = 1, .layout_idx = .u64 } },
+            .value = .{ .i128_literal = try store.addStmtRow(LIR.I128Literal, .{ .value = 1, .layout_idx = .u64 }) },
             .next = reserve,
         } }, .test_fixture);
         return try store.addProcSpec(.{
@@ -3699,7 +3794,7 @@ test "promote prepared summaries are frozen across long forward helper chains an
     for (0..96) |_| {
         helper_body = try store.addCFStmt(.{ .assign_ref = .{
             .target = list_arg,
-            .op = .{ .local = list_arg },
+            .op = .local(list_arg),
             .next = helper_body,
         } }, .test_fixture);
     }
@@ -3777,7 +3872,7 @@ test "promote summaries reject discarded operations before checked append" {
             try f.store.addCFStmt(.{ .assign_low_level = .{
                 .target = ignored,
                 .op = low_level,
-                .rc_effect = low_level.rcEffect(),
+                .rc_effect = try f.store.addRcEffect(low_level.rcEffect()),
                 .args = args,
                 .next = next,
             } }, .test_fixture)
@@ -3815,7 +3910,7 @@ test "promote summaries do not treat an exact reserve as an append's growth step
     const reserve = f.store.getCFStmtPtr(literal.next);
     try testing.expectEqual(LowLevelOp.list_reserve_for_append, reserve.assign_low_level.op);
     reserve.assign_low_level.op = .list_reserve;
-    reserve.assign_low_level.rc_effect = LowLevelOp.list_reserve.rcEffect();
+    reserve.assign_low_level.rc_effect = try f.store.addRcEffect(LowLevelOp.list_reserve.rcEffect());
     var prepared = try prepareCallees(&f.store, testing.allocator);
     defer prepared.deinit();
     try testing.expectEqual(@as(?ProcKind, null), prepared.kinds.get(helper).?);
@@ -3832,7 +3927,7 @@ test "promote summaries preserve direct reserve and unsafe append wrappers" {
         const body = try f.store.addCFStmt(.{ .assign_low_level = .{
             .target = result,
             .op = op,
-            .rc_effect = op.rcEffect(),
+            .rc_effect = try f.store.addRcEffect(op.rcEffect()),
             .args = args,
             .next = ret,
         } }, .test_fixture);
@@ -3876,14 +3971,14 @@ test "promote summary provenance distinguishes aliased reserve siblings" {
             next = try f.store.addCFStmt(.{ .assign_low_level = .{
                 .target = sibling,
                 .op = .list_reserve_for_append,
-                .rc_effect = LowLevelOp.list_reserve_for_append.rcEffect(),
+                .rc_effect = try f.store.addRcEffect(LowLevelOp.list_reserve_for_append.rcEffect()),
                 .args = reserve.args,
                 .next = next,
             } }, .test_fixture);
         }
         const alias = try f.store.addCFStmt(.{ .assign_ref = .{
             .target = reserved_alias,
-            .op = .{ .local = reserve.target },
+            .op = .local(reserve.target),
             .next = next,
         } }, .test_fixture);
         f.store.getCFStmtPtr(literal.next).assign_low_level.next = alias;
@@ -3891,7 +3986,7 @@ test "promote summary provenance distinguishes aliased reserve siblings" {
         const ret = try f.store.addCFStmt(.{ .ret = .{ .value = result_alias } }, .test_fixture);
         const return_alias = try f.store.addCFStmt(.{ .assign_ref = .{
             .target = result_alias,
-            .op = .{ .local = append.target },
+            .op = .local(append.target),
             .next = ret,
         } }, .test_fixture);
         f.store.getCFStmtPtr(reserve.next).assign_low_level.next = return_alias;
@@ -3912,8 +4007,9 @@ fn testMetadataTransfer(f: *PromoteTest, proc: LIR.LirProcSpecId, site_entry: CF
     const allocator = testing.allocator;
     var analysis = body_clone.AnalysisScratch.init(allocator);
     defer analysis.deinit();
-    var pass = Pass.init(&f.store, &f.layouts, allocator, &analysis);
+    var pass = Pass.init(allocator);
     defer pass.deinit();
+    pass.attach(&f.store, &f.layouts, &analysis);
     var scan = Pass.Scan{
         .total_uses = collections.DenseMap(LocalId, u32).init(allocator),
         .tracked_uses = collections.DenseMap(LocalId, u32).init(allocator),
@@ -3949,7 +4045,7 @@ test "promote metadata follows alias observations across source redefinitions" {
         const read = try store.addCFStmt(.{ .assign_low_level = .{
             .target = item,
             .op = .list_get_unsafe,
-            .rc_effect = LowLevelOp.list_get_unsafe.rcEffect(),
+            .rc_effect = try store.addRcEffect(LowLevelOp.list_get_unsafe.rcEffect()),
             .args = try store.addLocalSpan(&.{ saved, index }),
             .next = done,
         } }, .test_fixture);
@@ -3963,7 +4059,7 @@ test "promote metadata follows alias observations across source redefinitions" {
         if (!observe_after) store.getCFStmtPtr(read).assign_low_level.next = site;
         const alias = try store.addCFStmt(.{ .assign_ref = .{
             .target = saved,
-            .op = .{ .local = input },
+            .op = .local(input),
             .next = if (observe_after) site else read,
         } }, .test_fixture);
         const proc = try store.addProcSpec(.{
@@ -4030,7 +4126,7 @@ test "promote threads slack through an append-only loop" {
     } }, .test_fixture);
     const alias_b = try store.addCFStmt(.{ .assign_ref = .{
         .target = b,
-        .op = .{ .local = appended },
+        .op = .local(appended),
         .next = back_set,
     } }, .test_fixture);
     const append_call = try store.addCFStmt(.{ .assign_call = .{
@@ -4041,7 +4137,7 @@ test "promote threads slack through an append-only loop" {
     } }, .test_fixture);
     const alias_a = try store.addCFStmt(.{ .assign_ref = .{
         .target = a,
-        .op = .{ .local = out },
+        .op = .local(out),
         .next = append_call,
     } }, .test_fixture);
 
@@ -4113,7 +4209,7 @@ test "promote threads slack through an append-only loop" {
     try testing.expectEqual(GuardedList.at(site_params, 0), GuardedList.at(unsafe_args, 0));
     try testing.expectEqual(elem, GuardedList.at(unsafe_args, 1));
     const forward = store.getCFStmtImmediate(unsafe_append.next).assign_ref;
-    try testing.expectEqual(GuardedList.at(site_params, 1), forward.op.local);
+    try testing.expectEqual(GuardedList.at(site_params, 1), forward.op.source);
     try testing.expectEqual(alias_b, forward.next);
 
     // The back edge hands the unchanged limit to the loop parameter.
@@ -4184,7 +4280,6 @@ test "promote threads slack through an append-only loop" {
                         .expect_err,
                         .runtime_error,
                         .comptime_exhaustiveness_failed,
-                        .comptime_branch_taken,
                         .incref,
                         .decref,
                         .decref_if_initialized,
@@ -4232,7 +4327,6 @@ test "promote threads slack through an append-only loop" {
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .incref,
             .decref,
             .decref_if_initialized,
@@ -4277,7 +4371,7 @@ test "promote guards a byte append with a word of slack and runs it unchecked" {
     } }, .test_fixture);
     const alias_c = try store.addCFStmt(.{ .assign_ref = .{
         .target = c,
-        .op = .{ .local = r },
+        .op = .local(r),
         .next = back_set,
     } }, .test_fixture);
     const append = try store.addLowLevelStmt(r, .list_append_le_bytes, &.{ a, value, count }, alias_c, .test_fixture);
@@ -4293,7 +4387,7 @@ test "promote guards a byte append with a word of slack and runs it unchecked" {
     } }, .test_fixture);
     const alias_a = try store.addCFStmt(.{ .assign_ref = .{
         .target = a,
-        .op = .{ .local = out },
+        .op = .local(out),
         .next = lit_value,
     } }, .test_fixture);
 
@@ -4341,9 +4435,9 @@ test "promote guards a byte append with a word of slack and runs it unchecked" {
     try testing.expectEqual(@as(usize, 2), site_params.len);
     const forward_list = store.getCFStmtImmediate(site.body).assign_ref;
     try testing.expectEqual(r, forward_list.target);
-    try testing.expectEqual(GuardedList.at(site_params, 0), forward_list.op.local);
+    try testing.expectEqual(GuardedList.at(site_params, 0), forward_list.op.source);
     const forward_limit = store.getCFStmtImmediate(forward_list.next).assign_ref;
-    try testing.expectEqual(GuardedList.at(site_params, 1), forward_limit.op.local);
+    try testing.expectEqual(GuardedList.at(site_params, 1), forward_limit.op.source);
     try testing.expectEqual(alias_c, forward_limit.next);
 
     // The dispatch asks for a whole word under the limit: literal eight,
@@ -4445,13 +4539,13 @@ test "promote threads slack through an inline reserve and unchecked append pair"
     } }, .test_fixture);
     const alias_c = try store.addCFStmt(.{ .assign_ref = .{
         .target = c,
-        .op = .{ .local = appended },
+        .op = .local(appended),
         .next = back_set,
     } }, .test_fixture);
     const unsafe_append = try store.addLowLevelStmt(appended, .list_append_unsafe, &.{ b, elem }, alias_c, .test_fixture);
     const alias_b = try store.addCFStmt(.{ .assign_ref = .{
         .target = b,
-        .op = .{ .local = r },
+        .op = .local(r),
         .next = unsafe_append,
     } }, .test_fixture);
     const reserve = try store.addLowLevelStmt(r, .list_reserve_for_append, &.{ a, one }, alias_b, .test_fixture);
@@ -4462,7 +4556,7 @@ test "promote threads slack through an inline reserve and unchecked append pair"
     } }, .test_fixture);
     const alias_a = try store.addCFStmt(.{ .assign_ref = .{
         .target = a,
-        .op = .{ .local = out },
+        .op = .local(out),
         .next = lit_one,
     } }, .test_fixture);
 
@@ -4510,9 +4604,9 @@ test "promote threads slack through an inline reserve and unchecked append pair"
     try testing.expectEqual(@as(usize, 2), site_params.len);
     const forward_list = store.getCFStmtImmediate(site.body).assign_ref;
     try testing.expectEqual(r, forward_list.target);
-    try testing.expectEqual(GuardedList.at(site_params, 0), forward_list.op.local);
+    try testing.expectEqual(GuardedList.at(site_params, 0), forward_list.op.source);
     const forward_limit = store.getCFStmtImmediate(forward_list.next).assign_ref;
-    try testing.expectEqual(GuardedList.at(site_params, 1), forward_limit.op.local);
+    try testing.expectEqual(GuardedList.at(site_params, 1), forward_limit.op.source);
     try testing.expectEqual(alias_b, forward_limit.next);
 
     // The dispatch measures the length, takes the limit's distance from it,
@@ -4606,19 +4700,19 @@ const CountedLoop = struct {
         const back_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
         const set_cur = try store.addCFStmt(.{ .set_local = .{ .target = cur, .value = cur1, .mode = .initialize_join_param, .next = back_jump } }, .test_fixture);
         const set_out = try store.addCFStmt(.{ .set_local = .{ .target = out, .value = b, .mode = .initialize_join_param, .next = set_cur } }, .test_fixture);
-        const alias_b = try store.addCFStmt(.{ .assign_ref = .{ .target = b, .op = .{ .local = appended }, .next = set_out } }, .test_fixture);
+        const alias_b = try store.addCFStmt(.{ .assign_ref = .{ .target = b, .op = .local(appended), .next = set_out } }, .test_fixture);
         const append_call = try store.addCFStmt(.{ .assign_call = .{
             .target = appended,
             .proc = append_proc,
             .args = try store.addLocalSpan(&.{ a, elem }),
             .next = alias_b,
         } }, .test_fixture);
-        const alias_a = try store.addCFStmt(.{ .assign_ref = .{ .target = a, .op = .{ .local = out }, .next = append_call } }, .test_fixture);
+        const alias_a = try store.addCFStmt(.{ .assign_ref = .{ .target = a, .op = .local(out), .next = append_call } }, .test_fixture);
         const elem_lit = try store.addCFStmt(.{ .assign_literal = .{ .target = elem, .value = .{ .i64_literal = .{ .value = 7, .layout_idx = .u8 } }, .next = alias_a } }, .test_fixture);
         const decrement = try store.addCFStmt(.{ .assign_low_level = .{
             .target = cur1,
             .op = .num_int_sub_wrap,
-            .rc_effect = LowLevelOp.num_int_sub_wrap.rcEffect(),
+            .rc_effect = try store.addRcEffect(LowLevelOp.num_int_sub_wrap.rcEffect()),
             .args = try store.addLocalSpan(&.{ cur, one }),
             .next = elem_lit,
         } }, .test_fixture);
@@ -4642,7 +4736,7 @@ const CountedLoop = struct {
             compare_next = try store.addCFStmt(.{ .assign_low_level = .{
                 .target = done,
                 .op = .bool_not,
-                .rc_effect = LowLevelOp.bool_not.rcEffect(),
+                .rc_effect = try store.addRcEffect(LowLevelOp.bool_not.rcEffect()),
                 .args = try store.addLocalSpan(&.{equal}),
                 .next = test_switch,
             } }, .test_fixture);
@@ -4651,7 +4745,7 @@ const CountedLoop = struct {
         const compare = try store.addCFStmt(.{ .assign_low_level = .{
             .target = compare_target,
             .op = .num_is_eq,
-            .rc_effect = LowLevelOp.num_is_eq.rcEffect(),
+            .rc_effect = try store.addRcEffect(LowLevelOp.num_is_eq.rcEffect()),
             .args = try store.addLocalSpan(&.{ cur, zero }),
             .next = compare_next,
         } }, .test_fixture);
@@ -4702,7 +4796,7 @@ fn appendShapeOf(store: *LirStore, root: CFStmtId, head: LIR.JoinPointId, copy: 
                 if (s.target == head) shape.jumps_to_head += 1;
                 if (s.target == copy) shape.jumps_to_copy += 1;
             },
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_initialized_payload, .str_match, .str_match_set, .join, .ret, .crash, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict => {},
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_initialized_payload, .str_match, .str_match_set, .join, .ret, .crash, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict => {},
         }
     }
     return shape;
@@ -4760,7 +4854,7 @@ fn expectSlackVersioned(store: *LirStore, built: CountedLoop) (Allocator.Error |
     // chain's spare (`limit - len(out)`), then dispatches on spare covering
     // the remaining iterations.
     const limit_lit = store.getCFStmtImmediate(head.body).assign_literal;
-    try testing.expectEqual(@as(i128, 0), limit_lit.value.i128_literal.value);
+    try testing.expectEqual(@as(i128, 0), store.stmtRow(limit_lit.value.i128_literal).value);
     const remaining = store.getCFStmtImmediate(limit_lit.next).assign_low_level;
     try testing.expectEqual(LowLevelOp.num_int_sub_wrap, remaining.op);
     try testing.expectEqual(built.cur, GuardedList.at(store.getLocalSpan(remaining.args), 0));
@@ -4851,7 +4945,7 @@ test "promote leaves a tainted chain alone" {
     } }, .test_fixture);
     const alias_a = try store.addCFStmt(.{ .assign_ref = .{
         .target = a,
-        .op = .{ .local = out },
+        .op = .local(out),
         .next = append_call,
     } }, .test_fixture);
 
@@ -4909,7 +5003,7 @@ test "promote ignores a join without a back edge" {
     } }, .test_fixture);
     const alias_a = try store.addCFStmt(.{ .assign_ref = .{
         .target = a,
-        .op = .{ .local = out },
+        .op = .local(out),
         .next = append_call,
     } }, .test_fixture);
     const entry_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
@@ -4981,7 +5075,6 @@ fn shapeOf(store: *LirStore, root: CFStmtId, head: LIR.JoinPointId, copy: LIR.Jo
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .incref,
             .decref,
             .decref_if_initialized,
@@ -5020,7 +5113,7 @@ fn addSetSite(f: *PromoteTest, target: LocalId, list: LocalId, next: CFStmtId) A
     const set_stmt = try store.addCFStmt(.{ .assign_low_level = .{
         .target = target,
         .op = .list_set,
-        .rc_effect = LowLevelOp.list_set.rcEffect(),
+        .rc_effect = try store.addRcEffect(LowLevelOp.list_set.rcEffect()),
         .args = try store.addLocalSpan(&.{ list, idx, elem }),
         .next = next,
     } }, .test_fixture);
@@ -5061,13 +5154,13 @@ test "promote versions a set loop into a dispatching head and a unique-only copy
     } }, .test_fixture);
     const alias_b = try store.addCFStmt(.{ .assign_ref = .{
         .target = b,
-        .op = .{ .local = s },
+        .op = .local(s),
         .next = back_set,
     } }, .test_fixture);
     const site = try addSetSite(&f, s, a, alias_b);
     const alias_a = try store.addCFStmt(.{ .assign_ref = .{
         .target = a,
-        .op = .{ .local = out },
+        .op = .local(out),
         .next = site,
     } }, .test_fixture);
 
@@ -5154,7 +5247,7 @@ test "promote keeps a foreign back edge on the head inside the copy" {
     } }, .test_fixture);
     const alias_b = try store.addCFStmt(.{ .assign_ref = .{
         .target = b,
-        .op = .{ .local = s },
+        .op = .local(s),
         .next = set_write,
     } }, .test_fixture);
     const site = try addSetSite(&f, s, a, alias_b);
@@ -5168,7 +5261,7 @@ test "promote keeps a foreign back edge on the head inside the copy" {
     } }, .test_fixture);
     const alias_o = try store.addCFStmt(.{ .assign_ref = .{
         .target = o,
-        .op = .{ .local = other },
+        .op = .local(other),
         .next = foreign_write,
     } }, .test_fixture);
 
@@ -5185,7 +5278,7 @@ test "promote keeps a foreign back edge on the head inside the copy" {
     } }, .test_fixture);
     const alias_a = try store.addCFStmt(.{ .assign_ref = .{
         .target = a,
-        .op = .{ .local = out },
+        .op = .local(out),
         .next = cond_lit,
     } }, .test_fixture);
 
@@ -5251,14 +5344,14 @@ test "promote initializes merged metadata on every incoming definition" {
     const tracked_jump = try store.addCFStmt(.{ .jump = .{ .target = merge_id } }, .test_fixture);
     const tracked = try store.addCFStmt(.{ .assign_ref = .{
         .target = merged,
-        .op = .{ .local = updated },
+        .op = .local(updated),
         .next = tracked_jump,
     } }, .test_fixture);
     const set_site = try addSetSite(&f, updated, out, tracked);
     const foreign_jump = try store.addCFStmt(.{ .jump = .{ .target = merge_id } }, .test_fixture);
     const foreign = try store.addCFStmt(.{ .assign_ref = .{
         .target = merged,
-        .op = .{ .local = other },
+        .op = .local(other),
         .next = foreign_jump,
     } }, .test_fixture);
     const branch = try store.addCFStmt(.{ .switch_stmt = .{

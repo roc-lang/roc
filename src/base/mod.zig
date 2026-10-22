@@ -73,17 +73,22 @@ pub const source_utils = @import("source_utils.zig");
 pub const read_file_failure = @import("read_file_failure.zig");
 pub const module_path = @import("module_path.zig");
 pub const url = @import("url.zig");
+pub const typo = @import("typo.zig");
 /// Default expanded-size cap for platform and CLI URL bundles.
 pub const max_bundle_expanded_bytes: u64 = 512 * 1024 * 1024;
 pub const roc_version = @import("roc_version.zig");
 pub const doc_comment = @import("doc_comment.zig");
 /// Canonical byte encodings shared across compiler stages.
 pub const byte_encoding = @import("byte_encoding.zig");
+/// Strict line-oriented text records for on-disk compiler metadata.
+pub const line_record = @import("line_record.zig");
 
 /// Allocator wrapper that recycles freed large blocks instead of unmapping them.
 pub const LargeBlockAllocator = @import("LargeBlockAllocator.zig");
 /// Logical CPU counts used to size worker pools.
 pub const cpu_count = @import("cpu_count.zig");
+/// Developer-only environment variables, read only by compilers built with developer diagnostics.
+pub const dev_diagnostics = @import("dev_diagnostics.zig");
 /// Settings only tests may change; production builds fix them at compile time.
 pub const TestSwitch = @import("test_switch.zig").TestSwitch;
 
@@ -111,10 +116,13 @@ test {
     std.testing.refAllDecls(TextRankCache);
     std.testing.refAllDecls(LargeBlockAllocator);
     std.testing.refAllDecls(cpu_count);
+    std.testing.refAllDecls(dev_diagnostics);
     std.testing.refAllDecls(TypeDigestHasher);
     std.testing.refAllDecls(@import("sha256.zig"));
     std.testing.refAllDecls(module_path_mod);
     std.testing.refAllDecls(@import("roc_version.zig"));
+    std.testing.refAllDecls(@import("typo.zig"));
+    std.testing.refAllDecls(line_record);
 }
 
 /// Whether a function calls itself.

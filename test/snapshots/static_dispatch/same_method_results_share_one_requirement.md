@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Keeps same-name requirements separate when their results are independently visible in the inferred type
+description=Relates same-name requirements on a generalized type into one requirement
 type=file
 ~~~
 # SOURCE
@@ -65,7 +65,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a -> (b, c) where [a.convert : a -> c, a.convert : a -> b]")))
+		(patt (type "a -> (b, b) where [a.convert : a -> b]")))
 	(expressions
-		(expr (type "a -> (b, c) where [a.convert : a -> c, a.convert : a -> b]"))))
+		(expr (type "a -> (b, b) where [a.convert : a -> b]"))))
 ~~~

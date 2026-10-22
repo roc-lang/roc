@@ -10,4 +10,16 @@ Closed := [].{
         }
         $sum
     }
+
+    # The constant `Err("missing")` is static data whose type mentions the
+    # caller's type parameter, so each specialization names its own copy. A
+    # caller declared in another module must still find that name after an
+    # edit elsewhere in its module.
+    first_or_missing : List(a) -> Try(a, Str)
+    first_or_missing = |items| {
+        match List.first(items) {
+            Ok(item) => Ok(item)
+            Err(_) => Err("missing")
+        }
+    }
 }

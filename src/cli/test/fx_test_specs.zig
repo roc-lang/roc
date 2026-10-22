@@ -774,6 +774,11 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Regression test for #10774: a hosted function owns a List(Str) argument whose elements the caller still holds, so the caller's retain must cover the element strings the host's release drops",
     },
     .{
+        .roc_file = "test/fx/issue_12438_input_list_overfree.roc",
+        .io_spec = "0<aa|1>ok: True, len: 2, first: 97",
+        .description = "Regression test for #12438: a list passed through cursor records into helper calls is not decremented more often than it is owned",
+    },
+    .{
         .roc_file = "test/fx/tailcc_stack_args.roc",
         .io_spec = "0<x x default 41|1>PASS",
         .description = "Regression test for #12191: an AArch64 spill reload right after a call that passes arguments on the stack reads the right slot",

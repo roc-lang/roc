@@ -14,37 +14,36 @@ ambiguous = conv(poly())
 ok = conv(5.U8)
 ~~~
 # EXPECTED
-TYPE NOT DETERMINED - static_dispatch_unresolved_via_helper.md:5:13:5:25
+MISSING METHOD - static_dispatch_unresolved_via_helper.md:5:13:5:25
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
-		(title "Type Not Determined")
+		(title "Missing Method")
 		(region (start 5 13) (end 5 25))
 		(headline
 			(reflow "This call uses a")
 			(reflow " ")
 			(annotated code "to_i128")
 			(reflow " ")
-			(reflow "method, but nothing in this program determines the type it is called on."))
-		(document
-			(source-region (file "static_dispatch_unresolved_via_helper.md") (start 5 13) (end 5 25) (annotation error) (line-text "ambiguous = conv(poly())"))
-			(line-break)
-			(reflow "This argument's type does not determine it:")
-			(line-break)
-			(source-region (file "static_dispatch_unresolved_via_helper.md") (start 5 18) (end 5 24) (annotation error) (line-text "ambiguous = conv(poly())"))
-			(line-break)
-			(reflow "Without knowing which type it is, there's no way to tell which")
+			(reflow "method on")
+			(reflow " ")
+			(reflow "a value whose type never resolved to a concrete type,")
+			(reflow " ")
+			(reflow "so it has no")
 			(reflow " ")
 			(annotated code "to_i128")
 			(reflow " ")
-			(reflow "method to use.")
+			(reflow "method."))
+		(document
+			(source-region (file "static_dispatch_unresolved_via_helper.md") (start 5 13) (end 5 25) (annotation error) (line-text "ambiguous = conv(poly())"))
 			(line-break)
+			(reflow "That type comes from this argument:")
 			(line-break)
-			(annotated emphasis "Hint:")
-			(reflow " ")
-			(reflow "Add a type annotation saying which type it should be."))))
+			(source-region (file "static_dispatch_unresolved_via_helper.md") (start 5 18) (end 5 24) (annotation error) (line-text "ambiguous = conv(poly())"))
+			(line-break)
+			(reflow "Using the value somewhere that requires a specific type, or annotating it, will give it one."))))
 ~~~
 # TOKENS
 ~~~zig

@@ -1798,10 +1798,10 @@ test "fx platform fold_rev static dispatch regression" {
 }
 
 test "fx platform invalid nested where-clause static dispatch fails in check" {
-    // Regression test for #9657: nothing in the program determines the types
-    // this where-clause constrains, and the default chosen for them lacks the
+    // Regression test for #9657: the types this where-clause constrains never
+    // resolve to concrete types, and the default chosen for them lacks the
     // required methods, so check must reject the contract before post-check
-    // lowering, reporting the type as undetermined.
+    // lowering, reporting the type as one that never resolved.
     const allocator = testing.allocator;
 
     var env = try util.buildIsolatedTestEnvMap(std.testing.io, allocator, null);
@@ -1824,7 +1824,7 @@ test "fx platform invalid nested where-clause static dispatch fails in check" {
         .stderr = check_result.stderr,
         .term = check_result.term,
     });
-    try testing.expect(std.mem.find(u8, check_result.stderr, "type not determined") != null);
+    try testing.expect(std.mem.find(u8, check_result.stderr, "never resolved to a") != null);
     try testing.expect(std.mem.find(u8, check_result.stderr, "postcheck invariant violated") == null);
 }
 
@@ -2544,6 +2544,45 @@ test "a build evaluates a root that an earlier build's cached module left uneval
         try testing.expect(run.read_by_app_b);
         try testing.expect(run.never_read);
     }
+}
+
+// repro for https://github.com/roc-lang/roc/issues/12437
+test "roc test passes against the object cache a roc check wrote" {
+    const allocator = testing.allocator;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const cache_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(cache_path);
+    var cache_env = std.process.Environ.Map.init(allocator);
+    defer cache_env.deinit();
+    try cache_env.put("ROC_CACHE_DIR", cache_path);
+
+    // The app's parser combinator chain specializes package lambda-set
+    // members at an app type. `roc test` must compile its own copy of each
+    // one the cached entries `roc check` wrote call by identity.
+    const check_result = try util.runRocWithEnv(
+        std.testing.io,
+        allocator,
+        &.{"check"},
+        "test/fx/check_then_test_served_callees.roc",
+        &cache_env,
+    );
+    defer allocator.free(check_result.stdout);
+    defer allocator.free(check_result.stderr);
+    try util.checkSuccess(check_result);
+
+    const test_result = try util.runRocWithEnv(
+        std.testing.io,
+        allocator,
+        &.{"test"},
+        "test/fx/check_then_test_served_callees.roc",
+        &cache_env,
+    );
+    defer allocator.free(test_result.stdout);
+    defer allocator.free(test_result.stderr);
+    try util.checkSuccess(test_result);
+    try testing.expect(std.mem.find(u8, test_result.stdout, "All (1) tests passed") != null);
 }
 
 /// Build a compile-time demand pack test app for the dev backend against the

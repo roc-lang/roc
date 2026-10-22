@@ -21,6 +21,56 @@ preamble: std.ArrayList(u8),
 /// Relocations within this function: (code_pos, symbol_index).
 /// code_pos is relative to the start of self.code, NOT the module's code section.
 import_relocations: std.ArrayList(Relocation),
+/// Operands naming module entities that do not exist yet. A body generated
+/// apart from its module names each such entity by its position in the body's
+/// entity list, and the module's owner fills these operands in with
+/// `resolveDeferred` when it creates the entities. A relocation whose symbol
+/// is `deferredSymbol(ref)` names the same kind of entity.
+deferred: std.ArrayList(Deferred),
+
+/// An operand whose value is a not-yet-created entity's index or address.
+pub const Deferred = struct {
+    /// For a padded form, the first byte of the operand already in `code`;
+    /// for `compact_signed`, where the operand's bytes go.
+    code_pos: u32,
+    /// The entity's position in the body's entity list.
+    ref: u32,
+    /// Added to the entity's value by the signed forms.
+    addend: i32 = 0,
+    form: Form,
+
+    pub const Form = enum {
+        /// A 5-byte padded unsigned LEB128 of the value.
+        padded_unsigned,
+        /// A 5-byte padded signed LEB128 of the value plus the addend.
+        padded_signed,
+        /// A minimal signed LEB128 of the value plus the addend, inserted at
+        /// `code_pos`; nothing is reserved for it in `code`.
+        compact_signed,
+    };
+};
+
+/// What one deferred entity became once its owner created it.
+pub const Resolved = struct {
+    /// The function index, table slot, or data address operands embed.
+    value: u32,
+    /// The symbol relocations against the entity name.
+    symbol: SymbolIndex,
+};
+
+/// Raw symbol values at or above this name deferred entities, never symbols.
+const deferred_symbol_base: u32 = 0xF000_0000;
+
+/// The placeholder symbol a relocation against deferred entity `ref` carries.
+pub fn deferredSymbol(ref: u32) SymbolIndex {
+    std.debug.assert(ref < std.math.maxInt(u32) - deferred_symbol_base);
+    return SymbolIndex.fromRaw(deferred_symbol_base + ref);
+}
+
+/// The deferred entity a placeholder value names, if it is one.
+pub fn deferredRef(raw: u32) ?u32 {
+    return if (raw >= deferred_symbol_base) raw - deferred_symbol_base else null;
+}
 
 /// A relocation entry recording a call site that needs patching during linking.
 pub const Relocation = union(enum) {
@@ -56,6 +106,13 @@ pub const Relocation = union(enum) {
             .offset => |*off| off.code_pos += amount,
         }
     }
+
+    fn symbolPtr(self: *Relocation) *SymbolIndex {
+        return switch (self.*) {
+            .index => |*idx| &idx.symbol_index,
+            .offset => |*off| &off.symbol_index,
+        };
+    }
 };
 
 pub fn init() Self {
@@ -63,6 +120,7 @@ pub fn init() Self {
         .code = .empty,
         .preamble = .empty,
         .import_relocations = .empty,
+        .deferred = .empty,
     };
 }
 
@@ -70,6 +128,76 @@ pub fn deinit(self: *Self, allocator: Allocator) void {
     self.code.deinit(allocator);
     self.preamble.deinit(allocator);
     self.import_relocations.deinit(allocator);
+    self.deferred.deinit(allocator);
+}
+
+/// Record a deferred operand; see `Deferred`.
+pub fn addDeferred(self: *Self, allocator: Allocator, deferred: Deferred) Allocator.Error!void {
+    if (self.deferred.items.len != 0) std.debug.assert(self.deferred.items[self.deferred.items.len - 1].code_pos < deferred.code_pos);
+    try self.deferred.append(allocator, deferred);
+}
+
+/// A copy of this body, allocated with `allocator`, whose deferred operands
+/// and placeholder relocation symbols hold the entities in `resolved`, which
+/// is indexed by entity-list position. Compact operands are inserted at their
+/// positions and every later relocation moves with the bytes it names.
+pub fn resolveDeferred(self: *const Self, allocator: Allocator, resolved: []const Resolved) Allocator.Error!Self {
+    var out = Self.init();
+    errdefer out.deinit(allocator);
+    try out.preamble.appendSlice(allocator, self.preamble.items);
+
+    var code = try allocator.dupe(u8, self.code.items);
+    defer allocator.free(code);
+    var compact_count: usize = 0;
+    for (self.deferred.items) |deferred| {
+        const entity = resolved[deferred.ref];
+        switch (deferred.form) {
+            .padded_unsigned => WasmModule.overwritePaddedU32(code, deferred.code_pos, entity.value),
+            .padded_signed => WasmModule.overwritePaddedI32(code, deferred.code_pos, signedValue(entity, deferred)),
+            .compact_signed => compact_count += 1,
+        }
+    }
+
+    // Each compact operand's bytes go before everything at or after its position.
+    const inserted = try allocator.alloc(struct { pos: u32, len: u32 }, compact_count);
+    defer allocator.free(inserted);
+    try out.code.ensureTotalCapacity(allocator, code.len + compact_count * 5);
+    var copied: u32 = 0;
+    var next: usize = 0;
+    for (self.deferred.items) |deferred| {
+        if (deferred.form != .compact_signed) continue;
+        out.code.appendSliceAssumeCapacity(code[copied..deferred.code_pos]);
+        copied = deferred.code_pos;
+        const before: u32 = @intCast(out.code.items.len);
+        try WasmModule.leb128WriteI32(allocator, &out.code, signedValue(resolved[deferred.ref], deferred));
+        inserted[next] = .{ .pos = deferred.code_pos, .len = @as(u32, @intCast(out.code.items.len)) - before };
+        next += 1;
+    }
+    try out.code.appendSlice(allocator, code[copied..]);
+
+    try out.import_relocations.appendSlice(allocator, self.import_relocations.items);
+    sortRelocations(out.import_relocations.items);
+    var shift: u32 = 0;
+    next = 0;
+    for (out.import_relocations.items) |*reloc| {
+        while (next < inserted.len and inserted[next].pos <= reloc.codePos()) : (next += 1) shift += inserted[next].len;
+        reloc.shiftCodePos(shift);
+        const symbol = reloc.symbolPtr();
+        if (deferredRef(symbol.raw())) |ref| symbol.* = resolved[ref].symbol;
+    }
+    return out;
+}
+
+fn signedValue(entity: Resolved, deferred: Deferred) i32 {
+    return @intCast(@as(i64, entity.value) + deferred.addend);
+}
+
+fn sortRelocations(relocations: []Relocation) void {
+    std.sort.heap(Relocation, relocations, {}, struct {
+        fn lessThan(_: void, a: Relocation, b: Relocation) bool {
+            return a.codePos() < b.codePos();
+        }
+    }.lessThan);
 }
 
 /// Emit a relocatable call instruction.
@@ -127,6 +255,7 @@ pub fn addOffsetRelocation(
 /// Returns the byte offset where this function's body starts in `code_bytes`
 /// (i.e. the position of the body-length prefix).
 pub fn insertIntoModule(self: *Self, allocator: Allocator, module: *WasmModule) Allocator.Error!u32 {
+    std.debug.assert(self.deferred.items.len == 0);
     const fn_offset: u32 = @intCast(module.code_bytes.items.len);
     try module.function_offsets.append(allocator, fn_offset);
 
@@ -143,11 +272,7 @@ pub fn insertIntoModule(self: *Self, allocator: Allocator, module: *WasmModule) 
     // Append instruction bytes
     try module.code_bytes.appendSlice(allocator, self.code.items);
 
-    std.sort.heap(Relocation, self.import_relocations.items, {}, struct {
-        fn lessThan(_: void, a: Relocation, b: Relocation) bool {
-            return a.codePos() < b.codePos();
-        }
-    }.lessThan);
+    sortRelocations(self.import_relocations.items);
 
     // Create relocation entries with absolute offsets.
     for (self.import_relocations.items) |reloc| {
@@ -185,6 +310,7 @@ pub fn prependToCode(self: *Self, allocator: Allocator, prefix: []const u8) Allo
     for (self.import_relocations.items) |*reloc| {
         reloc.shiftCodePos(prefix_len);
     }
+    for (self.deferred.items) |*deferred| deferred.code_pos += prefix_len;
     // Grow capacity if needed
     try self.code.ensureTotalCapacity(allocator, self.code.items.len + prefix.len);
     // Shift existing bytes right
@@ -200,6 +326,7 @@ pub fn clear(self: *Self) void {
     self.code.clearRetainingCapacity();
     self.preamble.clearRetainingCapacity();
     self.import_relocations.clearRetainingCapacity();
+    self.deferred.clearRetainingCapacity();
 }
 
 // Tests

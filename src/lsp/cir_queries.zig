@@ -990,7 +990,26 @@ pub const UnannotatedBinding = struct {
 };
 
 /// A set of patterns, for the membership questions asked about every binding.
-const PatternSet = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void);
+/// A pattern index is a node index, so the set is one bit per store node.
+const PatternSet = struct {
+    bits: std.DynamicBitSetUnmanaged,
+
+    fn init(allocator: std.mem.Allocator, store: *const NodeStore) std.mem.Allocator.Error!PatternSet {
+        return .{ .bits = try std.DynamicBitSetUnmanaged.initEmpty(allocator, store.nodes.len()) };
+    }
+
+    fn deinit(self: *PatternSet, allocator: std.mem.Allocator) void {
+        self.bits.deinit(allocator);
+    }
+
+    fn insert(self: *PatternSet, pattern: CIR.Pattern.Idx) void {
+        self.bits.set(@backingInt(pattern));
+    }
+
+    fn contains(self: *const PatternSet, pattern: CIR.Pattern.Idx) bool {
+        return self.bits.isSet(@backingInt(pattern));
+    }
+};
 
 /// Context for collecting `assign` patterns inside a byte range, along with
 /// what the module says about the bindings it declares.
@@ -1014,15 +1033,9 @@ const CollectBindingsContext = struct {
 
     fn visitStmtPre(ctx: *CollectBindingsContext, _: CIR.Statement.Idx, stmt: CIR.Statement) VisitAction {
         const pattern_idx = module_lookup.getDeclarationPattern(stmt) orelse return .continue_traversal;
-        ctx.declared.put(ctx.allocator, pattern_idx, {}) catch |err| {
-            ctx.oom = err;
-            return .stop;
-        };
+        ctx.declared.insert(pattern_idx);
         if (statementAnnotation(stmt) == null) return .continue_traversal;
-        ctx.annotated.put(ctx.allocator, pattern_idx, {}) catch |err| {
-            ctx.oom = err;
-            return .stop;
-        };
+        ctx.annotated.insert(pattern_idx);
         return .continue_traversal;
     }
 
@@ -1088,9 +1101,9 @@ pub fn collectUnannotatedBindings(
     // Which patterns already say their type, and which ones a definition or a
     // statement declares. Both are asked once per binding in the range, so
     // they are keyed rather than scanned.
-    var annotated: PatternSet = .empty;
+    var annotated = try PatternSet.init(allocator, &module_env.store);
     defer annotated.deinit(allocator);
-    var declared: PatternSet = .empty;
+    var declared = try PatternSet.init(allocator, &module_env.store);
     defer declared.deinit(allocator);
 
     var results: std.ArrayList(UnannotatedBinding) = .empty;
@@ -1117,8 +1130,8 @@ pub fn collectUnannotatedBindings(
     const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
     for (defs_slice) |def_idx| {
         const def = module_env.store.getDef(def_idx);
-        try declared.put(allocator, def.pattern, {});
-        if (def.annotation != null) try annotated.put(allocator, def.pattern, {});
+        declared.insert(def.pattern);
+        if (def.annotation != null) annotated.insert(def.pattern);
         visitor.walkPattern(&module_env.store, def.pattern);
         if (visitor.stopped) break;
         visitor.walkExpr(&module_env.store, def.expr);

@@ -912,11 +912,52 @@ pub const LowLevel = enum(u16) {
         return op_info[@backingInt(self)].rc_effect;
     }
 
-    /// The per-operation properties behind `procedureKeyedByLayout` and
-    /// `rcEffect`.
+    /// How much of a type variable a body asks for when a value whose type
+    /// mentions that variable reaches one of its operations (design.md
+    /// "Specialization By Demand").
+    pub const ElementDemand = enum(u2) {
+        /// The operation reads nothing that depends on the variable and never
+        /// owns the value: a list header's length or capacity.
+        none,
+        /// The operation moves, stores, copies, or refcounts values of the
+        /// variable's type, which needs only their layout.
+        layout,
+        /// The operation's behavior depends on the variable's type itself.
+        full,
+    };
+
+    /// The demand this operation places on every type variable that argument
+    /// `arg`'s type mentions. An argument whose type is fixed mentions no
+    /// variable, so its entry is never consulted. The operation's result is
+    /// not an argument: a value it produces is demanded by whatever consumes
+    /// it.
+    pub fn elementDemand(self: LowLevel, arg: usize) ElementDemand {
+        const demands = op_info[@backingInt(self)].element_demands;
+        if (arg >= demands.len) return .full;
+        return demands[arg];
+    }
+
+    /// The most arguments `elementDemand` records separately; every later
+    /// argument is `full`.
+    const max_element_demand_args = 4;
+
+    /// One operation's `elementDemand` entries by argument position.
+    const ElementDemands = [max_element_demand_args]ElementDemand;
+
+    /// The per-operation properties behind `procedureKeyedByLayout`,
+    /// `rcEffect`, and `elementDemand`.
     const OpInfo = struct {
         keyed_by_layout: bool,
         rc_effect: RcEffect,
+        element_demands: ElementDemands = @splat(.full),
+
+        /// This operation with the given argument demands, in argument
+        /// order; arguments past the end stay `full`.
+        fn elements(self: OpInfo, comptime demands: []const ElementDemand) OpInfo {
+            var out = self;
+            for (demands, 0..) |demand, index| out.element_demands[index] = demand;
+            return out;
+        }
     };
 
     /// An operation on `procedureKeyedByLayout`'s allow list.
@@ -1030,47 +1071,47 @@ pub const LowLevel = enum(u16) {
         .str_to_utf8 = byType(.allocatesAndRetainsOrReleasesSharingArgs(arg_0)),
         .str_from_utf8_validated = byType(.retainsOrReleasesSharingArgs(arg_0)),
 
-        .list_drop_at = byLayout(.runtimeUniquenessMaybeSharedResult(arg_0)),
-        .list_sublist = byLayout(.runtimeUniquenessMaybeSharedResult(arg_0)),
-        .list_take_first = byType(.runtimeUniquenessMaybeSharedResult(arg_0)),
-        .list_take_last = byType(.runtimeUniquenessMaybeSharedResult(arg_0)),
+        .list_drop_at = byLayout(.runtimeUniquenessMaybeSharedResult(arg_0)).elements(&.{ .layout, .none }),
+        .list_sublist = byLayout(.runtimeUniquenessMaybeSharedResult(arg_0)).elements(&.{ .layout, .none }),
+        .list_take_first = byType(.runtimeUniquenessMaybeSharedResult(arg_0)).elements(&.{ .layout, .none }),
+        .list_take_last = byType(.runtimeUniquenessMaybeSharedResult(arg_0)).elements(&.{ .layout, .none }),
 
-        .list_sublist_borrowed = byType(.retainsResultBorrowingArgs(arg_0)),
+        .list_sublist_borrowed = byType(.retainsResultBorrowingArgs(arg_0)).elements(&.{ .layout, .none }),
 
-        .list_reverse = byType(.runtimeUniqueness(arg_0)),
-        .list_reserve = byLayout(.runtimeUniqueness(arg_0)),
-        .list_reserve_for_append = byLayout(.runtimeUniqueness(arg_0)),
-        .list_release_excess_capacity = byLayout(.runtimeUniqueness(arg_0)),
-        .list_clear = byType(.runtimeUniqueness(arg_0)),
+        .list_reverse = byType(.runtimeUniqueness(arg_0)).elements(&.{.layout}),
+        .list_reserve = byLayout(.runtimeUniqueness(arg_0)).elements(&.{ .layout, .none }),
+        .list_reserve_for_append = byLayout(.runtimeUniqueness(arg_0)).elements(&.{ .layout, .none }),
+        .list_release_excess_capacity = byLayout(.runtimeUniqueness(arg_0)).elements(&.{.layout}),
+        .list_clear = byType(.runtimeUniqueness(arg_0)).elements(&.{.layout}),
 
         // SIMD byte stores and appends consume/update their List(U8),
         // which is argument 1 in both primitive signatures.
         .simd_store_16_unchecked = byType(.runtimeUniqueness(arg_1)),
         .simd_append_16 = byType(.runtimeUniqueness(arg_1)),
 
-        .list_prepend = byLayout(.runtimeUniquenessRetainingArgs(arg_0, arg_1)),
+        .list_prepend = byLayout(.runtimeUniquenessRetainingArgs(arg_0, arg_1)).elements(&.{ .layout, .layout }),
 
-        .list_append_unsafe = byLayout(.consumesArgsReturningConsumedArgsRetainingArgs(arg_0, arg_1)),
+        .list_append_unsafe = byLayout(.consumesArgsReturningConsumedArgsRetainingArgs(arg_0, arg_1)).elements(&.{ .layout, .layout }),
 
         // Like `list_append_unsafe`: stores into a list the loop promotion
         // pass proved uniquely owned, so there is nothing to check at
         // runtime. The displaced element is released inside the builtin.
-        .list_set_in_place_unsafe = byType(.consumesArgsReturningConsumedArgsRetainingArgs(arg_0, arg_2)),
+        .list_set_in_place_unsafe = byType(.consumesArgsReturningConsumedArgsRetainingArgs(arg_0, arg_2)).elements(&.{ .layout, .none, .layout }),
 
         // Like `list_append_unsafe`: mutates a list the loop-append
         // promotion pass proved uniquely owned with enough capacity, so
         // there is nothing to check at runtime. Copied refcounted
         // elements gain their references inside the builtin.
-        .list_append_range_within_unsafe = byType(.consumesArgsReturningConsumedArgsRetainingArgs(arg_0, 0)),
+        .list_append_range_within_unsafe = byType(.consumesArgsReturningConsumedArgsRetainingArgs(arg_0, 0)).elements(&.{ .layout, .none, .none }),
 
         // Moves the list's ownership unit into a new local before the
         // reuse query, forcing ARC to preserve every later use first.
         // List.map, List.update, and loop promotion use this transfer.
-        .list_map_prepare_reuse = byLayout(.consumesArgsReturningConsumedArgs(arg_0)),
+        .list_map_prepare_reuse = byLayout(.consumesArgsReturningConsumedArgs(arg_0)).elements(&.{.layout}),
 
         // The same list; LIR lowering replaces it with an alias, so this
         // describes the source-level operation only.
-        .list_prefetched = byType(.consumesArgsReturningConsumedArgs(arg_0)),
+        .list_prefetched = byType(.consumesArgsReturningConsumedArgs(arg_0)).elements(&.{ .layout, .none }),
 
         // Reads the prepared list's refcount (and slice bit) without
         // changing it. List.map additionally gates this result on item
@@ -1079,46 +1120,46 @@ pub const LowLevel = enum(u16) {
         // The owned flag reads the list's count and nothing else; it is
         // the check a versioned loop dispatches on, so a list proven
         // unique makes it a constant.
-        .list_owned_unique = byType(.{ .may_runtime_uniqueness_check_args = arg_0 }),
+        .list_owned_unique = byType(.{ .may_runtime_uniqueness_check_args = arg_0 }).elements(&.{.none}),
 
         // Retypes a unique non-slice list to the output element type,
         // keeping the same allocation. Only reachable behind a true
         // `list_map_can_reuse`, so the result's count is 1 on return.
-        .list_map_cast_unsafe = byLayout(.consumesArgsReturningConsumedArgsRetainingArgs(arg_0, 0)),
+        .list_map_cast_unsafe = byLayout(.consumesArgsReturningConsumedArgsRetainingArgs(arg_0, 0)).elements(&.{.layout}),
 
         // Moves one element's ownership out of a unique list's buffer.
         // The buffer slot keeps stale bytes until `list_map_write_unsafe`
         // stores the replacement; the op itself performs no RC work.
-        .list_map_extract_unsafe = byLayout(.none()),
+        .list_map_extract_unsafe = byLayout(.none()).elements(&.{ .layout, .none }),
 
         // Stores an owned element into the slot vacated by
         // `list_map_extract_unsafe`, mirroring `list_append_unsafe`.
-        .list_map_write_unsafe = byLayout(.consumesArgsReturningConsumedArgsRetainingArgs(arg_0, arg_2)),
+        .list_map_write_unsafe = byLayout(.consumesArgsReturningConsumedArgsRetainingArgs(arg_0, arg_2)).elements(&.{ .layout, .none, .layout }),
 
         // Reads the bound and the list's layout, never the list itself; the
         // bound is an operand value, so the operation is not layout-keyed.
-        .list_item_size_at_most = byType(.none()),
+        .list_item_size_at_most = byType(.none()).elements(&.{ .layout, .none }),
 
-        .list_swap = byLayout(.runtimeUniqueness(arg_0)),
+        .list_swap = byLayout(.runtimeUniqueness(arg_0)).elements(&.{ .layout, .none, .none }),
 
-        .list_set = byLayout(.runtimeUniquenessRetainingArgs(arg_0, arg_2)),
-        .list_replace_unsafe = byLayout(.runtimeUniquenessRetainingArgs(arg_0, arg_2)),
+        .list_set = byLayout(.runtimeUniquenessRetainingArgs(arg_0, arg_2)).elements(&.{ .layout, .none, .layout }),
+        .list_replace_unsafe = byLayout(.runtimeUniquenessRetainingArgs(arg_0, arg_2)).elements(&.{ .layout, .none, .layout }),
 
-        .list_concat = byLayout(.runtimeUniqueness(argMask(&.{ 0, 1 }))),
+        .list_concat = byLayout(.runtimeUniqueness(argMask(&.{ 0, 1 }))).elements(&.{ .layout, .layout }),
 
         // Both appends mutate only their first list; `list_append_sublist`
         // reads its source without consuming or retaining it. The
         // within-list range copy mutates the one list it is given.
-        .list_append_range_within = byLayout(.runtimeUniqueness(arg_0)),
-        .list_copy_range_within = byLayout(.runtimeUniqueness(arg_0)),
-        .list_append_sublist = byLayout(.runtimeUniqueness(arg_0)),
+        .list_append_range_within = byLayout(.runtimeUniqueness(arg_0)).elements(&.{ .layout, .none, .none }),
+        .list_copy_range_within = byLayout(.runtimeUniqueness(arg_0)).elements(&.{ .layout, .none, .none, .none }),
+        .list_append_sublist = byLayout(.runtimeUniqueness(arg_0)).elements(&.{ .layout, .layout, .none, .none }),
         .list_append_le_bytes = byType(.runtimeUniqueness(arg_0)),
         // Like `list_append_unsafe`: stores a word into a list the
         // loop-append promotion pass proved uniquely owned with a word of
         // spare capacity, so there is nothing to check at runtime.
         .list_append_le_bytes_unsafe = byType(.consumesArgsReturningConsumedArgsRetainingArgs(arg_0, 0)),
 
-        .list_get_unsafe = byLayout(.retainsResultBorrowingArgs(arg_0)),
+        .list_get_unsafe = byLayout(.retainsResultBorrowingArgs(arg_0)).elements(&.{ .layout, .none }),
 
         // Allocates the list of segments, and counts the source string
         // once per segment it slices out of it.
@@ -1144,7 +1185,7 @@ pub const LowLevel = enum(u16) {
         .dec_to_str = byType(.allocates()),
         .f32_to_str = byType(.allocates()),
         .f64_to_str = byType(.allocates()),
-        .list_with_capacity = byLayout(.allocates()),
+        .list_with_capacity = byLayout(.allocates()).elements(&.{.none}),
         .crypto_sha256_hash_bytes = byType(.allocates()),
         .crypto_sha256_hasher_empty = byType(.allocates()),
         .crypto_sha256_hasher_write = byType(.allocates()),
@@ -1156,11 +1197,11 @@ pub const LowLevel = enum(u16) {
 
         .str_join_with = byType(.allocatesConsumingArgs(arg_0)),
 
-        .box_box = byLayout(.allocatesRetainingArgs(arg_0)),
+        .box_box = byLayout(.allocatesRetainingArgs(arg_0)).elements(&.{.layout}),
 
-        .box_unbox = byLayout(.{ .may_retain_or_release = true, .consume_args = arg_0, .result_shares_args = arg_0 }),
+        .box_unbox = byLayout(.{ .may_retain_or_release = true, .consume_args = arg_0, .result_shares_args = arg_0 }).elements(&.{.layout}),
 
-        .box_unbox_borrowed = byType(.retainsResultBorrowingArgs(arg_0)),
+        .box_unbox_borrowed = byType(.retainsResultBorrowingArgs(arg_0)).elements(&.{.layout}),
 
         .box_prepare_update = byType(.runtimeUniqueness(arg_0)),
 
@@ -1189,10 +1230,10 @@ pub const LowLevel = enum(u16) {
         .str_ends_with = byType(.none()),
         .str_count_utf8_bytes = byType(.none()),
         .str_get_utf8_byte_unsafe = byType(.none()),
-        .list_len = byLayout(.none()),
-        .list_capacity = byLayout(.none()),
-        .list_prefetch = byLayout(.none()),
-        .list_slack_unique = byType(.none()),
+        .list_len = byLayout(.none()).elements(&.{.none}),
+        .list_capacity = byLayout(.none()).elements(&.{.none}),
+        .list_prefetch = byLayout(.none()).elements(&.{ .none, .none }),
+        .list_slack_unique = byType(.none()).elements(&.{.none}),
         .bool_not = byType(.none()),
         .bool_likely = byType(.none()),
         .dict_pseudo_seed = byType(.none()),
@@ -1407,4 +1448,30 @@ pub const LowLevel = enum(u16) {
 test "LowLevel declares no list_split_first or list_split_last op" {
     try std.testing.expect(!@hasField(LowLevel, "list_split_first"));
     try std.testing.expect(!@hasField(LowLevel, "list_split_last"));
+}
+
+test "elementDemand gives every operation an entry for every argument" {
+    // `explicit_op_info` has one field per operation that is not a numeric
+    // conversion, so a missing row is a compile error; this walks the
+    // finished table so every row is also evaluated.
+    for (std.enums.values(LowLevel)) |op| {
+        for (0..LowLevel.max_element_demand_args + 1) |arg| {
+            _ = op.elementDemand(arg);
+        }
+        if (numeric_conversion.getConversionSpec(op) != null) {
+            try std.testing.expectEqual(LowLevel.ElementDemand.full, op.elementDemand(0));
+        }
+    }
+}
+
+test "elementDemand distinguishes header reads, element moves, and inspection" {
+    try std.testing.expectEqual(LowLevel.ElementDemand.none, LowLevel.list_len.elementDemand(0));
+    try std.testing.expectEqual(LowLevel.ElementDemand.none, LowLevel.list_capacity.elementDemand(0));
+    try std.testing.expectEqual(LowLevel.ElementDemand.layout, LowLevel.list_get_unsafe.elementDemand(0));
+    try std.testing.expectEqual(LowLevel.ElementDemand.layout, LowLevel.list_append_unsafe.elementDemand(1));
+    try std.testing.expectEqual(LowLevel.ElementDemand.layout, LowLevel.box_box.elementDemand(0));
+    try std.testing.expectEqual(LowLevel.ElementDemand.layout, LowLevel.box_unbox.elementDemand(0));
+    try std.testing.expectEqual(LowLevel.ElementDemand.full, LowLevel.list_map_can_reuse.elementDemand(0));
+    try std.testing.expectEqual(LowLevel.ElementDemand.full, LowLevel.num_plus.elementDemand(0));
+    try std.testing.expectEqual(LowLevel.ElementDemand.full, LowLevel.list_len.elementDemand(LowLevel.max_element_demand_args));
 }

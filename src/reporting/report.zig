@@ -236,8 +236,12 @@ pub const Report = struct {
     headline: Document,
     severity: Severity,
     document: Document,
+    /// The file a report is about as a whole, for a report that has no source
+    /// region because nothing in the file's text is the problem (for example,
+    /// a definition the file lacks). Renderers name it in place of a position.
+    /// Owned by `owned_strings`.
+    file: ?[]const u8,
     allocator: Allocator,
-    owned_strings: std.array_list.Managed([]const u8),
 
     pub fn init(allocator: Allocator, title: []const u8, headline: []const u8, severity: Severity) Allocator.Error!Report {
         assertValidTitleAndDescription(title, headline);
@@ -246,8 +250,8 @@ pub const Report = struct {
             .headline = Document.init(allocator),
             .severity = severity,
             .document = Document.init(allocator),
+            .file = null,
             .allocator = allocator,
-            .owned_strings = std.array_list.Managed([]const u8).init(allocator),
         };
         if (headline.len > 0) {
             try report.headline.addReflowingText(headline);
@@ -255,21 +259,40 @@ pub const Report = struct {
         return report;
     }
 
+    /// A report whose headline names a file: `before`, then `path`, then
+    /// `after`. Renderers show the path relative to the working directory.
+    pub fn initWithPath(
+        allocator: Allocator,
+        title: []const u8,
+        before: []const u8,
+        path: []const u8,
+        after: []const u8,
+        severity: Severity,
+    ) Allocator.Error!Report {
+        var report = try init(allocator, title, "", severity);
+        errdefer report.deinit();
+        try report.headline.addReflowingText(before);
+        try report.headline.addAnnotated(path, .path);
+        try report.headline.addReflowingText(after);
+        return report;
+    }
+
     pub fn deinit(self: *Report) void {
-        for (self.owned_strings.items) |owned_string| {
-            self.allocator.free(@constCast(owned_string));
-        }
-        self.owned_strings.deinit();
         self.headline.deinit();
         self.document.deinit();
     }
 
     /// Add a string that the report will take ownership of.
-    /// Returns the owned copy of the string that can be safely used in the document.
+    /// Returns the owned copy of the string, which lives in the report's
+    /// document content and can be safely used in either document.
     pub fn addOwnedString(self: *Report, string: []const u8) Allocator.Error![]const u8 {
-        const owned_copy = try self.allocator.dupe(u8, string);
-        try self.owned_strings.append(owned_copy);
-        return owned_copy;
+        return self.document.ownString(string);
+    }
+
+    /// Mark the report as being about `path` as a whole. A report with a
+    /// source region already names its file there, so it never has one.
+    pub fn setFile(self: *Report, path: []const u8) Allocator.Error!void {
+        self.file = try self.addOwnedString(path);
     }
 
     /// Render the report to the specified writer and target format.
@@ -316,18 +339,13 @@ pub const Report = struct {
         };
 
         const truncated_suggestion = if (suggestion.len > DEFAULT_MAX_MESSAGE_BYTES) blk: {
-            // `suggestion` is already validated as UTF-8 above, and the limit is
-            // large enough that a truncation point always exists, so the only
-            // failure `truncateUtf8` can produce here is running out of memory.
             const truncated = truncateUtf8(self.allocator, suggestion, DEFAULT_MAX_MESSAGE_BYTES) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
-                error.InvalidUtf8, error.CannotTruncate => unreachable,
+                error.InvalidUtf8, error.CannotTruncate => unreachable, // `suggestion` was validated as UTF-8 above, and the limit always leaves a truncation point
             };
-            if (truncated.ptr != suggestion.ptr) {
-                try self.owned_strings.append(truncated);
-            }
             break :blk truncated;
         } else suggestion;
+        defer if (truncated_suggestion.ptr != suggestion.ptr) self.allocator.free(truncated_suggestion);
 
         try self.document.addLineBreak();
         try self.document.addAnnotated("Hint: ", .suggestion);
@@ -463,7 +481,7 @@ test "Report diagnostic location uses the underline rather than its context" {
     var report = try Report.init(testing.allocator, "Type Mismatch", "", .runtime_error);
     defer report.deinit();
     try report.document.addSourceCodeWithUnderlines(.{
-        .line_text = try testing.allocator.dupe(u8, "match value {\n    A(_) => 1\n}"),
+        .line_text = "match value {\n    A(_) => 1\n}",
         .start_line = 3,
         .start_column = 1,
         .end_line = 5,

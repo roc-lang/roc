@@ -38,6 +38,8 @@ scratch_idents: base.Scratch(base.Ident.Idx),
 scratch_nodes: std.ArrayList(Node.Idx),
 /// Worklist of `recordDestructuredValueNames`, kept with its capacity.
 destructured_patterns: std.ArrayList(AST.Pattern.Idx),
+/// Worklist of `recordTypeDependenciesFromAnnoWorklist`, kept with its capacity.
+type_dependency_pending: std.ArrayList(TypeDependencyWalkItem),
 /// Text of the import path being interned, kept with its capacity.
 import_path: std.ArrayList(u8),
 diagnostics: std.ArrayList(AST.Diagnostic),
@@ -112,6 +114,18 @@ pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator) std.mem.Allocator.E
     const estimated_node_count = tokens.tokens.len;
     var store = try NodeStore.initCapacity(gpa, estimated_node_count);
     errdefer store.deinit();
+    var numeric_literal_count: usize = 0;
+    // Each field-access segment is one `.field` or `.?field` token.
+    var field_segment_count: usize = 0;
+    for (tokens.tokens.items(.tag)) |tag| {
+        numeric_literal_count += @intFromBool(tag == .Int or tag == .Float);
+        const tag_int = @backingInt(tag);
+        field_segment_count += @intFromBool((tag_int >= @backingInt(Token.Tag.DotLowerIdent) and tag_int <= @backingInt(Token.Tag.NoSpaceDotLowerIdent)) or
+            (tag_int >= @backingInt(Token.Tag.DotQuestionLowerIdent) and tag_int <= @backingInt(Token.Tag.NoSpaceDotQuestionLowerIdent)));
+    }
+    try store.numeric_literals.ensureTotalCapacity(gpa, numeric_literal_count);
+    try store.numeric_literal_bytes.ensureTotalCapacity(gpa, numeric_literal_count);
+    try store.field_access_segments.ensureTotalCapacity(gpa, field_segment_count);
 
     var scratch_idents = try base.Scratch(base.Ident.Idx).init(gpa);
     errdefer scratch_idents.deinit();
@@ -132,6 +146,7 @@ pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator) std.mem.Allocator.E
         .scratch_idents = scratch_idents,
         .scratch_nodes = .empty,
         .destructured_patterns = .empty,
+        .type_dependency_pending = .empty,
         .import_path = .empty,
         .diagnostics = .empty,
         .cached_malformed_node = null,
@@ -145,6 +160,7 @@ pub fn deinit(parser: *Parser) void {
     parser.scratch_idents.deinit();
     parser.scratch_nodes.deinit(parser.gpa);
     parser.destructured_patterns.deinit(parser.gpa);
+    parser.type_dependency_pending.deinit(parser.gpa);
     parser.import_path.deinit(parser.gpa);
     parser.scope_pending_annos.deinit(parser.gpa);
     parser.type_path_stack.deinit(parser.gpa);
@@ -2468,7 +2484,7 @@ fn CurrentStack(comptime State: type) type {
         }
 
         inline fn leave(self: *Self) State {
-            const state = self.current orelse unreachable;
+            const state = self.current orelse base.invariant("parser invariant violated: left a parse-state stack with no active state", .{});
             self.current = self.stack.pop();
             return state;
         }
@@ -3057,9 +3073,9 @@ const OpenSyntaxStack = struct {
     }
 
     inline fn popPayloadWithKind(self: *OpenSyntaxStack, comptime Kind: type, kind_stack: *std.ArrayList(Kind), expected: Kind, comptime Payload: type) Payload {
-        const kind = kind_stack.pop() orelse unreachable;
+        const kind = kind_stack.pop() orelse base.invariant("parser invariant violated: popped an empty {s} stack", .{@typeName(Kind)});
         std.debug.assert(kind == expected);
-        return self.payloadStack(Payload).pop() orelse unreachable;
+        return self.payloadStack(Payload).pop() orelse base.invariant("parser invariant violated: popped an empty {s} payload stack", .{@typeName(Payload)});
     }
 
     inline fn popExprPayload(self: *OpenSyntaxStack, expected: ExprParentKind, comptime Payload: type) Payload {
@@ -3087,7 +3103,7 @@ const OpenSyntaxStack = struct {
     }
 
     inline fn popMarkerWithKind(comptime Kind: type, kind_stack: *std.ArrayList(Kind), expected: Kind) void {
-        const kind = kind_stack.pop() orelse unreachable;
+        const kind = kind_stack.pop() orelse base.invariant("parser invariant violated: popped an empty {s} stack", .{@typeName(Kind)});
         std.debug.assert(kind == expected);
     }
 
@@ -3581,8 +3597,8 @@ fn runExprStatementKernel(
                 if (tok == .Int) {
                     const start = self.pos;
                     self.advance();
-                    const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
-                    const literal = try self.store.addNumericLiteral(self.tokenText(start), .int);
+                    const deprecated = NumericLiteral.splitSource(self.tokenText(start), .int);
+                    const literal = try self.store.addNumericLiteral(deprecated, .int);
                     const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
                     try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
 
@@ -3618,8 +3634,8 @@ fn runExprStatementKernel(
                 if (tok == .Float) {
                     const start = self.pos;
                     self.advance();
-                    const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
-                    const literal = try self.store.addNumericLiteral(self.tokenText(start), .frac);
+                    const deprecated = NumericLiteral.splitSource(self.tokenText(start), .frac);
+                    const literal = try self.store.addNumericLiteral(deprecated, .frac);
                     const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
                     try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
 
@@ -4323,7 +4339,7 @@ fn runExprStatementKernel(
             continue :expr_kernel .complete;
         },
         .complete => {
-            const completed = last_expr orelse unreachable;
+            const completed = last_expr orelse unreachable; // every transition into .complete sets last_expr first
             if (open_syntax.peekExpr()) |kind| {
                 switch (kind) {
                     .expr_collection_item => {
@@ -4803,10 +4819,7 @@ fn runExprStatementKernel(
             if (root == .expr) {
                 return completed;
             }
-            if (root == .pattern) {
-                unreachable;
-            }
-            unreachable;
+            base.invariant("parser invariant violated: expression completed with no open parent under a {s} root", .{@tagName(root)});
         },
         .arrow_app_next => {
             if (self.peek() == .NoSpaceOpenRound) {
@@ -4855,7 +4868,8 @@ fn runExprStatementKernel(
                         .tuple => {
                             const expr = try self.store.addExpr(.{ .tuple = .{ .items = span, .region = .{ .start = state.start, .end = self.pos } } });
                             self.store.setCollectionLayout(expr, layout);
-                            expr_finish_state = .{ .start = state.start, .min_bp = state.min_bp orelse unreachable, .expr = expr };
+                            const tuple_min_bp = state.min_bp orelse unreachable; // prefix parsing enters tuple collections with expr_state.min_bp, which is never null
+                            expr_finish_state = .{ .start = state.start, .min_bp = tuple_min_bp, .expr = expr };
                             continue :expr_kernel .suffix;
                         },
                         .apply => |apply_state| {
@@ -5340,7 +5354,7 @@ fn runExprStatementKernel(
             continue :expr_kernel .type_complete;
         },
         .type_complete => {
-            const completed = last_type_anno orelse unreachable;
+            const completed = last_type_anno orelse base.invariant("parser invariant violated: reached type_complete without a completed type annotation", .{});
             if (open_syntax.peekType()) |kind| {
                 switch (kind) {
                     .type_apply => {
@@ -5618,7 +5632,7 @@ fn runExprStatementKernel(
             if (root == .type_anno) {
                 return completed;
             }
-            unreachable;
+            base.invariant("parser invariant violated: type annotation completed with no open parent under a {s} root", .{@tagName(root)});
         },
         .type_apply_next => {
             if (self.peek() == .CloseRound) {
@@ -6037,7 +6051,7 @@ fn runExprStatementKernel(
             continue :expr_kernel .where_complete;
         },
         .where_complete => {
-            const completed = last_where orelse unreachable;
+            const completed = last_where orelse base.invariant("parser invariant violated: reached where_complete without a completed where clause", .{});
             last_where = null;
             if (open_syntax.peekWhere()) |kind| {
                 switch (kind) {
@@ -6082,7 +6096,7 @@ fn runExprStatementKernel(
                     },
                 }
             }
-            unreachable;
+            base.invariant("parser invariant violated: where clause completed with no open parent", .{});
         },
         .statement_type_decl_finish => {
             const state = statement_type_decl_ready_state;
@@ -6479,7 +6493,7 @@ fn runExprStatementKernel(
             continue :expr_kernel .prefix;
         },
         .statement_complete => {
-            const completed = last_statement orelse unreachable;
+            const completed = last_statement orelse base.invariant("parser invariant violated: reached statement_complete without a completed statement", .{});
             last_statement = null;
             if (open_syntax.peekStatement() == .statement_type_associated_statement and
                 open_syntax.peekPayload(StatementAssociatedStatementState).expr_block_depth == expr_blocks.depth())
@@ -6594,8 +6608,8 @@ fn runExprStatementKernel(
                 if (tok == .Float) {
                     const start = self.pos;
                     self.advance();
-                    const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
-                    const literal = try self.store.addNumericLiteral(self.tokenText(start), .frac);
+                    const deprecated = NumericLiteral.splitSource(self.tokenText(start), .frac);
+                    const literal = try self.store.addNumericLiteral(deprecated, .frac);
                     const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
                     try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
                     if (try self.typeSuffixFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_suffix| {
@@ -6639,8 +6653,8 @@ fn runExprStatementKernel(
                 if (tok == .Int) {
                     const start = self.pos;
                     self.advance();
-                    const deprecated = NumericLiteral.deprecatedSuffixFromSource(self.tokenText(start));
-                    const literal = try self.store.addNumericLiteral(self.tokenText(start), .int);
+                    const deprecated = NumericLiteral.splitSource(self.tokenText(start), .int);
+                    const literal = try self.store.addNumericLiteral(deprecated, .int);
                     const deprecated_region = AST.TokenizedRegion{ .start = start, .end = self.pos };
                     try self.pushDeprecatedNumberSuffixDiagnostic(deprecated.deprecated_suffix, deprecated_region);
                     if (try self.typeSuffixFromDeprecatedSuffix(deprecated.deprecated_suffix)) |type_suffix| {
@@ -6814,7 +6828,7 @@ fn runExprStatementKernel(
             continue :expr_kernel .pattern_complete;
         },
         .pattern_complete => {
-            const completed = last_pattern orelse unreachable;
+            const completed = last_pattern orelse base.invariant("parser invariant violated: reached pattern_complete without a completed pattern", .{});
             if (open_syntax.peekPattern()) |kind| {
                 switch (kind) {
                     .expr_for_pattern => {
@@ -7045,7 +7059,7 @@ fn runExprStatementKernel(
                     },
                 }
             }
-            unreachable;
+            base.invariant("parser invariant violated: pattern completed with no open parent under a {s} root", .{@tagName(root)});
         },
         .pattern_tag_args_next => {
             if (self.peek() == .CloseRound) {
@@ -7312,11 +7326,9 @@ fn recordTypeDependenciesFromAnnoWorklist(
     root: AST.TypeAnno.Idx,
     mode: TypeDependencyWalkMode,
 ) std.mem.Allocator.Error!void {
-    var pending_allocator_state_buffer: [4096]u8 align(@alignOf(usize)) = undefined;
-    var pending_allocator_state = std.heap.BufferFirstAllocator.init(&pending_allocator_state_buffer, self.gpa);
-    const pending_allocator = pending_allocator_state.allocator();
-    var pending: std.ArrayList(TypeDependencyWalkItem) = .empty;
-    defer pending.deinit(pending_allocator);
+    const pending_allocator = self.gpa;
+    const pending = &self.type_dependency_pending;
+    pending.clearRetainingCapacity();
 
     try pending.append(pending_allocator, .{ .anno = root, .mode = mode });
 
@@ -7325,7 +7337,7 @@ fn recordTypeDependenciesFromAnnoWorklist(
         switch (item.mode) {
             .tag_payloads_only => if (anno == .apply) {
                 const args = self.store.typeAnnoSlice(anno.apply.args);
-                try appendTypeDependencyAnnoSlice(pending_allocator, &pending, args, 1, .all);
+                try appendTypeDependencyAnnoSlice(pending_allocator, pending, args, 1, .all);
             },
             .all => switch (anno) {
                 .ty => |ty| {
@@ -7336,18 +7348,18 @@ fn recordTypeDependenciesFromAnnoWorklist(
                 },
                 .apply => |apply| {
                     const args = self.store.typeAnnoSlice(apply.args);
-                    try appendTypeDependencyAnnoSlice(pending_allocator, &pending, args, 0, .all);
+                    try appendTypeDependencyAnnoSlice(pending_allocator, pending, args, 0, .all);
                 },
                 .tag_union => |tag_union| {
                     if (tag_union.ext == .named) {
                         try pending.append(pending_allocator, .{ .anno = tag_union.ext.named.anno, .mode = .all });
                     }
                     const tags = self.store.typeAnnoSlice(tag_union.tags);
-                    try appendTypeDependencyAnnoSlice(pending_allocator, &pending, tags, 0, .tag_payloads_only);
+                    try appendTypeDependencyAnnoSlice(pending_allocator, pending, tags, 0, .tag_payloads_only);
                 },
                 .tuple => |tuple| {
                     const elems = self.store.typeAnnoSlice(tuple.annos);
-                    try appendTypeDependencyAnnoSlice(pending_allocator, &pending, elems, 0, .all);
+                    try appendTypeDependencyAnnoSlice(pending_allocator, pending, elems, 0, .all);
                 },
                 .record => |record| {
                     if (record.ext == .named) {
@@ -7364,7 +7376,7 @@ fn recordTypeDependenciesFromAnnoWorklist(
                 .@"fn" => |func| {
                     try pending.append(pending_allocator, .{ .anno = func.ret, .mode = .all });
                     const args = self.store.typeAnnoSlice(func.args);
-                    try appendTypeDependencyAnnoSlice(pending_allocator, &pending, args, 0, .all);
+                    try appendTypeDependencyAnnoSlice(pending_allocator, pending, args, 0, .all);
                 },
                 .parens => |parens| {
                     try pending.append(pending_allocator, .{ .anno = parens.anno, .mode = .all });

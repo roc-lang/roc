@@ -15,6 +15,8 @@ const layout = @import("layout");
 const roc_target = @import("roc_target");
 const wasm32_boxy_runtime = @import("wasm32_boxy_runtime");
 const wasm32_builtins = @import("wasm32_builtins");
+const wasm32v1_boxy_runtime = @import("wasm32v1_boxy_runtime");
+const wasm32v1_builtins = @import("wasm32v1_builtins");
 
 const Allocator = std.mem.Allocator;
 const object_image = @import("object_image.zig");
@@ -64,11 +66,16 @@ pub const Program = struct {
     store: *const lir.LirStore,
     layouts: *const LayoutStore,
     boxy_tables: boxy_runtime.BoxyTables = .{},
+    /// Bytes the program's erased callables reserve before their captures
+    /// (`LirProgram.Result.erased_capture_prefix`).
+    erased_capture_prefix: u32,
     boxy_sidecar_blob: ?[]const u8 = null,
     boxy_sidecar_desc: ?LirImage.BoxySidecar = null,
     main_proc: LirProcSpecId,
     static_data: []const backend.StaticDataExport = &.{},
     static_data_value_count: usize = 0,
+    /// Executor wasm body generation runs on; null generates every body inline.
+    post_check_executor: ?base.post_check_task_executor.Executor = null,
 };
 
 /// Explicit dependency for platform-hosted calls during inspected execution.
@@ -128,7 +135,6 @@ pub const Result = struct {
 };
 
 const InterpreterError = Allocator.Error || error{
-    ComptimeExhaustiveness,
     Crash,
     DivisionByZero,
     ExpectErr,
@@ -322,7 +328,6 @@ fn runInterpreter(allocator: Allocator, program: Program, execution_host: Execut
         error.Crash => return crashResult(allocator, &runtime_env, interp.getCrashMessage()),
         error.RuntimeError => return crashResult(allocator, &runtime_env, interp.getRuntimeErrorMessage()),
         error.DivisionByZero => return crashResult(allocator, &runtime_env, "Division by zero"),
-        error.ComptimeExhaustiveness,
         error.ExpectErr,
         error.InvalidHostedFunctionSignature,
         error.OutOfMemory,
@@ -369,6 +374,7 @@ fn runDev(allocator: Allocator, program: Program) DevError!Result {
             program.boxy_tables.erased_arg_desc_offsets,
             program.boxy_tables.erased_arg_desc_params,
             program.boxy_tables.worker_procs,
+            program.erased_capture_prefix,
             roc_target.host_cpu.level(),
         );
         defer codegen.deinit();
@@ -454,36 +460,15 @@ fn runDev(allocator: Allocator, program: Program) DevError!Result {
 }
 
 fn runWasm(allocator: Allocator, program: Program) WasmError!Result {
+    return runWasmAt(allocator, program, .default);
+}
+
+/// Run on the wasm backend for a CPU level, with builtins and the Boxy
+/// runtime built for that level.
+pub fn runWasmAt(allocator: Allocator, program: Program, cpu_level: roc_target.CpuLevel) WasmError!Result {
     if (comptime builtin.target.os.tag == .freestanding) return error.WasmExecFailed;
 
-    var codegen = backend.wasm.WasmCodeGen.init(
-        allocator,
-        program.store,
-        program.layouts,
-        program.boxy_tables.erased_arg_desc_offsets,
-        program.boxy_tables.erased_arg_desc_params,
-        program.boxy_tables.worker_procs,
-        .default,
-    );
-    defer codegen.deinit();
-    const helpers = try backend.collectRequiredRcHelpers(allocator, program.static_data);
-    defer allocator.free(helpers);
-    codegen.static_data_rc_helpers = helpers;
-    codegen.module.addStaticDataExports(program.static_data) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        else => return error.Internal,
-    };
-
-    const proc = program.store.getProcSpec(program.main_proc);
-    const runtime_input: ?backend.wasm.WasmCodeGen.BoxyRuntimeInput = if (program.boxy_tables.needsRuntimeForStore(program.store)) .{
-        .runtime_object = wasm32_boxy_runtime.bytes[0..],
-        .sidecar_blob = program.boxy_sidecar_blob orelse return error.Internal,
-        .sidecar_desc = program.boxy_sidecar_desc orelse return error.Internal,
-    } else null;
-    const wasm_result = codegen.generateModule(program.main_proc, proc.ret_layout, wasm32_builtins.bytes, runtime_input) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.HostedFunctionTypeMismatch => return error.Internal,
-    };
+    const wasm_result = try generateWasmModule(allocator, program, cpu_level);
     defer allocator.free(wasm_result.wasm_bytes);
 
     const result = try WasmRunner.runWasmOutcomeWithStats(
@@ -499,6 +484,47 @@ fn runWasm(allocator: Allocator, program: Program) WasmError!Result {
         },
         .events = result.events,
         .allocation_count = result.allocation_count,
+    };
+}
+
+/// Generate the wasm module `runWasmAt` runs, with builtins and the Boxy
+/// runtime built for `cpu_level`. The caller owns the returned bytes.
+pub fn generateWasmModule(allocator: Allocator, program: Program, cpu_level: roc_target.CpuLevel) WasmError!backend.wasm.WasmCodeGen.GenerateResult {
+    var codegen = backend.wasm.WasmCodeGen.init(
+        allocator,
+        program.store,
+        program.layouts,
+        program.boxy_tables.erased_arg_desc_offsets,
+        program.boxy_tables.erased_arg_desc_params,
+        program.boxy_tables.worker_procs,
+        cpu_level,
+    );
+    defer codegen.deinit();
+    codegen.executor = program.post_check_executor;
+    const helpers = try backend.collectRequiredRcHelpers(allocator, program.static_data);
+    defer allocator.free(helpers);
+    codegen.static_data_rc_helpers = helpers;
+    codegen.module.addStaticDataExports(program.static_data) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.Internal,
+    };
+
+    const proc = program.store.getProcSpec(program.main_proc);
+    const runtime_input: ?backend.wasm.WasmCodeGen.BoxyRuntimeInput = if (program.boxy_tables.needsRuntimeForStore(program.store)) .{
+        .runtime_object = switch (cpu_level) {
+            .default => wasm32_boxy_runtime.bytes[0..],
+            .v1 => wasm32v1_boxy_runtime.bytes[0..],
+        },
+        .sidecar_blob = program.boxy_sidecar_blob orelse return error.Internal,
+        .sidecar_desc = program.boxy_sidecar_desc orelse return error.Internal,
+    } else null;
+    const builtins_object = switch (cpu_level) {
+        .default => wasm32_builtins.bytes,
+        .v1 => wasm32v1_builtins.bytes,
+    };
+    return codegen.generateModule(program.main_proc, proc.ret_layout, builtins_object, runtime_input) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.HostedFunctionTypeMismatch => return error.Internal,
     };
 }
 
@@ -617,12 +643,20 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
     defer lib.deinit();
     var functions = std.StringHashMap(usize).init(allocator);
     defer functions.deinit();
+    const symbol_prefix = "roc_inspect_";
+    var symbol_name = std.ArrayList(u8).empty;
+    defer symbol_name.deinit(allocator);
     for (program.static_data) |data_export| for (data_export.relocations) |relocation| {
         if (relocation.kind != .function_pointer) continue;
-        const name = try std.fmt.allocPrintSentinel(allocator, "roc_inspect_{s}", .{relocation.target_symbol_name}, 0);
-        defer allocator.free(name);
-        const address = lib.lookup(*const anyopaque, name) orelse return error.LlvmBackendUnavailable;
-        try functions.put(relocation.target_symbol_name, @intFromPtr(address));
+        const entry = try functions.getOrPut(relocation.target_symbol_name);
+        if (entry.found_existing) continue;
+        errdefer _ = functions.remove(relocation.target_symbol_name);
+        symbol_name.clearRetainingCapacity();
+        try symbol_name.ensureTotalCapacity(allocator, symbol_prefix.len + relocation.target_symbol_name.len);
+        symbol_name.appendSliceAssumeCapacity(symbol_prefix);
+        symbol_name.appendSliceAssumeCapacity(relocation.target_symbol_name);
+        const address = lib.lookup(*const anyopaque, symbol_name.items) orelse return error.LlvmBackendUnavailable;
+        entry.value_ptr.* = @intFromPtr(address);
     };
     const Resolver = struct {
         fn resolve(raw: ?*anyopaque, relocation: backend.StaticDataRelocation) ?usize {

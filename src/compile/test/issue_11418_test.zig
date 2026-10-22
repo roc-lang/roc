@@ -113,7 +113,7 @@ test "issue 11418: shared LIR generation leaves runtime-only procedures to the r
     try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
     const session = &coord.program_session.?;
-    try std.testing.expect(session.host != null);
+    try std.testing.expect(session.completed != null);
     try std.testing.expect(session.runtime_prepared != null);
     try std.testing.expectEqual(@as(u32, 1), metrics.monotype_runs);
     try std.testing.expectEqual(@as(u32, 1), metrics.solved_runs);
@@ -129,7 +129,9 @@ test "issue 11418: shared LIR generation leaves runtime-only procedures to the r
     // continues the Solved program compile-time evaluation ran in.
     try std.testing.expectEqual(@as(u32, 1), metrics.monotype_runs);
     try std.testing.expectEqual(@as(u32, 1), metrics.solved_runs);
-    const host_store = &session.host.?.lir_result.store;
-    const runtime_only_count = countNamedProcs(host_store, "runtime_only_a") + countNamedProcs(host_store, "runtime_only_b");
-    try std.testing.expectEqual(@as(usize, 0), runtime_only_count);
+    for (session.completed.?.programs()) |program| {
+        const host_store = &program.lir_result.store;
+        const runtime_only_count = countNamedProcs(host_store, "runtime_only_a") + countNamedProcs(host_store, "runtime_only_b");
+        try std.testing.expectEqual(@as(usize, 0), runtime_only_count);
+    }
 }

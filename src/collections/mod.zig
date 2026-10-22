@@ -30,6 +30,8 @@ pub const SafeRange = @import("safe_list.zig").SafeRange;
 pub const SafeMultiList = @import("safe_list.zig").SafeMultiList;
 pub const validateRelocatedSpan = @import("safe_list.zig").validateRelocatedSpan;
 pub const GuardedList = @import("GuardedList.zig");
+/// Backings a growing list replaced while readers may still hold slices of them.
+pub const SupersededBackings = @import("SupersededBackings.zig");
 
 pub const IndexedStack = @import("IndexedStack.zig").IndexedStack;
 pub const WorkStacks = @import("WorkStacks.zig").WorkStacks;
@@ -38,6 +40,9 @@ pub const DenseMap = @import("DenseMap.zig").DenseMap;
 /// A direct-indexed map over dense IDs that takes its allocator per call.
 pub const DenseMapUnmanaged = @import("DenseMap.zig").DenseMapUnmanaged;
 pub const RingQueue = @import("RingQueue.zig").RingQueue;
+/// A multimap whose buckets are chains through one shared node list.
+pub const ChainedBuckets = @import("ChainedBuckets.zig").ChainedBuckets;
+pub const AutoChainedBuckets = @import("ChainedBuckets.zig").AutoChainedBuckets;
 pub const VersionedDenseMap = @import("VersionedMap.zig").VersionedDenseMap;
 pub const VersionedHashMap = @import("VersionedMap.zig").VersionedHashMap;
 pub const DenseMapPool = @import("DenseMap.zig").DenseMapPool;
@@ -103,12 +108,14 @@ test "collections tests" {
     std.testing.refAllDecls(@import("ExposedItems.zig"));
     std.testing.refAllDecls(@import("safe_list.zig"));
     std.testing.refAllDecls(@import("GuardedList.zig"));
+    std.testing.refAllDecls(@import("SupersededBackings.zig"));
     std.testing.refAllDecls(@import("serialization.zig"));
     std.testing.refAllDecls(@import("SortedArrayBuilder.zig"));
     std.testing.refAllDecls(@import("SingleThreadArena.zig"));
     std.testing.refAllDecls(@import("DeterministicAllocator.zig"));
     std.testing.refAllDecls(@import("DenseMap.zig"));
     std.testing.refAllDecls(@import("RingQueue.zig"));
+    std.testing.refAllDecls(@import("ChainedBuckets.zig"));
     std.testing.refAllDecls(@import("any_all.zig"));
     std.testing.refAllDecls(@import("VersionedMap.zig"));
     std.testing.refAllDecls(@import("IndexedStack.zig"));

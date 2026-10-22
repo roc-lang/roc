@@ -7,7 +7,8 @@
 
 const std = @import("std");
 const collections = @import("collections");
-const compilerInvariant = @import("base").invariant;
+const base = @import("base");
+const compilerInvariant = base.invariant;
 const builtins = @import("builtins");
 const layout = @import("layout");
 const lir = @import("lir");
@@ -67,14 +68,15 @@ pub fn freezeRootIntoSlot(
     if (program.layouts.targetUsize().size() != word_size) {
         invariant("native root export requires host-width LIR");
     }
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = base.SingleThreadArena.init(allocator);
     defer arena.deinit();
     var builder = Builder{
-        .graph = .{ .allocator = arena.allocator(), .program = program, .slot = slot },
+        .graph = .{ .allocator = arena.allocator(), .output = allocator, .program = program, .slot = slot },
         .callables = callables,
     };
+    defer builder.graph.deinit();
     const root_symbol = try builder.graph.addNode(
-        try Program.staticDataSymbolName(builder.graph.allocator, slot),
+        try Program.staticDataSymbolName(allocator, slot),
         builder.graph.size(slot_layout),
         builder.graph.alignment(slot_layout),
     );
@@ -101,7 +103,7 @@ pub fn freezeRootIntoSlot(
         const job = builder.jobs.items[next];
         try builder.visit(job);
     }
-    return builder.graph.finish(allocator);
+    return builder.graph.finish();
 }
 
 const Destination = frozen_graph.Destination;
@@ -181,6 +183,7 @@ const Builder = struct {
                 .box_of_zst => self.graph.writeWord(job.dest, 0),
                 .box => try self.boxed(job, element, physical.getIdx()),
                 .erased_callable => try self.enqueue(element, job.layout_idx, job.source, job.dest, .value),
+                .hole => invariant("a demand hole reached a native root export"),
                 .scalar, .list, .list_of_zst, .struct_, .closure, .zst, .tag_union, .ptr, .erased_box => invariant("box export plan had incompatible layout"),
             },
             .tuple, .record => |child_plans| {
@@ -413,8 +416,7 @@ fn missingCallableResolver(_: ?*anyopaque, _: [*]u8) error{RuntimeError}!Callabl
 }
 
 fn invariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .debug) compilerInvariant("native root export invariant violated: {s}", .{message});
-    unreachable;
+    compilerInvariant("native root export invariant violated: {s}", .{message});
 }
 
 fn testSlot(program: *Program.Result, idx: layout.Idx) Allocator.Error!lir.LIR.StaticDataId {

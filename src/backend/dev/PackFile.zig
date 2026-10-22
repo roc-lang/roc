@@ -13,6 +13,7 @@
 //! splicing program binds them to its own table (`ProcArtifact.splice`).
 
 const std = @import("std");
+const base = @import("base");
 const collections = @import("collections");
 const lir = @import("lir");
 const ProcArtifact = @import("ProcArtifact.zig");
@@ -22,7 +23,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RPCK";
 /// Format version; bump whenever the encoding or artifact contents change.
-pub const format_version: u32 = 8;
+pub const format_version: u32 = 9;
 
 /// One specialization the pack can serve: its reservation-time key, the
 /// artifact holding its procedure, and the ownership signature and
@@ -31,8 +32,6 @@ pub const format_version: u32 = 8;
 pub const SpecEntry = struct {
     key: [32]u8,
     artifact: u32,
-    /// Null is an authoritative independent summary, not missing metadata.
-    platform_requirement_relation: ?[32]u8 = null,
     /// The compile-time roots the procedure's code reads, which a linking
     /// program demands (`Common.SpecCacheHit.comptime_root_reads`).
     comptime_root_reads: []const lir.CheckedPipeline.ComptimeRootRead = &.{},
@@ -167,6 +166,45 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
             try writer.word(ProcArtifact.rebindLoc(line.loc, file_map).file);
             try writer.word(line.loc.line);
             try writer.word(line.loc.column);
+            try writer.word(line.region.start.offset);
+            try writer.word(line.region.end.offset);
+        }
+        try writer.word(@intCast(artifact.failure_sites.len));
+        for (artifact.failure_sites) |site| {
+            try writer.word(site.offset);
+            switch (site.meaning) {
+                .checked_error => try writer.byte(0),
+                .literal_rejection => |literal| {
+                    try writer.byte(1);
+                    try writer.raw(&literal.module);
+                    try writer.word(literal.checked_expr);
+                    try writer.byte(@backingInt(literal.kind));
+                },
+                .exhaustiveness => |exhaustiveness| {
+                    try writer.byte(2);
+                    try writer.raw(&exhaustiveness.module);
+                    if (exhaustiveness.checked_site) |checked_site| {
+                        try writer.byte(1);
+                        try writer.word(@backingInt(checked_site));
+                    } else {
+                        try writer.byte(0);
+                    }
+                },
+                .failed_value => |value| {
+                    try writer.byte(3);
+                    try writer.raw(&value.module);
+                    switch (value.producer) {
+                        .checked => |root| {
+                            try writer.byte(0);
+                            try writer.word(@backingInt(root));
+                        },
+                        .literal => |root| {
+                            try writer.byte(1);
+                            try writer.word(@backingInt(root));
+                        },
+                    }
+                },
+            }
         }
         try writer.word(@intCast(artifact.relocations.len));
         for (artifact.relocations) |relocation| {
@@ -204,32 +242,28 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
         }
     }
 
-    for (specs) |spec| {
-        try writer.raw(&spec.key);
-        try writer.word(spec.artifact);
-        try writer.byte(@intFromBool(spec.platform_requirement_relation != null));
-        if (spec.platform_requirement_relation) |relation| try writer.raw(&relation);
-        try writer.word(@intCast(spec.comptime_root_reads.len));
-        for (spec.comptime_root_reads) |root_read| {
-            try writer.raw(&root_read.module);
-            try writer.word(root_read.root);
-        }
-        try writer.wide(spec.rc_borrowed_params);
-        try writer.byte(@intFromBool(spec.rc_ret_borrowed));
-        try writer.wide(spec.rc_ret_lenders);
-        try writer.wide(spec.rc_read_only_params);
-        try writer.byte(@intFromBool(spec.rc_ret_unique));
-        try writer.wide(spec.rc_ret_unique_fields);
-        try writer.word(@intCast(spec.rc_ret_conditions.len));
-        for (spec.rc_ret_conditions) |condition| try writer.word(condition);
-    }
+    try writeSpecs(&writer, specs);
 
     return try bytes.toOwnedSlice(allocator);
 }
 
-/// Decode a pack. Every slice in the result is owned by the pack's arena.
+/// Decode a pack. Every slice in the result is owned by the pack's arena,
+/// which holds one copy of `bytes` that the decoded strings alias.
 pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
+    // A pack of another format is declined before anything is copied.
+    try checkFormat(bytes, magic);
     var arena = collections.SingleThreadArena.init(allocator);
+    const owned = arena.allocator().dupe(u8, bytes) catch |err| {
+        arena.deinit();
+        return err;
+    };
+    return readOwned(arena, owned);
+}
+
+/// Decode a pack whose bytes `arena` already owns. The pack takes `arena`,
+/// on failure too, and its strings alias `bytes`.
+pub fn readOwned(owning_arena: collections.SingleThreadArena, bytes: []const u8) ReadError!Pack {
+    var arena = owning_arena;
     errdefer arena.deinit();
     const arena_allocator = arena.allocator();
     var reader = Reader{ .bytes = bytes };
@@ -246,7 +280,7 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
     for (artifacts) |*artifact| {
         const kind: ProcArtifact.Kind = switch (try reader.byte()) {
             0 => .{ .proc = .{ .bytes = (try reader.raw(32))[0..32].* } },
-            1 => .{ .rc_helper = try reader.strOwned(arena_allocator) },
+            1 => .{ .rc_helper = try reader.str() },
             2 => .{ .boxy_thunk = .{ .bytes = (try reader.raw(32))[0..32].* } },
             3 => .entrypoint,
             4 => .message_pool_run,
@@ -270,7 +304,7 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
             },
             else => return error.MalformedPack,
         };
-        const code = try reader.strOwned(arena_allocator);
+        const code = try reader.str();
         const refs = try arena_allocator.alloc(ProcArtifact.Reference, try reader.word());
         for (refs) |*ref| {
             ref.* = .{
@@ -305,7 +339,7 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
                 },
                 .target = switch (try reader.byte()) {
                     0 => .{ .proc = .{ .bytes = (try reader.raw(32))[0..32].* } },
-                    1 => .{ .rc_helper = try reader.strOwned(arena_allocator) },
+                    1 => .{ .rc_helper = try reader.str() },
                     2 => .{ .boxy_thunk = .{ .bytes = (try reader.raw(32))[0..32].* } },
                     else => return error.MalformedPack,
                 },
@@ -316,15 +350,46 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
             line.* = .{
                 .offset = try reader.word(),
                 .loc = .{ .file = try reader.word(), .line = try reader.word(), .column = try reader.word() },
+                .region = base.Region.from_raw_offsets(try reader.word(), try reader.word()),
             };
             if (line.loc.hasLocation() and line.loc.file >= source_files.len) return error.MalformedPack;
+        }
+        const failure_sites = try arena_allocator.alloc(ProcArtifact.FailureSite, try reader.word());
+        for (failure_sites) |*site| {
+            const offset = try reader.word();
+            const meaning: lir.LIR.FailureMeaning = switch (try reader.byte()) {
+                0 => .checked_error,
+                1 => .{ .literal_rejection = .{
+                    .module = (try reader.raw(32))[0..32].*,
+                    .checked_expr = try reader.word(),
+                    .kind = std.enums.fromInt(lir.LIR.LiteralRejectionKind, try reader.byte()) orelse return error.MalformedPack,
+                } },
+                2 => .{ .exhaustiveness = .{
+                    .module = (try reader.raw(32))[0..32].*,
+                    .checked_site = switch (try reader.byte()) {
+                        0 => null,
+                        1 => @fromBackingInt(try reader.word()),
+                        else => return error.MalformedPack,
+                    },
+                } },
+                3 => .{ .failed_value = .{
+                    .module = (try reader.raw(32))[0..32].*,
+                    .producer = switch (try reader.byte()) {
+                        0 => .{ .checked = @fromBackingInt(try reader.word()) },
+                        1 => .{ .literal = @fromBackingInt(try reader.word()) },
+                        else => return error.MalformedPack,
+                    },
+                } },
+                else => return error.MalformedPack,
+            };
+            site.* = .{ .offset = offset, .meaning = meaning };
         }
         const relocations = try arena_allocator.alloc(ProcArtifact.NamedRelocation, try reader.word());
         for (relocations) |*relocation| {
             const offset = try reader.word();
             const kind_tag = try reader.byte();
             const data_kind_raw = try reader.byte();
-            const name = try reader.strOwned(arena_allocator);
+            const name = try reader.str();
             const scope = std.enums.fromInt(ProcArtifact.SymbolScope, try reader.byte()) orelse return error.MalformedPack;
             relocation.* = .{
                 .offset = offset,
@@ -339,8 +404,8 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
         }
         const data = try arena_allocator.alloc(ProcArtifact.DataItem, try reader.word());
         for (data) |*item| {
-            const name = try reader.strOwned(arena_allocator);
-            const item_bytes = try reader.strOwned(arena_allocator);
+            const name = try reader.str();
+            const item_bytes = try reader.str();
             const alignment = try reader.word();
             const symbol_offset = try reader.word();
             const data_relocations = try arena_allocator.alloc(ProcArtifact.DataRelocation, try reader.word());
@@ -359,7 +424,7 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
                 };
                 relocation.* = .{
                     .offset = offset,
-                    .name = try reader.strOwned(arena_allocator),
+                    .name = try reader.str(),
                     .addend = addend,
                     .function = function,
                     .external = external,
@@ -381,6 +446,7 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
             .refs = refs,
             .symbolic_refs = symbolic_refs,
             .lines = lines,
+            .failure_sites = failure_sites,
             .relocations = relocations,
             .data = data,
         };
@@ -389,16 +455,111 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
         }
     }
 
-    const specs = try arena_allocator.alloc(SpecEntry, spec_count);
+    const specs = try readSpecs(&reader, arena_allocator, spec_count, artifact_count);
+    if (reader.offset != bytes.len) return error.MalformedPack;
+
+    return .{
+        .set = .{ .arena = arena, .artifacts = artifacts, .source_files = source_files },
+        .specs = specs,
+    };
+}
+
+const object_magic = "RPKO";
+
+/// A pack whose code is one linkable object rather than procedure artifacts:
+/// the object exports a C-ABI entry for each procedure it offers
+/// (`lir.ProcIdentity.writeCAbiEntryName`), and every spec entry's
+/// `artifact` indexes `identities`, the procedures those entries name.
+pub const ObjectPack = struct {
+    arena: collections.SingleThreadArena,
+    object: []const u8,
+    identities: []const lir.ProcIdentity,
+    specs: []const SpecEntry,
+
+    pub fn deinit(self: *ObjectPack) void {
+        self.arena.deinit();
+    }
+};
+
+/// Encode an object pack. Like `write`, a pure function of its inputs.
+pub fn writeObject(
+    allocator: Allocator,
+    object: []const u8,
+    identities: []const lir.ProcIdentity,
+    specs: []const SpecEntry,
+) Allocator.Error![]u8 {
+    var bytes = std.ArrayList(u8).empty;
+    errdefer bytes.deinit(allocator);
+    var writer = Writer{ .allocator = allocator, .bytes = &bytes };
+    try writer.raw(object_magic);
+    try writer.word(format_version);
+    try writer.word(@intCast(identities.len));
+    for (identities) |identity| try writer.raw(&identity.bytes);
+    try writer.word(@intCast(specs.len));
+    try writeSpecs(&writer, specs);
+    try writer.str(object);
+    return try bytes.toOwnedSlice(allocator);
+}
+
+/// Decode an object pack. Every slice in the result is owned by its arena,
+/// which holds one copy of `bytes` that the object aliases.
+pub fn readObject(allocator: Allocator, bytes: []const u8) ReadError!ObjectPack {
+    // A pack of another format is declined before anything is copied.
+    try checkFormat(bytes, object_magic);
+    var arena = collections.SingleThreadArena.init(allocator);
+    const owned = arena.allocator().dupe(u8, bytes) catch |err| {
+        arena.deinit();
+        return err;
+    };
+    return readObjectOwned(arena, owned);
+}
+
+/// Decode an object pack whose bytes `arena` already owns. The pack takes
+/// `arena`, on failure too, and its object aliases `bytes`.
+pub fn readObjectOwned(owning_arena: collections.SingleThreadArena, bytes: []const u8) ReadError!ObjectPack {
+    var arena = owning_arena;
+    errdefer arena.deinit();
+    const arena_allocator = arena.allocator();
+    var reader = Reader{ .bytes = bytes };
+    if (!std.mem.eql(u8, try reader.raw(object_magic.len), object_magic)) return error.MalformedPack;
+    if (try reader.word() != format_version) return error.UnsupportedPackVersion;
+    const identities = try arena_allocator.alloc(lir.ProcIdentity, try reader.word());
+    for (identities) |*identity| identity.* = .{ .bytes = (try reader.raw(32))[0..32].* };
+    const spec_count = try reader.word();
+    const specs = try readSpecs(&reader, arena_allocator, spec_count, @intCast(identities.len));
+    const object = try reader.str();
+    if (reader.offset != bytes.len) return error.MalformedPack;
+    return .{ .arena = arena, .object = object, .identities = identities, .specs = specs };
+}
+
+fn writeSpecs(writer: *Writer, specs: []const SpecEntry) Allocator.Error!void {
+    for (specs) |spec| {
+        try writer.raw(&spec.key);
+        try writer.word(spec.artifact);
+        try writer.word(@intCast(spec.comptime_root_reads.len));
+        for (spec.comptime_root_reads) |root_read| {
+            try writer.raw(&root_read.module);
+            try writer.word(root_read.root);
+        }
+        try writer.wide(spec.rc_borrowed_params);
+        try writer.byte(@intFromBool(spec.rc_ret_borrowed));
+        try writer.wide(spec.rc_ret_lenders);
+        try writer.wide(spec.rc_read_only_params);
+        try writer.byte(@intFromBool(spec.rc_ret_unique));
+        try writer.wide(spec.rc_ret_unique_fields);
+        try writer.word(@intCast(spec.rc_ret_conditions.len));
+        for (spec.rc_ret_conditions) |condition| try writer.word(condition);
+    }
+}
+
+/// Decode `count` spec entries whose `artifact` indexes a table of
+/// `artifact_count` rows.
+fn readSpecs(reader: *Reader, arena_allocator: Allocator, count: u32, artifact_count: u32) ReadError![]SpecEntry {
+    const specs = try arena_allocator.alloc(SpecEntry, count);
     for (specs) |*spec| {
         spec.* = .{
             .key = (try reader.raw(32))[0..32].*,
             .artifact = try reader.word(),
-            .platform_requirement_relation = switch (try reader.byte()) {
-                0 => null,
-                1 => (try reader.raw(32))[0..32].*,
-                else => return error.MalformedPack,
-            },
             .comptime_root_reads = reads: {
                 const reads = try arena_allocator.alloc(lir.CheckedPipeline.ComptimeRootRead, try reader.word());
                 for (reads) |*root_read| root_read.* = .{ .module = (try reader.raw(32))[0..32].*, .root = try reader.word() };
@@ -425,12 +586,7 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
         spec.rc_ret_conditions = conditions;
         if (spec.artifact >= artifact_count) return error.MalformedPack;
     }
-    if (reader.offset != bytes.len) return error.MalformedPack;
-
-    return .{
-        .set = .{ .arena = arena, .artifacts = artifacts, .source_files = source_files },
-        .specs = specs,
-    };
+    return specs;
 }
 
 const Writer = struct {
@@ -463,6 +619,13 @@ const Writer = struct {
     }
 };
 
+/// Reject bytes that do not start with `expected_magic` and this format version.
+fn checkFormat(bytes: []const u8, expected_magic: []const u8) ReadError!void {
+    var reader = Reader{ .bytes = bytes };
+    if (!std.mem.eql(u8, try reader.raw(expected_magic.len), expected_magic)) return error.MalformedPack;
+    if (try reader.word() != format_version) return error.UnsupportedPackVersion;
+}
+
 const Reader = struct {
     bytes: []const u8,
     offset: usize = 0,
@@ -486,14 +649,17 @@ const Reader = struct {
         return std.mem.readInt(u64, (try self.raw(8))[0..8], .little);
     }
 
-    fn strOwned(self: *Reader, allocator: Allocator) ReadError![]u8 {
+    fn str(self: *Reader) ReadError![]const u8 {
         const len = try self.word();
-        return try allocator.dupe(u8, try self.raw(len));
+        return try self.raw(len);
     }
 };
 
 test "pack ownership survives input destruction and allocation failure" {
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, testOwnedPack, .{});
+    // In-place growth under the testing allocator depends on the heap's
+    // layout, so the failure check runs over an allocator that refuses it.
+    var deterministic = collections.DeterministicAllocator.init(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), testOwnedPack, .{});
 }
 
 fn testOwnedPack(allocator: Allocator) (ReadError || error{TestExpectedEqual})!void {
@@ -506,7 +672,7 @@ fn testOwnedPack(allocator: Allocator) (ReadError || error{TestExpectedEqual})!v
             .frame = null,
             .refs = &.{.{ .site = 0, .form = .call, .target = 0, .delta = 0, .veneer = 3 }},
             .symbolic_refs = &.{.{ .site = 1, .form = .call, .target = .{ .rc_helper = "external" } }},
-            .lines = &.{.{ .offset = 0, .loc = .{ .file = 0, .line = 10, .column = 8 } }},
+            .lines = &.{.{ .offset = 0, .loc = .{ .file = 0, .line = 10, .column = 8 }, .region = base.Region.zero() }},
             .relocations = &.{.{ .offset = 0, .name = "builtin", .scope = .shared, .kind = .function }},
             .data = &.{.{
                 .name = "datum",
@@ -554,8 +720,8 @@ test "pack bytes round-trip every artifact field and spec entry" {
                 .{ .site = 2, .form = .addr, .target = .{ .boxy_thunk = lir.ProcIdentity.forTest(9) } },
             },
             .lines = &.{
-                .{ .offset = 0, .loc = .{ .file = 3, .line = 42, .column = 7 } },
-                .{ .offset = 0, .loc = .{ .file = 3, .line = 43, .column = 9 } },
+                .{ .offset = 0, .loc = .{ .file = 3, .line = 42, .column = 7 }, .region = base.Region.zero() },
+                .{ .offset = 0, .loc = .{ .file = 3, .line = 43, .column = 9 }, .region = base.Region.zero() },
             },
             .relocations = relocations,
             .data = try a.dupe(ProcArtifact.DataItem, &.{
@@ -668,9 +834,9 @@ test "pack bytes round-trip every artifact field and spec entry" {
     try testing.expectError(error.MalformedPack, read(testing.allocator, bytes[0 .. bytes.len - 1]));
 }
 
-test "pack preserves independent and relation-dependent semantic summaries" {
+test "pack round-trips spec summaries and declines a previous format" {
     const Attempt = struct {
-        fn run(allocator: Allocator, relation: ?[32]u8) (ReadError || error{ TestExpectedEqual, TestExpectedError, TestUnexpectedError })!void {
+        fn run(allocator: Allocator) (ReadError || error{ TestExpectedEqual, TestExpectedError, TestUnexpectedError })!void {
             const set = ProcArtifact.Set{
                 .arena = collections.SingleThreadArena.init(allocator),
                 .artifacts = &.{.{
@@ -686,7 +852,6 @@ test "pack preserves independent and relation-dependent semantic summaries" {
             const bytes = try write(allocator, &set, &.{.{
                 .key = @as([32]u8, @splat(7)),
                 .artifact = 0,
-                .platform_requirement_relation = relation,
                 .rc_borrowed_params = 1,
                 .rc_ret_borrowed = true,
                 .rc_ret_lenders = 1,
@@ -698,7 +863,7 @@ test "pack preserves independent and relation-dependent semantic summaries" {
             defer allocator.free(bytes);
             var pack = try read(allocator, bytes);
             defer pack.deinit();
-            try std.testing.expectEqualDeep(relation, pack.specs[0].platform_requirement_relation);
+            try std.testing.expectEqual(@as(u64, 1), pack.specs[0].rc_borrowed_params);
             const rewritten = try write(allocator, &pack.set, pack.specs);
             defer allocator.free(rewritten);
             try std.testing.expectEqualSlices(u8, bytes, rewritten);
@@ -709,9 +874,10 @@ test "pack preserves independent and relation-dependent semantic summaries" {
             try std.testing.expectError(error.UnsupportedPackVersion, read(allocator, old));
         }
     };
-    for ([_]?[32]u8{ null, @as([32]u8, @splat(0)), @as([32]u8, @splat(9)) }) |relation| {
-        try std.testing.checkAllAllocationFailures(std.testing.allocator, Attempt.run, .{relation});
-    }
+    // In-place growth under the testing allocator depends on the heap's
+    // layout, so the failure check runs over an allocator that refuses it.
+    var deterministic = collections.DeterministicAllocator.init(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), Attempt.run, .{});
 }
 
 test "pack writes program-local constants and every reference to them under content names" {
@@ -770,4 +936,34 @@ test "pack writes program-local constants and every reference to them under cont
         packed_names[index] = try arena.allocator().dupe(u8, node.name);
     }
     try testing.expect(!std.mem.eql(u8, packed_names[0], packed_names[1]));
+}
+
+test "object packs round-trip their object, identities, and spec table" {
+    const testing = std.testing;
+    const identities = [_]lir.ProcIdentity{ lir.ProcIdentity.forTest(1), lir.ProcIdentity.forTest(2) };
+    const specs = [_]SpecEntry{.{
+        .key = @as([32]u8, @splat(4)),
+        .artifact = 1,
+        .rc_borrowed_params = 0b11,
+        .rc_ret_borrowed = false,
+        .rc_ret_lenders = 0,
+        .rc_read_only_params = 0b1,
+        .rc_ret_unique = true,
+        .rc_ret_unique_fields = 0,
+        .rc_ret_conditions = &.{0x0001_02ff},
+    }};
+    const bytes = try writeObject(testing.allocator, "\x7fELF object", &identities, &specs);
+    defer testing.allocator.free(bytes);
+    var pack = try readObject(testing.allocator, bytes);
+    defer pack.deinit();
+    try testing.expectEqualStrings("\x7fELF object", pack.object);
+    try testing.expectEqualDeep(identities[0..], pack.identities);
+    try testing.expectEqual(@as(u32, 1), pack.specs[0].artifact);
+    try testing.expectEqual(specs[0].rc_borrowed_params, pack.specs[0].rc_borrowed_params);
+    try testing.expectEqualSlices(u32, specs[0].rc_ret_conditions, pack.specs[0].rc_ret_conditions);
+    const again = try writeObject(testing.allocator, pack.object, pack.identities, pack.specs);
+    defer testing.allocator.free(again);
+    try testing.expectEqualSlices(u8, bytes, again);
+    // An artifact pack is not an object pack.
+    try testing.expectError(error.MalformedPack, readObject(testing.allocator, "RPCK"));
 }

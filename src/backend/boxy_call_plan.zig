@@ -88,30 +88,30 @@ fn layoutImm(idx: layout.Idx) Operand {
 }
 
 /// `roc_boxy_box(out, out_desc, payload, payload_layout, source_desc, payload_desc, payload_mode, target_layout)`.
-fn box(s: anytype) Plan {
+fn box(target: LocalId, s: anytype) Plan {
     const payload_desc = s.payload_desc orelse base.invariant(
         "LIR/codegen invariant violated: assign_boxy_box reached a backend without a payload descriptor",
         .{},
     );
-    return .init(.box, s.target, .target_boxy_desc, &.{
+    return .init(.box, target, .target_boxy_desc, &.{
         .out,                        .out_desc,                      .{ .value = s.payload },
         layoutImm(s.payload_layout), .{ .opt_desc = s.source_desc }, .{ .desc = payload_desc },
-        mode(s.payload_mode),        .{ .local_layout = s.target },
+        mode(s.payload_mode),        .{ .local_layout = target },
     });
 }
 
 /// `roc_boxy_record_update(out, out_desc, base, base_layout, base_desc, fields, fields_layout, fields_desc, target_layout)`.
-fn recordUpdate(s: anytype) Plan {
-    return .init(.record_update, s.target, .target_boxy_desc, &.{
+fn recordUpdate(target: LocalId, s: anytype) Plan {
+    return .init(.record_update, target, .target_boxy_desc, &.{
         .out,                        .out_desc,                  .{ .value = s.base },
         .{ .local_layout = s.base }, .{ .desc = s.base_desc },   .{ .value = s.fields },
-        layoutImm(s.fields_layout),  .{ .desc = s.fields_desc }, .{ .local_layout = s.target },
+        layoutImm(s.fields_layout),  .{ .desc = s.fields_desc }, .{ .local_layout = target },
     });
 }
 
 /// `roc_boxy_unbox(out, out_desc, source, source_layout, source_desc, target_desc, target_layout, source_mode)`.
-fn unbox(s: anytype) Plan {
-    var plan: Plan = .init(.unbox, s.target, .target_boxy_desc, &.{
+fn unbox(target: LocalId, s: anytype) Plan {
+    var plan: Plan = .init(.unbox, target, .target_boxy_desc, &.{
         .out,                          .out_desc,                  .{ .value = s.source },
         .{ .local_layout = s.source }, .{ .desc = s.source_desc }, .{ .opt_desc = s.target_desc },
         layoutImm(s.target_layout),    mode(s.source_mode),
@@ -121,8 +121,8 @@ fn unbox(s: anytype) Plan {
 }
 
 /// `roc_boxy_adapt(out, out_desc, source, source_desc, target_desc, adapter, source_mode)`.
-fn adapt(s: anytype) Plan {
-    return .init(.adapt, s.target, .target_boxy_desc, &.{
+fn adapt(target: LocalId, s: anytype) Plan {
+    return .init(.adapt, target, .target_boxy_desc, &.{
         .out,                           .out_desc,                      .{ .value = s.source },
         .{ .opt_desc = s.source_desc }, .{ .opt_desc = s.target_desc }, .{ .imm32 = @backingInt(s.adapter) },
         mode(s.source_mode),
@@ -130,49 +130,50 @@ fn adapt(s: anytype) Plan {
 }
 
 /// `roc_boxy_inspect(out, source, source_layout, source_desc)`.
-fn inspect(s: anytype) Plan {
-    return .init(.inspect, s.target, .none, &.{
+fn inspect(target: LocalId, s: anytype) Plan {
+    return .init(.inspect, target, .none, &.{
         .out, .{ .value = s.source }, .{ .local_layout = s.source }, .{ .desc = s.source_desc },
     });
 }
 
 /// `roc_boxy_eq(out, lhs, rhs, value_layout, desc)`. Both operands share
 /// one layout, so the layout of `lhs` describes both.
-fn eq(s: anytype) Plan {
-    return .init(.eq, s.target, .none, &.{
+fn eq(target: LocalId, s: anytype) Plan {
+    return .init(.eq, target, .none, &.{
         .out, .{ .value = s.lhs }, .{ .value = s.rhs }, .{ .local_layout = s.lhs }, .{ .desc = s.desc },
     });
 }
 
 /// `roc_boxy_hash(out, value, value_layout, desc, hasher)`.
-fn hash(s: anytype) Plan {
-    return .init(.hash, s.target, .none, &.{
+fn hash(target: LocalId, s: anytype) Plan {
+    return .init(.hash, target, .none, &.{
         .out, .{ .value = s.value }, .{ .local_layout = s.value }, .{ .desc = s.desc }, .{ .value = s.hasher },
     });
 }
 
 /// `roc_boxy_tag(out, target_desc, tag_name, payload, payload_layout, payload_desc, payload_mode, target_layout)`.
-fn tag(s: anytype) Plan {
-    return .init(.tag, s.target, .none, &.{
-        .out,                        .{ .desc = s.target_desc },    .{ .imm32 = @backingInt(s.tag_name) },
-        .{ .opt_value = s.payload }, layoutImm(s.payload_layout),   .{ .opt_desc = s.payload_desc },
-        mode(s.payload_mode),        .{ .local_layout = s.target },
+fn tag(target: LocalId, s: anytype) Plan {
+    return .init(.tag, target, .none, &.{
+        .out,                        .{ .desc = s.target_desc },  .{ .imm32 = @backingInt(s.tag_name) },
+        .{ .opt_value = s.payload }, layoutImm(s.payload_layout), .{ .opt_desc = s.payload_desc },
+        mode(s.payload_mode),        .{ .local_layout = target },
     });
 }
 
 /// `roc_boxy_tag_payload(out, out_desc, source, source_layout, source_desc, tag_name, payload_index, target_layout, source_mode)`.
-fn tagPayload(s: anytype) Plan {
-    return .init(.tag_payload, s.target, .{ .local = s.target_desc }, &.{
-        .out,                          .out_desc,                     .{ .value = s.source },
-        .{ .local_layout = s.source }, .{ .desc = s.source_desc },    .{ .imm32 = @backingInt(s.tag_name) },
-        .{ .imm32 = s.payload_index }, .{ .local_layout = s.target }, mode(s.source_mode),
+fn tagPayload(target: LocalId, s: anytype) Plan {
+    return .init(.tag_payload, target, .{ .local = s.target_desc }, &.{
+        .out,                          .out_desc,                   .{ .value = s.source },
+        .{ .local_layout = s.source }, .{ .desc = s.source_desc },  .{ .imm32 = @backingInt(s.tag_name) },
+        .{ .imm32 = s.payload_index }, .{ .local_layout = target }, mode(s.source_mode),
     });
 }
 
-/// `roc_boxy_tag_match(source, source_layout, source_desc, tag_name) -> bool`.
-pub fn tagMatch(s: anytype) Plan {
+/// `roc_boxy_tag_match(source, source_layout, source_desc, tag_name) -> bool`,
+/// with the match's descriptor resolved from its row.
+pub fn tagMatch(s: anytype, source_desc: LIR.BoxyDescRef) Plan {
     return .init(.tag_match, undefined, .none, &.{
-        .{ .value = s.source }, .{ .local_layout = s.source }, .{ .desc = s.source_desc }, .{ .imm32 = @backingInt(s.tag_name) },
+        .{ .value = s.source }, .{ .local_layout = s.source }, .{ .desc = source_desc }, .{ .imm32 = @backingInt(s.tag_name) },
     });
 }
 
@@ -188,7 +189,8 @@ const plans_by_statement = .{
     .assign_boxy_tag_payload = tagPayload,
 };
 
-/// The plan for the Boxy value statement whose `LIR.CFStmt` tag is `stmt_tag`.
-pub fn forStatement(comptime stmt_tag: @typeInfo(LIR.CFStmt).@"union".tag_type.?, s: anytype) Plan {
-    return @field(plans_by_statement, @tagName(stmt_tag))(s);
+/// The plan for the Boxy value statement whose `LIR.CFStmt` tag is
+/// `stmt_tag`, assigning `target`, with the statement's out-of-line fields `s`.
+pub fn forStatement(comptime stmt_tag: @typeInfo(LIR.CFStmt).@"union".tag_type.?, target: LocalId, s: anytype) Plan {
+    return @field(plans_by_statement, @tagName(stmt_tag))(target, s);
 }

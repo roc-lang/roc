@@ -78,7 +78,7 @@ EndOfFile,
 ~~~roc
 foo : U64 -> Try(Str, [TooBig])
 foo = |num| {
-	str = if (num > 10) {
+	str = if num > 10 {
 		return Err(TooBig)
 	} else {
 		"SMALL"

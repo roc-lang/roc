@@ -112,34 +112,21 @@ pub const CacheManager = struct {
     /// Build a cache entry's path using a caller-supplied allocator, so a worker
     /// thread never allocates from the manager's own allocator.
     pub fn computeCacheFilePathIn(allocator: Allocator, cache_key: [32]u8, entries_dir: []const u8) Allocator.Error![]u8 {
-        var subdir_buf: [2]u8 = undefined;
-        _ = std.fmt.bufPrint(&subdir_buf, "{x}", .{cache_key[0..1]}) catch unreachable;
-        const subdir = subdir_buf[0..];
+        const subdir_buf = std.fmt.bytesToHex(cache_key[0..1], .lower);
 
-        var filename_buf: [62]u8 = undefined;
-        _ = std.fmt.bufPrint(&filename_buf, "{x}", .{cache_key[1..32]}) catch unreachable;
-        const filename = filename_buf[0..];
+        const filename_buf: [cache_file_name_len]u8 = std.fmt.bytesToHex(cache_key[1..32], .lower);
 
-        const cache_subdir = try std.fs.path.join(allocator, &.{ entries_dir, subdir });
-        defer allocator.free(cache_subdir);
-
-        return std.fs.path.join(allocator, &.{ cache_subdir, filename });
+        return std.fs.path.join(allocator, &.{ entries_dir, &subdir_buf, &filename_buf });
     }
 
-    /// Create a cache entry's subdirectory using a caller-supplied allocator.
-    pub fn ensureCacheSubdirWith(
-        self: *Self,
-        allocator: Allocator,
-        cache_key: [32]u8,
-        entries_dir: []const u8,
-    ) (Allocator.Error || CoreCtx.MakePathError)!void {
-        var subdir_buf: [2]u8 = undefined;
-        _ = std.fmt.bufPrint(&subdir_buf, "{x}", .{cache_key[0..1]}) catch unreachable;
-        const subdir = subdir_buf[0..];
-        const full_subdir = try std.fs.path.join(allocator, &.{ entries_dir, subdir });
-        defer allocator.free(full_subdir);
+    /// Hex spelling of the key bytes after the subdirectory byte.
+    const cache_file_name_len = 62;
 
-        try self.roc_ctx.makePath(full_subdir);
+    /// The subdirectory holding the entry at `cache_path`, a path built by
+    /// `computeCacheFilePathIn`. The file name has no separators, so the join
+    /// put exactly one separator before it.
+    fn cacheSubdirOf(cache_path: []const u8) []const u8 {
+        return cache_path[0 .. cache_path.len - cache_file_name_len - 1];
     }
 
     pub fn storeRawBytes(self: *Self, cache_key: [32]u8, data: []const u8, entries_dir: []const u8, source_name: []const u8) void {
@@ -171,7 +158,22 @@ pub const CacheManager = struct {
         entries_dir: []const u8,
         source_name: []const u8,
     ) void {
-        self.storeEntry(self.allocator, .checked, cache_key, .{ .stream = stream }, size, entries_dir, source_name);
+        self.storeStreamIn(self.allocator, .checked, cache_key, stream, size, entries_dir, source_name);
+    }
+
+    /// `storeStream`, allocating path scratch from `allocator` and counting the
+    /// operation against `kind`'s counters.
+    pub fn storeStreamIn(
+        self: *Self,
+        allocator: Allocator,
+        kind: Kind,
+        cache_key: [32]u8,
+        stream: CoreCtx.FileStream,
+        size: usize,
+        entries_dir: []const u8,
+        source_name: []const u8,
+    ) void {
+        self.storeEntry(allocator, kind, cache_key, .{ .stream = stream }, size, entries_dir, source_name);
     }
 
     const EntrySource = union(enum) { bytes: []const u8, stream: CoreCtx.FileStream };
@@ -188,18 +190,18 @@ pub const CacheManager = struct {
     ) void {
         if (!self.config.enabled) return;
 
-        self.ensureCacheSubdirWith(allocator, cache_key, entries_dir) catch |err| {
+        const cache_path = computeCacheFilePathIn(allocator, cache_key, entries_dir) catch |err| {
             self.verboseLog(allocator, "Failed to create {s} cache subdirectory in {s} for {s} (key {x}): {}\n", .{ @tagName(kind), entries_dir, source_name, cache_key, err });
             self.recordStoreFailureFor(kind);
             return;
         };
+        defer allocator.free(cache_path);
 
-        const cache_path = computeCacheFilePathIn(allocator, cache_key, entries_dir) catch |err| {
-            self.verboseLog(allocator, "Failed to allocate cache path for {s}: {}\n", .{ source_name, err });
+        self.roc_ctx.makePath(cacheSubdirOf(cache_path)) catch |err| {
+            self.verboseLog(allocator, "Failed to create {s} cache subdirectory in {s} for {s} (key {x}): {}\n", .{ @tagName(kind), entries_dir, source_name, cache_key, err });
             self.recordStoreFailureFor(kind);
             return;
         };
-        defer allocator.free(cache_path);
 
         // Concurrent compilers can publish the same key. Each writer needs its
         // own staging file so one rename cannot remove another writer's input.
@@ -231,6 +233,78 @@ pub const CacheManager = struct {
         };
 
         self.recordStoreFor(kind, size);
+    }
+
+    /// One part of a checked cache entry, written to a staging file before the
+    /// rest of the entry exists. Nothing reads it until the entry is published.
+    pub const StagedPart = struct {
+        /// Owned by the manager's allocator.
+        path: []u8,
+        len: usize,
+    };
+
+    /// Write `stream` to a staging file beside the checked entry for
+    /// `cache_key`, publishing nothing. Null when the cache is off or the write
+    /// failed; a failure counts as a store failure, since the entry it belonged
+    /// to can no longer be written.
+    pub fn stageCheckedPart(
+        self: *Self,
+        cache_key: [32]u8,
+        stream: CoreCtx.FileStream,
+        size: usize,
+        entries_dir: []const u8,
+        source_name: []const u8,
+    ) ?StagedPart {
+        if (!self.config.enabled) return null;
+        const allocator = self.allocator;
+        const cache_path = computeCacheFilePathIn(allocator, cache_key, entries_dir) catch {
+            self.recordStoreFailureFor(.checked);
+            return null;
+        };
+        defer allocator.free(cache_path);
+        self.roc_ctx.makePath(cacheSubdirOf(cache_path)) catch |err| {
+            self.verboseLog(allocator, "Failed to create checked cache subdirectory in {s} for {s} (key {x}): {}\n", .{ entries_dir, source_name, cache_key, err });
+            self.recordStoreFailureFor(.checked);
+            return null;
+        };
+        // Staged parts are named like the writer's own staging files, so cache
+        // cleanup ages out one left behind by a compilation that never finished.
+        var suffix: [16]u8 = undefined;
+        self.roc_ctx.std_io.random(&suffix);
+        const path = std.fmt.allocPrint(allocator, "{s}.{s}.part.tmp", .{ cache_path, std.fmt.bytesToHex(suffix, .lower) }) catch {
+            self.recordStoreFailureFor(.checked);
+            return null;
+        };
+        self.roc_ctx.writeFileStream(path, stream) catch |err| {
+            self.verboseLog(allocator, "Failed to write checked cache part {s} for {s} ({d} bytes): {}\n", .{ path, source_name, size, err });
+            self.removeFailedTempFile(allocator, path);
+            allocator.free(path);
+            self.recordStoreFailureFor(.checked);
+            return null;
+        };
+        return .{ .path = path, .len = size };
+    }
+
+    /// The bytes of a staged part, owned by `allocator`. Null, counted as a
+    /// store failure, when the staging file can no longer be read whole.
+    pub fn readStagedPart(self: *Self, part: StagedPart, allocator: Allocator) ?[]u8 {
+        const bytes = self.roc_ctx.readFile(part.path, allocator) catch |err| {
+            self.verboseLog(allocator, "Failed to read checked cache part {s}: {}\n", .{ part.path, err });
+            self.recordStoreFailureFor(.checked);
+            return null;
+        };
+        if (bytes.len != part.len) {
+            allocator.free(bytes);
+            self.recordStoreFailureFor(.checked);
+            return null;
+        }
+        return bytes;
+    }
+
+    /// Delete a staged part's file and release it.
+    pub fn discardStagedPart(self: *Self, part: StagedPart) void {
+        self.removeFailedTempFile(self.allocator, part.path);
+        self.allocator.free(part.path);
     }
 
     fn removeFailedTempFile(self: *Self, allocator: Allocator, path: []const u8) void {
@@ -318,6 +392,102 @@ pub const CacheManager = struct {
         @memcpy(buffer, data);
 
         self.recordHitFor(kind, buffer.len);
+        return CacheModule.CacheData{ .allocated = buffer };
+    }
+
+    const placement_pointer_magic = "roc-mod-latest-v1";
+    const placement_pointer_len = placement_pointer_magic.len + 32;
+
+    /// Record `key` as the most recently stored checked entry of the module
+    /// filed under `placement`, replacing the previous pointer. A failure
+    /// leaves no pointer and only costs a later edit its reuse.
+    pub fn storePlacementPointer(self: *Self, placement: [32]u8, key: [32]u8) void {
+        if (!self.config.enabled) return;
+        const allocator = self.allocator;
+        const dir = self.config.getCheckedPlacementDir(allocator) catch return;
+        defer allocator.free(dir);
+        const path = computeCacheFilePathIn(allocator, placement, dir) catch return;
+        defer allocator.free(path);
+        self.roc_ctx.makePath(cacheSubdirOf(path)) catch return;
+        var contents: [placement_pointer_len]u8 = undefined;
+        @memcpy(contents[0..placement_pointer_magic.len], placement_pointer_magic);
+        @memcpy(contents[placement_pointer_magic.len..], &key);
+        var suffix: [16]u8 = undefined;
+        self.roc_ctx.std_io.random(&suffix);
+        const temp_path = std.fmt.allocPrint(allocator, "{s}.{s}.tmp", .{ path, std.fmt.bytesToHex(suffix, .lower) }) catch return;
+        defer allocator.free(temp_path);
+        self.roc_ctx.writeFile(temp_path, &contents) catch {
+            self.removeFailedTempFile(allocator, temp_path);
+            return;
+        };
+        self.roc_ctx.rename(temp_path, path) catch self.removeFailedTempFile(allocator, temp_path);
+    }
+
+    /// The key `storePlacementPointer` last recorded for `placement`, or
+    /// null when there is none or it is unreadable.
+    pub fn loadPlacementPointer(self: *Self, placement: [32]u8) ?[32]u8 {
+        if (!self.config.enabled) return null;
+        const allocator = self.allocator;
+        const dir = self.config.getCheckedPlacementDir(allocator) catch return null;
+        defer allocator.free(dir);
+        const path = computeCacheFilePathIn(allocator, placement, dir) catch return null;
+        defer allocator.free(path);
+        var contents: [placement_pointer_len]u8 = undefined;
+        const len = self.roc_ctx.readFileInto(path, &contents) catch return null;
+        if (len != placement_pointer_len or !std.mem.eql(u8, contents[0..placement_pointer_magic.len], placement_pointer_magic)) return null;
+        return contents[placement_pointer_magic.len..].*;
+    }
+
+    /// Replace the literal values file of the program root module filed
+    /// under `placement` with `bytes`. A failure leaves the previous file, or
+    /// none, and only costs a later compilation its reuse.
+    pub fn storeLiteralValues(self: *Self, placement: [32]u8, bytes: []const u8) void {
+        if (!self.config.enabled) return;
+        const allocator = self.allocator;
+        const dir = self.config.getLiteralValuesDir(allocator) catch return;
+        defer allocator.free(dir);
+        const path = computeCacheFilePathIn(allocator, placement, dir) catch return;
+        defer allocator.free(path);
+        self.roc_ctx.makePath(cacheSubdirOf(path)) catch return;
+        var suffix: [16]u8 = undefined;
+        self.roc_ctx.std_io.random(&suffix);
+        const temp_path = std.fmt.allocPrint(allocator, "{s}.{s}.tmp", .{ path, std.fmt.bytesToHex(suffix, .lower) }) catch return;
+        defer allocator.free(temp_path);
+        self.roc_ctx.writeFile(temp_path, bytes) catch {
+            self.removeFailedTempFile(allocator, temp_path);
+            return;
+        };
+        self.roc_ctx.rename(temp_path, path) catch self.removeFailedTempFile(allocator, temp_path);
+    }
+
+    /// The literal values file `storeLiteralValues` last wrote for
+    /// `placement`, or null when there is none or it is unreadable. Owned.
+    pub fn loadLiteralValues(self: *Self, placement: [32]u8) ?[]u8 {
+        if (!self.config.enabled) return null;
+        const allocator = self.allocator;
+        const dir = self.config.getLiteralValuesDir(allocator) catch return null;
+        defer allocator.free(dir);
+        const path = computeCacheFilePathIn(allocator, placement, dir) catch return null;
+        defer allocator.free(path);
+        if (!self.roc_ctx.fileExists(path)) return null;
+        return self.roc_ctx.readFile(path, allocator) catch null;
+    }
+
+    /// Load a checked entry without counting it as a cache lookup: reading a
+    /// module's previous entry for value reuse is not a probe of its key.
+    pub fn loadCheckedEntryUncounted(self: *Self, cache_key: [32]u8) ?CacheModule.CacheData {
+        if (!self.config.enabled) return null;
+        const allocator = self.allocator;
+        const entries_dir = self.config.getCheckedArtifactCacheDir(allocator) catch return null;
+        defer allocator.free(entries_dir);
+        const cache_path = computeCacheFilePathIn(allocator, cache_key, entries_dir) catch return null;
+        defer allocator.free(cache_path);
+        if (!self.roc_ctx.fileExists(cache_path)) return null;
+        if (CacheModule.tryMapCacheFile(self.roc_ctx, cache_path)) |mapped| return mapped;
+        const data = self.roc_ctx.readFile(cache_path, allocator) catch return null;
+        defer allocator.free(data);
+        const buffer = allocator.alignedAlloc(u8, CacheModule.SERIALIZATION_ALIGNMENT, data.len) catch return null;
+        @memcpy(buffer, data);
         return CacheModule.CacheData{ .allocated = buffer };
     }
 

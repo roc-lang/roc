@@ -7,7 +7,7 @@
 //! of base-pointer fixups (3), independent of how many names it holds.
 //!
 //! Unlike `SmallStringInterner` (whose id is a byte offset), this interner hands
-//! out **serial** ids (0, 1, 2, … in insertion order) via a separate `ranges`
+//! out **serial** ids (0, 1, 2, … in insertion order) via a separate `ends`
 //! array. `CanonicalNameStore`'s `*NameId`s are serial indices today, and are
 //! used internally as such (e.g. `NominalTypeKey` equality, proc-base key
 //! encoding); preserving serial semantics keeps the conversion behavior-
@@ -21,7 +21,6 @@
 
 const std = @import("std");
 const invariant = @import("invariant.zig").invariant;
-const builtin = @import("builtin");
 const collections = @import("collections");
 
 const Allocator = std.mem.Allocator;
@@ -31,16 +30,13 @@ const InternedBytes = @import("InternedBytes.zig");
 
 const SerialStringInterner = @This();
 
-/// `{start, len}` into `bytes` for one interned string. POD / relocation-invariant.
-pub const Range = extern struct {
-    start: u32,
-    len: u32,
-};
-
-/// All interned text, concatenated. No separators needed; `ranges` holds bounds.
+/// All interned text, concatenated in id order. No separators needed; `ends`
+/// holds bounds.
 bytes: SafeList(u8) = .{},
-/// Serial id -> byte range. `ranges.len()` is the number of interned strings.
-ranges: SafeList(Range) = .{},
+/// Serial id -> end offset of its text in `bytes`. A string's text starts
+/// where the previous id's ends, or at 0 for id 0. `ends.len()` is the
+/// number of interned strings.
+ends: SafeList(u32) = .{},
 /// Open-addressing (linear-probing) hash table: slot -> (serial id + 1).
 /// A value of 0 means the slot is empty. Stored as a flat array of u32 so it
 /// relocates with a single base-pointer fixup.
@@ -59,12 +55,12 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!SerialStrin
 
     var self = SerialStringInterner{
         .bytes = .{},
-        .ranges = .{},
+        .ends = .{},
         .index = .{},
         .supports_inserts = true,
     };
     self.bytes = try SafeList(u8).initCapacity(gpa, capacity * 4);
-    self.ranges = try SafeList(Range).initCapacity(gpa, capacity);
+    self.ends = try SafeList(u32).initCapacity(gpa, capacity);
     self.index = try SafeList(u32).initCapacity(gpa, index_cap);
     try self.index.items.ensureTotalCapacityPrecise(gpa, index_cap);
     self.index.items.items.len = index_cap;
@@ -77,13 +73,13 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!SerialStrin
 pub fn deinit(self: *SerialStringInterner, gpa: Allocator) void {
     if (!self.supports_inserts) return;
     self.bytes.deinit(gpa);
-    self.ranges.deinit(gpa);
+    self.ends.deinit(gpa);
     self.index.deinit(gpa);
 }
 
 /// Number of interned strings.
 pub fn count(self: *const SerialStringInterner) u32 {
-    return @intCast(self.ranges.items.items.len);
+    return @intCast(self.ends.items.items.len);
 }
 
 /// Immutable append boundary for the durable id and byte arrays.
@@ -95,134 +91,15 @@ pub const EpochBoundary = struct {
 /// Capture the current durable boundary without exposing growable storage.
 pub fn epochBoundary(self: *const SerialStringInterner) EpochBoundary {
     return .{
-        .ids = @intCast(self.ranges.items.items.len),
+        .ids = @intCast(self.ends.items.items.len),
         .bytes = @intCast(self.bytes.items.items.len),
     };
 }
 
-/// Owned immutable suffix between two durable boundaries.
-///
-/// Hash-index cells are derived insertion state, not durable data. Range
-/// starts are normalized to this segment's byte allocation so no pointer or
-/// offset retains the mutable source interner.
-pub const EpochDelta = struct {
-    allocator: Allocator,
-    begin: EpochBoundary,
-    end: EpochBoundary,
-    bytes: []u8,
-    ranges: []Range,
-
-    pub fn capture(
-        allocator: Allocator,
-        source: *const SerialStringInterner,
-        begin: EpochBoundary,
-        end: EpochBoundary,
-    ) Allocator.Error!EpochDelta {
-        requireEpochBoundary(source, begin);
-        requireEpochBoundary(source, end);
-        std.debug.assert(begin.ids <= end.ids);
-        std.debug.assert(begin.bytes <= end.bytes);
-
-        const owned_bytes = try allocator.dupe(
-            u8,
-            source.bytes.items.items[begin.bytes..end.bytes],
-        );
-        errdefer allocator.free(owned_bytes);
-        const source_ranges = source.ranges.items.items[begin.ids..end.ids];
-        const owned_ranges = try allocator.alloc(Range, source_ranges.len);
-        errdefer allocator.free(owned_ranges);
-        for (source_ranges, owned_ranges) |source_range, *owned_range| {
-            std.debug.assert(source_range.start >= begin.bytes);
-            std.debug.assert(source_range.start + source_range.len <= end.bytes);
-            owned_range.* = .{
-                .start = source_range.start - begin.bytes,
-                .len = source_range.len,
-            };
-        }
-        return .{
-            .allocator = allocator,
-            .begin = begin,
-            .end = end,
-            .bytes = owned_bytes,
-            .ranges = owned_ranges,
-        };
-    }
-
-    /// Resolve a workspace-local serial id when it belongs to this segment.
-    pub fn getText(self: *const EpochDelta, id: u32) ?[]const u8 {
-        if (id < self.begin.ids or id >= self.end.ids) return null;
-        const range = self.ranges[id - self.begin.ids];
-        return self.bytes[range.start..][0..range.len];
-    }
-
-    /// Reserve every allocation needed to append this exact suffix.
-    pub fn prepareAppend(
-        self: *const EpochDelta,
-        destination: *SerialStringInterner,
-        allocator: Allocator,
-    ) Allocator.Error!void {
-        std.debug.assert(std.meta.eql(destination.epochBoundary(), self.begin));
-        if (self.begin.ids == self.end.ids) return;
-        try destination.bytes.items.ensureTotalCapacity(allocator, self.end.bytes);
-        try destination.ranges.items.ensureTotalCapacity(allocator, self.end.ids);
-        var index = Index.fromCells(destination.index, destination.count());
-        defer destination.index = index.cells;
-        try index.ensureTotalCapacity(destination, allocator, self.end.ids);
-    }
-
-    /// Append after `prepareAppend`; no logical mutation can fail.
-    pub fn appendPrepared(
-        self: *const EpochDelta,
-        destination: *SerialStringInterner,
-        allocator: Allocator,
-    ) void {
-        std.debug.assert(std.meta.eql(destination.epochBoundary(), self.begin));
-        var index = Index.fromCells(destination.index, destination.count());
-        defer destination.index = index.cells;
-        var id = self.begin.ids;
-        while (id < self.end.ids) : (id += 1) {
-            const inserted = index.insert(
-                destination,
-                allocator,
-                self.getText(id).?,
-            ) catch unreachable;
-            std.debug.assert(inserted == id);
-        }
-        std.debug.assert(std.meta.eql(destination.epochBoundary(), self.end));
-    }
-
-    /// Append this suffix after an identical prefix while preserving serial ids.
-    pub fn appendTo(
-        self: *const EpochDelta,
-        destination: *SerialStringInterner,
-        allocator: Allocator,
-    ) Allocator.Error!void {
-        try self.prepareAppend(destination, allocator);
-        self.appendPrepared(destination, allocator);
-    }
-
-    pub fn deinit(self: *EpochDelta) void {
-        self.allocator.free(self.ranges);
-        self.allocator.free(self.bytes);
-        self.* = undefined;
-    }
-};
-
-fn requireEpochBoundary(self: *const SerialStringInterner, mark: EpochBoundary) void {
-    std.debug.assert(mark.ids <= self.ranges.items.items.len);
-    std.debug.assert(mark.bytes <= self.bytes.items.items.len);
-    const expected_bytes: u32 = if (mark.ids == 0)
-        0
-    else blk: {
-        const range = self.ranges.items.items[mark.ids - 1];
-        break :blk range.start + range.len;
-    };
-    std.debug.assert(mark.bytes == expected_bytes);
-}
-
 fn textAt(self: *const SerialStringInterner, id: u32) []const u8 {
-    const r = self.ranges.items.items[id];
-    return self.bytes.items.items[r.start .. r.start + r.len];
+    const ends = self.ends.items.items;
+    const start = if (id == 0) 0 else ends[id - 1];
+    return self.bytes.items.items[start..ends[id]];
 }
 
 /// Text for a serial id.
@@ -231,7 +108,7 @@ pub fn getText(self: *const SerialStringInterner, id: u32) []const u8 {
 }
 
 /// Id encoding for the shared `InternedBytes`: dense serial ids (0, 1, 2, …)
-/// stored via the `ranges` array, with hash-table cells holding `id + 1` (so 0 is
+/// stored via the `ends` array, with hash-table cells holding `id + 1` (so 0 is
 /// the empty-slot sentinel).
 const Policy = struct {
     pub const Id = u32;
@@ -240,7 +117,7 @@ const Policy = struct {
     pub const initial_index_capacity: usize = SerialStringInterner.initial_index_capacity;
 
     pub fn count(self: *const SerialStringInterner) u32 {
-        return @intCast(self.ranges.items.items.len);
+        return @intCast(self.ends.items.items.len);
     }
     pub fn cellForId(id: Id) Cell {
         return id + 1;
@@ -256,13 +133,14 @@ const Policy = struct {
         // Ids, byte offsets, and lengths are 32-bit, and index cells store
         // `id + 1`; an interner past that range has exhausted the
         // representable memory.
-        const id = std.math.cast(u32, self.ranges.items.items.len) orelse return error.OutOfMemory;
+        const id = std.math.cast(u32, self.ends.items.items.len) orelse return error.OutOfMemory;
         if (id == std.math.maxInt(u32)) return error.OutOfMemory;
         const start = std.math.cast(u32, self.bytes.items.items.len) orelse return error.OutOfMemory;
         const len = std.math.cast(u32, string.len) orelse return error.OutOfMemory;
-        _ = std.math.add(u32, start, len) catch return error.OutOfMemory;
+        const end = std.math.add(u32, start, len) catch return error.OutOfMemory;
+        try self.ends.items.ensureUnusedCapacity(gpa, 1);
         _ = try self.bytes.appendSlice(gpa, string);
-        _ = try self.ranges.append(gpa, .{ .start = start, .len = len });
+        _ = try self.ends.append(gpa, end);
         return id;
     }
     pub fn hash(string: []const u8) u64 {
@@ -272,11 +150,7 @@ const Policy = struct {
 
 fn assertSupportsInserts(supports_inserts: bool) void {
     if (supports_inserts) return;
-
-    if (comptime builtin.mode == .debug) {
-        invariant("SerialStringInterner invariant violated: attempted to insert into frozen interner", .{});
-    }
-    unreachable;
+    invariant("SerialStringInterner invariant violated: attempted to insert into frozen interner", .{});
 }
 
 /// Look up a string's serial id without modifying the interner. Safe on frozen
@@ -309,9 +183,9 @@ pub fn clone(self: *const SerialStringInterner, gpa: Allocator) Allocator.Error!
     var new_bytes = try SafeList(u8).initCapacity(gpa, self.bytes.items.items.len);
     errdefer new_bytes.deinit(gpa);
     _ = try new_bytes.appendSlice(gpa, self.bytes.items.items);
-    var new_ranges = try SafeList(Range).initCapacity(gpa, self.ranges.items.items.len);
-    errdefer new_ranges.deinit(gpa);
-    _ = try new_ranges.appendSlice(gpa, self.ranges.items.items);
+    var new_ends = try SafeList(u32).initCapacity(gpa, self.ends.items.items.len);
+    errdefer new_ends.deinit(gpa);
+    _ = try new_ends.appendSlice(gpa, self.ends.items.items);
     var new_index = try SafeList(u32).initCapacity(gpa, self.index.items.items.len);
     errdefer new_index.deinit(gpa);
     try new_index.items.ensureTotalCapacityPrecise(gpa, self.index.items.items.len);
@@ -320,7 +194,7 @@ pub fn clone(self: *const SerialStringInterner, gpa: Allocator) Allocator.Error!
 
     return .{
         .bytes = new_bytes,
-        .ranges = new_ranges,
+        .ends = new_ends,
         .index = new_index,
         .supports_inserts = true,
     };
@@ -329,7 +203,7 @@ pub fn clone(self: *const SerialStringInterner, gpa: Allocator) Allocator.Error!
 /// Relocatable serialized form. Exactly 3 relocatable base pointers.
 pub const Serialized = extern struct {
     bytes: SafeList(u8).Serialized,
-    ranges: SafeList(Range).Serialized,
+    ends: SafeList(u32).Serialized,
     index: SafeList(u32).Serialized,
     entry_count: u32,
     _padding: u32 = 0,
@@ -341,7 +215,7 @@ pub const Serialized = extern struct {
         writer: *CompactWriter,
     ) Allocator.Error!void {
         try self.bytes.serialize(&interner.bytes, gpa, writer);
-        try self.ranges.serialize(&interner.ranges, gpa, writer);
+        try self.ends.serialize(&interner.ends, gpa, writer);
         try self.index.serialize(&interner.index, gpa, writer);
         self.entry_count = interner.count();
         self._padding = 0;
@@ -350,7 +224,7 @@ pub const Serialized = extern struct {
     pub fn deserialize(self: *const Serialized, base: usize) SerialStringInterner {
         return .{
             .bytes = self.bytes.deserializeInto(base),
-            .ranges = self.ranges.deserializeInto(base),
+            .ends = self.ends.deserializeInto(base),
             .index = self.index.deserializeInto(base),
             .supports_inserts = false,
         };
@@ -392,50 +266,6 @@ test "SerialStringInterner: default-empty interner lazily initializes on first i
     try testing.expectEqual(@as(u32, 0), try it.insert(gpa, "List"));
     try testing.expectEqualStrings("Dict", it.getText(1));
     try testing.expectEqual(@as(?u32, 0), it.lookup("List"));
-}
-
-test "SerialStringInterner epoch deltas own consecutive immutable suffixes" {
-    const gpa = testing.allocator;
-    var source: SerialStringInterner = .{};
-    const start = source.epochBoundary();
-    var empty = try EpochDelta.capture(gpa, &source, start, start);
-    defer empty.deinit();
-    try testing.expectEqual(@as(usize, 0), empty.bytes.len);
-    try testing.expectEqual(@as(usize, 0), empty.ranges.len);
-
-    try testing.expectEqual(@as(u32, 0), try source.insert(gpa, "alpha"));
-    try testing.expectEqual(@as(u32, 1), try source.insert(gpa, ""));
-    const middle = source.epochBoundary();
-    var first = try EpochDelta.capture(gpa, &source, start, middle);
-    defer first.deinit();
-
-    try testing.expectEqual(@as(u32, 2), try source.insert(gpa, "omega"));
-    const end = source.epochBoundary();
-    var second = try EpochDelta.capture(gpa, &source, middle, end);
-    defer second.deinit();
-
-    // Force source growth, then destroy it before reading either owned segment.
-    var index: usize = 0;
-    while (index < 256) : (index += 1) {
-        var buffer: [32]u8 = undefined;
-        const text = try std.fmt.bufPrint(&buffer, "growth-{d}", .{index});
-        _ = try source.insert(gpa, text);
-    }
-    source.deinit(gpa);
-
-    try testing.expectEqualStrings("alpha", first.getText(0).?);
-    try testing.expectEqualStrings("", first.getText(1).?);
-    try testing.expect(first.getText(2) == null);
-    try testing.expectEqualStrings("omega", second.getText(2).?);
-
-    var destination: SerialStringInterner = .{};
-    defer destination.deinit(gpa);
-    try empty.appendTo(&destination, gpa);
-    try first.appendTo(&destination, gpa);
-    try second.appendTo(&destination, gpa);
-    try testing.expectEqualStrings("alpha", destination.getText(0));
-    try testing.expectEqualStrings("", destination.getText(1));
-    try testing.expectEqualStrings("omega", destination.getText(2));
 }
 
 test "SerialStringInterner: grows past initial table capacity preserving ids/lookup" {
@@ -520,7 +350,7 @@ test "SerialStringInterner: enableRuntimeInserts copies frozen data and permits 
 fn nonEmptyBasePointers(it: *const SerialStringInterner) usize {
     var n: usize = 0;
     if (it.bytes.items.capacity != 0) n += 1;
-    if (it.ranges.items.capacity != 0) n += 1;
+    if (it.ends.items.capacity != 0) n += 1;
     if (it.index.items.capacity != 0) n += 1;
     return n;
 }

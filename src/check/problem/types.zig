@@ -85,6 +85,7 @@ pub const Problem = union(enum) {
     where_alias_in_type_position: WhereAliasInTypePosition,
     recursive_where_alias: RecursiveWhereAlias,
     where_clause_receiver_not_introduced: WhereClauseReceiverNotIntroduced,
+    where_requirement_not_function: WhereRequirementNotFunction,
     redundant_open_tag_union: RedundantOpenTagUnion,
     invalid_nominal_decl_recursion: InvalidNominalDeclRecursion,
     infinite_recursion: VarWithSnapshot,
@@ -99,6 +100,7 @@ pub const Problem = union(enum) {
     effectful_function_name: EffectfulFunctionName,
     annotation_only_value: AnnotationOnlyValue,
     annotation_only_value_use: AnnotationOnlyValueUse,
+    hosted_where_requirement: HostedWhereRequirement,
     derived_method_value_use: DerivedMethodValueUse,
     capturing_method: CapturingMethod,
     unsupported_generated_method: UnsupportedGeneratedMethod,
@@ -134,7 +136,6 @@ pub const Problem = union(enum) {
     unmatchable_pattern: UnmatchablePattern,
     match_alt_binder_missing: MatchAltBinderMissing,
     discarded_var_update: DiscardedVarUpdate,
-    comptime_unused_branch: ComptimeUnusedBranch,
     comptime_condition: ComptimeCondition,
     derived_parser_error_row: DerivedParserErrorRow,
     derived_codec_open_record: DerivedCodecOpenRecord,
@@ -222,6 +223,20 @@ pub const AnnotationOnlyValue = struct {
 /// nothing to evaluate.
 pub const AnnotationOnlyValueUse = struct {
     region: base.Region,
+};
+
+/// A hosted declaration was selected to satisfy a `where` requirement whose
+/// result holds a tag union. The requiring function's body may use that union
+/// as part of a wider one, and a host's unions have the representation the host
+/// was compiled with, so a hosted declaration never serves such a requirement
+/// (design.md "Row Joins").
+pub const HostedWhereRequirement = struct {
+    /// The use that selected the hosted declaration.
+    region: base.Region,
+    /// The dispatcher type that owns the hosted declaration.
+    dispatcher_name: Ident.Idx,
+    /// The method the requirement names.
+    method_name: Ident.Idx,
 };
 
 /// A compiler-derived associated method was used as a value instead of being
@@ -634,9 +649,31 @@ pub const TypeMismatch = struct {
     /// Set when `leaf` failed because the use gave one instantiated
     /// interpolation's values different types.
     interpolation_tie: ?InterpolationTie = null,
+    /// Set when the actual type carries a tag row a host-boundary annotation
+    /// wrote, which never widens (design.md "Row Joins"); the report says
+    /// how to write the value again, tag by tag, instead.
+    host_fixed_row: bool = false,
+    /// The hosted function the actual value's row is forwarded from, when the
+    /// forwarding path is unchanged. Diagnostic-only provenance.
+    host_fixed_origin: ?Ident.Idx = null,
+    /// Set when the relation failed because it required one type to have two
+    /// different methods of the same name.
+    method_conflict: ?MethodConflict = null,
     /// How the report suggests turning the actual value into the expected
     /// builtin `Str`.
     str_conversion: StrConversion = .none,
+};
+
+/// Two requirements of one method on the same type that cannot agree. A type
+/// has one method of each name, so no type can satisfy both.
+pub const MethodConflict = struct {
+    method_name: Ident.Idx,
+    /// Whether one of the requirements came from an operator, which the
+    /// report names alongside the method it calls.
+    from_operator: bool,
+    /// Display text of each required method type.
+    first_type: ExtraStringIdx,
+    second_type: ExtraStringIdx,
 };
 
 /// The way a report suggests turning a value into a `Str` when it is used
@@ -724,16 +761,6 @@ pub const NonExhaustiveDestructure = struct {
     empirical: bool = false,
 };
 
-/// A compile-time-only branch or match alternative was not taken by compile-time evaluation.
-pub const ComptimeUnusedBranch = struct {
-    kind: enum {
-        match,
-        if_,
-    },
-    site_region: base.Region,
-    branch_region: base.Region,
-};
-
 /// A conditional expression was known while checking, so it will always make the same choice.
 pub const ComptimeCondition = struct {
     kind: enum {
@@ -744,18 +771,36 @@ pub const ComptimeCondition = struct {
     region: base.Region,
 };
 
+/// The part of a match branch that a redundant or unmatchable pattern problem
+/// is about: either every `|` alternative of the branch, or one alternative.
+pub const MatchBranchPart = enum(u32) {
+    whole_branch = std.math.maxInt(u32),
+    _,
+
+    /// The alternative at this zero-based index within its branch.
+    pub fn alternative(index: u32) MatchBranchPart {
+        std.debug.assert(index != std.math.maxInt(u32));
+        return @fromBackingInt(index);
+    }
+
+    /// The zero-based alternative index, or null for the whole branch.
+    pub fn alternativeIndex(self: MatchBranchPart) ?u32 {
+        return if (self == .whole_branch) null else @backingInt(self);
+    }
+};
+
 /// Problem data for a redundant pattern in a match
 pub const RedundantPattern = struct {
     match_expr: CIR.Expr.Idx,
-    num_branches: u32,
-    problem_branch_index: u32,
+    branch_index: u32,
+    part: MatchBranchPart,
 };
 
 /// Problem data for an unmatchable pattern (pattern on uninhabited type)
 pub const UnmatchablePattern = struct {
     match_expr: CIR.Expr.Idx,
-    num_branches: u32,
-    problem_branch_index: u32,
+    branch_index: u32,
+    part: MatchBranchPart,
 };
 
 /// A name bound by one `|` alternative of a match branch but not by another,
@@ -795,11 +840,11 @@ pub const StaticDispatch = union(enum) {
     undetermined_type: UndeterminedType,
 };
 
-/// A requirement failed on a type that nothing in the program determined: a
+/// A requirement failed on a type that never resolved to a concrete type: a
 /// defaulting decision chose the type, and the chosen default cannot satisfy
-/// every requirement on it. Reported once per defaulted type, in terms of the
-/// type as the program wrote it—never the default the checker chose, which
-/// the user did not write.
+/// every requirement on it. Reported once per defaulted type as a missing
+/// method, in terms of the type as the program wrote it—never the default the
+/// checker chose, which the user did not write.
 pub const UndeterminedType = struct {
     /// Where the undetermined type comes from: the literal itself, or the
     /// expression that owns the failed requirement.
@@ -941,9 +986,9 @@ pub const TypeDoesNotSupportMap = struct {
 };
 
 /// Error when a compiler-derived `parser_for` or `encoder_for` is used at a type
-/// that nothing in the program ever determines fully (for example the element
+/// part of which never resolves to a concrete type (for example the element
 /// type of `List.parser_for(format)` when the parsed list is never used), so
-/// there is no single codec to derive.
+/// that part has no method to derive the codec from.
 pub const UndeterminedCodecType = struct {
     dispatcher_snapshot: SnapshotContentIdx,
     fn_var: Var,
@@ -1025,6 +1070,12 @@ pub const RecursiveWhereAlias = struct {
 /// variable introduced by a different annotation.
 pub const WhereClauseReceiverNotIntroduced = struct {
     type_var_name: base.Ident.Idx,
+    method_name: base.Ident.Idx,
+    region: base.Region,
+};
+
+/// Error when a where clause requires a method whose type is not a function.
+pub const WhereRequirementNotFunction = struct {
     method_name: base.Ident.Idx,
     region: base.Region,
 };

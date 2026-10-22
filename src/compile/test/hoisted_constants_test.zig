@@ -62,7 +62,6 @@ const HoistedConstantsTestError = std.mem.Allocator.Error ||
         PathOutsideWorkspace,
         RootDidNotStoreConstNode,
         StaticDataInitializerCountMismatch,
-        StaticDataInitializerPrecededRootBody,
         StaticDataInitializerRequestOrderMismatch,
         StaticDataLiteralNotFound,
         StaticDataSymbolNotFound,
@@ -535,13 +534,9 @@ test "hoisted list constants lower to internal static data in request order" {
     const second_initializer = lowered.lir_result.store.getProcSpec(lowered.lir_result.static_data_values.items[1].initializer.?);
     const first_body = first_initializer.body orelse return error.StaticDataLiteralNotFound;
     const second_body = second_initializer.body orelse return error.StaticDataLiteralNotFound;
-    // Reachable roots form a barrier before queued initializers, whose request
-    // order must then determine their body order.
+    // Queued initializers lower in request order. ARC leaves initializers as
+    // lowered, so their bodies' statement ids still show that order.
     if (@backingInt(first_body) >= @backingInt(second_body)) return error.StaticDataInitializerRequestOrderMismatch;
-    for (lowered.lir_result.root_procs.items) |root_proc| {
-        const root_body = lowered.lir_result.store.getProcSpecImmediate(root_proc).body orelse return error.StaticDataLiteralNotFound;
-        if (@backingInt(root_body) >= @backingInt(first_body)) return error.StaticDataInitializerPrecededRootBody;
-    }
     try expectStaticDataLiteralPresent(&lowered.lir_result);
 
     const exports = try static_data_exports.buildStaticData(
@@ -734,6 +729,73 @@ test "a compile-time list of copies of one scalar is static data, not a per-read
     }.inspect);
 }
 
+// Repro for https://github.com/roc-lang/roc/issues/12294
+test "issue 12294: a restored list of boxed capturing closures is static data, not a per-read rebuild" {
+    _ = try lowerEchoApp(
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\handlers : List(Box(({} -> U64)))
+        \\handlers = {
+        \\    n = 42
+        \\    [Box.box(|{}| n)]
+        \\}
+        \\main! = |args| {
+        \\    kept = List.drop_first(handlers, List.len(args) - List.len(args))
+        \\    Echo.line!(List.len(kept).to_str())
+        \\    Ok({})
+        \\}
+    , struct {
+        fn inspect(result: *lir.Program.Result) HoistedConstantsTestError!usize {
+            // The list, the box, and the closure's capture record ride in
+            // static data; reading the constant must not rebuild them.
+            try expectLowLevelAbsent(result, .list_with_capacity);
+            try expectLowLevelAbsent(result, .list_append_unsafe);
+            try std.testing.expect(result.static_data_values.items.len > 0);
+            return 0;
+        }
+    }.inspect);
+}
+
+fn expectRestoredSelfReadingClosuresStatic(result: *lir.Program.Result) HoistedConstantsTestError!usize {
+    // The closure reads `handlers` as a top-level constant, the way its
+    // compile-time evaluation did, so the list it sits in stays static data.
+    try expectLowLevelAbsent(result, .list_with_capacity);
+    try expectLowLevelAbsent(result, .list_append_unsafe);
+    try std.testing.expect(result.static_data_values.items.len > 0);
+    return 0;
+}
+
+test "a restored list of boxed closures that read their own constant is static data" {
+    _ = try lowerEchoApp(
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\handlers : List(Box((U64 -> U64)))
+        \\handlers = [Box.box(|k| List.len(handlers) + k)]
+        \\main! = |args| {
+        \\    kept = List.drop_first(handlers, List.len(args) - List.len(args))
+        \\    Echo.line!(List.len(kept).to_str())
+        \\    Ok({})
+        \\}
+    , expectRestoredSelfReadingClosuresStatic);
+}
+
+test "a restored list of boxed capturing closures that read their own constant is static data" {
+    _ = try lowerEchoApp(
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\handlers : List(Box((U64 -> U64)))
+        \\handlers = {
+        \\    n = 42
+        \\    [Box.box(|k| if k == 0 n else List.len(handlers) + k)]
+        \\}
+        \\main! = |args| {
+        \\    kept = List.drop_first(handlers, List.len(args) - List.len(args))
+        \\    Echo.line!(List.len(kept).to_str())
+        \\    Ok({})
+        \\}
+    , expectRestoredSelfReadingClosuresStatic);
+}
+
 test "an empty compile-time list rebuilds with the capacity it was evaluated with" {
     _ = try lowerEchoApp(
         \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
@@ -876,7 +938,7 @@ fn expectIntLiteralPresent(result: *const lir.Program.Result, value: i128) Hoist
     for (result.store.getCFStmts()) |stmt| {
         if (stmt != .assign_literal) continue;
         switch (stmt.assign_literal.value) {
-            .i128_literal => |literal| if (literal.value == value) return,
+            .i128_literal => |id| if (result.store.stmtRow(id).value == value) return,
             .i64_literal => |literal| if (literal.value == value) return,
             .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => {},
         }
@@ -2005,7 +2067,7 @@ test "issue 10721: runtime-dependent callable use keeps one validating extractio
     try std.testing.expectEqual(@as(usize, 1), validating_extraction_roots);
 }
 
-test "hoisted match guard does not report unused branch warning" {
+test "a match on a constant with a guard selects a hoisted root" {
     const gpa = std.testing.allocator;
 
     var tmp_dir = std.testing.tmpDir(.{});
@@ -2057,13 +2119,6 @@ test "hoisted match guard does not report unused branch warning" {
     try coord.coordinatorLoop();
     try coord.finishCheckedProgram(.none);
     try std.testing.expect(!coord.hasUserErrors());
-
-    var found_unused_branch = false;
-    var report_iter = coord.iterReports();
-    while (report_iter.next()) |entry| {
-        if (std.mem.eql(u8, entry.report.title, "Unused Branch")) found_unused_branch = true;
-    }
-    try std.testing.expect(!found_unused_branch);
 
     const artifact = coord.appRootCheckedArtifact();
     var found_hoisted_root = false;
@@ -2692,7 +2747,6 @@ fn expectStaticDataLiteralPresent(result: *const lir.Program.Result) HoistedCons
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .switch_stmt,
             .switch_initialized_payload,
             .str_match,

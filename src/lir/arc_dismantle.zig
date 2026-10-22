@@ -71,10 +71,10 @@ pub const Projection = extern struct {
 /// Encodes the ownership-relevant shape of a reference projection, or null
 /// when the operation does not select aggregate storage.
 pub fn encodeProjection(op: LIR.RefOp) ?Projection {
-    return switch (op) {
-        .field => |field| .{ .kind = .field, .first = field.field_idx, .second = 0 },
-        .tag_payload => |payload| .{ .kind = .tag_payload, .first = payload.variant_index, .second = payload.payload_idx },
-        .tag_payload_struct => |payload| .{ .kind = .tag_payload_struct, .first = payload.variant_index, .second = 0 },
+    return switch (op.kind) {
+        .field => .{ .kind = .field, .first = op.index, .second = 0 },
+        .tag_payload => .{ .kind = .tag_payload, .first = op.variant_index, .second = op.index },
+        .tag_payload_struct => .{ .kind = .tag_payload_struct, .first = op.variant_index, .second = 0 },
         .local, .discriminant, .list_reinterpret, .nominal => null,
     };
 }
@@ -87,7 +87,7 @@ pub fn layoutMayContainBoxyDynamic(
     allocator: Allocator,
     layouts: *const layout_mod.Store,
     layout_idx: layout_mod.Idx,
-    visited: *std.AutoHashMap(layout_mod.Idx, void),
+    visited: *collections.DenseMap(layout_mod.Idx, void),
     stack: *std.ArrayList(layout_mod.Idx),
 ) Error!bool {
     visited.clearRetainingCapacity();
@@ -99,7 +99,7 @@ pub fn layoutMayContainBoxyDynamic(
         switch (layout_val.tag) {
             .erased_box => return true,
             .box, .list => try stack.append(allocator, layout_val.getIdx()),
-            .list_of_zst, .box_of_zst, .zst, .scalar, .erased_callable, .ptr => {},
+            .list_of_zst, .box_of_zst, .zst, .hole, .scalar, .erased_callable, .ptr => {},
             .struct_ => {
                 const info = layouts.getStructInfo(layout_val);
                 for (0..info.fields.len) |index| {
@@ -255,6 +255,15 @@ pub const Take = struct {
 pub const View = struct {
     root: LIR.LocalId,
     base: u32,
+    /// The innermost view, this one or one enclosing it, whose definition
+    /// takes its slots out of its container. In an emission where that take
+    /// applies, the holder owns those slots: this view is then a view of the
+    /// holder's own container from `holder_base`, or no view at all when it
+    /// is the holder or the holder does not dismantle.
+    holder: ?LIR.LocalId = null,
+    holder_base: u32 = 0,
+    /// This local is the holder itself or a borrowed alias of it.
+    is_holder: bool = false,
 };
 
 /// One direct-call argument whose owned unit came from an exact aggregate
@@ -292,14 +301,27 @@ pub const Dismantles = struct {
     /// Parameter positions whose owned variant activates an exact field take,
     /// indexed directly by source procedure id.
     owned_only_param_benefits: []arc_sig.ParamMask,
-    /// Binding targets produced by unconditional field takes. The target
-    /// carries the stored field unit even when its base binding was solved
-    /// borrowed.
+    /// Bindings that hold a stored unit taken from their container: the
+    /// owned targets of unconditional field takes, projected containers
+    /// solved borrowed whose read moves their root's unit, and views solved
+    /// borrowed whose definition takes their whole range.
     take_bindings: []bool,
-    /// For a binding solved borrowed whose field read becomes a take in an
-    /// owned-parameter variant, the exact borrowed parameter root authorizing
-    /// that binding-mode override; `no_index` means no override.
+    /// For a binding solved borrowed whose read moves a unit out of its
+    /// container only in an owned-parameter variant (a projected container
+    /// moving its parameter root's unit, or a view taking its range out of
+    /// such a container), the container root whose owned override activates
+    /// that take, which authorizes the binding-mode override; `no_index`
+    /// means no override.
     owned_only_binding_roots: []u32,
+    /// Consuming operands of borrowed field-read bindings that move the
+    /// container's stored field unit at the operand itself, keyed by
+    /// statement and argument position. Each is the last observation of its
+    /// field on every path. Emission skips the operand's retain and removes
+    /// the field from the container's residual mask.
+    operand_takes: std.AutoHashMapUnmanaged(CallArg, Take) = .empty,
+    /// `operand_takes` on containers solved borrowed, valid only in
+    /// emissions whose demand vector overrides the root to owned.
+    owned_only_operand_takes: std.AutoHashMapUnmanaged(CallArg, Take) = .empty,
     /// Exact field-place destinations for outcome-conditioned argument
     /// restitution. Entries exist only when the projection binding has no
     /// operand use other than this call and the call result has the closed,
@@ -328,6 +350,8 @@ pub const Dismantles = struct {
         self.owned_only_takes.deinit();
         self.owned_only_containers.deinit();
         self.field_restitution_args.deinit(gpa);
+        self.operand_takes.deinit(gpa);
+        self.owned_only_operand_takes.deinit(gpa);
         self.projection_units.deinit();
         self.complete_takes.deinit();
         self.projection_aliases.deinit();
@@ -341,6 +365,16 @@ pub const Dismantles = struct {
 
     pub fn ownedOnlyTake(self: *const Dismantles, stmt: LIR.CFStmtId) ?Take {
         return self.owned_only_takes.get(stmt);
+    }
+
+    pub fn operandTakeAt(self: *const Dismantles, stmt: LIR.CFStmtId, position: usize) ?Take {
+        if (position > std.math.maxInt(u8)) return null;
+        return self.operand_takes.get(.{ .stmt = stmt, .position = @intCast(position) });
+    }
+
+    pub fn ownedOnlyOperandTake(self: *const Dismantles, stmt: LIR.CFStmtId, position: usize) ?Take {
+        if (position > std.math.maxInt(u8)) return null;
+        return self.owned_only_operand_takes.get(.{ .stmt = stmt, .position = @intCast(position) });
     }
 
     pub fn containerOf(self: *const Dismantles, local: LIR.LocalId) ?Container {
@@ -399,8 +433,7 @@ pub const Dismantles = struct {
 };
 
 fn dismantleInvariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .debug) base.invariant(message, .{});
-    unreachable;
+    base.invariant(message, .{});
 }
 
 const State = enum(u8) {
@@ -424,6 +457,9 @@ const Read = struct {
     /// The read defines a view: its result reads the container's slots in
     /// place instead of holding them.
     view: bool = false,
+    /// The view the read's source belongs to, `no_index` for a read of the
+    /// container itself or of a transparent alias of it.
+    through: u32 = no_index,
 };
 
 /// A complete field read of a root that dominance canonicalized to an
@@ -440,10 +476,9 @@ const MentionEdge = struct {
     next: u32,
 };
 
-const LocalEdge = struct {
-    local: u32,
-    next: u32,
-};
+/// One edge of the solved borrow forest, reversed: a binding borrowed from
+/// the local whose list holds the edge.
+const BorrowChildEdge = struct { local: u32, next: u32 };
 
 /// A tag union whose stored units may be taken through one payload view. Any
 /// occurrence of the root other than its definition, a discriminant read, a
@@ -485,12 +520,11 @@ const Candidate = struct {
     /// stay valid as long as no whole use can run after a take, which the
     /// dataflow checks exactly like a borrow of every field at once.
     whole_uses: std.ArrayList(LIR.CFStmtId) = .empty,
-    /// Lengths of `reads` and `whole_uses` as classification left them.
-    /// Solving appends the occurrences that depend on other candidates'
-    /// plans and on owned demand, and truncates back first, so a recursive
-    /// call-graph component can solve its candidates again.
+    /// Length of `reads` as classification left it. Solving appends the
+    /// deferred reads whose representatives committed no plan, and truncates
+    /// back first, so a recursive call-graph component can solve its
+    /// candidates again.
     own_read_count: u32 = 0,
-    own_whole_use_count: u32 = 0,
 };
 
 const Analysis = struct {
@@ -510,6 +544,18 @@ const Analysis = struct {
     /// Targets of refcounted reads through a view. Each is a read of the
     /// view's root in its own right, so the view's borrow forest skips it.
     read_through_view: []bool,
+    /// The view each view local belongs to: the view a field read defined,
+    /// for that read's target and every borrowed alias of it; `no_index`
+    /// for any other local.
+    view_head: []u32,
+    /// For each view, the view its defining read went through, `no_index`
+    /// when that read named the container or a transparent alias of it.
+    view_parent: []u32,
+    /// Each view as a container of its own, keyed by the view. A view whose
+    /// definition takes its slots out of its container holds them, so its
+    /// reads, every read through views nested in it, and its whole uses are
+    /// the occurrences of that container, numbered from the view's base.
+    view_candidates: std.AutoHashMapUnmanaged(u32, Candidate),
     /// Tag-union root per ownership-complete borrowed payload view,
     /// `no_index` otherwise. Such a view is the struct candidate through
     /// which the union dismantles; its unit is the root's.
@@ -530,17 +576,6 @@ const Analysis = struct {
     /// Join cells with explicit initialization edges. Each edge supplies a
     /// fresh intact container independently of the other incoming values.
     explicit_init_join: []const bool,
-    /// Solved-borrowed bindings whose value reaches an explicitly owned
-    /// direct-call or low-level operand. Field-take variants override exactly
-    /// these bindings to owned instead of manufacturing a retain at that
-    /// ownership boundary.
-    owned_demand: []bool,
-    /// Same-value aliases propagate an owned demand back to their source.
-    demand_aliases: std.ArrayList(struct { source: LIR.LocalId, target: LIR.LocalId }) = .empty,
-    /// `demand_aliases` indexed by target: per-local linked lists of sources.
-    demand_source_heads: []u32 = &.{},
-    demand_source_edges: std.ArrayList(LocalEdge) = .empty,
-    demand_stack: std.ArrayList(u32) = .empty,
     /// Every operand mention of a solved-borrowed refcounted local, as a
     /// per-local linked list into `mention_edges`. A binding borrowed through
     /// a candidate's field read observes that field at each of its mentions,
@@ -550,7 +585,7 @@ const Analysis = struct {
     /// Per-layout answers of `layoutMayContainBoxyDynamic` for field layouts
     /// the gate has asked about, and the scratch that answers them.
     boxy_dynamic_layouts: collections.DenseMap(layout_mod.Idx, bool),
-    layout_visited: std.AutoHashMap(layout_mod.Idx, void),
+    layout_visited: collections.DenseMap(layout_mod.Idx, void),
     layout_stack: std.ArrayList(layout_mod.Idx) = .empty,
 
     fn deinit(self: *Analysis) void {
@@ -562,76 +597,27 @@ const Analysis = struct {
             candidate.whole_uses.deinit(self.gpa);
         }
         self.candidates.deinit(self.gpa);
+        var view_it = self.view_candidates.valueIterator();
+        while (view_it.next()) |candidate| {
+            candidate.reads.deinit(self.gpa);
+            candidate.equivalenced_reads.deinit(self.gpa);
+            candidate.join_starts.deinit(self.gpa);
+            candidate.whole_uses.deinit(self.gpa);
+        }
+        self.view_candidates.deinit(self.gpa);
         self.union_roots.deinit(self.gpa);
         self.gpa.free(self.view_root);
         self.gpa.free(self.alias_root);
         self.gpa.free(self.view_base);
         self.gpa.free(self.read_through_view);
+        self.gpa.free(self.view_head);
+        self.gpa.free(self.view_parent);
         self.gpa.free(self.mention_heads);
         self.mention_edges.deinit(self.gpa);
         self.gpa.free(self.state);
-        self.gpa.free(self.owned_demand);
-        self.demand_aliases.deinit(self.gpa);
-        self.gpa.free(self.demand_source_heads);
-        self.demand_source_edges.deinit(self.gpa);
-        self.demand_stack.deinit(self.gpa);
         self.boxy_dynamic_layouts.deinit();
         self.layout_visited.deinit();
         self.layout_stack.deinit(self.gpa);
-    }
-
-    fn demandOwned(self: *Analysis, local: LIR.LocalId) void {
-        self.owned_demand[@backingInt(local)] = true;
-    }
-
-    fn noteDemandAlias(self: *Analysis, source: LIR.LocalId, target: LIR.LocalId) Error!void {
-        try self.demand_aliases.append(self.gpa, .{ .source = source, .target = target });
-    }
-
-    /// Index the same-value alias edges by target and close the demands
-    /// recorded during classification over them. Later demands close through
-    /// `demandOwnedClosed`, so each edge is crossed at most once overall.
-    fn closeOwnedDemand(self: *Analysis) Error!void {
-        self.demand_source_heads = try self.gpa.alloc(u32, self.owned_demand.len);
-        @memset(self.demand_source_heads, no_index);
-        try self.demand_source_edges.ensureTotalCapacity(self.gpa, self.demand_aliases.items.len);
-        for (self.demand_aliases.items) |edge| {
-            const target_index = @backingInt(edge.target);
-            self.demand_source_edges.appendAssumeCapacity(.{
-                .local = @backingInt(edge.source),
-                .next = self.demand_source_heads[target_index],
-            });
-            self.demand_source_heads[target_index] = @intCast(self.demand_source_edges.items.len - 1);
-        }
-        for (self.owned_demand, 0..) |demanded, index| {
-            if (demanded) try self.demand_stack.append(self.gpa, @intCast(index));
-        }
-        try self.drainDemand();
-    }
-
-    /// Demand `local` owned after classification, closing the demand over
-    /// its alias sources. Returns whether `local` was newly demanded.
-    fn demandOwnedClosed(self: *Analysis, local: LIR.LocalId) Error!bool {
-        const index = @backingInt(local);
-        if (self.owned_demand[index]) return false;
-        self.owned_demand[index] = true;
-        try self.demand_stack.append(self.gpa, index);
-        try self.drainDemand();
-        return true;
-    }
-
-    fn drainDemand(self: *Analysis) Error!void {
-        while (self.demand_stack.pop()) |target| {
-            var edge_index = self.demand_source_heads[target];
-            while (edge_index != no_index) {
-                const edge = self.demand_source_edges.items[edge_index];
-                if (!self.owned_demand[edge.local]) {
-                    self.owned_demand[edge.local] = true;
-                    try self.demand_stack.append(self.gpa, edge.local);
-                }
-                edge_index = edge.next;
-            }
-        }
     }
 
     /// Whether the local's layout and binding shape could ever benefit from
@@ -729,9 +715,19 @@ const Analysis = struct {
         try self.noteMention(stmt, local);
         try self.touchUnion(local);
         // A view's other uses are borrow observations of its slots, which
-        // its borrow forest replays against the root's takes.
-        if (self.isView(local)) return;
+        // its borrow forest replays against the root's takes. The view
+        // itself cannot dismantle.
+        if (self.isView(local)) {
+            self.viewCandidateOf(local).disqualified = true;
+            return;
+        }
         self.disqualify(local);
+    }
+
+    /// The container a view local stands for once its view holds its slots.
+    fn viewCandidateOf(self: *Analysis, local: LIR.LocalId) *Candidate {
+        return self.view_candidates.getPtr(self.view_head[@backingInt(local)]) orelse
+            dismantleInvariant("ARC dismantle view had no container entry");
     }
 
     /// A whole-value use of the container as an operand—moved into an
@@ -740,7 +736,10 @@ const Analysis = struct {
     fn useWholeAt(self: *Analysis, local: LIR.LocalId, stmt: LIR.CFStmtId) Error!void {
         try self.noteMention(stmt, local);
         try self.touchUnion(local);
-        if (self.isView(local)) return;
+        if (self.isView(local)) {
+            try self.viewCandidateOf(local).whole_uses.append(self.gpa, stmt);
+            return;
+        }
         const root = self.resolveRoot(local);
         const candidate = (try self.entryOf(root)) orelse return;
         try candidate.whole_uses.append(self.gpa, stmt);
@@ -780,7 +779,7 @@ const Analysis = struct {
     fn notePayloadView(self: *Analysis, target: LIR.LocalId, op: anytype) Error!bool {
         if (!self.solution.isBorrowed(target)) return false;
         const root_index = self.unionRootOf(op.source) orelse return false;
-        const projection = encodeProjection(.{ .tag_payload_struct = op }).?;
+        const projection = encodeProjection(op).?;
         if (!projectionOwnsAllRc(self.store, self.layouts, op.source, target, projection)) return false;
         const entry = try self.unionEntryOf(root_index);
         if (entry.view == no_index) {
@@ -844,6 +843,7 @@ const Analysis = struct {
     fn noteFieldRead(self: *Analysis, stmt: LIR.CFStmtId, source: LIR.LocalId, field_idx: u32, target: LIR.LocalId) Error!bool {
         const target_index = @backingInt(target);
         const through_view = self.isView(source);
+        const through: u32 = if (through_view) self.view_head[@backingInt(source)] else no_index;
         // A refcounted field read through a borrowed source observes the
         // source's stored unit at the read itself when the target retains.
         // A read through a view is a read of the view's root in its own
@@ -858,6 +858,12 @@ const Analysis = struct {
         const root = self.resolveRoot(source);
         const representative_index = self.projected_container[target_index];
         if (representative_index != no_index and representative_index != target_index) {
+            // The root settles this read against the representative's plan,
+            // so no view it went through can hold it as its own read.
+            var enclosing = through;
+            while (enclosing != no_index) : (enclosing = self.view_parent[enclosing]) {
+                (self.view_candidates.getPtr(enclosing) orelse dismantleInvariant("ARC dismantle view had no container entry")).disqualified = true;
+            }
             try self.noteEquivalencedRead(stmt, root, self.readSlots(source, field_idx, target), target, @fromBackingInt(@intCast(representative_index)));
             return false;
         }
@@ -874,21 +880,38 @@ const Analysis = struct {
             self.state[target_index] = .view;
             self.alias_root[target_index] = @backingInt(root);
             self.view_base[target_index] = slots.first;
+            self.view_head[target_index] = target_index;
+            self.view_parent[target_index] = through;
+            try self.view_candidates.put(self.gpa, target_index, .{ .def_stmt = stmt, .def_count = 1 });
         }
         try candidate.reads.append(self.gpa, .{
             .stmt = stmt,
             .target = target,
             .slots = slots,
             .view = view,
+            .through = through,
         });
+        // Every view the read went through reads the same slots, from its
+        // own base, as the container it becomes when it holds them.
+        var enclosing = through;
+        while (enclosing != no_index) : (enclosing = self.view_parent[enclosing]) {
+            const enclosing_candidate = self.view_candidates.getPtr(enclosing) orelse
+                dismantleInvariant("ARC dismantle view had no container entry");
+            try enclosing_candidate.reads.append(self.gpa, .{
+                .stmt = stmt,
+                .target = target,
+                .slots = .{ .first = slots.first - self.view_base[enclosing], .count = slots.count },
+                .view = view,
+                .through = through,
+            });
+        }
         return view;
     }
 
     /// A complete read canonicalized to a dominating representative. If the
     /// representative commits a plan, the read is materialized as a pure
-    /// alias of it and is scanned as that alias now: a target emitted owned
-    /// is a whole use of the representative (an owned-demanded borrowed
-    /// target joins it once demand is closed), and a borrowed target reads
+    /// alias of it and is scanned as that alias now: a target solved owned
+    /// is a whole use of the representative, and a borrowed target reads
     /// through it.
     /// The root defers the read until the representative's plan is known;
     /// the representative's plan never depends on the root's, so solving
@@ -925,12 +948,14 @@ const Analysis = struct {
                 self.state[target_index] = .view;
                 self.alias_root[target_index] = self.alias_root[source_index];
                 self.view_base[target_index] = self.view_base[source_index];
+                self.view_head[target_index] = self.view_head[source_index];
                 return;
             }
             // An owned binding retains the view's slots here, observing
             // them, and holds that retained unit as its own.
             try self.noteMention(stmt, source);
             try self.touchUnion(source);
+            try self.viewCandidateOf(source).whole_uses.append(self.gpa, stmt);
             if (self.solution.isBorrowed(target)) {
                 self.disqualify(target);
             } else {
@@ -964,6 +989,8 @@ const Analysis = struct {
                 self.unionRootOf(source) != null and
                 self.unionRootOf(source) == self.unionRootOf(target);
             if (!union_alias) try self.touchUnion(source);
+            // Binding the alias reads the source's stored units here.
+            try self.noteMention(stmt, source);
             if (try self.entryOf(root)) |candidate| try candidate.whole_uses.append(self.gpa, stmt);
             if (self.solution.isBorrowed(target)) {
                 self.disqualify(target);
@@ -1107,7 +1134,6 @@ const FutureFields = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -1294,7 +1320,6 @@ fn fieldObservedAfter(
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .incref,
             .decref,
             .decref_if_initialized,
@@ -1344,7 +1369,7 @@ test "future field uses resolve joins in their procedure" {
     const back_edge = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const read = try store.addCFStmt(.{ .assign_ref = .{
         .target = field,
-        .op = .{ .field = .{ .source = container, .field_idx = 0 } },
+        .op = .field(container, 0),
         .next = back_edge,
     } }, .test_fixture);
     const loop_proc = try store.addCFStmt(.{ .join = .{
@@ -1409,7 +1434,7 @@ test "future field observations agree with per-read traversal across joins rebin
     } }, .test_fixture);
     const read = try store.addCFStmt(.{ .assign_ref = .{
         .target = other,
-        .op = .{ .field = .{ .source = local, .field_idx = 0 } },
+        .op = .field(local, 0),
         .next = rebind,
     } }, .test_fixture);
     const branch = try store.addCFStmt(.{ .switch_stmt = .{
@@ -1447,7 +1472,7 @@ test "future field observations agree with per-read traversal across joins rebin
     for (starts, &probes) |start, *probe| {
         probe.* = try store.addCFStmt(.{ .assign_ref = .{
             .target = other,
-            .op = .{ .field = .{ .source = local, .field_idx = 2 } },
+            .op = .field(local, 2),
             .next = start,
         } }, .test_fixture);
         try reads.put(probe.*, .{ .bit = 4, .consuming = true });
@@ -1505,7 +1530,7 @@ test "future field observations share one reversed CFG across many consuming rea
     for (0..255) |_| {
         start = try store.addCFStmt(.{ .assign_ref = .{
             .target = local,
-            .op = .{ .local = local },
+            .op = .local(local),
             .next = start,
         } }, .test_fixture);
     }
@@ -1526,7 +1551,7 @@ test "future field observations share one reversed CFG across many consuming rea
         while (reads.count() <= count) {
             const probe = try store.addCFStmt(.{ .assign_ref = .{
                 .target = local,
-                .op = .{ .field = .{ .source = local, .field_idx = 0 } },
+                .op = .field(local, 0),
                 .next = start,
             } }, .test_fixture);
             try reads.put(probe, .{ .bit = 1, .consuming = true });
@@ -1569,6 +1594,16 @@ const ReadKind = struct {
     bit: u64,
     consuming: bool,
     visited: bool = false,
+    /// A consuming operand of a borrowed read's binding rather than a read.
+    site: bool = false,
+};
+
+const OperandSite = struct {
+    stmt: LIR.CFStmtId,
+    /// The statement after the operand's.
+    next: LIR.CFStmtId,
+    position: u8,
+    bit: u64,
 };
 
 const FieldRestitution = struct {
@@ -1916,7 +1951,7 @@ test "component dominance agrees with whole-store dominance across shared proced
     const rc = try gpa.alloc(bool, store.localCount());
     defer gpa.free(rc);
     @memset(rc, false);
-    var solution = try arc_solve.solve(gpa, &store, &layouts, rc, &.{}, &.{}, true);
+    var solution = try arc_solve.solve(gpa, &store, &layouts, rc, .{}, &.{}, true);
     defer solution.deinit();
 
     const stmt_first_proc = try gpa.alloc(u32, store.cfStmtCount());
@@ -2015,7 +2050,6 @@ test "statement dominance agrees with deleted-node reachability on every four-no
 fn classifyStatement(
     analysis: *Analysis,
     store: *const LirStore,
-    solution: *const arc_solve.Solution,
     operand_read_counts: []u32,
     direct_call_stmt_by_arg: []u32,
     direct_call_position_by_arg: []u8,
@@ -2028,36 +2062,35 @@ fn classifyStatement(
             try analysis.useWhole(current, stmt.target);
         },
         .assign_ref => |stmt| {
-            switch (stmt.op) {
-                .field => |op| {
-                    if (!try analysis.noteFieldRead(current, op.source, op.field_idx, stmt.target)) {
+            switch (stmt.op.kind) {
+                .field => {
+                    if (!try analysis.noteFieldRead(current, stmt.op.source, stmt.op.index, stmt.target)) {
                         try analysis.noteDef(stmt.target, current);
                     }
                 },
-                .local => |source| {
-                    try analysis.noteDemandAlias(source, stmt.target);
-                    if (stmt.target == source) {
-                        try analysis.useWhole(current, source);
+                .local => {
+                    if (stmt.target == stmt.op.source) {
+                        try analysis.useWhole(current, stmt.op.source);
                     } else {
-                        try analysis.noteAliasDef(current, stmt.target, source);
+                        try analysis.noteAliasDef(current, stmt.target, stmt.op.source);
                     }
                 },
-                .discriminant => |op| {
+                .discriminant => {
                     // The tag word is disjoint from every stored unit, so
                     // reading it is no use of a tag union.
-                    analysis.disqualify(op.source);
+                    analysis.disqualify(stmt.op.source);
                     try analysis.noteDef(stmt.target, current);
                 },
-                .tag_payload => |op| {
-                    try analysis.useWhole(current, op.source);
+                .tag_payload => {
+                    try analysis.useWhole(current, stmt.op.source);
                     try analysis.noteDef(stmt.target, current);
                 },
-                .tag_payload_struct => |op| {
-                    if (!try analysis.notePayloadView(stmt.target, op)) try analysis.useWhole(current, op.source);
+                .tag_payload_struct => {
+                    if (!try analysis.notePayloadView(stmt.target, stmt.op)) try analysis.useWhole(current, stmt.op.source);
                     try analysis.noteDef(stmt.target, current);
                 },
-                inline .list_reinterpret, .nominal => |op| {
-                    try analysis.useWhole(current, op.backing_ref);
+                inline .list_reinterpret, .nominal => {
+                    try analysis.useWhole(current, stmt.op.source);
                     analysis.disqualify(stmt.target);
                 },
             }
@@ -2067,7 +2100,6 @@ fn classifyStatement(
         },
         .assign_call => |stmt| {
             const args = store.getLocalSpan(stmt.args);
-            const callee_sig = solution.sigOf(stmt.proc);
             for (0..GuardedList.borrowLen(args)) |i| {
                 const arg = GuardedList.at(args, i);
                 if (i < arc_sig.tracked_param_count) {
@@ -2075,29 +2107,31 @@ fn classifyStatement(
                     direct_call_position_by_arg[@backingInt(arg)] = @intCast(i);
                 }
                 try analysis.useWholeAt(arg, current);
-                if (callee_sig.paramMode(i) == .owned) analysis.demandOwned(arg);
             }
             try analysis.noteDef(stmt.target, current);
         },
-        .assign_call_erased => |stmt| {
+        .assign_call_erased => |inline_stmt| {
+            const stmt = store.stmtRow(inline_stmt.data);
             try analysis.useWhole(current, stmt.closure);
             if (stmt.reuse_source) |reuse_source| try analysis.useWhole(current, reuse_source);
             const args = store.getLocalSpan(stmt.args);
             for (0..GuardedList.borrowLen(args)) |i| try analysis.useWholeAt(GuardedList.at(args, i), current);
-            try analysis.noteDef(stmt.target, current);
+            try analysis.noteDef(inline_stmt.target, current);
         },
-        .assign_packed_erased_fn => |stmt| {
+        .assign_packed_erased_fn => |inline_stmt| {
+            const stmt = store.stmtRow(inline_stmt.data);
             if (stmt.capture) |capture| try analysis.useWhole(current, capture);
             if (stmt.reuse) |reuse| try analysis.useWhole(current, reuse);
-            try analysis.noteDef(stmt.target, current);
+            try analysis.noteDef(inline_stmt.target, current);
         },
-        .assign_boxy_desc_ref => |stmt| {
+        .assign_boxy_desc_ref => |inline_stmt| {
+            const stmt = store.stmtRow(inline_stmt.data);
             if (stmt.desc.localOrNull()) |local| try analysis.useWhole(current, local);
             if (stmt.tag_residual_for) |desc| if (desc.localOrNull()) |local| try analysis.useWhole(current, local);
             const captures = store.getLocalSpan(stmt.captures);
             for (0..GuardedList.borrowLen(captures)) |i| try analysis.useWhole(current, GuardedList.at(captures, i));
-            try analysis.noteDef(stmt.target, current);
-            analysis.disqualify(stmt.target);
+            try analysis.noteDef(inline_stmt.target, current);
+            analysis.disqualify(inline_stmt.target);
         },
         .assign_boxy_dict_ref => |stmt| {
             if (stmt.dict.localOrNull()) |local| try analysis.useWhole(current, local);
@@ -2106,49 +2140,57 @@ fn classifyStatement(
             try analysis.noteDef(stmt.target, current);
             analysis.disqualify(stmt.target);
         },
-        .assign_boxy_box => |stmt| {
+        .assign_boxy_box => |inline_stmt| {
+            const stmt = store.stmtRow(inline_stmt.data);
             try analysis.useWhole(current, stmt.payload);
-            try analysis.noteDef(stmt.target, current);
-            analysis.disqualify(stmt.target);
+            try analysis.noteDef(inline_stmt.target, current);
+            analysis.disqualify(inline_stmt.target);
         },
-        .assign_boxy_record_update => |stmt| {
+        .assign_boxy_record_update => |inline_stmt| {
+            const stmt = store.stmtRow(inline_stmt.data);
             try analysis.useWhole(current, stmt.base);
             try analysis.useWhole(current, stmt.fields);
-            try analysis.noteDef(stmt.target, current);
-            analysis.disqualify(stmt.target);
+            try analysis.noteDef(inline_stmt.target, current);
+            analysis.disqualify(inline_stmt.target);
         },
-        inline .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect => |stmt| {
+        inline .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect => |stmt_stmt| {
+            const stmt = store.stmtRow(stmt_stmt.data);
             try analysis.useWhole(current, stmt.source);
-            try analysis.noteDef(stmt.target, current);
-            analysis.disqualify(stmt.target);
+            try analysis.noteDef(stmt_stmt.target, current);
+            analysis.disqualify(stmt_stmt.target);
         },
-        .assign_boxy_eq => |stmt| {
+        .assign_boxy_eq => |inline_stmt| {
+            const stmt = store.stmtRow(inline_stmt.data);
             try analysis.useWhole(current, stmt.lhs);
             try analysis.useWhole(current, stmt.rhs);
-            try analysis.noteDef(stmt.target, current);
-            analysis.disqualify(stmt.target);
+            try analysis.noteDef(inline_stmt.target, current);
+            analysis.disqualify(inline_stmt.target);
         },
-        .assign_boxy_hash => |stmt| {
+        .assign_boxy_hash => |inline_stmt| {
+            const stmt = store.stmtRow(inline_stmt.data);
             try analysis.useWhole(current, stmt.value);
             try analysis.useWhole(current, stmt.hasher);
-            try analysis.noteDef(stmt.target, current);
-            analysis.disqualify(stmt.target);
+            try analysis.noteDef(inline_stmt.target, current);
+            analysis.disqualify(inline_stmt.target);
         },
-        .assign_boxy_tag => |stmt| {
+        .assign_boxy_tag => |inline_stmt| {
+            const stmt = store.stmtRow(inline_stmt.data);
             if (stmt.payload) |payload| try analysis.useWhole(current, payload);
-            try analysis.noteDef(stmt.target, current);
-            analysis.disqualify(stmt.target);
+            try analysis.noteDef(inline_stmt.target, current);
+            analysis.disqualify(inline_stmt.target);
         },
-        .assign_boxy_tag_payload => |stmt| {
+        .assign_boxy_tag_payload => |inline_stmt| {
+            const stmt = store.stmtRow(inline_stmt.data);
             try analysis.useWhole(current, stmt.source);
-            try analysis.noteDef(stmt.target, current);
-            analysis.disqualify(stmt.target);
+            try analysis.noteDef(inline_stmt.target, current);
+            analysis.disqualify(inline_stmt.target);
             if (stmt.target_desc) |target_desc| {
                 try analysis.noteDef(target_desc, current);
                 analysis.disqualify(target_desc);
             }
         },
-        .assign_call_dict => |stmt| {
+        .assign_call_dict => |inline_stmt| {
+            const stmt = store.stmtRow(inline_stmt.data);
             if (stmt.dict.localOrNull()) |local| try analysis.useWhole(current, local);
             const args = store.getLocalSpan(stmt.args);
             for (0..GuardedList.borrowLen(args)) |i| try analysis.useWhole(current, GuardedList.at(args, i));
@@ -2156,16 +2198,14 @@ fn classifyStatement(
             for (0..GuardedList.borrowLen(arg_descs)) |i| try analysis.useWhole(current, GuardedList.at(arg_descs, i));
             const hidden_args = store.getLocalSpan(stmt.hidden_args);
             for (0..GuardedList.borrowLen(hidden_args)) |i| try analysis.useWhole(current, GuardedList.at(hidden_args, i));
-            try analysis.noteDef(stmt.target, current);
-            analysis.disqualify(stmt.target);
+            try analysis.noteDef(inline_stmt.target, current);
+            analysis.disqualify(inline_stmt.target);
         },
         .assign_low_level => |stmt| {
             const args = store.getLocalSpan(stmt.args);
-            const demand_mask = stmt.rc_effect.consume_args | stmt.rc_effect.retain_args;
             for (0..GuardedList.borrowLen(args)) |i| {
                 const arg = GuardedList.at(args, i);
                 try analysis.useWholeAt(arg, current);
-                if (i < 64 and (demand_mask & (@as(u64, 1) << @intCast(i))) != 0) analysis.demandOwned(arg);
             }
             try analysis.noteDef(stmt.target, current);
         },
@@ -2208,7 +2248,6 @@ fn classifyStatement(
         },
         .expect_err => |stmt| try analysis.useWhole(current, stmt.message),
         .runtime_error, .comptime_exhaustiveness_failed, .jump => {},
-        .comptime_branch_taken => {},
         // The input contract is RC-free LIR; if RC statements ever appear
         // here, classifying their operands as whole uses stays sound.
         inline .incref, .decref, .free => |stmt| {
@@ -2225,8 +2264,9 @@ fn classifyStatement(
             try analysis.useWhole(current, stmt.cond);
             try analysis.useWhole(current, stmt.payload);
         },
-        .str_match => |stmt| {
-            try analysis.useWhole(current, stmt.source);
+        .str_match => |stmt_stmt| {
+            const stmt = store.stmtRow(stmt_stmt.data);
+            try analysis.useWhole(current, stmt_stmt.source);
             const steps = store.getStrMatchSteps(stmt.steps);
             for (0..GuardedList.borrowLen(steps)) |i| {
                 switch (GuardedList.at(steps, i).capture) {
@@ -2260,6 +2300,176 @@ fn classifyStatement(
     }
 }
 
+/// A consuming operand position and the statement after it.
+const OperandUse = struct {
+    position: u8,
+    next: LIR.CFStmtId,
+};
+
+/// Where `stmt` consumes exactly one member of a borrowed read's forest, and
+/// that member carries the read's value: it is the read's binding `root` or a
+/// borrowed pure same-value alias of it, at an owned direct-call position, a
+/// borrowed one whose owned variant takes a field, a consumed low-level
+/// position, or a retained one whose result can hold the operand. A member
+/// borrowed onward from the binding through a field or payload read, a
+/// borrowed low-level result, or a lent call result holds a different value,
+/// so consuming it only observes the field, as does any other mention or a
+/// second mention in the same statement.
+fn operandSiteUse(
+    store: *const LirStore,
+    solution: *const arc_solve.Solution,
+    param_benefits: []const arc_sig.ParamMask,
+    rc_local: []const bool,
+    forest_mark: []const bool,
+    root: u32,
+    stmt_id: LIR.CFStmtId,
+) ?OperandUse {
+    switch (store.getCFStmtImmediate(stmt_id).*) {
+        .assign_call => |stmt| {
+            if (forest_mark[@backingInt(stmt.target)]) return null;
+            const args = store.getLocalSpan(stmt.args);
+            const sig = solution.sigOf(stmt.proc);
+            var found: ?OperandUse = null;
+            for (0..GuardedList.borrowLen(args)) |position| {
+                const arg = GuardedList.at(args, position);
+                if (!forest_mark[@backingInt(arg)]) continue;
+                if (found != null or position >= arc_sig.tracked_param_count or !rc_local[@backingInt(arg)]) return null;
+                if (@backingInt(solution.unitLocalOf(arg)) != root) return null;
+                const bit = arc_sig.paramBit(position).?;
+                const consumes = switch (sig.paramMode(position)) {
+                    .owned => true,
+                    .borrowed => !solution.isPinnedProc(stmt.proc) and (param_benefits[@backingInt(stmt.proc)] & bit) != 0,
+                };
+                if (!consumes) return null;
+                found = .{ .position = @intCast(position), .next = stmt.next };
+            }
+            return found;
+        },
+        .assign_low_level => |stmt| {
+            if (forest_mark[@backingInt(stmt.target)]) return null;
+            const args = store.getLocalSpan(stmt.args);
+            const effect = store.stmtRow(stmt.rc_effect);
+            const mask = effect.consume_args | effect.retain_args;
+            var found: ?OperandUse = null;
+            for (0..GuardedList.borrowLen(args)) |position| {
+                const arg = GuardedList.at(args, position);
+                if (!forest_mark[@backingInt(arg)]) continue;
+                if (found != null or position >= 64 or !rc_local[@backingInt(arg)]) return null;
+                if (@backingInt(solution.unitLocalOf(arg)) != root) return null;
+                const bit = @as(u64, 1) << @intCast(position);
+                if ((mask & bit) == 0) return null;
+                // A retained operand moves into the result only when the
+                // result can hold it.
+                if ((effect.consume_args & bit) == 0 and !rc_local[@backingInt(stmt.target)]) return null;
+                found = .{ .position = @intCast(position), .next = stmt.next };
+            }
+            return found;
+        },
+        .init_uninitialized,
+        .assign_ref,
+        .assign_literal,
+        .assign_call_erased,
+        .assign_packed_erased_fn,
+        .assign_boxy_desc_ref,
+        .assign_boxy_dict_ref,
+        .assign_boxy_box,
+        .assign_boxy_record_update,
+        .assign_boxy_unbox,
+        .assign_boxy_adapt,
+        .assign_boxy_inspect,
+        .assign_boxy_eq,
+        .assign_boxy_hash,
+        .assign_boxy_tag,
+        .assign_boxy_tag_payload,
+        .boxy_tag_match,
+        .assign_call_dict,
+        .assign_list,
+        .assign_struct,
+        .assign_tag,
+        .store_struct,
+        .store_tag,
+        .set_local,
+        .debug,
+        .expect,
+        .expect_err,
+        .runtime_error,
+        .comptime_exhaustiveness_failed,
+        .incref,
+        .decref,
+        .decref_if_initialized,
+        .free,
+        .switch_stmt,
+        .switch_initialized_payload,
+        .str_match,
+        .str_match_set,
+        .join,
+        .jump,
+        .ret,
+        .crash,
+        => return null,
+    }
+}
+
+/// Collects the borrow forest of `root` into `forest` and marks each member in
+/// `forest_mark`: the binding itself and every binding borrowed onward from it.
+/// A read through a view is a read of the view's root in its own right, with
+/// its own slots and observations, so the forest stops there.
+fn collectBorrowForest(
+    gpa: Allocator,
+    store: *const LirStore,
+    analysis: *const Analysis,
+    borrow_child_heads: []const u32,
+    borrow_child_edges: []const BorrowChildEdge,
+    borrow_stack: *std.ArrayList(u32),
+    forest: *std.ArrayList(u32),
+    forest_mark: []bool,
+    root: u32,
+) Error!void {
+    forest.clearRetainingCapacity();
+    borrow_stack.clearRetainingCapacity();
+    try borrow_stack.append(gpa, root);
+    var borrow_steps: usize = 0;
+    while (borrow_stack.pop()) |borrower| {
+        borrow_steps += 1;
+        if (borrow_steps > store.localCount()) dismantleInvariant("ARC dismantle borrow forest contained a cycle");
+        try forest.append(gpa, borrower);
+        forest_mark[borrower] = true;
+        var child = borrow_child_heads[borrower];
+        while (child != no_index) {
+            const child_edge = borrow_child_edges[child];
+            if (!analysis.read_through_view[child_edge.local]) {
+                try borrow_stack.append(gpa, child_edge.local);
+            }
+            child = child_edge.next;
+        }
+    }
+}
+
+/// Whether any mention of a member of the marked borrow forest of `root` is a
+/// consuming operand: the forest's binding then carries its field to an owned
+/// consumer.
+fn forestHasOperandSite(
+    store: *const LirStore,
+    solution: *const arc_solve.Solution,
+    analysis: *const Analysis,
+    param_benefits: []const arc_sig.ParamMask,
+    rc_local: []const bool,
+    forest: []const u32,
+    forest_mark: []const bool,
+    root: u32,
+) bool {
+    for (forest) |borrower| {
+        var mention = analysis.mention_heads[borrower];
+        while (mention != no_index) {
+            const edge = analysis.mention_edges.items[mention];
+            mention = edge.next;
+            const stmt: LIR.CFStmtId = @fromBackingInt(@intCast(edge.stmt));
+            if (operandSiteUse(store, solution, param_benefits, rc_local, forest_mark, root, stmt) != null) return true;
+        }
+    }
+    return false;
+}
+
 /// A reachable reference read that can carry its source's ownership root: a
 /// borrowed same-layout alias or an ownership-complete projection.
 const ProjectionEdge = struct {
@@ -2276,17 +2486,17 @@ fn projectionEdgeOf(
     stmt_id: LIR.CFStmtId,
     assign: anytype,
 ) ?ProjectionEdge {
-    const source: LIR.LocalId, const is_projection: bool = switch (assign.op) {
-        .local => |local| blk: {
+    const source: LIR.LocalId, const is_projection: bool = switch (assign.op.kind) {
+        .local => blk: {
             if (!solution.isBorrowed(assign.target)) return null;
-            if (store.getLocal(local).layout_idx != store.getLocal(assign.target).layout_idx) return null;
-            break :blk .{ local, false };
+            if (store.getLocal(assign.op.source).layout_idx != store.getLocal(assign.target).layout_idx) return null;
+            break :blk .{ assign.op.source, false };
         },
         .field, .tag_payload, .tag_payload_struct => blk: {
             const projection = encodeProjection(assign.op).?;
-            const local = switch (assign.op) {
-                inline .field, .tag_payload, .tag_payload_struct => |op| op.source,
-                .local, .discriminant, .list_reinterpret, .nominal => unreachable,
+            const local = switch (assign.op.kind) {
+                inline .field, .tag_payload, .tag_payload_struct => assign.op.source,
+                .local, .discriminant, .list_reinterpret, .nominal => unreachable, // the enclosing prong matched only field and tag-payload kinds
             };
             if (!projectionOwnsAllRc(store, layouts, local, assign.target, projection)) return null;
             break :blk .{ local, true };
@@ -2316,17 +2526,17 @@ fn placeLinkOf(
     stmt_index: u32,
     assign: anytype,
 ) ?PlaceLink {
-    const source: LIR.LocalId, const kind: PlaceEdgeKind = switch (assign.op) {
-        .local => |local| blk: {
+    const source: LIR.LocalId, const kind: PlaceEdgeKind = switch (assign.op.kind) {
+        .local => blk: {
             if (!solution.isBorrowed(assign.target)) return null;
-            if (solution.unitLocalOf(assign.target) != solution.unitLocalOf(local)) return null;
-            break :blk .{ local, .alias };
+            if (solution.unitLocalOf(assign.target) != solution.unitLocalOf(assign.op.source)) return null;
+            break :blk .{ assign.op.source, .alias };
         },
         .field, .tag_payload, .tag_payload_struct => blk: {
             const projection = encodeProjection(assign.op).?;
-            const projection_source = switch (assign.op) {
-                inline .field, .tag_payload, .tag_payload_struct => |op| op.source,
-                .local, .discriminant, .list_reinterpret, .nominal => unreachable,
+            const projection_source = switch (assign.op.kind) {
+                inline .field, .tag_payload, .tag_payload_struct => assign.op.source,
+                .local, .discriminant, .list_reinterpret, .nominal => unreachable, // the enclosing prong matched only field and tag-payload kinds
             };
             if (!projectionOwnsAllRc(store, layouts, projection_source, assign.target, projection)) return null;
             break :blk .{ projection_source, .{ .projection = stmt_index } };
@@ -2416,7 +2626,6 @@ const StatementFacts = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -2531,6 +2740,17 @@ const ComponentBuckets = struct {
     }
 };
 
+/// Whether a read whose source belongs to view `through` goes through a view
+/// in `held` on its way out to `stop`, the view whose container is being
+/// solved (`no_index` for any other container).
+fn readsThroughHeldView(analysis: *const Analysis, held: *const std.AutoHashMapUnmanaged(u32, void), through: u32, stop: u32) bool {
+    var view = through;
+    while (view != no_index and view != stop) : (view = analysis.view_parent[view]) {
+        if (held.contains(view)) return true;
+    }
+    return false;
+}
+
 /// A reachable statement naming the candidate, which places it in its
 /// procedure's call-graph component, or null for a candidate with no
 /// occurrence (which never commits a plan).
@@ -2562,7 +2782,7 @@ fn materializedPlaceLink(
     const representative_local: LIR.LocalId = @fromBackingInt(representative);
     if (!result.containers.contains(representative_local) and
         !result.owned_only_containers.contains(representative_local)) return read.link;
-    return placeLinkOf(store, layouts, solution, read.stmt, .{ .target = assign.target, .op = LIR.RefOp{ .local = representative_local } });
+    return placeLinkOf(store, layouts, solution, read.stmt, .{ .target = assign.target, .op = LIR.RefOp.local(representative_local) });
 }
 
 /// Solve takes for every reachable statement in the store.
@@ -2595,7 +2815,7 @@ pub fn compute(
     defer gpa.free(direct_call_position_by_arg);
     @memset(direct_call_position_by_arg, std.math.maxInt(u8));
     for (0..store.procSpecCount()) |proc_index| {
-        const proc = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
+        const proc = store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
         const body = proc.body orelse continue;
         const params = store.getLocalSpan(proc.args);
         for (0..GuardedList.borrowLen(params)) |position| {
@@ -2647,7 +2867,7 @@ pub fn compute(
 
     // Every per-statement fact the whole-store passes below consume, gathered
     // in disjoint statement ranges off the coordinator.
-    const range_count = @max(1, std.math.divCeil(usize, store.cfStmtCount(), statement_facts_range_size) catch unreachable);
+    const range_count = @max(1, std.math.divCeil(usize, store.cfStmtCount(), statement_facts_range_size) catch unreachable); // the divisor is a nonzero constant and usize division cannot overflow
     const fact_ranges = try gpa.alloc(StatementFacts, range_count);
     defer gpa.free(fact_ranges);
     for (fact_ranges, 0..) |*range, index| {
@@ -2759,6 +2979,9 @@ pub fn compute(
         .alias_root = try gpa.alloc(u32, store.localCount()),
         .view_base = try gpa.alloc(u32, store.localCount()),
         .read_through_view = try gpa.alloc(bool, store.localCount()),
+        .view_head = try gpa.alloc(u32, store.localCount()),
+        .view_parent = try gpa.alloc(u32, store.localCount()),
+        .view_candidates = .empty,
         .view_root = try gpa.alloc(u32, store.localCount()),
         .union_roots = .empty,
         .candidates = .empty,
@@ -2766,18 +2989,18 @@ pub fn compute(
         .projected_root = projected_root,
         .projected_container = projected_container,
         .explicit_init_join = explicit_init_join,
-        .owned_demand = try gpa.alloc(bool, store.localCount()),
         .mention_heads = try gpa.alloc(u32, store.localCount()),
         .boxy_dynamic_layouts = collections.DenseMap(layout_mod.Idx, bool).init(gpa),
-        .layout_visited = std.AutoHashMap(layout_mod.Idx, void).init(gpa),
+        .layout_visited = collections.DenseMap(layout_mod.Idx, void).init(gpa),
     };
     defer analysis.deinit();
     @memset(analysis.state, .unknown);
     @memset(analysis.alias_root, no_index);
     @memset(analysis.view_base, 0);
     @memset(analysis.read_through_view, false);
+    @memset(analysis.view_head, no_index);
+    @memset(analysis.view_parent, no_index);
     @memset(analysis.view_root, no_index);
-    @memset(analysis.owned_demand, false);
     @memset(analysis.mention_heads, no_index);
 
     // One linear scan over every reachable statement, classifying each
@@ -2796,15 +3019,13 @@ pub fn compute(
             const stmt_index = @backingInt(current);
             if (visited.isSet(stmt_index)) continue;
             visited.set(stmt_index);
-            try classifyStatement(&analysis, store, solution, operand_read_counts, direct_call_stmt_by_arg, direct_call_position_by_arg, current);
+            try classifyStatement(&analysis, store, operand_read_counts, direct_call_stmt_by_arg, direct_call_position_by_arg, current);
         }
     }
 
-    try analysis.closeOwnedDemand();
     var own_counts_it = analysis.candidates.valueIterator();
     while (own_counts_it.next()) |candidate| {
         candidate.own_read_count = @intCast(candidate.reads.items.len);
-        candidate.own_whole_use_count = @intCast(candidate.whole_uses.items.len);
     }
 
     // Second phase: verify the surviving candidates' read shapes and spines,
@@ -2852,7 +3073,7 @@ pub fn compute(
     defer gpa.free(straight_next);
     for (straight_next, 0..) |*next, stmt_index| {
         next.* = switch (store.getCFStmtImmediate(@fromBackingInt(@intCast(stmt_index))).*) {
-            inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| @backingInt(stmt.next),
+            inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |stmt| @backingInt(stmt.next),
             .set_local,
             .join,
             .switch_stmt,
@@ -2883,7 +3104,6 @@ pub fn compute(
     // The solved borrow forest, edges reversed: every binding borrowed
     // through a candidate's field read observes that field at each of its
     // mentions, and so does every binding borrowed onward from it.
-    const BorrowChildEdge = struct { local: u32, next: u32 };
     var borrow_child_edges = std.ArrayList(BorrowChildEdge).empty;
     defer borrow_child_edges.deinit(gpa);
     const borrow_child_heads = try gpa.alloc(u32, store.localCount());
@@ -2897,6 +3117,17 @@ pub fn compute(
     }
     var borrow_stack = std.ArrayList(u32).empty;
     defer borrow_stack.deinit(gpa);
+    var forest = std.ArrayList(u32).empty;
+    defer forest.deinit(gpa);
+    const forest_mark = try gpa.alloc(bool, store.localCount());
+    defer gpa.free(forest_mark);
+    @memset(forest_mark, false);
+    var operand_sites = std.ArrayList(OperandSite).empty;
+    defer operand_sites.deinit(gpa);
+    // Per read of the container being solved: whether it defines a view whose
+    // borrow forest has a consuming operand (see `operandSiteUse`).
+    var view_demand = std.ArrayList(bool).empty;
+    defer view_demand.deinit(gpa);
     var rc_slots = std.ArrayList(layout_mod.Store.RcSlot).empty;
     defer rc_slots.deinit(gpa);
     var bounds = std.ArrayList(u32).empty;
@@ -2905,6 +3136,20 @@ pub fn compute(
     defer pieces.deinit(gpa);
     var read_masks = std.ArrayList(u64).empty;
     defer read_masks.deinit(gpa);
+    // The containers of one component's solve: its candidates, then each view
+    // whose definition took its slots, solved right after its container.
+    const SolveEntry = struct { local: u32, view: bool };
+    var solve_queue = std.ArrayList(SolveEntry).empty;
+    defer solve_queue.deinit(gpa);
+    // Per container: reads solved as owned-demanded takes whose binding is
+    // borrowed, and those that turned out not to be takes. A borrowed binding
+    // that holds no unit reads the container's slots at every later mention.
+    var deferred_takes = std.ArrayList(u32).empty;
+    defer deferred_takes.deinit(gpa);
+    var declined_takes = std.AutoHashMapUnmanaged(u32, void).empty;
+    defer declined_takes.deinit(gpa);
+    var held_views = std.AutoHashMapUnmanaged(u32, void).empty;
+    defer held_views.deinit(gpa);
 
     // A root's deferred reads are settled by their representatives' plans,
     // and a representative's layout is a proper part of its root's layout,
@@ -3014,6 +3259,9 @@ pub fn compute(
         value.* = @intCast(index);
     }
     const place_read_buckets = try ComponentBuckets.build(scc_allocator, component_count, place_read_keys, place_read_values);
+    // Every parameter benefit published so far, which classifies operands.
+    const operand_benefits = try scc_allocator.alloc(arc_sig.ParamMask, proc_count);
+    @memset(operand_benefits, 0);
     const proc_values = try scc_allocator.alloc(u32, proc_count);
     for (proc_values, 0..) |*value, index| value.* = @intCast(index);
     const proc_buckets = try ComponentBuckets.build(scc_allocator, component_count, component_of_proc, proc_values);
@@ -3047,6 +3295,8 @@ pub fn compute(
         take_binding: LIR.LocalId,
         binding_root: LIR.LocalId,
         restitution: CallArg,
+        operand_take: CallArg,
+        owned_only_operand_take: CallArg,
         container: LIR.LocalId,
         owned_only_container: LIR.LocalId,
     };
@@ -3112,29 +3362,33 @@ pub fn compute(
         undo.clearRetainingCapacity();
         var solved = false;
         while (true) {
-            // A call argument at a borrowed position whose owned variant
-            // takes a field is an owned operand, like one at an owned
-            // position.
-            var demand_changed = false;
+            // A refcounted argument at a borrowed position whose owned
+            // variant takes a field is a consuming operand, like one at an
+            // owned position. A benefit once seen keeps classifying its
+            // positions, so the operands only grow: a recursive component
+            // whose own new benefits add one solves again.
+            var operands_changed = false;
             for (scc_calls) |call_index| {
                 const call = store.getCFStmtImmediate(@fromBackingInt(call_index)).assign_call;
                 if (solution.isPinnedProc(call.proc)) continue;
-                const benefits = result.owned_only_param_benefits[@backingInt(call.proc)];
-                if (benefits == 0) continue;
+                const added = result.owned_only_param_benefits[@backingInt(call.proc)] & ~operand_benefits[@backingInt(call.proc)];
+                if (added == 0) continue;
                 const callee_sig = solution.sigOf(call.proc);
                 const args = store.getLocalSpan(call.args);
                 for (0..@min(GuardedList.borrowLen(args), arc_sig.tracked_param_count)) |position| {
                     const bit = arc_sig.paramBit(position).?;
-                    if ((benefits & bit) == 0 or callee_sig.paramMode(position) != .borrowed) continue;
-                    const arg = GuardedList.at(args, position);
-                    if (!rc_local[@backingInt(arg)]) continue;
-                    if (try analysis.demandOwnedClosed(arg)) demand_changed = true;
+                    if ((added & bit) == 0 or callee_sig.paramMode(position) != .borrowed) continue;
+                    if (rc_local[@backingInt(GuardedList.at(args, position))]) operands_changed = true;
                 }
             }
+            for (scc_calls) |call_index| {
+                const callee_index = @backingInt(store.getCFStmtImmediate(@fromBackingInt(call_index)).assign_call.proc);
+                operand_benefits[callee_index] |= result.owned_only_param_benefits[callee_index];
+            }
             if (solved) {
-                // The component's own benefits demanded nothing new: its
-                // last solve is final.
-                if (!demand_changed) break;
+                // The component's own benefits added no operand: its last
+                // solve is final.
+                if (!operands_changed) break;
                 var undo_index = undo.items.len;
                 while (undo_index > 0) {
                     undo_index -= 1;
@@ -3145,6 +3399,8 @@ pub fn compute(
                         .take_binding => |local| result.take_bindings[@backingInt(local)] = false,
                         .binding_root => |local| result.owned_only_binding_roots[@backingInt(local)] = no_index,
                         .restitution => |call_arg| _ = result.field_restitution_args.remove(call_arg),
+                        .operand_take => |call_arg| _ = result.operand_takes.remove(call_arg),
+                        .owned_only_operand_take => |call_arg| _ = result.owned_only_operand_takes.remove(call_arg),
                         .container => |local| _ = result.containers.remove(local),
                         .owned_only_container => |local| _ = result.owned_only_containers.remove(local),
                     }
@@ -3155,34 +3411,28 @@ pub fn compute(
             }
             solved = true;
 
-            // A deferred read whose borrowed target is re-emitted owned
-            // retains through its representative exactly like an owned
-            // target, so it is the same whole use of that representative.
-            for (scc_candidates) |candidate_index| {
-                const candidate = analysis.candidates.getPtr(candidate_index).?;
-                candidate.whole_uses.shrinkRetainingCapacity(candidate.own_whole_use_count);
-            }
-            for (scc_candidates) |candidate_index| {
-                const candidate = analysis.candidates.getPtr(candidate_index).?;
-                for (candidate.equivalenced_reads.items) |deferred| {
-                    const target_index = @backingInt(deferred.read.target);
-                    if (!solution.isBorrowed(deferred.read.target) or !analysis.owned_demand[target_index]) continue;
-                    const representative = analysis.candidates.getPtr(@backingInt(deferred.representative)) orelse continue;
-                    try representative.whole_uses.append(gpa, deferred.read.stmt);
-                }
-            }
-            candidates: for (scc_candidates) |candidate_index| {
+            solve_queue.clearRetainingCapacity();
+            for (scc_candidates) |candidate_index| try solve_queue.append(gpa, .{ .local = candidate_index, .view = false });
+            var queue_index: usize = 0;
+            candidates: while (queue_index < solve_queue.items.len) : (queue_index += 1) {
+                const entry = solve_queue.items[queue_index];
+                const candidate_index = entry.local;
                 const local: LIR.LocalId = @fromBackingInt(@intCast(candidate_index));
-                const candidate = analysis.candidates.getPtr(candidate_index).?;
+                const candidate = if (entry.view) analysis.view_candidates.getPtr(candidate_index).? else analysis.candidates.getPtr(candidate_index).?;
                 if (candidate.disqualified) continue;
-                // A deferred read whose representative committed a plan is that
-                // representative's alias; every other one is an ordinary field read
-                // of this container.
-                candidate.reads.shrinkRetainingCapacity(candidate.own_read_count);
-                for (candidate.equivalenced_reads.items) |deferred| {
-                    if (result.containers.contains(deferred.representative) or
-                        result.owned_only_containers.contains(deferred.representative)) continue;
-                    try candidate.reads.append(gpa, deferred.read);
+                // Every read of a view's container went through the view, so only
+                // views nested inside it can hold a read's slots.
+                const reads_stop: u32 = if (entry.view) candidate_index else no_index;
+                if (!entry.view) {
+                    // A deferred read whose representative committed a plan is that
+                    // representative's alias; every other one is an ordinary field read
+                    // of this container.
+                    candidate.reads.shrinkRetainingCapacity(candidate.own_read_count);
+                    for (candidate.equivalenced_reads.items) |deferred| {
+                        if (result.containers.contains(deferred.representative) or
+                            result.owned_only_containers.contains(deferred.representative)) continue;
+                        try candidate.reads.append(gpa, deferred.read);
+                    }
                 }
                 if (candidate.reads.items.len == 0) continue;
 
@@ -3190,7 +3440,7 @@ pub fn compute(
                 // its own, but an ownership-complete view of a root that dies whole,
                 // is defined once, and is otherwise only aliased or discriminated
                 // spends the root's unit through its fields.
-                const union_root: ?*UnionRoot = if (analysis.view_root[@backingInt(local)] != no_index) blk: {
+                const union_root: ?*UnionRoot = if (!entry.view and analysis.view_root[@backingInt(local)] != no_index) blk: {
                     const root_entry = analysis.union_roots.getPtr(analysis.view_root[@backingInt(local)]) orelse continue :candidates;
                     if (root_entry.disqualified or root_entry.def_count != 1 or root_entry.view != @backingInt(local)) continue :candidates;
                     break :blk root_entry;
@@ -3205,9 +3455,10 @@ pub fn compute(
                 else if (candidate.def_count == 1)
                     switch (store.getCFStmtImmediate(candidate.def_stmt).*) {
                         inline .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag => |stmt| stmt.next,
-                        .assign_ref => |stmt| if (union_root != null or
+                        .assign_ref => |stmt| if (entry.view or
+                            union_root != null or
                             analysis.projected_root[@backingInt(local)] != no_index or
-                            (stmt.op == .local and !solution.isBorrowed(local))) stmt.next else continue :candidates,
+                            (stmt.op.kind == .local and !solution.isBorrowed(local))) stmt.next else continue :candidates,
                         .set_local => continue :candidates,
                         .init_uninitialized,
                         .assign_boxy_desc_ref,
@@ -3230,7 +3481,6 @@ pub fn compute(
                         .expect_err,
                         .runtime_error,
                         .comptime_exhaustiveness_failed,
-                        .comptime_branch_taken,
                         .incref,
                         .decref,
                         .decref_if_initialized,
@@ -3290,122 +3540,6 @@ pub fn compute(
                     try read_masks.append(gpa, mask);
                 }
 
-                // Verify each field by a forward dataflow from the container's
-                // definition over the control-flow graph: a consuming read is a take
-                // only if the field cannot have been taken yet at that point, a
-                // borrow of a taken field must run before every take that could
-                // reach it. Divergent residuals remain exact per path in ARC. Loops
-                // poison themselves unless an explicit reinitialization or outcome
-                // receipt supplies the field again before the next take.
-                read_kinds.clearRetainingCapacity();
-                field_restitutions.clearRetainingCapacity();
-                for (candidate.reads.items, read_masks.items) |read, bit| {
-                    if (bit == 0) continue;
-                    const consuming = !solution.isBorrowed(read.target) or analysis.owned_demand[@backingInt(read.target)];
-                    // A borrowed view's definition copies only the
-                    // representation; its reads and other uses observe the
-                    // slots themselves.
-                    if (read.view and !consuming) continue;
-                    try read_kinds.put(read.stmt, .{
-                        .bit = bit,
-                        .consuming = consuming,
-                    });
-
-                    // Initial closed field-place restitution capability. The field
-                    // binding must have exactly one operand read, and that read must
-                    // be one represented owned position of a direct call whose
-                    // result is refined by the explicit alias/discriminant/switch
-                    // continuation. This is a total syntactic/metadata boundary:
-                    // unsupported continuations simply keep the ordinary schedule.
-                    if (!consuming or operand_read_counts[@backingInt(read.target)] != 1) continue;
-                    const call_stmt_index = direct_call_stmt_by_arg[@backingInt(read.target)];
-                    const position = direct_call_position_by_arg[@backingInt(read.target)];
-                    if (call_stmt_index == no_index or position == std.math.maxInt(u8)) continue;
-                    const call_stmt_id: LIR.CFStmtId = @fromBackingInt(@intCast(call_stmt_index));
-                    const call_stmt = store.getCFStmtImmediate(call_stmt_id);
-                    if (call_stmt.* != .assign_call) continue;
-                    const args = store.getLocalSpan(call_stmt.assign_call.args);
-                    if (position >= GuardedList.borrowLen(args) or GuardedList.at(args, position) != read.target) continue;
-                    const callee_sig = solution.sigOf(call_stmt.assign_call.proc);
-                    if (callee_sig.paramMode(position) != .owned) continue;
-                    const outcomes = solution.availableOutcomeSpanOf(call_stmt.assign_call.proc);
-                    const refinement = (try arc_solve.findOutcomeRefinement(gpa, store, call_stmt.assign_call.target, call_stmt.assign_call.next, outcomes)) orelse continue;
-                    const position_bit = arc_sig.paramBit(position).?;
-                    var any_restitution = false;
-                    for (solution.sigTable().outcomesOf(.{ .outcomes = outcomes })) |outcome| {
-                        any_restitution = any_restitution or (outcome.restituted_params & position_bit) != 0;
-                    }
-                    if (!any_restitution) continue;
-                    try field_restitutions.append(gpa, .{
-                        .call_arg = .{ .stmt = call_stmt_id, .position = position },
-                        .projection = read.stmt,
-                        .switch_stmt = refinement,
-                        .field_mask = bit,
-                        .outcomes = outcomes,
-                    });
-                }
-                // A whole use behaves like a borrow of every field at once: no take
-                // may run before it on any path, so the value it moves or observes
-                // is the intact container.
-                for (candidate.whole_uses.items) |stmt| {
-                    const slot = try read_kinds.getOrPut(stmt);
-                    if (slot.found_existing) {
-                        slot.value_ptr.bit = ~@as(u64, 0);
-                        slot.value_ptr.consuming = false;
-                    } else {
-                        slot.value_ptr.* = .{ .bit = ~@as(u64, 0), .consuming = false };
-                    }
-                }
-                // A borrowed field read binds a name that reads the field's stored
-                // unit at every later mention, without holding a unit of its own, and
-                // every binding borrowed onward from it does the same. Each such
-                // mention is a borrow observation of that field: a take of the field
-                // may not run before any of them on any path.
-                var forced_poison: u64 = 0;
-                for (candidate.reads.items, read_masks.items) |read, bit| {
-                    if (bit == 0) continue;
-                    if (!solution.isBorrowed(read.target) or analysis.owned_demand[@backingInt(read.target)]) continue;
-                    borrow_stack.clearRetainingCapacity();
-                    try borrow_stack.append(gpa, @backingInt(read.target));
-                    var borrow_steps: usize = 0;
-                    while (borrow_stack.pop()) |borrower| {
-                        borrow_steps += 1;
-                        if (borrow_steps > store.localCount()) dismantleInvariant("ARC dismantle borrow forest contained a cycle");
-                        var mention = analysis.mention_heads[borrower];
-                        while (mention != no_index) {
-                            const edge = analysis.mention_edges.items[mention];
-                            const slot = try read_kinds.getOrPut(@fromBackingInt(@intCast(edge.stmt)));
-                            if (!slot.found_existing) {
-                                slot.value_ptr.* = .{ .bit = bit, .consuming = false };
-                            } else if (slot.value_ptr.consuming) {
-                                forced_poison |= bit;
-                            } else {
-                                slot.value_ptr.bit |= bit;
-                            }
-                            mention = edge.next;
-                        }
-                        var child = borrow_child_heads[borrower];
-                        while (child != no_index) {
-                            const child_edge = borrow_child_edges.items[child];
-                            // A read through a view is a read of this
-                            // container with its own slots and observations.
-                            if (!analysis.read_through_view[child_edge.local]) {
-                                try borrow_stack.append(gpa, child_edge.local);
-                            }
-                            child = child_edge.next;
-                        }
-                    }
-                }
-
-                var candidate_mask: u64 = 0;
-                for (candidate.reads.items, read_masks.items) |read, bit| {
-                    if (!solution.isBorrowed(read.target) or analysis.owned_demand[@backingInt(read.target)]) {
-                        candidate_mask |= bit;
-                    }
-                }
-                candidate_mask &= rc_mask;
-                if (candidate_mask == 0) continue;
-
                 if (candidate.reads.items.len == 0) dismantleInvariant("field-take candidate had no field projection");
                 const first_read = @backingInt(candidate.reads.items[0].stmt);
                 const owner = stmt_proc[first_read];
@@ -3418,153 +3552,337 @@ pub fn compute(
                 }
                 const join_bodies = &proc_joins[owner];
 
-                var poison: u64 = 0;
-                // A borrowed payload view supplies no unit of its own. Only producing
-                // its union root again restores fresh fields across a loop back edge;
-                // recreating the view still observes the same stored units.
-                const fresh_def = if (union_root) |root| root.def_stmt else candidate.def_stmt;
-                const redefinition: ?LIR.CFStmtId = if (candidate.join_starts.items.len == 0) fresh_def else null;
-                try future_fields.compute(gpa, store, solution, local, proc_graphs[owner], &read_kinds, field_restitutions.items, redefinition);
+                // Verify each field by a forward dataflow from the container's
+                // definition over the control-flow graph: a consuming read is a take
+                // only if the field cannot have been taken yet at that point, a
+                // borrow of a taken field must run before every take that could
+                // reach it. Divergent residuals remain exact per path in ARC. Loops
+                // poison themselves unless an explicit reinitialization or outcome
+                // receipt supplies the field again before the next take.
+                // A view whose borrow forest has a consuming operand carries its
+                // whole range there, so it is solved as the take of that range at
+                // its definition. Every other read solved borrowed holds no unit
+                // and takes, if at all, at its consuming operands.
+                view_demand.clearRetainingCapacity();
                 for (candidate.reads.items) |read| {
-                    const kind = read_kinds.getPtr(read.stmt) orelse continue;
-                    if (!kind.consuming) continue;
-                    const definition = store.getCFStmtImmediate(read.stmt).assign_ref;
-                    if (future_fields.observed(definition.next) & kind.bit != 0) {
-                        kind.consuming = false;
+                    var demanded = false;
+                    if (read.view and solution.isBorrowed(read.target)) {
+                        try collectBorrowForest(gpa, store, &analysis, borrow_child_heads, borrow_child_edges.items, &borrow_stack, &forest, forest_mark, @backingInt(read.target));
+                        demanded = forestHasOperandSite(store, solution, &analysis, operand_benefits, rc_local, forest.items, forest_mark, @backingInt(read.target));
+                        for (forest.items) |borrower| forest_mark[borrower] = false;
                     }
+                    try view_demand.append(gpa, demanded);
                 }
-                candidate_mask = 0;
-                for (candidate.reads.items) |read| {
-                    const kind = read_kinds.get(read.stmt) orelse continue;
-                    if (kind.consuming) candidate_mask |= kind.bit;
-                }
-                if (candidate_mask == 0) continue;
-                body_states.clearRetainingCapacity();
-                flow_frames.clearRetainingCapacity();
-                try flow_frames.append(gpa, .{ .cursor = spine_start, .state = .{ .may = 0, .must = 0 } });
-                for (candidate.join_starts.items, 0..) |start, index| {
-                    if (index == 0) continue;
-                    try flow_frames.append(gpa, .{ .cursor = start, .state = .{ .may = 0, .must = 0 } });
-                }
-                var steps: usize = 0;
-                // Each statement is re-walked at most once per lattice step of its
-                // reaching state; 2 bits per tracked field bound the lattice height.
-                const step_limit = (store.cfStmtCount() + 1) * (2 * 64 + 1);
-                flow: while (flow_frames.pop()) |frame| {
-                    var cursor = frame.cursor;
-                    var state = frame.state;
-                    chain: while (true) {
-                        steps += 1;
-                        if (steps > step_limit) {
-                            poison = ~@as(u64, 0);
-                            break :flow;
+                declined_takes.clearRetainingCapacity();
+                const taken_mask: u64 = attempt: while (true) {
+                    // A view whose value reaches a consuming operand is solved as the
+                    // take of its whole range, and while it is, it holds its slots:
+                    // reads through it are its own, solved once it is committed. A
+                    // view the solve declines is a borrowed view again, whose reads
+                    // are this container's.
+                    held_views.clearRetainingCapacity();
+                    for (candidate.reads.items, view_demand.items) |read, demanded| {
+                        if (!demanded) continue;
+                        const target_index = @backingInt(read.target);
+                        if (declined_takes.contains(target_index)) continue;
+                        try held_views.put(gpa, target_index, {});
+                    }
+                    deferred_takes.clearRetainingCapacity();
+                    read_kinds.clearRetainingCapacity();
+                    field_restitutions.clearRetainingCapacity();
+                    for (candidate.reads.items, read_masks.items, 0..) |read, bit, read_index| {
+                        if (bit == 0) continue;
+                        if (readsThroughHeldView(&analysis, &held_views, read.through, reads_stop)) continue;
+                        const target_index = @backingInt(read.target);
+                        // A borrowed binding holds no unit of its own, so its read
+                        // consumes nothing unless it defines a held view.
+                        const demanded = view_demand.items[read_index];
+                        const consuming = !solution.isBorrowed(read.target) or (demanded and !declined_takes.contains(target_index));
+                        if (demanded and consuming) try deferred_takes.append(gpa, @intCast(read_index));
+                        // A borrowed view's definition copies only the
+                        // representation; its reads and other uses observe the
+                        // slots themselves.
+                        if (read.view and !consuming) continue;
+                        try read_kinds.put(read.stmt, .{
+                            .bit = bit,
+                            .consuming = consuming,
+                        });
+
+                        // Initial closed field-place restitution capability. The field
+                        // binding must have exactly one operand read, and that read must
+                        // be one represented owned position of a direct call whose
+                        // result is refined by the explicit alias/discriminant/switch
+                        // continuation. This is a total syntactic/metadata boundary:
+                        // unsupported continuations simply keep the ordinary schedule.
+                        if (!consuming or operand_read_counts[@backingInt(read.target)] != 1) continue;
+                        const call_stmt_index = direct_call_stmt_by_arg[@backingInt(read.target)];
+                        const position = direct_call_position_by_arg[@backingInt(read.target)];
+                        if (call_stmt_index == no_index or position == std.math.maxInt(u8)) continue;
+                        const call_stmt_id: LIR.CFStmtId = @fromBackingInt(@intCast(call_stmt_index));
+                        const call_stmt = store.getCFStmtImmediate(call_stmt_id);
+                        if (call_stmt.* != .assign_call) continue;
+                        const args = store.getLocalSpan(call_stmt.assign_call.args);
+                        if (position >= GuardedList.borrowLen(args) or GuardedList.at(args, position) != read.target) continue;
+                        const callee_sig = solution.sigOf(call_stmt.assign_call.proc);
+                        if (callee_sig.paramMode(position) != .owned) continue;
+                        const outcomes = solution.availableOutcomeSpanOf(call_stmt.assign_call.proc);
+                        const refinement = (try arc_solve.findOutcomeRefinement(gpa, store, call_stmt.assign_call.target, call_stmt.assign_call.next, outcomes)) orelse continue;
+                        const position_bit = arc_sig.paramBit(position).?;
+                        var any_restitution = false;
+                        for (solution.sigTable().outcomesOf(.{ .outcomes = outcomes })) |outcome| {
+                            any_restitution = any_restitution or (outcome.restituted_params & position_bit) != 0;
                         }
-                        // Reaching the container's single value-producing definition
-                        // again, through a loop back edge, starts the next
-                        // iteration's fresh value with every field intact; the
-                        // previous value is dead past its redefinition exactly as it
-                        // is past an explicit join-cell write.
-                        if (redefinition) |def_stmt| if (cursor == def_stmt) {
-                            state = .{ .may = 0, .must = 0 };
-                        };
-                        if (read_kinds.getPtr(cursor)) |kind| {
-                            kind.visited = true;
-                            if (kind.consuming) {
-                                // A take where the field may already be gone would
-                                // double-consume its unit on that path.
-                                poison |= state.may & kind.bit;
-                                state.may |= kind.bit;
-                                state.must |= kind.bit;
-                            } else {
-                                // A borrow after a possible take would observe the
-                                // taker's mutation instead of the original field.
-                                poison |= state.may & kind.bit;
+                        if (!any_restitution) continue;
+                        try field_restitutions.append(gpa, .{
+                            .call_arg = .{ .stmt = call_stmt_id, .position = position },
+                            .projection = read.stmt,
+                            .switch_stmt = refinement,
+                            .field_mask = bit,
+                            .outcomes = outcomes,
+                        });
+                    }
+                    // A whole use behaves like a borrow of every field at once: no take
+                    // may run before it on any path, so the value it moves or observes
+                    // is the intact container.
+                    for (candidate.whole_uses.items) |stmt| {
+                        const slot = try read_kinds.getOrPut(stmt);
+                        if (slot.found_existing) {
+                            slot.value_ptr.bit = ~@as(u64, 0);
+                            slot.value_ptr.consuming = false;
+                        } else {
+                            slot.value_ptr.* = .{ .bit = ~@as(u64, 0), .consuming = false };
+                        }
+                    }
+                    // A borrowed field read binds a name that reads the field's stored
+                    // unit at every later mention, without holding a unit of its own, and
+                    // every binding borrowed onward from it does the same. Each such
+                    // mention is a borrow observation of that field, except a consuming
+                    // operand of exactly one of those bindings, which is a candidate take
+                    // of the field at the operand itself: no take of the field may run
+                    // before any observation on any path. A view whose value reaches a
+                    // consuming operand is such a binding exactly when its take is
+                    // declined.
+                    var forced_poison: u64 = 0;
+                    operand_sites.clearRetainingCapacity();
+                    for (candidate.reads.items, read_masks.items, view_demand.items) |read, bit, demanded| {
+                        if (bit == 0) continue;
+                        if (readsThroughHeldView(&analysis, &held_views, read.through, reads_stop)) continue;
+                        const target_index = @backingInt(read.target);
+                        if (!solution.isBorrowed(read.target)) continue;
+                        if (demanded and !declined_takes.contains(target_index)) continue;
+                        try collectBorrowForest(gpa, store, &analysis, borrow_child_heads, borrow_child_edges.items, &borrow_stack, &forest, forest_mark, target_index);
+                        for (forest.items) |borrower| {
+                            var mention = analysis.mention_heads[borrower];
+                            while (mention != no_index) {
+                                const edge = analysis.mention_edges.items[mention];
+                                mention = edge.next;
+                                const stmt: LIR.CFStmtId = @fromBackingInt(@intCast(edge.stmt));
+                                const site_use = operandSiteUse(store, solution, operand_benefits, rc_local, forest_mark, target_index, stmt);
+                                const slot = try read_kinds.getOrPut(stmt);
+                                if (site_use) |use| {
+                                    if (!slot.found_existing) {
+                                        slot.value_ptr.* = .{ .bit = bit, .consuming = true, .site = true };
+                                        try operand_sites.append(gpa, .{ .stmt = stmt, .next = use.next, .position = use.position, .bit = bit });
+                                    } else if (slot.value_ptr.site and slot.value_ptr.consuming and (slot.value_ptr.bit & bit) == 0) {
+                                        // Another field of this container consumed
+                                        // at a different position of the same statement.
+                                        slot.value_ptr.bit |= bit;
+                                        try operand_sites.append(gpa, .{ .stmt = stmt, .next = use.next, .position = use.position, .bit = bit });
+                                    } else {
+                                        slot.value_ptr.consuming = false;
+                                        slot.value_ptr.site = false;
+                                        slot.value_ptr.bit |= bit;
+                                    }
+                                } else if (!slot.found_existing) {
+                                    slot.value_ptr.* = .{ .bit = bit, .consuming = false };
+                                } else if (slot.value_ptr.consuming and !slot.value_ptr.site) {
+                                    forced_poison |= bit;
+                                } else {
+                                    slot.value_ptr.consuming = false;
+                                    slot.value_ptr.site = false;
+                                    slot.value_ptr.bit |= bit;
+                                }
                             }
                         }
-                        const straight = straight_next[@backingInt(cursor)];
-                        if (straight != no_index) {
-                            cursor = @fromBackingInt(straight);
-                            continue :chain;
-                        }
-                        switch (store.getCFStmtImmediate(cursor).*) {
-                            inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
-                            .set_local => |stmt| {
-                                // The value operand above still observes the old
-                                // definition. Only the explicit write starts a fresh
-                                // intact field domain for the next loop iteration.
-                                if (stmt.target == local) state = .{ .may = 0, .must = 0 };
-                                cursor = stmt.next;
-                            },
-                            .join => |stmt| {
-                                cursor = stmt.remainder;
-                            },
-                            .switch_stmt => |stmt| {
-                                const heads = store.getCFSwitchBranches(stmt.branches);
-                                for (0..GuardedList.borrowLen(heads)) |i| {
-                                    const branch = GuardedList.at(heads, i);
-                                    const restored = restoredFieldMaskForBranch(solution, field_restitutions.items, cursor, branch.value);
-                                    try flow_frames.append(gpa, .{
-                                        .cursor = branch.body,
-                                        .state = .{ .may = state.may & ~restored, .must = state.must & ~restored },
-                                    });
-                                }
-                                const default_restored = restoredFieldMaskForDefault(solution, store, field_restitutions.items, cursor);
-                                state.may &= ~default_restored;
-                                state.must &= ~default_restored;
-                                cursor = stmt.default_branch;
-                            },
-                            .jump => |stmt| {
-                                // Control continues at the join's body; meet this
-                                // path's state into it and re-walk on change. A jump
-                                // to a join declared before the definition leaves
-                                // the candidate's region—a loop back edge or an
-                                // enclosing early exit—so it ends this path like a
-                                // return would. Reads living past it are never
-                                // visited, which keeps their fields residual.
-                                const body = join_bodies.get(@backingInt(stmt.target)) orelse break :chain;
-                                const slot = try body_states.getOrPut(body);
-                                if (slot.found_existing) {
-                                    const merged = FlowState.meet(slot.value_ptr.*, state);
-                                    if (FlowState.eql(merged, slot.value_ptr.*)) break :chain;
-                                    slot.value_ptr.* = merged;
-                                    try flow_frames.append(gpa, .{ .cursor = body, .state = merged });
-                                } else {
-                                    slot.value_ptr.* = state;
-                                    try flow_frames.append(gpa, .{ .cursor = body, .state = state });
-                                }
-                                break :chain;
-                            },
-                            .switch_initialized_payload => |stmt| {
-                                try flow_frames.append(gpa, .{ .cursor = stmt.initialized_branch, .state = state });
-                                cursor = stmt.uninitialized_branch;
-                            },
-                            inline .str_match, .boxy_tag_match => |stmt| {
-                                try flow_frames.append(gpa, .{ .cursor = stmt.on_match, .state = state });
-                                cursor = stmt.on_miss;
-                            },
-                            .str_match_set => |stmt| {
-                                const arms = store.getStrMatchArms(stmt.arms);
-                                for (0..GuardedList.borrowLen(arms)) |i| {
-                                    try flow_frames.append(gpa, .{ .cursor = GuardedList.at(arms, i).on_match, .state = state });
-                                }
-                                cursor = stmt.on_miss;
-                            },
-                            .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed => {
-                                break :chain;
-                            },
-                        }
+                        for (forest.items) |borrower| forest_mark[borrower] = false;
                     }
-                }
 
-                // A read the flow never reached sits outside the verified region;
-                // its field keeps ordinary retains and residual release.
-                var kinds_it = read_kinds.valueIterator();
-                while (kinds_it.next()) |kind| {
-                    if (!kind.visited) poison |= kind.bit;
-                }
+                    var candidate_mask: u64 = 0;
+                    var kinds_mask_it = read_kinds.valueIterator();
+                    while (kinds_mask_it.next()) |kind| {
+                        if (kind.consuming) candidate_mask |= kind.bit;
+                    }
+                    candidate_mask &= rc_mask;
+                    const solved_mask: u64 = solve: {
+                        if (candidate_mask == 0) break :solve 0;
+                        var poison: u64 = 0;
+                        // A borrowed payload view supplies no unit of its own. Only producing
+                        // its union root again restores fresh fields across a loop back edge;
+                        // recreating the view still observes the same stored units.
+                        const fresh_def = if (union_root) |root| root.def_stmt else candidate.def_stmt;
+                        const redefinition: ?LIR.CFStmtId = if (candidate.join_starts.items.len == 0) fresh_def else null;
+                        try future_fields.compute(gpa, store, solution, local, proc_graphs[owner], &read_kinds, field_restitutions.items, redefinition);
+                        for (candidate.reads.items) |read| {
+                            const kind = read_kinds.getPtr(read.stmt) orelse continue;
+                            if (!kind.consuming) continue;
+                            const definition = store.getCFStmtImmediate(read.stmt).assign_ref;
+                            if (future_fields.observed(definition.next) & kind.bit != 0) {
+                                kind.consuming = false;
+                            }
+                        }
+                        // An operand takes the field only as the last observation of
+                        // it on every path; an earlier one retains for its consumer.
+                        for (operand_sites.items) |site| {
+                            const kind = read_kinds.getPtr(site.stmt) orelse continue;
+                            if (!kind.consuming) continue;
+                            if (future_fields.observed(site.next) & kind.bit != 0) kind.consuming = false;
+                        }
+                        candidate_mask = 0;
+                        var demoted_it = read_kinds.valueIterator();
+                        while (demoted_it.next()) |kind| {
+                            if (kind.consuming) candidate_mask |= kind.bit;
+                        }
+                        if (candidate_mask == 0) break :solve 0;
+                        body_states.clearRetainingCapacity();
+                        flow_frames.clearRetainingCapacity();
+                        try flow_frames.append(gpa, .{ .cursor = spine_start, .state = .{ .may = 0, .must = 0 } });
+                        for (candidate.join_starts.items, 0..) |start, index| {
+                            if (index == 0) continue;
+                            try flow_frames.append(gpa, .{ .cursor = start, .state = .{ .may = 0, .must = 0 } });
+                        }
+                        var steps: usize = 0;
+                        // Each statement is re-walked at most once per lattice step of its
+                        // reaching state; 2 bits per tracked field bound the lattice height.
+                        const step_limit = (store.cfStmtCount() + 1) * (2 * 64 + 1);
+                        flow: while (flow_frames.pop()) |frame| {
+                            var cursor = frame.cursor;
+                            var state = frame.state;
+                            chain: while (true) {
+                                steps += 1;
+                                if (steps > step_limit) {
+                                    poison = ~@as(u64, 0);
+                                    break :flow;
+                                }
+                                // Reaching the container's single value-producing definition
+                                // again, through a loop back edge, starts the next
+                                // iteration's fresh value with every field intact; the
+                                // previous value is dead past its redefinition exactly as it
+                                // is past an explicit join-cell write.
+                                if (redefinition) |def_stmt| if (cursor == def_stmt) {
+                                    state = .{ .may = 0, .must = 0 };
+                                };
+                                if (read_kinds.getPtr(cursor)) |kind| {
+                                    kind.visited = true;
+                                    if (kind.consuming) {
+                                        // A take where the field may already be gone would
+                                        // double-consume its unit on that path.
+                                        poison |= state.may & kind.bit;
+                                        state.may |= kind.bit;
+                                        state.must |= kind.bit;
+                                    } else {
+                                        // A borrow after a possible take would observe the
+                                        // taker's mutation instead of the original field.
+                                        poison |= state.may & kind.bit;
+                                    }
+                                }
+                                const straight = straight_next[@backingInt(cursor)];
+                                if (straight != no_index) {
+                                    cursor = @fromBackingInt(straight);
+                                    continue :chain;
+                                }
+                                switch (store.getCFStmtImmediate(cursor).*) {
+                                    inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
+                                    .set_local => |stmt| {
+                                        // The value operand above still observes the old
+                                        // definition. Only the explicit write starts a fresh
+                                        // intact field domain for the next loop iteration.
+                                        if (stmt.target == local) state = .{ .may = 0, .must = 0 };
+                                        cursor = stmt.next;
+                                    },
+                                    .join => |stmt| {
+                                        cursor = stmt.remainder;
+                                    },
+                                    .switch_stmt => |stmt| {
+                                        const heads = store.getCFSwitchBranches(stmt.branches);
+                                        for (0..GuardedList.borrowLen(heads)) |i| {
+                                            const branch = GuardedList.at(heads, i);
+                                            const restored = restoredFieldMaskForBranch(solution, field_restitutions.items, cursor, branch.value);
+                                            try flow_frames.append(gpa, .{
+                                                .cursor = branch.body,
+                                                .state = .{ .may = state.may & ~restored, .must = state.must & ~restored },
+                                            });
+                                        }
+                                        const default_restored = restoredFieldMaskForDefault(solution, store, field_restitutions.items, cursor);
+                                        state.may &= ~default_restored;
+                                        state.must &= ~default_restored;
+                                        cursor = stmt.default_branch;
+                                    },
+                                    .jump => |stmt| {
+                                        // Control continues at the join's body; meet this
+                                        // path's state into it and re-walk on change. A jump
+                                        // to a join declared before the definition leaves
+                                        // the candidate's region—a loop back edge or an
+                                        // enclosing early exit—so it ends this path like a
+                                        // return would. Reads living past it are never
+                                        // visited, which keeps their fields residual.
+                                        const body = join_bodies.get(@backingInt(stmt.target)) orelse break :chain;
+                                        const slot = try body_states.getOrPut(body);
+                                        if (slot.found_existing) {
+                                            const merged = FlowState.meet(slot.value_ptr.*, state);
+                                            if (FlowState.eql(merged, slot.value_ptr.*)) break :chain;
+                                            slot.value_ptr.* = merged;
+                                            try flow_frames.append(gpa, .{ .cursor = body, .state = merged });
+                                        } else {
+                                            slot.value_ptr.* = state;
+                                            try flow_frames.append(gpa, .{ .cursor = body, .state = state });
+                                        }
+                                        break :chain;
+                                    },
+                                    .switch_initialized_payload => |stmt| {
+                                        try flow_frames.append(gpa, .{ .cursor = stmt.initialized_branch, .state = state });
+                                        cursor = stmt.uninitialized_branch;
+                                    },
+                                    inline .str_match, .boxy_tag_match => |stmt| {
+                                        try flow_frames.append(gpa, .{ .cursor = stmt.on_match, .state = state });
+                                        cursor = stmt.on_miss;
+                                    },
+                                    .str_match_set => |stmt| {
+                                        const arms = store.getStrMatchArms(stmt.arms);
+                                        for (0..GuardedList.borrowLen(arms)) |i| {
+                                            try flow_frames.append(gpa, .{ .cursor = GuardedList.at(arms, i).on_match, .state = state });
+                                        }
+                                        cursor = stmt.on_miss;
+                                    },
+                                    .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed => {
+                                        break :chain;
+                                    },
+                                }
+                            }
+                        }
 
-                poison |= forced_poison;
-                const taken_mask: u64 = candidate_mask & ~poison;
+                        // A read the flow never reached sits outside the verified region;
+                        // its field keeps ordinary retains and residual release.
+                        var kinds_it = read_kinds.valueIterator();
+                        while (kinds_it.next()) |kind| {
+                            if (!kind.visited) poison |= kind.bit;
+                        }
+
+                        poison |= forced_poison;
+                        break :solve candidate_mask & ~poison;
+                    };
+                    // An owned-demanded read whose binding stays borrowed is no take,
+                    // so its later mentions observe its slots: solve again with them.
+                    var declined_any = false;
+                    for (deferred_takes.items) |read_index| {
+                        const read = candidate.reads.items[read_index];
+                        const bit = read_masks.items[read_index];
+                        const kind = read_kinds.get(read.stmt) orelse dismantleInvariant("ARC dismantle lost a deferred take's read");
+                        if (kind.consuming and (solved_mask & bit) == bit) continue;
+                        try declined_takes.put(gpa, @backingInt(read.target), {});
+                        declined_any = true;
+                    }
+                    if (!declined_any) break :attempt solved_mask;
+                };
                 if (taken_mask == 0) continue;
 
                 // Accepted. The committed field-place domain is the layout's
@@ -3577,7 +3895,12 @@ pub fn compute(
                 const projection_root_index = analysis.projected_root[@backingInt(local)];
                 const projected = projection_root_index != no_index and union_root == null;
                 const activation_root: LIR.LocalId = if (projected) @fromBackingInt(@intCast(projection_root_index)) else local;
-                const owned_only = solution.isBorrowed(activation_root) and union_root == null;
+                // A view holds its slots exactly in the emissions its own take
+                // applies to.
+                const owned_only = if (entry.view)
+                    !result.take_bindings[candidate_index]
+                else
+                    solution.isBorrowed(activation_root) and union_root == null;
                 if (projected) {
                     // The projection read itself moves the outer unit into this
                     // container in precisely those emissions where the root is owned.
@@ -3597,17 +3920,20 @@ pub fn compute(
                 const stored_pieces = try result.arena.allocator().dupe(SlotRange, pieces.items);
                 for (candidate.reads.items, read_masks.items) |read, bit| {
                     if (bit == 0 or (taken_mask & bit) != bit) continue;
+                    // A read consumes at the read only when its target is solved
+                    // owned or it defines a held view; its take spares the retain
+                    // the target would pay.
                     if (!(read_kinds.get(read.stmt) orelse continue).consuming) continue;
-                    if (solution.isBorrowed(read.target) and !analysis.owned_demand[@backingInt(read.target)]) continue;
                     const take = Take{ .root = local, .field_mask = bit };
                     if (owned_only) {
                         try result.owned_only_takes.put(read.stmt, take);
                         try undo.append(gpa, .{ .owned_only_take = read.stmt });
                         // A target solved owned holds its own unit in every emission;
-                        // the take only spares its retain. Only a target solved
-                        // borrowed needs its binding overridden to owned, and a
-                        // borrowed binding has exactly one defining read, so exactly
-                        // one parameter root authorizes the override.
+                        // the take only spares its retain. A held view's target is
+                        // solved borrowed and holds its slots exactly in the
+                        // emissions the take applies to, so its binding is overridden
+                        // to owned there; a borrowed binding has exactly one defining
+                        // read, so exactly one root authorizes the override.
                         if (!solution.isBorrowed(read.target)) continue;
                         const target_index = @backingInt(read.target);
                         const prior = result.owned_only_binding_roots[target_index];
@@ -3622,6 +3948,28 @@ pub fn compute(
                         try undo.append(gpa, .{ .take = read.stmt });
                         try undo.append(gpa, .{ .take_binding = read.target });
                     }
+                }
+                for (operand_sites.items) |site| {
+                    if ((taken_mask & site.bit) != site.bit) continue;
+                    const kind = read_kinds.get(site.stmt) orelse continue;
+                    if (!kind.consuming) continue;
+                    const take = Take{ .root = local, .field_mask = site.bit };
+                    const key = CallArg{ .stmt = site.stmt, .position = site.position };
+                    if (owned_only) {
+                        try result.owned_only_operand_takes.put(gpa, key, take);
+                        try undo.append(gpa, .{ .owned_only_operand_take = key });
+                    } else {
+                        try result.operand_takes.put(gpa, key, take);
+                        try undo.append(gpa, .{ .operand_take = key });
+                    }
+                }
+                // A view whose definition took its slots is a container of its
+                // own, solved next.
+                for (candidate.reads.items, read_masks.items) |read, bit| {
+                    if (!read.view or bit == 0 or (taken_mask & bit) != bit) continue;
+                    if (!(read_kinds.get(read.stmt) orelse continue).consuming) continue;
+                    if (!solution.isBorrowed(read.target)) continue;
+                    try solve_queue.append(gpa, .{ .local = @backingInt(read.target), .view = true });
                 }
                 for (field_restitutions.items) |receipt| {
                     if ((receipt.field_mask & taken_mask) == 0) continue;
@@ -3926,22 +4274,32 @@ pub fn compute(
         if (stmt_index == no_index) continue;
         const stmt = store.getCFStmtPtr(@fromBackingInt(@intCast(stmt_index)));
         if (stmt.* != .assign_ref) dismantleInvariant("projected alias definition stopped being a reference read");
-        stmt.assign_ref.op = .{ .local = representative_local };
+        stmt.assign_ref.op = .local(representative_local);
         try result.projection_aliases.put(@fromBackingInt(@intCast(@as(u32, @intCast(local_index)))), representative_local);
     }
     // Publish the views of committed containers. A tag union's container is
     // keyed by the union, whose payload view numbers the slots.
     for (analysis.state, 0..) |state, local_index| {
         if (state != .view) continue;
-        // A view whose definition became a take holds those slots itself.
-        if (result.take_bindings[local_index]) continue;
         const root_index = analysis.alias_root[local_index];
         const union_index = analysis.view_root[root_index];
         const key: LIR.LocalId = @fromBackingInt(@intCast(if (union_index != no_index) union_index else root_index));
         if (!result.containers.contains(key) and !result.owned_only_containers.contains(key)) continue;
+        // Takes nested in a view's take apply in exactly its emissions, so
+        // the innermost view whose definition is a take decides them all.
+        var holder = analysis.view_head[local_index];
+        while (holder != no_index and !result.take_bindings[holder] and result.owned_only_binding_roots[holder] == no_index) {
+            holder = analysis.view_parent[holder];
+        }
+        // A view whose definition takes its slots in every emission holds
+        // them itself.
+        if (holder == analysis.view_head[local_index] and result.take_bindings[holder]) continue;
         try result.views.put(@fromBackingInt(@intCast(@as(u32, @intCast(local_index)))), .{
             .root = key,
             .base = analysis.view_base[local_index],
+            .holder = if (holder == no_index) null else @fromBackingInt(@intCast(holder)),
+            .holder_base = if (holder == no_index) 0 else analysis.view_base[holder],
+            .is_holder = holder == analysis.view_head[local_index],
         });
     }
     return result;
