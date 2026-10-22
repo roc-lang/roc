@@ -2549,6 +2549,7 @@ const Certifier = struct {
                 .closure,
                 .erased_callable,
                 .zst,
+                .hole,
                 .ptr,
                 => break :walk false,
             };
@@ -2705,6 +2706,7 @@ const Certifier = struct {
             .closure,
             .erased_callable,
             .zst,
+            .hole,
             .ptr,
             => return null,
         };
@@ -6225,6 +6227,7 @@ const Certifier = struct {
             .closure,
             .erased_callable,
             .zst,
+            .hole,
             .ptr,
             => false,
         };

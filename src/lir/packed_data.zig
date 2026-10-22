@@ -45,6 +45,7 @@ pub const Plan = struct {
             const offset = next.offset;
             const value = layouts.getLayout(next.layout_idx);
             switch (value.tag) {
+                .hole => unreachable, // a hole sits only behind a List or Box, which a fixed product never holds
                 .zst => {},
                 .scalar => {
                     switch (value.getScalar().tag) {

@@ -22780,6 +22780,11 @@ pub const CheckedProcedureTemplate = struct {
     /// callable of such a target needs its own checked instantiation instead
     /// of deriving one from its callable.
     callable_determines_scheme: bool = true,
+    /// How much of each `scheme_vars` entry the body demands, in the same
+    /// order (a range into `CheckedProcedureTemplateTable.demand_pool`).
+    /// Monotype specializes the template over only this much of each
+    /// variable's substitution (design.md "Specialization By Demand").
+    demands: artifact_serialize.Span = .{},
 };
 
 fn checkedTypeIsClosedTagRow(
@@ -22898,6 +22903,8 @@ pub const CheckedProcedureTemplateTable = struct {
     /// calls at that one site, so an inline decision based on it is the same
     /// in every program (`SingleSourceCalls`).
     single_source_call_templates: []canonical.CheckedProcedureTemplateId = &.{},
+    /// Flat pool backing each template's `demands` span.
+    demand_pool: []SchemeVarDemand = &.{},
 
     pub const Serialized = extern struct {
         templates: SerializedSlice(CheckedProcedureTemplate) = .{},
@@ -22913,6 +22920,7 @@ pub const CheckedProcedureTemplateTable = struct {
         specialization_interface_relations: SerializedSlice(SpecializationInterfaceRelation) = .{},
         specialization_interface_types: SerializedSlice(CheckedTypeId) = .{},
         single_source_call_templates: SerializedSlice(canonical.CheckedProcedureTemplateId) = .{},
+        demand_pool: SerializedSlice(SchemeVarDemand) = .{},
         const Serde = artifact_serialize.SliceStoreSerde(CheckedProcedureTemplateTable, @This());
         pub const serialize = Serde.serialize;
         pub const deserialize = Serde.deserialize;
@@ -23195,6 +23203,12 @@ pub const CheckedProcedureTemplateTable = struct {
     /// The quantified variables of a template's scheme, in slot order.
     pub fn templateSchemeVars(self: *const CheckedProcedureTemplateTable, template: *const CheckedProcedureTemplate) []const CheckedTypeId {
         return self.scheme_vars_pool[template.scheme_vars.start .. template.scheme_vars.start + template.scheme_vars.len];
+    }
+
+    /// How much of each of a template's quantified variables its body
+    /// demands, in slot order.
+    pub fn templateDemands(self: *const CheckedProcedureTemplateTable, template: *const CheckedProcedureTemplate) []const SchemeVarDemand {
+        return self.demand_pool[template.demands.start .. template.demands.start + template.demands.len];
     }
 
     /// The quantified variables of a generalized-local scope's scheme, in
@@ -28644,6 +28658,877 @@ const SingleSourceCalls = struct {
     }
 };
 
+/// How much of one quantified variable a procedure template's body demands
+/// (design.md "Specialization By Demand"). The scale is the same one
+/// `LowLevel.elementDemand` places on an operation's arguments.
+pub const SchemeVarDemand = base.LowLevel.ElementDemand;
+
+fn maxSchemeVarDemand(left: SchemeVarDemand, right: SchemeVarDemand) SchemeVarDemand {
+    return if (@backingInt(left) >= @backingInt(right)) left else right;
+}
+
+/// How a checked type reaches one type variable it mentions. Each flag is
+/// true when at least one path from the type to the variable has the
+/// property, so the flags of several paths combine by `or`.
+const TypeVarMentionFlags = packed struct(u8) {
+    /// A path passes through a function's argument or result.
+    under_function: bool = false,
+    /// A path reaches the variable without passing through the element of a
+    /// `List` or `Box`.
+    outside_container: bool = false,
+    /// The variable is the extension of a record or tag-union row.
+    row_extension: bool = false,
+    /// A path passes through an argument of a builtin nominal whose runtime
+    /// representation that argument's structure decides, not just its layout:
+    /// the field-name tables of `FieldNames`, `FieldName`, and
+    /// `ParseTagUnionSpec`, and the iterator representation of `Iter` and
+    /// `Stream`.
+    decides_representation: bool = false,
+    _padding: u4 = 0,
+
+    fn merge(left: TypeVarMentionFlags, right: TypeVarMentionFlags) TypeVarMentionFlags {
+        return @bitCast(@as(u8, @bitCast(left)) | @as(u8, @bitCast(right)));
+    }
+};
+
+/// One type variable a checked type mentions, and how.
+const TypeVarMention = struct {
+    var_ty: CheckedTypeId,
+    flags: TypeVarMentionFlags,
+};
+
+/// The type variables each checked type mentions, memoized by type.
+const TypeVarMentions = struct {
+    allocator: Allocator,
+    checked_types: *const CheckedTypeStore,
+    memo: collections.DenseMap(CheckedTypeId, artifact_serialize.Span),
+    pool: std.ArrayList(TypeVarMention) = .empty,
+    /// Walk state of one query: each (type, flags) pair is visited once, so a
+    /// cyclic type terminates.
+    pending: std.ArrayList(Step) = .empty,
+    visited: std.AutoHashMapUnmanaged(Step, void) = .empty,
+    found: collections.DenseMap(CheckedTypeId, TypeVarMentionFlags),
+
+    const Step = struct {
+        ty: CheckedTypeId,
+        flags: TypeVarMentionFlags,
+    };
+
+    fn deinit(self: *TypeVarMentions) void {
+        self.memo.deinit();
+        self.pool.deinit(self.allocator);
+        self.pending.deinit(self.allocator);
+        self.visited.deinit(self.allocator);
+        self.found.deinit();
+    }
+
+    /// The variables `root` mentions, in ascending type-id order.
+    fn of(self: *TypeVarMentions, root: CheckedTypeId) Allocator.Error![]const TypeVarMention {
+        if (self.memo.get(root)) |span| return self.pool.items[span.start .. span.start + span.len];
+        self.pending.clearRetainingCapacity();
+        self.visited.clearRetainingCapacity();
+        self.found.clearRetainingCapacity();
+        try self.push(root, .{ .outside_container = true });
+        while (self.pending.pop()) |step| try expandStep(self.checked_types, step, self);
+        const lessThan = struct {
+            fn lessThan(_: void, left: TypeVarMention, right: TypeVarMention) bool {
+                return @backingInt(left.var_ty) < @backingInt(right.var_ty);
+            }
+        }.lessThan;
+        const start = self.pool.items.len;
+        try self.pool.ensureUnusedCapacity(self.allocator, self.found.count());
+        var it = self.found.iterator();
+        while (it.next()) |entry| self.pool.appendAssumeCapacity(.{ .var_ty = entry.key_ptr.*, .flags = entry.value_ptr.* });
+        const mentions = self.pool.items[start..];
+        std.mem.sort(TypeVarMention, mentions, {}, lessThan);
+        try self.memo.put(root, .{ .start = @intCast(start), .len = @intCast(mentions.len) });
+        return mentions;
+    }
+
+    /// Visit one step of a walk from a type to the variables it mentions:
+    /// note the variable it reaches, or push each component with the flags of
+    /// the path through it. `sink` provides `push(ty, flags)` and
+    /// `noteMention(var_ty, flags)`.
+    fn expandStep(checked_types: *const CheckedTypeStore, step: Step, sink: anytype) Allocator.Error!void {
+        switch (checked_types.payload(step.ty)) {
+            .flex, .rigid => try sink.noteMention(step.ty, step.flags),
+            .alias => |alias| try sink.push(alias.backing, step.flags),
+            .record => |record| {
+                for (record.fields) |field| try sink.push(field.ty, step.flags);
+                try expandRowExtension(checked_types, record.ext, step.flags, sink);
+            },
+            .tuple => |elems| for (elems) |elem| try sink.push(elem, step.flags),
+            .nominal => |nominal| {
+                var arg_flags = step.flags;
+                if (nominal.builtin) |builtin_nominal| switch (builtin_nominal) {
+                    .list, .box => arg_flags.outside_container = false,
+                    .fields, .field, .parse_tag_union_spec, .iter, .stream => arg_flags.decides_representation = true,
+                    .bool, .try_, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .dict, .set, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => {},
+                };
+                for (nominal.args) |arg| try sink.push(arg, arg_flags);
+                for (nominal.padding_field_types) |padding| try sink.push(padding, step.flags);
+            },
+            .function => |function| {
+                var inner = step.flags;
+                inner.under_function = true;
+                for (function.args) |arg| try sink.push(arg, inner);
+                try sink.push(function.ret, inner);
+            },
+            .tag_union => |tag_union| {
+                for (tag_union.tags) |tag| {
+                    for (tag.argsSlice(checked_types)) |arg| try sink.push(arg, step.flags);
+                }
+                try expandRowExtension(checked_types, tag_union.ext, step.flags, sink);
+            },
+            .empty_record, .empty_tag_union, .err, .pending => {},
+        }
+    }
+
+    fn expandRowExtension(checked_types: *const CheckedTypeStore, ext: CheckedTypeId, flags: TypeVarMentionFlags, sink: anytype) Allocator.Error!void {
+        switch (checked_types.payload(ext)) {
+            .flex, .rigid => {
+                var ext_flags = flags;
+                ext_flags.row_extension = true;
+                try sink.noteMention(ext, ext_flags);
+            },
+            .pending, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => try sink.push(ext, flags),
+        }
+    }
+
+    fn push(self: *TypeVarMentions, ty: CheckedTypeId, flags: TypeVarMentionFlags) Allocator.Error!void {
+        const step: Step = .{ .ty = ty, .flags = flags };
+        const entry = try self.visited.getOrPut(self.allocator, step);
+        if (entry.found_existing) return;
+        try self.pending.append(self.allocator, step);
+    }
+
+    fn noteMention(self: *TypeVarMentions, var_ty: CheckedTypeId, flags: TypeVarMentionFlags) Allocator.Error!void {
+        const entry = try self.found.getOrPut(var_ty);
+        entry.value_ptr.* = if (entry.found_existing) entry.value_ptr.merge(flags) else flags;
+    }
+};
+
+/// Computes every local procedure template's demand vector: for each
+/// quantified variable of its scheme, the most its body asks of the type a
+/// specialization substitutes for it (design.md "Specialization By Demand").
+/// Each template body is walked once into a base vector and a set of edges
+/// to the templates it calls; the edges then propagate demand to a fixed
+/// point, so recursion through any number of templates converges.
+const TemplateDemandPass = struct {
+    allocator: Allocator,
+    artifact_key: CheckedModuleArtifactKey,
+    checked_types: *const CheckedTypeStore,
+    checked_bodies: *const CheckedBodyStore,
+    templates: *CheckedProcedureTemplateTable,
+    resolved_value_refs: *const ResolvedValueRefTable,
+    top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
+    static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
+    imports: CheckedImportViews,
+
+    mentions: TypeVarMentions,
+    /// Every local template's vector, at the template's `demands` span.
+    demands: std.ArrayList(SchemeVarDemand) = .empty,
+    edges: std.ArrayList(Edge) = .empty,
+    work: std.ArrayList(Work) = .empty,
+    imported_templates: std.AutoHashMapUnmanaged(ImportedDefKey, ?canonical.ProcedureTemplateRef) = .empty,
+
+    /// Every step a raise has walked in the current template, at the demand
+    /// it raised. A raise's effect is a function of its step and demand, and
+    /// demands only rise, so a step walked once at a demand never needs
+    /// walking again at that demand within the template.
+    raised: std.AutoHashMapUnmanaged(RaiseStep, void) = .empty,
+    raise_pending: std.ArrayList(RaiseStep) = .empty,
+
+    // The template being walked.
+    current: canonical.CheckedProcedureTemplateId = undefined,
+    current_vars: []const CheckedTypeId = &.{},
+    /// Each quantified variable's slot in `current_vars`.
+    current_slots: collections.DenseMap(CheckedTypeId, u32),
+    current_demands: []SchemeVarDemand = &.{},
+
+    /// The demand of the caller's `caller_slot` is at least that of the local
+    /// callee's `callee_slot`.
+    const Edge = struct {
+        caller: canonical.CheckedProcedureTemplateId,
+        caller_slot: u32,
+        callee: canonical.CheckedProcedureTemplateId,
+        callee_slot: u32,
+    };
+
+    const ImportedDefKey = struct {
+        artifact: ModuleId,
+        def: CIR.Def.Idx,
+    };
+
+    /// One step of a raise walk: a type reached along a path with `flags`,
+    /// raising the variables it mentions to `demand` (and exact mentions to
+    /// `full`).
+    const RaiseStep = struct {
+        step: TypeVarMentions.Step,
+        demand: SchemeVarDemand,
+    };
+
+    /// The sink `TypeVarMentions.expandStep` drives during a raise walk.
+    const RaiseSink = struct {
+        pass: *TemplateDemandPass,
+        demand: SchemeVarDemand,
+
+        pub fn push(sink: RaiseSink, ty: CheckedTypeId, flags: TypeVarMentionFlags) Allocator.Error!void {
+            try sink.pass.pushRaise(.{ .step = .{ .ty = ty, .flags = flags }, .demand = sink.demand });
+        }
+
+        pub fn noteMention(sink: RaiseSink, var_ty: CheckedTypeId, flags: TypeVarMentionFlags) Allocator.Error!void {
+            const slot = sink.pass.slotOf(var_ty) orelse return;
+            sink.pass.raiseSlot(slot, if (exactMention(flags)) .full else sink.demand);
+        }
+    };
+
+    /// Where an expression stands relative to the operation that consumes it.
+    const ExprRole = enum {
+        /// Its value is materialized: held in a local, stored, returned, or
+        /// matched on.
+        value,
+        /// A direct operand of a procedure call or a low-level operation. The
+        /// callee's or operation's demand covers the operand, so reading a
+        /// local into this position materializes nothing.
+        operand,
+        /// The callee of a direct template call. The call's edges cover it.
+        direct_callee,
+    };
+
+    const PatternRole = enum {
+        /// A parameter of the template's own lambda. The value already exists
+        /// in the caller; binding it materializes nothing.
+        parameter,
+        binding,
+    };
+
+    const Work = union(enum) {
+        expr: struct { id: CheckedExprId, role: ExprRole },
+        pattern: struct { id: CheckedPatternId, role: PatternRole },
+        statement: CheckedStatementId,
+    };
+
+    fn deinit(self: *TemplateDemandPass) void {
+        self.mentions.deinit();
+        self.current_slots.deinit();
+        self.raised.deinit(self.allocator);
+        self.raise_pending.deinit(self.allocator);
+        self.demands.deinit(self.allocator);
+        self.edges.deinit(self.allocator);
+        self.work.deinit(self.allocator);
+        self.imported_templates.deinit(self.allocator);
+    }
+
+    fn publish(self: *TemplateDemandPass) Allocator.Error!void {
+        const templates = self.templates.templates.items;
+        for (templates) |*template| {
+            const vars = self.templates.templateSchemeVars(template);
+            template.demands = .{ .start = @intCast(self.demands.items.len), .len = @intCast(vars.len) };
+            try self.demands.appendNTimes(self.allocator, .none, vars.len);
+        }
+        for (templates, 0..) |*template, raw| {
+            self.current = @fromBackingInt(@intCast(raw));
+            self.current_vars = self.templates.templateSchemeVars(template);
+            self.current_slots.clearRetainingCapacity();
+            for (self.current_vars, 0..) |var_ty, slot| try self.current_slots.put(var_ty, @intCast(slot));
+            self.raised.clearRetainingCapacity();
+            self.current_demands = self.demands.items[template.demands.start .. template.demands.start + template.demands.len];
+            try self.analyzeTemplate(template);
+        }
+        try self.propagate();
+        self.allocator.free(self.templates.demand_pool);
+        self.templates.demand_pool = try self.demands.toOwnedSlice(self.allocator);
+    }
+
+    fn analyzeTemplate(self: *TemplateDemandPass, template: *const CheckedProcedureTemplate) Allocator.Error!void {
+        if (self.current_vars.len == 0) return;
+        const body_id = switch (template.body) {
+            .checked_body => |body| body,
+            // An intrinsic inspects its operands, an entry wrapper marshals
+            // them to the host, and an unimplemented declaration's crash
+            // body still returns at its declared type.
+            .intrinsic_wrapper, .entry_wrapper, .unimplemented => return self.raiseEverything(),
+        };
+        if (template.target != .roc) return self.raiseEverything();
+
+        // A dispatch requirement inspects its dispatcher's type.
+        for (self.templates.evidenceParams(template)) |param| {
+            try self.raiseMentions(param.dispatcher_ty, .full);
+            try self.raiseMentions(param.callable_ty, .full);
+        }
+        for (self.current_vars, self.current_demands) |var_ty, *demand| {
+            switch (self.checked_types.payload(var_ty)) {
+                .flex, .rigid => |variable| {
+                    if (variable.constraints.len != 0 or variable.numeric_default_phase != null) demand.* = .full;
+                },
+                .pending, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => demand.* = .full,
+            }
+        }
+
+        // A specialization substitutes each variable through the root type,
+        // so a variable it never mentions is fixed only by evidence, and a row
+        // extension's substitution is a row rather than a type of its own.
+        // Function types carry program-specific lambda sets. A variable that
+        // a parameter holds by value, rather than as a list or box element,
+        // sizes the parameter itself.
+        const root_fn = self.rootFunction(template.checked_fn_root) orelse return self.raiseEverything();
+        const root_flags = try self.allocator.alloc(?TypeVarMentionFlags, self.current_vars.len);
+        defer self.allocator.free(root_flags);
+        @memset(root_flags, null);
+        for (root_fn.args) |arg| try self.noteRootMentions(root_flags, arg);
+        try self.noteRootMentions(root_flags, root_fn.ret);
+        for (root_flags, self.current_demands) |maybe_flags, *demand| {
+            const flags = maybe_flags orelse {
+                demand.* = .full;
+                continue;
+            };
+            if (flags.row_extension or flags.under_function or flags.decides_representation) {
+                demand.* = .full;
+            } else if (flags.outside_container) {
+                demand.* = maxSchemeVarDemand(demand.*, .layout);
+            }
+        }
+
+        // Walking the body only raises demands, and the edges it records only
+        // raise this template's demands, so a template that already demands
+        // all of every variable has nothing left to learn from its body.
+        for (self.current_demands) |demand| {
+            if (demand != .full) break;
+        } else return;
+
+        const root_expr = self.checked_bodies.body(body_id).root_expr;
+        const root = self.checked_bodies.expr(root_expr);
+        if (root.data != .lambda) return self.raiseEverything();
+        const lambda = root.data.lambda;
+        self.work.clearRetainingCapacity();
+        try self.work.append(self.allocator, .{ .expr = .{ .id = lambda.body, .role = .value } });
+        for (lambda.args) |arg| try self.work.append(self.allocator, .{ .pattern = .{ .id = arg, .role = .parameter } });
+        while (self.work.pop()) |item| switch (item) {
+            .expr => |expr| try self.visitExpr(expr.id, expr.role),
+            .pattern => |pattern| try self.visitPattern(pattern.id, pattern.role),
+            .statement => |statement| try self.visitStatement(statement),
+        };
+    }
+
+    /// The function type a template's root names, through aliases.
+    fn rootFunction(self: *const TemplateDemandPass, root: CheckedTypeId) ?CheckedFunctionType {
+        var current = root;
+        var remaining = self.checked_types.payloads.items.len;
+        while (remaining != 0) : (remaining -= 1) {
+            switch (self.checked_types.payload(current)) {
+                .alias => |alias| current = alias.backing,
+                .function => |function| return function,
+                .pending, .err, .flex, .rigid, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return null,
+            }
+        }
+        checkedArtifactInvariant("procedure template root alias chain was cyclic", .{});
+    }
+
+    fn noteRootMentions(self: *TemplateDemandPass, flags: []?TypeVarMentionFlags, ty: CheckedTypeId) Allocator.Error!void {
+        for (try self.mentions.of(ty)) |mention| {
+            const slot = self.slotOf(mention.var_ty) orelse continue;
+            flags[slot] = if (flags[slot]) |existing| existing.merge(mention.flags) else mention.flags;
+        }
+    }
+
+    fn slotOf(self: *const TemplateDemandPass, var_ty: CheckedTypeId) ?usize {
+        return if (self.current_slots.get(var_ty)) |slot| slot else null;
+    }
+
+    fn raiseSlot(self: *TemplateDemandPass, slot: usize, demand: SchemeVarDemand) void {
+        self.current_demands[slot] = maxSchemeVarDemand(self.current_demands[slot], demand);
+    }
+
+    fn raiseEverything(self: *TemplateDemandPass) void {
+        @memset(self.current_demands, .full);
+    }
+
+    /// Raise every quantified variable `ty` mentions to `demand`, and every one
+    /// whose exact type it needs (see `exactMention`) to `full`. The walk
+    /// skips every step an earlier raise in this template already walked at
+    /// this demand, so the raises of one template cost the size of the types
+    /// they reach, however many of its expressions share those types.
+    fn raiseMentions(self: *TemplateDemandPass, ty: CheckedTypeId, demand: SchemeVarDemand) Allocator.Error!void {
+        try self.pushRaise(.{ .step = .{ .ty = ty, .flags = .{ .outside_container = true } }, .demand = demand });
+        const sink: RaiseSink = .{ .pass = self, .demand = demand };
+        while (self.raise_pending.pop()) |raise| try TypeVarMentions.expandStep(self.checked_types, raise.step, sink);
+    }
+
+    fn pushRaise(self: *TemplateDemandPass, raise: RaiseStep) Allocator.Error!void {
+        const entry = try self.raised.getOrPut(self.allocator, raise);
+        if (entry.found_existing) return;
+        try self.raise_pending.append(self.allocator, raise);
+    }
+
+    /// Whether a type needs the exact type of a variable it mentions this
+    /// way: lambda-set solving needs the exact type of every function, and a
+    /// representation-deciding builtin argument decides more than a layout.
+    fn exactMention(flags: TypeVarMentionFlags) bool {
+        return flags.under_function or flags.decides_representation;
+    }
+
+    /// Raise every quantified variable whose exact type `ty` needs to `full`:
+    /// a raise to `none` leaves every other mention as it is.
+    fn raiseFunctionMentions(self: *TemplateDemandPass, ty: CheckedTypeId) Allocator.Error!void {
+        try self.raiseMentions(ty, .none);
+    }
+
+    fn pushExpr(self: *TemplateDemandPass, id: CheckedExprId, role: ExprRole) Allocator.Error!void {
+        try self.work.append(self.allocator, .{ .expr = .{ .id = id, .role = role } });
+    }
+
+    fn pushExprs(self: *TemplateDemandPass, ids: []const CheckedExprId, role: ExprRole) Allocator.Error!void {
+        for (ids) |id| try self.pushExpr(id, role);
+    }
+
+    fn pushPattern(self: *TemplateDemandPass, id: CheckedPatternId, role: PatternRole) Allocator.Error!void {
+        try self.work.append(self.allocator, .{ .pattern = .{ .id = id, .role = role } });
+    }
+
+    fn visitExpr(self: *TemplateDemandPass, id: CheckedExprId, role: ExprRole) Allocator.Error!void {
+        const expr = self.checked_bodies.expr(id);
+        switch (role) {
+            .direct_callee => {},
+            .operand => if (expr.data == .lookup_local)
+                try self.raiseFunctionMentions(expr.ty)
+            else
+                try self.raiseMentions(expr.ty, .layout),
+            .value => try self.raiseMentions(expr.ty, .layout),
+        }
+        switch (expr.data) {
+            .lookup_local,
+            .lookup_external,
+            .lookup_required,
+            .str_segment,
+            .bytes_literal,
+            .empty_list,
+            .empty_record,
+            .zero_argument_tag,
+            .crash,
+            .break_,
+            => {},
+            .pending, .ellipsis, .anno_only, .hosted_lambda => self.raiseEverything(),
+            .numeral => |numeral| {
+                try self.raiseMentions(expr.ty, .full);
+                if (numeral.plan) |plan| try self.visitInspectingPlan(plan);
+            },
+            .str_from_quote => |quote| {
+                try self.raiseMentions(expr.ty, .full);
+                if (quote.plan) |plan| try self.visitInspectingPlan(plan);
+            },
+            .str, .list, .tuple => |items| try self.pushExprs(items, .value),
+            .match_ => |match| {
+                try self.pushExpr(match.cond, .value);
+                for (match.branches) |branch| {
+                    for (branch.patternsSlice(self.checked_bodies)) |branch_pattern| try self.pushPattern(branch_pattern.pattern, .binding);
+                    if (branch.guard) |guard| try self.pushExpr(guard, .value);
+                    try self.pushExpr(branch.value, .value);
+                }
+            },
+            .if_ => |if_| {
+                for (if_.branches) |branch| {
+                    try self.pushExpr(branch.cond, .value);
+                    try self.pushExpr(branch.body, .value);
+                }
+                try self.pushExpr(if_.final_else, .value);
+            },
+            .call => |call| try self.visitCall(call),
+            .record => |record| {
+                if (record.ext) |ext| try self.pushExpr(ext, .value);
+                for (record.fields) |field| try self.pushExpr(field.value, .value);
+            },
+            .block => |block| {
+                for (block.statements) |statement| try self.work.append(self.allocator, .{ .statement = statement });
+                try self.pushExpr(block.final_expr, .value);
+            },
+            .tag => |tag| try self.pushExprs(tag.args, .value),
+            .nominal => |nominal| try self.pushExpr(nominal.backing_expr, .value),
+            .row_coerce => |coerce| try self.pushExpr(coerce.value, .value),
+            .closure => |closure| {
+                // A closure's lambda set is program-specific, and so is the
+                // layout of what it captures.
+                try self.raiseMentions(expr.ty, .full);
+                for (closure.captures) |capture| {
+                    try self.raiseMentions(self.checked_bodies.pattern(capture.pattern).ty, .full);
+                }
+                try self.pushExpr(closure.lambda, .value);
+            },
+            .lambda => |lambda| {
+                try self.raiseMentions(expr.ty, .full);
+                for (lambda.args) |arg| try self.pushPattern(arg, .binding);
+                try self.pushExpr(lambda.body, .value);
+            },
+            .binop => |binop| {
+                try self.raiseMentions(self.checked_bodies.expr(binop.lhs).ty, .full);
+                try self.raiseMentions(self.checked_bodies.expr(binop.rhs).ty, .full);
+                try self.pushExpr(binop.lhs, .value);
+                try self.pushExpr(binop.rhs, .value);
+            },
+            .unary_minus, .unary_not => |operand| {
+                try self.raiseMentions(self.checked_bodies.expr(operand).ty, .full);
+                try self.pushExpr(operand, .value);
+            },
+            .field_access => |field| try self.pushExpr(field.receiver, .value),
+            .tuple_access => |access| try self.pushExpr(access.tuple, .value),
+            .dispatch_call, .type_dispatch_call => |plan_id| {
+                const plan = plan_id orelse return self.raiseEverything();
+                try self.visitDispatchPlan(plan);
+            },
+            .method_eq => |plan_id| {
+                const plan = plan_id orelse return self.raiseEverything();
+                try self.visitInspectingPlan(plan);
+            },
+            .interpolation => |interpolation| {
+                for (interpolation.values) |value| try self.raiseMentions(self.checked_bodies.expr(value).ty, .full);
+                try self.pushExprs(interpolation.segments, .value);
+                try self.pushExprs(interpolation.values, .value);
+            },
+            .structural_eq => |eq| {
+                try self.raiseMentions(self.checked_bodies.expr(eq.lhs).ty, .full);
+                try self.raiseMentions(self.checked_bodies.expr(eq.rhs).ty, .full);
+                try self.pushExpr(eq.lhs, .value);
+                try self.pushExpr(eq.rhs, .value);
+            },
+            .structural_hash => |hash| {
+                try self.raiseMentions(self.checked_bodies.expr(hash.value).ty, .full);
+                try self.pushExpr(hash.value, .value);
+                try self.pushExpr(hash.hasher, .value);
+            },
+            .runtime_error => |runtime_error| try self.pushExprs(runtime_error.evaluated, .value),
+            .dbg => |payload| {
+                try self.raiseMentions(self.checked_bodies.expr(payload).ty, .full);
+                try self.pushExpr(payload, .value);
+            },
+            .expect_err => |expect_err| {
+                try self.raiseMentions(self.checked_bodies.expr(expect_err.expr).ty, .full);
+                try self.pushExpr(expect_err.expr, .value);
+            },
+            .expect => |condition| try self.pushExpr(condition, .value),
+            .return_ => |ret| try self.pushExpr(ret.expr, .value),
+            .for_ => |for_| try self.visitFor(for_.pattern, for_.expr, for_.body),
+            .run_low_level => |run| {
+                for (run.args, 0..) |arg, index| {
+                    try self.raiseMentions(self.checked_bodies.expr(arg).ty, run.op.elementDemand(index));
+                    try self.pushExpr(arg, .operand);
+                }
+            },
+        }
+    }
+
+    fn visitFor(self: *TemplateDemandPass, pattern: CheckedPatternId, iterable: CheckedExprId, body: CheckedExprId) Allocator.Error!void {
+        // Iteration dispatches on the iterable's type.
+        try self.raiseMentions(self.checked_bodies.expr(iterable).ty, .full);
+        try self.raiseMentions(self.checked_bodies.pattern(pattern).ty, .full);
+        try self.pushPattern(pattern, .binding);
+        try self.pushExpr(iterable, .value);
+        try self.pushExpr(body, .value);
+    }
+
+    fn visitStatement(self: *TemplateDemandPass, id: CheckedStatementId) Allocator.Error!void {
+        switch (self.checked_bodies.statement(id).data) {
+            .decl => |decl| {
+                try self.pushPattern(decl.pattern, .binding);
+                try self.pushExpr(decl.expr, .value);
+            },
+            .var_ => |var_| {
+                try self.pushPattern(var_.pattern, .binding);
+                try self.pushExpr(var_.expr, .value);
+            },
+            .reassign => |reassign| {
+                try self.pushPattern(reassign.pattern, .binding);
+                try self.pushExpr(reassign.expr, .value);
+            },
+            // The promoted procedure is a template of its own; its binding's
+            // function type is all this body sees of it.
+            .promoted_proc => |promoted| try self.pushPattern(promoted.pattern, .binding),
+            .var_uninitialized => |var_| try self.pushPattern(var_.pattern, .binding),
+            .dbg => |payload| {
+                try self.raiseMentions(self.checked_bodies.expr(payload).ty, .full);
+                try self.pushExpr(payload, .value);
+            },
+            .expr, .expect => |expr| try self.pushExpr(expr, .value),
+            .for_ => |for_| try self.visitFor(for_.pattern, for_.expr, for_.body),
+            .while_, .infinite_loop, .breakable_loop => |loop| {
+                try self.pushExpr(loop.cond, .value);
+                try self.pushExpr(loop.body, .value);
+            },
+            .return_ => |ret| try self.pushExpr(ret.expr, .value),
+            .pending => self.raiseEverything(),
+            .crash,
+            .break_,
+            .import_,
+            .alias_decl,
+            .where_alias_decl,
+            .nominal_decl,
+            .type_anno,
+            .type_var_alias,
+            .runtime_error,
+            => {},
+        }
+    }
+
+    fn visitPattern(self: *TemplateDemandPass, id: CheckedPatternId, role: PatternRole) Allocator.Error!void {
+        const pattern = self.checked_bodies.pattern(id);
+        switch (pattern.data) {
+            .assign, .underscore => switch (role) {
+                .parameter => try self.raiseFunctionMentions(pattern.ty),
+                .binding => try self.raiseMentions(pattern.ty, .layout),
+            },
+            .as => |as| {
+                try self.raiseMentions(pattern.ty, .layout);
+                try self.pushPattern(as.pattern, .binding);
+            },
+            .applied_tag => |tag| {
+                try self.raiseMentions(pattern.ty, .layout);
+                for (tag.args) |arg| try self.pushPattern(arg, .binding);
+            },
+            .nominal => |nominal| {
+                try self.raiseMentions(pattern.ty, .layout);
+                try self.pushPattern(nominal.backing_pattern, .binding);
+            },
+            .record_destructure => |destructs| {
+                try self.raiseMentions(pattern.ty, .layout);
+                for (destructs) |destruct| switch (destruct.kind) {
+                    inline .required, .sub_pattern, .rest => |child| try self.pushPattern(child, .binding),
+                };
+            },
+            .list => |list| {
+                try self.raiseMentions(pattern.ty, .layout);
+                for (list.patterns) |child| try self.pushPattern(child, .binding);
+                if (list.rest) |rest| if (rest.pattern) |child| try self.pushPattern(child, .binding);
+            },
+            .tuple => |items| {
+                try self.raiseMentions(pattern.ty, .layout);
+                for (items) |child| try self.pushPattern(child, .binding);
+            },
+            .numeral_literal => |literal| {
+                try self.raiseMentions(pattern.ty, .full);
+                if (literal.guard) |guard| try self.pushExpr(guard, .value);
+            },
+            .str_literal => |literal| {
+                try self.raiseMentions(pattern.ty, .full);
+                if (literal.guard) |guard| try self.pushExpr(guard, .value);
+            },
+            .str_interpolation => |str| {
+                try self.raiseMentions(pattern.ty, .full);
+                for (str.steps) |step| if (step.capture) |capture| try self.pushPattern(capture, .binding);
+            },
+            .runtime_error => {},
+            .pending => self.raiseEverything(),
+        }
+    }
+
+    fn visitCall(self: *TemplateDemandPass, call: anytype) Allocator.Error!void {
+        if (call.direct_target) |target| {
+            if (try self.directCallTemplate(target)) |callee| {
+                if (self.static_dispatch_plans.siteSubstitution(call.func)) |subst| {
+                    if (try self.relateCall(callee, subst)) {
+                        try self.pushExpr(call.func, .direct_callee);
+                        try self.pushExprs(call.args, .operand);
+                        return;
+                    }
+                }
+            }
+        }
+        // Any other callee is a function value whose lambda set the program
+        // decides; its type mentions every variable its operands do.
+        try self.raiseMentions(self.checked_bodies.expr(call.func).ty, .full);
+        try self.pushExpr(call.func, .value);
+        try self.pushExprs(call.args, .operand);
+    }
+
+    /// A dispatch whose checked resolution selected one procedure template
+    /// behaves like a direct call to it; any other dispatch inspects its
+    /// dispatcher.
+    fn visitDispatchPlan(self: *TemplateDemandPass, plan_id: static_dispatch.StaticDispatchPlanId) Allocator.Error!void {
+        const plan = self.static_dispatch_plans.plans[@backingInt(plan_id)];
+        if (self.dispatchTemplate(plan)) |selected| {
+            if (try self.relateCall(selected.template, selected.subst)) {
+                try self.pushPlanOperands(plan, .operand);
+                return;
+            }
+        }
+        try self.raiseMentions(plan.dispatcher_ty, .full);
+        try self.raiseMentions(plan.callable_ty, .full);
+        try self.pushPlanOperands(plan, .operand);
+    }
+
+    fn visitInspectingPlan(self: *TemplateDemandPass, plan_id: static_dispatch.StaticDispatchPlanId) Allocator.Error!void {
+        const plan = self.static_dispatch_plans.plans[@backingInt(plan_id)];
+        try self.raiseMentions(plan.dispatcher_ty, .full);
+        try self.raiseMentions(plan.callable_ty, .full);
+        try self.pushPlanOperands(plan, .value);
+    }
+
+    fn pushPlanOperands(self: *TemplateDemandPass, plan: static_dispatch.StaticDispatchCallPlan, role: ExprRole) Allocator.Error!void {
+        for (plan.argsSlice(self.static_dispatch_plans)) |operand| switch (operand) {
+            .checked_expr => |expr| try self.pushExpr(expr, role),
+            .generated_interpolation_segments => |expr| try self.pushExpr(expr, .value),
+            .generated_numeral, .generated_quote => {},
+        };
+    }
+
+    const SelectedTemplate = struct {
+        template: canonical.ProcedureTemplateRef,
+        subst: []const CheckedTypeId,
+    };
+
+    fn dispatchTemplate(self: *TemplateDemandPass, plan: static_dispatch.StaticDispatchCallPlan) ?SelectedTemplate {
+        const direct = switch (plan.resolution) {
+            .direct_closed, .direct_parametric => |direct| direct,
+            .direct_pending, .evidence_dependent, .structural, .checked_error, .@"unreachable" => return null,
+        };
+        const node = self.static_dispatch_plans.evidenceNode(direct.evidence);
+        if (node.target.alias != null) return null;
+        const procedure = switch (node.target.kind) {
+            .procedure => |procedure| procedure,
+            .local_proc, .structural => return null,
+        };
+        switch (procedure.runtime_target) {
+            .procedure, .low_level => {},
+            .intrinsic, .graph_participating => return null,
+        }
+        return .{
+            .template = procedure.template,
+            .subst = self.static_dispatch_plans.site_substitutions[node.subst.start .. node.subst.start + node.subst.len],
+        };
+    }
+
+    /// The checked template a direct call's target names, when it names one.
+    fn directCallTemplate(self: *TemplateDemandPass, target: ResolvedValueRefId) Allocator.Error!?canonical.ProcedureTemplateRef {
+        const procedure = switch (self.resolved_value_refs.records[@backingInt(target)].ref) {
+            .top_level_proc, .imported_proc, .promoted_top_level_proc => |procedure| procedure,
+            .local_param,
+            .local_value,
+            .local_mutable_version,
+            .pattern_binder,
+            .local_proc,
+            .selected_hoisted_const,
+            .top_level_const,
+            .imported_const,
+            .hosted_proc,
+            .platform_required_declaration,
+            .platform_required_checked_error,
+            .platform_required_const,
+            .platform_required_proc,
+            => return null,
+        };
+        if (procedure.intrinsic != null) return null;
+        const body = switch (procedure.binding) {
+            .top_level => |binding| blk: {
+                if (!binding.artifact.eql(self.artifact_key.digest())) return null;
+                break :blk self.top_level_procedure_bindings.get(binding.binding).body;
+            },
+            .imported => |imported| return try self.importedTemplate(imported),
+            .hosted, .platform_required => return null,
+        };
+        return directProcedureBindingTemplate(body);
+    }
+
+    fn importedTemplate(self: *TemplateDemandPass, imported: ImportedProcedureBindingRef) Allocator.Error!?canonical.ProcedureTemplateRef {
+        const key: ImportedDefKey = .{ .artifact = imported.artifact, .def = imported.def };
+        if (self.imported_templates.get(key)) |cached| return cached;
+        const view = self.imports.viewForKey(imported.artifact) orelse return null;
+        const template = if (importedProcedureBindingForDef(view, imported.def)) |binding|
+            directProcedureBindingTemplate(binding.body)
+        else
+            null;
+        try self.imported_templates.put(self.allocator, key, template);
+        return template;
+    }
+
+    fn directProcedureBindingTemplate(body: ProcedureBindingBody) ?canonical.ProcedureTemplateRef {
+        return switch (body) {
+            .direct_template => |direct| switch (direct.template) {
+                .checked => |template| template,
+                .lifted, .synthetic => null,
+            },
+            .callable_eval_template, .checked_error => null,
+        };
+    }
+
+    /// Relate a call to `callee` under `subst` (one caller type per callee
+    /// quantified variable): every caller variable a slot's type mentions is
+    /// demanded at least as much as the callee demands that slot. False when
+    /// the callee's demand vector is not available to this module.
+    fn relateCall(self: *TemplateDemandPass, callee: canonical.ProcedureTemplateRef, subst: []const CheckedTypeId) Allocator.Error!bool {
+        if (callee.artifact.eql(self.artifact_key.digest())) {
+            const callee_template = &self.templates.templates.items[@backingInt(callee.template)];
+            if (subst.len != callee_template.scheme_vars.len) return false;
+            for (subst, 0..) |slot_ty, callee_slot| {
+                for (try self.mentions.of(slot_ty)) |mention| {
+                    const caller_slot = self.slotOf(mention.var_ty) orelse continue;
+                    if (exactMention(mention.flags)) {
+                        self.raiseSlot(caller_slot, .full);
+                        continue;
+                    }
+                    try self.edges.append(self.allocator, .{
+                        .caller = self.current,
+                        .caller_slot = @intCast(caller_slot),
+                        .callee = callee.template,
+                        .callee_slot = @intCast(callee_slot),
+                    });
+                }
+            }
+            return true;
+        }
+        const view = self.imports.viewForKey(callee.artifact) orelse return false;
+        const callee_templates = view.checked_procedure_templates;
+        const callee_template = &callee_templates.templates.items[@backingInt(callee.template)];
+        const callee_demands = callee_templates.templateDemands(callee_template);
+        if (subst.len != callee_demands.len) return false;
+        for (subst, callee_demands) |slot_ty, demand| try self.raiseMentions(slot_ty, demand);
+        return true;
+    }
+
+    /// Propagate local call edges to a fixed point. Demands only rise and
+    /// each has three values, so every caller slot changes at most twice.
+    fn propagate(self: *TemplateDemandPass) Allocator.Error!void {
+        if (self.edges.items.len == 0) return;
+        const templates = self.templates.templates.items;
+        // Edges grouped by callee, so a changed callee revisits only its callers.
+        const by_callee = try self.allocator.alloc(u32, self.edges.items.len);
+        defer self.allocator.free(by_callee);
+        const starts = try self.allocator.alloc(u32, templates.len + 1);
+        defer self.allocator.free(starts);
+        @memset(starts, 0);
+        for (self.edges.items) |edge| starts[@backingInt(edge.callee) + 1] += 1;
+        for (1..starts.len) |index| starts[index] += starts[index - 1];
+        const cursor = try self.allocator.dupe(u32, starts[0..templates.len]);
+        defer self.allocator.free(cursor);
+        for (self.edges.items, 0..) |edge, index| {
+            by_callee[cursor[@backingInt(edge.callee)]] = @intCast(index);
+            cursor[@backingInt(edge.callee)] += 1;
+        }
+
+        var queued = try std.DynamicBitSetUnmanaged.initFull(self.allocator, templates.len);
+        defer queued.deinit(self.allocator);
+        var pending: std.ArrayList(u32) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.ensureTotalCapacity(self.allocator, templates.len);
+        for (0..templates.len) |raw| pending.appendAssumeCapacity(@intCast(raw));
+        while (pending.pop()) |raw_callee| {
+            queued.unset(raw_callee);
+            for (by_callee[starts[raw_callee]..starts[raw_callee + 1]]) |edge_index| {
+                const edge = self.edges.items[edge_index];
+                const callee_template = templates[raw_callee];
+                const caller_template = templates[@backingInt(edge.caller)];
+                const demand = self.demands.items[callee_template.demands.start + edge.callee_slot];
+                const caller_demand = &self.demands.items[caller_template.demands.start + edge.caller_slot];
+                const raised = maxSchemeVarDemand(caller_demand.*, demand);
+                if (raised == caller_demand.*) continue;
+                caller_demand.* = raised;
+                const raw_caller = @backingInt(edge.caller);
+                if (!queued.isSet(raw_caller)) {
+                    queued.set(raw_caller);
+                    try pending.append(self.allocator, raw_caller);
+                }
+            }
+        }
+    }
+};
+
 fn checkedTypeIsContextFreeCompileTimeRoot(
     allocator: Allocator,
     checked_types: *const CheckedTypeStore,
@@ -33368,8 +34253,8 @@ pub const CheckedModuleArtifact = struct {
             // identity table its rows, value context, exports and method and
             // export requirements, and the portability column one more. Stored
             // function evidence keeps its target and structural payloads in
-            // two pools of their own.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 246);
+            // two pools of their own. Template demand vectors add one.
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 247);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -36997,6 +37882,28 @@ pub fn publishFromTypedModule(
         .static_dispatch_plans = &static_dispatch_plans,
     }).publish(allocator);
     try checked_bodies.publishResolvedDispatchDivergence(allocator, &static_dispatch_plans);
+    {
+        var demand_pass = TemplateDemandPass{
+            .allocator = allocator,
+            .artifact_key = artifact_key,
+            .checked_types = checked_types,
+            .checked_bodies = checked_bodies,
+            .templates = &checked_procedure_templates,
+            .resolved_value_refs = &resolved_value_refs,
+            .top_level_procedure_bindings = &top_level_procedure_bindings,
+            .static_dispatch_plans = &static_dispatch_plans,
+            .imports = .{ .current_owner = artifact_key.digest(), .direct = inputs.imports, .available = inputs.available_artifacts, .relations = inputs.relation_artifacts },
+            .current_slots = collections.DenseMap(CheckedTypeId, u32).init(allocator),
+            .mentions = .{
+                .allocator = allocator,
+                .checked_types = checked_types,
+                .memo = collections.DenseMap(CheckedTypeId, artifact_serialize.Span).init(allocator),
+                .found = collections.DenseMap(CheckedTypeId, TypeVarMentionFlags).init(allocator),
+            },
+        };
+        defer demand_pass.deinit();
+        try demand_pass.publish();
+    }
     template_iterator_refs.deinit(allocator);
     plan_build_data.deinit(allocator);
 
@@ -39552,8 +40459,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x6C, 0x98, 0x80, 0x42, 0x92, 0x3F, 0x1A, 0x5C, 0x0C, 0xE7, 0xFE, 0x6E, 0x15, 0xB8, 0xE2, 0xFB,
-        0x90, 0x60, 0x0C, 0xA0, 0xBE, 0xD6, 0xD2, 0xC1, 0xE5, 0xBC, 0x51, 0x57, 0xA9, 0xF5, 0xD5, 0xD3,
+        0x6E, 0xDF, 0x6C, 0xE1, 0x1F, 0x36, 0x54, 0x09, 0xD6, 0xE9, 0x97, 0x14, 0x0A, 0x36, 0x2B, 0xF2,
+        0x03, 0xB9, 0x3A, 0x8B, 0xE1, 0x26, 0xC8, 0xB4, 0x51, 0x1D, 0x9D, 0x1D, 0x40, 0x55, 0x82, 0xD0,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

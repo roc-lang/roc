@@ -354,7 +354,9 @@ pub const Constants = struct {
     ///      follows function values and every selected dispatch; type stores
     ///      keep interpolation metadata in a table that static dispatch
     ///      constraints index.
-    pub const CACHE_VERSION = 159;
+    /// 160: procedure templates record how much of each quantified variable
+    ///      their bodies demand.
+    pub const CACHE_VERSION = 160;
 };
 
 /// Configuration for the Roc cache system.

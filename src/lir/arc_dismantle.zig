@@ -99,7 +99,7 @@ pub fn layoutMayContainBoxyDynamic(
         switch (layout_val.tag) {
             .erased_box => return true,
             .box, .list => try stack.append(allocator, layout_val.getIdx()),
-            .list_of_zst, .box_of_zst, .zst, .scalar, .erased_callable, .ptr => {},
+            .list_of_zst, .box_of_zst, .zst, .hole, .scalar, .erased_callable, .ptr => {},
             .struct_ => {
                 const info = layouts.getStructInfo(layout_val);
                 for (0..info.fields.len) |index| {

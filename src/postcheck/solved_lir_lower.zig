@@ -2528,7 +2528,7 @@ const Lowerer = struct {
             // registering the child's TypeId (notably erased captures and
             // nominal storage aliases). Close every representation edge.
             switch (l.types.get(ty)) {
-                .primitive, .zst, .erased_capture_ptr => {},
+                .primitive, .zst, .hole, .erased_capture_ptr => {},
                 .box, .list => |elem| try self.add(.{ .ty = elem }),
                 .tuple => |span| {
                     const items = l.types.span(span);
@@ -4274,6 +4274,7 @@ const Lowerer = struct {
                     .mono => Common.invariant("direct Lambda Mono type lowering saw an unfinalized lazy Monotype leaf"),
                     .primitive => |primitive| return try self.finishTypeVar(task, .{ .primitive = primitive }),
                     .zst => return try self.finishTypeVar(task, .zst),
+                    .hole => return try self.finishTypeVar(task, .hole),
                     .erased => |erased| {
                         frame.cursor = TypeVarCursor.callable;
                         return .{ .call = .{ .members = .{ .members = erased.members, .abi = .erased, .solved_fn_ty = erased.abi_fn } } };
@@ -4305,7 +4306,7 @@ const Lowerer = struct {
                         .members = members,
                     } },
                     .lambda_set => .{ .callable = members },
-                    .link, .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .zst, .mono => unreachable, // TypeVarCursor.callable is set only for func, erased, and lambda_set contents
+                    .link, .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .zst, .hole, .mono => unreachable, // TypeVarCursor.callable is set only for func, erased, and lambda_set contents
                 });
             },
             TypeVarCursor.children => try self.acceptTypeChild(frame, task, input.?.ty),
@@ -4367,7 +4368,7 @@ const Lowerer = struct {
                 frame.index += 1;
             },
             .tag_union => try task.tys.append(self.allocator, lowered),
-            .link, .unbound, .forall, .primitive, .func, .lambda_set, .erased, .zst, .mono => unreachable, // TypeVarCursor.children is set only for list, box, tuple, record, tag_union, and named contents
+            .link, .unbound, .forall, .primitive, .func, .lambda_set, .erased, .zst, .hole, .mono => unreachable, // TypeVarCursor.children is set only for list, box, tuple, record, tag_union, and named contents
         }
     }
 
@@ -4461,7 +4462,7 @@ const Lowerer = struct {
                 frame.cursor = TypeVarCursor.named_declared_order;
                 return .{ .call = .{ .declared_order = .{ .span = named.declared_order } } };
             },
-            .link, .unbound, .forall, .primitive, .func, .lambda_set, .erased, .zst, .mono => unreachable, // cursor start returns for every content without children
+            .link, .unbound, .forall, .primitive, .func, .lambda_set, .erased, .zst, .hole, .mono => unreachable, // cursor start returns for every content without children
         }
     }
 
@@ -5012,7 +5013,7 @@ const Lowerer = struct {
                 try children.append(allocator, .{ .program = backing.ty, .declared = declared_backing.ty });
                 return false;
             },
-            .primitive, .capture_record, .callable, .erased_fn, .erased_capture_ptr, .zst => return false,
+            .primitive, .capture_record, .callable, .erased_fn, .erased_capture_ptr, .zst, .hole => return false,
         }
     }
 
@@ -5066,7 +5067,7 @@ const Lowerer = struct {
             .tag_union => |span| {
                 const declared_tags = switch (declared) {
                     .tag_union => |tags| declared_types.tagSpan(tags),
-                    .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => Common.invariant("a compile-time root's tag union was declared as another kind of type"),
+                    .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst, .hole => Common.invariant("a compile-time root's tag union was declared as another kind of type"),
                 };
                 for (declared_tags) |declared_tag| {
                     // A label is two variants only where their payloads
@@ -5090,7 +5091,7 @@ const Lowerer = struct {
             .record => |span| {
                 const declared_fields = switch (declared) {
                     .record => |fields| declared_types.fieldSpan(fields),
-                    .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("a compile-time root's record was declared as another kind of type"),
+                    .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("a compile-time root's record was declared as another kind of type"),
                 };
                 if (declared_fields.len != span.len) Common.invariant("a compile-time root's record has other fields than its declaration");
                 for (declared_fields, 0..) |declared_field, index| {
@@ -5100,7 +5101,7 @@ const Lowerer = struct {
             .tuple => |span| {
                 const declared_items = switch (declared) {
                     .tuple => |items| declared_types.span(items),
-                    .primitive, .named, .record, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("a compile-time root's tuple was declared as another kind of type"),
+                    .primitive, .named, .record, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("a compile-time root's tuple was declared as another kind of type"),
                 };
                 if (declared_items.len != span.len) Common.invariant("a compile-time root's tuple has another arity than its declaration");
                 for (declared_items, 0..) |declared_item, index| {
@@ -5110,21 +5111,21 @@ const Lowerer = struct {
             .list => |elem| {
                 const declared_elem = switch (declared) {
                     .list => |item| item,
-                    .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst => Common.invariant("a compile-time root's list was declared as another kind of type"),
+                    .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst, .hole => Common.invariant("a compile-time root's list was declared as another kind of type"),
                 };
                 try walk.frame_pairs.append(allocator, .{ .program = elem, .declared = declared_elem });
             },
             .box => |elem| {
                 const declared_elem = switch (declared) {
                     .box => |item| item,
-                    .primitive, .named, .record, .tuple, .tag_union, .list, .func, .erased, .zst => Common.invariant("a compile-time root's box was declared as another kind of type"),
+                    .primitive, .named, .record, .tuple, .tag_union, .list, .func, .erased, .zst, .hole => Common.invariant("a compile-time root's box was declared as another kind of type"),
                 };
                 try walk.frame_pairs.append(allocator, .{ .program = elem, .declared = declared_elem });
             },
             .named => |named| {
                 const declared_named = switch (declared) {
                     .named => |declared_named| declared_named,
-                    .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => Common.invariant("a compile-time root's named type was declared as another kind of type"),
+                    .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("a compile-time root's named type was declared as another kind of type"),
                 };
                 // A recursive named type reaches itself again through its
                 // backing; that reference is this copy.
@@ -5141,9 +5142,9 @@ const Lowerer = struct {
                     try walk.frame_pairs.append(allocator, .{ .program = backing.ty, .declared = declared_backing.ty });
                 }
             },
-            // Callables, erased values and scalars hold no row a join widens
+            // Callables, erased values, scalars and holes hold no row a join widens
             // at the root's own type, so none is ever widened.
-            .primitive, .capture_record, .callable, .erased_fn, .erased_capture_ptr, .zst => Common.invariant("a compile-time root's leaf type was widened"),
+            .primitive, .capture_record, .callable, .erased_fn, .erased_capture_ptr, .zst, .hole => Common.invariant("a compile-time root's leaf type was widened"),
         }
         frame.children_len = @as(u32, @intCast(walk.frame_pairs.items.len)) - frame.children_start;
         try walk.frames.append(allocator, frame);
@@ -5199,7 +5200,7 @@ const Lowerer = struct {
                 try self.types.set(copy, .{ .named = narrowed });
                 return copy;
             },
-            .primitive, .capture_record, .callable, .erased_fn, .erased_capture_ptr, .zst => Common.invariant("a compile-time root's leaf type was widened"),
+            .primitive, .capture_record, .callable, .erased_fn, .erased_capture_ptr, .zst, .hole => Common.invariant("a compile-time root's leaf type was widened"),
         }
     }
 
@@ -5393,8 +5394,10 @@ const Lowerer = struct {
                 .zst => true,
                 .record => |fields| fields.len == 0,
                 .tuple => |items| items.len == 0,
-                .primitive, .named, .tag_union, .list, .box, .func, .erased => false,
+                .primitive, .named, .tag_union, .list, .box, .func, .erased, .hole => false,
             },
+            // A hole equals only itself.
+            .hole => return declared == .hole,
             .capture_record, .erased_capture_ptr => return false,
         }
         try walk.active.put(pair, {});
@@ -5566,7 +5569,7 @@ const Lowerer = struct {
                 .tuple => |items| task.plans = try self.allocator.alloc(LirProgram.ConstPlanId, items.len),
                 .record => |fields| task.plans = try self.allocator.alloc(LirProgram.ConstPlanId, fields.len),
                 .tag_union => |tags| task.variants = try self.allocator.alloc(LirProgram.ConstTagVariant, tags.len),
-                .primitive, .zst, .list, .box, .named, .callable, .erased_fn, .capture_record, .erased_capture_ptr => {},
+                .primitive, .zst, .hole, .list, .box, .named, .callable, .erased_fn, .capture_record, .erased_capture_ptr => {},
             }
         } else if (task.reserved == null) {
             // The alias's backing plan.
@@ -5603,6 +5606,7 @@ const Lowerer = struct {
                 => .scalar,
             },
             .zst => .zst,
+            .hole => Common.invariant("a demand hole reached a constant plan"),
             .list => |elem| if (input) |elem_plan| .{ .list = elem_plan.get(.plan) } else return .{ .call = .{ .plan = .{ .ty = elem } } },
             .box => |elem| if (input) |elem_plan| .{ .box = elem_plan.get(.plan) } else return .{ .call = .{ .plan = .{ .ty = elem } } },
             .tuple, .record => blk: {
@@ -5616,7 +5620,7 @@ const Lowerer = struct {
                             .ty = switch (content) {
                                 .tuple => |items| self.types.typeAt(items, task.index),
                                 .record => |fields| self.types.fieldAt(fields, task.index).ty,
-                                .primitive, .named, .capture_record, .tag_union, .callable, .list, .box, .erased_fn, .erased_capture_ptr, .zst => unreachable, // this switch is inside the .tuple, .record prong
+                                .primitive, .named, .capture_record, .tag_union, .callable, .list, .box, .erased_fn, .erased_capture_ptr, .zst, .hole => unreachable, // this switch is inside the .tuple, .record prong
                             },
                         },
                     },
@@ -5739,6 +5743,7 @@ const Lowerer = struct {
                 switch (content) {
                     .primitive => |primitive| return try self.finishConstType(task, .{ .primitive = constPrimitive(primitive) }),
                     .zst => return try self.finishConstType(task, .zst),
+                    .hole => Common.invariant("a demand hole reached a constant type"),
                     .list, .box => |elem| return constTypeStep(elem),
                     // The solved source signature below is the durable authority for
                     // both callable shapes; runtime variant sets are irrelevant here
@@ -5779,7 +5784,7 @@ const Lowerer = struct {
                         }
                     },
                     .tuple, .tag_union, .callable, .erased_fn => try task.ids.append(allocator, component),
-                    .primitive, .zst, .capture_record, .erased_capture_ptr => unreachable, // cursor start returns for primitive and zst and rejects capture_record and erased_capture_ptr
+                    .primitive, .zst, .hole, .capture_record, .erased_capture_ptr => unreachable, // cursor start returns for primitive and zst and rejects hole, capture_record, and erased_capture_ptr
                 }
             },
             ConstTypeCursor.field_value => {
@@ -5896,7 +5901,7 @@ const Lowerer = struct {
                 task.cursor = ConstTypeCursor.callable_ret;
                 return constTypeStep(try self.lowerType(func.ret));
             },
-            .primitive, .zst, .list, .box, .capture_record, .erased_capture_ptr => unreachable, // cursor start returns for primitive, zst, and capture contents, and cursor components returns for list and box
+            .primitive, .zst, .hole, .list, .box, .capture_record, .erased_capture_ptr => unreachable, // cursor start returns for primitive, zst, and capture contents, rejects hole, and cursor components returns for list and box
         }
     }
 
@@ -6167,7 +6172,7 @@ const Lowerer = struct {
         while (stack.pop()) |ty| {
             if ((try visited.getOrPut(ty)).found_existing) continue;
             switch (self.types.get(ty)) {
-                .primitive, .zst, .erased_capture_ptr, .erased_fn => {},
+                .primitive, .zst, .hole, .erased_capture_ptr, .erased_fn => {},
                 .list, .box => |elem| try stack.append(self.allocator, elem),
                 .tuple => |span| try self.appendTypeSpan(&stack, span),
                 .record => |span| {
@@ -6835,6 +6840,8 @@ const Lowerer = struct {
         /// Borrowed from the lifted program.
         capture_operands: []const Lifted.CaptureOperand,
         is_cold: bool,
+        /// See `Mono.CallProc.demand_shaped`.
+        demand_shaped: bool = false,
         next: LIR.CFStmtId,
         target_fn: Type.FnId = undefined,
         captures: CaptureSpanId = undefined,
@@ -6851,6 +6858,10 @@ const Lowerer = struct {
         args: []const Lifted.ExprId,
         capture_arg: ?LIR.LocalId,
         is_cold: bool,
+        /// The callee is a demand-shaped specialization, whose parameters
+        /// accept the arguments at the call's own types (design.md
+        /// "Specialization By Demand").
+        demand_shaped: bool = false,
         next: LIR.CFStmtId,
         /// Owned. The capture values of a call the inline plan selected, in
         /// the callee's capture order. They are evaluated before the
@@ -8578,6 +8589,7 @@ const Lowerer = struct {
             .args = args,
             .capture_operands = capture_operands,
             .is_cold = call.is_cold,
+            .demand_shaped = call.demand_shaped,
             .next = next,
         } } };
     }
@@ -8615,9 +8627,11 @@ const Lowerer = struct {
                 .args = args,
                 .capture_arg = null,
                 .is_cold = task.is_cold,
+                .demand_shaped = task.demand_shaped,
                 .next = task.next,
             } } };
         }
+        if (task.demand_shaped) Common.invariant("a demand-shaped call targeted a capturing procedure");
         if (capture_items.len != task.capture_operands.len) Common.invariant("direct call capture operand count differed from callee capture count");
         if (!task.is_cold and return_reuse == .none) {
             if (try self.inlineBodyForKnownCall(task.target_fn, task.where.owner) != null) {
@@ -8657,6 +8671,34 @@ const Lowerer = struct {
         } } };
     }
 
+    /// A demand-shaped call's layouts agree with its callee's: each argument's
+    /// layout is accepted at its parameter's, and the result's layout is the
+    /// callee's (design.md "Specialization By Demand"). A layout
+    /// representative commits exactly the layout of the type it stands for,
+    /// so this checks that agreement at every shaped call.
+    fn requireDemandShapedCallLayouts(self: *Lowerer, callee: Type.FnId, arg_tys: []const Type.TypeId, result_ty: Type.TypeId) Common.LowerError!void {
+        const param_tys = try self.lowerFnSpecArgTypes(callee);
+        defer self.allocator.free(param_tys);
+        if (param_tys.len != arg_tys.len) Common.invariant("a demand-shaped call's arity differed from its callee's");
+        for (arg_tys, param_tys) |arg_ty, param_ty| {
+            const arg_layout = try self.layoutOfType(arg_ty);
+            const param_layout = try self.layoutOfType(param_ty);
+            if (!try self.result.layouts.acceptsAtHoles(self.allocator, arg_layout, param_layout) and !try self.layoutsEquivalent(arg_layout, param_layout)) {
+                Common.invariantFmt("a demand-shaped call's argument layout {d} ({s}) was not accepted by its callee's parameter layout {d} ({s})", .{
+                    @backingInt(arg_layout),
+                    @tagName(self.result.layouts.getLayout(arg_layout).tag),
+                    @backingInt(param_layout),
+                    @tagName(self.result.layouts.getLayout(param_layout).tag),
+                });
+            }
+        }
+        const callee_ret_layout = try self.layoutOfType(self.fn_entries.items[@backingInt(callee)].ret);
+        const result_layout = try self.layoutOfType(result_ty);
+        if (callee_ret_layout != result_layout and !try self.layoutsEquivalent(callee_ret_layout, result_layout)) {
+            Common.invariant("a demand-shaped call's result layout differed from its callee's");
+        }
+    }
+
     fn stepKnownCall(self: *Lowerer, frame: *LowerFrame, task: *KnownCallTask, input: ?LIR.CFStmtId) Common.LowerError!LowerStep {
         if (frame.cursor == 1) {
             const lowered = task.lowered.?;
@@ -8668,7 +8710,14 @@ const Lowerer = struct {
         const where = task.where;
         const target = task.target;
         const capture_count = task.capture_values.len;
-        if (capture_count == 0) {
+        if (task.demand_shaped) {
+            // The arguments keep the call's own types; the callee's parameters
+            // accept their layouts at its holes.
+            task.arg_tys = try self.allocator.alloc(Type.TypeId, task.args.len);
+            for (task.args, task.arg_tys) |arg, *ty| ty.* = try self.lowerExprTy(arg);
+            task.lowered = try self.lowerExprsToTempsAtTypes(task.args, task.arg_tys);
+            if (@import("builtin").mode == .debug) try self.requireDemandShapedCallLayouts(callee, task.arg_tys, task.result_ty);
+        } else if (capture_count == 0) {
             task.arg_tys = try self.lowerFnSpecArgTypes(callee);
             task.lowered = try self.lowerExprsToTempsAtTypes(task.args, task.arg_tys);
         } else {
@@ -10349,6 +10398,7 @@ const Lowerer = struct {
             .closure,
             .erased_callable,
             .zst,
+            .hole,
             .tag_union,
             .ptr,
             .erased_box,
@@ -10498,7 +10548,7 @@ const Lowerer = struct {
                 break :blk .ambiguous;
             } else switch (self.types.get(child_ty)) {
                 .erased_fn => .single_slot,
-                .primitive, .callable, .erased_capture_ptr, .zst => .none,
+                .primitive, .callable, .erased_capture_ptr, .zst, .hole => .none,
                 .named => |named| if (named.backing) |backing| {
                     try frames.append(frame_allocator, .{ .ty = child_ty, .remaining = child_remaining, .exhaustions_before = exhaustions });
                     child_ty = backing.ty;
@@ -10545,7 +10595,7 @@ const Lowerer = struct {
                             .done => |done| result = done,
                         }
                     },
-                    .erased_fn, .primitive, .callable, .erased_capture_ptr, .zst => unreachable, // frames are pushed only for named, box, list, record, capture_record, tuple, and tag_union types
+                    .erased_fn, .primitive, .callable, .erased_capture_ptr, .zst, .hole => unreachable, // frames are pushed only for named, box, list, record, capture_record, tuple, and tag_union types
                 }
                 if (exhaustions == top.exhaustions_before) try self.erased_demands.put(top.ty, result);
                 _ = frames.pop();
@@ -10600,7 +10650,7 @@ const Lowerer = struct {
                 }
                 return .{ .done = if (any_single_variant.*) .single_slot else .none };
             },
-            .erased_fn, .named, .box, .list, .primitive, .callable, .erased_capture_ptr, .zst => unreachable, // callers pass only record, capture_record, tuple, and tag_union types
+            .erased_fn, .named, .box, .list, .primitive, .callable, .erased_capture_ptr, .zst, .hole => unreachable, // callers pass only record, capture_record, tuple, and tag_union types
         }
     }
 
@@ -10888,6 +10938,7 @@ const Lowerer = struct {
                 .primitive => |primitive| .{ .done = try ctx.l.lowerPrimitiveHashLocalsInto(ctx.where, request.target, request.value, request.hasher, primitive, request.next) },
                 // Hashing a zero-sized value contributes nothing.
                 .zst => .nothing,
+                .hole => Common.invariant("structural hashing reached a demand hole"),
                 .named => |named| .{ .retarget = (named.backing orelse Common.invariant("named hash reached direct LIR without runtime backing")).ty },
                 .record,
                 .tuple,
@@ -12427,6 +12478,7 @@ const Lowerer = struct {
             return switch (l.types.get(request.ty)) {
                 .primitive => |primitive| .{ .done = try l.lowerPrimitiveEqLocalsInto(ctx.where, request.target, request.lhs, request.rhs, primitive, request.negated, request.next) },
                 .zst => .always_equal,
+                .hole => Common.invariant("structural equality reached a demand hole"),
                 .named => |named| .{ .retarget = (named.backing orelse Common.invariant("named equality reached direct LIR without runtime backing")).ty },
                 .record => |fields| .{ .components = try ctx.fieldComponents(l.types.fieldSpan(fields)) },
                 .capture_record => |fields| .{ .components = try ctx.fieldComponents(l.types.captureFieldSpan(fields)) },
@@ -13459,6 +13511,9 @@ const Lowerer = struct {
         switch (frame.cursor) {
             BoxCursor.start => {
                 if (target_layout == task.source_layout) return .{ .ret = try self.assignLocal(where, target, source, next) };
+                // A demand-shaped body reads a list or box of holes only as
+                // its header, which the caller's value shares.
+                if (try self.result.layouts.acceptsAtHoles(self.allocator, task.source_layout, target_layout)) return .{ .ret = try self.assignLocal(where, target, source, next) };
                 if (target_content.eql(source_content)) return .{ .ret = try self.assignLocal(where, target, source, next) };
                 if (target_content.tag == .box and try self.layoutsEquivalent(target_content.getIdx(), task.source_layout)) {
                     return .{ .ret = try self.assignUnaryLowLevel(where, target, .box_box, source, next) };
@@ -14066,6 +14121,7 @@ const Lowerer = struct {
                 .erased_callable,
                 => return .{ .value = lhs.eql(rhs) },
                 .zst,
+                .hole,
                 .box_of_zst,
                 .erased_box,
                 .list_of_zst,
@@ -14207,7 +14263,8 @@ const Lowerer = struct {
             // indices, and only walk layouts for recursive equivalents.
             if (target_layout != source_layout and
                 !self.layoutsShareRepresentation(target_layout, source_layout) and
-                !try self.layoutsEquivalent(target_layout, source_layout))
+                !try self.layoutsEquivalent(target_layout, source_layout) and
+                !try self.result.layouts.acceptsAtHoles(self.allocator, source_layout, target_layout))
             {
                 Common.invariant("local assignment representations differed without an explicit boundary");
             }
@@ -14277,7 +14334,7 @@ const Lowerer = struct {
 
         const named = switch (self.types.get(ty)) {
             .named => |named| named,
-            .primitive, .record, .capture_record, .tuple, .tag_union, .callable, .list, .box, .erased_fn, .erased_capture_ptr, .zst => return,
+            .primitive, .record, .capture_record, .tuple, .tag_union, .callable, .list, .box, .erased_fn, .erased_capture_ptr, .zst, .hole => return,
         };
         const gop = try self.named_layout_index.getOrPut(.{
             .named = namedRepresentationKey(named),
@@ -14372,7 +14429,7 @@ const Lowerer = struct {
     fn knownLayoutForEquivalentNamedType(self: *Lowerer, ty: Type.TypeId) Common.LowerError!?EquivalentNamedLayout {
         const named = switch (self.types.get(ty)) {
             .named => |named| named,
-            .primitive, .record, .capture_record, .tuple, .tag_union, .callable, .list, .box, .erased_fn, .erased_capture_ptr, .zst => return null,
+            .primitive, .record, .capture_record, .tuple, .tag_union, .callable, .list, .box, .erased_fn, .erased_capture_ptr, .zst, .hole => return null,
         };
         const candidates = self.named_layout_index.get(.{
             .named = namedRepresentationKey(named),
@@ -14466,7 +14523,7 @@ const Lowerer = struct {
     /// fixed order.
     fn appendRepresentationShapeChildren(self: *Lowerer, children: *std.ArrayList(Type.TypeId), ty: Type.TypeId) Common.LowerError!void {
         switch (self.types.get(ty)) {
-            .primitive, .zst, .erased_capture_ptr => {},
+            .primitive, .zst, .hole, .erased_capture_ptr => {},
             .list, .box => |elem| try children.append(self.allocator, elem),
             .tuple => |elems| try self.appendTypeSpan(children, elems),
             .record => |fields| {
@@ -14505,7 +14562,7 @@ const Lowerer = struct {
         std.hash.autoHash(&hasher, std.meta.activeTag(content));
         switch (content) {
             .primitive => |primitive| std.hash.autoHash(&hasher, primitive),
-            .zst, .erased_capture_ptr, .list, .box => {},
+            .zst, .hole, .erased_capture_ptr, .list, .box => {},
             .tuple => |elems| std.hash.autoHash(&hasher, elems.len),
             .record => |fields| {
                 const field_span = self.types.fieldSpan(fields);
@@ -14627,7 +14684,7 @@ const Lowerer = struct {
 
                 switch (lhs) {
                     .primitive => |primitive| return .{ .value = primitive == rhs.primitive },
-                    .zst, .erased_capture_ptr => return .{ .value = true },
+                    .zst, .hole, .erased_capture_ptr => return .{ .value = true },
                     .list => |elem| try addPair(items, elem, rhs.list),
                     .box => |elem| try addPair(items, elem, rhs.box),
                     .tuple => |elems| if (!try scan.addSpanPairs(items, elems, rhs.tuple)) return .{ .value = false },
@@ -14794,7 +14851,7 @@ const Lowerer = struct {
             const children_start = pending.items.len;
             switch (self.types.get(current)) {
                 .callable, .erased_fn => return true,
-                .primitive, .zst, .erased_capture_ptr => {},
+                .primitive, .zst, .hole, .erased_capture_ptr => {},
                 .list, .box => |elem| try pending.append(self.allocator, elem),
                 .tuple => |items| try self.appendTypeSpan(&pending, items),
                 .record => |fields| {
@@ -14838,7 +14895,7 @@ const Lowerer = struct {
                 .func, .lambda_set, .erased => return true,
                 .mono => Common.invariant("callable scan saw an unfinalized lazy Monotype leaf"),
                 .link, .unbound, .forall => Common.invariant("callable scan saw unresolved Lambda Solved type"),
-                .primitive, .zst => {},
+                .primitive, .zst, .hole => {},
                 .list, .box => |elem| try pending.append(self.allocator, elem),
                 .tuple => |items| try self.appendSolvedTypeSpan(&pending, items),
                 .record => |fields| {
@@ -15039,6 +15096,7 @@ const Lowerer = struct {
             switch (lowerer.types.get(ty)) {
                 .primitive => |primitive| return .{ .input = layout.committedGraphInput(Common.primitiveLayout(primitive)) },
                 .zst => return .{ .input = layout.committedGraphInput(.zst) },
+                .hole => return .{ .input = layout.committedGraphInput(try lowerer.result.layouts.insertLayout(layout.Layout.hole())) },
                 .erased_capture_ptr => return .{ .input = layout.committedGraphInput(.opaque_ptr) },
                 .named => |named| if (named.builtin_owner) |owner| {
                     if (builtinOwnerLayout(owner)) |layout_idx| return .{ .input = layout.committedGraphInput(layout_idx) };
@@ -15096,7 +15154,7 @@ const Lowerer = struct {
 
                     return .{ .push = .{ .kind = .{ .named_backing = .{ .ty = ty, .backing = backing.ty } } } };
                 },
-                .primitive, .record, .capture_record, .tuple, .tag_union, .callable, .list, .box, .erased_fn, .erased_capture_ptr, .zst => {},
+                .primitive, .record, .capture_record, .tuple, .tag_union, .callable, .list, .box, .erased_fn, .erased_capture_ptr, .zst, .hole => {},
             }
 
             const node = try self.graph.reserveNode(allocator);
@@ -15171,7 +15229,7 @@ const Lowerer = struct {
         fn beginNodeContent(self: *LayoutGraphBuilder, ty: Type.TypeId, node: layout.GraphNodeId) Common.LowerError!BuildStep {
             const types = &self.lowerer.types;
             switch (types.get(ty)) {
-                .primitive, .zst, .erased_capture_ptr => unreachable, // beginInput answers primitive, zst, and erased_capture_ptr types without reserving a node
+                .primitive, .zst, .hole, .erased_capture_ptr => unreachable, // beginInput answers primitive, zst, hole, and erased_capture_ptr types without reserving a node
                 .named => |named| return .{ .child = (named.backing orelse Common.invariant("named type without runtime backing reached layout selection")).ty },
                 .record => |fields| {
                     const field_span = types.fieldSpan(fields);
@@ -15232,7 +15290,7 @@ const Lowerer = struct {
                 .tag_union, .callable => .{ .tag_union = result.refs },
                 .list => .{ .list = result.input },
                 .box => .{ .box = result.input },
-                .primitive, .zst, .erased_capture_ptr, .erased_fn => unreachable, // beginInput reserves no node for primitive, zst, or erased_capture_ptr, and beginNodeContent finishes erased_fn nodes itself
+                .primitive, .zst, .hole, .erased_capture_ptr, .erased_fn => unreachable, // beginInput reserves no node for primitive, zst, hole, or erased_capture_ptr, and beginNodeContent finishes erased_fn nodes itself
             };
         }
 
@@ -15276,7 +15334,7 @@ const Lowerer = struct {
                         const backing = named.backing orelse Common.invariant("transparent alias reached layout lowering without a backing type");
                         current = backing.ty;
                     },
-                    .primitive, .record, .capture_record, .tuple, .tag_union, .callable, .list, .box, .erased_capture_ptr, .zst => return false,
+                    .primitive, .record, .capture_record, .tuple, .tag_union, .callable, .list, .box, .erased_capture_ptr, .zst, .hole => return false,
                 }
             }
         }
@@ -15543,7 +15601,7 @@ const Lowerer = struct {
             },
             .box => unreachable, // the loop above unwraps every box layout
             .box_of_zst, .zst, .scalar => .zst,
-            .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => Common.invariant("tag payload operation expected tag-union layout"),
+            .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr, .hole => Common.invariant("tag payload operation expected tag-union layout"),
         };
     }
 
@@ -15564,7 +15622,7 @@ const Lowerer = struct {
         return switch (list_layout.tag) {
             .list => list_layout.getIdx(),
             .list_of_zst => .zst,
-            .scalar, .box, .box_of_zst, .erased_box, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => Common.invariant("list expression target was not a list layout"),
+            .scalar, .box, .box_of_zst, .erased_box, .struct_, .closure, .erased_callable, .zst, .hole, .tag_union, .ptr => Common.invariant("list expression target was not a list layout"),
         };
     }
 

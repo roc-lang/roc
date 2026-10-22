@@ -962,7 +962,7 @@ pub const MonoLlvmCodeGen = struct {
 
         // Embedded LIR image bytes, when building a standalone interpreter binary.
         const image_ref: @FieldType(ShimTarget, "image") = if (image) |bytes| .{
-            .value = try self.staticBytes(bytes),
+            .value = try self.staticImageBytes(bytes),
             .len = bytes.len,
         } else null;
 
@@ -1434,7 +1434,7 @@ pub const MonoLlvmCodeGen = struct {
                     builder.metadataTuple(frame.members.items) catch return error.OutOfMemory,
                 ) catch return error.OutOfMemory };
             },
-            .scalar, .box_of_zst, .erased_box, .list_of_zst, .tag_union, .closure, .erased_callable, .zst => return .{ .done = try self.buildDebugType(builder, frame.idx, null) },
+            .scalar, .box_of_zst, .erased_box, .list_of_zst, .tag_union, .closure, .erased_callable, .zst, .hole => return .{ .done = try self.buildDebugType(builder, frame.idx, null) },
         }
     }
 
@@ -1662,12 +1662,13 @@ pub const MonoLlvmCodeGen = struct {
                     builder.metadataTuple(members.items) catch return error.OutOfMemory,
                 ) catch return error.OutOfMemory;
             },
-            .closure, .erased_callable, .zst => {
+            .closure, .erased_callable, .zst, .hole => {
                 const name = switch (lay.tag) {
                     .closure => "Closure",
                     .erased_callable => "ErasedCallable",
                     .zst => "Unit",
-                    .scalar, .box, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .tag_union, .ptr => unreachable, // the enclosing prong matched only closure, erased_callable, and zst
+                    .hole => "hole",
+                    .scalar, .box, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .tag_union, .ptr => unreachable, // the enclosing prong matched only closure, erased_callable, zst, and hole
                 };
                 return builder.debugStructType(
                     builder.metadataString(name) catch return error.OutOfMemory,
@@ -9809,6 +9810,22 @@ pub const MonoLlvmCodeGen = struct {
         return value;
     }
 
+    /// An embedded LIR image. Its arrays are read at their offsets' natural
+    /// alignment from the image base, which the image builders and the shared
+    /// mapping keep 16-aligned, so the global is too.
+    fn staticImageBytes(self: *MonoLlvmCodeGen, bytes: []const u8) Error!LlvmBuilder.Value {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const arr_ty = builder.arrayType(bytes.len, .i8) catch return error.OutOfMemory;
+        const name = builder.strtabStringFmt(".roc.image.{d}", .{self.string_counter}) catch return error.OutOfMemory;
+        self.string_counter += 1;
+        const variable = builder.addVariable(name, arr_ty, .default) catch return error.OutOfMemory;
+        variable.ptrConst(builder).global.setLinkage(.internal, builder);
+        variable.setMutability(.constant, builder);
+        variable.setAlignment(LlvmBuilder.Alignment.fromByteUnits(16), builder);
+        variable.setInitializer(builder.stringConst(builder.string(bytes) catch return error.OutOfMemory) catch return error.OutOfMemory, builder) catch return error.OutOfMemory;
+        return variable.toValue(builder);
+    }
+
     fn staticRefcountedBytes(self: *MonoLlvmCodeGen, backing: Base.StringLiteral.Idx) Error!LlvmBuilder.Value {
         const key: u32 = @backingInt(backing);
         const builder = self.builder orelse return error.CompilationFailed;
@@ -12039,7 +12056,7 @@ pub const MonoLlvmCodeGen = struct {
                 );
                 try self.storePointer(self.slot(target).ptr, result);
             },
-            .scalar, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => return error.CompilationFailed,
+            .scalar, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .hole, .tag_union, .ptr => return error.CompilationFailed,
         }
     }
 
@@ -13591,7 +13608,7 @@ pub const MonoLlvmCodeGen = struct {
                 .vector, .opaque_ptr, .str => false,
             },
             .tag_union, .box, .box_of_zst, .erased_box, .ptr => false,
-            .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst => direct_idx.isSigned(),
+            .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .hole => direct_idx.isSigned(),
         };
     }
 
