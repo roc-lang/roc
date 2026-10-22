@@ -926,8 +926,8 @@ pub const LoadedPacks = struct {
         }
     }
 
-    /// Read the object pack at `path` without indexing. A missing file or a
-    /// pack of another format is no offer.
+    /// Read the object pack at `path` without indexing. A missing file, a
+    /// pack of another format, or a pack that offers nothing is no offer.
     fn loadObjectFile(self: *LoadedPacks, io: std.Io, path: []const u8) LoadError!void {
         const allocator = self.allocator;
         // The decoded pack aliases the file bytes, which its arena owns.
@@ -944,6 +944,12 @@ pub const LoadedPacks = struct {
             error.UnsupportedPackVersion => return,
             else => |other| return other,
         };
+        // A pack that offers nothing records only that its program's code
+        // could not be a linked object; it holds no object to link.
+        if (pack.specs.len == 0) {
+            pack.deinit();
+            return;
+        }
         errdefer pack.deinit();
         try self.object_packs_used.append(allocator, false);
         errdefer _ = self.object_packs_used.pop();
@@ -1487,4 +1493,31 @@ test "object packs serve in load order, and app-bound entries serve only the pro
         try std.testing.expectEqual(serves_app, packs.linked_specs.get(@splat(2)) != null);
         try std.testing.expectEqual(serves_app, packs.linked_identities.get(app_code) != null);
     }
+}
+
+test "an object pack that offers nothing is no offer and contributes no object to link" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const offered = lir.ProcIdentity.forTest(81);
+    const spec: PackFile.SpecEntry = .{ .key = @splat(3), .artifact = 0, .rc_borrowed_params = 0, .rc_ret_borrowed = false, .rc_ret_lenders = 0, .rc_read_only_params = 0, .rc_ret_unique = false, .rc_ret_unique_fields = 0, .rc_ret_conditions = &.{} };
+    const offering = try PackFile.writeObject(allocator, "object", &.{offered}, &.{spec}, .{ .app_bound = &.{false} });
+    defer allocator.free(offering);
+    // What an optimized build files when its program's code could not be a
+    // linked object.
+    const empty = try PackFile.writeObject(allocator, "", &.{}, &.{}, .{ .input_key = @splat(9), .app_bound = &.{} });
+    defer allocator.free(empty);
+    try tmp.dir.writeFile(io, .{ .sub_path = "offering.rpo", .data = offering });
+    try tmp.dir.writeFile(io, .{ .sub_path = "empty.rpo", .data = empty });
+
+    var packs = LoadedPacks.init(allocator);
+    defer packs.deinit();
+    for ([_][]const u8{ "empty.rpo", "offering.rpo" }) |name| {
+        const path = try tmp.dir.realPathFileAlloc(io, name, allocator);
+        defer allocator.free(path);
+        try packs.loadObjectFile(io, path);
+    }
+    try std.testing.expectEqual(@as(usize, 1), packs.object_packs.items.len);
+    try std.testing.expectEqualStrings("object", packs.object_packs.items[0].object);
 }
