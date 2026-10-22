@@ -14970,7 +14970,7 @@ test "comparing interface summaries leaves the graph they describe unchanged" {
     };
     var args = [_]NodeId{try graph.newNode(.{ .unresolved = InstVariable.placeholder() })};
     const instance = try graph.newNode(try graph.namedContent(.{
-        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1) },
+        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1), .ty_module = .{} },
         .def = def,
         .kind = .nominal,
         .builtin_owner = null,
