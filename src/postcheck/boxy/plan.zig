@@ -10025,42 +10025,110 @@ const Builder = struct {
         }
     };
 
-    /// Whether a type is ground: no type variable and no open tag row
-    /// anywhere in it. Only ground members share a join set's representation;
-    /// an open row keeps its own dynamic representation and only connects the
-    /// ground types on either side of it.
-    fn rowJoinIdentityIsGround(self: *Builder, identity: CheckedTypeIdentity) Allocator.Error!bool {
-        var work = std.ArrayList(CheckedTypeIdentity).empty;
-        defer work.deinit(self.allocator);
-        var seen = std.AutoHashMap(CheckedTypeIdentity, void).init(self.allocator);
-        defer seen.deinit();
-        try work.append(self.allocator, identity);
-        while (work.pop()) |current| {
-            if ((try seen.getOrPut(current)).found_existing) continue;
+    /// Which of `identities` are ground: no type variable and no open tag row
+    /// anywhere in them. Only ground members share a join set's
+    /// representation; an open row keeps its own dynamic representation and
+    /// only connects the ground types on either side of it.
+    ///
+    /// Checked types share structure and may be cyclic, so every type
+    /// reachable from `identities` is visited once, and non-groundness is
+    /// propagated backward from the types that are not ground themselves over
+    /// reversed child edges. Each type and edge is visited once however many
+    /// identities reach it.
+    fn rowJoinGroundIdentities(self: *Builder, identities: []const CheckedTypeIdentity) Allocator.Error!std.DynamicBitSetUnmanaged {
+        const allocator = self.allocator;
+        var node_ids = std.AutoHashMap(CheckedTypeIdentity, u32).init(allocator);
+        defer node_ids.deinit();
+        var nodes = std.ArrayList(CheckedTypeIdentity).empty;
+        defer nodes.deinit(allocator);
+        var edge_parents = std.ArrayList(u32).empty;
+        defer edge_parents.deinit(allocator);
+        var edge_children = std.ArrayList(u32).empty;
+        defer edge_children.deinit(allocator);
+        var pending = std.ArrayList(u32).empty;
+        defer pending.deinit(allocator);
+        var tags = std.ArrayList(RowJoinTag).empty;
+        defer tags.deinit(allocator);
+
+        const Graph = struct {
+            builder: *Builder,
+            node_ids: *std.AutoHashMap(CheckedTypeIdentity, u32),
+            nodes: *std.ArrayList(CheckedTypeIdentity),
+
+            fn node(graph: @This(), identity: CheckedTypeIdentity) Allocator.Error!u32 {
+                const resolved = graph.builder.resolvedRowJoinIdentity(identity);
+                const entry = try graph.node_ids.getOrPut(resolved);
+                if (!entry.found_existing) {
+                    entry.value_ptr.* = @intCast(graph.nodes.items.len);
+                    try graph.nodes.append(graph.builder.allocator, resolved);
+                }
+                return entry.value_ptr.*;
+            }
+        };
+        const graph = Graph{ .builder = self, .node_ids = &node_ids, .nodes = &nodes };
+
+        const roots = try allocator.alloc(u32, identities.len);
+        defer allocator.free(roots);
+        for (identities, roots) |identity, *root| root.* = try graph.node(identity);
+
+        var next: u32 = 0;
+        while (next < nodes.items.len) : (next += 1) {
+            const current = nodes.items[next];
             const view = self.moduleForId(current.module);
-            const resolved = resolvedRowJoinPayload(view, current.ty);
-            switch (resolved.payload) {
-                .flex, .rigid, .pending, .err => return false,
-                .alias => unreachable, // resolvedRowJoinPayload resolved the type through aliases
+            const children_start = edge_children.items.len;
+            switch (view.checked_types.payload(current.ty)) {
+                .flex, .rigid, .pending, .err => try pending.append(allocator, next),
+                .alias => unreachable, // graph nodes are resolved through aliases
                 .empty_record, .empty_tag_union => {},
                 .tag_union => {
-                    var tags = std.ArrayList(RowJoinTag).empty;
-                    defer tags.deinit(self.allocator);
-                    if (!try self.collectRowJoinTags(view, resolved.ty, &tags)) return false;
+                    tags.clearRetainingCapacity();
+                    if (!try self.collectRowJoinTags(view, current.ty, &tags)) try pending.append(allocator, next);
                     for (tags.items) |tag| {
-                        for (tag.tag.argsSlice(tag.view.checked_types)) |arg| try work.append(self.allocator, typeRef(tag.view, arg));
+                        for (tag.tag.argsSlice(tag.view.checked_types)) |arg| try edge_children.append(allocator, try graph.node(typeRef(tag.view, arg)));
                     }
                 },
-                .nominal => |nominal| for (nominal.args) |arg| try work.append(self.allocator, typeRef(view, arg)),
-                .record => |record| for (record.fields) |field| try work.append(self.allocator, typeRef(view, field.ty)),
-                .tuple => |items| for (items) |item| try work.append(self.allocator, typeRef(view, item)),
+                .nominal => |nominal| for (nominal.args) |arg| try edge_children.append(allocator, try graph.node(typeRef(view, arg))),
+                .record => |record| for (record.fields) |field| try edge_children.append(allocator, try graph.node(typeRef(view, field.ty))),
+                .tuple => |items| for (items) |item| try edge_children.append(allocator, try graph.node(typeRef(view, item))),
                 .function => |function| {
-                    for (function.args) |arg| try work.append(self.allocator, typeRef(view, arg));
-                    try work.append(self.allocator, typeRef(view, function.ret));
+                    for (function.args) |arg| try edge_children.append(allocator, try graph.node(typeRef(view, arg)));
+                    try edge_children.append(allocator, try graph.node(typeRef(view, function.ret)));
                 },
             }
+            try edge_parents.appendNTimes(allocator, next, edge_children.items.len - children_start);
         }
-        return true;
+
+        const node_count = nodes.items.len;
+        const parent_starts = try allocator.alloc(u32, node_count + 1);
+        defer allocator.free(parent_starts);
+        @memset(parent_starts, 0);
+        for (edge_children.items) |child| parent_starts[child + 1] += 1;
+        for (1..node_count + 1) |index| parent_starts[index] += parent_starts[index - 1];
+        const parents_by_child = try allocator.alloc(u32, edge_children.items.len);
+        defer allocator.free(parents_by_child);
+        const fill = try allocator.dupe(u32, parent_starts[0..node_count]);
+        defer allocator.free(fill);
+        for (edge_children.items, edge_parents.items) |child, parent| {
+            parents_by_child[fill[child]] = parent;
+            fill[child] += 1;
+        }
+
+        var not_ground = try std.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
+        defer not_ground.deinit(allocator);
+        for (pending.items) |seed| not_ground.set(seed);
+        while (pending.pop()) |child| {
+            for (parents_by_child[parent_starts[child]..parent_starts[child + 1]]) |parent| {
+                if (not_ground.isSet(parent)) continue;
+                not_ground.set(parent);
+                try pending.append(allocator, parent);
+            }
+        }
+
+        var ground = try std.DynamicBitSetUnmanaged.initEmpty(allocator, identities.len);
+        for (roots, 0..) |root, index| {
+            if (!not_ground.isSet(root)) ground.set(index);
+        }
+        return ground;
     }
 
     fn rowJoinIdentityLessThan(_: void, a: CheckedTypeIdentity, b: CheckedTypeIdentity) bool {
@@ -10092,9 +10160,30 @@ const Builder = struct {
         defer identities.deinit(self.allocator);
         var keys = self.row_joins.keyIterator();
         while (keys.next()) |identity| try identities.append(self.allocator, identity.*);
-        for (identities.items) |identity| {
-            if (!try self.rowJoinIdentityIsGround(identity)) continue;
-            const root = try self.rowJoinRoot(identity);
+        // Only a set with at least two members can elect, so only those
+        // members' groundness is asked.
+        const identity_roots = try self.allocator.alloc(CheckedTypeIdentity, identities.items.len);
+        defer self.allocator.free(identity_roots);
+        var set_sizes = std.AutoHashMap(CheckedTypeIdentity, u32).init(self.allocator);
+        defer set_sizes.deinit();
+        for (identities.items, identity_roots) |identity, *root| {
+            root.* = try self.rowJoinRoot(identity);
+            const entry = try set_sizes.getOrPut(root.*);
+            entry.value_ptr.* = if (entry.found_existing) entry.value_ptr.* + 1 else 1;
+        }
+        var candidates = std.ArrayList(CheckedTypeIdentity).empty;
+        defer candidates.deinit(self.allocator);
+        var candidate_roots = std.ArrayList(CheckedTypeIdentity).empty;
+        defer candidate_roots.deinit(self.allocator);
+        for (identities.items, identity_roots) |identity, root| {
+            if (set_sizes.get(root).? < 2) continue;
+            try candidates.append(self.allocator, identity);
+            try candidate_roots.append(self.allocator, root);
+        }
+        var ground = try self.rowJoinGroundIdentities(candidates.items);
+        defer ground.deinit(self.allocator);
+        for (candidates.items, candidate_roots.items, 0..) |identity, root, index| {
+            if (!ground.isSet(index)) continue;
             const entry = try groups.getOrPut(root);
             if (!entry.found_existing) entry.value_ptr.* = .empty;
             try entry.value_ptr.append(self.allocator, identity);
@@ -10236,7 +10325,7 @@ const Builder = struct {
                 }
                 return true;
             },
-            .pending, .err, .flex, .rigid, .alias => unreachable, // group members passed rowJoinIdentityIsGround and resolvedRowJoinPayload resolved aliases
+            .pending, .err, .flex, .rigid, .alias => unreachable, // group members are ground (rowJoinGroundIdentities) and resolvedRowJoinPayload resolved aliases
         }
     }
 
