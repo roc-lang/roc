@@ -571,7 +571,12 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         source.* = .{
             .template = &inserter,
             .proc = proc,
-            .body = spec.body,
+            // A static initializer is construction-only LIR that the static
+            // data materializer evaluates symbolically and no backend ever
+            // emits, so reference counts in it would never run: ARC neither
+            // prepares nor emits it, and nothing calls it, so no variant
+            // inherits its body.
+            .body = if (spec.is_static_initializer) null else spec.body,
             .frame = spec.frame_locals,
         };
     }
@@ -623,10 +628,6 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
             spec.rc_ret_borrowed = job.sig.ret_mode == .borrowed;
             spec.rc_ret_lenders = job.sig.ret_lenders;
             if (sources[@backingInt(job.source)].body == null) continue;
-            // A static initializer is construction-only LIR that the static
-            // data materializer evaluates symbolically and no backend ever
-            // emits, so reference counts in it would never run.
-            if (spec.is_static_initializer) continue;
             owners[count] = .{
                 .inserter = inserter,
                 .source = &sources[@backingInt(job.source)],
@@ -1312,6 +1313,7 @@ const VariantTable = struct {
         const callee = request.source;
         const source_spec = store.getProcSpec(callee);
         if (source_spec.external) arcInvariant("ARC demanded a variant of an object-cache procedure, whose signature is fixed");
+        if (source_spec.is_static_initializer) arcInvariant("ARC demanded a variant of a static initializer, which nothing calls");
         const variant = try store.addProcSpec(.{
             .name = store.freshSyntheticSymbol(),
             .identity = variantIdentity(self.sig_table, source_spec.identity, request.demanded),

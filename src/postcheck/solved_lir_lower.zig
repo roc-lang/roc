@@ -4193,6 +4193,9 @@ const Lowerer = struct {
     }
 
     fn lowerType(self: *Lowerer, solved_ty: SolvedType.TypeVarId) Common.LowerError!Type.TypeId {
+        // A type already lowered is its cached type, which is what the task
+        // machine's first step returns for it.
+        if (self.type_map.get(self.solved.types.root(solved_ty))) |cached| return cached;
         return (try self.runTypeTasks(.{ .type_var = .{ .var_id = solved_ty } })).ty;
     }
 

@@ -397,13 +397,13 @@ fn compileWithCodeGen(
     // names, into the code generator the object is encoded from.
     var symbol_relocations_started_ns = if (timing) |timings| timings.start() else 0;
     codegen.finishImage() catch return CompilationError.OutOfMemory;
-    var staged = ProcArtifact.extract(CodeGen, allocator, &codegen, proc_specs, layout_store, static_strings.exports, static_data_exports, spliced_data.items) catch |err| switch (err) {
+    var catalog = ProcArtifact.PreparedData.init(allocator, static_strings.exports, static_data_exports, spliced_data.items) catch return CompilationError.OutOfMemory;
+    defer catalog.deinit();
+    var staged = ProcArtifact.extractCataloged(CodeGen, allocator, &codegen, proc_specs, layout_store, &catalog) catch |err| switch (err) {
         error.OutOfMemory => return CompilationError.OutOfMemory,
         error.NestedCodeRegion, error.UncoveredCode, error.DanglingReference, error.UnsupportedRelocation => invariant("canonical image extraction failed: {s}", .{@errorName(err)}),
     };
     defer staged.deinit();
-    var catalog = ProcArtifact.PreparedData.init(allocator, static_strings.exports, static_data_exports, spliced_data.items) catch return CompilationError.OutOfMemory;
-    defer catalog.deinit();
     var host_visible = std.ArrayList(ProcArtifact.DataItem).empty;
     defer host_visible.deinit(allocator);
     {

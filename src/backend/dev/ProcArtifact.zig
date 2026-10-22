@@ -681,9 +681,15 @@ pub const ContentNames = struct {
         writeWord(&sub, item.alignment);
         writeWord(&sub, item.symbol_offset);
         var low: u32 = no_reference;
-        const relocations = try self.allocator.dupe(DataRelocation, item.relocations);
-        defer self.allocator.free(relocations);
-        std.mem.sort(DataRelocation, relocations, {}, relocationOffsetBefore);
+        // Relocations are rendered in offset order; ones already in that
+        // order are read in place.
+        const in_order = std.sort.isSorted(DataRelocation, item.relocations, {}, relocationOffsetBefore);
+        const relocations = if (in_order) item.relocations else blk: {
+            const sorted = try self.allocator.dupe(DataRelocation, item.relocations);
+            std.mem.sort(DataRelocation, sorted, {}, relocationOffsetBefore);
+            break :blk sorted;
+        };
+        defer if (!in_order) self.allocator.free(relocations);
         writeWord(&sub, @intCast(relocations.len));
         for (relocations) |relocation| {
             writeWord(&sub, relocation.offset);
@@ -802,7 +808,19 @@ pub fn extract(
 ) ExtractError!Set {
     var prepared = try PreparedData.init(allocator, string_exports, constant_exports, spliced_data);
     defer prepared.deinit();
-    var set = try extractPrepared(CG, allocator, codegen, proc_specs, layout_store, &prepared);
+    return try extractCataloged(CG, allocator, codegen, proc_specs, layout_store, &prepared);
+}
+
+/// `extract` against a data catalog the caller prepared and keeps.
+pub fn extractCataloged(
+    comptime CG: type,
+    allocator: Allocator,
+    codegen: *CG,
+    proc_specs: []const lir.LIR.LirProcSpec,
+    layout_store: *const layout.Store,
+    prepared: *const PreparedData,
+) ExtractError!Set {
+    var set = try extractPrepared(CG, allocator, codegen, proc_specs, layout_store, prepared);
     errdefer set.deinit();
     const source_files = try set.arena.allocator().alloc([32]u8, codegen.store.sourceFileCount());
     for (source_files, 0..) |*identity, file| identity.* = codegen.store.sourceFileModuleIdentity(@intCast(file));
@@ -1528,6 +1546,13 @@ pub fn canonicalize(allocator: Allocator, set: *const Set, host_visible: []const
     var arena = collections.SingleThreadArena.init(allocator);
     errdefer arena.deinit();
     const a = arena.allocator();
+    // Every constant under its content name, renamed once: a constant one
+    // name names is one constant, which each artifact carrying it and the
+    // image's data share.
+    var renamed_items = std.StringHashMap(DataItem).init(allocator);
+    defer renamed_items.deinit();
+    try renamed_items.ensureTotalCapacity(@intCast(all_items.items.len));
+    for (all_items.items) |item| renamed_items.putAssumeCapacityNoClobber(item.name, try renamedData(a, item, &names));
     const artifacts = try a.alloc(Artifact, set.artifacts.len);
     for (order.items, artifacts) |old, *out| {
         const source = set.artifacts[old];
@@ -1556,7 +1581,7 @@ pub fn canonicalize(allocator: Allocator, set: *const Set, host_visible: []const
         }
         out.relocations = relocations;
         const data = try a.alloc(DataItem, source.data.len);
-        for (source.data, data) |item, *owned| owned.* = try renamedData(a, item, &names);
+        for (source.data, data) |item, *owned| owned.* = renamed_items.get(item.name) orelse unreachable; // `all_items` holds every artifact's data by name
         out.data = data;
     }
 
@@ -1565,13 +1590,15 @@ pub fn canonicalize(allocator: Allocator, set: *const Set, host_visible: []const
     var seen = std.StringHashMap(void).init(allocator);
     defer seen.deinit();
     for (all_items.items) |item| {
-        const renamed = try renamedData(a, item, &names);
+        const renamed = renamed_items.get(item.name) orelse unreachable; // every collected item was renamed above
         // Distinct program constants with the same content are one symbol.
         if ((try seen.getOrPut(renamed.name)).found_existing) continue;
         data[data_len] = .{ .item = renamed, .host_visible = visible.contains(item.name) };
         data_len += 1;
     }
-    std.mem.sort(CanonicalDatum, data[0..data_len], {}, struct {
+    // The loop above keeps one datum per name, so ordering by name alone is
+    // total and an unstable sort orders them exactly as a stable one would.
+    std.mem.sortUnstable(CanonicalDatum, data[0..data_len], {}, struct {
         fn lessThan(_: void, lhs: CanonicalDatum, rhs: CanonicalDatum) bool {
             return std.mem.lessThan(u8, lhs.item.name, rhs.item.name);
         }

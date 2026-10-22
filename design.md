@@ -2514,8 +2514,11 @@ bodies, object symbols, or generated code.
 
 Target static data is produced from explicit, closed LIR initializer procedures.
 Monotype restoration builds each initializer from the stored `ConstStore` value,
-then closure lifting, lambda solving, layout commitment, structural LIR rewrites,
-and ARC run normally. The initializer's returned LIR value is the sole source of
+then closure lifting, lambda solving, and layout commitment run normally. The
+initializer is straight-line construction LIR that no backend emits, so the
+procedure-local LIR rewrites and ARC leave it as lowered: it has no branch,
+call, join, or loop to rewrite, and a reference count in it would never run.
+The initializer's returned LIR value is the sole source of
 target representation: static materialization freezes its exact bytes,
 allocations, procedure relocations, and explicit generated-RC-helper
 relocations into readonly target data. It must not

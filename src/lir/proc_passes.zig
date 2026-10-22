@@ -182,6 +182,11 @@ pub fn run(
     }
     for (0..store.procSpecCount()) |index| {
         const proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
+        // A static initializer is straight-line construction LIR that the
+        // static data materializer evaluates and no backend emits: it has no
+        // branch, call, join, or loop for a phase to rewrite, and ARC places
+        // no reference count in it.
+        if (store.getProcSpecImmediate(proc).is_static_initializer) continue;
         const body = switch (phase) {
             .forwarding_join => ForwardingJoinInline.rewritableProcBody(store, proc),
             .tag_fusion => TagCaseFusion.rewritableProcBody(store, proc),
