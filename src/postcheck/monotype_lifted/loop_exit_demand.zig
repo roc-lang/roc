@@ -136,14 +136,14 @@ pub const Inventory = struct {
     }
 
     /// Whether values of `ty` never carry a reference count: a primitive
-    /// other than `Str`, or a zero-sized type.
+    /// other than `Str`, or a zero-sized type (a demand hole included).
     fn isScalar(self: *const Inventory, ty: Type.TypeId) bool {
         return switch (self.program.types.get(ty)) {
             .primitive => |primitive| switch (primitive) {
                 .str => false,
                 .bool, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => true,
             },
-            .zst => true,
+            .zst, .hole => true,
             .named, .record, .tuple, .tag_union, .list, .box, .func, .erased => false,
         };
     }
