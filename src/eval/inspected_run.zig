@@ -66,6 +66,9 @@ pub const Program = struct {
     store: *const lir.LirStore,
     layouts: *const LayoutStore,
     boxy_tables: boxy_runtime.BoxyTables = .{},
+    /// Bytes the program's erased callables reserve before their captures
+    /// (`LirProgram.Result.erased_capture_prefix`).
+    erased_capture_prefix: u32,
     boxy_sidecar_blob: ?[]const u8 = null,
     boxy_sidecar_desc: ?LirImage.BoxySidecar = null,
     main_proc: LirProcSpecId,
@@ -132,7 +135,6 @@ pub const Result = struct {
 };
 
 const InterpreterError = Allocator.Error || error{
-    ComptimeExhaustiveness,
     Crash,
     DivisionByZero,
     ExpectErr,
@@ -326,7 +328,6 @@ fn runInterpreter(allocator: Allocator, program: Program, execution_host: Execut
         error.Crash => return crashResult(allocator, &runtime_env, interp.getCrashMessage()),
         error.RuntimeError => return crashResult(allocator, &runtime_env, interp.getRuntimeErrorMessage()),
         error.DivisionByZero => return crashResult(allocator, &runtime_env, "Division by zero"),
-        error.ComptimeExhaustiveness,
         error.ExpectErr,
         error.InvalidHostedFunctionSignature,
         error.OutOfMemory,
@@ -373,6 +374,7 @@ fn runDev(allocator: Allocator, program: Program) DevError!Result {
             program.boxy_tables.erased_arg_desc_offsets,
             program.boxy_tables.erased_arg_desc_params,
             program.boxy_tables.worker_procs,
+            program.erased_capture_prefix,
             roc_target.host_cpu.level(),
         );
         defer codegen.deinit();

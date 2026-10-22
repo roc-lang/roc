@@ -335,10 +335,6 @@ fn runEchoView(
             return error.EvaluationFailed;
         },
         error.Crash => roc_ops.crash(interpreter.getCrashMessage()),
-        error.ComptimeExhaustiveness => {
-            diag.step("interpreter.runEntrypoint", err);
-            return error.EvaluationFailed;
-        },
         error.OutOfMemory => {
             diag.step("interpreter.runEntrypoint", err);
             return error.OutOfMemory;

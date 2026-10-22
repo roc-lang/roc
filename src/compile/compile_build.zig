@@ -21,6 +21,13 @@ const lir = @import("lir");
 const unbundle = if (is_freestanding) struct {} else @import("unbundle");
 const CoreCtx = @import("ctx").CoreCtx;
 
+/// Asks a build, once its executable program is checked and before it is
+/// evaluated, whether that exact program's runtime output is recorded.
+pub const RuntimeOutputProbe = struct {
+    context: *anyopaque,
+    cached: *const fn (*anyopaque, *const check.CheckedArtifact.CheckedModuleArtifact) Allocator.Error!bool,
+};
+
 /// Runtime demand fixed before post-check finalization. Explicit plans may be
 /// declared from prepared checked modules after the frontend completes.
 pub const RuntimeLoweringConfig = struct {
@@ -227,6 +234,7 @@ pub const BuildEnv = struct {
     // Actor model coordinator (owns all mutable compilation state)
     coordinator: ?*Coordinator = null,
     runtime_lowering: ?RuntimeLoweringConfig = null,
+    runtime_output_probe: ?RuntimeOutputProbe = null,
     /// Instrumentation only; never participates in checked or object identity.
     detailed_monotype_diagnostics: bool = false,
     /// See `eval.CompileTimeFinalization.CompileTimeObjectCache`.
@@ -242,6 +250,11 @@ pub const BuildEnv = struct {
     cwd: []const u8,
     /// Whether to retain exact source byte states for watch-mode refreshes.
     track_watch_inputs: bool = false,
+    /// Whether modules' solver type stores are released once checking finishes
+    /// (`Coordinator.release_checked_solver_types`). Commands that read solver
+    /// types after compiling, such as documentation and editor tooling, leave
+    /// this off.
+    release_checked_solver_types: bool = false,
 
     /// Whether `compileDiscovered` validates that the selected platform target's
     /// declared link files exist before type checking.
@@ -874,7 +887,9 @@ pub const BuildEnv = struct {
         // This is required for roc build so that hosted functions can be called at runtime
         coord.enable_hosted_transform = true;
         coord.setWatchInputTracking(self.track_watch_inputs);
+        coord.setReleaseCheckedSolverTypes(self.release_checked_solver_types);
         coord.runtime_lowering = self.runtime_lowering;
+        coord.runtime_output_probe = self.runtime_output_probe;
         coord.setDetailedLoweringTiming(self.detailed_lowering_timing);
         coord.compile_time_object_cache = self.compile_time_object_cache;
         if (self.detailed_monotype_diagnostics) coord.ctfe_timing.lowering.enableDetailedMonotypeBody();
@@ -904,6 +919,18 @@ pub const BuildEnv = struct {
         self.compile_time_object_cache_owner = owner;
     }
 
+    pub fn setRuntimeOutputProbe(self: *BuildEnv, probe: RuntimeOutputProbe) void {
+        if (self.coordinator) |coordinator| coordinator.runtime_output_probe = probe;
+        self.runtime_output_probe = probe;
+    }
+
+    /// Whether checked-program finalization found the program's runtime
+    /// output recorded and so lowered no runtime program.
+    pub fn runtimeOutputCached(self: *const BuildEnv) bool {
+        const coordinator = self.coordinator orelse return false;
+        return coordinator.runtime_output_cached;
+    }
+
     pub fn setRuntimeLowering(self: *BuildEnv, config: RuntimeLoweringConfig) void {
         if (self.coordinator) |coordinator| {
             std.debug.assert(coordinator.program_session == null);
@@ -922,12 +949,20 @@ pub const BuildEnv = struct {
         base.invariant("build env invariant violated: runtime lowering is configured but the checked program retained no program session", .{});
     }
 
-    /// The compile-time evaluation program this compilation lowered and
-    /// completed, while its program session retains it.
-    pub fn compileTimeProgram(self: *BuildEnv) ?*const lir.CheckedPipeline.LoweredProgram {
+    /// The compile-time reads of the specializations compile-time
+    /// evaluation lowered, while its program session retains them.
+    pub fn compileTimeSpecReads(self: *BuildEnv) ?*const lir.CheckedPipeline.SpecComptimeReads {
         const coordinator = self.coordinator orelse return null;
         const session = if (coordinator.program_session) |*session| session else return null;
-        return if (session.host) |*host| host else null;
+        return session.specComptimeReads();
+    }
+
+    /// The programs compile-time evaluation lowered and completed, while
+    /// its program session retains them.
+    pub fn compileTimeStages(self: *BuildEnv) ?*const eval.CompileTimeFinalization.CompletedStages {
+        const coordinator = self.coordinator orelse return null;
+        const session = if (coordinator.program_session) |*session| session else return null;
+        return if (session.completed) |*completed| completed else null;
     }
 
     /// Reuse compilation workers for post-check lowering after checking finishes.
@@ -3324,8 +3359,8 @@ pub const BuildEnv = struct {
         errdefer artifacts.deinit(allocator);
         const builtin_artifact = &self.builtin_modules.checked_artifact;
         for (root_artifact.lowering_visibility.module_ids) |key| {
-            if (checkedArtifactKeysEqual(key, root_artifact.key)) continue;
-            if (checkedArtifactKeysEqual(key, builtin_artifact.key)) continue;
+            if (checkedArtifactKeysEqual(key, root_artifact.key.digest())) continue;
+            if (checkedArtifactKeysEqual(key, builtin_artifact.key.digest())) continue;
             const artifact = self.artifactByKey(key) orelse continue;
             try artifacts.append(allocator, artifact);
         }
@@ -3356,15 +3391,15 @@ pub const BuildEnv = struct {
     }
 
     fn checkedArtifactKeysEqual(
-        a: check.CheckedArtifact.CheckedModuleArtifactKey,
-        b: check.CheckedArtifact.CheckedModuleArtifactKey,
+        a: check.CheckedArtifact.ModuleId,
+        b: check.CheckedArtifact.ModuleId,
     ) bool {
-        return std.mem.eql(u8, &a.bytes, &b.bytes);
+        return a.eql(b);
     }
 
     fn artifactByKey(
         self: *const BuildEnv,
-        key: check.CheckedArtifact.CheckedModuleArtifactKey,
+        key: check.CheckedArtifact.ModuleId,
     ) ?*const check.CheckedArtifact.CheckedModuleArtifact {
         const coord = self.coordinator orelse return null;
         return coord.checkedArtifactByKey(key);

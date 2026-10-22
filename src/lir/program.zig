@@ -152,7 +152,7 @@ pub const FnTemplate = struct {
     fn_def: const_store.FnDef,
     source_fn_ty: checked.CheckedTypeId,
     source_fn_key: names.TypeDigest,
-    evidence: []const const_store.ConstFnEvidence = &.{},
+    evidence: const_store.ConstFnEvidenceVector = .{},
     evidence_frames: []const const_store.ConstFnEvidenceFrame = &.{},
     evidence_frame_head: ?u32 = null,
 };
@@ -576,13 +576,6 @@ pub const StaticDataValue = struct {
     /// Null when completed frozen data supplies this slot directly.
     initializer: ?LIR.LirProcSpecId,
     layout_idx: layout.Idx,
-    /// The procedure every read of a compile-time root goes through in a
-    /// program lowered before its roots were evaluated. Its body is the slot
-    /// read until the root completes; a root that completed as a
-    /// construction then rebuilds it there, without touching the callers.
-    accessor: ?LIR.LirProcSpecId = null,
-    /// Successful construction replacement is performed only once per accessor.
-    accessor_rebuilt: bool = false,
     /// An evaluated root owns this slot. Its initializer is representation
     /// evidence; materialization must consume the completed root value.
     compile_time_root: ?struct {
@@ -625,10 +618,15 @@ pub const ComptimeValueGuard = struct {
     value_slot: LIR.StaticDataId,
 };
 
+/// The namespace of every symbol the compiler invents for generated code or
+/// data. Platforms and hosts share the `roc_` interface (one underscore) with
+/// Roc; nothing but the compiler defines a name in this one.
+pub const compiler_symbol_namespace = "roc__";
+
 /// Prefix of a datum named by content, the same in every program:
 /// `roc__h{hash}`, for a string literal's backing or a constant an
 /// object-cache pack carries.
-pub const content_data_symbol_prefix = "roc__h";
+pub const content_data_symbol_prefix = compiler_symbol_namespace ++ "h";
 
 /// Symbol of the value in static-data slot `id`: `roc__d{id}`. The naming
 /// scheme is in design.md, "Object Symbol Names".
@@ -731,9 +729,6 @@ pub const Result = struct {
 
     pub fn deinit(self: *Result) void {
         const allocator = self.store.allocator;
-        for (self.comptime_sites.items) |site| {
-            allocator.free(site.branch_regions);
-        }
         self.comptime_sites.deinit(allocator);
         self.lowering_modules.deinit(allocator);
         self.expect_site_ids.deinit(allocator);
@@ -783,10 +778,7 @@ pub const Result = struct {
         region: base.Region,
         checked_site: ?LIR.CheckedExhaustivenessSiteId,
         proc: LIR.LirProcSpecId,
-        branch_regions: []const base.Region,
     ) Allocator.Error!LIR.ComptimeSiteId {
-        const owned_branch_regions = try self.store.allocator.dupe(base.Region, branch_regions);
-        errdefer self.store.allocator.free(owned_branch_regions);
         const id: LIR.ComptimeSiteId = @fromBackingInt(@intCast(@as(u32, @intCast(self.comptime_sites.items.len))));
         try self.comptime_sites.append(self.store.allocator, .{
             .kind = kind,
@@ -794,7 +786,6 @@ pub const Result = struct {
             .region = region,
             .checked_site = checked_site,
             .proc = proc,
-            .branch_regions = owned_branch_regions,
         });
         return id;
     }
@@ -803,7 +794,17 @@ pub const Result = struct {
     /// once, before any consumer resolves an owner out of it.
     pub fn setLoweringModules(self: *Result, modules: []const checked.ModuleId) Allocator.Error!void {
         self.lowering_modules.clearRetainingCapacity();
-        try self.lowering_modules.appendSlice(self.store.allocator, modules);
+        self.store.lowering_module_keys.clearRetainingCapacity();
+        for (modules) |module| _ = try self.appendLoweringModule(module);
+    }
+
+    /// Give a checked module the next dense lowering id.
+    pub fn appendLoweringModule(self: *Result, module: checked.ModuleId) Allocator.Error!LIR.LoweringModuleId {
+        const id: LIR.LoweringModuleId = @fromBackingInt(@intCast(self.lowering_modules.items.len));
+        try self.lowering_modules.ensureUnusedCapacity(self.store.allocator, 1);
+        try self.store.lowering_module_keys.append(self.store.allocator, module.bytes);
+        self.lowering_modules.appendAssumeCapacity(module);
+        return id;
     }
 
     /// The dense id this program gave a checked module, when the module was
@@ -976,7 +977,7 @@ pub fn deinitFnSets(allocator: Allocator, fn_sets: []const FnSet) void {
     for (fn_sets) |fn_set| {
         for (fn_set.variants) |variant| {
             if (variant.captures.len > 0) allocator.free(variant.captures);
-            if (variant.template.evidence.len > 0) allocator.free(variant.template.evidence);
+            const_store.freeVector(allocator, variant.template.evidence);
             if (variant.template.evidence_frames.len > 0) allocator.free(variant.template.evidence_frames);
         }
         if (fn_set.variants.len > 0) allocator.free(fn_set.variants);
@@ -989,7 +990,7 @@ pub fn deinitErasedFns(allocator: Allocator, erased_fns: []const ErasedFns) void
         for (set.entries) |entry| {
             if (entry.captures.len > 0) allocator.free(entry.captures);
             if (entry.template) |template| {
-                if (template.evidence.len > 0) allocator.free(template.evidence);
+                const_store.freeVector(allocator, template.evidence);
                 if (template.evidence_frames.len > 0) allocator.free(template.evidence_frames);
             }
             if (entry.boxy) |boxy| allocator.free(boxy.captures);
@@ -1026,7 +1027,7 @@ test "lowering module table resolves checked module provenance both ways" {
 
     // A site keeps the owner its producer recorded, not the procedure's owner.
     const owner: LIR.LoweringModuleId = @fromBackingInt(@intCast(2));
-    const site = try result.addComptimeSite(.destructure, owner, base.Region.zero(), @fromBackingInt(@intCast(41)), .first, &.{});
+    const site = try result.addComptimeSite(.destructure, owner, base.Region.zero(), @fromBackingInt(@intCast(41)), .first);
     const stored = result.comptime_sites.items[@backingInt(site)];
     try std.testing.expectEqual(owner, stored.owner);
     try std.testing.expectEqual(@as(?LIR.CheckedExhaustivenessSiteId, @fromBackingInt(@intCast(41))), stored.checked_site);

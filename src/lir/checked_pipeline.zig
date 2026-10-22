@@ -23,6 +23,11 @@ const SingleUseInline = @import("single_use_inline.zig");
 pub const CompletedScalarValues = postcheck.ComptimeScalarValues.CompletedScalarValues;
 /// Which runtime specializations compile-time evaluation must lower.
 pub const LiteralDemand = postcheck.LiteralDemand;
+/// See `postcheck.Common.LiteralValueLookup`.
+pub const LiteralValueLookup = postcheck.Common.LiteralValueLookup;
+pub const LiteralValueHit = postcheck.Common.LiteralValueHit;
+pub const LiteralValueRead = postcheck.Common.LiteralValueRead;
+pub const LiteralRootReuse = postcheck.Common.LiteralRootReuse;
 const TagReachability = @import("tag_reachability.zig");
 const ReachableProcs = @import("reachable_procs.zig");
 const DebugPrint = @import("debug_print.zig");
@@ -127,6 +132,16 @@ pub const WorkMetrics = struct {
     lir_continuations: u32 = 0,
 };
 
+/// The inlining a dev build specializes under. The object cache links dev
+/// procedures into other programs, so dev decides inlining from source alone,
+/// the same in every program; compile-time evaluation specializes under it
+/// too, so its code is the code a dev build compiles.
+pub const dev_inline_mode: InlineMode = .wrappers_and_source_single_use;
+
+/// SpecConstr's clone-inlining scope for dev builds and compile-time
+/// evaluation.
+pub const dev_spec_constr_clone_inlining: SpecConstrCloneInlining = .iterator_fusion;
+
 /// Target settings and checked module state for the checked-to-LIR pipeline.
 pub const TargetConfig = struct {
     work_metrics: ?*WorkMetrics = null,
@@ -152,6 +167,13 @@ pub const TargetConfig = struct {
     spec_comptime_reads: bool = false,
     /// The compilation session evaluates the program's literal roots.
     literal_roots: bool = false,
+    /// With `literal_roots`, the literal values an earlier compilation of the
+    /// program stored, which literal roots restore instead of converting
+    /// (design.md "Compile-Time Value Reuse Across Edits").
+    literal_values: ?postcheck.Common.LiteralValueLookup = null,
+    /// With `literal_values`, keep each restored literal root's conversion as
+    /// a literal root that evaluation runs to verify the stored value.
+    verify_literal_values: bool = false,
     inline_mode: InlineMode = .none,
     /// Direct-call inlining scope for SpecConstr's value-aware clones.
     /// Optimized builds use `.all_calls`; dev builds use `.iterator_fusion`
@@ -162,6 +184,12 @@ pub const TargetConfig = struct {
     inline_expects: InlineExpectMode = .run,
     /// Whether ARC may consume a dead Box lender while unboxing.
     consume_dead_boxes: bool = false,
+    /// Lower `Dict`'s pseudo-random seed to zero. The seed decides only bucket
+    /// placement, never anything a program observes, so it changes only
+    /// hash-flooding resistance; dev builds and compile-time evaluation lower
+    /// it to zero so their code is identical, and optimized builds, which are
+    /// what get deployed, keep the runtime seed.
+    zero_dict_seed: bool = false,
     /// Allow `List.map` and `List.update` to reuse a unique input list's
     /// allocation. Map additionally requires interchangeable input and output
     /// element layouts. Optimized builds enable this; dev builds and
@@ -172,12 +200,6 @@ pub const TargetConfig = struct {
     proc_debug_names: bool = false,
     /// The object cache Monotype asks for closed specializations.
     spec_cache: ?postcheck.Common.SpecCacheLookup = null,
-    /// Whether Monotype and Direct LIR may serve cache entries to the compile-time
-    /// roots' closure. `prepareCheckedModulesMonotype` sets this from the
-    /// modules: a match whose exhaustiveness only the evaluation can decide
-    /// must run as the evaluator's own code, which reports the branches it
-    /// takes, and a spliced entry reports nothing.
-    comptime_closure_hits: bool = false,
     /// Keep every keyed specialization procedure through compaction; a pack
     /// program offers them from its manifest whether or not its export
     /// wrappers inlined their calls.
@@ -1070,11 +1092,11 @@ pub const SolvedPolicy = struct {
 /// under. A consumer continuing a shared Solved program brings its own.
 pub const LirPolicy = struct {
     consume_dead_boxes: bool,
+    zero_dict_seed: bool,
     list_in_place_map: bool,
     proc_debug_names: bool,
     spec_cache: ?postcheck.Common.SpecCacheLookup,
     code_provision: CodeProvision,
-    comptime_closure_hits: bool,
     keep_specialization_procs: bool,
     promote_loop_appends: base.TestSwitch(true),
     fuse_tag_cases: bool,
@@ -1381,8 +1403,12 @@ pub const PreparedMonotype = struct {
 pub const SpecKeyAliases = postcheck.Monotype.Lower.SpecKeyAliases;
 /// See `postcheck.Monotype.Lower.ComptimeDemand`.
 pub const ComptimeDemand = postcheck.Monotype.Lower.ComptimeDemand;
+/// See `PreparedSolved.producerGraph`.
+pub const ComptimeRootGraph = postcheck.ComptimeRootGraph;
 /// See `postcheck.Monotype.Lower.SpecComptimeReads`.
 pub const SpecComptimeReads = postcheck.Monotype.Lower.SpecComptimeReads;
+/// See `postcheck.DiscoverySummary`.
+pub const DiscoverySummary = postcheck.DiscoverySummary;
 /// See `postcheck.Common.ComptimeRootRead`.
 pub const ComptimeRootRead = postcheck.Common.ComptimeRootRead;
 /// A checked compile-time root named in a `ComptimeDemand`.
@@ -1416,12 +1442,6 @@ pub fn prepareCheckedModulesMonotype(
     if (target.specialization_strategy != .lss) checkedPipelineInvariant("Monotype preparation requires LSS");
     try verifyCheckedBoundary(modules, target);
     try requireHostedProceduresBound(modules, target);
-
-    // One checked-program proof governs both lookup stages. An early hit
-    // removes the source body, so Direct LIR cannot defer this decision until
-    // it discovers which procedures the evaluator reaches.
-    var prepared_target = target;
-    prepared_target.comptime_closure_hits = comptimeClosureHitsAllowed(modules);
 
     const layout_requests = try collectLayoutRequests(allocator, modules.root.module, roots.layout_requests, roots.include_provided_data_exports);
     defer allocator.free(layout_requests);
@@ -1471,11 +1491,7 @@ pub fn prepareCheckedModulesMonotype(
             rootRequests(roots, layout_requests, static_data_requests),
             .{
                 .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled(),
-                .spec_cache = if (monotypeCacheHitsAllowed(
-                    target.checked_module_state,
-                    prepared_target.comptime_closure_hits,
-                    target.code_provision,
-                )) target.spec_cache else null,
+                .spec_cache = if (target.code_provision.permitsNativeObjects()) target.spec_cache else null,
                 .spec_cache_takes = target.code_provision.specCacheTakes(),
                 .post_check_executor = target.post_check_executor,
                 .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
@@ -1485,6 +1501,8 @@ pub fn prepareCheckedModulesMonotype(
                 .spec_comptime_reads_out = if (target.spec_comptime_reads) &spec_comptime_reads else null,
                 .spec_key_aliases_out = &spec_key_aliases,
                 .literal_roots = target.literal_roots,
+                .literal_values = target.literal_values,
+                .verify_literal_values = target.verify_literal_values,
                 .replay_interface_summaries = target.replay_interface_summaries,
                 .target_usize = target.target_usize,
                 .inline_expects = if (target.comptime_value_reads) .shared else switch (target.inline_expects) {
@@ -1507,28 +1525,13 @@ pub fn prepareCheckedModulesMonotype(
     return .{
         .allocator = allocator,
         .program = mono,
-        .target = prepared_target,
+        .target = target,
         .root_count = root_count,
         .test_plan_metadata = test_plan_metadata,
         .comptime_demand = if (target.comptime_value_reads) comptime_demand else null,
         .spec_comptime_reads = if (target.spec_comptime_reads) spec_comptime_reads else null,
         .spec_key_aliases = spec_key_aliases,
     };
-}
-
-/// Early hits erase producer bodies, so both native provision and the
-/// compile-time observation proof must authorize them before lowering.
-fn monotypeCacheHitsAllowed(state: CheckedModuleState, comptime_closure_hits: bool, provision: CodeProvision) bool {
-    return provision.permitsNativeObjects() and (state == .complete or comptime_closure_hits);
-}
-
-test "early cache requires declared native provision and the CTFE observation proof" {
-    for (std.enums.values(CodeProvision)) |provision| {
-        for ([_]bool{ false, true }) |proof| {
-            try std.testing.expectEqual(provision.permitsNativeObjects(), monotypeCacheHitsAllowed(.complete, proof, provision));
-            try std.testing.expectEqual(provision.permitsNativeObjects() and proof, monotypeCacheHitsAllowed(.checking_finalization, proof, provision));
-        }
-    }
 }
 
 test "shared producer native provision requires every consumer in the host dev domain" {
@@ -1539,51 +1542,6 @@ test "shared producer native provision requires every consumer in the host dev d
             try std.testing.expectEqual(expected, runtime.sharedDomain(host));
         }
     }
-}
-
-/// Whether every exhaustiveness site of the program resolves without the
-/// evaluator observing the branch it takes. A site reachable only at compile
-/// time is resolved by the evaluation reaching it, which a spliced
-/// object-cache entry never reports.
-fn comptimeClosureHitsAllowed(modules: CheckedModuleSet) bool {
-    if (hasCompileTimeOnlySite(&modules.root.module.exhaustiveness_sites)) return false;
-    for (modules.root.relation_modules) |relation| {
-        if (hasCompileTimeOnlySite(relation.exhaustiveness_sites)) return false;
-    }
-    for (modules.imports) |import| {
-        if (hasCompileTimeOnlySite(import.exhaustiveness_sites)) return false;
-    }
-    return true;
-}
-
-fn hasCompileTimeOnlySite(sites: *const checked.CheckedExhaustivenessSiteTable) bool {
-    for (sites.sites) |site| {
-        switch (site.policy) {
-            .compile_time_only => return true,
-            .compile_time_replaced_by_root, .runtime_reachable, .not_pending => {},
-        }
-    }
-    return false;
-}
-
-test "CTFE cache proof rejects unresolved empirical exhaustiveness only" {
-    const policies = [_]checked.ExhaustivenessResolutionPolicy{
-        .not_pending,
-        .runtime_reachable,
-        .{ .compile_time_replaced_by_root = @fromBackingInt(3) },
-        .compile_time_only,
-    };
-    var sites = [_]checked.CheckedExhaustivenessSite{.{
-        .id = @fromBackingInt(5),
-        .kind = .match,
-        .region = std.mem.zeroes(base.Region),
-        .policy = .not_pending,
-    }};
-    for (policies) |policy| {
-        sites[0].policy = policy;
-        try std.testing.expectEqual(policy == .compile_time_only, hasCompileTimeOnlySite(&.{ .sites = &sites }));
-    }
-    try std.testing.expect(!hasCompileTimeOnlySite(&.{}));
 }
 
 /// Consumes the prepared program on success and failure. No specialization
@@ -1699,6 +1657,29 @@ pub const PreparedSolved = struct {
     /// How many literal roots the producer registered.
     pub fn literalRootCount(self: *const PreparedSolved) usize {
         return self.program.lifted.literalRootsView().len;
+    }
+
+    /// The producers each compile-time producer's evaluation reads: the
+    /// program's first `root_count` roots, which are compile-time roots, as
+    /// producers `0..root_count`, then its literal roots in id order.
+    pub fn producerGraph(self: *const PreparedSolved, allocator: Allocator, root_count: usize) Allocator.Error!postcheck.ComptimeRootGraph.Graph {
+        const lifted = &self.program.lifted;
+        const roots = lifted.rootsView();
+        const literal_roots = lifted.literalRootsView();
+        const lowering_modules = lifted.loweringModules();
+        const producers = try allocator.alloc(postcheck.ComptimeRootGraph.Producer, root_count + literal_roots.len);
+        defer allocator.free(producers);
+        for (roots[0..root_count], producers[0..root_count]) |root, *producer| producer.* = .{
+            .fn_id = root.fn_id,
+            .module = lowering_modules[@backingInt(root.owner)],
+            .root = .{ .checked = root.request.compile_time_root orelse checkedPipelineInvariant("compile-time root reached producer ordering without its checked root identity") },
+        };
+        for (literal_roots, producers[root_count..], 0..) |root, *producer, index| producer.* = .{
+            .fn_id = root.fn_id,
+            .module = root.module,
+            .root = .{ .literal = @fromBackingInt(@intCast(index)) },
+        };
+        return postcheck.ComptimeRootGraph.build(allocator, lifted, producers);
     }
 
     /// Release the retained solved program and its owned continuation metadata.
@@ -1823,16 +1804,12 @@ fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResou
         .root_manifest = consumer.roots,
         .spec_cache = if (target.code_provision.permitsNativeObjects()) target.spec_cache else null,
         .spec_cache_takes = target.code_provision.specCacheTakes(),
-        .comptime_closure_hits = target.comptime_closure_hits,
         .inline_plan = prepared.inline_plan.view(),
         .keep_specialization_procs = target.keep_specialization_procs,
         .post_check_executor = target.post_check_executor,
         .inline_expects = target.inline_expects,
         .list_in_place_map = target.list_in_place_map,
-        .dict_seed_mode = if (target.comptime_value_reads) .runtime else switch (target.checked_module_state) {
-            .complete => .runtime,
-            .checking_finalization => .comptime_zero,
-        },
+        .dict_seed_mode = if (target.zero_dict_seed) .comptime_zero else .runtime,
         .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled(),
         .layout_request_const_plans = target.layout_request_const_plans,
         .test_plan_metadata = prepared.test_plan_metadata,

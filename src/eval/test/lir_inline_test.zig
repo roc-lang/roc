@@ -710,7 +710,6 @@ fn runLoweredWithHostEvents(
             runtime_env.noteCrash(interpreter.getCrashMessage());
             return runtime_env.snapshot(allocator);
         },
-        error.ComptimeExhaustiveness,
         error.DivisionByZero,
         error.ExpectErr,
         error.InvalidHostedFunctionSignature,
@@ -785,7 +784,6 @@ fn countDebugEffectStmts(lowered: *const lir.CheckedPipeline.LoweredProgram) Deb
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .incref,
             .decref,
             .decref_if_initialized,
@@ -1374,7 +1372,6 @@ fn collectAssignCallProcs(
             .set_local => |stmt| try work.append(allocator, stmt.next),
             .debug => |stmt| try work.append(allocator, stmt.next),
             .expect => |stmt| try work.append(allocator, stmt.next),
-            .comptime_branch_taken => |stmt| try work.append(allocator, stmt.next),
             .incref => |stmt| try work.append(allocator, stmt.next),
             .decref => |stmt| try work.append(allocator, stmt.next),
             .decref_if_initialized => |stmt| try work.append(allocator, stmt.next),
@@ -1613,7 +1610,6 @@ fn markReachableLiftedExpr(
         => |child| markReachableLiftedExpr(program, child, reachable),
         .return_ => |ret| markReachableLiftedExpr(program, ret.value, reachable),
         .expect_err => |expect_err| markReachableLiftedExpr(program, expect_err.msg, reachable),
-        .comptime_branch_taken => |taken| markReachableLiftedExpr(program, taken.body, reachable),
         .if_initialized_payload => |switch_| {
             markReachableLiftedExpr(program, switch_.cond, reachable);
             markReachableLiftedExpr(program, switch_.initialized, reachable);
@@ -4390,8 +4386,7 @@ test "LIR statements and procs carry resolved source locations" {
     defer lowered_source.deinit(allocator);
 
     const store = &lowered_source.lowered.lir_result.store;
-    try std.testing.expectEqual(store.getCFStmts().len, store.cf_stmt_locs.unsafeRawItemsForView().len);
-    try std.testing.expectEqual(store.getCFStmts().len, store.cf_stmt_regions.unsafeRawItemsForView().len);
+    try std.testing.expectEqual(store.getCFStmts().len, store.cf_stmt_sources.unsafeRawItemsForView().len);
     try std.testing.expectEqual(store.getProcSpecs().len, store.proc_locs.unsafeRawItemsForView().len);
     try std.testing.expect(store.proc_debug_names.unsafeRawItemsForView().len > 0);
     for (store.proc_debug_names.unsafeRawItemsForView()) |entry| {
@@ -4400,7 +4395,10 @@ test "LIR statements and procs carry resolved source locations" {
     try std.testing.expect(store.sourceFileCount() >= 1);
 
     var located: usize = 0;
-    for (store.cf_stmt_locs.unsafeRawItemsForView(), store.cf_stmt_regions.unsafeRawItemsForView(), store.getCFStmts()) |loc, region, stmt| {
+    for (store.getCFStmts(), 0..) |stmt, stmt_index| {
+        const stmt_id: lir.LIR.CFStmtId = @fromBackingInt(@intCast(stmt_index));
+        const loc = store.stmtLoc(stmt_id);
+        const region = store.stmtRegion(stmt_id);
         const has_source = switch (stmt) {
             .incref,
             .decref,
@@ -4439,7 +4437,6 @@ test "LIR statements and procs carry resolved source locations" {
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .switch_stmt,
             .switch_initialized_payload,
             .str_match,
@@ -4570,7 +4567,10 @@ test "LIR statements carry source locations under optimizing inline mode" {
 
     const store = &lowered_source.lowered.lir_result.store;
     var located: usize = 0;
-    for (store.cf_stmt_locs.unsafeRawItemsForView(), store.cf_stmt_regions.unsafeRawItemsForView()) |loc, region| {
+    for (0..store.getCFStmts().len) |stmt_index| {
+        const stmt_id: lir.LIR.CFStmtId = @fromBackingInt(@intCast(stmt_index));
+        const loc = store.stmtLoc(stmt_id);
+        const region = store.stmtRegion(stmt_id);
         if (loc.hasLocation()) located += 1;
         if (loc.hasLocation()) try std.testing.expect(!region.isEmpty());
     }
@@ -4843,7 +4843,6 @@ fn collectLirResultProcShape(
             .set_local => |stmt| try work.append(allocator, stmt.next),
             .debug => |stmt| try work.append(allocator, stmt.next),
             .expect => |stmt| try work.append(allocator, stmt.next),
-            .comptime_branch_taken => |stmt| try work.append(allocator, stmt.next),
             .incref => |stmt| {
                 shape.incref_count += 1;
                 try work.append(allocator, stmt.next);
@@ -9099,7 +9098,8 @@ test "literal conversion ownership includes nested codec evidence" {
         try std.testing.expectEqual(@as(usize, 0), resources.checker.problems.problems.items.len);
         try std.testing.expect((try artifact.validateDispatchEvidence()) == null);
         var dependent_conversions: usize = 0;
-        for (artifact.checked_bodies.stored_exprs.items) |expr| {
+        for (artifact.checked_bodies.stored_exprs.items, 0..) |expr, expr_index| {
+            const expr_id: check.CheckedArtifact.CheckedExprId = @fromBackingInt(@intCast(expr_index));
             const plan_id = switch (expr.data) {
                 .numeral => |numeral| numeral.plan orelse continue,
                 .str_from_quote => |quote| quote.plan orelse continue,
@@ -9152,7 +9152,7 @@ test "literal conversion ownership includes nested codec evidence" {
             };
             const plan = artifact.static_dispatch_plans.plans[@backingInt(plan_id)];
             try std.testing.expect(plan.resolution == .direct_parametric);
-            try std.testing.expect(artifact.checked_bodies.literalConversionRoot(expr.id) == null);
+            try std.testing.expect(artifact.checked_bodies.literalConversionRoot(expr_id) == null);
             dependent_conversions += 1;
         }
         try std.testing.expectEqual(@as(usize, 1), dependent_conversions);
@@ -9479,10 +9479,10 @@ test "dispatch evidence boundary validator reports a removed dispatch plan by ex
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     var removed: ?check.CheckedArtifact.CheckedExprId = null;
-    for (resources.checked_artifact.checked_bodies.stored_exprs.items) |*expr| {
+    for (resources.checked_artifact.checked_bodies.stored_exprs.items, 0..) |*expr, expr_index| {
         if (std.meta.activeTag(expr.data) == .dispatch_call and expr.data.dispatch_call != null) {
             expr.data = .{ .dispatch_call = null };
-            removed = expr.id;
+            removed = @fromBackingInt(@intCast(expr_index));
             break;
         }
     }
@@ -10685,7 +10685,7 @@ fn recordFieldReadCounts(
                 seen_call = true;
                 cursor = stmt.next;
             },
-            inline .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
+            inline .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |stmt| {
                 cursor = stmt.next;
             },
             .expect_err,
@@ -10806,7 +10806,7 @@ fn fieldReadRetainCount(
                     }
                     try stack.append(allocator, stmt.next);
                 },
-                inline .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .decref, .decref_if_initialized, .free => |stmt| {
+                inline .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .decref, .decref_if_initialized, .free => |stmt| {
                     try stack.append(allocator, stmt.next);
                 },
                 .switch_stmt => |stmt| {
@@ -11599,7 +11599,7 @@ fn listSetCounts(store: *const lir.LirStore, proc_id: LIR.LirProcSpecId) ListSet
                     top += 1;
                 }
             },
-            inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
+            inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |stmt| {
                 if (top < cursor_stack.len) {
                     cursor_stack[top] = stmt.next;
                     top += 1;
@@ -11918,7 +11918,6 @@ test "issue 10354 undefined identifier in expression does not panic monotype low
         error.BuiltinArtifactVersionMismatch,
         error.Canceled,
         error.CompilationFailed,
-        error.ComptimeExhaustiveness,
         error.ConnectionResetByPeer,
         error.CorruptArtifact,
         error.CorruptBuiltinArtifact,
@@ -13618,7 +13617,7 @@ test "provenance: ARC RC statements state their subject, reason, and deciding lo
                     try std.testing.expect(store.stmtLoc(stmt_id).hasLocation());
                     decrefs += 1;
                 },
-                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => try std.testing.expect(!kind.isArcInserted()),
+                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => try std.testing.expect(!kind.isArcInserted()),
             }
         }
     }

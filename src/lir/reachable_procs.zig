@@ -102,11 +102,38 @@ const Pass = struct {
     export_queue: std.ArrayList(LirProgram.StaticDataSymbolId),
     plan_stack: std.ArrayList(LirProgram.ConstPlanId),
     stmt_stack: std.ArrayList(LIR.CFStmtId),
+    /// The compile-time values this program's own roots produce, which a
+    /// program with completed values evaluates itself; built on first use.
+    own_values: ?std.AutoHashMapUnmanaged(OwnValue, void) = null,
     /// `Result.served_callees` grouped by entry: the callees of `proc` are
     /// `served_callees[served_starts[proc]..served_starts[proc + 1]]`. Both
     /// are empty when the program takes no entry with served callees.
     served_starts: []u32,
     served_callees: []LIR.LirProcSpecId,
+
+    const OwnValue = struct { module: [32]u8, tag: u8, index: u32 };
+
+    fn ownValue(module: @import("check").CheckedModule.ModuleId, producer: LIR.ComptimeProducer) OwnValue {
+        return switch (producer) {
+            .checked => |id| .{ .module = module.bytes, .tag = 0, .index = @backingInt(id) },
+            .literal => |id| .{ .module = module.bytes, .tag = 1, .index = @backingInt(id) },
+        };
+    }
+
+    /// Whether one of this program's own roots produces `root`'s value.
+    fn evaluatesItself(self: *Pass, module: @import("check").CheckedModule.ModuleId, producer: LIR.ComptimeProducer) Allocator.Error!bool {
+        if (self.own_values == null) {
+            var own = std.AutoHashMapUnmanaged(OwnValue, void).empty;
+            errdefer own.deinit(self.allocator);
+            for (self.result.const_roots.items) |root| {
+                const id = root.request.compile_time_root orelse continue;
+                try own.put(self.allocator, ownValue(self.result.lowering_modules.items[@backingInt(root.owner)], .{ .checked = id }), {});
+            }
+            for (self.result.literal_roots.items) |root| try own.put(self.allocator, ownValue(root.module, .{ .literal = root.id }), {});
+            self.own_values = own;
+        }
+        return self.own_values.?.contains(ownValue(module, producer));
+    }
 
     fn init(result: *LirProgram.Result, frozen: ?*LirProgram.FrozenStaticData) Allocator.Error!Pass {
         const allocator = result.store.allocator;
@@ -212,6 +239,7 @@ const Pass = struct {
     }
 
     fn deinit(self: *Pass) void {
+        if (self.own_values) |*own| own.deinit(self.allocator);
         self.allocator.free(self.served_callees);
         self.allocator.free(self.served_starts);
         self.allocator.free(self.static_data_exports);
@@ -399,7 +427,11 @@ const Pass = struct {
         } else if (self.result.static_data_values.items[index].initializer) |initializer| {
             try self.markProc(initializer);
         } else if (self.frozen != null) {
-            reachableProcInvariant("completed static data slot has no frozen export");
+            // A program lowered after some compile-time values completed
+            // evaluates the rest itself.
+            const root = self.result.static_data_values.items[index].compile_time_root orelse
+                reachableProcInvariant("completed static data slot has no frozen export");
+            if (!try self.evaluatesItself(root.module, root.root)) reachableProcInvariant("completed static data slot has no frozen export");
         } else if (self.result.static_data_values.items[index].compile_time_root == null) {
             reachableProcInvariant("static data slot has neither an initializer nor explicit compile-time ownership");
         }
@@ -536,7 +568,6 @@ const Pass = struct {
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .incref,
             .decref,
             .decref_if_initialized,
@@ -579,9 +610,13 @@ const Pass = struct {
         }
         self.result.served_callees.shrinkRetainingCapacity(kept_served);
         // A specialization whose procedure was unreachable leaves the table.
+        const trace = base.dev_diagnostics.isSet(.pack_trace);
         var kept: usize = 0;
         for (self.result.spec_procs.items) |spec_proc| {
-            const new_proc = self.old_to_new[@backingInt(spec_proc.proc)] orelse continue;
+            const new_proc = self.old_to_new[@backingInt(spec_proc.proc)] orelse {
+                if (trace) std.debug.print("drop-spec key={x} name={s}\n", .{ spec_proc.key[0..8], self.result.store.procDebugName(spec_proc.proc) orelse "" });
+                continue;
+            };
             var remapped = spec_proc;
             remapped.proc = new_proc;
             self.result.spec_procs.items[kept] = remapped;
@@ -608,7 +643,6 @@ const Pass = struct {
         for (self.result.static_data_values.items, 0..) |*value, index| {
             if (!self.reachable_static_data[index]) continue;
             if (value.initializer) |initializer| value.initializer = self.remapProc(initializer);
-            if (value.accessor) |accessor| value.accessor = self.maybeRemapProc(accessor);
             if (value.compile_time_root) |*root| {
                 if (root.role == .value) {
                     root.role.value.failure_slot = self.remapStaticData(root.role.value.failure_slot);
@@ -754,7 +788,7 @@ const Pass = struct {
                 for (old_entries) |entry| {
                     if (entry.captures.len > 0) self.allocator.free(entry.captures);
                     if (entry.template) |template| {
-                        if (template.evidence.len > 0) self.allocator.free(template.evidence);
+                        @import("check").ConstStore.freeVector(self.allocator, template.evidence);
                         if (template.evidence_frames.len > 0) self.allocator.free(template.evidence_frames);
                     }
                     if (entry.boxy) |boxy| self.allocator.free(boxy.captures);
@@ -774,7 +808,7 @@ const Pass = struct {
                 } else {
                     if (entry.captures.len > 0) self.allocator.free(entry.captures);
                     if (entry.template) |template| {
-                        if (template.evidence.len > 0) self.allocator.free(template.evidence);
+                        @import("check").ConstStore.freeVector(self.allocator, template.evidence);
                         if (template.evidence_frames.len > 0) self.allocator.free(template.evidence_frames);
                     }
                     if (entry.boxy) |boxy| self.allocator.free(boxy.captures);
@@ -1008,7 +1042,6 @@ fn stmtRefs(store: *const LirStore, stmt: LIR.CFStmt) StmtRefs {
         .expect_err,
         .runtime_error,
         .comptime_exhaustiveness_failed,
-        .comptime_branch_taken,
         .incref,
         .decref,
         .decref_if_initialized,
@@ -1487,7 +1520,7 @@ test "erased callable pruning frees evidence for fully and partly discarded sets
                     .fn_def = undefined,
                     .source_fn_ty = undefined,
                     .source_fn_key = undefined,
-                    .evidence = try allocator.dupe(@import("check").ConstStore.ConstFnEvidence, &.{.checked_error}),
+                    .evidence = .{ .nodes = try allocator.dupe(@import("check").ConstStore.ConstFnEvidence, &.{.checked_error}) },
                     .evidence_frames = try allocator.dupe(@import("check").ConstStore.ConstFnEvidenceFrame, &.{.{ .scope_id = .root, .parent = null, .roots_start = 0, .roots_len = 1 }}),
                 },
             };
@@ -1497,7 +1530,7 @@ test "erased callable pruning frees evidence for fully and partly discarded sets
     try run(&result);
     try std.testing.expectEqual(@as(usize, 0), result.erased_fns.items[0].entries.len);
     try std.testing.expectEqual(@as(usize, 1), result.erased_fns.items[1].entries.len);
-    try std.testing.expectEqual(@as(usize, 1), result.erased_fns.items[1].entries[0].template.?.evidence.len);
+    try std.testing.expectEqual(@as(usize, 1), result.erased_fns.items[1].entries[0].template.?.evidence.nodes.len);
     try std.testing.expectEqual(@as(usize, 1), result.erased_fns.items[1].entries[0].template.?.evidence_frames.len);
 }
 

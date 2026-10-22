@@ -178,6 +178,8 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_10870_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10893_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10897_test.zig"));
+    std.testing.refAllDecls(@import("test/released_solver_types_test.zig"));
+    std.testing.refAllDecls(@import("test/spent_aggregate_scalar_read_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10935_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10940_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10977_test.zig"));
@@ -262,6 +264,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/demand_driven_ctfe_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11528_test.zig"));
     std.testing.refAllDecls(@import("test/consumer_manifest_test.zig"));
+    std.testing.refAllDecls(@import("test/ctfe_code_identity_test.zig"));
     std.testing.refAllDecls(@import("test/package_effect_boundary_test.zig"));
     std.testing.refAllDecls(@import("test/hosted_error_diagnostic_test.zig"));
     std.testing.refAllDecls(@import("test/tce_capture_test.zig"));

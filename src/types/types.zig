@@ -40,16 +40,15 @@ test {
     try std.testing.expectEqual(24, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
     try std.testing.expectEqual(20, @sizeOf(NominalType)); // Increased from 16 due to source identity and opacity bits
-    // A numeric literal's facts live in the type store's `numeral_infos`, so
-    // the constraint holds one row index rather than a full `NumeralInfo`, and
-    // `origin` holds only kind flags. Provenance adds one raw expr index (4B);
-    // expect effects live in checker-owned slots because they belong to call
-    // occurrences, not copied type constraints. A derived map's payload
-    // selection belongs to its callable's class in the type store, not to
-    // each constraint. Interpolation metadata records whose source its
-    // regions point into, so reports never render another module's positions
-    // against this module's source.
-    try std.testing.expectEqual(44, @sizeOf(StaticDispatchConstraint));
+    // A constraint keeps its name, callable, origin kind, and introducing
+    // expression inline. A numeric literal's facts live in the type store's
+    // `numeral_infos` and interpolation metadata in its
+    // `interpolation_metadata`, so the constraint holds one 4-byte row index
+    // for each. A derived map's payload selection belongs to its callable's
+    // class in the type store, not to each constraint. Expect effects live in
+    // checker-owned slots because they belong to call occurrences, not copied
+    // type constraints.
+    try std.testing.expectEqual(24, @sizeOf(StaticDispatchConstraint));
     // Directed effect dependencies must survive type generalization,
     // instantiation, and cross-module copying, so they live with the function
     // payload rather than in checker-only side state.
@@ -1146,11 +1145,12 @@ pub const StaticDispatchConstraint = struct {
     /// so two structurally identical constraints with different provenance stay
     /// equal.
     provenance: Provenance = .{},
-    /// Extra checking metadata for `from_interpolation`. This travels with the
-    /// constraint because the checker must re-check interpolated part types
-    /// after instantiation and cross-module copying. It is metadata, not type
-    /// identity: canonical type keys and constraint equivalence do not read it.
-    interpolation: InterpolationMetadata = .none,
+    /// Extra checking metadata for `from_interpolation`, in the owning type
+    /// store's pool. This travels with the constraint because the checker
+    /// must re-check interpolated part types after instantiation and
+    /// cross-module copying. It is metadata, not type identity: canonical
+    /// type keys and constraint equivalence do not read it.
+    interpolation: InterpolationMetadata.OptIdx = .none,
 
     /// The introducing site of a static dispatch constraint. `intro_expr` is the
     /// raw `CIR.Expr.Idx` of the expression that created the constraint, stored
@@ -1231,6 +1231,29 @@ pub const StaticDispatchConstraint = struct {
         pub fn isPresent(self: InterpolationMetadata) bool {
             return self.expr_region.get() != null;
         }
+
+        /// The type store's pool of interpolation metadata.
+        pub const MetadataList = MkSafeList(@This());
+
+        /// Interpolation metadata in its type store's pool, or `none`.
+        pub const OptIdx = enum(u32) {
+            none = std.math.maxInt(u32),
+            _,
+
+            pub fn from(idx: MetadataList.Idx) OptIdx {
+                std.debug.assert(@backingInt(idx) != std.math.maxInt(u32));
+                return @fromBackingInt(@backingInt(idx));
+            }
+
+            /// The pool index, or null when absent.
+            pub fn get(self: OptIdx) ?MetadataList.Idx {
+                return if (self == .none) null else @fromBackingInt(@backingInt(self));
+            }
+
+            pub fn isPresent(self: OptIdx) bool {
+                return self != .none;
+            }
+        };
     };
 
     /// The kinds of literal that desugar to open literal-conversion constraints.

@@ -81,24 +81,30 @@ pub const Options = struct {
     disable_output: bool = false,
 };
 
-/// Errors returned by the embedded LLD wrapper.
-pub const Error = error{
-    LinkFailed,
-    OutOfMemory,
+/// What one embedded link reported: whether it produced its output, and
+/// everything the linker wrote to its error stream, warnings included. The
+/// diagnostics belong to the caller's allocator.
+pub const Outcome = struct {
+    succeeded: bool,
+    diagnostics: []u8,
 };
 
-extern fn ZigLLDLinkCOFF(argc: c_int, argv: [*]const [*:0]const u8, can_exit_early: bool, disable_output: bool) bool;
-extern fn ZigLLDLinkELF(argc: c_int, argv: [*]const [*:0]const u8, can_exit_early: bool, disable_output: bool) bool;
-extern fn ZigLLDLinkMachO(argc: c_int, argv: [*]const [*:0]const u8, can_exit_early: bool, disable_output: bool) bool;
-extern fn ZigLLDLinkWasm(argc: c_int, argv: [*]const [*:0]const u8, can_exit_early: bool, disable_output: bool) bool;
+extern fn ZigLLDLinkCOFF(argc: c_int, argv: [*]const [*:0]const u8, can_exit_early: bool, disable_output: bool, diagnostics: *?[*]const u8, diagnostics_len: *usize) bool;
+extern fn ZigLLDLinkELF(argc: c_int, argv: [*]const [*:0]const u8, can_exit_early: bool, disable_output: bool, diagnostics: *?[*]const u8, diagnostics_len: *usize) bool;
+extern fn ZigLLDLinkMachO(argc: c_int, argv: [*]const [*:0]const u8, can_exit_early: bool, disable_output: bool, diagnostics: *?[*]const u8, diagnostics_len: *usize) bool;
+extern fn ZigLLDLinkWasm(argc: c_int, argv: [*]const [*:0]const u8, can_exit_early: bool, disable_output: bool, diagnostics: *?[*]const u8, diagnostics_len: *usize) bool;
+extern fn ZigLLDFreeDiagnostics(diagnostics: ?[*]const u8) void;
 
-/// Link using the embedded LLD entrypoint for `format`.
+/// Link using the embedded LLD entrypoint for `format`. The linker's own
+/// output file is the link's result; the returned outcome says whether it was
+/// produced and carries the linker's diagnostics for the caller to print and
+/// read.
 pub fn link(
     allocator: std.mem.Allocator,
     format: Format,
     args: []const []const u8,
     options: Options,
-) Error!void {
+) std.mem.Allocator.Error!Outcome {
     var arena_impl = collections.SingleThreadArena.init(allocator);
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
@@ -108,32 +114,44 @@ pub fn link(
         c_args[i] = (try arena.dupeSentinel(u8, arg, 0)).ptr;
     }
 
+    var diagnostics_ptr: ?[*]const u8 = null;
+    var diagnostics_len: usize = 0;
     const success = switch (format) {
         .elf => ZigLLDLinkELF(
             @intCast(c_args.len),
             c_args.ptr,
             options.can_exit_early,
             options.disable_output,
+            &diagnostics_ptr,
+            &diagnostics_len,
         ),
         .coff => ZigLLDLinkCOFF(
             @intCast(c_args.len),
             c_args.ptr,
             options.can_exit_early,
             options.disable_output,
+            &diagnostics_ptr,
+            &diagnostics_len,
         ),
         .macho => ZigLLDLinkMachO(
             @intCast(c_args.len),
             c_args.ptr,
             options.can_exit_early,
             options.disable_output,
+            &diagnostics_ptr,
+            &diagnostics_len,
         ),
         .wasm => ZigLLDLinkWasm(
             @intCast(c_args.len),
             c_args.ptr,
             options.can_exit_early,
             options.disable_output,
+            &diagnostics_ptr,
+            &diagnostics_len,
         ),
     };
+    defer ZigLLDFreeDiagnostics(diagnostics_ptr);
 
-    if (!success) return Error.LinkFailed;
+    const diagnostics = if (diagnostics_ptr) |ptr| try allocator.dupe(u8, ptr[0..diagnostics_len]) else try allocator.alloc(u8, 0);
+    return .{ .succeeded = success, .diagnostics = diagnostics };
 }

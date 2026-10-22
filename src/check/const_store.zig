@@ -320,20 +320,27 @@ pub const ConstFnStructuralEvidence = struct {
     }
 };
 
-/// Dispatch evidence selected for a stored compile-time function value. Target
-/// module identities make every checked id explicitly relative to its owning
-/// checked module when the function is restored in another compilation.
+/// Exact checked method edge retained by a stored function. Target module
+/// identities make every checked id explicitly relative to its owning checked
+/// module when the function is restored in another compilation.
+pub const ConstFnTargetEvidence = struct {
+    view: names.CheckedModuleDigest,
+    method: static_dispatch.MethodTarget,
+    /// Stable checked identity of `method.callable_ty`.
+    method_callable_key: names.CanonicalTypeKey,
+    instantiation: ?ConstFnCallableInstantiation,
+    nested: ConstFnNestedEvidence,
+    callable_contracts: u32 = 0,
+};
+
+/// Dispatch evidence selected for a stored compile-time function value. The
+/// two large payloads live in their vector's own columns
+/// (`ConstFnEvidenceVector`), so an entry takes a few words.
 pub const ConstFnEvidence = union(enum(u8)) {
-    target: struct {
-        view: names.CheckedModuleDigest,
-        method: static_dispatch.MethodTarget,
-        /// Stable checked identity of `method.callable_ty`.
-        method_callable_key: names.CanonicalTypeKey,
-        instantiation: ?ConstFnCallableInstantiation,
-        nested: ConstFnNestedEvidence,
-        callable_contracts: u32 = 0,
-    },
-    structural: ConstFnStructuralEvidence,
+    /// Index of the entry's payload in its vector's `targets`.
+    target: u32,
+    /// Index of the entry's payload in its vector's `structurals`.
+    structural: u32,
     /// A callable-reachable requirement that must be resolved from the
     /// concrete function type when this stored function is restored. Its
     /// position in its evidence vector selects the owning schema parameter,
@@ -347,6 +354,106 @@ pub const ConstFnEvidence = union(enum(u8)) {
     unreachable_value,
     checked_error,
 };
+
+/// One stored function's flattened evidence entries with the target and
+/// structural payloads they index. Entry indexes are relative to this
+/// vector's own payload columns, so a vector copies as three plain slices.
+pub const ConstFnEvidenceVector = struct {
+    nodes: []const ConstFnEvidence = &.{},
+    targets: []const ConstFnTargetEvidence = &.{},
+    structurals: []const ConstFnStructuralEvidence = &.{},
+
+    /// The target payload of a `.target` entry.
+    pub fn target(self: ConstFnEvidenceVector, index: u32) *const ConstFnTargetEvidence {
+        return &self.targets[index];
+    }
+
+    /// The structural payload of a `.structural` entry.
+    pub fn structural(self: ConstFnEvidenceVector, index: u32) *const ConstFnStructuralEvidence {
+        return &self.structurals[index];
+    }
+
+    /// How many callable-contract trees follow `entry`'s nested evidence.
+    pub fn callableContracts(self: ConstFnEvidenceVector, entry: ConstFnEvidence) u32 {
+        return switch (entry) {
+            .target => |index| self.targets[index].callable_contracts,
+            .structural => |index| self.structurals[index].callable_contracts,
+            .from_callable => |use| use.callable_contracts,
+            .from_scheme, .unreachable_value, .checked_error => 0,
+        };
+    }
+};
+
+/// Growable `ConstFnEvidenceVector`.
+pub const ConstFnEvidenceBuilder = struct {
+    nodes: std.ArrayList(ConstFnEvidence) = .empty,
+    targets: std.ArrayList(ConstFnTargetEvidence) = .empty,
+    structurals: std.ArrayList(ConstFnStructuralEvidence) = .empty,
+
+    /// Release every column.
+    pub fn deinit(self: *ConstFnEvidenceBuilder, allocator: Allocator) void {
+        self.nodes.deinit(allocator);
+        self.targets.deinit(allocator);
+        self.structurals.deinit(allocator);
+    }
+
+    /// The entries so far; invalidated by the next append.
+    pub fn vector(self: *const ConstFnEvidenceBuilder) ConstFnEvidenceVector {
+        return .{ .nodes = self.nodes.items, .targets = self.targets.items, .structurals = self.structurals.items };
+    }
+
+    /// Append a `.target` entry with its payload.
+    pub fn appendTarget(self: *ConstFnEvidenceBuilder, allocator: Allocator, payload: ConstFnTargetEvidence) Allocator.Error!void {
+        try self.targets.append(allocator, payload);
+        try self.nodes.append(allocator, .{ .target = @intCast(self.targets.items.len - 1) });
+    }
+
+    /// Append a `.structural` entry with its payload.
+    pub fn appendStructural(self: *ConstFnEvidenceBuilder, allocator: Allocator, payload: ConstFnStructuralEvidence) Allocator.Error!void {
+        try self.structurals.append(allocator, payload);
+        try self.nodes.append(allocator, .{ .structural = @intCast(self.structurals.items.len - 1) });
+    }
+
+    /// Append an entry with no out-of-line payload.
+    pub fn appendSmall(self: *ConstFnEvidenceBuilder, allocator: Allocator, entry: ConstFnEvidence) Allocator.Error!void {
+        switch (entry) {
+            .target, .structural => constStoreInvariant("evidence payload entries are appended with their payload"),
+            .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
+        }
+        try self.nodes.append(allocator, entry);
+    }
+
+    /// Set the callable-contract count of the entry at `node_index`.
+    pub fn setCallableContracts(self: *ConstFnEvidenceBuilder, node_index: usize, count: u32) void {
+        switch (self.nodes.items[node_index]) {
+            .target => |index| self.targets.items[index].callable_contracts = count,
+            .structural => |index| self.structurals.items[index].callable_contracts = count,
+            .from_callable => |*use| use.callable_contracts = count,
+            .from_scheme, .unreachable_value, .checked_error => constStoreInvariant("evidence entry without callable contracts was given some"),
+        }
+    }
+
+    /// Copy the columns into `allocator`-owned slices.
+    pub fn dupe(self: *const ConstFnEvidenceBuilder, allocator: Allocator) Allocator.Error!ConstFnEvidenceVector {
+        return dupeVector(allocator, self.vector());
+    }
+};
+
+/// Copy `source`'s columns into `allocator`-owned slices.
+pub fn dupeVector(allocator: Allocator, source: ConstFnEvidenceVector) Allocator.Error!ConstFnEvidenceVector {
+    const nodes = try allocator.dupe(ConstFnEvidence, source.nodes);
+    errdefer allocator.free(nodes);
+    const targets = try allocator.dupe(ConstFnTargetEvidence, source.targets);
+    errdefer allocator.free(targets);
+    return .{ .nodes = nodes, .targets = targets, .structurals = try allocator.dupe(ConstFnStructuralEvidence, source.structurals) };
+}
+
+/// Free a vector made by `dupeVector`.
+pub fn freeVector(allocator: Allocator, vector: ConstFnEvidenceVector) void {
+    allocator.free(vector.nodes);
+    allocator.free(vector.targets);
+    allocator.free(vector.structurals);
+}
 
 /// Stable checked dispatch scope identity stored without depending on checked
 /// artifact implementation types.
@@ -378,15 +485,21 @@ pub const ConstFn = struct {
     source_fn_ty: checked_ids.CheckedTypeId,
     source_fn_key: names.TypeDigest,
     captures: []const ConstCapture = &.{},
-    evidence: []const ConstFnEvidence = &.{},
+    evidence: ConstFnEvidenceVector = .{},
     evidence_frames: []const ConstFnEvidenceFrame = &.{},
     evidence_frame_head: ?u32 = null,
 };
 
 /// Named type owner for a stored nominal constant.
 pub const NamedType = struct {
+    /// The checked module that declares the type.
     module: names.CheckedModuleDigest,
+    /// The checked type occurrence the stored type was lowered from, an id in
+    /// the type store of `ty_module`.
     ty: checked_ids.CheckedTypeId,
+    /// The checked module whose type store `ty` indexes, which need not be
+    /// `module` (design.md "Compile-Time Value Reuse Across Edits").
+    ty_module: names.CheckedModuleDigest,
 };
 
 /// Checked function definition referenced by a stored function value.
@@ -518,14 +631,38 @@ const StoredFn = struct {
     source_fn_key: names.TypeDigest,
     captures: ConstRange = .{},
     evidence: ConstRange = .{},
+    evidence_targets: ConstRange = .{},
+    evidence_structurals: ConstRange = .{},
     evidence_frames: ConstRange = .{},
     evidence_frame_head: ?u32 = null,
 };
 
+/// A type node as `ConstTypeStore` keeps it: `ConstType` with its two large
+/// payloads, `named` and `erased`, held out of line by index, so a node takes
+/// a few words rather than the size of the largest payload.
+pub const StoredConstType = union(enum) {
+    primitive: Primitive,
+    named: u32,
+    record: ConstRange,
+    tuple: ConstRange,
+    tag_union: ConstRange,
+    list: ConstTypeId,
+    box: ConstTypeId,
+    func: @FieldType(ConstType, "func"),
+    erased: u32,
+    zst,
+};
+
+/// Payload of a `named` const type node.
+pub const ConstNamedType = @FieldType(ConstType, "named");
+
 /// Store of monomorphic type evidence attached to compile-time constants.
 pub const ConstTypeStore = struct {
     allocator: Allocator,
-    types: std.ArrayList(ConstType),
+    types: std.ArrayList(StoredConstType),
+    /// Out-of-line payloads of `named` and `erased` nodes.
+    named_pool: std.ArrayList(ConstNamedType),
+    erased_pool: std.ArrayList(names.TypeDigest),
     /// Flat pool of `ConstTypeId`s for tuple/function args and tag payloads.
     type_pool: std.ArrayList(ConstTypeId),
     /// Flat pool of record fields.
@@ -541,6 +678,8 @@ pub const ConstTypeStore = struct {
         return .{
             .allocator = allocator,
             .types = .empty,
+            .named_pool = .empty,
+            .erased_pool = .empty,
             .type_pool = .empty,
             .field_pool = .empty,
             .tag_pool = .empty,
@@ -554,14 +693,31 @@ pub const ConstTypeStore = struct {
         return id;
     }
 
-    pub fn fill(self: *ConstTypeStore, id: ConstTypeId, ty: ConstType) void {
-        self.types.items[@backingInt(id)] = ty;
+    /// Install the content of a node `reserve` returned.
+    pub fn fill(self: *ConstTypeStore, id: ConstTypeId, ty: ConstType) Allocator.Error!void {
+        self.types.items[@backingInt(id)] = switch (ty) {
+            .named => |named| blk: {
+                const index: u32 = @intCast(self.named_pool.items.len);
+                try self.named_pool.append(self.allocator, named);
+                break :blk .{ .named = index };
+            },
+            .erased => |digest| blk: {
+                const index: u32 = @intCast(self.erased_pool.items.len);
+                try self.erased_pool.append(self.allocator, digest);
+                break :blk .{ .erased = index };
+            },
+            inline .primitive, .record, .tuple, .tag_union, .list, .box, .func, .zst => |payload, tag| @unionInit(StoredConstType, @tagName(tag), payload),
+        };
     }
 
     pub fn append(self: *ConstTypeStore, ty: ConstType) Allocator.Error!ConstTypeId {
         const id = try self.reserve();
-        self.fill(id, ty);
+        try self.fill(id, ty);
         return id;
+    }
+
+    pub fn typeCount(self: *const ConstTypeStore) usize {
+        return self.types.items.len;
     }
 
     pub fn appendTypeSpan(self: *ConstTypeStore, ids: []const ConstTypeId) Allocator.Error!ConstRange {
@@ -581,7 +737,11 @@ pub const ConstTypeStore = struct {
     }
 
     pub fn get(self: *const ConstTypeStore, id: ConstTypeId) ConstType {
-        return self.types.items[@backingInt(id)];
+        return switch (self.types.items[@backingInt(id)]) {
+            .named => |index| .{ .named = self.named_pool.items[index] },
+            .erased => |index| .{ .erased = self.erased_pool.items[index] },
+            inline .primitive, .record, .tuple, .tag_union, .list, .box, .func, .zst => |payload, tag| @unionInit(ConstType, @tagName(tag), payload),
+        };
     }
 
     pub fn typeSpan(self: *const ConstTypeStore, range: ConstRange) []const ConstTypeId {
@@ -716,15 +876,15 @@ pub const ConstTypeStore = struct {
         const ops = &frame.ops;
         switch (source.get(ty)) {
             .primitive => |primitive| {
-                self.fill(out, .{ .primitive = primitive });
+                try self.fill(out, .{ .primitive = primitive });
                 return out;
             },
             .zst => {
-                self.fill(out, .zst);
+                try self.fill(out, .zst);
                 return out;
             },
             .erased => |erased| {
-                self.fill(out, .{ .erased = erased });
+                try self.fill(out, .{ .erased = erased });
                 return out;
             },
             .list, .box => |elem| try ops.append(self.allocator, .{ .child = elem }),
@@ -844,7 +1004,7 @@ pub const ConstTypeStore = struct {
                 } };
             },
         };
-        self.fill(frame.out, cloned);
+        try self.fill(frame.out, cloned);
     }
 
     fn translateRecordFieldName(name_translation: ?NameTranslation, id: names.RecordFieldNameId) Allocator.Error!names.RecordFieldNameId {
@@ -890,15 +1050,178 @@ pub const ConstTypeStore = struct {
         };
     }
 
+    /// Whether the stored type at `root` can move into a later version of the
+    /// module whose checked digest is `own` and whose content identity is
+    /// `own_identity`: it names no function, erased or generated type, no
+    /// named type or field default that module declares, and no named type
+    /// whose checked occurrence is in that module's type store (design.md
+    /// "Compile-Time Value Reuse Across Edits").
+    pub fn typePortable(
+        self: *const ConstTypeStore,
+        type_names: *const names.NameStore,
+        root: ConstTypeId,
+        own: names.CheckedModuleDigest,
+        own_identity: *const [32]u8,
+    ) Allocator.Error!bool {
+        var seen = collections.DenseMap(ConstTypeId, void).init(self.allocator);
+        defer seen.deinit();
+        var pending = std.ArrayList(ConstTypeId).empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |ty| {
+            const entry = try seen.getOrPut(ty);
+            if (entry.found_existing) continue;
+            switch (self.get(ty)) {
+                .func, .erased => return false,
+                .primitive, .zst => {},
+                .list, .box => |elem| try pending.append(self.allocator, elem),
+                .tuple => |span| try pending.appendSlice(self.allocator, self.typeSpan(span)),
+                .record => |span| for (self.fieldSpan(span)) |field| {
+                    if (field.default) |default| {
+                        if (std.meta.eql(type_names.moduleIdentityBytes(default.module).*, own_identity.*)) return false;
+                    }
+                    try pending.append(self.allocator, field.ty);
+                    if (field.value_ty) |value_ty| try pending.append(self.allocator, value_ty);
+                },
+                .tag_union => |span| for (self.tagSpan(span)) |tag| try pending.appendSlice(self.allocator, self.typeSpan(tag.payloads)),
+                .named => |named| {
+                    if (named.def.generated != null) return false;
+                    if (std.meta.eql(named.named_type.module.bytes, own.bytes)) return false;
+                    if (std.meta.eql(named.named_type.ty_module.bytes, own.bytes)) return false;
+                    if (std.meta.eql(type_names.moduleIdentityBytes(named.def.module).*, own_identity.*)) return false;
+                    try pending.appendSlice(self.allocator, self.typeSpan(named.args));
+                    for (self.declaredFieldSpan(named.declared_order)) |declared| switch (declared) {
+                        .named => {},
+                        .padding => |padding| try pending.append(self.allocator, padding),
+                    };
+                    if (named.backing) |backing| try pending.append(self.allocator, backing.ty);
+                },
+            }
+        }
+        return true;
+    }
+
+    /// Structural equality of two stored types, names compared by text and
+    /// named types by declaration; a named type's checked occurrence
+    /// (`named_type.ty`) is provenance, not identity.
+    pub fn graphEql(
+        self: *const ConstTypeStore,
+        self_names: *const names.NameStore,
+        root: ConstTypeId,
+        other: *const ConstTypeStore,
+        other_names: *const names.NameStore,
+        other_root: ConstTypeId,
+    ) Allocator.Error!bool {
+        const Pair = struct { left: ConstTypeId, right: ConstTypeId };
+        var seen = std.AutoHashMap(Pair, void).init(self.allocator);
+        defer seen.deinit();
+        var pending = std.ArrayList(Pair).empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, .{ .left = root, .right = other_root });
+        while (pending.pop()) |pair| {
+            const entry = try seen.getOrPut(pair);
+            if (entry.found_existing) continue;
+            const left = self.get(pair.left);
+            const right = other.get(pair.right);
+            if (std.meta.activeTag(left) != std.meta.activeTag(right)) return false;
+            switch (left) {
+                .primitive => |primitive| if (primitive != right.primitive) return false,
+                .zst => {},
+                .erased => |digest| if (!std.meta.eql(digest, right.erased)) return false,
+                inline .list, .box => |elem, tag| try pending.append(self.allocator, .{ .left = elem, .right = @field(right, @tagName(tag)) }),
+                .tuple => |span| if (!try appendTypePairs(&pending, self.allocator, self.typeSpan(span), other.typeSpan(right.tuple))) return false,
+                .func => |function| {
+                    if (!try appendTypePairs(&pending, self.allocator, self.typeSpan(function.args), other.typeSpan(right.func.args))) return false;
+                    try pending.append(self.allocator, .{ .left = function.ret, .right = right.func.ret });
+                },
+                .record => |span| {
+                    const fields = self.fieldSpan(span);
+                    const right_fields = other.fieldSpan(right.record);
+                    if (fields.len != right_fields.len) return false;
+                    for (fields, right_fields) |l, r| {
+                        if (!base.Ident.textEql(self_names.recordFieldLabelText(l.name), other_names.recordFieldLabelText(r.name))) return false;
+                        if ((l.default == null) != (r.default == null)) return false;
+                        if (l.default) |default| {
+                            if (default.expr_node != r.default.?.expr_node) return false;
+                            if (!std.meta.eql(self_names.moduleIdentityBytes(default.module).*, other_names.moduleIdentityBytes(r.default.?.module).*)) return false;
+                        }
+                        if ((l.value_ty == null) != (r.value_ty == null)) return false;
+                        try pending.append(self.allocator, .{ .left = l.ty, .right = r.ty });
+                        if (l.value_ty) |value_ty| try pending.append(self.allocator, .{ .left = value_ty, .right = r.value_ty.? });
+                    }
+                },
+                .tag_union => |span| {
+                    const tags = self.tagSpan(span);
+                    const right_tags = other.tagSpan(right.tag_union);
+                    if (tags.len != right_tags.len) return false;
+                    for (tags, right_tags) |l, r| {
+                        if (!base.Ident.textEql(self_names.tagLabelText(l.name), other_names.tagLabelText(r.name))) return false;
+                        if (!base.Ident.textEql(self_names.tagLabelText(l.checked_name), other_names.tagLabelText(r.checked_name))) return false;
+                        if (!try appendTypePairs(&pending, self.allocator, self.typeSpan(l.payloads), other.typeSpan(r.payloads))) return false;
+                    }
+                },
+                .named => |named| {
+                    const r = right.named;
+                    if (!std.meta.eql(named.named_type.module.bytes, r.named_type.module.bytes)) return false;
+                    if (named.kind != r.kind or named.builtin_owner != r.builtin_owner) return false;
+                    if (!typeDefEql(self_names, named.def, other_names, r.def)) return false;
+                    if (!try appendTypePairs(&pending, self.allocator, self.typeSpan(named.args), other.typeSpan(r.args))) return false;
+                    const declared = self.declaredFieldSpan(named.declared_order);
+                    const right_declared = other.declaredFieldSpan(r.declared_order);
+                    if (declared.len != right_declared.len) return false;
+                    for (declared, right_declared) |l, rd| {
+                        if (std.meta.activeTag(l) != std.meta.activeTag(rd)) return false;
+                        switch (l) {
+                            .named => |label| if (!base.Ident.textEql(self_names.recordFieldLabelText(label), other_names.recordFieldLabelText(rd.named))) return false,
+                            .padding => |padding| try pending.append(self.allocator, .{ .left = padding, .right = rd.padding }),
+                        }
+                    }
+                    if ((named.backing == null) != (r.backing == null)) return false;
+                    if (named.backing) |backing| {
+                        if (backing.use != r.backing.?.use or backing.authority != r.backing.?.authority) return false;
+                        try pending.append(self.allocator, .{ .left = backing.ty, .right = r.backing.?.ty });
+                    }
+                },
+            }
+        }
+        return true;
+    }
+
+    fn appendTypePairs(pending: anytype, allocator: Allocator, left: []const ConstTypeId, right: []const ConstTypeId) Allocator.Error!bool {
+        if (left.len != right.len) return false;
+        for (left, right) |l, r| try pending.append(allocator, .{ .left = l, .right = r });
+        return true;
+    }
+
+    fn typeDefEql(left_names: *const names.NameStore, left: TypeDef, right_names: *const names.NameStore, right: TypeDef) bool {
+        if (!std.meta.eql(left_names.moduleIdentityBytes(left.module).*, right_names.moduleIdentityBytes(right.module).*)) return false;
+        if (!base.Ident.textEql(left_names.typeNameText(left.type_name), right_names.typeNameText(right.type_name))) return false;
+        if (left.source_decl != right.source_decl or !std.meta.eql(left.generated, right.generated)) return false;
+        if (left.iterator_representation != right.iterator_representation or left.iterator_kind != right.iterator_kind or left.iterator_depth != right.iterator_depth) return false;
+        if ((left.iterator_topology == null) != (right.iterator_topology == null)) return false;
+        if (left.iterator_topology) |topology| {
+            const other = right.iterator_topology.?;
+            inline for (.{ "len_field", "step_field", "item_field", "rest_field" }) |field| {
+                if (!base.Ident.textEql(left_names.recordFieldLabelText(@field(topology, field)), right_names.recordFieldLabelText(@field(other, field)))) return false;
+            }
+            inline for (.{ "known_tag", "unknown_tag", "done_tag", "one_tag", "skip_tag" }) |field| {
+                if (!base.Ident.textEql(left_names.tagLabelText(@field(topology, field)), right_names.tagLabelText(@field(other, field)))) return false;
+            }
+        }
+        return true;
+    }
+
     pub const Serialized = extern struct {
-        types: artifact_serialize.SerializedSlice(ConstType) = .{},
+        types: artifact_serialize.SerializedSlice(StoredConstType) = .{},
+        named_pool: artifact_serialize.SerializedSlice(ConstNamedType) = .{},
+        erased_pool: artifact_serialize.SerializedSlice(names.TypeDigest) = .{},
         type_pool: artifact_serialize.SerializedSlice(ConstTypeId) = .{},
         field_pool: artifact_serialize.SerializedSlice(TypeField) = .{},
         tag_pool: artifact_serialize.SerializedSlice(TypeTag) = .{},
         declared_field_pool: artifact_serialize.SerializedSlice(TypeDeclaredField) = .{},
 
         comptime {
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 5);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 7);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(ConstTypeStore, @This());
@@ -910,6 +1233,8 @@ pub const ConstTypeStore = struct {
     pub fn deinit(self: *ConstTypeStore) void {
         if (!self.serialized) {
             self.types.deinit(self.allocator);
+            self.named_pool.deinit(self.allocator);
+            self.erased_pool.deinit(self.allocator);
             self.type_pool.deinit(self.allocator);
             self.field_pool.deinit(self.allocator);
             self.tag_pool.deinit(self.allocator);
@@ -936,6 +1261,8 @@ pub const ConstStore = struct {
     capture_pool: std.ArrayList(ConstCapture),
     /// Flat evidence vectors referenced by stored functions.
     evidence_pool: std.ArrayList(ConstFnEvidence),
+    evidence_target_pool: std.ArrayList(ConstFnTargetEvidence),
+    evidence_structural_pool: std.ArrayList(ConstFnStructuralEvidence),
     evidence_frame_pool: std.ArrayList(ConstFnEvidenceFrame),
     /// Flat pool of immutable backing bytes shared by strings and packed lists.
     blob_backing: std.ArrayList(u8),
@@ -994,6 +1321,8 @@ pub const ConstStore = struct {
             .type_store = ConstTypeStore.init(allocator),
             .capture_pool = .empty,
             .evidence_pool = .empty,
+            .evidence_target_pool = .empty,
+            .evidence_structural_pool = .empty,
             .evidence_frame_pool = .empty,
             .blob_backing = .empty,
             .blob_views = .empty,
@@ -1058,7 +1387,9 @@ pub const ConstStore = struct {
         try validateEvidenceFrames(self.allocator, fn_value);
         const id: ConstFnId = @fromBackingInt(@intCast(@as(u32, @intCast(self.fns.items.len))));
         const captures_range = try artifact_serialize.appendSpan(ConstRange, ConstCapture, &self.capture_pool, self.allocator, fn_value.captures);
-        const evidence_range = try artifact_serialize.appendSpan(ConstRange, ConstFnEvidence, &self.evidence_pool, self.allocator, fn_value.evidence);
+        const evidence_range = try artifact_serialize.appendSpan(ConstRange, ConstFnEvidence, &self.evidence_pool, self.allocator, fn_value.evidence.nodes);
+        const evidence_targets = try artifact_serialize.appendSpan(ConstRange, ConstFnTargetEvidence, &self.evidence_target_pool, self.allocator, fn_value.evidence.targets);
+        const evidence_structurals = try artifact_serialize.appendSpan(ConstRange, ConstFnStructuralEvidence, &self.evidence_structural_pool, self.allocator, fn_value.evidence.structurals);
         const evidence_frames = try artifact_serialize.appendSpan(ConstRange, ConstFnEvidenceFrame, &self.evidence_frame_pool, self.allocator, fn_value.evidence_frames);
         try self.fns.append(self.allocator, .{
             .fn_def = fn_value.fn_def,
@@ -1066,6 +1397,8 @@ pub const ConstStore = struct {
             .source_fn_key = fn_value.source_fn_key,
             .captures = captures_range,
             .evidence = evidence_range,
+            .evidence_targets = evidence_targets,
+            .evidence_structurals = evidence_structurals,
             .evidence_frames = evidence_frames,
             .evidence_frame_head = fn_value.evidence_frame_head,
         });
@@ -1081,7 +1414,7 @@ pub const ConstStore = struct {
     fn evidenceFramesValid(allocator: Allocator, fn_value: ConstFn) Allocator.Error!bool {
         if (fn_value.evidence_frames.len == 0) {
             return switch (fn_value.fn_def) {
-                .parser_runtime, .encoder_for_runtime => fn_value.evidence_frame_head == null and fn_value.evidence.len == 0,
+                .parser_runtime, .encoder_for_runtime => fn_value.evidence_frame_head == null and fn_value.evidence.nodes.len == 0,
                 .local_template,
                 .imported_template,
                 .nested,
@@ -1108,13 +1441,14 @@ pub const ConstStore = struct {
             if (frame.roots_start != cursor) return false;
             cursor = try evidenceVectorEnd(allocator, fn_value.evidence, cursor, frame.roots_len) orelse return false;
         }
-        return cursor == fn_value.evidence.len;
+        return cursor == fn_value.evidence.nodes.len;
     }
 
     /// The end of a vector of `count` evidence trees starting at `start`, or
     /// null when a nested vector's declared subtree length disagrees with its
     /// entries. Open nested vectors are kept on an explicit stack.
-    fn evidenceVectorEnd(allocator: Allocator, nodes: []const ConstFnEvidence, start: usize, count: u32) Allocator.Error!?usize {
+    fn evidenceVectorEnd(allocator: Allocator, evidence: ConstFnEvidenceVector, start: usize, count: u32) Allocator.Error!?usize {
+        const nodes = evidence.nodes;
         const Open = struct {
             remaining: u32,
             /// Where a nested vector's entries start, and how many nodes they
@@ -1140,14 +1474,11 @@ pub const ConstStore = struct {
             cursor += 1;
             // A node's nested vector precedes its callable contracts, so the
             // contracts wait beneath it on the stack.
-            const contracts = switch (node) {
-                inline .target, .structural, .from_callable => |target| target.callable_contracts,
-                .from_scheme, .unreachable_value, .checked_error => 0,
-            };
+            const contracts = evidence.callableContracts(node);
             if (contracts != 0) try open.append(allocator, .{ .remaining = contracts, .nested = null });
             switch (node) {
                 .target => |target| {
-                    switch (target.nested) {
+                    switch (evidence.target(target).nested) {
                         .resolved => |nested| try open.append(allocator, .{
                             .remaining = nested.count,
                             .nested = .{ .start = cursor, .subtree_len = nested.subtree_len },
@@ -1162,14 +1493,15 @@ pub const ConstStore = struct {
     }
 
     test "callable-derived function evidence has no flattened child vector" {
-        const evidence = [_]ConstFnEvidence{.{ .target = .{
+        const targets = [_]ConstFnTargetEvidence{.{
             .view = .{},
             .method = undefined,
             .method_callable_key = .{},
             .instantiation = null,
             .nested = .from_callable,
-        } }};
-        try std.testing.expectEqual(@as(?usize, 1), try evidenceVectorEnd(std.testing.allocator, &evidence, 0, 1));
+        }};
+        const nodes = [_]ConstFnEvidence{.{ .target = 0 }};
+        try std.testing.expectEqual(@as(?usize, 1), try evidenceVectorEnd(std.testing.allocator, .{ .nodes = &nodes, .targets = &targets }, 0, 1));
     }
 
     test "issue 11737: stored evidence validates callable contract topology" {
@@ -1179,9 +1511,9 @@ pub const ConstStore = struct {
             .checked_error,
             .unreachable_value,
         };
-        try std.testing.expectEqual(@as(?usize, 4), try evidenceVectorEnd(std.testing.allocator, &nodes, 0, 2));
-        try std.testing.expectEqual(@as(?usize, null), try evidenceVectorEnd(std.testing.allocator, nodes[0..2], 0, 1));
-        try std.testing.expectEqual(@as(?usize, null), try evidenceVectorEnd(std.testing.allocator, &nodes, 0, 3));
+        try std.testing.expectEqual(@as(?usize, 4), try evidenceVectorEnd(std.testing.allocator, .{ .nodes = &nodes }, 0, 2));
+        try std.testing.expectEqual(@as(?usize, null), try evidenceVectorEnd(std.testing.allocator, .{ .nodes = nodes[0..2] }, 0, 1));
+        try std.testing.expectEqual(@as(?usize, null), try evidenceVectorEnd(std.testing.allocator, .{ .nodes = &nodes }, 0, 3));
     }
 
     /// Writable space for `len` candidate blob bytes at the end of the blob
@@ -1279,7 +1611,11 @@ pub const ConstStore = struct {
             .source_fn_ty = stored.source_fn_ty,
             .source_fn_key = stored.source_fn_key,
             .captures = self.capture_pool.items[stored.captures.start .. stored.captures.start + stored.captures.len],
-            .evidence = self.evidence_pool.items[stored.evidence.start .. stored.evidence.start + stored.evidence.len],
+            .evidence = .{
+                .nodes = self.evidence_pool.items[stored.evidence.start .. stored.evidence.start + stored.evidence.len],
+                .targets = self.evidence_target_pool.items[stored.evidence_targets.start .. stored.evidence_targets.start + stored.evidence_targets.len],
+                .structurals = self.evidence_structural_pool.items[stored.evidence_structurals.start .. stored.evidence_structurals.start + stored.evidence_structurals.len],
+            },
             .evidence_frames = self.evidence_frame_pool.items[stored.evidence_frames.start .. stored.evidence_frames.start + stored.evidence_frames.len],
             .evidence_frame_head = stored.evidence_frame_head,
         };
@@ -1304,13 +1640,15 @@ pub const ConstStore = struct {
         type_store: ConstTypeStore.Serialized = .{},
         capture_pool: artifact_serialize.SerializedSlice(ConstCapture) = .{},
         evidence_pool: artifact_serialize.SerializedSlice(ConstFnEvidence) = .{},
+        evidence_target_pool: artifact_serialize.SerializedSlice(ConstFnTargetEvidence) = .{},
+        evidence_structural_pool: artifact_serialize.SerializedSlice(ConstFnStructuralEvidence) = .{},
         evidence_frame_pool: artifact_serialize.SerializedSlice(ConstFnEvidenceFrame) = .{},
         blob_backing: artifact_serialize.SerializedSlice(u8) = .{},
         blob_views: artifact_serialize.SerializedSlice(ConstRange) = .{},
 
         comptime {
-            // 9 value/function side lists + 5 nested type-store lists.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 14);
+            // 11 value/function side lists + 7 nested type-store lists.
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 18);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(ConstStore, @This());
@@ -1331,6 +1669,231 @@ pub const ConstStore = struct {
             constStoreInvariant("blob view is outside backing data");
         }
         return backing[offset..][0..len];
+    }
+
+    /// Copy the value graph at `root` of `source` into this store, re-adding
+    /// its blobs by content, and return the copy's root. Shared nodes stay
+    /// shared. Named types are copied as they are: a portable value names
+    /// only types declared outside the module that stored it (design.md
+    /// "Compile-Time Value Reuse Across Edits"). A function value is never
+    /// portable, so none reaches the copy.
+    pub fn cloneValueFrom(self: *ConstStore, source: *const ConstStore, root: ConstNodeId) Allocator.Error!ConstNodeId {
+        var map = collections.DenseMap(ConstNodeId, ConstNodeId).init(self.allocator);
+        defer map.deinit();
+        var order = std.ArrayList(ConstNodeId).empty;
+        defer order.deinit(self.allocator);
+        var pending = std.ArrayList(ConstNodeId).empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |node| {
+            const entry = try map.getOrPut(node);
+            if (entry.found_existing) continue;
+            entry.value_ptr.* = try self.reserve();
+            try order.append(self.allocator, node);
+            try appendValueChildren(source.get(node), &pending, self.allocator);
+        }
+        var children = std.ArrayList(ConstNodeId).empty;
+        defer children.deinit(self.allocator);
+        for (order.items) |node| {
+            const value = source.get(node);
+            children.clearRetainingCapacity();
+            const copied: ConstValue = switch (value) {
+                .pending => constStoreInvariant("a pending node reached a value copy"),
+                .fn_value => constStoreInvariant("a function value reached a value copy"),
+                .zst => .zst,
+                .scalar => |scalar| .{ .scalar = scalar },
+                .str => |str| .{ .str = try self.copyBlob(source, str) },
+                .crash => |str| .{ .crash = try self.copyBlob(source, str) },
+                .checked_error => |str| .{ .checked_error = try self.copyBlob(source, str) },
+                .box => |payload| .{ .box = map.get(payload).? },
+                .nominal => |nominal| .{ .nominal = .{ .named_type = nominal.named_type, .backing = map.get(nominal.backing).? } },
+                .list => |list| .{ .list = switch (list) {
+                    .nodes => |items| .{ .nodes = try mappedNodes(&children, self.allocator, &map, items) },
+                    .packed_bytes => |packed_list| .{ .packed_bytes = .{
+                        .bytes = try self.copyBlob(source, packed_list.bytes),
+                        .len = packed_list.len,
+                        .element = packed_list.element,
+                        .product_width = packed_list.product_width,
+                    } },
+                    .empty => |capacity| .{ .empty = capacity },
+                } },
+                .tuple => |items| .{ .tuple = try mappedNodes(&children, self.allocator, &map, items) },
+                .record => |items| .{ .record = try mappedNodes(&children, self.allocator, &map, items) },
+                .tag => |tag| .{ .tag = .{ .tag_name = tag.tag_name, .payloads = try mappedNodes(&children, self.allocator, &map, tag.payloads) } },
+            };
+            self.fill(map.get(node).?, copied);
+        }
+        return map.get(root).?;
+    }
+
+    fn copyBlob(self: *ConstStore, source: *const ConstStore, blob: ConstBlob) Allocator.Error!ConstBlob {
+        return .{ .data = try self.addBlobData(source.blobData(blob.data)), .offset = blob.offset, .len = blob.len };
+    }
+
+    fn mappedNodes(
+        out: *std.ArrayList(ConstNodeId),
+        allocator: Allocator,
+        map: *const collections.DenseMap(ConstNodeId, ConstNodeId),
+        items: []const ConstNodeId,
+    ) Allocator.Error![]const ConstNodeId {
+        out.clearRetainingCapacity();
+        for (items) |item| try out.append(allocator, map.get(item).?);
+        return out.items;
+    }
+
+    /// Push the nodes a value refers to directly.
+    fn appendValueChildren(value: ConstValue, out: *std.ArrayList(ConstNodeId), allocator: Allocator) Allocator.Error!void {
+        switch (value) {
+            .pending, .zst, .scalar, .str, .crash, .checked_error, .fn_value => {},
+            .box => |payload| try out.append(allocator, payload),
+            .nominal => |nominal| try out.append(allocator, nominal.backing),
+            .list => |list| switch (list) {
+                .nodes => |items| try out.appendSlice(allocator, items),
+                .packed_bytes, .empty => {},
+            },
+            .tuple, .record => |items| try out.appendSlice(allocator, items),
+            .tag => |tag| try out.appendSlice(allocator, tag.payloads),
+        }
+    }
+
+    /// Whether the value graph at `root` can move into a later version of the
+    /// module `own` names: it holds no function value, no named type that
+    /// module declares, and no named type whose checked occurrence is in that
+    /// module's type store (design.md "Compile-Time Value Reuse Across
+    /// Edits").
+    pub fn valuePortable(self: *const ConstStore, root: ConstNodeId, own: names.CheckedModuleDigest) Allocator.Error!bool {
+        var seen = collections.DenseMap(ConstNodeId, void).init(self.allocator);
+        defer seen.deinit();
+        var pending = std.ArrayList(ConstNodeId).empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |node| {
+            const entry = try seen.getOrPut(node);
+            if (entry.found_existing) continue;
+            const value = self.get(node);
+            switch (value) {
+                .pending => constStoreInvariant("a pending node reached a portability walk"),
+                .fn_value => return false,
+                .nominal => |nominal| {
+                    if (std.meta.eql(nominal.named_type.module.bytes, own.bytes)) return false;
+                    if (std.meta.eql(nominal.named_type.ty_module.bytes, own.bytes)) return false;
+                },
+                .zst, .scalar, .str, .crash, .checked_error, .box, .list, .tuple, .record, .tag => {},
+            }
+            try appendValueChildren(value, &pending, self.allocator);
+        }
+        return true;
+    }
+
+    /// Whether the value graph at `root` of a store read from outside the
+    /// running compiler is well formed and holds no function value: every
+    /// node, child, blob and name range it reaches is inside the store, and
+    /// every packed list's bytes hold exactly its items.
+    pub fn validValueGraph(self: *const ConstStore, root: ConstNodeId) Allocator.Error!bool {
+        var seen = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, self.values.items.len);
+        defer seen.deinit(self.allocator);
+        var pending = std.ArrayList(u32).empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, @backingInt(root));
+        while (pending.pop()) |raw| {
+            if (raw >= self.values.items.len) return false;
+            if (seen.isSet(raw)) continue;
+            seen.set(raw);
+            switch (self.values.items[raw]) {
+                .pending, .fn_value => return false,
+                .zst, .scalar => {},
+                .str, .crash, .checked_error => |str| if (!self.validBlob(str)) return false,
+                .box => |payload| try pending.append(self.allocator, @backingInt(payload)),
+                .nominal => |nominal| try pending.append(self.allocator, @backingInt(nominal.backing)),
+                .list => |list| switch (list) {
+                    .nodes => |range| if (!try self.appendValidRange(&pending, range)) return false,
+                    .packed_bytes => |packed_list| {
+                        if (!self.validBlob(packed_list.bytes)) return false;
+                        if (@as(u64, packed_list.len) * packed_list.byteWidth() != packed_list.bytes.len) return false;
+                    },
+                    .empty => {},
+                },
+                .tuple, .record => |range| if (!try self.appendValidRange(&pending, range)) return false,
+                .tag => |tag| {
+                    if (@as(u64, tag.tag_name.start) + tag.tag_name.len > self.tag_name_pool.items.len) return false;
+                    if (!try self.appendValidRange(&pending, tag.payloads)) return false;
+                },
+            }
+        }
+        return true;
+    }
+
+    fn validBlob(self: *const ConstStore, blob: ConstBlob) bool {
+        const index = @backingInt(blob.data);
+        if (index >= self.blob_views.items.len) return false;
+        const view = self.blob_views.items[index];
+        if (@as(u64, view.start) + view.len > self.blob_backing.items.len) return false;
+        return @as(u64, blob.offset) + blob.len <= view.len;
+    }
+
+    fn appendValidRange(self: *const ConstStore, pending: *std.ArrayList(u32), range: ConstRange) Allocator.Error!bool {
+        if (@as(u64, range.start) + range.len > self.node_pool.items.len) return false;
+        for (self.nodeSlice(range)) |child| try pending.append(self.allocator, @backingInt(child));
+        return true;
+    }
+
+    /// Structural equality of two value graphs: scalars bitwise, blob and tag
+    /// bytes, children in order, and named types by declaring module. A named
+    /// type's checked occurrence (`named_type.ty`) is provenance, not value
+    /// identity. Function values are never equal; no compared graph holds one.
+    pub fn graphEql(self: *const ConstStore, root: ConstNodeId, other: *const ConstStore, other_root: ConstNodeId) Allocator.Error!bool {
+        const Pair = struct { left: ConstNodeId, right: ConstNodeId };
+        var seen = std.AutoHashMap(Pair, void).init(self.allocator);
+        defer seen.deinit();
+        var pending = std.ArrayList(Pair).empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, .{ .left = root, .right = other_root });
+        while (pending.pop()) |pair| {
+            const entry = try seen.getOrPut(pair);
+            if (entry.found_existing) continue;
+            const left = self.get(pair.left);
+            const right = other.get(pair.right);
+            if (std.meta.activeTag(left) != std.meta.activeTag(right)) return false;
+            switch (left) {
+                .pending, .fn_value => return false,
+                .zst => {},
+                .scalar => |scalar| if (!std.meta.eql(scalar, right.scalar)) return false,
+                .str => |str| if (!sameBytes(self.blobBytes(str), other.blobBytes(right.str))) return false,
+                .crash => |str| if (!sameBytes(self.blobBytes(str), other.blobBytes(right.crash))) return false,
+                .checked_error => |str| if (!sameBytes(self.blobBytes(str), other.blobBytes(right.checked_error))) return false,
+                .box => |payload| try pending.append(self.allocator, .{ .left = payload, .right = right.box }),
+                .nominal => |nominal| {
+                    if (!std.meta.eql(nominal.named_type.module.bytes, right.nominal.named_type.module.bytes)) return false;
+                    try pending.append(self.allocator, .{ .left = nominal.backing, .right = right.nominal.backing });
+                },
+                .list => |list| {
+                    const right_list = right.list;
+                    if (std.meta.activeTag(list) != std.meta.activeTag(right_list)) return false;
+                    switch (list) {
+                        .nodes => |items| {
+                            if (items.len != right_list.nodes.len) return false;
+                            for (items, right_list.nodes) |l, r| try pending.append(self.allocator, .{ .left = l, .right = r });
+                        },
+                        .packed_bytes => |packed_list| {
+                            const r = right_list.packed_bytes;
+                            if (packed_list.len != r.len or packed_list.element != r.element or packed_list.product_width != r.product_width) return false;
+                            if (!sameBytes(self.blobBytes(packed_list.bytes), other.blobBytes(r.bytes))) return false;
+                        },
+                        .empty => |capacity| if (capacity != right_list.empty) return false,
+                    }
+                },
+                inline .tuple, .record => |items, tag| {
+                    const right_items = @field(right, @tagName(tag));
+                    if (items.len != right_items.len) return false;
+                    for (items, right_items) |l, r| try pending.append(self.allocator, .{ .left = l, .right = r });
+                },
+                .tag => |tag| {
+                    if (!base.Ident.textEql(tag.tag_name, right.tag.tag_name) or tag.payloads.len != right.tag.payloads.len) return false;
+                    for (tag.payloads, right.tag.payloads) |l, r| try pending.append(self.allocator, .{ .left = l, .right = r });
+                },
+            }
+        }
+        return true;
     }
 
     pub fn verifyComplete(self: *const ConstStore) Allocator.Error!void {
@@ -1381,6 +1944,8 @@ pub const ConstStore = struct {
             self.tag_name_pool.deinit(self.allocator);
             self.capture_pool.deinit(self.allocator);
             self.evidence_pool.deinit(self.allocator);
+            self.evidence_target_pool.deinit(self.allocator);
+            self.evidence_structural_pool.deinit(self.allocator);
             self.evidence_frame_pool.deinit(self.allocator);
             self.blob_backing.deinit(self.allocator);
             self.blob_views.deinit(self.allocator);
@@ -1484,7 +2049,7 @@ pub const ConstStore = struct {
                 try pending.append(self.allocator, .{ .exit_fn = index });
                 const mark = pending.items.len;
                 for (self.getFn(node.id).captures) |capture| {
-                    if (@backingInt(capture.ty) >= self.type_store.types.items.len) {
+                    if (@backingInt(capture.ty) >= self.type_store.typeCount()) {
                         constStoreInvariant("completed store contains an out-of-range capture type id");
                     }
                     try pending.append(self.allocator, .{ .value = .{ .id = capture.value, .delayed_depth = node.delayed_depth + 1 } });
@@ -1543,7 +2108,7 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     const capture_ty = try store.type_store.append(.{ .primitive = .u64 });
     const private_backing_ty = try store.type_store.append(.{ .record = .{} });
     const private_named_ty = try store.type_store.append(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(8)) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(8)), .ty_module = .{} },
         .def = .{ .module = @fromBackingInt(@intCast(9)), .type_name = @fromBackingInt(@intCast(10)) },
         .kind = .@"opaque",
         .args = .{},
@@ -1569,8 +2134,8 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     method_callable_key.bytes[0] = 0xC3;
     var instantiation_callable_key: names.CanonicalTypeKey = .{};
     instantiation_callable_key.bytes[0] = 0xD4;
-    const evidence = [_]ConstFnEvidence{
-        .{ .target = .{
+    const evidence_targets = [_]ConstFnTargetEvidence{
+        .{
             .view = target_view,
             .method = .{
                 .module_idx = 4,
@@ -1589,8 +2154,12 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
                 .callable_ty = @fromBackingInt(@intCast(7)),
             },
             .nested = .{ .resolved = .{ .count = 1, .subtree_len = 1 } },
-        } },
-        .{ .structural = .{ .derivation = .equality } },
+        },
+    };
+    const evidence_structurals = [_]ConstFnStructuralEvidence{.{ .derivation = .equality }};
+    const evidence = [_]ConstFnEvidence{
+        .{ .target = 0 },
+        .{ .structural = 0 },
         .checked_error,
         .{ .from_callable = .{ .independent_callable = true } },
         .{ .from_scheme = 3 },
@@ -1606,7 +2175,7 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
         .source_fn_ty = @fromBackingInt(@intCast(3)),
         .source_fn_key = .{},
         .captures = caps,
-        .evidence = &evidence,
+        .evidence = .{ .nodes = &evidence, .targets = &evidence_targets, .structurals = &evidence_structurals },
         .evidence_frames = &evidence_frames,
         .evidence_frame_head = 1,
     });
@@ -1658,12 +2227,12 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     try std.testing.expect(loaded_fn.captures[0].kind.eql(.lexical));
     try std.testing.expect(loaded_fn.captures[1].kind.eql(recursive_kind));
     try loaded.verifyComplete();
-    try std.testing.expectEqual(evidence.len, loaded_fn.evidence.len);
-    const loaded_target = loaded_fn.evidence[0].target;
+    try std.testing.expectEqualSlices(ConstFnEvidence, &evidence, loaded_fn.evidence.nodes);
+    const loaded_target = loaded_fn.evidence.target(loaded_fn.evidence.nodes[0].target);
     try std.testing.expectEqualSlices(u8, &target_view.bytes, &loaded_target.view.bytes);
     try std.testing.expectEqual(@as(u32, 4), loaded_target.method.module_idx);
     try std.testing.expectEqual(@as(u32, 5), @backingInt(loaded_target.method.def_idx));
-    try std.testing.expectEqual(evidence[0].target.method.kind, loaded_target.method.kind);
+    try std.testing.expectEqual(evidence_targets[0].method.kind, loaded_target.method.kind);
     try std.testing.expectEqual(@as(checked_ids.CheckedTypeId, @fromBackingInt(@intCast(6))), loaded_target.method.callable_ty);
     try std.testing.expectEqual(method_callable_key, loaded_target.method_callable_key);
     const loaded_instantiation = loaded_target.instantiation.?;
@@ -1673,10 +2242,7 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     const loaded_nested = loaded_target.nested.resolved;
     try std.testing.expectEqual(@as(u32, 1), loaded_nested.count);
     try std.testing.expectEqual(@as(u32, 1), loaded_nested.subtree_len);
-    try std.testing.expectEqual(ConstFnEvidence{ .structural = .{ .derivation = .equality } }, loaded_fn.evidence[1]);
-    try std.testing.expectEqual(ConstFnEvidence.checked_error, loaded_fn.evidence[2]);
-    try std.testing.expectEqual(ConstFnEvidence{ .from_callable = .{ .independent_callable = true } }, loaded_fn.evidence[3]);
-    try std.testing.expectEqual(ConstFnEvidence{ .from_scheme = 3 }, loaded_fn.evidence[4]);
+    try std.testing.expectEqual(ConstFnStructuralEvidence{ .derivation = .equality }, loaded_fn.evidence.structural(loaded_fn.evidence.nodes[1].structural).*);
     try std.testing.expectEqualSlices(ConstFnEvidenceFrame, &evidence_frames, loaded_fn.evidence_frames);
     try std.testing.expectEqual(@as(?u32, 1), loaded_fn.evidence_frame_head);
     try std.testing.expectEqual(ConstFnEvidenceScope{ .generalized = 9 }, loaded_fn.evidence_frames[1].scope());
@@ -1687,13 +2253,13 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
         ConstFnEvidenceFrame.init(.{ .generalized = 4 }, 1, 0, 0),
     };
     var empty_chain = loaded_fn;
-    empty_chain.evidence = &.{};
+    empty_chain.evidence = .{};
     empty_chain.evidence_frames = &empty_frames;
     empty_chain.evidence_frame_head = 2;
     try std.testing.expect(try ConstStore.evidenceFramesValid(std.testing.allocator, empty_chain));
 
     var absent_chain = loaded_fn;
-    absent_chain.evidence = &.{};
+    absent_chain.evidence = .{};
     absent_chain.evidence_frames = &.{};
     absent_chain.evidence_frame_head = null;
     try std.testing.expect(!try ConstStore.evidenceFramesValid(std.testing.allocator, absent_chain));
@@ -1801,4 +2367,13 @@ test "ConstStore.appendFn: no leak or double-free under allocation failure" {
         }
     };
     try std.testing.checkAllAllocationFailures(std.testing.allocator, Helper.run, .{});
+}
+
+/// Whether two byte strings stored in different stores hold the same bytes.
+fn sameBytes(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |left, right| {
+        if (left != right) return false;
+    }
+    return true;
 }

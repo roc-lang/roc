@@ -112,7 +112,7 @@ fn lowerBothPaths(gpa: std.mem.Allocator, arena: std.mem.Allocator, tmp_dir: std
     const session = &coord.program_session.?;
     // The build continues the evaluation's specialization in a separate
     // runtime consumer, which is the path that reads the frozen image.
-    try std.testing.expect(session.host != null);
+    try std.testing.expect(session.completed != null);
     try std.testing.expect(session.runtime_prepared != null);
     var continued = try session.takeRuntime(gpa, session.runtime_roots, optimizedTarget(inline_mode));
     errdefer continued.deinit();
@@ -252,12 +252,14 @@ test "an empty compile-time list read at another layout index still lowers as it
     // The evaluation's program names the buffer's list layout by a different
     // index than the runtime program does, so a construction matched by
     // layout index would miss here.
-    const host = &lowered.coord.program_session.?.host.?.lir_result;
     var host_buffer_layout: ?layout.Idx = null;
-    for (host.static_data_values.items) |slot| {
-        if (slot.compile_time_root == null) continue;
-        const slot_layout = host.layouts.getLayout(slot.layout_idx);
-        if (slot_layout.tag == .list and slot_layout.getIdx() == .u64) host_buffer_layout = slot.layout_idx;
+    for (lowered.coord.program_session.?.completed.?.programs()) |program| {
+        const host = &program.lir_result;
+        for (host.static_data_values.items) |slot| {
+            if (slot.compile_time_root == null) continue;
+            const slot_layout = host.layouts.getLayout(slot.layout_idx);
+            if (slot_layout.tag == .list and slot_layout.getIdx() == .u64) host_buffer_layout = slot.layout_idx;
+        }
     }
     var runtime_buffer_layout: ?layout.Idx = null;
     for (lowered.continued.lir_result.store.getCFStmts()) |stmt| {

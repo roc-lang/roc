@@ -27,7 +27,7 @@ const test_fixtures = @import("test_fixtures.zig");
 /// synthetic checked payloads from one definition.
 const fixtureTableIndex = test_fixtures.tableIndex;
 const builtinNominal = test_fixtures.builtinNominal;
-const moduleKey = test_fixtures.moduleKey;
+const checkedModuleKey = test_fixtures.checkedModuleKey;
 const typeKey = test_fixtures.typeKey;
 const typeSchemeKey = test_fixtures.typeSchemeKey;
 const testIntNumeral = test_fixtures.testIntNumeral;
@@ -350,8 +350,8 @@ const RecordLabelPositions = struct {
     }
 };
 
-fn checked_moduleKeyEqual(a: checked.CheckedModuleArtifactKey, b: checked.CheckedModuleArtifactKey) bool {
-    return std.mem.eql(u8, a.bytes[0..], b.bytes[0..]);
+fn checked_moduleKeyEqual(a: checked.ModuleId, b: checked.ModuleId) bool {
+    return a.eql(b);
 }
 
 /// The planned view of the module among `modules` whose content identity is
@@ -3595,8 +3595,8 @@ const ProcedureBuilder = struct {
         const desc = try proc.addFrameLocal(.opaque_ptr);
         try proc.markReadOnlyDescriptorInput(desc);
         try proc.arg_locals.append(self.allocator, desc);
-        self.result.store.setLocalBoxyDesc(first, .{ .local = desc });
-        if (hasher_layout == null) self.result.store.setLocalBoxyDesc(second, .{ .local = desc });
+        try self.result.store.setLocalBoxyDesc(first, .{ .local = desc });
+        if (hasher_layout == null) try self.result.store.setLocalBoxyDesc(second, .{ .local = desc });
         const ret_layout = hasher_layout orelse .bool;
         const result = try proc.addFrameLocal(ret_layout);
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = result } }, proc.derivedOrigin());
@@ -4017,7 +4017,7 @@ const ProcedureBuilder = struct {
         for (requirement_args, requirement_arg_locals) |arg, local| {
             const arg_desc = self.plan.representations.items[@backingInt(self.descriptorIdentityRep(arg.rep))].descriptor.get();
             const frame_index = if (arg_desc) |desc| frameRequirementDescriptorIndex(frame_requirement_descs, desc) else null;
-            self.result.store.setLocalBoxyDesc(local, if (frame_index) |index|
+            try self.result.store.setLocalBoxyDesc(local, if (frame_index) |index|
                 .{ .local = frame_requirement_locals[index] }
             else
                 try self.staticDescRefForWorkerRepWithSourceMap(
@@ -5355,8 +5355,8 @@ const ProcedureBuilder = struct {
         // The operand descriptor describes the operands themselves, as a
         // worker argument's does.
         if (shape.operand_desc) {
-            self.result.store.setLocalBoxyDesc(first, .{ .local = frame_desc_locals[0] });
-            if (job.method == .equality) self.result.store.setLocalBoxyDesc(second, .{ .local = frame_desc_locals[0] });
+            try self.result.store.setLocalBoxyDesc(first, .{ .local = frame_desc_locals[0] });
+            if (job.method == .equality) try self.result.store.setLocalBoxyDesc(second, .{ .local = frame_desc_locals[0] });
         }
         try proc.arg_locals.appendSlice(self.allocator, frame_desc_locals);
         try proc.arg_locals.appendSlice(self.allocator, frame_dict_locals);
@@ -6462,11 +6462,11 @@ const ProcedureBuilder = struct {
 
         try self.appendHostedCatalogFromModule(&entries, Plan.moduleViewFromCheckedModule(self.modules.root.module));
         for (self.modules.imports, 0..) |imported, index| {
-            if (self.importModuleAlreadyScanned(imported.key, index)) continue;
+            if (self.importModuleAlreadyScanned(imported.key.digest(), index)) continue;
             try self.appendHostedCatalogFromModule(&entries, Plan.moduleViewFromImported(imported));
         }
         for (self.modules.root.relation_modules, 0..) |relation, index| {
-            if (self.relationModuleAlreadyScanned(relation.key, index)) continue;
+            if (self.relationModuleAlreadyScanned(relation.key.digest(), index)) continue;
             try self.appendHostedCatalogFromModule(&entries, Plan.moduleViewFromImported(relation));
         }
 
@@ -6569,21 +6569,21 @@ const ProcedureBuilder = struct {
         }
     }
 
-    fn importModuleAlreadyScanned(self: *ProcedureBuilder, module_key: checked.CheckedModuleArtifactKey, import_index: usize) bool {
-        if (checked_moduleKeyEqual(module_key, self.modules.root.module.key)) return true;
+    fn importModuleAlreadyScanned(self: *ProcedureBuilder, module_key: checked.ModuleId, import_index: usize) bool {
+        if (checked_moduleKeyEqual(module_key, self.modules.root.module.key.digest())) return true;
         for (self.modules.imports[0..import_index]) |imported| {
-            if (checked_moduleKeyEqual(module_key, imported.key)) return true;
+            if (checked_moduleKeyEqual(module_key, imported.key.digest())) return true;
         }
         return false;
     }
 
-    fn relationModuleAlreadyScanned(self: *ProcedureBuilder, module_key: checked.CheckedModuleArtifactKey, relation_index: usize) bool {
-        if (checked_moduleKeyEqual(module_key, self.modules.root.module.key)) return true;
+    fn relationModuleAlreadyScanned(self: *ProcedureBuilder, module_key: checked.ModuleId, relation_index: usize) bool {
+        if (checked_moduleKeyEqual(module_key, self.modules.root.module.key.digest())) return true;
         for (self.modules.imports) |imported| {
-            if (checked_moduleKeyEqual(module_key, imported.key)) return true;
+            if (checked_moduleKeyEqual(module_key, imported.key.digest())) return true;
         }
         for (self.modules.root.relation_modules[0..relation_index]) |relation| {
-            if (checked_moduleKeyEqual(module_key, relation.key)) return true;
+            if (checked_moduleKeyEqual(module_key, relation.key.digest())) return true;
         }
         return false;
     }
@@ -6722,7 +6722,6 @@ const ProcedureBuilder = struct {
                     .set_local,
                     .debug,
                     .expect,
-                    .comptime_branch_taken,
                     .incref,
                     .decref,
                     .decref_if_initialized,
@@ -7386,7 +7385,6 @@ const ProcedureBuilder = struct {
             .ret_layout = ret_layout,
             .ret_desc = try self.staticDescRefForRepIfNeeded(initializer.rep),
         }, origin.loc);
-        self.result.static_data_values.items[@backingInt(value_slot)].accessor = accessor_id;
         // The dictionary entry returns the checked site's worker representation.
         // Its conversion is ordinary LIR, so every execution engine sees the
         // same explicit boundary and ARC owns its allocation lifetime.
@@ -7480,11 +7478,7 @@ const ProcedureBuilder = struct {
             .ret_layout = ret_layout,
             .ret_desc = try self.staticDescRefForRepIfNeeded(initializer.rep),
         }, origin.loc);
-        const owner = self.result.loweringModuleId(module.key) orelse blk: {
-            const id: LIR.LoweringModuleId = @fromBackingInt(@intCast(self.result.lowering_modules.items.len));
-            try self.result.lowering_modules.append(self.allocator, module.key);
-            break :blk id;
-        };
+        const owner = self.result.loweringModuleId(module.key) orelse try self.result.appendLoweringModule(module.key);
         self.result.literal_roots.items[index] = .{
             .module = module.key,
             .id = @fromBackingInt(index),
@@ -12076,8 +12070,8 @@ const ProcedureBuilder = struct {
         const acc = try proc.addFrameLocal(list_layout);
         const target_desc = try proc.stableDescriptorForConstructedValue(value, shape_rep);
         if (target_desc.desc) |desc| {
-            self.result.store.setLocalBoxyDesc(value, desc);
-            self.result.store.setLocalBoxyDesc(acc, desc);
+            try self.result.store.setLocalBoxyDesc(value, desc);
+            try self.result.store.setLocalBoxyDesc(acc, desc);
         }
         const loop = GeneratedListLoop{
             .subject_type = subject_type,
@@ -12102,7 +12096,7 @@ const ProcedureBuilder = struct {
         const elem_value = try proc.addGeneratedParserOutputLocalForRep(loop.elem.rep);
         const parsed_rest = try proc.addGeneratedParserOutputLocalForRep(context.state_rep);
         const next_acc = try proc.addFrameLocal(self.result.store.getLocal(loop.acc).layout_idx);
-        if (self.result.store.getLocal(loop.acc).boxy_desc) |desc| self.result.store.setLocalBoxyDesc(next_acc, desc);
+        if (self.result.store.getLocal(loop.acc).boxy_desc) |desc| try self.result.store.setLocalBoxyDesc(next_acc, desc);
         const one = try proc.addFrameLocal(.u64);
         const next_remaining = try proc.addFrameLocal(.u64);
         var element = try self.result.store.addCFStmt(.{ .jump = .{ .target = loop.join_id } }, proc.derivedOrigin());
@@ -13035,7 +13029,7 @@ const ProcedureBuilder = struct {
         capacity: LIR.LocalId,
     ) Allocator.Error!LIR.CFStmtId {
         const initial_list = try proc.addFrameLocal(self.result.store.getLocal(loop.acc).layout_idx);
-        if (list_desc) |desc| self.result.store.setLocalBoxyDesc(initial_list, desc);
+        if (list_desc) |desc| try self.result.store.setLocalBoxyDesc(initial_list, desc);
         const counted_value = try proc.addFrameLocal(.bool);
         var continuation = try self.result.store.addCFStmt(.{ .jump = .{ .target = loop.join_id } }, proc.derivedOrigin());
         continuation = try proc.setLocalInitializeJoinParam(loop.remaining, capacity, continuation);
@@ -13274,7 +13268,7 @@ const ProcedureBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         const payload = try proc.generatedParserSingleTagPayloadLocal(variant);
         const next_acc = try proc.addFrameLocal(self.result.store.getLocal(acc).layout_idx);
-        if (self.result.store.getLocal(acc).boxy_desc) |desc| self.result.store.setLocalBoxyDesc(next_acc, desc);
+        if (self.result.store.getLocal(acc).boxy_desc) |desc| try self.result.store.setLocalBoxyDesc(next_acc, desc);
         var continuation = try self.result.store.addCFStmt(.{ .jump = .{ .target = join_id } }, proc.derivedOrigin());
         continuation = try proc.setLocalInitializeJoinParam(acc, next_acc, continuation);
         continuation = try proc.setLocalInitializeJoinParamFromRep(cursor, payload.local, payload.child.rep, continuation);
@@ -14317,7 +14311,7 @@ const ProcedureBuilder = struct {
         // allocation can reserve a runtime descriptor for nested dynamic data,
         // which would conflict with the call's descriptor even on a fresh local.
         if (host_result_desc) |desc| {
-            self.result.store.setLocalBoxyDesc(host_ret_local, desc);
+            try self.result.store.setLocalBoxyDesc(host_ret_local, desc);
         }
 
         var continuation = ret_stmt;
@@ -14440,7 +14434,7 @@ const ProcedureBuilder = struct {
             try proc.addFrameLocalForRepWithRequiredFreshDescriptor(worker_ret_rep)
         else if (external_result_desc) |desc| blk: {
             const local = try proc.addFrameLocal(proc.workerRuntimeLayoutForRep(worker_ret_rep).layoutIdx());
-            self.result.store.setLocalBoxyDesc(local, desc);
+            try self.result.store.setLocalBoxyDesc(local, desc);
             break :blk local;
         } else try proc.addFrameLocalForRep(worker_ret_rep);
         const ret_desc_local = if (worker_returns_desc)
@@ -14609,7 +14603,6 @@ const ProcedureBuilder = struct {
                 .set_local,
                 .debug,
                 .expect,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -14800,7 +14793,6 @@ const ProcedureBuilder = struct {
                     .expect_err,
                     .runtime_error,
                     .comptime_exhaustiveness_failed,
-                    .comptime_branch_taken,
                     .incref,
                     .decref,
                     .decref_if_initialized,
@@ -14884,7 +14876,6 @@ const ProcedureBuilder = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -15883,7 +15874,7 @@ const ProcBodyBuilder = struct {
                         boxyLowerInvariant("boxy worker argument was pre-bound to a different storage descriptor");
                     }
                 } else {
-                    self.parent.result.store.setLocalBoxyDesc(arg_local, .{ .local = local });
+                    try self.parent.result.store.setLocalBoxyDesc(arg_local, .{ .local = local });
                 }
             }
             try self.recordLocalDescriptorEnvironment(arg_local, arg.rep, bindings.items);
@@ -16026,7 +16017,7 @@ const ProcBodyBuilder = struct {
                 boxyLowerInvariant("boxy erased worker capture descriptor did not match its field layout");
             const field_desc_local = try self.addFrameLocal(.opaque_ptr);
             const field_desc_ref = LIR.BoxyDescRef{ .local = field_desc_local };
-            self.parent.result.store.setLocalBoxyDesc(captured_local, field_desc_ref);
+            try self.parent.result.store.setLocalBoxyDesc(captured_local, field_desc_ref);
             try self.erased_capture_value_desc_initializers.append(self.parent.allocator, .{
                 .local = field_desc_local,
                 .materialize = .{ .local = contents_desc },
@@ -16340,7 +16331,7 @@ const ProcBodyBuilder = struct {
                         boxyLowerInvariant("boxy erased argument value was pre-bound to a different root descriptor");
                     }
                 } else {
-                    self.parent.result.store.setLocalBoxyDesc(arg_local, .{ .local = local });
+                    try self.parent.result.store.setLocalBoxyDesc(arg_local, .{ .local = local });
                 }
             }
             try self.recordLocalDescriptorEnvironment(arg_local, arg.rep, bindings.items);
@@ -17123,7 +17114,7 @@ const ProcBodyBuilder = struct {
             chain.current = switch (item) {
                 .lower => |task| return .{ .child = withNext(task, chain.current) },
                 .propagate_desc => |pair| blk: {
-                    self.propagateBoundaryDescriptorMetadata(pair.target, pair.source);
+                    try self.propagateBoundaryDescriptorMetadata(pair.target, pair.source);
                     break :blk chain.current;
                 },
                 .prepend_field_initializers => try self.prependDescriptorArgMaterializations(chain.aggregate_desc.?.field_initializers, chain.current),
@@ -17305,7 +17296,7 @@ const ProcBodyBuilder = struct {
                 // so run the loop into a unit temporary and box the unit.
                 const unit_local = try self.addFrameLocal(.zst);
                 const payload_desc = try self.appendLiteralPayloadDesc(.zst, expr.ty);
-                self.parent.result.store.setLocalBoxyDesc(target, payload_desc);
+                try self.parent.result.store.setLocalBoxyDesc(target, payload_desc);
                 const box = try self.parent.result.store.addCFStmt(.{ .assign_boxy_box = .{
                     .target = target,
                     .data = try self.parent.result.store.addStmtRow(LIR.BoxyBoxData, .{
@@ -17602,7 +17593,7 @@ const ProcBodyBuilder = struct {
         const worker_value = try self.addFrameLocalForRepWithFreshDescriptor(target_rep);
         if (self.parent.result.store.getLocal(target).layout_idx == self.parent.result.store.getLocal(worker_value).layout_idx) {
             if (self.parent.result.store.getLocal(target).boxy_desc) |target_desc| {
-                self.parent.result.store.setLocalBoxyDesc(worker_value, target_desc);
+                try self.parent.result.store.setLocalBoxyDesc(worker_value, target_desc);
             }
         }
         const store_payload = try self.assignWorkerValueToTagPayloadStorage(target, worker_value, target_rep, next);
@@ -17630,7 +17621,7 @@ const ProcBodyBuilder = struct {
             if (target_desc_local.localOrNull() == elem_desc_local) {
                 const fresh_target = try self.addFrameLocal(self.parent.result.store.getLocal(target).layout_idx);
                 const fresh_desc_local = try self.addFrameLocal(.opaque_ptr);
-                self.parent.result.store.setLocalBoxyDesc(fresh_target, .{ .local = fresh_desc_local });
+                try self.parent.result.store.setLocalBoxyDesc(fresh_target, .{ .local = fresh_desc_local });
                 const transfer = try self.assignLocal(target, fresh_target, next);
                 return .{ .tail = .{ .list = .{ .target = fresh_target, .list_ty = list_ty, .items = items, .next = transfer } } };
             }
@@ -17648,7 +17639,7 @@ const ProcBodyBuilder = struct {
         else
             try self.stableDescriptorForConstructedValue(target, target_rep);
         if (target_desc_info.desc) |desc| {
-            self.parent.result.store.setLocalBoxyDesc(target, desc);
+            try self.parent.result.store.setLocalBoxyDesc(target, desc);
         }
 
         var continuation = try self.assignList(target, elem_locals, next);
@@ -18859,7 +18850,7 @@ const ProcBodyBuilder = struct {
     }
 
     fn captureIsReassignable(self: *ProcBodyBuilder, capture: checked.CheckedCapture) bool {
-        const binder = self.module.checked_bodies.pattern_binder_by_pattern[@backingInt(capture.pattern)] orelse
+        const binder = self.module.checked_bodies.pattern_binder_by_pattern[@backingInt(capture.pattern)].get() orelse
             boxyLowerInvariant("boxy closure capture referenced a non-binding pattern");
         return self.module.checked_bodies.patternBinder(binder).reassignable;
     }
@@ -18885,7 +18876,7 @@ const ProcBodyBuilder = struct {
                 local.* = null;
                 continue;
             }
-            const binder = self.module.checked_bodies.pattern_binder_by_pattern[@backingInt(capture.pattern)].?;
+            const binder = self.module.checked_bodies.pattern_binder_by_pattern[@backingInt(capture.pattern)].get().?;
             const rep = self.binderStorageRep(binder);
             local.* = if (self.parent.layoutIsBoxStorage(self.workerRuntimeLayoutForRep(rep).layoutIdx()))
                 try self.addFrameLocalForRepWithFreshDescriptor(rep)
@@ -19450,7 +19441,7 @@ const ProcBodyBuilder = struct {
             self.matchConditionNeedsExactResultDescriptor(discriminant.value, value_rep))
         {
             const desc_local = try self.addFrameLocal(.opaque_ptr);
-            self.parent.result.store.setLocalBoxyDesc(value, .{ .local = desc_local });
+            try self.parent.result.store.setLocalBoxyDesc(value, .{ .local = desc_local });
         }
 
         const done = self.freshJoinPointId();
@@ -19533,7 +19524,7 @@ const ProcBodyBuilder = struct {
         const lhs = try self.addStructuralEqOperandLocalForRep(rep_id);
         const rhs = try self.addFrameLocal(operand_layout);
         if (self.parent.result.store.getLocal(lhs).boxy_desc) |desc| {
-            self.parent.result.store.setLocalBoxyDesc(rhs, desc);
+            try self.parent.result.store.setLocalBoxyDesc(rhs, desc);
         }
         if (self.parent.result.store.getLocal(lhs).layout_idx != operand_layout or
             self.parent.result.store.getLocal(rhs).layout_idx != operand_layout)
@@ -20464,7 +20455,7 @@ const ProcBodyBuilder = struct {
                 try self.recordDescriptorLocalTemplate(local, source_materialization);
                 break :blk LIR.BoxyDescRef{ .local = local };
             };
-            self.parent.result.store.setLocalBoxyDesc(concrete, source_desc);
+            try self.parent.result.store.setLocalBoxyDesc(concrete, source_desc);
 
             var continuation = try self.assignPlannedCallBoundary(
                 target,
@@ -20544,7 +20535,7 @@ const ProcBodyBuilder = struct {
             const payload_desc_info = try self.storageDescriptorForRepIfNeeded(result_rep);
             const payload_desc = payload_desc_info.desc orelse
                 boxyLowerInvariant("boxy list_replace_unsafe result box had no payload descriptor");
-            self.parent.result.store.setLocalBoxyDesc(target, payload_desc);
+            try self.parent.result.store.setLocalBoxyDesc(target, payload_desc);
             const box = try self.parent.result.store.addCFStmt(.{ .assign_boxy_box = .{
                 .target = target,
                 .data = try self.parent.result.store.addStmtRow(LIR.BoxyBoxData, .{
@@ -20708,7 +20699,7 @@ const ProcBodyBuilder = struct {
         defer self.parent.allocator.free(elem_locals);
         for (elem_locals) |*local| local.* = try self.addFrameLocal(elem_layout);
         const target_desc_info = try self.stableDescriptorForConstructedValue(target, target_rep);
-        if (target_desc_info.desc) |desc| self.parent.result.store.setLocalBoxyDesc(target, desc);
+        if (target_desc_info.desc) |desc| try self.parent.result.store.setLocalBoxyDesc(target, desc);
         var continuation = try self.assignList(target, elem_locals, next);
         continuation = try self.prependOptionalDescriptorMaterialization(target_desc_info.materialize, continuation);
         var index = interpolation.segments.len;
@@ -20848,11 +20839,7 @@ const ProcBodyBuilder = struct {
         const initializer = self.parent.plan.literal_evidence.?.initializers.items[initializer_index];
         const site = self.parent.plan.literal_sites.items[initializer.site];
         const site_module_key = self.parent.plan.moduleKey(site.source.module);
-        const owner = self.parent.result.loweringModuleId(site_module_key) orelse blk: {
-            const id: LIR.LoweringModuleId = @fromBackingInt(@intCast(self.parent.result.lowering_modules.items.len));
-            try self.parent.result.lowering_modules.append(self.parent.allocator, site_module_key);
-            break :blk id;
-        };
+        const owner = self.parent.result.loweringModuleId(site_module_key) orelse try self.parent.result.appendLoweringModule(site_module_key);
         const variants = self.parent.plan.tagVariantSlice(self.parent.plan.representations.items[@backingInt(try_rep)].tag_variants);
         const err_index = for (variants, 0..) |variant, index| {
             if (std.mem.eql(u8, self.parent.tagVariantNameText(variant), "Err")) break index;
@@ -20870,18 +20857,19 @@ const ProcBodyBuilder = struct {
             const payloads = self.parent.plan.childSlice(variant.payloads);
             if (payloads.len != 1) boxyLowerInvariant("literal conversion error tag did not carry one message");
             const message = try self.addFrameLocalForRep(payloads[0].rep);
+            const site_rejection: LIR.LiteralRejectionSite = .{
+                .owner = owner,
+                .checked_expr = @backingInt(site.source.expr),
+                .kind = switch (self.module.checked_bodies.expr(site.source.expr).data) {
+                    .numeral => .numeral,
+                    .str_from_quote => .quote,
+                    .interpolation => .interpolation,
+                    .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => boxyLowerInvariant("literal rejection site did not name a checked literal conversion"),
+                },
+            };
             const rejected = try self.parent.result.store.addCFStmt(.{ .crash = .{
                 .msg = .{ .local = message },
-                .literal_rejection = .{
-                    .owner = owner,
-                    .checked_expr = @backingInt(site.source.expr),
-                    .kind = switch (self.module.checked_bodies.expr(site.source.expr).data) {
-                        .numeral => .numeral,
-                        .str_from_quote => .quote,
-                        .interpolation => .interpolation,
-                        .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => boxyLowerInvariant("literal rejection site did not name a checked literal conversion"),
-                    },
-                },
+                .extra = try self.parent.result.store.addStmtRow(LIR.CrashExtra, .{ .literal_rejection = site_rejection }),
             } }, self.origin);
             const read_message = try self.assignConcreteTagPayloadRead(message, payloads[0].rep, null, error_value, error_rep, variant.name, @intCast(index), 0, 1, rejected);
             try branches.append(self.parent.allocator, .{ .value = @intCast(index), .body = read_message });
@@ -20956,7 +20944,7 @@ const ProcBodyBuilder = struct {
                 if (pattern_index >= self.module.checked_bodies.pattern_binder_by_pattern.len) {
                     boxyLowerInvariant("boxy local lookup referenced missing binder metadata");
                 }
-                break :blk self.module.checked_bodies.pattern_binder_by_pattern[pattern_index];
+                break :blk self.module.checked_bodies.pattern_binder_by_pattern[pattern_index].get();
             },
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => null,
         };
@@ -20983,7 +20971,7 @@ const ProcBodyBuilder = struct {
                 if (pattern_index >= self.module.checked_bodies.pattern_binder_by_pattern.len) {
                     boxyLowerInvariant("boxy local lookup referenced missing binder metadata");
                 }
-                break :blk self.module.checked_bodies.pattern_binder_by_pattern[pattern_index];
+                break :blk self.module.checked_bodies.pattern_binder_by_pattern[pattern_index].get();
             },
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => null,
         } orelse boxyLowerInvariant("boxy expression had explicit storage representation without a binder source");
@@ -21036,17 +21024,17 @@ const ProcBodyBuilder = struct {
 
         const target_layout = self.parent.result.store.getLocal(target).layout_idx;
         if (!self.parent.layoutNeedsNestedBoxyDesc(target_layout)) return;
-        self.parent.result.store.setLocalBoxyDesc(target, .{ .local = try self.addFrameLocal(.opaque_ptr) });
+        try self.parent.result.store.setLocalBoxyDesc(target, .{ .local = try self.addFrameLocal(.opaque_ptr) });
     }
 
     fn propagateBoundaryDescriptorMetadata(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
         source: LIR.LocalId,
-    ) void {
+    ) Allocator.Error!void {
         if (self.parent.result.store.getLocal(target).boxy_desc != null) return;
         if (self.parent.result.store.getLocal(source).boxy_desc) |desc| {
-            self.parent.result.store.setLocalBoxyDesc(target, desc);
+            try self.parent.result.store.setLocalBoxyDesc(target, desc);
         }
     }
 
@@ -21061,7 +21049,7 @@ const ProcBodyBuilder = struct {
         if (lookup.resolved) |ref_id| {
             return try self.beginResolvedLookup(target, expr_id, checked_ty, ref_id, next);
         }
-        const binder = self.module.checked_bodies.pattern_binder_by_pattern[@backingInt(lookup.pattern)] orelse
+        const binder = self.module.checked_bodies.pattern_binder_by_pattern[@backingInt(lookup.pattern)].get() orelse
             boxyLowerInvariant("boxy unresolved local lookup referenced a non-binding pattern");
         return exprDone(try self.assignTypedLocalFromRep(
             target,
@@ -21136,7 +21124,7 @@ const ProcBodyBuilder = struct {
         if (target_layout == source_layout and self.parent.descriptorStorageRep(target_rep) == self.parent.descriptorStorageRep(source_rep)) {
             if (self.parent.result.store.getLocal(source).boxy_desc == null and self.repContainsDynamicStorage(source_rep)) {
                 const desc = try self.descriptorRefForSourceLocalRep(source, source_rep);
-                self.parent.result.store.setLocalBoxyDesc(source, desc);
+                try self.parent.result.store.setLocalBoxyDesc(source, desc);
             }
             if (self.parent.result.store.getLocal(source).boxy_desc == null) {
                 return try self.assignDescriptorAwareNominalBoundary(
@@ -21615,7 +21603,7 @@ const ProcBodyBuilder = struct {
                     variant.index,
                 );
                 const payload_storage = try self.addFrameLocal(payload_layout);
-                self.propagateBoundaryDescriptorMetadata(payload_storage, payload);
+                try self.propagateBoundaryDescriptorMetadata(payload_storage, payload);
                 const descriptor_fields = [_]AggregateDescriptorField{.{
                     .local = payload_storage,
                     .target_rep = target_child.rep,
@@ -21645,7 +21633,7 @@ const ProcBodyBuilder = struct {
                 try self.bindConstructedTargetDescriptor(target, target_rep);
                 const target_desc = try self.constructedTargetDescForRep(target_rep);
                 const dynamic_payload = try self.dynamicTagPayloadLocalForChildren(target_payloads);
-                self.propagateBoundaryDescriptorMetadata(dynamic_payload.local, payload);
+                try self.propagateBoundaryDescriptorMetadata(dynamic_payload.local, payload);
                 const descriptor_fields = [_]AggregateDescriptorField{.{
                     .local = dynamic_payload.local,
                     .target_rep = target_child.rep,
@@ -23176,7 +23164,7 @@ const ProcBodyBuilder = struct {
         const initial = try self.addFrameLocal(list_layout);
         const next_acc = try self.addFrameLocal(list_layout);
         if (self.parent.result.store.getLocal(target).boxy_desc) |desc| {
-            for ([_]LIR.LocalId{ acc, initial, next_acc }) |local| self.parent.result.store.setLocalBoxyDesc(local, desc);
+            for ([_]LIR.LocalId{ acc, initial, next_acc }) |local| try self.parent.result.store.setLocalBoxyDesc(local, desc);
         }
         const len = try self.addFrameLocal(.u64);
         const zero = try self.addFrameLocal(.u64);
@@ -23273,7 +23261,7 @@ const ProcBodyBuilder = struct {
         continuation: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const payload_desc = try self.descriptorRefForKnownRep(source_elem_rep);
-        self.parent.result.store.setLocalBoxyDesc(elem_local, payload_desc);
+        try self.parent.result.store.setLocalBoxyDesc(elem_local, payload_desc);
         return try self.parent.result.store.addCFStmt(.{ .assign_boxy_box = .{
             .target = elem_local,
             .data = try self.parent.result.store.addStmtRow(LIR.BoxyBoxData, .{
@@ -23822,7 +23810,7 @@ const ProcBodyBuilder = struct {
                 boxyLowerInvariant("boxy erased capture descriptor need disappeared during materialization");
             const desc_local = try self.addFrameLocal(.opaque_ptr);
             const desc_ref = LIR.BoxyDescRef{ .local = desc_local };
-            self.parent.result.store.setLocalBoxyDesc(capture_local, desc_ref);
+            try self.parent.result.store.setLocalBoxyDesc(capture_local, desc_ref);
             capture_desc_initializer = materialization.initializer(desc_local);
             break :blk desc_ref;
         } else null;
@@ -24157,7 +24145,7 @@ const ProcBodyBuilder = struct {
             const materialization = try self.descriptorMaterializationForSourceRep(desc_rep);
             if (materialization.captures.len == 0) {
                 switch (mode) {
-                    .reuse_existing => self.parent.result.store.setLocalBoxyDesc(field_local, materialization.desc),
+                    .reuse_existing => try self.parent.result.store.setLocalBoxyDesc(field_local, materialization.desc),
                     .snapshot_existing => descriptor_overrides.?[index] = materialization.desc,
                 }
                 continue;
@@ -24165,7 +24153,7 @@ const ProcBodyBuilder = struct {
 
             const desc_local = try self.addFrameLocal(.opaque_ptr);
             switch (mode) {
-                .reuse_existing => self.parent.result.store.setLocalBoxyDesc(field_local, .{ .local = desc_local }),
+                .reuse_existing => try self.parent.result.store.setLocalBoxyDesc(field_local, .{ .local = desc_local }),
                 .snapshot_existing => descriptor_overrides.?[index] = .{ .local = desc_local },
             }
             try initializers.append(self.parent.allocator, materialization.initializer(desc_local));
@@ -24422,7 +24410,7 @@ const ProcBodyBuilder = struct {
             ) orelse boxyLowerInvariant("generated erased callable capture descriptor need disappeared during materialization");
             const desc_local = try self.addFrameLocal(.opaque_ptr);
             const desc_ref = LIR.BoxyDescRef{ .local = desc_local };
-            self.parent.result.store.setLocalBoxyDesc(capture_local, desc_ref);
+            try self.parent.result.store.setLocalBoxyDesc(capture_local, desc_ref);
             capture_desc_initializer = materialization.initializer(desc_local);
             break :blk desc_ref;
         } else null;
@@ -25177,7 +25165,7 @@ const ProcBodyBuilder = struct {
         else
             ResultDescriptorSource{};
         if (result_desc_info.desc) |desc| {
-            self.parent.result.store.setLocalBoxyDesc(call_target, desc);
+            try self.parent.result.store.setLocalBoxyDesc(call_target, desc);
         }
 
         continuation = try self.parent.result.store.addCFStmt(.{ .assign_call_dict = .{
@@ -25354,7 +25342,7 @@ const ProcBodyBuilder = struct {
                 if (pattern_index >= self.module.checked_bodies.pattern_binder_by_pattern.len) {
                     boxyLowerInvariant("boxy direct call operand lookup referenced missing binder metadata");
                 }
-                break :blk self.module.checked_bodies.pattern_binder_by_pattern[pattern_index];
+                break :blk self.module.checked_bodies.pattern_binder_by_pattern[pattern_index].get();
             },
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => null,
         } orelse return planned_rep;
@@ -25521,7 +25509,7 @@ const ProcBodyBuilder = struct {
             const raw_result_desc = self.resultDescriptorForCallTarget(raw_ret, direct_result_desc);
             if (self.parent.result.store.getLocal(raw_ret).boxy_desc == null) {
                 if (raw_result_desc.desc) |desc| {
-                    self.parent.result.store.setLocalBoxyDesc(raw_ret, desc);
+                    try self.parent.result.store.setLocalBoxyDesc(raw_ret, desc);
                 }
             }
             continuation = try self.assignPlannedCallBoundary(target, raw_ret, target_rep, worker_ret_rep, continuation);
@@ -25567,7 +25555,7 @@ const ProcBodyBuilder = struct {
         const result_desc = result_desc_info.desc;
         if (self.parent.result.store.getLocal(call_target).boxy_desc == null) {
             if (result_desc) |desc| {
-                self.parent.result.store.setLocalBoxyDesc(call_target, desc);
+                try self.parent.result.store.setLocalBoxyDesc(call_target, desc);
             }
         }
 
@@ -25755,7 +25743,7 @@ const ProcBodyBuilder = struct {
         const target_desc = target_desc_info.desc orelse
             boxyLowerInvariant("planned boxy call adapter had no target descriptor");
         if (self.parent.result.store.getLocal(target).boxy_desc == null) {
-            self.parent.result.store.setLocalBoxyDesc(target, target_desc);
+            try self.parent.result.store.setLocalBoxyDesc(target, target_desc);
         }
         const value_storage_is_interchangeable = source_layout == target_layout or
             (self.parent.layoutIsBoxStorage(source_layout) and
@@ -27381,7 +27369,7 @@ const ProcBodyBuilder = struct {
                 self.matchConditionNeedsExactResultDescriptor(task.cond, task.cond_rep))
             {
                 const desc_local = try self.addFrameLocal(.opaque_ptr);
-                self.parent.result.store.setLocalBoxyDesc(task.cond_local, .{ .local = desc_local });
+                try self.parent.result.store.setLocalBoxyDesc(task.cond_local, .{ .local = desc_local });
             }
             task.outer_descriptors = try self.snapshotDescriptorBindings();
             task.done = self.freshJoinPointId();
@@ -27835,7 +27823,7 @@ const ProcBodyBuilder = struct {
                 boxyLowerInvariant("bound constructed descriptor had no matching local")
         else
             (try self.reserveDescriptorLocalForRep(rep_id)) orelse return;
-        self.parent.result.store.setLocalBoxyDesc(target, .{ .local = local });
+        try self.parent.result.store.setLocalBoxyDesc(target, .{ .local = local });
     }
 
     fn dynamicTagPayloadLocalForChildren(
@@ -28256,7 +28244,7 @@ const ProcBodyBuilder = struct {
                     boxyLowerInvariant("dynamic record field access receiver had no descriptor payload layout");
                 const payload = try self.addFrameLocal(payload_layout);
                 if (unboxed_receiver_desc_info.desc) |desc| {
-                    self.parent.result.store.setLocalBoxyDesc(payload, desc);
+                    try self.parent.result.store.setLocalBoxyDesc(payload, desc);
                 }
                 break :blk payload;
             },
@@ -28307,7 +28295,7 @@ const ProcBodyBuilder = struct {
             // A field read borrows the exact stored field. Any conversion to
             // its worker representation is an explicit owned materialization.
             const field_desc = self.parent.result.store.getLocal(read_target).boxy_desc;
-            if (field_desc) |desc| self.parent.result.store.setLocalBoxyDesc(stored_field_local, desc);
+            if (field_desc) |desc| try self.parent.result.store.setLocalBoxyDesc(stored_field_local, desc);
             break :blk try self.parent.result.store.addCFStmt(.{ .assign_boxy_adapt = .{
                 .target = read_target,
                 .data = try self.parent.result.store.addStmtRow(LIR.BoxyAdaptData, .{
@@ -28868,7 +28856,7 @@ const ProcBodyBuilder = struct {
         const target_desc_info = try self.descriptorRefForPayloadStorageTarget(target, rep);
         const target_desc = target_desc_info.desc orelse
             boxyLowerInvariant("boxy recursive value slot read had no target descriptor");
-        self.parent.result.store.setLocalBoxyDesc(target, target_desc);
+        try self.parent.result.store.setLocalBoxyDesc(target, target_desc);
         if (target_desc_info.materialize) |materialize| {
             try self.erased_capture_value_desc_initializers.append(self.parent.allocator, materialize);
         }
@@ -30238,7 +30226,7 @@ const ProcBodyBuilder = struct {
                 const payload_desc: ?LIR.BoxyDescRef = target_desc_info.desc orelse
                     if (self.repContainsDynamicStorage(record_rep)) source_desc else null;
                 if (payload_desc) |desc| {
-                    self.parent.result.store.setLocalBoxyDesc(payload, desc);
+                    try self.parent.result.store.setLocalBoxyDesc(payload, desc);
                 }
                 break :blk .{
                     .local = payload,
@@ -30355,7 +30343,7 @@ const ProcBodyBuilder = struct {
         }
 
         if (self.parent.result.store.getLocal(source).boxy_desc) |source_desc| {
-            self.parent.result.store.setLocalBoxyDesc(target, source_desc);
+            try self.parent.result.store.setLocalBoxyDesc(target, source_desc);
         }
         if (self.localDescriptorEnvironmentForLocal(source)) |env| {
             if (self.parent.descriptorStorageRep(env.rep) != self.parent.descriptorStorageRep(list_rep)) {
@@ -30572,7 +30560,7 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         const reserved = try self.addFrameLocal(self.parent.result.store.getLocal(list).layout_idx);
         if (self.parent.result.store.getLocal(list).boxy_desc) |desc| {
-            self.parent.result.store.setLocalBoxyDesc(reserved, desc);
+            try self.parent.result.store.setLocalBoxyDesc(reserved, desc);
         }
         const one = try self.addFrameLocal(.u64);
         var continuation = try self.assignListAppendMovingElement(target, reserved, elem, next);
@@ -31163,7 +31151,7 @@ const ProcBodyBuilder = struct {
             try self.dictionaryCallResultDescriptorRef(self.repForTypeRef(ret_type), hidden_desc_args, hidden_desc_locals),
         );
         if (result_desc_info.desc) |desc| {
-            self.parent.result.store.setLocalBoxyDesc(target, desc);
+            try self.parent.result.store.setLocalBoxyDesc(target, desc);
         }
 
         var continuation = try self.parent.result.store.addCFStmt(.{ .assign_call_dict = .{
@@ -32597,7 +32585,7 @@ const ProcBodyBuilder = struct {
         constructed_desc: LIR.BoxyDescRef,
     ) Allocator.Error!ResultDescriptorSource {
         const existing = self.parent.result.store.getLocal(target).boxy_desc orelse {
-            self.parent.result.store.setLocalBoxyDesc(target, constructed_desc);
+            try self.parent.result.store.setLocalBoxyDesc(target, constructed_desc);
             return .{ .desc = constructed_desc };
         };
         if (std.meta.eql(existing, constructed_desc)) {
@@ -32642,7 +32630,7 @@ const ProcBodyBuilder = struct {
 
         const desc_local = try self.addFrameLocal(.opaque_ptr);
         const desc_ref = LIR.BoxyDescRef{ .local = desc_local };
-        self.parent.result.store.setLocalBoxyDesc(target, desc_ref);
+        try self.parent.result.store.setLocalBoxyDesc(target, desc_ref);
         try self.recordDescriptorLocalTemplate(desc_local, materialization);
         return .{
             .desc = desc_ref,
@@ -32761,7 +32749,7 @@ const ProcBodyBuilder = struct {
             const target_desc_info = try self.descriptorRefForPayloadStorageTarget(target, rep_id);
             const target_desc = target_desc_info.desc orelse
                 boxyLowerInvariant("boxy tag payload storage unbox had no target descriptor");
-            self.parent.result.store.setLocalBoxyDesc(target, target_desc);
+            try self.parent.result.store.setLocalBoxyDesc(target, target_desc);
             const unbox = try self.parent.result.store.addCFStmt(.{ .assign_boxy_unbox = .{
                 .target = target,
                 .data = try self.parent.result.store.addStmtRow(LIR.BoxyUnboxData, .{
@@ -32781,7 +32769,7 @@ const ProcBodyBuilder = struct {
             const target_desc_info = try self.descriptorRefForPayloadStorageTarget(target, rep_id);
             const target_desc = target_desc_info.desc orelse
                 boxyLowerInvariant("boxy tag payload storage box had no target descriptor");
-            self.parent.result.store.setLocalBoxyDesc(target, target_desc);
+            try self.parent.result.store.setLocalBoxyDesc(target, target_desc);
             const box = try self.parent.result.store.addCFStmt(.{ .assign_boxy_box = .{
                 .target = target,
                 .data = try self.parent.result.store.addStmtRow(LIR.BoxyBoxData, .{
@@ -32964,7 +32952,7 @@ const ProcBodyBuilder = struct {
         const source_desc_rep = self.parent.tagPayloadStorageDescRepForLayout(rep_id, source_layout, true) orelse
             boxyLowerInvariant("boxy tag payload storage source descriptor did not match source layout");
         const source_desc = try self.descriptorRefForKnownRep(source_desc_rep);
-        self.parent.result.store.setLocalBoxyDesc(source, source_desc);
+        try self.parent.result.store.setLocalBoxyDesc(source, source_desc);
         return source_desc;
     }
 
@@ -33258,7 +33246,7 @@ const ProcBodyBuilder = struct {
         const desc_local = try self.addFrameLocal(.opaque_ptr);
         try self.recordDescriptorLocalTemplate(desc_local, initial);
         if (self.parent.layoutNeedsNestedBoxyDesc(self.parent.result.store.getLocal(value).layout_idx)) {
-            self.parent.result.store.setLocalBoxyDesc(value, .{ .local = desc_local });
+            try self.parent.result.store.setLocalBoxyDesc(value, .{ .local = desc_local });
         }
         try initializers.append(self.parent.allocator, .{
             .local = desc_local,
@@ -34341,7 +34329,7 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!?LIR.BoxyDescRef {
         if (self.parent.result.store.getLocal(target).boxy_desc) |existing| return existing;
         const derived = try self.descriptorRefForRepIfNeeded(target_rep) orelse return null;
-        self.parent.result.store.setLocalBoxyDesc(target, derived);
+        try self.parent.result.store.setLocalBoxyDesc(target, derived);
         return derived;
     }
 
@@ -36443,7 +36431,7 @@ const ProcBodyBuilder = struct {
             try self.dictionaryCallResultDescriptorRef(function.ret, hidden_desc_args, hidden_desc_locals),
         );
         if (result_desc_info.desc) |desc| {
-            if (self.parent.result.store.getLocal(target).boxy_desc == null) self.parent.result.store.setLocalBoxyDesc(target, desc);
+            if (self.parent.result.store.getLocal(target).boxy_desc == null) try self.parent.result.store.setLocalBoxyDesc(target, desc);
         }
         var continuation = try self.parent.result.store.addCFStmt(.{ .assign_call_dict = .{
             .target = target,
@@ -37146,7 +37134,7 @@ const ProcBodyBuilder = struct {
         for (elems) |*elem| elem.* = try self.addFrameLocal(.u8);
 
         const desc_info = try self.stableDescriptorForConstructedValue(target, target_rep);
-        if (desc_info.desc) |desc| self.parent.result.store.setLocalBoxyDesc(target, desc);
+        if (desc_info.desc) |desc| try self.parent.result.store.setLocalBoxyDesc(target, desc);
         var continuation = try self.assignList(target, elems, next);
         continuation = try self.prependOptionalDescriptorMaterialization(desc_info.materialize, continuation);
         var index = elems.len;
@@ -37496,7 +37484,7 @@ const ProcBodyBuilder = struct {
                 .shape = LirProgram.BoxyDescShape.forStorage(source_layout_value),
             });
             const payload_desc = LIR.BoxyDescRef{ .static = desc_id };
-            self.parent.result.store.setLocalBoxyDesc(target, payload_desc);
+            try self.parent.result.store.setLocalBoxyDesc(target, payload_desc);
             return try self.parent.result.store.addCFStmt(.{ .assign_boxy_box = .{
                 .target = target,
                 .data = try self.parent.result.store.addStmtRow(LIR.BoxyBoxData, .{
@@ -38417,7 +38405,7 @@ const ProcBodyBuilder = struct {
         const target_desc = target_info.descriptor.get() orelse return;
         for (bindings.items) |binding| {
             if (binding.desc == target_desc and self.parent.descriptorStorageRep(binding.rep) == identity_target) {
-                self.parent.result.store.setLocalBoxyDesc(target, .{ .local = binding.local });
+                try self.parent.result.store.setLocalBoxyDesc(target, .{ .local = binding.local });
                 return;
             }
         }
@@ -39223,7 +39211,7 @@ const ProcBodyBuilder = struct {
                     const existing_target_desc = self.parent.result.store.getLocal(target).boxy_desc;
                     const payload_desc = existing_target_desc orelse desc_for_payload;
                     if (existing_target_desc == null) {
-                        self.parent.result.store.setLocalBoxyDesc(target, payload_desc);
+                        try self.parent.result.store.setLocalBoxyDesc(target, payload_desc);
                     }
                     const writable_target_desc = if (existing_target_desc) |desc| blk_desc: {
                         const local = desc.localOrNull() orelse break :blk_desc null;
@@ -39289,7 +39277,7 @@ const ProcBodyBuilder = struct {
                     const resolved_target_desc = self.resultDescriptorForCallTarget(target, selected_target_desc);
                     if (self.parent.result.store.getLocal(target).boxy_desc == null) {
                         if (resolved_target_desc.desc) |desc| {
-                            self.parent.result.store.setLocalBoxyDesc(target, desc);
+                            try self.parent.result.store.setLocalBoxyDesc(target, desc);
                         }
                     }
                     const adapt = try self.assignDynamicBoxMaterialization(
@@ -39588,7 +39576,7 @@ const ProcBodyBuilder = struct {
         else
             null;
         if (source_payload_desc) |desc| {
-            self.parent.result.store.setLocalBoxyDesc(source_payload, desc);
+            try self.parent.result.store.setLocalBoxyDesc(source_payload, desc);
         }
         return try self.beginRecordFieldsBoundary(frames, request, target_record, target_field_count, .{
             .target = request.target,
@@ -39659,7 +39647,7 @@ const ProcBodyBuilder = struct {
             const target_layout = self.parent.result.store.getLocal(target).layout_idx;
             const source_layout = self.parent.result.store.getLocal(source).layout_idx;
             const boxed_source = try self.addFrameLocal(boxed_source_layout);
-            self.parent.result.store.setLocalBoxyDesc(boxed_source, source_desc);
+            try self.parent.result.store.setLocalBoxyDesc(boxed_source, source_desc);
             var continuation = try self.parent.result.store.addCFStmt(.{ .assign_boxy_unbox = .{
                 .target = target,
                 .data = try self.parent.result.store.addStmtRow(LIR.BoxyUnboxData, .{
@@ -39895,9 +39883,9 @@ const ProcBodyBuilder = struct {
         else
             try self.stableDescriptorForConstructedValue(target, target_rep);
         if (state.target_desc_info.desc) |desc| {
-            self.parent.result.store.setLocalBoxyDesc(target, desc);
-            self.parent.result.store.setLocalBoxyDesc(initial_list, desc);
-            self.parent.result.store.setLocalBoxyDesc(acc, desc);
+            try self.parent.result.store.setLocalBoxyDesc(target, desc);
+            try self.parent.result.store.setLocalBoxyDesc(initial_list, desc);
+            try self.parent.result.store.setLocalBoxyDesc(acc, desc);
         }
         state.join_id = self.freshJoinPointId();
 
@@ -39931,16 +39919,16 @@ const ProcBodyBuilder = struct {
             try self.addFrameBoundaryTargetLocalForRep(target_elem.rep);
         if (state.target_elem != state.source_elem) {
             if (target_elem_desc_local) |desc_local| {
-                self.parent.result.store.setLocalBoxyDesc(state.target_elem, .{ .local = desc_local });
+                try self.parent.result.store.setLocalBoxyDesc(state.target_elem, .{ .local = desc_local });
             }
         }
         state.source_elem_desc_info = try self.descriptorForSourceListElement(source, source_rep, source_elem.rep);
         const source_elem_desc = state.source_elem_desc_info.desc orelse
             boxyLowerInvariant("boxy list boundary source element descriptor had no descriptor");
-        self.parent.result.store.setLocalBoxyDesc(state.source_elem, source_elem_desc);
+        try self.parent.result.store.setLocalBoxyDesc(state.source_elem, source_elem_desc);
         const next_acc = try self.addFrameLocal(self.parent.result.store.getLocal(acc).layout_idx);
         if (self.parent.result.store.getLocal(acc).boxy_desc) |desc| {
-            self.parent.result.store.setLocalBoxyDesc(next_acc, desc);
+            try self.parent.result.store.setLocalBoxyDesc(next_acc, desc);
         }
         state.one = try self.addFrameLocal(.u64);
         state.next_index = try self.addFrameLocal(.u64);
@@ -40274,7 +40262,7 @@ const ProcBodyBuilder = struct {
                 const target_desc = target_desc_info.desc orelse
                     boxyLowerInvariant("boxy concrete tag relabel had no target descriptor");
                 if (existing_target_desc == null) {
-                    self.parent.result.store.setLocalBoxyDesc(target, target_desc);
+                    try self.parent.result.store.setLocalBoxyDesc(target, target_desc);
                 }
                 const box = try self.parent.result.store.addCFStmt(.{ .assign_boxy_box = .{
                     .target = target,
@@ -40549,7 +40537,7 @@ const ProcBodyBuilder = struct {
         const resolved_target_desc = self.resultDescriptorForCallTarget(target, selected_target_desc);
         if (self.parent.result.store.getLocal(target).boxy_desc == null) {
             if (resolved_target_desc.desc) |desc| {
-                self.parent.result.store.setLocalBoxyDesc(target, desc);
+                try self.parent.result.store.setLocalBoxyDesc(target, desc);
             }
         }
         const adapt = try self.assignDynamicBoxMaterialization(
@@ -40615,7 +40603,7 @@ const ProcBodyBuilder = struct {
                         } }, self.glueOrigin());
                     }
                     if (self.parent.result.store.getLocal(source).boxy_desc == null) {
-                        self.parent.result.store.setLocalBoxyDesc(source, source_desc);
+                        try self.parent.result.store.setLocalBoxyDesc(source, source_desc);
                     }
                     return try self.assignLocal(target, source, next);
                 }
@@ -40631,7 +40619,7 @@ const ProcBodyBuilder = struct {
                 if (self.localIsReadOnlyDescriptorInput(target_desc)) {
                     target_desc = try self.addFrameLocal(.opaque_ptr);
                 }
-                self.parent.result.store.setLocalBoxyDesc(target, .{ .local = target_desc });
+                try self.parent.result.store.setLocalBoxyDesc(target, .{ .local = target_desc });
                 const rebind = try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
                     .target = target_desc,
                     .data = try self.parent.result.store.addStmtRow(LIR.BoxyDescRefData, .{
@@ -40642,7 +40630,7 @@ const ProcBodyBuilder = struct {
                 return rebind;
             }
         }
-        self.parent.result.store.setLocalBoxyDesc(target, source_desc);
+        try self.parent.result.store.setLocalBoxyDesc(target, source_desc);
         return if (target == source) next else try self.assignLocal(target, source, next);
     }
 
@@ -41329,7 +41317,7 @@ const ProcBodyBuilder = struct {
         const maybe_source_desc = self.parent.result.store.getLocal(source).boxy_desc;
         const target_desc = self.parent.result.store.getLocal(target).boxy_desc orelse {
             const source_desc = maybe_source_desc orelse return next;
-            self.parent.result.store.setLocalBoxyDesc(target, source_desc);
+            try self.parent.result.store.setLocalBoxyDesc(target, source_desc);
             return next;
         };
         const target_desc_local = target_desc.localOrNull() orelse return next;
@@ -41490,7 +41478,7 @@ const ProcBodyBuilder = struct {
             }
         }
         const local = try self.addFrameLocal(layout_idx);
-        if (desc) |desc_ref| self.parent.result.store.setLocalBoxyDesc(local, desc_ref);
+        if (desc) |desc_ref| try self.parent.result.store.setLocalBoxyDesc(local, desc_ref);
         return local;
     }
 
@@ -41537,7 +41525,7 @@ const ProcBodyBuilder = struct {
         }
 
         const desc_local = try self.addFrameLocal(.opaque_ptr);
-        self.parent.result.store.setLocalBoxyDesc(local, .{ .local = desc_local });
+        try self.parent.result.store.setLocalBoxyDesc(local, .{ .local = desc_local });
         try self.recordDescriptorLocalTemplate(
             desc_local,
             try self.descriptorMaterializationForExactRep(rep_id),
@@ -41553,16 +41541,16 @@ const ProcBodyBuilder = struct {
             (identity.contains_dynamic and self.parent.layoutNeedsNestedBoxyDesc(layout_idx)))
         {
             const desc_local = try self.addFrameLocal(.opaque_ptr);
-            self.parent.result.store.setLocalBoxyDesc(local, .{ .local = desc_local });
+            try self.parent.result.store.setLocalBoxyDesc(local, .{ .local = desc_local });
         } else if (self.repContainsDynamicStorage(rep_id)) {
-            self.parent.result.store.setLocalBoxyDesc(local, try self.parent.staticDescRefForRep(identity_rep));
+            try self.parent.result.store.setLocalBoxyDesc(local, try self.parent.staticDescRefForRep(identity_rep));
         } else if (try self.descriptorRefForRepIfNeeded(rep_id)) |desc| {
             switch (desc) {
-                .static => self.parent.result.store.setLocalBoxyDesc(local, desc),
+                .static => try self.parent.result.store.setLocalBoxyDesc(local, desc),
                 .local,
                 .runtime,
                 .dict_method_hidden,
-                => self.parent.result.store.setLocalBoxyDesc(local, .{ .local = try self.addFrameLocal(.opaque_ptr) }),
+                => try self.parent.result.store.setLocalBoxyDesc(local, .{ .local = try self.addFrameLocal(.opaque_ptr) }),
             }
         }
         if (self.parent.result.store.getLocal(local).boxy_desc) |desc| {
@@ -41579,7 +41567,7 @@ const ProcBodyBuilder = struct {
     fn addFrameLocalForRepWithRequiredFreshDescriptor(self: *ProcBodyBuilder, rep_id: Plan.TypeRepId) Allocator.Error!LIR.LocalId {
         const local = try self.addFrameLocal(self.workerRuntimeLayoutForRep(rep_id).layoutIdx());
         const desc_local = try self.addFrameLocal(.opaque_ptr);
-        self.parent.result.store.setLocalBoxyDesc(local, .{ .local = desc_local });
+        try self.parent.result.store.setLocalBoxyDesc(local, .{ .local = desc_local });
         try self.recordDescriptorLocalTemplate(
             desc_local,
             try self.descriptorMaterializationForExactRep(rep_id),
@@ -41622,7 +41610,7 @@ const ProcBodyBuilder = struct {
         else
             null;
         const local = try self.addFrameLocal(runtime.layoutIdx());
-        if (desc) |desc_ref| self.parent.result.store.setLocalBoxyDesc(local, desc_ref);
+        if (desc) |desc_ref| try self.parent.result.store.setLocalBoxyDesc(local, desc_ref);
         if (desc) |desc_ref| {
             if (desc_ref.localOrNull()) |desc_local| {
                 try self.recordDescriptorLocalTemplate(
@@ -41681,7 +41669,7 @@ const ProcBodyBuilder = struct {
         }
         const desc = try self.frameDescriptorRefForRep(rep_id);
         const local = try self.addFrameLocal(runtime.layoutIdx());
-        if (desc) |desc_ref| self.parent.result.store.setLocalBoxyDesc(local, desc_ref);
+        if (desc) |desc_ref| try self.parent.result.store.setLocalBoxyDesc(local, desc_ref);
         return local;
     }
 
@@ -41731,7 +41719,7 @@ const ProcBodyBuilder = struct {
         if (self.parent.result.store.getLocal(local).boxy_desc != null) return;
         const desc_ref = try self.descriptorRefForRepIfNeeded(rep_id);
         if (desc_ref) |desc| {
-            self.parent.result.store.setLocalBoxyDesc(local, desc);
+            try self.parent.result.store.setLocalBoxyDesc(local, desc);
         }
     }
 
@@ -41741,7 +41729,7 @@ const ProcBodyBuilder = struct {
                 boxyLowerInvariant("boxy runtime descriptor initialization targeted a statically described value");
         }
         const local = try self.addFrameLocal(.opaque_ptr);
-        self.parent.result.store.setLocalBoxyDesc(value, .{ .local = local });
+        try self.parent.result.store.setLocalBoxyDesc(value, .{ .local = local });
         return local;
     }
 
@@ -42155,7 +42143,7 @@ const ProcBodyBuilder = struct {
 
         const desc_local = try self.reserveRuntimeDescriptorLocalForType(ty) orelse
             try self.addFrameLocal(.opaque_ptr);
-        self.parent.result.store.setLocalBoxyDesc(value, .{ .local = desc_local });
+        try self.parent.result.store.setLocalBoxyDesc(value, .{ .local = desc_local });
         return desc_local;
     }
 
@@ -42765,7 +42753,7 @@ const ProcBodyBuilder = struct {
         if (pattern_index >= self.module.checked_bodies.pattern_binder_by_pattern.len) {
             boxyLowerInvariant("boxy local lookup referenced a pattern without binder metadata");
         }
-        const binder = self.module.checked_bodies.pattern_binder_by_pattern[pattern_index] orelse
+        const binder = self.module.checked_bodies.pattern_binder_by_pattern[pattern_index].get() orelse
             boxyLowerInvariant("boxy local lookup referenced a non-binding pattern");
         return self.localForBinder(binder);
     }
@@ -44191,6 +44179,7 @@ const ConstPlanBuilder = struct {
                 .named_type = .{
                     .module = moduleDigestFromId(self.plan.moduleKey(rep.source_type.module)),
                     .ty = rep.source_type.ty,
+                    .ty_module = moduleDigestFromId(self.plan.moduleKey(rep.source_type.module)),
                 },
                 .backing = try self.appendLeafPlan(try self.boolTagUnionConstPlan(rep)),
             } },
@@ -44312,6 +44301,7 @@ const ConstPlanBuilder = struct {
                         .named_type = .{
                             .module = moduleDigestFromId(self.plan.moduleKey(rep.source_type.module)),
                             .ty = rep.source_type.ty,
+                            .ty_module = moduleDigestFromId(self.plan.moduleKey(rep.source_type.module)),
                         },
                         .backing = child,
                     } },
@@ -44930,9 +44920,8 @@ test "boxy lowerer emits private worker proc for zero-arg numeric lambda root" {
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -44941,15 +44930,13 @@ test "boxy lowerer emits private worker proc for zero-arg numeric lambda root" {
         },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(42), .plan = null } },
@@ -45046,9 +45033,8 @@ fn expectBoxyTopLevelConstLookup(kind: ConstLookupExprKind, stored: ConstLookupS
     checked_module.const_store = check.ConstStore.ConstStore.init(gpa);
     defer checked_module.const_store.deinit();
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -45091,15 +45077,13 @@ fn expectBoxyTopLevelConstLookup(kind: ConstLookupExprKind, stored: ConstLookupS
     }};
     checked_module.compile_time_roots = .{ .roots = &compile_time_roots };
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = switch (kind) {
@@ -45132,9 +45116,9 @@ fn expectBoxyTopLevelConstLookup(kind: ConstLookupExprKind, stored: ConstLookupS
             .scope_depth = 0,
         },
     };
-    var refs_by_expr = [_]?checked.ResolvedValueRefId{
-        null,
-        @as(checked.ResolvedValueRefId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
+    var refs_by_expr = [_]checked.OptionalId(checked.ResolvedValueRefId){
+        .none,
+        .some(@as(checked.ResolvedValueRefId, @fromBackingInt(@intCast(fixtureTableIndex(0))))),
     };
     checked_module.resolved_value_refs = .{
         .records = &resolved_records,
@@ -45198,9 +45182,8 @@ test "boxy lowerer emits small decimal expressions as Dec literals" {
 
     const value = can.CIR.SmallDecValue{ .numerator = 314, .denominator_power_of_ten = 2 };
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.dec, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.dec, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -45209,15 +45192,13 @@ test "boxy lowerer emits small decimal expressions as Dec literals" {
         },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testSmallDecNumeral(value), .plan = null } },
@@ -45275,9 +45256,8 @@ test "boxy lowerer emits direct calls to planned private workers" {
     defer checked_module.checked_bodies.deinit(gpa);
 
     try checked_module.checked_types.type_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -45298,26 +45278,23 @@ test "boxy lowerer emits direct calls to planned private workers" {
         .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .reassignable = false,
     });
-    try checked_module.checked_bodies.pattern_binder_by_pattern.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
+    try checked_module.checked_bodies.pattern_binder_by_pattern.append(gpa, .some(@fromBackingInt(@intCast(fixtureTableIndex(0)))));
     try checked_module.checked_bodies.pattern_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .assign = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
     });
     try checked_module.checked_bodies.expr_id_pool.append(gpa, @fromBackingInt(@intCast(3)));
 
-    const root_template = procedureTemplateRef(checked_module.key, 0);
-    const callee_template = procedureTemplateRef(checked_module.key, 1);
+    const root_template = procedureTemplateRef(checked_module.key.digest(), 0);
+    const callee_template = procedureTemplateRef(checked_module.key.digest(), 1);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .call = .{
@@ -45329,25 +45306,21 @@ test "boxy lowerer emits direct calls to planned private workers" {
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .lookup_external = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(41), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(4)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{ .start = 0, .len = 1 }, .body = @fromBackingInt(@intCast(5)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(5)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .lookup_local = .{ .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))), .resolved = null } },
@@ -45384,7 +45357,7 @@ test "boxy lowerer emits direct calls to planned private workers" {
         .{
             .expr = @fromBackingInt(@intCast(2)),
             .ref = .{ .top_level_proc = .{
-                .binding = .{ .top_level = .{ .artifact = checked_module.key, .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
+                .binding = .{ .top_level = .{ .artifact = checked_module.key.digest(), .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
                 .source_fn_ty_template = typeKey(1),
                 .source_fn_ty_payload = @fromBackingInt(@intCast(1)),
                 .runtime_result_provenance = null,
@@ -45393,13 +45366,13 @@ test "boxy lowerer emits direct calls to planned private workers" {
             .scope_depth = 0,
         },
     };
-    var refs_by_expr = [_]?checked.ResolvedValueRefId{
-        null,
-        null,
-        @as(checked.ResolvedValueRefId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
-        null,
-        null,
-        null,
+    var refs_by_expr = [_]checked.OptionalId(checked.ResolvedValueRefId){
+        .none,
+        .none,
+        .some(@as(checked.ResolvedValueRefId, @fromBackingInt(@intCast(fixtureTableIndex(0))))),
+        .none,
+        .none,
+        .none,
     };
     checked_module.resolved_value_refs = .{
         .records = &resolved_records,
@@ -45424,11 +45397,11 @@ test "boxy lowerer emits direct calls to planned private workers" {
 
     try std.testing.expectEqual(@as(usize, 2), plan.workers.items.len);
     const callee_worker = plan.directWorkerForCall(
-        .{ .module = plan.moduleIdForKey(checked_module.key).?, .expr = @fromBackingInt(@intCast(1)) },
+        .{ .module = plan.moduleIdForKey(checked_module.key.digest()).?, .expr = @fromBackingInt(@intCast(1)) },
         plan.roots.items[0].worker,
     ) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(
-        Plan.WorkerSource{ .procedure_binding = .{ .artifact = checked_module.key, .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
+        Plan.WorkerSource{ .procedure_binding = .{ .artifact = checked_module.key.digest(), .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
         plan.workers.items[@backingInt(callee_worker)].source,
     );
 
@@ -45481,14 +45454,13 @@ test "boxy lowerer emits direct calls to planned imported workers" {
     defer root_checked_module.checked_bodies.deinit(gpa);
 
     var import_checked_module = try minimalCheckedModule(gpa);
-    import_checked_module.key = moduleKey(2);
+    import_checked_module.key = checkedModuleKey(2);
     defer import_checked_module.canonical_names.deinit();
     defer import_checked_module.checked_types.deinit(gpa);
     defer import_checked_module.checked_bodies.deinit(gpa);
 
-    try import_checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try import_checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try import_checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(import_checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try import_checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -45497,16 +45469,14 @@ test "boxy lowerer emits direct calls to planned imported workers" {
         },
     });
 
-    const import_template = procedureTemplateRef(import_checked_module.key, 0);
-    const import_helper_template = procedureTemplateRef(import_checked_module.key, 1);
+    const import_template = procedureTemplateRef(import_checked_module.key.digest(), 0);
+    const import_helper_template = procedureTemplateRef(import_checked_module.key.digest(), 1);
     try import_checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try import_checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .call = .{
@@ -45518,19 +45488,16 @@ test "boxy lowerer emits direct calls to planned imported workers" {
         } },
     });
     try import_checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .lookup_external = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
     });
     try import_checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(4)) } },
     });
     try import_checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(4)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(99), .plan = null } },
@@ -45561,7 +45528,7 @@ test "boxy lowerer emits direct calls to planned imported workers" {
     };
     import_checked_module.top_level_procedure_bindings = .{ .bindings = .{ .items = &import_bindings, .capacity = import_bindings.len, .pointer_stability = .{} } };
     const import_helper_use = checked.ProcedureUseTemplate{
-        .binding = .{ .top_level = .{ .artifact = import_checked_module.key, .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
+        .binding = .{ .top_level = .{ .artifact = import_checked_module.key.digest(), .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
         .source_fn_ty_template = typeKey(3),
         .source_fn_ty_payload = @fromBackingInt(@intCast(1)),
         .runtime_result_provenance = null,
@@ -45574,12 +45541,12 @@ test "boxy lowerer emits direct calls to planned imported workers" {
             .scope_depth = 0,
         },
     };
-    var import_refs_by_expr = [_]?checked.ResolvedValueRefId{
-        null,
-        null,
-        @as(checked.ResolvedValueRefId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
-        null,
-        null,
+    var import_refs_by_expr = [_]checked.OptionalId(checked.ResolvedValueRefId){
+        .none,
+        .none,
+        .some(@as(checked.ResolvedValueRefId, @fromBackingInt(@intCast(fixtureTableIndex(0))))),
+        .none,
+        .none,
     };
     import_checked_module.resolved_value_refs = .{
         .records = &import_resolved_records,
@@ -45587,7 +45554,7 @@ test "boxy lowerer emits direct calls to planned imported workers" {
     };
 
     const imported_binding = checked.ImportedProcedureBindingRef{
-        .artifact = import_checked_module.key,
+        .artifact = import_checked_module.key.digest(),
         .def = @fromBackingInt(@intCast(7)),
         .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))),
     };
@@ -45605,9 +45572,8 @@ test "boxy lowerer emits direct calls to planned imported workers" {
     };
     import_checked_module.exported_procedure_bindings = .{ .bindings = &exported_bindings };
 
-    try root_checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try root_checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try root_checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(root_checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try root_checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -45616,15 +45582,13 @@ test "boxy lowerer emits direct calls to planned imported workers" {
         },
     });
 
-    const root_template = procedureTemplateRef(root_checked_module.key, 0);
+    const root_template = procedureTemplateRef(root_checked_module.key.digest(), 0);
     try root_checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try root_checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .call = .{
@@ -45636,7 +45600,6 @@ test "boxy lowerer emits direct calls to planned imported workers" {
         } },
     });
     try root_checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .lookup_external = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
@@ -45666,10 +45629,10 @@ test "boxy lowerer emits direct calls to planned imported workers" {
             .scope_depth = 0,
         },
     };
-    var refs_by_expr = [_]?checked.ResolvedValueRefId{
-        null,
-        null,
-        @as(checked.ResolvedValueRefId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
+    var refs_by_expr = [_]checked.OptionalId(checked.ResolvedValueRefId){
+        .none,
+        .none,
+        .some(@as(checked.ResolvedValueRefId, @fromBackingInt(@intCast(fixtureTableIndex(0))))),
     };
     root_checked_module.resolved_value_refs = .{
         .records = &resolved_records,
@@ -45697,16 +45660,16 @@ test "boxy lowerer emits direct calls to planned imported workers" {
 
     try std.testing.expectEqual(@as(usize, 3), plan.workers.items.len);
     const callee_worker = plan.directWorkerForCall(
-        .{ .module = plan.moduleIdForKey(root_checked_module.key).?, .expr = @fromBackingInt(@intCast(1)) },
+        .{ .module = plan.moduleIdForKey(root_checked_module.key.digest()).?, .expr = @fromBackingInt(@intCast(1)) },
         plan.roots.items[0].worker,
     ) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(Plan.WorkerSource{ .procedure_use = imported_use }, plan.workers.items[@backingInt(callee_worker)].source);
     const helper_worker = plan.directWorkerForCall(
-        .{ .module = plan.moduleIdForKey(import_checked_module.key).?, .expr = @fromBackingInt(@intCast(1)) },
+        .{ .module = plan.moduleIdForKey(import_checked_module.key.digest()).?, .expr = @fromBackingInt(@intCast(1)) },
         callee_worker,
     ) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(
-        Plan.WorkerSource{ .procedure_binding = .{ .artifact = import_checked_module.key, .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
+        Plan.WorkerSource{ .procedure_binding = .{ .artifact = import_checked_module.key.digest(), .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
         plan.workers.items[@backingInt(helper_worker)].source,
     );
 
@@ -45747,7 +45710,7 @@ test "boxy lowerer emits direct calls to planned imported workers" {
                 break :blk .{ adapt_stmt.target, adapt_stmt.next };
             };
         },
-        .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => return error.TestUnexpectedResult,
+        .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => return error.TestUnexpectedResult,
     };
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = returned[0] } }, out.lir_result.store.getCFStmt(returned[1]));
 
@@ -45781,9 +45744,8 @@ test "boxy lowerer emits recursive direct calls to the current private worker" {
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -45792,15 +45754,13 @@ test "boxy lowerer emits recursive direct calls to the current private worker" {
         },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .call = .{
@@ -45812,7 +45772,6 @@ test "boxy lowerer emits recursive direct calls to the current private worker" {
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .lookup_external = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
@@ -45843,7 +45802,7 @@ test "boxy lowerer emits recursive direct calls to the current private worker" {
         .{
             .expr = @fromBackingInt(@intCast(2)),
             .ref = .{ .top_level_proc = .{
-                .binding = .{ .top_level = .{ .artifact = checked_module.key, .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
+                .binding = .{ .top_level = .{ .artifact = checked_module.key.digest(), .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
                 .source_fn_ty_template = typeKey(1),
                 .source_fn_ty_payload = @fromBackingInt(@intCast(1)),
                 .runtime_result_provenance = null,
@@ -45852,10 +45811,10 @@ test "boxy lowerer emits recursive direct calls to the current private worker" {
             .scope_depth = 0,
         },
     };
-    var refs_by_expr = [_]?checked.ResolvedValueRefId{
-        null,
-        null,
-        @as(checked.ResolvedValueRefId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
+    var refs_by_expr = [_]checked.OptionalId(checked.ResolvedValueRefId){
+        .none,
+        .none,
+        .some(@as(checked.ResolvedValueRefId, @fromBackingInt(@intCast(fixtureTableIndex(0))))),
     };
     checked_module.resolved_value_refs = .{
         .records = &resolved_records,
@@ -45881,7 +45840,7 @@ test "boxy lowerer emits recursive direct calls to the current private worker" {
 
     try std.testing.expectEqual(@as(usize, 1), plan.workers.items.len);
     try std.testing.expectEqual(plan.roots.items[0].worker, plan.directWorkerForCall(
-        .{ .module = plan.moduleIdForKey(checked_module.key).?, .expr = @fromBackingInt(@intCast(1)) },
+        .{ .module = plan.moduleIdForKey(checked_module.key.digest()).?, .expr = @fromBackingInt(@intCast(1)) },
         plan.roots.items[0].worker,
     ) orelse return error.TestUnexpectedResult);
 
@@ -45920,9 +45879,8 @@ test "boxy lowerer emits checked crash as terminal LIR crash" {
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -45934,15 +45892,13 @@ test "boxy lowerer emits checked crash as terminal LIR crash" {
     try checked_module.checked_bodies.string_bytes.appendSlice(gpa, "boom");
     try checked_module.checked_bodies.string_ranges.append(gpa, .{ .start = 0, .len = 4 });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .crash = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
@@ -45999,9 +45955,8 @@ test "boxy lowerer emits checked ellipsis as identity not-implemented crash" {
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -46010,15 +45965,13 @@ test "boxy lowerer emits checked ellipsis as identity not-implemented crash" {
         },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .ellipsis,
@@ -46075,9 +46028,8 @@ test "boxy lowerer emits checked return expressions as terminal ret" {
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -46086,15 +46038,13 @@ test "boxy lowerer emits checked return expressions as terminal ret" {
         },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .return_ = .{
@@ -46104,7 +46054,6 @@ test "boxy lowerer emits checked return expressions as terminal ret" {
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(7), .plan = null } },
@@ -46166,9 +46115,8 @@ test "boxy lowerer emits checked return statements as terminal ret" {
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -46179,7 +46127,6 @@ test "boxy lowerer emits checked return statements as terminal ret" {
 
     try checked_module.checked_bodies.statement_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
     try checked_module.checked_bodies.stored_statements.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .return_ = .{
             .expr = @fromBackingInt(@intCast(2)),
@@ -46187,15 +46134,13 @@ test "boxy lowerer emits checked return statements as terminal ret" {
         } },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .block = .{
@@ -46204,13 +46149,11 @@ test "boxy lowerer emits checked return statements as terminal ret" {
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(7), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(99), .plan = null } },
@@ -46272,9 +46215,8 @@ test "boxy lowerer emits checked runtime error expressions as the runtime error 
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -46283,15 +46225,13 @@ test "boxy lowerer emits checked runtime error expressions as the runtime error 
         },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .runtime_error = .{} },
@@ -46345,9 +46285,8 @@ test "boxy lowerer emits checked runtime error statements as the runtime error c
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -46358,20 +46297,17 @@ test "boxy lowerer emits checked runtime error statements as the runtime error c
 
     try checked_module.checked_bodies.statement_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
     try checked_module.checked_bodies.stored_statements.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .runtime_error,
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .block = .{
@@ -46380,7 +46316,6 @@ test "boxy lowerer emits checked runtime error statements as the runtime error c
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(99), .plan = null } },
@@ -46436,13 +46371,11 @@ test "boxy lowerer emits checked while statements as join-backed loops" {
 
     const false_tag = try checked_module.canonical_names.internTagLabel("False");
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .empty_record);
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.bool, @fromBackingInt(@intCast(1)), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.bool, @fromBackingInt(@intCast(1)), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -46453,7 +46386,6 @@ test "boxy lowerer emits checked while statements as join-backed loops" {
 
     try checked_module.checked_bodies.statement_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
     try checked_module.checked_bodies.stored_statements.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .while_ = .{
             .cond = @fromBackingInt(@intCast(2)),
@@ -46461,15 +46393,13 @@ test "boxy lowerer emits checked while statements as join-backed loops" {
         } },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(3)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .block = .{
@@ -46478,7 +46408,6 @@ test "boxy lowerer emits checked while statements as join-backed loops" {
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .zero_argument_tag = .{
@@ -46487,13 +46416,11 @@ test "boxy lowerer emits checked while statements as join-backed loops" {
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .empty_record,
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(4)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(99), .plan = null } },
@@ -46573,13 +46500,11 @@ test "boxy lowerer emits checked break as the active loop exit" {
 
     const true_tag = try checked_module.canonical_names.internTagLabel("True");
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .empty_record);
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.bool, @fromBackingInt(@intCast(1)), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.bool, @fromBackingInt(@intCast(1)), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -46590,7 +46515,6 @@ test "boxy lowerer emits checked break as the active loop exit" {
 
     try checked_module.checked_bodies.statement_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
     try checked_module.checked_bodies.stored_statements.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .breakable_loop = .{
             .cond = @fromBackingInt(@intCast(2)),
@@ -46598,15 +46522,13 @@ test "boxy lowerer emits checked break as the active loop exit" {
         } },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(3)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .block = .{
@@ -46615,7 +46537,6 @@ test "boxy lowerer emits checked break as the active loop exit" {
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .zero_argument_tag = .{
@@ -46624,13 +46545,11 @@ test "boxy lowerer emits checked break as the active loop exit" {
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .break_,
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(4)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(41), .plan = null } },
@@ -46706,12 +46625,10 @@ test "boxy lowerer emits checked if expressions with a shared continuation join"
 
     const true_tag = try checked_module.canonical_names.internTagLabel("True");
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.bool, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.bool, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -46725,25 +46642,21 @@ test "boxy lowerer emits checked if expressions with a shared continuation join"
         .body = @fromBackingInt(@intCast(3)),
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .if_ = .{
             .branches = .{ .start = 0, .len = 1 },
             .final_else = @fromBackingInt(@intCast(4)),
-            .warn_unused_branches = false,
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .zero_argument_tag = .{
@@ -46752,13 +46665,11 @@ test "boxy lowerer emits checked if expressions with a shared continuation join"
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(11), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(4)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(22), .plan = null } },
@@ -46867,7 +46778,7 @@ const TestReachable = struct {
                 },
                 .join => |stmt| try work.appendSlice(gpa, &.{ stmt.body, stmt.remainder }),
                 .runtime_error, .comptime_exhaustiveness_failed, .expect_err, .jump, .ret, .crash => {},
-                inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| try work.append(gpa, stmt.next),
+                inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |stmt| try work.append(gpa, stmt.next),
             }
         }
         return .{ .store = store, .ids = ids };
@@ -46899,9 +46810,8 @@ test "boxy lowerer emits checked tag matches as one discriminant switch" {
 
     try checked_module.checked_types.tag_pool.append(gpa, .{ .name = tag_a, .args_start = 0, .args_len = 0 });
     try checked_module.checked_types.tag_pool.append(gpa, .{ .name = tag_b, .args_start = 0, .args_len = 0 });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .empty_tag_union);
     try checked_module.checked_types.payloads.append(gpa, .{
         .tag_union = .{ .tags = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(@intCast(1)) },
@@ -46914,15 +46824,13 @@ test "boxy lowerer emits checked tag matches as one discriminant switch" {
         },
     });
 
-    try checked_module.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{ null, null });
+    try checked_module.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{ .none, .none });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .applied_tag = .{ .name = tag_a, .args = .{} } },
     });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .applied_tag = .{ .name = tag_b, .args = .{} } },
@@ -46936,15 +46844,13 @@ test "boxy lowerer emits checked tag matches as one discriminant switch" {
         .{ .pt_start = 1, .pt_len = 1, .value = @fromBackingInt(@intCast(4)), .guard = null },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(3)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .match_ = .{
@@ -46956,7 +46862,6 @@ test "boxy lowerer emits checked tag matches as one discriminant switch" {
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .zero_argument_tag = .{
@@ -46965,13 +46870,11 @@ test "boxy lowerer emits checked tag matches as one discriminant switch" {
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(11), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(4)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(22), .plan = null } },
@@ -47066,9 +46969,8 @@ test "boxy lowerer binds checked tag payload match patterns before branch bodies
     try checked_module.checked_types.type_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
     try checked_module.checked_types.tag_pool.append(gpa, .{ .name = tag_a, .args_start = 0, .args_len = 1 });
     try checked_module.checked_types.tag_pool.append(gpa, .{ .name = tag_b, .args_start = 1, .args_len = 0 });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .empty_tag_union);
     try checked_module.checked_types.payloads.append(gpa, .{
         .tag_union = .{ .tags = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(@intCast(1)) },
@@ -47087,25 +46989,22 @@ test "boxy lowerer binds checked tag payload match patterns before branch bodies
         .reassignable = false,
     });
     try checked_module.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{
-        null,
-        @as(?checked.PatternBinderId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
-        null,
+        .none,
+        .some(@fromBackingInt(@intCast(fixtureTableIndex(0)))),
+        .none,
     });
     try checked_module.checked_bodies.pattern_id_pool.append(gpa, @fromBackingInt(@intCast(1)));
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .applied_tag = .{ .name = tag_a, .args = .{ .start = 0, .len = 1 } } },
     });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .assign = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
     });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .applied_tag = .{ .name = tag_b, .args = .{} } },
@@ -47120,15 +47019,13 @@ test "boxy lowerer binds checked tag payload match patterns before branch bodies
     });
     try checked_module.checked_bodies.expr_id_pool.append(gpa, @fromBackingInt(@intCast(5)));
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(3)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .match_ = .{
@@ -47140,7 +47037,6 @@ test "boxy lowerer binds checked tag payload match patterns before branch bodies
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .tag = .{
@@ -47149,19 +47045,16 @@ test "boxy lowerer binds checked tag payload match patterns before branch bodies
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .lookup_local = .{ .pattern = @fromBackingInt(@intCast(1)), .resolved = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(4)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(0), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(5)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(41), .plan = null } },
@@ -47254,12 +47147,10 @@ test "boxy lowerer emits checked list match patterns as a length switch and elem
     defer checked_module.checked_bodies.deinit(gpa);
 
     try checked_module.checked_types.type_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.list, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.list, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -47274,16 +47165,15 @@ test "boxy lowerer emits checked list match patterns as a length switch and elem
         .reassignable = false,
     });
     try checked_module.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{
-        null,
-        null,
-        @as(?checked.PatternBinderId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
+        .none,
+        .none,
+        .some(@fromBackingInt(@intCast(fixtureTableIndex(0)))),
     });
     try checked_module.checked_bodies.pattern_id_pool.appendSlice(gpa, &.{
         @as(checked.CheckedPatternId, @fromBackingInt(@intCast(1))),
         @as(checked.CheckedPatternId, @fromBackingInt(@intCast(2))),
     });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .list = .{
@@ -47292,13 +47182,11 @@ test "boxy lowerer emits checked list match patterns as a length switch and elem
         } },
     });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .underscore,
     });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .assign = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
@@ -47318,15 +47206,13 @@ test "boxy lowerer emits checked list match patterns as a length switch and elem
         @as(checked.CheckedExprId, @fromBackingInt(@intCast(5))),
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .match_ = .{
@@ -47338,25 +47224,21 @@ test "boxy lowerer emits checked list match patterns as a length switch and elem
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .list = .{ .start = 0, .len = 2 } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .lookup_local = .{ .pattern = @fromBackingInt(@intCast(2)), .resolved = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(4)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(7), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(5)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(9), .plan = null } },
@@ -47440,9 +47322,8 @@ test "boxy lowerer emits checked string interpolation match patterns" {
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.str, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.str, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -47464,15 +47345,14 @@ test "boxy lowerer emits checked string interpolation match patterns" {
         .reassignable = false,
     });
     try checked_module.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{
-        null,
-        @as(?checked.PatternBinderId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
+        .none,
+        .some(@fromBackingInt(@intCast(fixtureTableIndex(0)))),
     });
     try checked_module.checked_bodies.str_pattern_step_pool.append(gpa, .{
         .capture = @fromBackingInt(@intCast(1)),
         .delimiter = @fromBackingInt(@intCast(2)),
     });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .str_interpolation = .{
@@ -47482,7 +47362,6 @@ test "boxy lowerer emits checked string interpolation match patterns" {
         } },
     });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .assign = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
@@ -47498,15 +47377,13 @@ test "boxy lowerer emits checked string interpolation match patterns" {
         .guard = null,
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .match_ = .{
@@ -47518,13 +47395,11 @@ test "boxy lowerer emits checked string interpolation match patterns" {
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .str_segment = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .lookup_local = .{ .pattern = @fromBackingInt(@intCast(1)), .resolved = null } },
@@ -47610,9 +47485,8 @@ test "boxy lowerer maps checked alternative binders onto representative match lo
     });
     try checked_module.checked_types.tag_pool.append(gpa, .{ .name = tag_a, .args_start = 0, .args_len = 1 });
     try checked_module.checked_types.tag_pool.append(gpa, .{ .name = tag_c, .args_start = 1, .args_len = 1 });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .empty_tag_union);
     try checked_module.checked_types.payloads.append(gpa, .{
         .tag_union = .{ .tags = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(@intCast(1)) },
@@ -47630,10 +47504,10 @@ test "boxy lowerer maps checked alternative binders onto representative match lo
         .{ .id = @fromBackingInt(@intCast(1)), .pattern = @fromBackingInt(@intCast(3)), .reassignable = false },
     });
     try checked_module.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{
-        null,
-        @as(?checked.PatternBinderId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
-        null,
-        @as(?checked.PatternBinderId, @fromBackingInt(@intCast(1))),
+        .none,
+        .some(@fromBackingInt(@intCast(fixtureTableIndex(0)))),
+        .none,
+        .some(@fromBackingInt(@intCast(1))),
     });
     try checked_module.checked_bodies.pattern_id_pool.appendSlice(gpa, &.{
         @as(checked.CheckedPatternId, @fromBackingInt(@intCast(1))),
@@ -47644,25 +47518,21 @@ test "boxy lowerer maps checked alternative binders onto representative match lo
         .{ .candidate_binder = @fromBackingInt(@intCast(1)), .representative_binder = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
     });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .applied_tag = .{ .name = tag_a, .args = .{ .start = 0, .len = 1 } } },
     });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .assign = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
     });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .applied_tag = .{ .name = tag_c, .args = .{ .start = 1, .len = 1 } } },
     });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .assign = @fromBackingInt(@intCast(1)) },
@@ -47679,15 +47549,13 @@ test "boxy lowerer maps checked alternative binders onto representative match lo
     });
     try checked_module.checked_bodies.expr_id_pool.append(gpa, @fromBackingInt(@intCast(4)));
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(3)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .match_ = .{
@@ -47699,7 +47567,6 @@ test "boxy lowerer maps checked alternative binders onto representative match lo
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .tag = .{
@@ -47708,13 +47575,11 @@ test "boxy lowerer maps checked alternative binders onto representative match lo
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .lookup_local = .{ .pattern = @fromBackingInt(@intCast(1)), .resolved = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(4)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(41), .plan = null } },
@@ -47802,9 +47667,8 @@ test "boxy lowerer emits checked integer literal match patterns as an integer sw
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -47813,9 +47677,8 @@ test "boxy lowerer emits checked integer literal match patterns as an integer sw
         },
     });
 
-    try checked_module.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{ null, null });
+    try checked_module.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{ .none, .none });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral_literal = .{
@@ -47824,7 +47687,6 @@ test "boxy lowerer emits checked integer literal match patterns as an integer sw
         } },
     });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .underscore,
@@ -47838,15 +47700,13 @@ test "boxy lowerer emits checked integer literal match patterns as an integer sw
         .{ .pt_start = 1, .pt_len = 1, .value = @fromBackingInt(@intCast(4)), .guard = null },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .match_ = .{
@@ -47858,19 +47718,16 @@ test "boxy lowerer emits checked integer literal match patterns as an integer sw
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(42), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(11), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(4)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(22), .plan = null } },
@@ -47945,12 +47802,10 @@ test "boxy lowerer emits checked small decimal match patterns as Dec equality te
     const value = can.CIR.SmallDecValue{ .numerator = 314, .denominator_power_of_ten = 2 };
     const expected_dec = value.toRocDec().num;
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.dec, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(1)), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.dec, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(1)), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -47959,9 +47814,8 @@ test "boxy lowerer emits checked small decimal match patterns as Dec equality te
         },
     });
 
-    try checked_module.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{ null, null });
+    try checked_module.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{ .none, .none });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral_literal = .{
@@ -47970,7 +47824,6 @@ test "boxy lowerer emits checked small decimal match patterns as Dec equality te
         } },
     });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .underscore,
@@ -47984,15 +47837,13 @@ test "boxy lowerer emits checked small decimal match patterns as Dec equality te
         .{ .pt_start = 1, .pt_len = 1, .value = @fromBackingInt(@intCast(4)), .guard = null },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .match_ = .{
@@ -48004,19 +47855,16 @@ test "boxy lowerer emits checked small decimal match patterns as Dec equality te
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testSmallDecNumeral(value), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(11), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(4)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(22), .plan = null } },
@@ -48104,12 +47952,10 @@ test "boxy lowerer emits checked string literal match patterns as a string match
     try checked_module.checked_bodies.string_bytes.appendSlice(gpa, "ok");
     try checked_module.checked_bodies.string_ranges.append(gpa, .{ .start = 0, .len = 2 });
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.str, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(1)), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.str, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(1)), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -48118,9 +47964,8 @@ test "boxy lowerer emits checked string literal match patterns as a string match
         },
     });
 
-    try checked_module.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{ null, null });
+    try checked_module.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{ .none, .none });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .str_literal = .{
@@ -48129,7 +47974,6 @@ test "boxy lowerer emits checked string literal match patterns as a string match
         } },
     });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .underscore,
@@ -48143,15 +47987,13 @@ test "boxy lowerer emits checked string literal match patterns as a string match
         .{ .pt_start = 1, .pt_len = 1, .value = @fromBackingInt(@intCast(4)), .guard = null },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .match_ = .{
@@ -48163,19 +48005,16 @@ test "boxy lowerer emits checked string literal match patterns as a string match
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .str_segment = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(11), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(4)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(22), .plan = null } },
@@ -48248,9 +48087,8 @@ test "boxy lowerer emits checked unary not as bool low-level call" {
 
     const true_tag = try checked_module.canonical_names.internTagLabel("True");
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.bool, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.bool, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -48259,21 +48097,18 @@ test "boxy lowerer emits checked unary not as bool low-level call" {
         },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .unary_not = @fromBackingInt(@intCast(2)) },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .zero_argument_tag = .{
@@ -48342,9 +48177,8 @@ test "boxy lowerer emits short-circuit checked boolean and" {
     const false_tag = try checked_module.canonical_names.internTagLabel("False");
     const true_tag = try checked_module.canonical_names.internTagLabel("True");
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.bool, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.bool, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -48353,15 +48187,13 @@ test "boxy lowerer emits short-circuit checked boolean and" {
         },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .binop = .{
@@ -48371,7 +48203,6 @@ test "boxy lowerer emits short-circuit checked boolean and" {
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .zero_argument_tag = .{
@@ -48380,7 +48211,6 @@ test "boxy lowerer emits short-circuit checked boolean and" {
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .zero_argument_tag = .{
@@ -48452,12 +48282,10 @@ test "boxy lowerer emits primitive structural equality as low-level equality" {
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.bool, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.bool, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -48466,15 +48294,13 @@ test "boxy lowerer emits primitive structural equality as low-level equality" {
         },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .structural_eq = .{
@@ -48484,13 +48310,11 @@ test "boxy lowerer emits primitive structural equality as low-level equality" {
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(42), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(42), .plan = null } },
@@ -48570,15 +48394,13 @@ test "boxy lowerer emits tuple structural equality with field short-circuiting" 
         @as(checked.CheckedTypeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
         @as(checked.CheckedTypeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
     });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .tuple = .{ .start = 0, .len = 2 },
     });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.bool, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.bool, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -48594,15 +48416,13 @@ test "boxy lowerer emits tuple structural equality with field short-circuiting" 
         @as(checked.CheckedExprId, @fromBackingInt(@intCast(7))),
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(3)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .structural_eq = .{
@@ -48612,37 +48432,31 @@ test "boxy lowerer emits tuple structural equality with field short-circuiting" 
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .tuple = .{ .start = 0, .len = 2 } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(1), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(4)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(2), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(5)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .tuple = .{ .start = 2, .len = 2 } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(6)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(1), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(7)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(3), .plan = null } },
@@ -48731,9 +48545,8 @@ test "boxy lowerer emits primitive structural hash as hasher low-level" {
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -48742,15 +48555,13 @@ test "boxy lowerer emits primitive structural hash as hasher low-level" {
         },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .structural_hash = .{
@@ -48759,13 +48570,11 @@ test "boxy lowerer emits primitive structural hash as hasher low-level" {
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(5), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(99), .plan = null } },
@@ -48843,9 +48652,8 @@ test "boxy lowerer emits tuple structural hash by threading hasher through field
         @as(checked.CheckedTypeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
         @as(checked.CheckedTypeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
     });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .tuple = .{ .start = 0, .len = 2 },
     });
@@ -48862,15 +48670,13 @@ test "boxy lowerer emits tuple structural hash by threading hasher through field
         @as(checked.CheckedExprId, @fromBackingInt(@intCast(4))),
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .structural_hash = .{
@@ -48879,25 +48685,21 @@ test "boxy lowerer emits tuple structural hash by threading hasher through field
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .tuple = .{ .start = 0, .len = 2 } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(1), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(4)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(2), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(5)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(99), .plan = null } },
@@ -48971,9 +48773,8 @@ test "boxy lowerer emits checked string segment literals" {
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.str, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.str, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -48985,15 +48786,13 @@ test "boxy lowerer emits checked string segment literals" {
     try checked_module.checked_bodies.string_bytes.appendSlice(gpa, "hello");
     try checked_module.checked_bodies.string_ranges.append(gpa, .{ .start = 0, .len = 5 });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .str_segment = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
@@ -49051,12 +48850,10 @@ test "boxy lowerer emits checked bytes literals as byte-backed LIR literals" {
     defer checked_module.checked_bodies.deinit(gpa);
 
     try checked_module.checked_types.type_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u8, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.list, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u8, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.list, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -49068,15 +48865,13 @@ test "boxy lowerer emits checked bytes literals as byte-backed LIR literals" {
     try checked_module.checked_bodies.string_bytes.appendSlice(gpa, "abc");
     try checked_module.checked_bodies.string_ranges.append(gpa, .{ .start = 0, .len = 3 });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .bytes_literal = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
@@ -49133,9 +48928,8 @@ test "boxy lowerer emits checked string interpolation segments as concat chain" 
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.str, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.str, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -49156,33 +48950,28 @@ test "boxy lowerer emits checked string interpolation segments as concat chain" 
         @as(checked.CheckedExprId, @fromBackingInt(@intCast(4))),
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .str = .{ .start = 0, .len = 3 } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .str_segment = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .str_segment = @fromBackingInt(@intCast(1)) },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(4)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .str_segment = @fromBackingInt(@intCast(2)) },
@@ -49266,9 +49055,8 @@ test "boxy lowerer emits checked dbg expressions before unit result" {
     defer checked_module.checked_bodies.deinit(gpa);
 
     try checked_module.checked_types.payloads.append(gpa, .empty_record);
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -49277,21 +49065,18 @@ test "boxy lowerer emits checked dbg expressions before unit result" {
         },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .dbg = @fromBackingInt(@intCast(2)) },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(7), .plan = null } },
@@ -49363,9 +49148,8 @@ test "boxy lowerer emits checked expect expressions before unit result" {
     const true_tag = try checked_module.canonical_names.internTagLabel("True");
 
     try checked_module.checked_types.payloads.append(gpa, .empty_record);
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.bool, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.bool, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -49374,21 +49158,18 @@ test "boxy lowerer emits checked expect expressions before unit result" {
         },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .expect = @fromBackingInt(@intCast(2)) },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .zero_argument_tag = .{
@@ -49451,9 +49232,8 @@ test "boxy lowerer emits expect_err messages from inspected payloads" {
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -49465,15 +49245,13 @@ test "boxy lowerer emits expect_err messages from inspected payloads" {
     try checked_module.checked_bodies.string_bytes.appendSlice(gpa, "fallible?");
     try checked_module.checked_bodies.string_ranges.append(gpa, .{ .start = 0, .len = 9 });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .expect_err = .{
@@ -49482,7 +49260,6 @@ test "boxy lowerer emits expect_err messages from inspected payloads" {
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(42), .plan = null } },
@@ -49583,9 +49360,8 @@ test "boxy lowerer emits checked dbg statements in block order" {
     defer checked_module.checked_bodies.deinit(gpa);
 
     try checked_module.checked_types.payloads.append(gpa, .empty_record);
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -49596,20 +49372,17 @@ test "boxy lowerer emits checked dbg statements in block order" {
 
     try checked_module.checked_bodies.statement_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
     try checked_module.checked_bodies.stored_statements.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .dbg = @fromBackingInt(@intCast(2)) },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .block = .{
@@ -49618,13 +49391,11 @@ test "boxy lowerer emits checked dbg statements in block order" {
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(13), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .empty_record,
@@ -49693,9 +49464,8 @@ test "boxy lowerer emits block declaration bindings with checked type layouts" {
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -49709,16 +49479,14 @@ test "boxy lowerer emits block declaration bindings with checked type layouts" {
         .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .reassignable = false,
     });
-    try checked_module.checked_bodies.pattern_binder_by_pattern.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
+    try checked_module.checked_bodies.pattern_binder_by_pattern.append(gpa, .some(@fromBackingInt(@intCast(fixtureTableIndex(0)))));
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .assign = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
     });
     try checked_module.checked_bodies.statement_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
     try checked_module.checked_bodies.stored_statements.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .decl = .{
             .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))),
@@ -49726,15 +49494,13 @@ test "boxy lowerer emits block declaration bindings with checked type layouts" {
         } },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .block = .{
@@ -49743,13 +49509,11 @@ test "boxy lowerer emits block declaration bindings with checked type layouts" {
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(99), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .lookup_local = .{ .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))), .resolved = null } },
@@ -49816,9 +49580,8 @@ test "boxy lowerer emits uninitialized mutable block bindings" {
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -49832,29 +49595,25 @@ test "boxy lowerer emits uninitialized mutable block bindings" {
         .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .reassignable = true,
     });
-    try checked_module.checked_bodies.pattern_binder_by_pattern.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
+    try checked_module.checked_bodies.pattern_binder_by_pattern.append(gpa, .some(@fromBackingInt(@intCast(fixtureTableIndex(0)))));
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .assign = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
     });
     try checked_module.checked_bodies.statement_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
     try checked_module.checked_bodies.stored_statements.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .var_uninitialized = .{ .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .block = .{
@@ -49863,7 +49622,6 @@ test "boxy lowerer emits uninitialized mutable block bindings" {
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(5), .plan = null } },
@@ -49927,9 +49685,8 @@ test "boxy lowerer emits mutable reassignment as set_local replace" {
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -49943,9 +49700,8 @@ test "boxy lowerer emits mutable reassignment as set_local replace" {
         .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .reassignable = true,
     });
-    try checked_module.checked_bodies.pattern_binder_by_pattern.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
+    try checked_module.checked_bodies.pattern_binder_by_pattern.append(gpa, .some(@fromBackingInt(@intCast(fixtureTableIndex(0)))));
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .assign = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
@@ -49956,7 +49712,6 @@ test "boxy lowerer emits mutable reassignment as set_local replace" {
     });
     try checked_module.checked_bodies.pattern_binder_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
     try checked_module.checked_bodies.stored_statements.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .var_ = .{
             .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))),
@@ -49964,7 +49719,6 @@ test "boxy lowerer emits mutable reassignment as set_local replace" {
         } },
     });
     try checked_module.checked_bodies.stored_statements.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .reassign = .{
             .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))),
@@ -49973,15 +49727,13 @@ test "boxy lowerer emits mutable reassignment as set_local replace" {
         } },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .block = .{
@@ -49990,19 +49742,16 @@ test "boxy lowerer emits mutable reassignment as set_local replace" {
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(1), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(2), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(4)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .lookup_local = .{ .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))), .resolved = null } },
@@ -50085,9 +49834,8 @@ test "boxy lowerer destructures tuple declaration patterns" {
         @as(checked.CheckedTypeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
         @as(checked.CheckedTypeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
     });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .tuple = .{ .start = 0, .len = 2 },
     });
@@ -50110,28 +49858,25 @@ test "boxy lowerer destructures tuple declaration patterns" {
         .reassignable = false,
     });
     try checked_module.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{
-        null,
-        @as(?checked.PatternBinderId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
-        @as(?checked.PatternBinderId, @fromBackingInt(@intCast(1))),
+        .none,
+        .some(@fromBackingInt(@intCast(fixtureTableIndex(0)))),
+        .some(@fromBackingInt(@intCast(1))),
     });
     try checked_module.checked_bodies.pattern_id_pool.appendSlice(gpa, &.{
         @as(checked.CheckedPatternId, @fromBackingInt(@intCast(1))),
         @as(checked.CheckedPatternId, @fromBackingInt(@intCast(2))),
     });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .tuple = .{ .start = 0, .len = 2 } },
     });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .assign = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
     });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .assign = @fromBackingInt(@intCast(1)) },
@@ -50139,7 +49884,6 @@ test "boxy lowerer destructures tuple declaration patterns" {
 
     try checked_module.checked_bodies.statement_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
     try checked_module.checked_bodies.stored_statements.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .decl = .{
             .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))),
@@ -50151,15 +49895,13 @@ test "boxy lowerer destructures tuple declaration patterns" {
         @as(checked.CheckedExprId, @fromBackingInt(@intCast(6))),
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .block = .{
@@ -50168,31 +49910,26 @@ test "boxy lowerer destructures tuple declaration patterns" {
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .tuple = .{ .start = 0, .len = 2 } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(0), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(4)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .lookup_local = .{ .pattern = @fromBackingInt(@intCast(2)), .resolved = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(5)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(1), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(6)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(2), .plan = null } },
@@ -50272,9 +50009,8 @@ test "boxy lowerer materializes record rest declaration patterns" {
     const field_a: @TypeOf(@as(checked.CheckedRecordField, undefined).name) = @fromBackingInt(@intCast(1));
     const field_b: @TypeOf(@as(checked.CheckedRecordField, undefined).name) = @fromBackingInt(@intCast(2));
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .empty_record);
     try checked_module.checked_types.record_field_pool.appendSlice(gpa, &.{
         .{ .name = field_a, .ty = @as(checked.CheckedTypeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))) },
@@ -50300,9 +50036,9 @@ test "boxy lowerer materializes record rest declaration patterns" {
         .reassignable = false,
     });
     try checked_module.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{
-        @as(?checked.PatternBinderId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
-        null,
-        null,
+        .some(@fromBackingInt(@intCast(fixtureTableIndex(0)))),
+        .none,
+        .none,
     });
     try checked_module.checked_bodies.record_destruct_pool.appendSlice(gpa, &.{
         .{ .label = field_a, .kind = .{ .required = @fromBackingInt(@intCast(1)) } },
@@ -50313,19 +50049,16 @@ test "boxy lowerer materializes record rest declaration patterns" {
         .{ .label = field_b, .value = @as(checked.CheckedExprId, @fromBackingInt(@intCast(4))) },
     });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(3)),
         .source_region = base.Region.zero(),
         .data = .{ .assign = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
     });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .underscore,
     });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .record_destructure = .{ .start = 0, .len = 2 } },
@@ -50333,7 +50066,6 @@ test "boxy lowerer materializes record rest declaration patterns" {
 
     try checked_module.checked_bodies.statement_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
     try checked_module.checked_bodies.stored_statements.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .decl = .{
             .pattern = @fromBackingInt(@intCast(2)),
@@ -50341,15 +50073,13 @@ test "boxy lowerer materializes record rest declaration patterns" {
         } },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(4)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .block = .{
@@ -50358,7 +50088,6 @@ test "boxy lowerer materializes record rest declaration patterns" {
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .record = .{
@@ -50368,13 +50097,11 @@ test "boxy lowerer materializes record rest declaration patterns" {
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(11), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(4)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(22), .plan = null } },
@@ -50386,7 +50113,6 @@ test "boxy lowerer materializes record rest declaration patterns" {
         .mode = .required,
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(5)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .field_access = .{
@@ -50395,7 +50121,6 @@ test "boxy lowerer materializes record rest declaration patterns" {
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(6)),
         .ty = @fromBackingInt(@intCast(3)),
         .source_region = base.Region.zero(),
         .data = .{ .lookup_local = .{ .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))), .resolved = null } },
@@ -50478,12 +50203,10 @@ test "boxy lowerer binds irrefutable list rest declaration patterns" {
     defer checked_module.checked_bodies.deinit(gpa);
 
     try checked_module.checked_types.type_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.list, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.list, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -50498,17 +50221,15 @@ test "boxy lowerer binds irrefutable list rest declaration patterns" {
         .reassignable = false,
     });
     try checked_module.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{
-        @as(?checked.PatternBinderId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
-        null,
+        .some(@fromBackingInt(@intCast(fixtureTableIndex(0)))),
+        .none,
     });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .assign = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
     });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .list = .{
@@ -50518,7 +50239,6 @@ test "boxy lowerer binds irrefutable list rest declaration patterns" {
     });
     try checked_module.checked_bodies.statement_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
     try checked_module.checked_bodies.stored_statements.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .decl = .{
             .pattern = @fromBackingInt(@intCast(1)),
@@ -50530,15 +50250,13 @@ test "boxy lowerer binds irrefutable list rest declaration patterns" {
         @as(checked.CheckedExprId, @fromBackingInt(@intCast(4))),
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .block = .{
@@ -50547,25 +50265,21 @@ test "boxy lowerer binds irrefutable list rest declaration patterns" {
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .list = .{ .start = 0, .len = 2 } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(3), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(4)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(4), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(5)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .lookup_local = .{ .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))), .resolved = null } },
@@ -50639,9 +50353,8 @@ test "boxy lowerer emits tuple construction in element order" {
         @as(checked.CheckedTypeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
         @as(checked.CheckedTypeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
     });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .tuple = .{ .start = 0, .len = 2 },
     });
@@ -50658,27 +50371,23 @@ test "boxy lowerer emits tuple construction in element order" {
         @as(checked.CheckedExprId, @fromBackingInt(@intCast(3))),
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .tuple = .{ .start = 0, .len = 2 } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(1), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(2), .plan = null } },
@@ -50757,9 +50466,8 @@ test "boxy lowerer emits tuple access as field_read" {
         @as(checked.CheckedTypeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
         @as(checked.CheckedTypeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
     });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .tuple = .{ .start = 0, .len = 2 },
     });
@@ -50776,33 +50484,28 @@ test "boxy lowerer emits tuple access as field_read" {
         @as(checked.CheckedExprId, @fromBackingInt(@intCast(4))),
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .tuple_access = .{ .tuple = @fromBackingInt(@intCast(2)), .elem_index = 1 } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .tuple = .{ .start = 0, .len = 2 } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(1), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(4)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(2), .plan = null } },
@@ -50868,9 +50571,8 @@ test "boxy lowerer emits record construction in layout order after source-order 
     const field_a: @TypeOf(@as(checked.CheckedRecordField, undefined).name) = @fromBackingInt(@intCast(1));
     const field_b: @TypeOf(@as(checked.CheckedRecordField, undefined).name) = @fromBackingInt(@intCast(2));
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .empty_record);
     try checked_module.checked_types.record_field_pool.appendSlice(gpa, &.{
         .{ .name = field_a, .ty = @as(checked.CheckedTypeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))) },
@@ -50892,15 +50594,13 @@ test "boxy lowerer emits record construction in layout order after source-order 
         .{ .label = field_a, .value = @as(checked.CheckedExprId, @fromBackingInt(@intCast(3))) },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(3)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .record = .{
@@ -50910,13 +50610,11 @@ test "boxy lowerer emits record construction in layout order after source-order 
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(2), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(1), .plan = null } },
@@ -50993,9 +50691,8 @@ test "boxy lowerer evaluates empty record extensions before explicit fields" {
 
     const field_a: @TypeOf(@as(checked.CheckedRecordField, undefined).name) = @fromBackingInt(@intCast(1));
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .empty_record);
     try checked_module.checked_types.record_field_pool.append(gpa, .{
         .name = field_a,
@@ -51017,15 +50714,13 @@ test "boxy lowerer evaluates empty record extensions before explicit fields" {
         .value = @fromBackingInt(@intCast(3)),
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(3)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .record = .{
@@ -51035,19 +50730,16 @@ test "boxy lowerer evaluates empty record extensions before explicit fields" {
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .dbg = @fromBackingInt(@intCast(4)) },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(9), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(4)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(5), .plan = null } },
@@ -51131,9 +50823,8 @@ test "boxy lowerer emits record field access using layout field index" {
     const field_a: @TypeOf(@as(checked.CheckedRecordField, undefined).name) = @fromBackingInt(@intCast(1));
     const field_b: @TypeOf(@as(checked.CheckedRecordField, undefined).name) = @fromBackingInt(@intCast(2));
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .empty_record);
     try checked_module.checked_types.record_field_pool.appendSlice(gpa, &.{
         .{ .name = field_a, .ty = @as(checked.CheckedTypeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))) },
@@ -51155,9 +50846,8 @@ test "boxy lowerer emits record field access using layout field index" {
         .{ .label = field_a, .value = @as(checked.CheckedExprId, @fromBackingInt(@intCast(4))) },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(3)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
@@ -51169,7 +50859,6 @@ test "boxy lowerer emits record field access using layout field index" {
         .mode = .required,
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .field_access = .{
@@ -51178,7 +50867,6 @@ test "boxy lowerer emits record field access using layout field index" {
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .record = .{
@@ -51188,13 +50876,11 @@ test "boxy lowerer emits record field access using layout field index" {
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(2), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(4)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(1), .plan = null } },
@@ -51263,9 +50949,8 @@ test "boxy lowerer emits nominal construction for representation-equivalent back
         .source_decl = 3,
     };
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.nominal_declarations.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .nominal = nominal_key,
@@ -51277,16 +50962,15 @@ test "boxy lowerer emits nominal construction for representation-equivalent back
         .df_start = 0,
         .df_len = 0,
     });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = .{
-            .name = @fromBackingInt(@intCast(2)),
-            .origin_module = nominal_key.module,
-            .owner_module = checked_module.key,
-            .source_decl = nominal_key.source_decl,
-            .is_opaque = false,
-            .representation = .{ .local_declaration = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
-        },
+    try checked_module.checked_types.nominal_row_pool.append(gpa, .{
+        .name = @fromBackingInt(@intCast(2)),
+        .origin_module = nominal_key.module,
+        .owner_module = checked_module.key.digest(),
+        .source_decl = nominal_key.source_decl,
+        .is_opaque = false,
+        .representation = .{ .local_declaration = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
     });
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -51295,15 +50979,13 @@ test "boxy lowerer emits nominal construction for representation-equivalent back
         },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .nominal = .{
@@ -51312,7 +50994,6 @@ test "boxy lowerer emits nominal construction for representation-equivalent back
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(5), .plan = null } },
@@ -51417,12 +51098,10 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
     };
 
     try checked_module.checked_types.type_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u8, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u16, @fromBackingInt(@intCast(1)), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u8, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u16, @fromBackingInt(@intCast(1)), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .empty_record);
     try checked_module.checked_types.record_field_pool.appendSlice(gpa, &.{
         .{ .name = field_a, .ty = @as(checked.CheckedTypeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))) },
@@ -51447,18 +51126,17 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
         .df_start = 0,
         .df_len = 3,
     });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = .{
-            .name = @fromBackingInt(@intCast(4)),
-            .origin_module = nominal_key.module,
-            .owner_module = checked_module.key,
-            .source_decl = nominal_key.source_decl,
-            .is_opaque = false,
-            .representation = .{ .local_declaration = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
-            .padding_field_types = .{ .start = 0, .len = 1 },
-            .declared_fields = .{ .start = 0, .len = 3 },
-        },
+    try checked_module.checked_types.nominal_row_pool.append(gpa, .{
+        .name = @fromBackingInt(@intCast(4)),
+        .origin_module = nominal_key.module,
+        .owner_module = checked_module.key.digest(),
+        .source_decl = nominal_key.source_decl,
+        .is_opaque = false,
+        .representation = .{ .local_declaration = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
+        .padding_field_types = .{ .start = 0, .len = 1 },
+        .declared_fields = .{ .start = 0, .len = 3 },
     });
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -51473,28 +51151,25 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
         .reassignable = false,
     });
     try checked_module.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{
-        @as(?checked.PatternBinderId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
-        null,
-        null,
+        .some(@fromBackingInt(@intCast(fixtureTableIndex(0)))),
+        .none,
+        .none,
     });
     try checked_module.checked_bodies.record_destruct_pool.append(gpa, .{
         .label = field_a,
         .kind = .{ .required = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
     });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .assign = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
     });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(3)),
         .source_region = base.Region.zero(),
         .data = .{ .record_destructure = .{ .start = 0, .len = 1 } },
     });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(4)),
         .source_region = base.Region.zero(),
         .data = .{ .nominal = .{
@@ -51505,7 +51180,6 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
 
     try checked_module.checked_bodies.statement_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
     try checked_module.checked_bodies.stored_statements.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .decl = .{
             .pattern = @fromBackingInt(@intCast(2)),
@@ -51521,15 +51195,13 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
         .{ .label = field_b, .value = @as(checked.CheckedExprId, @fromBackingInt(@intCast(5))) },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(5)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .block = .{
@@ -51538,7 +51210,6 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(4)),
         .source_region = base.Region.zero(),
         .data = .{ .nominal = .{
@@ -51547,7 +51218,6 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(3)),
         .source_region = base.Region.zero(),
         .data = .{ .record = .{
@@ -51557,19 +51227,16 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(4)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(7), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(5)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(500), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(6)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .lookup_local = .{ .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))), .resolved = null } },
@@ -51663,12 +51330,10 @@ test "boxy lowerer inspects declared-field nominals through backing field_read" 
     };
 
     try checked_module.checked_types.type_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u8, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u16, @fromBackingInt(@intCast(1)), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u8, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u16, @fromBackingInt(@intCast(1)), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .empty_record);
     try checked_module.checked_types.record_field_pool.appendSlice(gpa, &.{
         .{ .name = field_a, .ty = @as(checked.CheckedTypeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))) },
@@ -51693,18 +51358,17 @@ test "boxy lowerer inspects declared-field nominals through backing field_read" 
         .df_start = 0,
         .df_len = 3,
     });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = .{
-            .name = try checked_module.canonical_names.internTypeName("WithPadding"),
-            .origin_module = nominal_key.module,
-            .owner_module = checked_module.key,
-            .source_decl = nominal_key.source_decl,
-            .is_opaque = false,
-            .representation = .{ .local_declaration = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
-            .padding_field_types = .{ .start = 0, .len = 1 },
-            .declared_fields = .{ .start = 0, .len = 3 },
-        },
+    try checked_module.checked_types.nominal_row_pool.append(gpa, .{
+        .name = try checked_module.canonical_names.internTypeName("WithPadding"),
+        .origin_module = nominal_key.module,
+        .owner_module = checked_module.key.digest(),
+        .source_decl = nominal_key.source_decl,
+        .is_opaque = false,
+        .representation = .{ .local_declaration = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
+        .padding_field_types = .{ .start = 0, .len = 1 },
+        .declared_fields = .{ .start = 0, .len = 3 },
     });
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -51718,21 +51382,18 @@ test "boxy lowerer inspects declared-field nominals through backing field_read" 
         .{ .label = field_b, .value = @as(checked.CheckedExprId, @fromBackingInt(@intCast(5))) },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(5)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .dbg = @fromBackingInt(@intCast(2)) },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(4)),
         .source_region = base.Region.zero(),
         .data = .{ .nominal = .{
@@ -51741,7 +51402,6 @@ test "boxy lowerer inspects declared-field nominals through backing field_read" 
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(3)),
         .source_region = base.Region.zero(),
         .data = .{ .record = .{
@@ -51751,13 +51411,11 @@ test "boxy lowerer inspects declared-field nominals through backing field_read" 
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(4)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(7), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(5)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(500), .plan = null } },
@@ -51835,7 +51493,7 @@ test "boxy lowerer inspects declared-field nominals through backing field_read" 
                 try std.testing.expect(debug.message != construct_nominal.target);
                 break;
             },
-            .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => return error.TestUnexpectedResult,
+            .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => return error.TestUnexpectedResult,
         }
     } else return error.TestUnexpectedResult;
 }
@@ -51857,12 +51515,10 @@ test "boxy lowerer hashes declared-field nominals through backing field_read" {
     };
 
     try checked_module.checked_types.type_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u8, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u16, @fromBackingInt(@intCast(1)), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u8, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u16, @fromBackingInt(@intCast(1)), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .empty_record);
     try checked_module.checked_types.record_field_pool.appendSlice(gpa, &.{
         .{ .name = field_a, .ty = @as(checked.CheckedTypeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))) },
@@ -51887,21 +51543,19 @@ test "boxy lowerer hashes declared-field nominals through backing field_read" {
         .df_start = 0,
         .df_len = 3,
     });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = .{
-            .name = try checked_module.canonical_names.internTypeName("WithPadding"),
-            .origin_module = nominal_key.module,
-            .owner_module = checked_module.key,
-            .source_decl = nominal_key.source_decl,
-            .is_opaque = false,
-            .representation = .{ .local_declaration = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
-            .padding_field_types = .{ .start = 0, .len = 1 },
-            .declared_fields = .{ .start = 0, .len = 3 },
-        },
+    try checked_module.checked_types.nominal_row_pool.append(gpa, .{
+        .name = try checked_module.canonical_names.internTypeName("WithPadding"),
+        .origin_module = nominal_key.module,
+        .owner_module = checked_module.key.digest(),
+        .source_decl = nominal_key.source_decl,
+        .is_opaque = false,
+        .representation = .{ .local_declaration = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
+        .padding_field_types = .{ .start = 0, .len = 1 },
+        .declared_fields = .{ .start = 0, .len = 3 },
     });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(5)), .{}),
-    });
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(5)), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -51915,15 +51569,13 @@ test "boxy lowerer hashes declared-field nominals through backing field_read" {
         .{ .label = field_b, .value = @as(checked.CheckedExprId, @fromBackingInt(@intCast(5))) },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(6)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(5)),
         .source_region = base.Region.zero(),
         .data = .{ .structural_hash = .{
@@ -51932,7 +51584,6 @@ test "boxy lowerer hashes declared-field nominals through backing field_read" {
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(4)),
         .source_region = base.Region.zero(),
         .data = .{ .nominal = .{
@@ -51941,7 +51592,6 @@ test "boxy lowerer hashes declared-field nominals through backing field_read" {
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(3)),
         .source_region = base.Region.zero(),
         .data = .{ .record = .{
@@ -51951,19 +51601,16 @@ test "boxy lowerer hashes declared-field nominals through backing field_read" {
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(4)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(7), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(5)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(500), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(6)),
         .ty = @fromBackingInt(@intCast(5)),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(99), .plan = null } },
@@ -52041,7 +51688,7 @@ test "boxy lowerer hashes declared-field nominals through backing field_read" {
                 try std.testing.expect(ret.value != seed.target);
                 break;
             },
-            .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .crash => return error.TestUnexpectedResult,
+            .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .crash => return error.TestUnexpectedResult,
         }
     } else return error.TestUnexpectedResult;
 }
@@ -52056,9 +51703,8 @@ test "boxy lowerer emits builtin Bool tags by checked Bool names" {
 
     const true_tag = try checked_module.canonical_names.internTagLabel("True");
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.bool, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.bool, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -52067,15 +51713,13 @@ test "boxy lowerer emits builtin Bool tags by checked Bool names" {
         },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .zero_argument_tag = .{
@@ -52143,9 +51787,8 @@ test "boxy lowerer emits payload tag construction using planned variant payload 
     try checked_module.checked_types.type_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
     try checked_module.checked_types.tag_pool.append(gpa, .{ .name = tag_a, .args_start = 0, .args_len = 2 });
     try checked_module.checked_types.tag_pool.append(gpa, .{ .name = tag_b, .args_start = 2, .args_len = 0 });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .empty_tag_union);
     try checked_module.checked_types.payloads.append(gpa, .{
         .tag_union = .{ .tags = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(@intCast(1)) },
@@ -52163,15 +51806,13 @@ test "boxy lowerer emits payload tag construction using planned variant payload 
         @as(checked.CheckedExprId, @fromBackingInt(@intCast(3))),
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(3)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .tag = .{
@@ -52180,13 +51821,11 @@ test "boxy lowerer emits payload tag construction using planned variant payload 
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(3), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(4), .plan = null } },
@@ -52262,12 +51901,10 @@ test "boxy lowerer emits list construction with committed element layout" {
     defer checked_module.checked_bodies.deinit(gpa);
 
     try checked_module.checked_types.type_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.list, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.list, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -52281,27 +51918,23 @@ test "boxy lowerer emits list construction with committed element layout" {
         @as(checked.CheckedExprId, @fromBackingInt(@intCast(3))),
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .list = .{ .start = 0, .len = 2 } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(8), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(9), .plan = null } },
@@ -52378,9 +52011,8 @@ test "boxy lowerer stores dynamic list elements with boxy storage layout" {
         @as(checked.CheckedTypeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))), // Second function argument.
     });
     try checked_module.checked_types.payloads.append(gpa, .{ .flex = .{} });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.list, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.list, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -52400,21 +52032,19 @@ test "boxy lowerer stores dynamic list elements with boxy storage layout" {
         .reassignable = false,
     });
     try checked_module.checked_bodies.pattern_binder_by_pattern.appendSlice(gpa, &.{
-        @as(?checked.PatternBinderId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
-        @as(?checked.PatternBinderId, @fromBackingInt(@intCast(1))),
+        .some(@fromBackingInt(@intCast(fixtureTableIndex(0)))),
+        .some(@fromBackingInt(@intCast(1))),
     });
     try checked_module.checked_bodies.pattern_id_pool.appendSlice(gpa, &.{
         @as(checked.CheckedPatternId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
         @as(checked.CheckedPatternId, @fromBackingInt(@intCast(1))),
     });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .assign = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
     });
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .assign = @fromBackingInt(@intCast(1)) },
@@ -52424,27 +52054,23 @@ test "boxy lowerer stores dynamic list elements with boxy storage layout" {
         @as(checked.CheckedExprId, @fromBackingInt(@intCast(3))),
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{ .start = 0, .len = 2 }, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .list = .{ .start = 0, .len = 2 } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .lookup_local = .{ .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))), .resolved = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .lookup_local = .{ .pattern = @fromBackingInt(@intCast(1)), .resolved = null } },
@@ -52495,7 +52121,7 @@ test "boxy lowerer stores dynamic list elements with boxy storage layout" {
         cursor = switch (out.lir_result.store.getCFStmtImmediate(cursor).*) {
             .set_local => |set| set.next,
             .assign_boxy_desc_ref => |assign| assign.next,
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => break,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => break,
         };
     }
     const first = out.lir_result.store.getCFStmtImmediate(cursor).assign_ref;
@@ -52508,7 +52134,7 @@ test "boxy lowerer stores dynamic list elements with boxy storage layout" {
         cursor = switch (out.lir_result.store.getCFStmtImmediate(cursor).*) {
             .set_local => |set| set.next,
             .assign_boxy_desc_ref => |assign| assign.next,
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => break,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => break,
         };
     }
     const second = out.lir_result.store.getCFStmtImmediate(cursor).assign_ref;
@@ -52520,7 +52146,7 @@ test "boxy lowerer stores dynamic list elements with boxy storage layout" {
     while (true) {
         cursor = switch (out.lir_result.store.getCFStmtImmediate(cursor).*) {
             .assign_boxy_desc_ref => |assign| assign.next,
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => break,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => break,
         };
     }
     const list = out.lir_result.store.getCFStmtImmediate(cursor).assign_list;
@@ -52543,12 +52169,10 @@ test "boxy lowerer inspects concrete lists with an index and string accumulator 
 
     try checked_module.checked_types.type_id_pool.append(gpa, @fromBackingInt(@intCast(1)));
     try checked_module.checked_types.payloads.append(gpa, .empty_record);
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(1)), .{}),
-    });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.list, @fromBackingInt(@intCast(2)), .{ .start = 0, .len = 1 }),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(1)), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.list, @fromBackingInt(@intCast(2)), .{ .start = 0, .len = 1 }));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -52562,33 +52186,28 @@ test "boxy lowerer inspects concrete lists with an index and string accumulator 
         @as(checked.CheckedExprId, @fromBackingInt(@intCast(4))),
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(3)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .dbg = @fromBackingInt(@intCast(2)) },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .list = .{ .start = 0, .len = 2 } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(8), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(4)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(9), .plan = null } },
@@ -52687,12 +52306,10 @@ test "boxy lowerer emits empty list construction" {
     defer checked_module.checked_bodies.deinit(gpa);
 
     try checked_module.checked_types.type_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.list, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.list, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -52701,15 +52318,13 @@ test "boxy lowerer emits empty list construction" {
         },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .empty_list,
@@ -52763,9 +52378,8 @@ test "boxy lowerer emits checked low-level calls after source-order argument low
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -52779,15 +52393,13 @@ test "boxy lowerer emits checked low-level calls after source-order argument low
         @as(checked.CheckedExprId, @fromBackingInt(@intCast(3))),
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .run_low_level = .{
@@ -52796,13 +52408,11 @@ test "boxy lowerer emits checked low-level calls after source-order argument low
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(10), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(20), .plan = null } },
@@ -52880,12 +52490,10 @@ test "boxy lowerer boxes concrete values with ordinary box low-level" {
     defer checked_module.checked_bodies.deinit(gpa);
 
     try checked_module.checked_types.type_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.box, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.box, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -52896,15 +52504,13 @@ test "boxy lowerer boxes concrete values with ordinary box low-level" {
 
     try checked_module.checked_bodies.expr_id_pool.append(gpa, @fromBackingInt(@intCast(2)));
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .run_low_level = .{
@@ -52913,7 +52519,6 @@ test "boxy lowerer boxes concrete values with ordinary box low-level" {
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(42), .plan = null } },
@@ -52983,9 +52588,8 @@ test "boxy lowerer reuses dynamic boxes for Box(a)" {
         @as(checked.CheckedTypeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))), // Function argument.
     });
     try checked_module.checked_types.payloads.append(gpa, .{ .flex = .{} });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.box, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.box, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -52999,25 +52603,22 @@ test "boxy lowerer reuses dynamic boxes for Box(a)" {
         .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .reassignable = false,
     });
-    try checked_module.checked_bodies.pattern_binder_by_pattern.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
+    try checked_module.checked_bodies.pattern_binder_by_pattern.append(gpa, .some(@fromBackingInt(@intCast(fixtureTableIndex(0)))));
     try checked_module.checked_bodies.pattern_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .assign = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
     });
     try checked_module.checked_bodies.expr_id_pool.append(gpa, @fromBackingInt(@intCast(2)));
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{ .start = 0, .len = 1 }, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .run_low_level = .{
@@ -53026,7 +52627,6 @@ test "boxy lowerer reuses dynamic boxes for Box(a)" {
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .lookup_local = .{ .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))), .resolved = null } },
@@ -53076,7 +52676,7 @@ test "boxy lowerer reuses dynamic boxes for Box(a)" {
     while (true) {
         cursor = switch (out.lir_result.store.getCFStmtImmediate(cursor).*) {
             .assign_boxy_desc_ref => |assign| assign.next,
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => break,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => break,
         };
     }
     const from_arg = out.lir_result.store.getCFStmtImmediate(cursor).assign_ref;
@@ -53101,7 +52701,7 @@ test "boxy lowerer reuses dynamic boxes for Box(a)" {
                     break :blk assign_stmt.next;
                 };
             },
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => break,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => break,
         };
     }
     const reused = out.lir_result.store.getCFStmtImmediate(cursor).assign_ref;
@@ -53126,12 +52726,10 @@ test "boxy lowerer unboxes concrete values with ordinary box low-level" {
     defer checked_module.checked_bodies.deinit(gpa);
 
     try checked_module.checked_types.type_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.box, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.box, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -53145,15 +52743,13 @@ test "boxy lowerer unboxes concrete values with ordinary box low-level" {
         @as(checked.CheckedExprId, @fromBackingInt(@intCast(3))),
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .run_low_level = .{
@@ -53162,7 +52758,6 @@ test "boxy lowerer unboxes concrete values with ordinary box low-level" {
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .run_low_level = .{
@@ -53171,7 +52766,6 @@ test "boxy lowerer unboxes concrete values with ordinary box low-level" {
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(99), .plan = null } },
@@ -53244,12 +52838,10 @@ test "boxy lowerer inspects concrete Box payloads" {
 
     try checked_module.checked_types.type_id_pool.append(gpa, @fromBackingInt(@intCast(1)));
     try checked_module.checked_types.payloads.append(gpa, .empty_record);
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(1)), .{}),
-    });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.box, @fromBackingInt(@intCast(2)), .{ .start = 0, .len = 1 }),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(1)), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.box, @fromBackingInt(@intCast(2)), .{ .start = 0, .len = 1 }));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -53260,21 +52852,18 @@ test "boxy lowerer inspects concrete Box payloads" {
 
     try checked_module.checked_bodies.expr_id_pool.append(gpa, @fromBackingInt(@intCast(3)));
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(3)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .dbg = @fromBackingInt(@intCast(2)) },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .run_low_level = .{
@@ -53283,7 +52872,6 @@ test "boxy lowerer inspects concrete Box payloads" {
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(42), .plan = null } },
@@ -53437,9 +53025,8 @@ test "boxy lowerer emits checked integer division low-level calls" {
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -53453,15 +53040,13 @@ test "boxy lowerer emits checked integer division low-level calls" {
         @as(checked.CheckedExprId, @fromBackingInt(@intCast(3))),
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{}, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .run_low_level = .{
@@ -53470,13 +53055,11 @@ test "boxy lowerer emits checked integer division low-level calls" {
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(84), .plan = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .numeral = .{ .literal = try testIntNumeral(2), .plan = null } },
@@ -53536,9 +53119,8 @@ test "boxy lowerer publishes host wrapper proc for exported roots" {
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.type_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
@@ -53554,22 +53136,19 @@ test "boxy lowerer publishes host wrapper proc for exported roots" {
         .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .reassignable = false,
     });
-    try checked_module.checked_bodies.pattern_binder_by_pattern.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
+    try checked_module.checked_bodies.pattern_binder_by_pattern.append(gpa, .some(@fromBackingInt(@intCast(fixtureTableIndex(0)))));
     try checked_module.checked_bodies.pattern_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
     try checked_module.checked_bodies.stored_patterns.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .assign = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{ .start = 0, .len = 1 }, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
         .data = .{ .lookup_local = .{ .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))), .resolved = null } },
@@ -53655,9 +53234,8 @@ test "boxy lowerer emits requested layout metadata for layout-only plans" {
     defer checked_module.checked_types.deinit(gpa);
 
     try checked_module.checked_types.roots.append(gpa, .{ .id = @fromBackingInt(@intCast(fixtureTableIndex(0))), .key = typeKey(1) });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
 
     var plan = try Plan.analyzeProgram(gpa, .{
         .checked_types = checked_module.checked_types.view(),
@@ -53692,12 +53270,10 @@ test "boxy lowerer emits requested layout metadata for static data requests" {
 
     try checked_module.checked_types.roots.append(gpa, .{ .id = @fromBackingInt(@intCast(fixtureTableIndex(0))), .key = typeKey(1) });
     try checked_module.checked_types.roots.append(gpa, .{ .id = @fromBackingInt(@intCast(1)), .key = typeKey(2) });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.str, @fromBackingInt(@intCast(1)), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.str, @fromBackingInt(@intCast(1)), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
 
     const data = checked.ProvidedDataExport{
         .source_name = @fromBackingInt(@intCast(fixtureTableIndex(0))),
@@ -53707,7 +53283,7 @@ test "boxy lowerer emits requested layout metadata for static data requests" {
         .checked_type = @fromBackingInt(@intCast(1)),
         .source_scheme = typeSchemeKey(2),
         .const_ref = .{
-            .artifact = checked_module.key,
+            .artifact = checked_module.key.digest(),
             .owner = .{ .top_level_binding = .{
                 .module_idx = 0,
                 .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))),
@@ -53773,9 +53349,8 @@ test "boxy lowerer emits const plans for zero-payload tag variants" {
     try checked_module.checked_types.type_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
     try checked_module.checked_types.tag_pool.append(gpa, .{ .name = tag_a, .args_start = 0, .args_len = 0 });
     try checked_module.checked_types.tag_pool.append(gpa, .{ .name = tag_b, .args_start = 0, .args_len = 1 });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .empty_tag_union);
     try checked_module.checked_types.payloads.append(gpa, .{
         .tag_union = .{ .tags = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(@intCast(1)) },
@@ -53846,16 +53421,13 @@ fn lowerListMapCanReuseFixture(
         try checked_module.checked_types.payloads.append(allocator, .{ .flex = .{} });
         try checked_module.checked_types.payloads.append(allocator, .{ .flex = .{} });
     } else {
-        try checked_module.checked_types.payloads.append(allocator, .{
-            .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-        });
-        try checked_module.checked_types.payloads.append(allocator, .{
-            .nominal = builtinNominal(.u8, @fromBackingInt(@intCast(1)), .{}),
-        });
+        try checked_module.checked_types.nominal_row_pool.append(allocator, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+        try checked_module.checked_types.payloads.append(allocator, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
+        try checked_module.checked_types.nominal_row_pool.append(allocator, builtinNominal(.u8, @fromBackingInt(@intCast(1)), .{}));
+        try checked_module.checked_types.payloads.append(allocator, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     }
-    try checked_module.checked_types.payloads.append(allocator, .{
-        .nominal = builtinNominal(.list, @fromBackingInt(@intCast(2)), .{ .start = 0, .len = 1 }),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(allocator, builtinNominal(.list, @fromBackingInt(@intCast(2)), .{ .start = 0, .len = 1 }));
+    try checked_module.checked_types.payloads.append(allocator, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(allocator, .{
         .function = .{
             .kind = .pure,
@@ -53882,21 +53454,19 @@ fn lowerListMapCanReuseFixture(
         .reassignable = false,
     });
     try checked_module.checked_bodies.pattern_binder_by_pattern.appendSlice(allocator, &.{
-        @as(?checked.PatternBinderId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
-        @as(?checked.PatternBinderId, @fromBackingInt(@intCast(1))),
+        .some(@fromBackingInt(@intCast(fixtureTableIndex(0)))),
+        .some(@fromBackingInt(@intCast(1))),
     });
     try checked_module.checked_bodies.pattern_id_pool.appendSlice(allocator, &.{
         @as(checked.CheckedPatternId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
         @as(checked.CheckedPatternId, @fromBackingInt(@intCast(1))),
     });
     try checked_module.checked_bodies.stored_patterns.append(allocator, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .assign = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
     });
     try checked_module.checked_bodies.stored_patterns.append(allocator, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(3)),
         .source_region = base.Region.zero(),
         .data = .{ .assign = @fromBackingInt(@intCast(1)) },
@@ -53907,15 +53477,13 @@ fn lowerListMapCanReuseFixture(
         @as(checked.CheckedExprId, @fromBackingInt(@intCast(3))),
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(allocator, .{
-        .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(4)),
         .source_region = base.Region.zero(),
         .data = .{ .lambda = .{ .args = .{ .start = 0, .len = 2 }, .body = @fromBackingInt(@intCast(1)) } },
     });
     try checked_module.checked_bodies.stored_exprs.append(allocator, .{
-        .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(1)),
         .source_region = base.Region.zero(),
         .data = .{ .run_low_level = .{
@@ -53924,13 +53492,11 @@ fn lowerListMapCanReuseFixture(
         } },
     });
     try checked_module.checked_bodies.stored_exprs.append(allocator, .{
-        .id = @fromBackingInt(@intCast(2)),
         .ty = @fromBackingInt(@intCast(2)),
         .source_region = base.Region.zero(),
         .data = .{ .lookup_local = .{ .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))), .resolved = null } },
     });
     try checked_module.checked_bodies.stored_exprs.append(allocator, .{
-        .id = @fromBackingInt(@intCast(3)),
         .ty = @fromBackingInt(@intCast(3)),
         .source_region = base.Region.zero(),
         .data = .{ .lookup_local = .{ .pattern = @fromBackingInt(@intCast(1)), .resolved = null } },
@@ -53992,7 +53558,7 @@ fn skipLeadingDescriptorInitializers(store: *const LirStore, start: LIR.CFStmtId
     while (true) {
         cursor = switch (store.getCFStmtImmediate(cursor).*) {
             .assign_boxy_desc_ref => |assign| assign.next,
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => return cursor,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => return cursor,
         };
     }
 }

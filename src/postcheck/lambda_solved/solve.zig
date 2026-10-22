@@ -634,7 +634,7 @@ const Solver = struct {
     fn canonicalizeCallableMemberOrder(self: *Solver) Allocator.Error!void {
         var sorted: std.ArrayList(Type.FnMember) = .empty;
         defer sorted.deinit(self.allocator);
-        for (0..self.program.types.vars.items.len) |index| {
+        for (0..self.program.types.varCount()) |index| {
             const ty: Type.TypeVarId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
             switch (self.program.types.get(ty)) {
                 .lambda_set => |members| if (try self.canonicalMemberSpan(members, &sorted)) |span| {
@@ -695,7 +695,7 @@ const Solver = struct {
             .platform, .hosted => try self.appendFunctionBoundary(self.program.fn_tys.items[@backingInt(root.fn_id)], &pending),
             .roc, .test_expect, .compile_time => {},
         };
-        for (0..self.program.types.vars.items.len) |index| {
+        for (0..self.program.types.varCount()) |index| {
             const ty: Type.TypeVarId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
             const content = self.program.types.get(ty);
             if (content == .named and content.named.def.iterator_representation == .forced_dynamic) try pending.append(self.allocator, ty);
@@ -1112,7 +1112,7 @@ const Solver = struct {
                 }
                 return null;
             },
-            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .typed_boundary, .row_widen, .list, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect, .expect_err, .literal_rejected, .comptime_branch_taken => {},
+            .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .typed_boundary, .row_widen, .list, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect, .expect_err, .literal_rejected => {},
         };
 
         switch (expr.data) {
@@ -1400,9 +1400,6 @@ const Solver = struct {
             },
             .literal_rejected => |rejected| {
                 if (cursor == 0) return .{ .expr = .{ .id = rejected.msg } };
-            },
-            .comptime_branch_taken => |taken| {
-                if (cursor == 0) return .{ .expr = .{ .id = taken.body, .expected = expected } };
             },
         }
         return null;
@@ -1707,7 +1704,7 @@ const Solver = struct {
         // Expanding a leaf appends fresh child vars, so the bound is re-read
         // every iteration and an expanded var is revisited in place.
         var index: usize = 0;
-        while (index < self.program.types.vars.items.len) : (index += 1) {
+        while (index < self.program.types.varCount()) : (index += 1) {
             const ty: Type.TypeVarId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
             if (self.program.types.rootCompressed(ty) != ty) continue;
             const content = self.program.types.get(ty);
@@ -3041,7 +3038,7 @@ const Solver = struct {
         if (self.uninhabited_memo.get(self.program.types.rootCompressed(ty))) |answer| {
             if (answer.epoch == self.program.types.mutation_epoch) return answer.uninhabited;
         }
-        const var_count = self.program.types.vars.items.len;
+        const var_count = self.program.types.varCount();
         if (self.uninhabited_path.bit_length < var_count) {
             try self.uninhabited_path.resize(self.allocator, var_count, false);
         }
@@ -4907,7 +4904,7 @@ test "solved type digest treats a transparent alias as its backing" {
     const module = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xA5))));
     const type_name = try name_store.internTypeName("Count");
     const alias = try program.types.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = undefined },
+        .named_type = .{ .module = .{}, .ty = undefined, .ty_module = .{} },
         .def = .{ .module = module, .type_name = type_name },
         .kind = .alias,
         .args = .empty(),
@@ -5046,7 +5043,7 @@ test "inspectable backing unification isolates the structural type variable once
         } });
     }
     const outer_named = backing;
-    const vars_before_unify = program.types.vars.items.len;
+    const vars_before_unify = program.types.varCount();
 
     var solver: Solver = undefined;
     solver.allocator = allocator;
@@ -5092,7 +5089,7 @@ test "inspectable backing unification isolates the structural type variable once
 
     try solver.unify(structural, outer_named);
 
-    try std.testing.expectEqual(vars_before_unify + 1, program.types.vars.items.len);
+    try std.testing.expectEqual(vars_before_unify + 1, program.types.varCount());
     try std.testing.expectEqual(program.types.root(outer_named), program.types.root(structural));
     try std.testing.expectEqual(Type.Content{ .primitive = .u64 }, try solver.shapeContent(structural));
 }
@@ -5533,6 +5530,8 @@ fn emptyLiftedProgramForTest(allocator: Allocator) Lifted.Program {
         names.NameStore.init(allocator),
         MonoType.Store.init(allocator),
         .empty, // const_fn_evidence
+        .empty, // const_fn_evidence_targets
+        .empty, // const_fn_evidence_structurals
         .empty, // const_fn_evidence_frames
         .empty, // exprs
         .empty, // pats

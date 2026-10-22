@@ -208,6 +208,7 @@ fn emit(
         program.boxy_erased_arg_desc_offsets.items,
         program.boxy_erased_arg_desc_params.items,
         program.boxy_worker_procs.items,
+        program.erased_capture_prefix,
         .default,
     );
     defer cg.deinit();

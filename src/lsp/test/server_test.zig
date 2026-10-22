@@ -426,8 +426,9 @@ test "server forgets documents on didClose" {
     server.client.trusted_workspace = true;
     try server.run();
 
-    try std.testing.expectEqual(@as(usize, 1), server.syntax_checker.close_calls);
     try std.testing.expect(server.getDocumentForTesting(file_uri) == null);
+    try std.testing.expectEqual(@as(usize, 1), server.syntax_checker.close_calls);
+    try std.testing.expectEqual(@as(usize, 1), server.syntax_checker.forget_calls);
 }
 
 test "server applies sequential incremental changes in a single didChange" {

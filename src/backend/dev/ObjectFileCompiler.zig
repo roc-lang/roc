@@ -87,6 +87,10 @@ pub const CompilationError = error{
 pub const ObjectFileCompiler = struct {
     allocator: Allocator,
     enable_default_platform_runtime: bool = false,
+    /// Bytes the program's erased callables reserve before their captures
+    /// (`LirProgram.Result.erased_capture_prefix`); nonzero when its code
+    /// supports a hot-reload session.
+    erased_capture_prefix: u32 = 0,
     timing: ?*Timing = null,
     post_check_executor: ?Executor = null,
     /// Borrowed artifacts from this exact LIR program, never an executable image.
@@ -101,6 +105,10 @@ pub const ObjectFileCompiler = struct {
     /// program's own pack can be written from the build that produced it.
     capture_artifacts: bool = false,
     captured_artifacts: ?ProcArtifact.Set = null,
+    /// Encode the object file and its debug sections. A pack written only
+    /// as artifacts leaves this off, and its result's `object_bytes` is
+    /// empty.
+    emit_object: bool = true,
 
     pub const TimingSnapshot = struct {
         backend_setup_ns: u64 = 0,
@@ -186,7 +194,7 @@ pub const ObjectFileCompiler = struct {
         boxy_worker_procs: []const lir.LIR.LirProcSpecId,
         target: RocTarget,
     ) CompilationError!CompilationResult {
-        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, erased_arg_desc_offsets, erased_arg_desc_params, boxy_worker_procs, target, self.enable_default_platform_runtime, self.timing, self.pack_mode, self.splice_source, self.capture_artifacts, self.post_check_executor, self.reuse_same_program);
+        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, erased_arg_desc_offsets, erased_arg_desc_params, boxy_worker_procs, target, self.enable_default_platform_runtime, self.erased_capture_prefix, self.timing, self.pack_mode, self.splice_source, self.capture_artifacts, self.emit_object, self.post_check_executor, self.reuse_same_program);
     }
 
     /// Compile to an object file and write it to a path. Returns whether the
@@ -301,10 +309,12 @@ fn compileWithCodeGen(
     boxy_worker_procs: []const lir.LIR.LirProcSpecId,
     target: RocTarget,
     enable_default_platform_runtime: bool,
+    erased_capture_prefix: u32,
     timing: ?*ObjectFileCompiler.Timing,
     pack_mode: bool,
     splice_source: ?SpliceSource,
     capture_artifacts: bool,
+    emit_object: bool,
     executor: ?Executor,
     reuse_same_program: ?*const NativeProcCompiler.Retained,
 ) CompilationError!CompilationResult {
@@ -327,6 +337,7 @@ fn compileWithCodeGen(
         erased_arg_desc_offsets,
         erased_arg_desc_params,
         boxy_worker_procs,
+        erased_capture_prefix,
         target.cpuLevel(),
     ) catch return CompilationError.OutOfMemory;
     defer codegen.deinit();
@@ -608,6 +619,7 @@ fn compileWithCodeGen(
             erased_arg_desc_offsets,
             erased_arg_desc_params,
             boxy_worker_procs,
+            erased_capture_prefix,
             target.cpuLevel(),
         ) catch return CompilationError.OutOfMemory;
         defer fresh.deinit();
@@ -633,8 +645,44 @@ fn compileWithCodeGen(
     defer resolved.deinit(allocator);
     if (timing) |timings| timings.finish(symbol_relocations_started_ns, .symbol_relocations);
 
-    // Build DWARF debug sections from the line entries recorded during
-    // code generation.
+    const object_bytes: []const u8 = if (emit_object)
+        try encodeObject(allocator, lir_store, target, &codegen, code, rodata.items, zero_fill_size, resolved.symbols, relocations, rodata_relocations.items, dwarf_procs.items, timing)
+    else
+        &.{};
+    errdefer allocator.free(object_bytes);
+
+    var artifacts: ?ProcArtifact.Set = null;
+    if (pack_mode or capture_artifacts) {
+        artifacts = ProcArtifact.extract(CodeGen, allocator, &codegen, proc_specs, layout_store, static_strings.exports, static_data_exports, spliced_data.items) catch |err| switch (err) {
+            error.OutOfMemory => return CompilationError.OutOfMemory,
+            error.NestedCodeRegion, error.UncoveredCode, error.DanglingReference, error.UnsupportedRelocation => invariant("pack artifact extraction failed: {s}", .{@errorName(err)}),
+        };
+    }
+
+    return CompilationResult{
+        .object_bytes = object_bytes,
+        .allocator = allocator,
+        .uses_boxy = codegen.boxy_runtime_used,
+        .artifacts = artifacts,
+    };
+}
+
+/// Encode the compiled program as an object file with DWARF line tables
+/// built from the line entries recorded during code generation.
+fn encodeObject(
+    allocator: Allocator,
+    lir_store: *const LirStore,
+    target: RocTarget,
+    codegen: anytype,
+    code: []const u8,
+    rodata: []const u8,
+    zero_fill_size: u64,
+    symbols: []const ObjectWriter.Symbol,
+    relocations: []const IndexedRelocation,
+    rodata_relocations: []const ObjectWriter.IndexedDataRelocation,
+    dwarf_procs: []const Dwarf.ProcEntry,
+    timing: ?*ObjectFileCompiler.Timing,
+) CompilationError![]const u8 {
     const dwarf_started_ns = if (timing) |timings| timings.start() else 0;
     const source_file_names = allocator.alloc([]const u8, lir_store.sourceFileCount()) catch {
         return CompilationError.OutOfMemory;
@@ -648,13 +696,12 @@ fn compileWithCodeGen(
         "roc dev",
         source_file_names,
         codegen.getLineEntries(),
-        dwarf_procs.items,
+        dwarf_procs,
         code.len,
     ) catch return CompilationError.OutOfMemory;
     defer dwarf_sections.deinit(allocator);
     if (timing) |timings| timings.finish(dwarf_started_ns, .dwarf);
 
-    // Generate object file
     const object_encoding_started_ns = if (timing) |timings| timings.start() else 0;
     var output = std.ArrayList(u8).empty;
     errdefer output.deinit(allocator);
@@ -663,11 +710,11 @@ fn compileWithCodeGen(
         allocator,
         target,
         code,
-        rodata.items,
+        rodata,
         zero_fill_size,
-        resolved.symbols,
+        symbols,
         relocations,
-        rodata_relocations.items,
+        rodata_relocations,
         codegen.getUnwindFunctions(),
         .{
             .line = dwarf_sections.debug_line,
@@ -684,21 +731,7 @@ fn compileWithCodeGen(
 
     const object_bytes = output.toOwnedSlice(allocator) catch return CompilationError.OutOfMemory;
     if (timing) |timings| timings.finish(object_encoding_started_ns, .object_encoding);
-
-    var artifacts: ?ProcArtifact.Set = null;
-    if (pack_mode or capture_artifacts) {
-        artifacts = ProcArtifact.extract(CodeGen, allocator, &codegen, proc_specs, layout_store, static_strings.exports, static_data_exports, spliced_data.items) catch |err| switch (err) {
-            error.OutOfMemory => return CompilationError.OutOfMemory,
-            error.NestedCodeRegion, error.UncoveredCode, error.DanglingReference, error.UnsupportedRelocation => invariant("pack artifact extraction failed: {s}", .{@errorName(err)}),
-        };
-    }
-
-    return CompilationResult{
-        .object_bytes = object_bytes,
-        .allocator = allocator,
-        .uses_boxy = codegen.boxy_runtime_used,
-        .artifacts = artifacts,
-    };
+    return object_bytes;
 }
 
 const SymbolDefinition = struct {
@@ -1005,10 +1038,12 @@ fn crossCompileDispatch(
     boxy_worker_procs: []const lir.LIR.LirProcSpecId,
     target: RocTarget,
     enable_default_platform_runtime: bool,
+    erased_capture_prefix: u32,
     timing: ?*ObjectFileCompiler.Timing,
     pack_mode: bool,
     splice_source: ?SpliceSource,
     capture_artifacts: bool,
+    emit_object: bool,
     executor: ?Executor,
     reuse_same_program: ?*const NativeProcCompiler.Retained,
 ) CompilationError!CompilationResult {
@@ -1033,10 +1068,12 @@ fn crossCompileDispatch(
                     boxy_worker_procs,
                     target,
                     enable_default_platform_runtime,
+                    erased_capture_prefix,
                     timing,
                     pack_mode,
                     splice_source,
                     capture_artifacts,
+                    emit_object,
                     executor,
                     reuse_same_program,
                 );

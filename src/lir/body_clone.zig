@@ -323,7 +323,6 @@ pub fn forEachSuccessor(
         .set_local,
         .debug,
         .expect,
-        .comptime_branch_taken,
         .incref,
         .decref,
         .decref_if_initialized,
@@ -415,7 +414,6 @@ pub fn redirectSuccessors(
         .set_local,
         .debug,
         .expect,
-        .comptime_branch_taken,
         .incref,
         .decref,
         .decref_if_initialized,
@@ -646,7 +644,6 @@ pub fn forEachStmtRead(
         },
         .init_uninitialized,
         .assign_literal,
-        .comptime_branch_taken,
         .join,
         .jump,
         .runtime_error,
@@ -748,7 +745,6 @@ pub fn forEachStmtDef(
         .decref,
         .decref_if_initialized,
         .free,
-        .comptime_branch_taken,
         .jump,
         .runtime_error,
         .comptime_exhaustiveness_failed,
@@ -868,7 +864,6 @@ pub fn definedTarget(stmt: LIR.CFStmt) ?LocalId {
         .expect_err,
         .runtime_error,
         .comptime_exhaustiveness_failed,
-        .comptime_branch_taken,
         .incref,
         .decref,
         .decref_if_initialized,
@@ -918,7 +913,6 @@ pub fn writtenLocal(stmt: LIR.CFStmt) ?LocalId {
         .expect_err,
         .runtime_error,
         .comptime_exhaustiveness_failed,
-        .comptime_branch_taken,
         .incref,
         .decref,
         .decref_if_initialized,
@@ -1182,7 +1176,6 @@ pub fn visitStmtDefinitions(store: *const LirStore, defined: anytype, stmt_id: C
         .expect_err,
         .runtime_error,
         .comptime_exhaustiveness_failed,
-        .comptime_branch_taken,
         .incref,
         .decref,
         .decref_if_initialized,
@@ -1909,7 +1902,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                         if (frame.owns_run) switch (frame.source) {
                             .switch_stmt => self.branches.shrinkRetainingCapacity(frame.run_start),
                             .str_match_set => self.arms.shrinkRetainingCapacity(frame.run_start),
-                            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_initialized_payload, .str_match, .join, .jump, .ret, .crash => {},
+                            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_initialized_payload, .str_match, .join, .jump, .ret, .crash => {},
                         };
                         frames.items.len -= 1;
                         returned = cloned;
@@ -1966,9 +1959,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .region = s.region,
                 } }, origin),
                 .runtime_error => try self.store.addCFStmt(.runtime_error, origin),
-                .comptime_exhaustiveness_failed => |s| try self.store.addCFStmt(.{ .comptime_exhaustiveness_failed = .{
-                    .site = s.site,
-                } }, origin),
+                .comptime_exhaustiveness_failed => |s| try self.store.addCFStmt(.{ .comptime_exhaustiveness_failed = s }, origin),
                 .jump => |s| try self.cloneJump(s, origin),
                 .ret => |s| if (@hasDecl(Rewriter, "cloneRet"))
                     try self.rewriter.cloneRet(self, s.value, origin)
@@ -1979,9 +1970,9 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                         .literal => |literal| .{ .literal = literal },
                         .local => |local| .{ .local = try self.mapLocal(local) },
                     },
-                    .literal_rejection = s.literal_rejection,
+                    .extra = s.extra,
                 } }, origin),
-                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join => null,
+                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join => null,
             };
         }
 
@@ -2261,11 +2252,6 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .site = s.site,
                     .next = s.next,
                 } },
-                .comptime_branch_taken => |s| .{ .comptime_branch_taken = .{
-                    .site = s.site,
-                    .branch_index = s.branch_index,
-                    .next = s.next,
-                } },
                 .incref => |s| .{ .incref = .{
                     .value = try self.mapLocal(s.value),
                     .rc = s.rc,
@@ -2422,7 +2408,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                         return .{ .finished = try self.store.addCFStmt(frame.built, frame.origin) };
                     },
                 },
-                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .jump, .ret, .crash => {
+                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .jump, .ret, .crash => {
                     if (step == 0) return .{ .clone = linearNext(frame.source) };
                     setLinearNext(&frame.built, returned.?);
                     return .{ .finished = try self.store.addCFStmt(frame.built, frame.origin) };
@@ -2680,14 +2666,14 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .local => |desc_local| old = desc_local,
                     .static, .runtime, .dict_method_hidden => {
                         _ = pending.pop();
-                        self.store.setLocalBoxyDesc(fresh, desc);
+                        try self.store.setLocalBoxyDesc(fresh, desc);
                         try self.new_locals.append(self.allocator, fresh);
                         break fresh;
                     },
                 }
             };
             while (pending.pop()) |entry| {
-                self.store.setLocalBoxyDesc(entry.fresh, .{ .local = mapped });
+                try self.store.setLocalBoxyDesc(entry.fresh, .{ .local = mapped });
                 try self.new_locals.append(self.allocator, entry.fresh);
                 mapped = entry.fresh;
             }
@@ -2826,7 +2812,6 @@ pub fn linearNextPtr(stmt: *LIR.CFStmt) ?*CFStmtId {
         .set_local,
         .debug,
         .expect,
-        .comptime_branch_taken,
         .incref,
         .decref,
         .decref_if_initialized,

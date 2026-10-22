@@ -311,6 +311,11 @@ pub const Store = struct {
         };
     }
 
+    /// The number of variables.
+    pub fn varCount(self: *const Store) usize {
+        return self.vars.items.len;
+    }
+
     pub fn add(self: *Store, content: Content) std.mem.Allocator.Error!TypeVarId {
         if (self.vars.items.len >= @backingInt(MaybeTypeVarId.none)) return error.OutOfMemory;
         const id: TypeVarId = @fromBackingInt(@as(u32, @intCast(self.vars.items.len)));

@@ -287,13 +287,17 @@ test "closed export types bind a nominal backing's formal parameters to its argu
     };
     var stored_nominal_free = stored_nominal;
     stored_nominal_free.args = .{ .start = 2, .len = 1 };
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        stored_nominal,
+        stored_nominal_free,
+    };
     const payloads = [_]checked.StoredCheckedTypePayload{
         .empty_record,
         .{ .rigid = .{} },
         .{ .tag_union = .{ .tags = .{ .start = 0, .len = 1 }, .ext = unit } },
-        .{ .nominal = stored_nominal },
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
         .{ .rigid = .{} },
-        .{ .nominal = stored_nominal_free },
+        .{ .nominal = @fromBackingInt(1) },
     };
     // Pool slots: [0] the formal as the tag's argument and the declaration's
     // formal list, [1] `unit` as the closed argument, [2] the free rigid.
@@ -310,6 +314,7 @@ test "closed export types bind a nominal backing's formal parameters to its argu
     }};
     const types = checked.CheckedTypeStoreView{
         .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
         .nominal_declarations = &declarations,
         .type_id_pool = &type_id_pool,
         .tag_pool = &tags,
@@ -343,13 +348,17 @@ test "closed export types admit functions inside a box but not type variables" {
     };
     var box_rigid_nominal = box_nominal;
     box_rigid_nominal.args = .{ .start = 2, .len = 1 };
+    const payloads_nominal_rows = [_]checked.StoredNominal{
+        box_nominal,
+        box_rigid_nominal,
+    };
     const payloads = [_]checked.StoredCheckedTypePayload{
         .empty_record,
         .{ .function = .{ .kind = .pure, .args = .{ .start = 0, .len = 1 }, .ret = unit } },
-        .{ .nominal = box_nominal },
+        .{ .nominal = @fromBackingInt(fixtureTableIndex(0)) },
         .{ .record = .{ .fields = .{ .start = 0, .len = 1 }, .ext = unit } },
         .{ .rigid = .{} },
-        .{ .nominal = box_rigid_nominal },
+        .{ .nominal = @fromBackingInt(1) },
     };
     // Pool slots: [0] the function's argument, [1] the boxed function, [2]
     // the boxed rigid.
@@ -360,6 +369,7 @@ test "closed export types admit functions inside a box but not type variables" {
     const fields = [_]checked.CheckedRecordField{.{ .name = label, .ty = func, .kind = .required }};
     const types = checked.CheckedTypeStoreView{
         .stored_payloads = &payloads,
+        .nominal_row_pool = &payloads_nominal_rows,
         .type_id_pool = &type_id_pool,
         .record_field_pool = &fields,
     };
@@ -432,7 +442,6 @@ pub fn erasedCallingProcs(allocator: Allocator, store: *const LirStore) Allocato
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -538,7 +547,6 @@ pub fn procCallClosure(allocator: Allocator, store: *const LirStore, root: LIR.L
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -596,7 +604,7 @@ pub fn literalConvertingProcs(allocator: Allocator, store: *const LirStore) Allo
             seen[@backingInt(stmt_id)] = true;
             try visited.append(allocator, stmt_id);
             const stmt = store.getCFStmtImmediate(stmt_id);
-            if (stmt.* == .crash and stmt.crash.literal_rejection != null) {
+            if (stmt.* == .crash and store.stmtRowOrDefault(stmt.crash.extra).literal_rejection != null) {
                 result.* = true;
                 break;
             }
@@ -604,4 +612,9 @@ pub fn literalConvertingProcs(allocator: Allocator, store: *const LirStore) Allo
         }
     }
     return converts;
+}
+
+/// Convert an intentional fixture-table position while preserving enum inference.
+fn fixtureTableIndex(comptime index: u32) u32 {
+    return index;
 }

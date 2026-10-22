@@ -787,7 +787,7 @@ fn classify(self: *Self, store: *const LirStore, param_count: usize, root: CFStm
     var stack_plan = self.indexes.takePlan();
     defer self.indexes.keepPlan(&stack_plan);
     self.planned.clearRetainingCapacity();
-    defer self.indexes.clear(self.planned.items);
+    defer self.indexes.clear();
     try stack_plan.addProcGraph(store, &self.indexes, root, &self.planned, Tracked{ .plan = self });
     for (stack_plan.values.items) |*value| value.size = 1;
     try stack_plan.solveLifetimes();
@@ -946,7 +946,7 @@ fn noteAddressedOperands(self: *Self, store: *const LirStore, stmt: lir.LIR.CFSt
         .switch_initialized_payload => |sw| self.markAddressed(sw.payload),
         .decref_if_initialized => |dec| self.markAddressed(dec.value),
         .ret => {},
-        .join, .jump, .comptime_branch_taken, .runtime_error, .comptime_exhaustiveness_failed => {},
+        .join, .jump, .runtime_error, .comptime_exhaustiveness_failed => {},
         .assign_call_erased,
         .assign_packed_erased_fn,
         .assign_boxy_desc_ref,

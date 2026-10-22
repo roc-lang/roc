@@ -110,7 +110,6 @@ const ProcScan = struct {
                 .set_local,
                 .debug,
                 .expect,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,

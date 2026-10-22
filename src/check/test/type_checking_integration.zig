@@ -8635,10 +8635,10 @@ test "check type - mutually recursive functions - type mismatch error" {
     try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
-test "check can - recursive non-function top-level cycle is rejected before type checking" {
+test "check type - recursive non-function top-level cycle is rejected" {
     const source =
         \\force : ({} -> I64) -> I64
-        \\force = |thunk| thunk(0)
+        \\force = |thunk| thunk({})
         \\
         \\t1 = |_| force(|_| t2)
         \\t2 = t1(0)
@@ -8647,7 +8647,7 @@ test "check can - recursive non-function top-level cycle is rejected before type
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertOneCanError("Circular Value Definition");
+    try test_env.assertOneTypeError("Circular Value Definition");
 }
 
 test "check type - monomorphic top-level numeric constant cannot be used at multiple types" {

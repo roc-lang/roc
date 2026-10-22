@@ -350,7 +350,6 @@ fn runInterpreter(allocator: std.mem.Allocator, lowered: *const LoweredProgram) 
             runtime_env.noteCrash(interp.getCrashMessage());
             return runtime_env.snapshot(allocator);
         },
-        error.ComptimeExhaustiveness,
         error.DivisionByZero,
         error.ExpectErr,
         error.InvalidHostedFunctionSignature,
@@ -395,6 +394,9 @@ fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) BackendE
             lowered.view.boxy_erased_arg_desc_offsets,
             lowered.view.boxy_erased_arg_desc_params,
             lowered.view.boxy_worker_procs,
+            // An image's program reserves no capture prefix; writing the
+            // image checks that.
+            0,
             roc_target.host_cpu.level(),
         );
         defer codegen.deinit();

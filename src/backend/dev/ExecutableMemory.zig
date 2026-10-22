@@ -268,6 +268,14 @@ pub const ExecutableMemory = struct {
         try protectExecutable(self.memory);
     }
 
+    /// Mark the first `executable_len` bytes of a writable allocation
+    /// returned by `initWritable` executable, and leave the page-aligned rest
+    /// writable data.
+    pub fn finishWriteExecutablePrefix(self: *Self, executable_len: usize) error{ MprotectFailed, VirtualProtectFailed, UnsupportedPlatform }!void {
+        std.debug.assert(std.mem.isAligned(executable_len, std.heap.page_size_min) and executable_len <= self.memory.len);
+        try protectExecutable(self.memory[0..executable_len]);
+    }
+
     /// Free the executable memory
     pub fn deinit(self: *Self) void {
         self.windows_unwind.deinit();
@@ -279,6 +287,11 @@ pub const ExecutableMemory = struct {
     /// Get a pointer to the start of the code
     pub fn codePtr(self: *const Self) [*]const u8 {
         return self.memory.ptr;
+    }
+
+    /// The generated code.
+    pub fn generatedCode(self: *const Self) []const u8 {
+        return self.memory[0..self.code_size];
     }
 
     /// Get a pointer to the entry point (may differ from codePtr if entry_offset is non-zero)

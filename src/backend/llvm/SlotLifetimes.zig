@@ -108,7 +108,7 @@ pub fn plan(self: *Self, store: *const LirStore, root: CFStmtId, params: anytype
     var stack_plan = self.indexes.takePlan();
     defer self.indexes.keepPlan(&stack_plan);
     self.planned.clearRetainingCapacity();
-    defer self.indexes.clear(self.planned.items);
+    defer self.indexes.clear();
     try stack_plan.addProcGraph(store, &self.indexes, root, &self.planned, Tracked{ .candidates = &self.candidates });
     for (stack_plan.values.items) |*value| value.size = 1;
     try stack_plan.solveLifetimes();
@@ -180,7 +180,6 @@ fn collectCandidates(self: *Self, store: *const LirStore, root: CFStmtId, params
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .incref,
             .decref,
             .decref_if_initialized,
