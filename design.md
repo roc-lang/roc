@@ -2512,19 +2512,33 @@ not silently demote the value from compile-time evaluation. No backend may
 rediscover or guess root eligibility by scanning source syntax, function
 bodies, object symbols, or generated code.
 
-Target static data is produced from explicit, closed LIR initializer procedures.
-Monotype restoration builds each initializer from the stored `ConstStore` value,
-then closure lifting, lambda solving, and layout commitment run normally. The
-initializer is straight-line construction LIR that no backend emits, so the
-procedure-local LIR rewrites and ARC leave it as lowered: it has no branch,
-call, join, or loop to rewrite, and a reference count in it would never run.
-The initializer's returned LIR value is the sole source of
+Target static data comes from one of two explicit sources. A restored non-empty
+list whose stored value is data alone, reaching no function value, crash, or
+checked error (decided by a memoized walk over explicit `ConstStore` edges), is
+a stored list. Its candidate carries no expression for the list or for any
+item: only the item count and, when every item stores one value that could be a
+construction, that item restored once, which the list's fresh form repeats.
+Static data freezes a stored list straight from its node through the const plan
+of the candidate's type, at the candidate's layout. A node of stored data has
+exactly one target representation at a layout, the one its type's constructions
+build and the one the `ConstStore` writer read through the same kind of plan,
+so this freezing reconstructs nothing. A static initializer that holds a stored
+list reads it as its own static data.
+
+Every other value is produced from an explicit, closed LIR initializer
+procedure. Monotype restoration builds each initializer from the stored
+`ConstStore` value, then closure lifting, lambda solving, and layout commitment
+run normally. The initializer is straight-line construction LIR that no backend
+emits, so the procedure-local LIR rewrites and ARC leave it as lowered: it has
+no branch, call, join, or loop to rewrite, and a reference count in it would
+never run. The initializer's returned LIR value is the sole source of its
 target representation: static materialization freezes its exact bytes,
 allocations, procedure relocations, and explicit generated-RC-helper
-relocations into readonly target data. It must not
-walk `ConstStore` in reverse using a type-derived storage plan, because a
-target-independent `ConstStore` node does not preserve the contextual callable
-encoding of every nested allocation.
+relocations into readonly target data. Values that reach a function value keep
+this path, because a target-independent `ConstStore` node does not preserve
+the contextual callable encoding of every nested allocation, and so do values
+that reach a crash or checked error, which a program raises where it reads
+them.
 
 F32 and F64 are distinct representations throughout the post-check pipeline.
 An F32 local, immediate, register value, stack slot, call argument, return, and
@@ -9396,7 +9410,9 @@ from its byte view. Fixed products are records, tuples, and nominal wrappers
 composed entirely of scalars and zero-sized products. Their existing checked
 types define checked field order; bytes concatenate scalar leaves in that
 order without host padding. Lists containing other value shapes retain explicit
-child nodes so their graph edges and sharing stay visible.
+child nodes so their graph edges and sharing stay visible. A restored list of
+such values that is data alone is a stored list (see "Compile-Time Evaluation
+And Static Storage"), which no stage represents item by item.
 
 Constant writing and target lowering compile a field-copy plan once per explicit
 representation. Plans use committed layout field indexes and offsets, preserve

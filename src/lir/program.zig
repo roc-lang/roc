@@ -573,9 +573,13 @@ pub const LiteralRootPlan = struct {
 pub const StaticDataValue = struct {
     /// Post-ARC guards reading this slot; threaded through ComptimeValueGuard.
     first_comptime_guard: ?u32 = null,
-    /// Null when completed frozen data supplies this slot directly.
+    /// Null when completed frozen data or a stored node supplies this slot
+    /// directly.
     initializer: ?LIR.LirProcSpecId,
     layout_idx: layout.Idx,
+    /// The stored list this value is frozen from, when it has no initializer
+    /// (`Mono.StoredStaticList`).
+    stored: ?StoredStaticValue = null,
     /// An evaluated root owns this slot. Its initializer is representation
     /// evidence; materialization must consume the completed root value.
     compile_time_root: ?struct {
@@ -592,6 +596,16 @@ pub const StaticDataValue = struct {
             },
         },
     } = null,
+};
+
+/// A list stored in a checked module's `ConstStore`, which static data
+/// freezes at its value's layout through `plan`, the const plan of the
+/// value's type. Nothing it reaches is a function value, so the plan names no
+/// procedure.
+pub const StoredStaticValue = struct {
+    module: checked.ModuleId,
+    node: checked.ConstNodeId,
+    plan: ConstPlanId,
 };
 
 /// The `failed` byte of a compile-time root's failure record.

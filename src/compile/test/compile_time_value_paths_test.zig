@@ -553,7 +553,7 @@ fn callsPassingIntLiteral(gpa: std.mem.Allocator, result: *const lir.Program.Res
 const small_count = 100;
 const large_count = 5000;
 
-test "a constant aggregate's image does not grow with its copies, and packed scalars and runtime repeats cost the runtime program the same at any element count" {
+test "a constant aggregate's image does not grow with its copies, and every constant aggregate costs the runtime program the same at any item count" {
     if (is_freestanding) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     inline for (@typeInfo(AggregateShape).@"enum".field_names) |field_name| {
@@ -602,16 +602,13 @@ test "a constant aggregate's image does not grow with its copies, and packed sca
             }
         }
         // The runtime program restores a completed value from the constant
-        // store, as one restored from the store without an evaluation does,
-        // and both build packed scalars and runtime repeats at a fixed size.
-        switch (shape) {
-            .literal_scalars, .runtime_repeat => {
-                try std.testing.expectEqual(sizes[0], sizes[1]);
-                try std.testing.expectEqual(restored_sizes[0], restored_sizes[1]);
-                try std.testing.expect(sizes[1].widest_frame < small_count);
-                try std.testing.expect(sizes[1].widest_list < small_count);
-            },
-            .nested_rows, .heap_strings, .string_records => {},
-        }
+        // store, as one restored from the store without an evaluation does.
+        // A packed list is a literal, a runtime repeat is one call, and every
+        // other constant list is frozen straight from its stored node, so no
+        // item becomes a local or a statement.
+        try std.testing.expectEqual(sizes[0], sizes[1]);
+        try std.testing.expectEqual(restored_sizes[0], restored_sizes[1]);
+        try std.testing.expect(sizes[1].widest_frame < small_count);
+        try std.testing.expect(sizes[1].widest_list < small_count);
     }
 }

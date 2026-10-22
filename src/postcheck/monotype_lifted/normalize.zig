@@ -727,7 +727,10 @@ const Normalizer = struct {
             },
             // These children provide evidence or conditional execution, rather
             // than ordinary strict operands at the enclosing position.
-            .static_data_candidate => |*candidate| return try self.scopedChild(frame, &candidate.runtime_expr, cursor, delivered),
+            .static_data_candidate => |*candidate| {
+                const child = candidate.value.subexpressionPtr() orelse return try self.finishExpr(frame);
+                return try self.scopedChild(frame, child, cursor, delivered);
+            },
             .comptime_value => |*candidate| return try self.scopedChild(frame, &candidate.initializer, cursor, delivered),
             .expect => |*child| return try self.scopedChild(frame, child, cursor, delivered),
             .dbg => |*child| return try self.sinkChild(frame, child, cursor, delivered),

@@ -1790,7 +1790,13 @@ const Pass = struct {
         const expr = self.program.getExpr(expr_id);
         const value: Value = switch (expr.data) {
             .comptime_value => .{ .expr = expr_id },
-            .static_data_candidate, .tag, .tuple, .record, .nominal, .fn_ref => return null,
+            // A stored list has no constructor components, as the list it
+            // stands for has none: the candidate is its own opaque value.
+            .static_data_candidate => |candidate| switch (candidate.value) {
+                .runtime => return null,
+                .stored => .{ .expr = expr_id },
+            },
+            .tag, .tuple, .record, .nominal, .fn_ref => return null,
             // A binding/control expression owns its complete lexical scope.
             // Retaining it as an opaque leaf preserves its exact evaluation
             // without exposing initializer-private locals through the view.
@@ -1871,7 +1877,10 @@ const Pass = struct {
         var components = std.ArrayList(Ast.ExprId).empty;
         errdefer components.deinit(self.allocator);
         switch (expr.data) {
-            .static_data_candidate => |candidate| try components.append(self.allocator, candidate.runtime_expr),
+            .static_data_candidate => |candidate| switch (candidate.value) {
+                .runtime => |runtime| try components.append(self.allocator, runtime),
+                .stored => unreachable, // staticDataLeaf returns a stored candidate as a leaf, so no frame is built for one
+            },
             .tag => |tag| for (0..tag.payloads.len) |i| try components.append(self.allocator, GuardedList.at(self.program.exprSpan(tag.payloads), i)),
             .tuple => |span| for (0..span.len) |i| try components.append(self.allocator, GuardedList.at(self.program.exprSpan(span), i)),
             .record => |span| for (0..span.len) |i| try components.append(self.allocator, GuardedList.at(self.program.fieldExprSpan(span), i).value),
@@ -3507,7 +3516,11 @@ const Pass = struct {
                 .nominal => |backing| try stack.append(self.allocator, backing),
                 .field_access => |field| try stack.append(self.allocator, field.receiver),
                 .tuple_access => |access| try stack.append(self.allocator, access.tuple),
-                .static_data_candidate => |candidate| try stack.append(self.allocator, candidate.runtime_expr),
+                .static_data_candidate => |candidate| switch (candidate.value) {
+                    .runtime => |runtime| try stack.append(self.allocator, runtime),
+                    // As the list literal it stands for.
+                    .stored => return .disproven,
+                },
                 .typed_boundary => |boundary| try stack.append(self.allocator, boundary.value),
                 // A row coercion emits a discriminant switch and, for a boxed
                 // destination, an allocation.
@@ -12347,7 +12360,7 @@ const Cloner = struct {
                 try self.collectFieldExprs(task, update.fields);
             },
             .tag => |tag| try self.collectExprSpan(task, tag.payloads),
-            .static_data_candidate => |candidate| try items.append(allocator, .{ .expr = candidate.runtime_expr }),
+            .static_data_candidate => |candidate| if (candidate.value.subexpression()) |sub| try items.append(allocator, .{ .expr = sub }),
             .typed_boundary => |boundary| try items.append(allocator, .{ .expr = boundary.value }),
             .row_widen => |widen| try items.append(allocator, .{ .expr = widen.value }),
             .nominal,
@@ -12633,7 +12646,11 @@ const Cloner = struct {
         // Transparent wrappers are unwrapped iteratively.
         while (true) {
             switch (self.pass.program.getExpr(expr_id).data) {
-                .static_data_candidate => |candidate| expr_id = candidate.runtime_expr,
+                .static_data_candidate => |candidate| switch (candidate.value) {
+                    .runtime => |runtime| expr_id = runtime,
+                    // As the list it stands for.
+                    .stored => return false,
+                },
                 .typed_boundary => |boundary| expr_id = boundary.value,
                 // A row coercion is opaque to static matching: the child's
                 // known tag structure indexes the child's own row.
@@ -13318,7 +13335,11 @@ const Cloner = struct {
                     try accessors.append(self.pass.allocator, expr_id);
                     expr_id = access.tuple;
                 },
-                .static_data_candidate => |candidate| expr_id = candidate.runtime_expr,
+                .static_data_candidate => |candidate| switch (candidate.value) {
+                    .runtime => |runtime| expr_id = runtime,
+                    // As the list it stands for.
+                    .stored => return null,
+                },
                 .comptime_value => return null,
                 .typed_boundary => |boundary| expr_id = boundary.value,
                 // A row coercion is opaque to static matching: the child's
@@ -14888,7 +14909,7 @@ const BodyLocalScope = struct {
                     try walk.pushFieldExprs(update.fields);
                 },
                 .tag => |tag| try walk.pushExprSpan(tag.payloads),
-                .static_data_candidate => |candidate| try walk.push(.{ .expr = candidate.runtime_expr }),
+                .static_data_candidate => |candidate| if (candidate.value.subexpression()) |sub| try walk.push(.{ .expr = sub }),
                 .comptime_value => |candidate| try walk.push(.{ .expr = candidate.initializer }),
                 .typed_boundary => |boundary| try walk.push(.{ .expr = boundary.value }),
                 .row_widen => |widen| try walk.push(.{ .expr = widen.value }),
@@ -16541,7 +16562,7 @@ test "a constant read counts as one expression in either form" {
     const candidate = try program.addExpr(.{ .ty = list_ty, .data = .{ .static_data_candidate = .{
         .storage = .aggregate,
         .static_data = try addStaticDataIdentityForTest(&program),
-        .runtime_expr = list,
+        .value = .{ .runtime = list },
     } } });
     try std.testing.expectEqual(BodySize{ .exact = 4 }, try exprBodySizeWithin(allocator, &program, list, spec_constr_body_expr_threshold));
     try std.testing.expectEqual(BodySize{ .exact = 1 }, try exprBodySizeWithin(allocator, &program, read, spec_constr_body_expr_threshold));
@@ -16559,7 +16580,7 @@ test "static candidate clones share closed initializers without emitting caller 
     const candidate = try program.addExpr(.{ .ty = list_ty, .data = .{ .static_data_candidate = .{
         .storage = .aggregate,
         .static_data = try addStaticDataIdentityForTest(&program),
-        .runtime_expr = list,
+        .value = .{ .runtime = list },
     } } });
     var pass = try Pass.init(allocator, &program);
     defer pass.deinit();
@@ -16597,7 +16618,7 @@ test "static candidate constructor views are linear in shared source graph size"
     const candidate = try program.addExpr(.{ .ty = ty, .data = .{ .static_data_candidate = .{
         .storage = .aggregate,
         .static_data = try addStaticDataIdentityForTest(&program),
-        .runtime_expr = expr,
+        .value = .{ .runtime = expr },
     } } });
     var pass = try Pass.init(allocator, &program);
     defer pass.deinit();
@@ -16630,7 +16651,7 @@ test "static candidate match rebinding preserves the initializer and its private
     const candidate = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .static_data_candidate = .{
         .storage = .aggregate,
         .static_data = try addStaticDataIdentityForTest(&program),
-        .runtime_expr = tuple,
+        .value = .{ .runtime = tuple },
     } } });
     const field_local = try program.addLocal(@fromBackingInt(@intCast(2)), ty);
     const field_pat = try program.addPat(.{ .ty = ty, .data = .{ .bind = field_local } });
@@ -16649,7 +16670,7 @@ test "static candidate match rebinding preserves the initializer and its private
     try std.testing.expectEqual(private, itemFromValue(cloned.value, 0).?.expr);
     const selected = try cloner.materialize(itemFromValue(prepared, 0).?);
     try std.testing.expect(program.getExpr(selected).data.local != local);
-    try std.testing.expectEqual(tuple, program.getExpr(candidate).data.static_data_candidate.runtime_expr);
+    try std.testing.expectEqual(tuple, program.getExpr(candidate).data.static_data_candidate.value.runtime);
 }
 
 test "loop exit selection clone is isolated from ordinary rewrites" {

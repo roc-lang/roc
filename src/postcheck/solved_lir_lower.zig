@@ -3659,7 +3659,7 @@ const Lowerer = struct {
                     continue;
                 },
                 .static_data_candidate => |candidate| {
-                    current = .{ .expr = candidate.runtime_expr, .ty = current.ty, .layout_idx = current.layout_idx };
+                    current = .{ .expr = candidateConstructionExpr(candidate) orelse return .{ .done = null }, .ty = current.ty, .layout_idx = current.layout_idx };
                     continue;
                 },
                 .local,
@@ -3705,6 +3705,16 @@ const Lowerer = struct {
         }
     }
 
+    /// The expression a candidate's construction is read from: its runtime
+    /// value. A stored list has none: it has items, and a list with items
+    /// has no construction (`constructionOfListExpr`).
+    fn candidateConstructionExpr(candidate: Mono.StaticDataCandidate) ?Lifted.ExprId {
+        return switch (candidate.value) {
+            .runtime => |runtime| runtime,
+            .stored => null,
+        };
+    }
+
     /// A restored list lowers as a construction only when it is empty: an
     /// empty list's `with_capacity` request cannot survive in a slot, while
     /// a list with elements is served from static data, since rebuilding it
@@ -3725,7 +3735,10 @@ const Lowerer = struct {
                 ty = try self.nominalBackingType(ty, data.nominal);
                 expr_id = data.nominal;
             } else if (data == .static_data_candidate) {
-                expr_id = data.static_data_candidate.runtime_expr;
+                switch (data.static_data_candidate.value) {
+                    .runtime => |runtime| expr_id = runtime,
+                    .stored => |stored| return try self.uniformStoredList(arena, stored, ty, value_layout),
+                }
             } else break;
         }
         const expr = self.solved.lifted.getExpr(expr_id);
@@ -3783,6 +3796,15 @@ const Lowerer = struct {
             .expect,
             => null,
         };
+    }
+
+    /// A stored list is uniform when Monotype found its items to be one
+    /// stored value and that value has a construction, as a list literal is
+    /// when every item's construction equals the first's.
+    fn uniformStoredList(self: *Lowerer, arena: std.mem.Allocator, stored: Mono.StoredStaticList, ty: Type.TypeId, value_layout: layout.Layout) Common.LowerError!?postcheck_values.UniformList {
+        const item = stored.uniform_item orelse return null;
+        const element = try self.constructionOfExpr(arena, item, self.listElemType(ty), value_layout.getIdx()) orelse return null;
+        return .{ .element = element, .count = stored.item_count };
     }
 
     fn uniformListOfItems(self: *Lowerer, arena: std.mem.Allocator, span: Lifted.Span(Lifted.ExprId), ty: Type.TypeId, value_layout: layout.Layout) Common.LowerError!?postcheck_values.UniformList {
@@ -6259,6 +6281,26 @@ const Lowerer = struct {
         }
         const gop = try self.static_initializer_map.getOrPut(request);
         if (gop.found_existing) return gop.value_ptr.*;
+        const runtime_expr = switch (candidate.value) {
+            .runtime => |runtime| runtime,
+            .stored => {
+                // Frozen straight from the stored node its request names: no
+                // initializer builds it.
+                const stored_request = self.solved.lifted.static_data_values.get(@backingInt(candidate.static_data));
+                const result_id: LIR.StaticDataId = @fromBackingInt(@intCast(@as(u32, @intCast(self.result.static_data_values.items.len))));
+                try self.result.static_data_values.append(self.allocator, .{
+                    .initializer = null,
+                    .layout_idx = layout_idx,
+                    .stored = .{
+                        .module = check.CheckedModule.constModuleId(stored_request.const_locator),
+                        .node = stored_request.node orelse Common.invariant("a stored list's static data request named no stored node"),
+                        .plan = try self.constPlanOfType(ty),
+                    },
+                });
+                gop.value_ptr.* = result_id;
+                return result_id;
+            },
+        };
 
         const proc = try self.result.store.addProcSpec(.{
             .name = lirSymbol(self.symbols.fresh()),
@@ -6268,14 +6310,14 @@ const Lowerer = struct {
             .ret_layout = layout_idx,
             .abi = .roc,
             .is_static_initializer = true,
-        }, self.solved.lifted.exprLoc(candidate.runtime_expr));
+        }, self.solved.lifted.exprLoc(runtime_expr));
         const result_id: LIR.StaticDataId = @fromBackingInt(@intCast(@as(u32, @intCast(self.result.static_data_values.items.len))));
         try self.result.static_data_values.append(self.allocator, .{
             .initializer = proc,
             .layout_idx = layout_idx,
         });
         try self.static_initializer_queue.append(self.allocator, .{
-            .expr = candidate.runtime_expr,
+            .expr = runtime_expr,
             .ty = ty,
             .proc = proc,
         });
@@ -7868,12 +7910,25 @@ const Lowerer = struct {
     ) Common.LowerError!LowerStep {
         const layout_idx = self.result.store.getLocal(target).layout_idx;
         const proc_id = self.current_proc orelse Common.invariant("static data candidate lowering ran without a current procedure");
-        if (self.result.store.getProcSpecImmediate(proc_id).is_static_initializer) {
-            // Closed target initializers serialize the stored value, not a
-            // runtime construction.
-            return .{ .tail = exprTask(where, target, candidate.runtime_expr, ty, next) };
+        const in_initializer = self.result.store.getProcSpecImmediate(proc_id).is_static_initializer;
+        switch (candidate.value) {
+            .runtime => |runtime| {
+                // Closed target initializers serialize the stored value, not
+                // a runtime construction.
+                if (in_initializer) return .{ .tail = exprTask(where, target, runtime, ty, next) };
+                if (try self.lowerConstructionExprInto(where, target, runtime, ty, next)) |built| return .{ .ret = built };
+            },
+            // A stored list has items, so it has no construction, and an
+            // initializer that holds it reads its frozen value.
+            .stored => if (in_initializer) return .{ .ret = try self.result.store.addCFStmt(.{ .assign_literal = .{
+                .target = target,
+                .value = .{ .static_data = .{
+                    .id = try self.lirStaticDataFor(candidate, ty, layout_idx),
+                    .copies = .none,
+                } },
+                .next = next,
+            } }, where.source()) },
         }
-        if (try self.lowerConstructionExprInto(where, target, candidate.runtime_expr, ty, next)) |built| return .{ .ret = built };
         if (candidate.storage.needsTargetStorage(self.result.layouts.targetUsize()) and self.layoutNeedsStaticData(layout_idx)) {
             const id = try self.lirStaticDataFor(candidate, ty, layout_idx);
             // A list of copies keeps its slot and also names its fresh form
@@ -7882,9 +7937,13 @@ const Lowerer = struct {
             defer self.lane_scratch.releaseArena(arena);
             var fresh_alternative: ?LIR.LirProcSpecId = null;
             var list_len: ?u64 = null;
-            if (try self.uniformListOfExpr(arena.allocator(), candidate.runtime_expr, ty, layout_idx)) |uniform| {
-                fresh_alternative = try self.uniformListConstructor(where, uniform, layout_idx);
-                if (fresh_alternative != null) list_len = uniform.count;
+            const uniform = switch (candidate.value) {
+                .runtime => |runtime| try self.uniformListOfExpr(arena.allocator(), runtime, ty, layout_idx),
+                .stored => |stored| try self.uniformStoredList(arena.allocator(), stored, ty, self.result.layouts.getLayout(layout_idx)),
+            };
+            if (uniform) |copies| {
+                fresh_alternative = try self.uniformListConstructor(where, copies, layout_idx);
+                if (fresh_alternative != null) list_len = copies.count;
             }
             return .{ .ret = try self.result.store.addCFStmt(.{ .assign_literal = .{
                 .target = target,
@@ -7898,7 +7957,10 @@ const Lowerer = struct {
                 .next = next,
             } }, where.source()) };
         }
-        return .{ .tail = exprTask(where, target, candidate.runtime_expr, ty, next) };
+        return switch (candidate.value) {
+            .runtime => |runtime| .{ .tail = exprTask(where, target, runtime, ty, next) },
+            .stored => Common.invariant("a stored list's layout needed no static data"),
+        };
     }
 
     fn typedBoundaryStep(
