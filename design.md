@@ -8500,10 +8500,15 @@ and ordinary value flow expose a known iterator constructor, SpecConstr can:
 - supply each reachable `continue` edge with the scalar leaves required by the
   loop fixed point.
 
-When the continuation observes only part of a tuple loop result, SpecConstr
-may narrow the loop's exit ABI without narrowing its back-edge state. This
-applies equally to source tuples and compiler-generated state tuples; tuple
-type does not imply a statically visible tuple constructor.
+When the continuation never observes a tuple loop result whole, SpecConstr
+gives the loop an exit ABI of the components it reads, dropping any it cannot
+observe, without narrowing its back-edge state. That includes a result whose
+every component is read: built as a tuple at each exit and read back field by
+field, each read of a refcounted tuple would retain and release every
+refcounted component, which a loop left by `break` from inside an enclosing
+loop pays on every pass. This applies equally to source tuples and
+compiler-generated state tuples; tuple type does not imply a statically
+visible tuple constructor.
 
 Exit selection is a distinct final phase after the specialization graph is
 complete. One source-order traversal of each finalized function records loop

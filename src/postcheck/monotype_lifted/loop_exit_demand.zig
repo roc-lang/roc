@@ -13,6 +13,8 @@ pub const Plan = struct {
     items: []Item,
     aggregate: ?Ast.LocalId,
     used_count: usize = 0,
+    /// Some use observes the complete tuple rather than its components.
+    whole: bool = false,
 
     pub const Item = struct {
         ty: Type.TypeId,
@@ -20,8 +22,14 @@ pub const Plan = struct {
         used: bool = false,
     };
 
+    /// Whether the exit should transfer the demanded components directly.
+    /// That holds whenever no use observes the tuple whole, including when
+    /// every component is demanded: a tuple the continuation only takes
+    /// apart is otherwise built at each exit and read field by field after
+    /// it, and each read of a refcounted tuple pays a retain and a release
+    /// of every refcounted component.
     pub fn selected(self: Plan) bool {
-        return self.used_count != 0 and self.used_count != self.items.len;
+        return self.used_count != 0 and !self.whole;
     }
 
     fn useItem(self: *Plan, index: usize) void {
@@ -119,7 +127,7 @@ pub const Inventory = struct {
 
     fn useLocal(self: *Inventory, local: Ast.LocalId, field: ?u32) void {
         const use = self.uses.get(local) orelse return;
-        if (use.plan.used_count == use.plan.items.len) return;
+        if (use.plan.whole) return;
         if (use.item) |i| {
             use.plan.useItem(i);
         } else if (field) |i| {
@@ -130,6 +138,7 @@ pub const Inventory = struct {
             // locals and values crossing call or capture boundaries.
             for (use.plan.items) |*item| item.used = true;
             use.plan.used_count = use.plan.items.len;
+            use.plan.whole = true;
         }
     }
 
