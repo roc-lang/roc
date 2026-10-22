@@ -1987,7 +1987,7 @@ fn unwindMatches(original: anytype, fresh: @TypeOf(original)) bool {
 /// only other spliced artifacts reach.
 pub const SpliceError = Allocator.Error;
 
-/// Which stable references to procedures `markReachers` follows.
+/// Which stable references to procedures `markReferrers` follows.
 pub const ProcSymbols = enum {
     /// Every one: a stable reference to a procedure the receiving program
     /// lowers itself is not followed by a splice, but whether a program
@@ -2002,7 +2002,7 @@ pub const ProcSymbols = enum {
 /// every artifact that reaches a marked artifact through references, or
 /// through a stable reference to an artifact of the set (to a procedure
 /// only as `proc_symbols` says), transitively.
-pub fn markReachers(allocator: Allocator, set: *const Set, marked: []bool, proc_symbols: ProcSymbols) Allocator.Error!void {
+pub fn markReferrers(allocator: Allocator, set: *const Set, marked: []bool, proc_symbols: ProcSymbols) Allocator.Error!void {
     std.debug.assert(marked.len == set.artifacts.len);
     var by_proc = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator);
     defer by_proc.deinit();
@@ -2017,14 +2017,14 @@ pub fn markReachers(allocator: Allocator, set: *const Set, marked: []bool, proc_
         .entrypoint, .message_pool_run, .branch_island => {},
     };
     // Reverse edges: who places whom.
-    var reachers = try allocator.alloc(std.ArrayList(u32), set.artifacts.len);
+    var referrers = try allocator.alloc(std.ArrayList(u32), set.artifacts.len);
     defer {
-        for (reachers) |*list| list.deinit(allocator);
-        allocator.free(reachers);
+        for (referrers) |*list| list.deinit(allocator);
+        allocator.free(referrers);
     }
-    for (reachers) |*list| list.* = .empty;
+    for (referrers) |*list| list.* = .empty;
     for (set.artifacts, 0..) |artifact, index| {
-        for (artifact.refs) |ref| try reachers[ref.target].append(allocator, @intCast(index));
+        for (artifact.refs) |ref| try referrers[ref.target].append(allocator, @intCast(index));
         for (artifact.symbolic_refs) |ref| {
             const target = switch (ref.target) {
                 .proc => |identity| switch (proc_symbols) {
@@ -2034,17 +2034,17 @@ pub fn markReachers(allocator: Allocator, set: *const Set, marked: []bool, proc_
                 .boxy_thunk => |identity| by_thunk.get(identity),
                 .rc_helper => |name| by_helper.get(name),
             } orelse continue;
-            try reachers[target].append(allocator, @intCast(index));
+            try referrers[target].append(allocator, @intCast(index));
         }
     }
     var work = std.ArrayList(u32).empty;
     defer work.deinit(allocator);
     for (marked, 0..) |is_marked, index| if (is_marked) try work.append(allocator, @intCast(index));
     while (work.pop()) |index| {
-        for (reachers[index].items) |reacher| {
-            if (marked[reacher]) continue;
-            marked[reacher] = true;
-            try work.append(allocator, reacher);
+        for (referrers[index].items) |referrer| {
+            if (marked[referrer]) continue;
+            marked[referrer] = true;
+            try work.append(allocator, referrer);
         }
     }
 }
@@ -2068,7 +2068,7 @@ pub fn reachingIdentities(allocator: Allocator, set: *const Set, identities: any
             .boxy_thunk, .rc_helper => {},
         };
     }
-    try markReachers(allocator, set, marked, .follow);
+    try markReferrers(allocator, set, marked, .follow);
     return marked;
 }
 
@@ -2088,7 +2088,7 @@ pub fn reachingAbsentFiles(allocator: Allocator, set: *const Set, present: []con
             if (line.loc.hasLocation() and !present[line.loc.file]) is_marked.* = true;
         }
     }
-    try markReachers(allocator, set, marked, .skip);
+    try markReferrers(allocator, set, marked, .skip);
     return marked;
 }
 
