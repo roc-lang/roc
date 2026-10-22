@@ -614,6 +614,11 @@ const TypeDigest = struct {
     /// The module's top-level statements, whose declarations the type world
     /// covers by source.
     top_level: collections.DenseMap(CIR.Statement.Idx, void),
+    /// The digest of each top-level declaration's source text, computed the
+    /// first time a type names that declaration. A declaration's text can be
+    /// most of the module (every builtin type is nested in one), and every
+    /// type that names it would otherwise hash all of it again.
+    declaration_digests: collections.DenseMap(CIR.Statement.Idx, [32]u8),
     stack: std.ArrayList(CheckedTypeId) = .empty,
 
     fn init(allocator: Allocator, inputs: Inputs) TypeDigest {
@@ -622,12 +627,14 @@ const TypeDigest = struct {
             .inputs = inputs,
             .visited = collections.DenseMap(CheckedTypeId, u32).init(allocator),
             .top_level = collections.DenseMap(CIR.Statement.Idx, void).init(allocator),
+            .declaration_digests = collections.DenseMap(CIR.Statement.Idx, [32]u8).init(allocator),
         };
     }
 
     fn deinit(self: *TypeDigest) void {
         self.visited.deinit();
         self.top_level.deinit();
+        self.declaration_digests.deinit();
         self.stack.deinit(self.allocator);
     }
 
@@ -667,15 +674,13 @@ const TypeDigest = struct {
 
     /// Names a declaration of the module: a top-level one by its name and
     /// source, any other by version-specific data.
-    fn writeOwnDeclaration(self: *const TypeDigest, hasher: *Sha256, name: []const u8, source_decl: ?u32) void {
-        const env = self.inputs.env;
+    fn writeOwnDeclaration(self: *TypeDigest, hasher: *Sha256, name: []const u8, source_decl: ?u32) Allocator.Error!void {
         if (source_decl) |raw| {
             const statement: CIR.Statement.Idx = @fromBackingInt(raw);
             if (self.top_level.contains(statement)) {
                 hashTag(hasher, "own-top-level");
                 hashBytes(hasher, name);
-                const region = env.store.getStatementRegion(statement);
-                hashBytes(hasher, env.getSourceAll()[region.start.offset..region.end.offset]);
+                hasher.update(&try self.declarationDigest(statement));
                 return;
             }
         }
@@ -683,6 +688,19 @@ const TypeDigest = struct {
         hasher.update(&self.inputs.own_identity);
         hashBytes(hasher, name);
         hashU32(hasher, source_decl orelse std.math.maxInt(u32));
+    }
+
+    /// The digest of a top-level declaration's source text.
+    fn declarationDigest(self: *TypeDigest, statement: CIR.Statement.Idx) Allocator.Error![32]u8 {
+        const entry = try self.declaration_digests.getOrPut(statement);
+        if (entry.found_existing) return entry.value_ptr.*;
+        const env = self.inputs.env;
+        const region = env.store.getStatementRegion(statement);
+        var hasher = Sha256.init(.{});
+        hashTag(&hasher, "declaration-source");
+        hashBytes(&hasher, env.getSourceAll()[region.start.offset..region.end.offset]);
+        entry.value_ptr.* = hasher.finalResult();
+        return entry.value_ptr.*;
     }
 
     fn writeNode(self: *TypeDigest, hasher: *Sha256, ty: CheckedTypeId, children: *std.ArrayList(CheckedTypeId)) Allocator.Error!void {
@@ -709,7 +727,7 @@ const TypeDigest = struct {
                 hashTag(hasher, "alias");
                 const name = names.typeNameText(alias.name);
                 if (self.isOwn(alias.origin_module)) {
-                    self.writeOwnDeclaration(hasher, name, alias.source_decl);
+                    try self.writeOwnDeclaration(hasher, name, alias.source_decl);
                 } else {
                     hasher.update(names.moduleIdentityBytes(alias.origin_module));
                     hashBytes(hasher, name);
@@ -723,7 +741,7 @@ const TypeDigest = struct {
                 hashTag(hasher, "nominal");
                 const name = names.typeNameText(nominal.name);
                 if (self.isOwn(nominal.origin_module)) {
-                    self.writeOwnDeclaration(hasher, name, nominal.source_decl);
+                    try self.writeOwnDeclaration(hasher, name, nominal.source_decl);
                 } else {
                     hasher.update(names.moduleIdentityBytes(nominal.origin_module));
                     hashBytes(hasher, name);
