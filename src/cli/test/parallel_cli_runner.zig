@@ -11178,7 +11178,12 @@ fn customCheckCompileTimePack(
         }
         const check_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
             return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a check");
-        const checked = runRocInEnv(io, allocator, &trace_env, &.{ "check", "--timings" }, app, .relative, &.{}, null, check_timeout) catch |err|
+        // Parallel Monotype workers read the interface summaries the
+        // coordinator has published when each job starts, so how much body
+        // work a check does depends on scheduling: on four workers it varies
+        // between runs by more than the pack saves. One worker does the same
+        // work every run, so the two checks' counts differ by the pack alone.
+        const checked = runRocInEnv(io, allocator, &trace_env, &.{ "check", "--timings", "--jobs=1" }, app, .relative, &.{}, null, check_timeout) catch |err|
             return customInfraFailure(allocator, timer, "check spawn error: {}", .{err});
         if (!processSucceeded(checked.term) or std.mem.find(u8, checked.stderr, "panic") != null) {
             return failureFromRun(allocator, timer, checked, "check did not succeed");
