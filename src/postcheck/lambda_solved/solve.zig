@@ -33,7 +33,6 @@
 //! explicit `FnId` and symbol references.
 
 const std = @import("std");
-const invariant = @import("base").invariant;
 const TypeDigestHasher = @import("base").TypeDigestHasher;
 const collections = @import("collections");
 const can = @import("can");
@@ -117,7 +116,7 @@ const ActivePairs = struct {
 
     /// Retire `pair`, the most recently begun active pair.
     fn retire(self: *ActivePairs, pair: UnifyPair) void {
-        const node = self.nodes.pop() orelse unreachable;
+        const node = self.nodes.pop() orelse unreachable; // pair is the most recently begun active pair, so its node is on top
         std.debug.assert(node.pair.first == pair.first and node.pair.second == pair.second);
         if (node.next == end) {
             _ = self.heads.remove(pair.first);
@@ -2216,7 +2215,7 @@ const Solver = struct {
             }
             if (left_tag != right_tag) return false;
             switch (left_content) {
-                .link, .mono, .unbound, .forall => unreachable,
+                .link, .mono, .unbound, .forall => unreachable, // resolvedContentAt follows links and monos, and unbound/forall pairs continued above
                 .primitive => |prim| if (prim != right_content.primitive) return false,
                 .zst, .hole, .lambda_set, .erased, .tag_union => {},
                 .list => |elem| try work.append(self.allocator, .{ .first = elem, .second = right_content.list }),
@@ -2401,14 +2400,7 @@ const Solver = struct {
         expected: usize,
     ) void {
         if (args.len == expected) return;
-
-        if (@import("builtin").mode == .debug) {
-            invariant(
-                "postcheck invariant violated: low-level op {s} had {d} args, expected {d}",
-                .{ @tagName(op), args.len, expected },
-            );
-        }
-        unreachable;
+        Common.invariantFmt("low-level op {s} had {d} args, expected {d}", .{ @tagName(op), args.len, expected });
     }
 
     fn boxElem(self: *Solver, ty: Type.TypeVarId) Allocator.Error!Type.TypeVarId {
@@ -2831,7 +2823,7 @@ const Solver = struct {
                     try self.pushSpanPairs(stack, left_named.args, right_named.args, "named type arguments failed Lambda Solved unification");
                 }
             },
-            .link, .unbound, .forall => unreachable,
+            .link, .unbound, .forall => unreachable, // processUnifyPair, the only caller, links unbound roots and rejects link and forall roots first
         }
     }
 
@@ -3138,7 +3130,8 @@ const Solver = struct {
         }
 
         switch (public) {
-            .link, .unbound, .lambda_set, .erased => unreachable,
+            .unbound, .lambda_set, .erased => unreachable, // the check above hands these pairs to pushUnifyPair and returns
+            .link => Common.invariant("Lambda Solved root returned a link"),
             .mono => Common.invariant("lazy Monotype leaf reached the generated-private evidence relation unexpanded"),
             .forall => Common.invariant("generated-private evidence relation received a generalized public type"),
             .primitive => |public_primitive| {

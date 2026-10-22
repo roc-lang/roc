@@ -5934,6 +5934,9 @@ pub const WipFunction = struct {
     /// Fixed entry allocations in creation order. Materialized as a single
     /// reversed prefix so repeated prepend operations do not move the body.
     entry_allocas: std.ArrayList(Instruction.Index) = .empty,
+    /// Words of `extra` that no instruction refers to any more: the
+    /// placeholder records of open phis that `WipPhi.finishOpen` replaced.
+    abandoned_extra_len: u32 = 0,
 
     pub const Cursor = struct { block: Block.Index, instruction: u32 = 0 };
 
@@ -6665,10 +6668,47 @@ pub const WipFunction = struct {
             @memcpy(extra.trail.nextMut(incoming_len, Value, wip), vals);
             @memcpy(extra.trail.nextMut(incoming_len, Block.Index, wip), blocks);
         }
+
+        /// Finish a phi made by `openPhi`: its block's final incoming count
+        /// becomes the number of edges given, which must equal the branches
+        /// into it.
+        pub fn finishOpen(
+            self: WipPhi,
+            vals: []const Value,
+            blocks: []const Block.Index,
+            wip: *WipFunction,
+        ) Allocator.Error!void {
+            assert(vals.len == blocks.len);
+            const block_ptr = self.block.ptr(wip);
+            assert(vals.len == block_ptr.branches);
+            block_ptr.incoming = @intCast(vals.len);
+            const ty = wip.extraData(Instruction.Phi, wip.instructions.get(@backingInt(self.instruction)).data).type;
+            for (vals) |val| assert(val.typeOfWip(wip) == ty);
+            try wip.ensureUnusedExtraCapacity(1, Instruction.Phi, vals.len * 2);
+            const data = wip.addExtraAssumeCapacity(Instruction.Phi{ .type = ty });
+            for (vals) |val| wip.extra.appendAssumeCapacity(@backingInt(val));
+            for (blocks) |block_index| wip.extra.appendAssumeCapacity(@backingInt(block_index));
+            wip.instructions.items(.data)[@backingInt(self.instruction)] = data;
+            wip.abandoned_extra_len += @typeInfo(Instruction.Phi).@"struct".field_names.len;
+        }
     };
 
     pub fn phi(self: *WipFunction, ty: Type, name: []const u8) Allocator.Error!WipPhi {
         return self.phiTag(.phi, ty, name);
+    }
+
+    /// A phi for a block whose predecessors are not all known yet. Its
+    /// incoming edges are supplied by `WipPhi.finishOpen` once every branch
+    /// into the block has been emitted, and the block's declared incoming
+    /// count is not consulted until then.
+    pub fn openPhi(self: *WipFunction, ty: Type, name: []const u8) Allocator.Error!WipPhi {
+        assert(try ty.isSized(self.builder));
+        try self.ensureUnusedExtraCapacity(1, Instruction.Phi, 0);
+        const instruction = try self.addInst(name, .{
+            .tag = .phi,
+            .data = self.addExtraAssumeCapacity(Instruction.Phi{ .type = ty }),
+        });
+        return .{ .block = self.cursor.block, .instruction = instruction };
     }
 
     pub fn select(
@@ -6859,8 +6899,135 @@ pub const WipFunction = struct {
         return metadata.toOptional();
     }
 
+    /// The successor `index` of `block`'s terminator, or null past the last.
+    fn blockSuccessor(self: *const WipFunction, from: Block.Index, index: u32) ?Block.Index {
+        const instructions = from.ptrConst(self).instructions.items;
+        if (instructions.len == 0) return null;
+        const terminator = self.instructions.get(@backingInt(instructions[instructions.len - 1]));
+        switch (terminator.tag) {
+            .br => return if (index == 0) @fromBackingInt(terminator.data) else null,
+            .br_cond => {
+                const extra = self.extraData(Instruction.BrCond, terminator.data);
+                return switch (index) {
+                    0 => extra.then,
+                    1 => extra.@"else",
+                    else => null,
+                };
+            },
+            .@"switch" => {
+                var extra = self.extraDataTrail(Instruction.Switch, terminator.data);
+                if (index == 0) return extra.data.default;
+                if (index > extra.data.cases_len) return null;
+                _ = extra.trail.next(extra.data.cases_len, Constant, self);
+                return extra.trail.next(extra.data.cases_len, Block.Index, self)[index - 1];
+            },
+            .indirectbr => {
+                var extra = self.extraDataTrail(Instruction.IndirectBr, terminator.data);
+                if (index >= extra.data.targets_len) return null;
+                return extra.trail.next(extra.data.targets_len, Block.Index, self)[index];
+            },
+            else => return null,
+        }
+    }
+
+    /// Order the blocks so each follows every block that dominates it: the
+    /// reverse postorder from the entry, then each block no path from the
+    /// entry reaches, from its own depth-first walk. The bitcode writer
+    /// encodes an operand by its distance back from its use, which needs an
+    /// instruction's operands, apart from a phi's, defined before it in
+    /// layout order, and a definition dominates its uses.
+    fn layoutBlocksInReversePostorder(self: *WipFunction) Allocator.Error!void {
+        const gpa = self.builder.gpa;
+        const len = self.blocks.items.len;
+        if (len <= 1) return;
+        const order = try gpa.alloc(Block.Index, len);
+        defer gpa.free(order);
+        const new_index = try gpa.alloc(u32, len);
+        defer gpa.free(new_index);
+        const visited = try gpa.alloc(bool, len);
+        defer gpa.free(visited);
+        @memset(visited, false);
+        const Frame = struct { block: Block.Index, next: u32 };
+        var stack: std.ArrayList(Frame) = .empty;
+        defer stack.deinit(gpa);
+        var postorder: std.ArrayList(Block.Index) = .empty;
+        defer postorder.deinit(gpa);
+
+        var placed: usize = 0;
+        for (0..len) |root_index| {
+            if (visited[root_index]) continue;
+            postorder.clearRetainingCapacity();
+            visited[root_index] = true;
+            try stack.append(gpa, .{ .block = @fromBackingInt(@intCast(root_index)), .next = 0 });
+            while (stack.items.len > 0) {
+                const top = &stack.items[stack.items.len - 1];
+                if (self.blockSuccessor(top.block, top.next)) |successor| {
+                    top.next += 1;
+                    if (visited[@backingInt(successor)]) continue;
+                    visited[@backingInt(successor)] = true;
+                    try stack.append(gpa, .{ .block = successor, .next = 0 });
+                } else {
+                    try postorder.append(gpa, top.block);
+                    stack.items.len -= 1;
+                }
+            }
+            var i = postorder.items.len;
+            while (i > 0) {
+                i -= 1;
+                order[placed] = postorder.items[i];
+                placed += 1;
+            }
+        }
+        assert(placed == len);
+
+        var identity = true;
+        for (order, 0..) |old_block, position| {
+            new_index[@backingInt(old_block)] = @intCast(position);
+            if (@backingInt(old_block) != position) identity = false;
+        }
+        if (identity) return;
+
+        const tags = self.instructions.items(.tag);
+        const datas = self.instructions.items(.data);
+        for (self.blocks.items) |current_block| {
+            for (current_block.instructions.items) |instruction| {
+                const index = @backingInt(instruction);
+                switch (tags[index]) {
+                    .br => datas[index] = new_index[datas[index]],
+                    .br_cond => {
+                        const fields = self.extra.items[datas[index]..];
+                        fields[1] = new_index[fields[1]];
+                        fields[2] = new_index[fields[2]];
+                    },
+                    .@"switch" => {
+                        const fields = self.extra.items[datas[index]..];
+                        fields[1] = new_index[fields[1]];
+                        const cases_len = fields[2];
+                        for (fields[4 + cases_len ..][0..cases_len]) |*target| target.* = new_index[target.*];
+                    },
+                    .indirectbr => {
+                        const fields = self.extra.items[datas[index]..];
+                        const targets_len = fields[1];
+                        for (fields[2..][0..targets_len]) |*target| target.* = new_index[target.*];
+                    },
+                    .phi, .@"phi fast" => {
+                        const fields = self.extra.items[datas[index]..];
+                        const incoming = current_block.incoming;
+                        for (fields[1 + incoming ..][0..incoming]) |*source| source.* = new_index[source.*];
+                    },
+                    else => {},
+                }
+            }
+        }
+        const reordered = try gpa.alloc(Block, len);
+        defer gpa.free(reordered);
+        for (order, reordered) |old, *slot| slot.* = self.blocks.items[@backingInt(old)];
+        @memcpy(self.blocks.items, reordered);
+    }
+
     pub fn finish(self: *WipFunction) Allocator.Error!void {
         try self.flushEntryAllocas();
+        try self.layoutBlocksInReversePostorder();
         const gpa = self.builder.gpa;
         const function = self.function.ptr(self.builder);
         const params_len = self.function.typeOf(self.builder).functionParameters(self.builder).len;
@@ -6946,7 +7113,7 @@ pub const WipFunction = struct {
                 assert(wip_extra.index == wip_extra.items.len);
                 return wip_extra.items;
             }
-        } = .{ .items = try gpa.alloc(u32, self.extra.items.len) };
+        } = .{ .items = try gpa.alloc(u32, self.extra.items.len - self.abandoned_extra_len) };
         errdefer gpa.free(wip_extra.items);
 
         gpa.free(function.blocks);
@@ -14938,7 +15105,9 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                             for (vals, blocks) |val, block| {
                                 const offset_value = adapter.getOffsetValueSignedIndex(val);
                                 const abs_value: u32 = @intCast(@abs(offset_value));
-                                const signed_vbr = if (offset_value > 0) abs_value << 1 else ((abs_value << 1) | 1);
+                                // A phi naming itself has offset zero, which sign rotation encodes
+                                // as 0: the encoding 1 means the most negative value.
+                                const signed_vbr = if (offset_value >= 0) abs_value << 1 else ((abs_value << 1) | 1);
                                 record.appendAssumeCapacity(signed_vbr);
                                 record.appendAssumeCapacity(@backingInt(block));
                             }

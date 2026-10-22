@@ -485,12 +485,7 @@ pub const BoxyRuntime = struct {
     }
 
     fn invariantFailed(_: *const BoxyRuntime, comptime fmt: []const u8, args: anytype) noreturn {
-        if (builtin.mode == .debug) {
-            debugPrint(fmt, args);
-            debugPrint("\n", .{});
-            std.debug.assert(false);
-        }
-        unreachable;
+        base.invariant(fmt, args);
     }
 
     fn invariantFailedError(self: *const BoxyRuntime, comptime fmt: []const u8, args: anytype) Error {
@@ -607,6 +602,14 @@ pub const BoxyRuntime = struct {
         discriminant: u32,
     ) LirProgram.BoxyTagVariant {
         if (self.findBoxyTagVariantByDiscriminant(desc, discriminant)) |variant| return variant;
+        self.missingBoxyTagVariant(desc, discriminant);
+    }
+
+    fn missingBoxyTagVariant(
+        self: *const BoxyRuntime,
+        desc: *const LirProgram.BoxyTypeDesc,
+        discriminant: u32,
+    ) noreturn {
         self.invariantFailed(
             "LIR/interpreter invariant violated: boxy descriptor had no tag variant with discriminant {d} payload_layout={d} checked_type={any} variants={any} ext={any}",
             .{
@@ -699,18 +702,16 @@ pub const BoxyRuntime = struct {
     }
 
     pub fn readPointerInt(self: *const BoxyRuntime, value: Value) usize {
-        return switch (self.layout_store.targetUsize().size()) {
-            4 => value.read(u32),
-            8 => value.read(usize),
-            else => unreachable,
+        return switch (self.layout_store.targetUsize()) {
+            .u32 => value.read(u32),
+            .u64 => value.read(usize),
         };
     }
 
     pub fn writePointerInt(self: *const BoxyRuntime, value: Value, raw_ptr: usize) void {
-        switch (self.layout_store.targetUsize().size()) {
-            4 => value.write(u32, @intCast(raw_ptr)),
-            8 => value.write(usize, raw_ptr),
-            else => unreachable,
+        switch (self.layout_store.targetUsize()) {
+            .u32 => value.write(u32, @intCast(raw_ptr)),
+            .u64 => value.write(usize, raw_ptr),
         }
     }
 
@@ -2179,7 +2180,7 @@ pub const BoxyRuntime = struct {
         }
 
         const should_drop_elements = switch (op) {
-            .incref => unreachable,
+            .incref => unreachable, // the incref case returned above
             .decref => rl.isUnique(self.roc_ops),
             .free => true,
             .host_drop => hostDropInRcStatement(),
@@ -2245,14 +2246,9 @@ pub const BoxyRuntime = struct {
         if (self.helper.sizeOf(actual_payload_layout) == 0) return;
 
         const variant = self.findBoxyTagVariantByDiscriminant(desc, discriminant) orelse {
-            const ext_discriminant = self.boxyTagExtDiscriminant(desc) orelse {
-                _ = self.requireBoxyTagVariantByDiscriminant(desc, discriminant);
-                unreachable;
-            };
-            if (discriminant != ext_discriminant) {
-                _ = self.requireBoxyTagVariantByDiscriminant(desc, discriminant);
-                unreachable;
-            }
+            const ext_discriminant = self.boxyTagExtDiscriminant(desc) orelse
+                self.missingBoxyTagVariant(desc, discriminant);
+            if (discriminant != ext_discriminant) self.missingBoxyTagVariant(desc, discriminant);
             const ext_desc = try self.resolveBoxyTagExtDesc(hooks, desc);
             const ext_value = try self.materializeLocalValue(hooks, tag_base.value, actual_payload_layout);
             try self.performBoxyLayoutDrop(hooks, ext_value, actual_payload_layout, ext_desc, op, count, atomicity);
@@ -3170,7 +3166,7 @@ pub const BoxyRuntime = struct {
                     .zst,
                     .tag_union,
                     .ptr,
-                    => unreachable,
+                    => unreachable, // target_is_box limits target_layout_val to box layouts
                 };
                 const target_ptr = self.readBoxedDataPointer(target) orelse {
                     if (self.helper.sizeOf(target_payload_layout) == 0) return;
@@ -3230,7 +3226,7 @@ pub const BoxyRuntime = struct {
                 .zst,
                 .tag_union,
                 .ptr,
-                => unreachable,
+                => unreachable, // target_is_box limits target_layout_val to box layouts
             };
             const target_ptr = self.readBoxedDataPointer(target) orelse {
                 if (self.helper.sizeOf(target_payload_layout) == 0) return;
@@ -3807,7 +3803,7 @@ pub const BoxyRuntime = struct {
                     .zst,
                     .tag_union,
                     .ptr,
-                    => unreachable,
+                    => unreachable, // expected_is_box limits expected_layout_val to box layouts
                 }
             };
             const source_payload = try self.boxyPayloadValueForTargetDesc(
@@ -5897,7 +5893,7 @@ pub const BoxyRuntime = struct {
             .primitive => |stored| switch (self.layout_store.getLayout(stored.layout).getScalar().tag) {
                 .str => try self.appendQuotedInspectBytes(out, readRocStr(stored.value)),
                 .int, .frac, .opaque_ptr => try self.appendScalarInspect(out, stored.value, stored.layout),
-                .vector => unreachable,
+                .vector => unreachable, // inspectShape rejects a vector before yielding a primitive shape
             },
             .record => |record| {
                 var sink = InspectStructSink(@TypeOf(hooks)){ .runtime = self, .hooks = hooks, .out = out, .aggregate = record };

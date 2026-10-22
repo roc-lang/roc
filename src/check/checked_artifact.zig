@@ -265,7 +265,7 @@ fn hashModuleSourceInputs(module_env: *const ModuleEnv) [32]u8 {
         switch (dep.state) {
             .present => hasher.update(&dep.content_hash),
             .missing, .unreadable => {},
-            .pending => unreachable,
+            .pending => unreachable, // the canonicalize task settles every file dependency before source inputs are hashed
         }
     }
     return hasher.finalResult();
@@ -2250,13 +2250,10 @@ fn checkedTypeIdForRootSource(
         .required_binding => |binding_idx| blk: {
             const module_env = module.moduleEnvConst();
             if (binding_idx >= module_env.requires_types.items.items.len) {
-                if (builtin.mode == .debug) {
-                    base.invariant(
-                        "checked artifact invariant violated: explicit required-binding root {d} is out of range",
-                        .{binding_idx},
-                    );
-                }
-                unreachable;
+                base.invariant(
+                    "checked artifact invariant violated: explicit required-binding root {d} is out of range",
+                    .{binding_idx},
+                );
             }
             break :blk ModuleEnv.varFrom(module_env.requires_types.items.items[binding_idx].type_anno);
         },
@@ -2282,10 +2279,7 @@ fn checkedTypeIdForVar(
     var_: Var,
 ) Allocator.Error!CheckedTypeId {
     return checked_types.rootForSourceVar(module, var_) orelse {
-        if (builtin.mode == .debug) {
-            base.invariant("checked artifact invariant violated: root request type was not published", .{});
-        }
-        unreachable;
+        base.invariant("checked artifact invariant violated: root request type was not published", .{});
     };
 }
 
@@ -2341,10 +2335,7 @@ fn entryWrapperForRoot(
     root: ComptimeRootId,
 ) EntryWrapper {
     const wrapper = entry_wrappers.lookupByRoot(root) orelse {
-        if (builtin.mode == .debug) {
-            base.invariant("checked artifact invariant violated: compile-time/test root has no entry wrapper", .{});
-        }
-        unreachable;
+        base.invariant("checked artifact invariant violated: compile-time/test root has no entry wrapper", .{});
     };
     return wrapper;
 }
@@ -3210,7 +3201,7 @@ fn reconstructTypeData(comptime Live: type, pool_owner: anytype, stored: anytype
                 return @unionInit(Live, name, reconstructTypeData(@FieldType(Live, name), pool_owner, &@field(stored.*, name)));
             }
         }
-        unreachable;
+        unreachable; // Stored and Live share tag names, and the loop above returns for each tag
     }
 }
 
@@ -3430,7 +3421,7 @@ pub const CheckedTypeStoreView = struct {
         var hasher = std.hash.Wyhash.init(0);
         std.hash.autoHash(&hasher, std.meta.activeTag(root_payload));
         switch (root_payload) {
-            .alias => unreachable,
+            .alias => unreachable, // checkedTypeEqualityRoot(.transparent) resolves past every alias
             .pending, .err, .empty_record, .empty_tag_union => {},
             .flex, .rigid => std.hash.autoHash(&hasher, root),
             .record => |record| {
@@ -3712,11 +3703,10 @@ fn checkedTypePairEqlStep(
         // equality-by-id returned above handles repeated references to one.
         .flex, .rigid => switch (mode) {
             .exact => return false,
-            .alpha => unreachable,
+            .alpha => unreachable, // the alpha-mode switch above returns for every flex and rigid pair
         },
         .alias => |left_alias| {
-            // Transparent equality resolved both sides past their aliases.
-            if (aliases == .transparent) unreachable;
+            if (aliases == .transparent) unreachable; // checkedTypeEqualityRoot(.transparent) resolved both sides past their aliases
             const right_alias = right_payload.alias;
             if (left_alias.name != right_alias.name or
                 left_alias.origin_module != right_alias.origin_module or
@@ -4069,6 +4059,12 @@ pub const CheckedTypeStore = struct {
     /// path (`fillSyntheticTypeRoot`). Each must declare its origin in
     /// `identity_origins`; `identityOrigin` refuses one that has not.
     synthetic_variable_roots: collections.DenseMapUnmanaged(CheckedTypeId, void) = .empty,
+    /// Build-only keys of identity-free roots by their full walk, shared by
+    /// every substitution so that keying a substituted root reads each
+    /// identity-free component once per store rather than once per
+    /// substitution. The store only appends roots and replaces a payload only
+    /// with one of the same key, so the keys stay valid as it grows.
+    closed_type_keys: ?*CheckedTypeKeys = null,
     roots: std.ArrayList(CheckedTypeRoot) = .empty,
     schemes: std.ArrayList(CheckedTypeScheme) = .empty,
     /// Serialized probing buckets contain scheme IDs, with zero denoting an
@@ -4143,6 +4139,7 @@ pub const CheckedTypeStore = struct {
         "structural_root_entries",
         "identity_origins",
         "synthetic_variable_roots",
+        "closed_type_keys",
     };
 
     /// Text of a stored variable name id, or null when absent.
@@ -4252,7 +4249,7 @@ pub const CheckedTypeStore = struct {
                     if (build == tag) return @unionInit(Stored, name, try self.commitTypeData(allocator, @FieldType(Stored, name), @field(build, name)));
                 }
             }
-            unreachable;
+            unreachable; // commitPayload commits .tag_union itself; the loop above returns for every other tag
         }
     }
 
@@ -5144,6 +5141,10 @@ pub const CheckedTypeStore = struct {
 
         self.identity_origins.deinit(allocator);
         self.synthetic_variable_roots.deinit(allocator);
+        if (self.closed_type_keys) |keys| {
+            keys.deinit();
+            allocator.destroy(keys);
+        }
         if (!self.serialized) {
             inline for (@typeInfo(BorrowedColumn).@"enum".field_names) |field_name| {
                 if (!self.borrowed_columns.contains(@field(BorrowedColumn, field_name))) @field(self, field_name).deinit(allocator);
@@ -5194,6 +5195,7 @@ pub const CheckedTypeStore = struct {
         substitution: *CheckedTypeSubstitution,
     ) Allocator.Error!CheckedTypeId {
         std.debug.assert(substitution.keys.adapter.store == self);
+        substitution.keys.adapter.closed_keys = try self.closedTypeKeys(allocator, substitution.keys.adapter.names);
         const Frame = struct {
             target: CheckedTypeId,
             snapshot: CheckedTypePayloadBuild,
@@ -5254,6 +5256,24 @@ pub const CheckedTypeStore = struct {
             if (frames.items.len == 0) return finished.target;
             try results.append(allocator, @backingInt(finished.target));
         }
+    }
+
+    /// The store's keys of identity-free roots, pointed at the store where
+    /// it now lives.
+    fn closedTypeKeys(
+        self: *CheckedTypeStore,
+        allocator: Allocator,
+        names: *const canonical.CanonicalNameStore,
+    ) Allocator.Error!*CheckedTypeKeys {
+        if (self.closed_type_keys) |keys| {
+            keys.digester.adapter.store = self;
+            keys.digester.adapter.names = names;
+            return keys;
+        }
+        const keys = try allocator.create(CheckedTypeKeys);
+        keys.* = CheckedTypeKeys.init(allocator, names, self);
+        self.closed_type_keys = keys;
+        return keys;
     }
 
     fn cloneCheckedTypeIdSliceSubstituting(
@@ -5436,7 +5456,7 @@ fn cloneCheckedTypeBuildPayload(
     cloned: *CheckedTypeProjectResults,
 ) Allocator.Error!CheckedTypePayloadBuild {
     return switch (payload) {
-        .pending => unreachable,
+        .pending => unreachable, // enterSubstitutingClone rejects pending snapshots before they are cloned
         .err => .err,
         .empty_record => .empty_record,
         .empty_tag_union => .empty_tag_union,
@@ -6028,7 +6048,7 @@ const DeclarationAnnoWalk = struct {
         };
         const ops_start = self.ops.items.len;
         switch (anno) {
-            .parens => unreachable,
+            .parens => unreachable, // the loop above strips every parens wrapper
             .tag_union => |tag_union| {
                 for (module_env.store.sliceTypeAnnos(tag_union.tags)) |tag_anno_idx| {
                     const tag = switch (module_env.store.getTypeAnno(tag_anno_idx)) {
@@ -6242,7 +6262,7 @@ const DeclarationAnnoWalk = struct {
             .rigid_var_lookup,
             .tag,
             .malformed,
-            => unreachable,
+            => unreachable, // enter returns these leaf annotations' roots directly and pushes frames only for composite ones
         }
     }
 
@@ -7260,6 +7280,7 @@ const CheckedTypeKeyDigester = struct {
     fn keyInfo(self: *CheckedTypeKeyDigester, source: CheckedTypeId) Allocator.Error!canonical_type_keys.TypeKeyInfo {
         // A failed request can leave partial classes behind.
         errdefer self.engine.reset();
+        std.debug.assert(self.adapter.closed_keys == null or self.adapter.store.rootContainsIdentityVariables(source));
         return keyInfoOf(try self.engine.summarize(&self.adapter, @backingInt(source)));
     }
 
@@ -7342,6 +7363,14 @@ const CheckedTypeKeyAdapter = struct {
     formals: []const CheckedTypeId,
     actuals: []const CheckedTypeId,
     build: ?struct { node: u32, payload: CheckedTypePayloadBuild } = null,
+    /// When set, every stored identity-free root is described by its key
+    /// from these keys. Such a root defines no variable and cannot reach the
+    /// walked node, so the walk writes it as exactly a reference to its key;
+    /// writing those bytes as a leaf keeps every key the same without
+    /// describing the root's structure again. Requests through this adapter
+    /// must then only summarize roots with identity variables, whose own
+    /// description is never replaced.
+    closed_keys: ?*CheckedTypeKeys = null,
     field_rank_scratch: base.TextRankCache,
     tag_rank_scratch: base.TextRankCache,
     field_ranks: []const u32 = &.{},
@@ -7409,6 +7438,17 @@ const CheckedTypeKeyAdapter = struct {
         return @backingInt(self.substitutedRoot(@fromBackingInt(@intCast(node))));
     }
 
+    /// Whether `node` is known to reach no identity variable. A stored root
+    /// records that exactly for its own graph, which is the graph this
+    /// adapter describes when it substitutes nothing.
+    pub fn identityFree(self: *const CheckedTypeKeyAdapter, node: u32) bool {
+        if (self.formals.len != 0) return false;
+        if (self.build) |build| {
+            if (node == build.node) return false;
+        }
+        return !self.store.rootContainsIdentityVariables(@fromBackingInt(@intCast(node)));
+    }
+
     fn storedPayload(self: *const CheckedTypeKeyAdapter, id: CheckedTypeId) CheckedTypePayload {
         const raw: usize = @backingInt(id);
         if (raw >= self.store.payloadCount()) {
@@ -7430,6 +7470,11 @@ const CheckedTypeKeyAdapter = struct {
             if (node == build.node) return try self.describeBuild(sink, build.payload);
         }
         const id: CheckedTypeId = @fromBackingInt(@intCast(node));
+        if (self.closed_keys) |keys| if (!self.store.rootContainsIdentityVariables(id)) {
+            try sink.byte(canonical_type_keys.key_engine_tags.child_key);
+            try sink.bytes(&(try keys.key(id)).bytes);
+            return .leaf;
+        };
         return switch (self.storedPayload(id)) {
             .flex => |variable| try self.describeIdentity(sink, .flex, variable),
             .rigid => |variable| try self.describeIdentity(sink, .rigid, variable),
@@ -7494,7 +7539,7 @@ const CheckedTypeKeyAdapter = struct {
             .rigid,
             .record,
             .tag_union,
-            => unreachable,
+            => unreachable, // describe and describeBuild handle flex, rigid, record and tag_union before delegating here
             .err => try tag(sink, .err),
             .alias => |alias| {
                 try tag(sink, .alias);
@@ -7534,7 +7579,7 @@ const CheckedTypeKeyAdapter = struct {
                 switch (finalizedFunctionKind(func.kind)) {
                     .pure => try tag(sink, .fn_pure),
                     .effectful => try tag(sink, .fn_effectful),
-                    .unbound => unreachable,
+                    .unbound => unreachable, // finalizedFunctionKind maps .unbound to .pure
                 }
                 try sink.varint(@intCast(func.args.len));
                 for (func.args) |arg| try self.child(sink, arg);
@@ -7824,7 +7869,7 @@ fn syntheticFunctionTypeKey(
         const effectful = switch (finalized_kind) {
             .pure => false,
             .effectful => true,
-            .unbound => unreachable,
+            .unbound => unreachable, // finalizedFunctionKind maps .unbound to .pure
         };
         return .{
             .key = try canonical_type_keys.composedFunctionKey(allocator, effectful, arg_keys, store.roots.items[@backingInt(ret)].key),
@@ -10357,7 +10402,7 @@ const TestImportViewTables = struct {
     const_store: ConstStore,
 
     fn init(allocator: Allocator) TestImportViewTables {
-        if (!builtin.is_test) unreachable;
+        if (!builtin.is_test) unreachable; // test scaffolding: only test blocks call this
         return .{ .const_store = ConstStore.init(allocator) };
     }
 
@@ -10449,7 +10494,7 @@ test "checked artifact builtin nominal categorization requires explicit builtin 
     }};
 
     const bool_source_decl = try testTypeDeclSourceDeclForIdent(builtin_env, builtin_env.idents.bool_type);
-    const builtin_hash = builtin_env.contentIdentityHash() orelse unreachable;
+    const builtin_hash = builtin_env.contentIdentityHash() orelse return error.TestUnexpectedResult;
     const nominal = types.NominalType{
         .ident = .{ .ident_idx = module.commonIdents().bool_type },
         .args = types.Var.SafeList.Range.empty(),
@@ -11256,7 +11301,7 @@ fn commitBodyData(store: *CheckedBodyStore, allocator: Allocator, live: anytype)
         inline for (comptime std.enums.values(std.meta.Tag(Live))) |tag| {
             if (live == tag) return @unionInit(Stored, @tagName(tag), try commitBodyData(store, allocator, @field(live, @tagName(tag))));
         }
-        unreachable;
+        unreachable; // the loop covers every tag of Live
     }
 }
 
@@ -11281,7 +11326,7 @@ fn reconstructBodyData(comptime Live: type, pool_owner: anytype, stored: anytype
         inline for (comptime std.enums.values(std.meta.Tag(Live))) |tag| {
             if (stored == tag) return @unionInit(Live, @tagName(tag), reconstructBodyData(@FieldType(Live, @tagName(tag)), pool_owner, @field(stored, @tagName(tag))));
         }
-        unreachable;
+        unreachable; // Stored mirrors Live's tags, and the loop covers every tag of Live
     }
 }
 
@@ -11323,7 +11368,7 @@ fn freeOwned(allocator: Allocator, value: anytype) void {
         inline for (comptime std.enums.values(std.meta.Tag(T))) |tag| {
             if (value == tag) return freeOwned(allocator, @field(value, @tagName(tag)));
         }
-        unreachable;
+        unreachable; // the loop covers every tag of T
     }
 }
 
@@ -11352,7 +11397,7 @@ fn dupeOwned(allocator: Allocator, value: anytype) Allocator.Error!@TypeOf(value
         inline for (comptime std.enums.values(std.meta.Tag(T))) |tag| {
             if (value == tag) return @unionInit(T, @tagName(tag), try dupeOwned(allocator, @field(value, @tagName(tag))));
         }
-        unreachable;
+        unreachable; // the loop covers every tag of T
     }
 }
 
@@ -12701,10 +12746,7 @@ pub const CheckedBodyStore = struct {
             if (source_nodes.hasExpr(@fromBackingInt(@intCast(node_idx)))) {
                 const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(node_idx));
                 const ty = checked_types.rootForSourceVar(module, module.exprType(expr_idx)) orelse {
-                    if (builtin.mode == .debug) {
-                        base.invariant("checked artifact invariant violated: checked expr type root was not published", .{});
-                    }
-                    unreachable;
+                    base.invariant("checked artifact invariant violated: checked expr type root was not published", .{});
                 };
                 const id: CheckedExprId = @fromBackingInt(@intCast(try checkedSourceNodeIdFromLen(exprs.items.len)));
                 try exprs.append(allocator, .{
@@ -12722,10 +12764,7 @@ pub const CheckedBodyStore = struct {
                 // Subsumption", "Row Coercion Primitive").
                 if (module.moduleEnvConst().rowCoercedResultWideVar(node)) |wide_var| {
                     const wide_ty = checked_types.rootForSourceVar(module, wide_var) orelse {
-                        if (builtin.mode == .debug) {
-                            base.invariant("checked artifact invariant violated: row-coerced result's widened type root was not published", .{});
-                        }
-                        unreachable;
+                        base.invariant("checked artifact invariant violated: row-coerced result's widened type root was not published", .{});
                     };
                     const wrapper: CheckedExprId = @fromBackingInt(@intCast(try checkedSourceNodeIdFromLen(exprs.items.len)));
                     try exprs.append(allocator, .{
@@ -12739,10 +12778,7 @@ pub const CheckedBodyStore = struct {
             } else if (source_nodes.hasPattern(@fromBackingInt(@intCast(node_idx)))) {
                 const pattern_idx: CIR.Pattern.Idx = @fromBackingInt(@intCast(node_idx));
                 const ty = checked_types.rootForSourceVar(module, checkedPatternSourceTypeVar(module, &top_level_defs, pattern_idx)) orelse {
-                    if (builtin.mode == .debug) {
-                        base.invariant("checked artifact invariant violated: checked pattern type root was not published", .{});
-                    }
-                    unreachable;
+                    base.invariant("checked artifact invariant violated: checked pattern type root was not published", .{});
                 };
                 const id: CheckedPatternId = @fromBackingInt(@intCast(try checkedSourceNodeIdFromLen(patterns.items.len)));
                 try patterns.append(allocator, .{
@@ -12801,16 +12837,16 @@ pub const CheckedBodyStore = struct {
         node_idx = 0;
         while (node_idx < module.nodeCount()) : (node_idx += 1) {
             if (source_nodes.hasExpr(@fromBackingInt(@intCast(node_idx)))) {
-                const id = source_node_map.exprAtRawNode(node_idx) orelse unreachable;
+                const id = source_node_map.exprAtRawNode(node_idx) orelse unreachable; // the first node pass mapped every expression node
                 // Copying a row-coerced use appends its coercion's child to
                 // `exprs`, so take the slot only after the copy has grown it.
                 const data = try copier.copyExprData(@fromBackingInt(@intCast(node_idx)));
                 exprs.items[@backingInt(id)].data = data;
             } else if (source_nodes.hasPattern(@fromBackingInt(@intCast(node_idx)))) {
-                const id = source_node_map.patternAtRawNode(node_idx) orelse unreachable;
+                const id = source_node_map.patternAtRawNode(node_idx) orelse unreachable; // the first node pass mapped every pattern node
                 patterns.items[@backingInt(id)].data = try copier.copyPatternData(@fromBackingInt(@intCast(node_idx)));
             } else if (source_nodes.hasStatement(@fromBackingInt(@intCast(node_idx)))) {
-                const id = source_node_map.statementAtRawNode(node_idx) orelse unreachable;
+                const id = source_node_map.statementAtRawNode(node_idx) orelse unreachable; // the first node pass mapped every statement node
                 statements.items[@backingInt(id)].data = try copier.copyStatementData(@fromBackingInt(@intCast(node_idx)));
             }
         }
@@ -13315,13 +13351,10 @@ pub const CheckedBodyStore = struct {
                 // Their literal-specific attachment runs below.
                 continue;
             } else {
-                if (builtin.mode == .debug) {
-                    base.invariant(
-                        "checked artifact invariant violated: static dispatch plan {d} points at non-dispatch checked expression {d}",
-                        .{ @backingInt(plan_id), @backingInt(checked_expr) },
-                    );
-                }
-                unreachable;
+                base.invariant(
+                    "checked artifact invariant violated: static dispatch plan {d} points at non-dispatch checked expression {d}",
+                    .{ @backingInt(plan_id), @backingInt(checked_expr) },
+                );
             }
         }
     }
@@ -13441,13 +13474,10 @@ pub const CheckedBodyStore = struct {
         for (refs.records, 0..) |record, i| {
             const ref_id: ResolvedValueRefId = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
             const indexed = refs.lookupIdByCheckedExpr(record.expr) orelse {
-                if (builtin.mode == .debug) {
-                    base.invariant(
-                        "checked artifact invariant violated: resolved value ref {d} is missing from checked expression index",
-                        .{i},
-                    );
-                }
-                unreachable;
+                base.invariant(
+                    "checked artifact invariant violated: resolved value ref {d} is missing from checked expression index",
+                    .{i},
+                );
             };
             std.debug.assert(ref_id == indexed);
             const data = &self.stored_exprs.items[@backingInt(record.expr)].data;
@@ -13494,13 +13524,10 @@ pub const CheckedBodyStore = struct {
             } else if (data.* == .lookup_required) {
                 data.* = .{ .lookup_required = ref_id };
             } else {
-                if (builtin.mode == .debug) {
-                    base.invariant(
-                        "checked artifact invariant violated: resolved value ref {d} points at non-lookup checked expression {d}",
-                        .{ i, @backingInt(record.expr) },
-                    );
-                }
-                unreachable;
+                base.invariant(
+                    "checked artifact invariant violated: resolved value ref {d} points at non-lookup checked expression {d}",
+                    .{ i, @backingInt(record.expr) },
+                );
             }
         }
 
@@ -14685,7 +14712,7 @@ const DivergenceScan = struct {
                 self.statement_diverges[@backingInt(statement_id)] = value;
                 self.statement_states[@backingInt(statement_id)] = .done;
             },
-            .decided => unreachable,
+            .decided => unreachable, // enter answers a decided leaf with a value, and exit runs only for leaves that expanded into a group
         }
     }
 
@@ -15515,7 +15542,7 @@ const CheckedBodyPayloadCopier = struct {
         std.debug.assert(self.pattern_binder_by_pattern[@backingInt(pattern_id)] == null);
         try self.pattern_binders.append(self.allocator, .{ .id = binder, .pattern = pattern_id, .reassignable = false });
         self.pattern_binder_by_pattern[@backingInt(pattern_id)] = binder;
-        const context = plan.patternContext(&self.module.moduleEnvConst().store) orelse unreachable;
+        const context = plan.patternContext(&self.module.moduleEnvConst().store) orelse unreachable; // recordLiteralDispatchPlan allocates a pattern context for every pattern node's plan
         std.debug.assert(context.equality_fn_var_plus_one != 0);
         const callable = try self.checkedTypeForRequiredVar(@fromBackingInt(@intCast(context.equality_fn_var_plus_one - 1)), "literal pattern equality callable was not published");
         const result_ty = checkedFunctionPayload(&self.checked_types.store, callable, "literal pattern equality").ret;
@@ -15870,20 +15897,14 @@ const CheckedBodyPayloadCopier = struct {
         try self.collectSourcePatternBinders(pattern, &candidate_binders);
 
         if (candidate_binders.items.len != representative_binders.len) {
-            if (builtin.mode == .debug) {
-                base.invariant("checked artifact invariant violated: non-degenerate alternative binder count differs from representative", .{});
-            }
-            unreachable;
+            base.invariant("checked artifact invariant violated: non-degenerate alternative binder count differs from representative", .{});
         }
 
         const start: u32 = @intCast(self.binder_remap_pool.items.len);
         try self.binder_remap_pool.ensureUnusedCapacity(self.allocator, candidate_binders.items.len);
         for (candidate_binders.items) |candidate| {
             const representative = self.representativeBinderForIdent(representative_binders, candidate.ident) orelse {
-                if (builtin.mode == .debug) {
-                    base.invariant("checked artifact invariant violated: non-degenerate alternative binder has no representative binder", .{});
-                }
-                unreachable;
+                base.invariant("checked artifact invariant violated: non-degenerate alternative binder has no representative binder", .{});
             };
             self.binder_remap_pool.appendAssumeCapacity(.{
                 .candidate_binder = candidate.binder,
@@ -16075,10 +16096,7 @@ const CheckedBodyPayloadCopier = struct {
         const raw = @backingInt(expr);
         if (self.result_wrappers.get(raw)) |wrapper| return wrapper;
         if (self.source_node_map.expr(expr)) |id| return id;
-        if (builtin.mode == .debug) {
-            base.invariant("checked artifact invariant violated: expression {d} was not copied into checked body store", .{raw});
-        }
-        unreachable;
+        base.invariant("checked artifact invariant violated: expression {d} was not copied into checked body store", .{raw});
     }
 
     fn checkedTagDiscriminantEquality(
@@ -16112,10 +16130,7 @@ const CheckedBodyPayloadCopier = struct {
     fn checkedPattern(self: *const @This(), pattern: CIR.Pattern.Idx) CheckedPatternId {
         const raw = @backingInt(pattern);
         if (self.source_node_map.pattern(pattern)) |id| return id;
-        if (builtin.mode == .debug) {
-            base.invariant("checked artifact invariant violated: pattern {d} was not copied into checked body store", .{raw});
-        }
-        unreachable;
+        base.invariant("checked artifact invariant violated: pattern {d} was not copied into checked body store", .{raw});
     }
 
     fn patternBinder(self: *@This(), pattern: CIR.Pattern.Idx) Allocator.Error!PatternBinderId {
@@ -16162,10 +16177,7 @@ const CheckedBodyPayloadCopier = struct {
     fn checkedStatement(self: *const @This(), statement: CIR.Statement.Idx) CheckedStatementId {
         const raw = @backingInt(statement);
         if (self.source_node_map.statement(statement)) |id| return id;
-        if (builtin.mode == .debug) {
-            base.invariant("checked artifact invariant violated: statement {d} was not copied into checked body store", .{raw});
-        }
-        unreachable;
+        base.invariant("checked artifact invariant violated: statement {d} was not copied into checked body store", .{raw});
     }
 };
 
@@ -17007,10 +17019,7 @@ pub const ResolvedValueRefTable = struct {
                 checked_bodies,
             );
             const checked_ty = checked_types.rootForSourceVar(module, module.exprType(expr_idx)) orelse {
-                if (builtin.mode == .debug) {
-                    base.invariant("checked artifact invariant violated: resolved value ref type root was not published", .{});
-                }
-                unreachable;
+                base.invariant("checked artifact invariant violated: resolved value ref type root was not published", .{});
             };
             // Publication keys every source root by this same writer.
             const checked_type_key = checked_types.store.view().rootKey(checked_ty);
@@ -17038,7 +17047,7 @@ pub const ResolvedValueRefTable = struct {
 
         for (checked_bodies.literal_pattern_exprs.items) |literal| {
             const expr = checked_bodies.expr(literal.scrutinee);
-            const binder = checked_bodies.patternBinderForCheckedPattern(expr.data.lookup_local.pattern) orelse unreachable;
+            const binder = checked_bodies.patternBinderForCheckedPattern(expr.data.lookup_local.pattern) orelse unreachable; // literalPatternGuard registers a binder for the scrutinee's pattern before recording it
             const id: ResolvedValueRefId = @fromBackingInt(@intCast(@as(u32, @intCast(records.items.len))));
             try records.append(allocator, .{
                 .expr = expr.id,
@@ -17366,13 +17375,10 @@ fn categorizeValueRef(
         .e_hosted_lambda,
         .e_run_low_level,
         => {
-            if (builtin.mode == .debug) {
-                base.invariant(
-                    "checked artifact invariant violated: expression {d} is not a value reference",
-                    .{@backingInt(expr_idx)},
-                );
-            }
-            unreachable;
+            base.invariant(
+                "checked artifact invariant violated: expression {d} is not a value reference",
+                .{@backingInt(expr_idx)},
+            );
         },
         .e_deferred_import_ref => checkedArtifactInvariant("deferred import reference reached checked artifact publication", .{}),
     };
@@ -17433,37 +17439,28 @@ fn categorizeLocalValueRef(
     checked_bodies: *const CheckedBodyStore,
 ) ResolvedValueRef {
     const checked_pattern = checked_bodies.patternIdForSource(pattern) orelse {
-        if (builtin.mode == .debug) {
-            base.invariant(
-                "checked artifact invariant violated: local lookup pattern {d} has no checked pattern id",
-                .{@backingInt(pattern)},
-            );
-        }
-        unreachable;
+        base.invariant(
+            "checked artifact invariant violated: local lookup pattern {d} has no checked pattern id",
+            .{@backingInt(pattern)},
+        );
     };
 
     if (top_level_values.lookupByPattern(checked_pattern)) |entry| {
         if (entry.pattern != checked_pattern) {
-            if (builtin.mode == .debug) {
-                base.invariant(
-                    "checked artifact invariant violated: top-level pattern index {d} resolved to mismatched entry",
-                    .{@backingInt(pattern)},
-                );
-            }
-            unreachable;
+            base.invariant(
+                "checked artifact invariant violated: top-level pattern index {d} resolved to mismatched entry",
+                .{@backingInt(pattern)},
+            );
         }
 
         return categorizeTopLevelValueRef(module, artifact_key, entry, hosted_procs);
     }
 
     const binder = checked_bodies.patternBinderForSource(pattern) orelse {
-        if (builtin.mode == .debug) {
-            base.invariant(
-                "checked artifact invariant violated: local lookup pattern {d} has no checked pattern binder",
-                .{@backingInt(pattern)},
-            );
-        }
-        unreachable;
+        base.invariant(
+            "checked artifact invariant violated: local lookup pattern {d} has no checked pattern binder",
+            .{@backingInt(pattern)},
+        );
     };
 
     if (selected_hoisted_callables.lookupByPattern(checked_pattern)) |binding| {
@@ -17508,13 +17505,10 @@ fn categorizeLocalValueRef(
         return .{ .pattern_binder = .{ .binder = binder } };
     }
 
-    if (builtin.mode == .debug) {
-        base.invariant(
-            "checked artifact invariant violated: local lookup pattern {d} has no categorized binding",
-            .{@backingInt(pattern)},
-        );
-    }
-    unreachable;
+    base.invariant(
+        "checked artifact invariant violated: local lookup pattern {d} has no categorized binding",
+        .{@backingInt(pattern)},
+    );
 }
 
 fn categorizeTopLevelValueRef(
@@ -17575,22 +17569,16 @@ fn categorizeImportedValueRef(
     imports: []const PublishImportArtifact,
 ) ResolvedValueRef {
     const resolved_module_idx = module.resolvedImportModule(import_idx) orelse {
-        if (builtin.mode == .debug) {
-            base.invariant(
-                "checked artifact invariant violated: external lookup import {d} has no resolved module",
-                .{@backingInt(import_idx)},
-            );
-        }
-        unreachable;
+        base.invariant(
+            "checked artifact invariant violated: external lookup import {d} has no resolved module",
+            .{@backingInt(import_idx)},
+        );
     };
     const import_artifact = publishImportForModule(imports, resolved_module_idx) orelse {
-        if (builtin.mode == .debug) {
-            base.invariant(
-                "checked artifact invariant violated: external lookup import {d} resolved to module {d} without a published artifact key",
-                .{ @backingInt(import_idx), resolved_module_idx },
-            );
-        }
-        unreachable;
+        base.invariant(
+            "checked artifact invariant violated: external lookup import {d} resolved to module {d} without a published artifact key",
+            .{ @backingInt(import_idx), resolved_module_idx },
+        );
     };
 
     const target_def: CIR.Def.Idx = @fromBackingInt(@intCast(@as(u32, @intCast(target_node_idx))));
@@ -17611,13 +17599,10 @@ fn categorizeImportedValueRef(
         } };
     }
 
-    if (builtin.mode == .debug) {
-        base.invariant(
-            "checked artifact invariant violated: external lookup target {d} in module {d} was not exported by the imported checked artifact",
-            .{ target_node_idx, resolved_module_idx },
-        );
-    }
-    unreachable;
+    base.invariant(
+        "checked artifact invariant violated: external lookup target {d} in module {d} was not exported by the imported checked artifact",
+        .{ target_node_idx, resolved_module_idx },
+    );
 }
 
 fn categorizeResolvedAssociatedValueRef(
@@ -17722,13 +17707,10 @@ fn collectPublishedExportDefs(
     while (exposed_iter.next()) |entry| {
         const raw_node_idx: u32 = entry.target.valueDefNode() orelse continue;
         if (raw_node_idx >= node_count) {
-            if (builtin.mode == .debug) {
-                base.invariant(
-                    "checked artifact invariant violated: exposed item {s} points at out-of-range node {d}",
-                    .{ module_env.getIdent(@bitCast(entry.ident_idx)), raw_node_idx },
-                );
-            }
-            unreachable;
+            base.invariant(
+                "checked artifact invariant violated: exposed item {s} points at out-of-range node {d}",
+                .{ module_env.getIdent(@bitCast(entry.ident_idx)), raw_node_idx },
+            );
         }
 
         const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(raw_node_idx));
@@ -17747,13 +17729,10 @@ fn appendPublishedExportDef(
 ) Allocator.Error!void {
     const raw = @backingInt(def_idx);
     if (raw >= seen.len) {
-        if (builtin.mode == .debug) {
-            base.invariant(
-                "checked artifact invariant violated: published export def {d} is outside the module node store",
-                .{raw},
-            );
-        }
-        unreachable;
+        base.invariant(
+            "checked artifact invariant violated: published export def {d} is outside the module node store",
+            .{raw},
+        );
     }
     if (seen[raw]) return;
     seen[raw] = true;
@@ -17807,13 +17786,10 @@ fn categorizeRequiredValueRef(
             return .platform_required_checked_error;
         }
         const declaration = platform_required_declarations.lookupByRequiredIndex(requires_idx) orelse {
-            if (builtin.mode == .debug) {
-                base.invariant(
-                    "checked artifact invariant violated: required lookup {d} has no platform declaration",
-                    .{requires_idx},
-                );
-            }
-            unreachable;
+            base.invariant(
+                "checked artifact invariant violated: required lookup {d} has no platform declaration",
+                .{requires_idx},
+            );
         };
         return .{ .platform_required_declaration = declaration.id };
     };
@@ -17905,7 +17881,7 @@ const LocalPatternRoleIndex = struct {
                 const statement: CIR.Statement.Idx = @fromBackingInt(@intCast(node_idx));
                 if (checked_bodies.source_node_map.statement(statement) == null) continue;
                 const statement_data = module.getStatement(statement);
-                if (statement_data != .s_decl) unreachable;
+                if (statement_data != .s_decl) unreachable; // getStatement decodes a statement_decl node as s_decl
                 const decl = statement_data.s_decl;
                 const is_alias = if (checked_bodies.patternBinderForSource(decl.pattern)) |binder|
                     checked_bodies.patternBinder(binder).is_scheme_alias
@@ -17924,19 +17900,19 @@ const LocalPatternRoleIndex = struct {
                 const statement: CIR.Statement.Idx = @fromBackingInt(@intCast(node_idx));
                 if (checked_bodies.source_node_map.statement(statement) == null) continue;
                 const statement_data = module.getStatement(statement);
-                if (statement_data != .s_var) unreachable;
+                if (statement_data != .s_var) unreachable; // getStatement decodes a statement_var node as s_var
                 putStatementRole(statement_roles, node_count, statement_data.s_var.pattern_idx, .mutable_version);
             } else if (node_tag == .statement_var_uninitialized) {
                 const statement: CIR.Statement.Idx = @fromBackingInt(@intCast(node_idx));
                 if (checked_bodies.source_node_map.statement(statement) == null) continue;
                 const statement_data = module.getStatement(statement);
-                if (statement_data != .s_var_uninitialized) unreachable;
+                if (statement_data != .s_var_uninitialized) unreachable; // getStatement decodes a statement_var_uninitialized node as s_var_uninitialized
                 putStatementRole(statement_roles, node_count, statement_data.s_var_uninitialized.pattern_idx, .mutable_version);
             } else if (node_tag == .expr_lambda) {
                 const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(node_idx));
                 if (checked_bodies.exprIdForSource(expr_idx) == null) continue;
                 const expr = module.expr(@fromBackingInt(@intCast(node_idx)));
-                if (expr.data != .e_lambda) unreachable;
+                if (expr.data != .e_lambda) unreachable; // module.expr decodes an expr_lambda node as e_lambda
                 for (module.slicePatterns(expr.data.e_lambda.args)) |arg| {
                     const raw_pattern = @backingInt(arg);
                     if (raw_pattern >= node_count) {
@@ -22955,10 +22931,7 @@ pub const CheckedProcedureTemplateTable = struct {
                 } else .callable,
             });
             const checked_fn_root = checked_type_publication.rootForSourceVar(module, module.defType(def_idx)) orelse {
-                if (builtin.mode == .debug) {
-                    base.invariant("checked artifact invariant violated: checked procedure function root was not published", .{});
-                }
-                unreachable;
+                base.invariant("checked artifact invariant violated: checked procedure function root was not published", .{});
             };
             const checked_fn_scheme = checked_type_publication.schemeForSourceVar(module, module.defType(def_idx));
             const body: CheckedProcedureBody = if (intrinsic) |intrinsic_id| blk: {
@@ -22968,10 +22941,7 @@ pub const CheckedProcedureTemplateTable = struct {
                 .region = module.regionAt(ModuleEnv.nodeIdxFrom(def.expr.idx)),
             } } else blk: {
                 const root_expr = checked_bodies.exprIdForSource(def.expr.idx) orelse {
-                    if (builtin.mode == .debug) {
-                        base.invariant("checked artifact invariant violated: checked procedure body root expression was not published", .{});
-                    }
-                    unreachable;
+                    base.invariant("checked artifact invariant violated: checked procedure body root expression was not published", .{});
                 };
                 break :blk .{ .checked_body = try checked_bodies.appendBody(allocator, root_expr, template_ref) };
             };
@@ -24055,10 +24025,7 @@ pub const HostedProcTable = struct {
             if (def.expr.data == .e_hosted_lambda) {
                 const hosted = def.expr.data.e_hosted_lambda;
                 const template_ref = templates.lookupByDef(def_idx) orelse {
-                    if (builtin.mode == .debug) {
-                        base.invariant("checked artifact invariant violated: hosted procedure def has no checked template", .{});
-                    }
-                    unreachable;
+                    base.invariant("checked artifact invariant violated: hosted procedure def has no checked template", .{});
                 };
 
                 try candidates.append(allocator, .{
@@ -24770,13 +24737,10 @@ pub const PlatformRequirementRelationTable = struct {
             active_relation,
         );
         if (active_relation.relations.len != active_relation.bindings.len) {
-            if (builtin.mode == .debug) {
-                base.invariant(
-                    "checked artifact invariant violated: platform/app relation has {d} checked relation rows for {d} bindings",
-                    .{ active_relation.relations.len, active_relation.bindings.len },
-                );
-            }
-            unreachable;
+            base.invariant(
+                "checked artifact invariant violated: platform/app relation has {d} checked relation rows for {d} bindings",
+                .{ active_relation.relations.len, active_relation.bindings.len },
+            );
         }
 
         var seen_declarations: []bool = &.{};
@@ -24797,13 +24761,10 @@ pub const PlatformRequirementRelationTable = struct {
 
         for (active_relation.relations, 0..) |input, i| {
             const declaration = declarations.lookupByDeclarationId(input.declaration) orelse {
-                if (builtin.mode == .debug) {
-                    base.invariant(
-                        "checked artifact invariant violated: platform/app checked relation {d} references unknown requirement declaration",
-                        .{i},
-                    );
-                }
-                unreachable;
+                base.invariant(
+                    "checked artifact invariant violated: platform/app checked relation {d} references unknown requirement declaration",
+                    .{i},
+                );
             };
             const declaration_index: usize = @intCast(@backingInt(input.declaration));
             if (builtin.mode == .debug) {
@@ -24816,22 +24777,16 @@ pub const PlatformRequirementRelationTable = struct {
                 seen_declarations[declaration_index] = true;
             }
             if (input.requires_idx != declaration.requires_idx) {
-                if (builtin.mode == .debug) {
-                    base.invariant(
-                        "checked artifact invariant violated: platform/app checked relation {d} maps declaration {d} to required index {d}, expected {d}",
-                        .{ i, declaration_index, input.requires_idx, declaration.requires_idx },
-                    );
-                }
-                unreachable;
+                base.invariant(
+                    "checked artifact invariant violated: platform/app checked relation {d} maps declaration {d} to required index {d}, expected {d}",
+                    .{ i, declaration_index, input.requires_idx, declaration.requires_idx },
+                );
             }
             if (!std.meta.eql(input.app_value.artifact.bytes, active_relation.app_artifact.bytes)) {
-                if (builtin.mode == .debug) {
-                    base.invariant(
-                        "checked artifact invariant violated: platform/app checked relation {d} points at a value outside the app artifact",
-                        .{i},
-                    );
-                }
-                unreachable;
+                base.invariant(
+                    "checked artifact invariant violated: platform/app checked relation {d} points at a value outside the app artifact",
+                    .{i},
+                );
             }
             // The requirement type as the checker solved it, recorded on the
             // app's artifact and projected into this publication's store.
@@ -25066,13 +25021,10 @@ pub const PlatformRequiredBindingTable = struct {
             active_relation,
         );
         if (active_relation.bindings.len + active_relation.checked_error_requires.len != declarations.declarations.len) {
-            if (builtin.mode == .debug) {
-                base.invariant(
-                    "checked artifact invariant violated: platform/app relation has {d} bindings and {d} checked errors for {d} platform requirements",
-                    .{ active_relation.bindings.len, active_relation.checked_error_requires.len, declarations.declarations.len },
-                );
-            }
-            unreachable;
+            base.invariant(
+                "checked artifact invariant violated: platform/app relation has {d} bindings and {d} checked errors for {d} platform requirements",
+                .{ active_relation.bindings.len, active_relation.checked_error_requires.len, declarations.declarations.len },
+            );
         }
         var seen_declarations: []bool = &.{};
         if (builtin.mode == .debug) {
@@ -25113,13 +25065,10 @@ pub const PlatformRequiredBindingTable = struct {
 
         for (active_relation.bindings, 0..) |binding, i| {
             const declaration = declarations.lookupByDeclarationId(binding.declaration) orelse {
-                if (builtin.mode == .debug) {
-                    base.invariant(
-                        "checked artifact invariant violated: platform/app binding {d} references unknown requirement declaration",
-                        .{i},
-                    );
-                }
-                unreachable;
+                base.invariant(
+                    "checked artifact invariant violated: platform/app binding {d} references unknown requirement declaration",
+                    .{i},
+                );
             };
             const declaration_index: usize = @intCast(@backingInt(binding.declaration));
             if (builtin.mode == .debug) {
@@ -25132,31 +25081,22 @@ pub const PlatformRequiredBindingTable = struct {
                 seen_declarations[declaration_index] = true;
             }
             if (declaration.requires_idx != binding.requires_idx) {
-                if (builtin.mode == .debug) {
-                    base.invariant(
-                        "checked artifact invariant violated: platform/app binding {d} maps declaration {d} to required index {d}, expected {d}",
-                        .{ i, declaration_index, binding.requires_idx, declaration.requires_idx },
-                    );
-                }
-                unreachable;
+                base.invariant(
+                    "checked artifact invariant violated: platform/app binding {d} maps declaration {d} to required index {d}, expected {d}",
+                    .{ i, declaration_index, binding.requires_idx, declaration.requires_idx },
+                );
             }
             if (!std.meta.eql(binding.app_value.artifact.bytes, active_relation.app_artifact.bytes)) {
-                if (builtin.mode == .debug) {
-                    base.invariant(
-                        "checked artifact invariant violated: platform/app binding {d} points at a value outside the app artifact",
-                        .{i},
-                    );
-                }
-                unreachable;
+                base.invariant(
+                    "checked artifact invariant violated: platform/app binding {d} points at a value outside the app artifact",
+                    .{i},
+                );
             }
             const checked_relation = relations.lookupByRelationId(binding.checked_relation) orelse {
-                if (builtin.mode == .debug) {
-                    base.invariant(
-                        "checked artifact invariant violated: platform/app binding {d} references missing checked relation",
-                        .{i},
-                    );
-                }
-                unreachable;
+                base.invariant(
+                    "checked artifact invariant violated: platform/app binding {d} references missing checked relation",
+                    .{i},
+                );
             };
             validatePlatformBindingRelation(binding.declaration, binding.requires_idx, binding.app_value, binding.value_use.tag(), checked_relation, i);
             const value_use = platformRequiredValueUseWithRelation(binding.value_use, checked_relation);
@@ -25240,39 +25180,30 @@ fn validatePlatformAppRelationForModule(
     active_relation: PlatformAppRelation,
 ) void {
     if (active_relation.platform_module_idx != module_identity.module_idx) {
-        if (builtin.mode == .debug) {
-            base.invariant(
-                "checked artifact invariant violated: platform/app relation belongs to module {d}, not platform module {d}",
-                .{ active_relation.platform_module_idx, module_identity.module_idx },
-            );
-        }
-        unreachable;
+        base.invariant(
+            "checked artifact invariant violated: platform/app relation belongs to module {d}, not platform module {d}",
+            .{ active_relation.platform_module_idx, module_identity.module_idx },
+        );
     }
     const expected_requirement_context = PlatformRequirementContextKey.compute(
         module_identity,
         declarations.identityHash(names),
     );
     if (!std.meta.eql(active_relation.requirement_context.bytes, expected_requirement_context.bytes)) {
-        if (builtin.mode == .debug) {
-            base.invariant(
-                "checked artifact invariant violated: platform/app relation requirement context does not match the current platform requirement declarations",
-                .{},
-            );
-        }
-        unreachable;
+        base.invariant(
+            "checked artifact invariant violated: platform/app relation requirement context does not match the current platform requirement declarations",
+            .{},
+        );
     }
     const expected_key = PlatformAppRelationKey.compute(
         active_relation.app_artifact,
         active_relation.requirement_context,
     );
     if (!std.meta.eql(active_relation.key.bytes, expected_key.bytes)) {
-        if (builtin.mode == .debug) {
-            base.invariant(
-                "checked artifact invariant violated: platform/app relation key does not match the current platform requirement declarations",
-                .{},
-            );
-        }
-        unreachable;
+        base.invariant(
+            "checked artifact invariant violated: platform/app relation key does not match the current platform requirement declarations",
+            .{},
+        );
     }
 }
 
@@ -25283,23 +25214,17 @@ fn platformRequiredPayloadForDeclaration(
 ) CheckedTypeId {
     const module_env = module.moduleEnvConst();
     if (declaration.requires_idx >= module_env.requires_types.items.items.len) {
-        if (builtin.mode == .debug) {
-            base.invariant(
-                "checked artifact invariant violated: platform requirement declaration {d} has out-of-range required index {d}",
-                .{ @backingInt(declaration.id), declaration.requires_idx },
-            );
-        }
-        unreachable;
+        base.invariant(
+            "checked artifact invariant violated: platform requirement declaration {d} has out-of-range required index {d}",
+            .{ @backingInt(declaration.id), declaration.requires_idx },
+        );
     }
     const required_type = module_env.requires_types.items.items[declaration.requires_idx];
     return checked_types.rootForSourceVar(module, ModuleEnv.varFrom(required_type.type_anno)) orelse {
-        if (builtin.mode == .debug) {
-            base.invariant(
-                "checked artifact invariant violated: platform requirement declaration {d} has no platform-owned checked payload",
-                .{@backingInt(declaration.id)},
-            );
-        }
-        unreachable;
+        base.invariant(
+            "checked artifact invariant violated: platform requirement declaration {d} has no platform-owned checked payload",
+            .{@backingInt(declaration.id)},
+        );
     };
 }
 
@@ -26009,7 +25934,7 @@ fn publishLiteralConversionRoots(
             .for_,
             .hosted_lambda,
             .run_low_level,
-            => unreachable,
+            => unreachable, // the loop above appends roots only for numeral and str_from_quote expressions
         };
         const ref_index = first_ref + i;
         plans.template_refs[ref_index] = plan_id;
@@ -26600,43 +26525,31 @@ fn validatePlatformBindingRelation(
     binding_index: usize,
 ) void {
     if (relation.declaration != declaration or relation.requires_idx != requires_idx) {
-        if (builtin.mode == .debug) {
-            base.invariant(
-                "checked artifact invariant violated: platform/app binding {d} points at a checked relation for a different requirement",
-                .{binding_index},
-            );
-        }
-        unreachable;
+        base.invariant(
+            "checked artifact invariant violated: platform/app binding {d} points at a checked relation for a different requirement",
+            .{binding_index},
+        );
     }
     if (!std.meta.eql(relation.app_value.artifact.bytes, app_value.artifact.bytes) or
         relation.app_value.pattern != app_value.pattern)
     {
-        if (builtin.mode == .debug) {
-            base.invariant(
-                "checked artifact invariant violated: platform/app binding {d} points at a checked relation for a different app value",
-                .{binding_index},
-            );
-        }
-        unreachable;
+        base.invariant(
+            "checked artifact invariant violated: platform/app binding {d} points at a checked relation for a different app value",
+            .{binding_index},
+        );
     }
     switch (value_use_kind) {
         .const_value => if (relation.value_kind != .const_value) {
-            if (builtin.mode == .debug) {
-                base.invariant(
-                    "checked artifact invariant violated: platform/app binding {d} has const value use but procedure checked relation",
-                    .{binding_index},
-                );
-            }
-            unreachable;
+            base.invariant(
+                "checked artifact invariant violated: platform/app binding {d} has const value use but procedure checked relation",
+                .{binding_index},
+            );
         },
         .procedure_value => if (relation.value_kind != .procedure_value) {
-            if (builtin.mode == .debug) {
-                base.invariant(
-                    "checked artifact invariant violated: platform/app binding {d} has procedure value use but const checked relation",
-                    .{binding_index},
-                );
-            }
-            unreachable;
+            base.invariant(
+                "checked artifact invariant violated: platform/app binding {d} has procedure value use but const checked relation",
+                .{binding_index},
+            );
         },
     }
 }
@@ -27749,16 +27662,10 @@ pub const ModuleInterfaceCapabilities = struct {
         names: *const canonical.CanonicalNameStore,
     ) Allocator.Error!ModuleInterfaceCapabilities {
         const current_module_hash = module.moduleEnvConst().contentIdentityHash() orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("checked artifact invariant violated: module content identity missing during interface capability publication", .{});
-            }
-            unreachable;
+            base.invariant("checked artifact invariant violated: module content identity missing during interface capability publication", .{});
         };
         const current_module = names.lookupModuleIdentity(current_module_hash) orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("checked artifact invariant violated: module identity was not interned before interface capability publication", .{});
-            }
-            unreachable;
+            base.invariant("checked artifact invariant violated: module identity was not interned before interface capability publication", .{});
         };
 
         var boxed_payload_templates = std.ArrayList(BoxPayloadCapabilityEntry).empty;
@@ -27986,7 +27893,7 @@ fn canonicalNominalTypeKeyEql(a: canonical.NominalTypeKey, b: canonical.NominalT
 }
 
 fn testCanonicalTypeKey(byte: u8) canonical.CanonicalTypeKey {
-    if (!builtin.is_test) unreachable;
+    if (!builtin.is_test) unreachable; // test scaffolding: only test blocks call this
 
     var key = canonical.CanonicalTypeKey{};
     key.bytes[0] = byte;
@@ -28004,14 +27911,14 @@ fn testFillSyntheticVariableRoot(
     root: CheckedTypeId,
     payload: CheckedTypePayloadBuild,
 ) Allocator.Error!void {
-    if (!builtin.is_test) unreachable;
+    if (!builtin.is_test) unreachable; // test scaffolding: only test blocks call this
 
     try store.fillSyntheticTypeRoot(allocator, root, payload);
     try store.declareIdentityInstance(allocator, root);
 }
 
 fn testCheckedModuleKey(byte: u8) CheckedModuleArtifactKey {
-    if (!builtin.is_test) unreachable;
+    if (!builtin.is_test) unreachable; // test scaffolding: only test blocks call this
 
     var key = CheckedModuleArtifactKey{};
     key.bytes[0] = byte;
@@ -30270,7 +30177,7 @@ fn exhaustivenessReplacingRootForSource(
                 const base_expr, const exact_pattern = switch (body) {
                     .pattern_extraction => |extraction| .{ extraction.base_expr, extraction.scrutinee_pattern },
                     .pattern_validation => |validation| .{ validation.base_expr, validation.scrutinee_pattern },
-                    .expr, .pattern_error, .valueless_binding => unreachable,
+                    .expr, .pattern_error, .valueless_binding => unreachable, // the enclosing prong matches only pattern_extraction and pattern_validation
                 };
                 if (source == .destructure_pattern and source.destructure_pattern == exact_pattern) return root;
 
@@ -30369,7 +30276,8 @@ fn checkedBodyForSelectedHoistedRoot(
             .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, if (selected.pattern) |pattern| ModuleEnv.varFrom(pattern) else module.exprType(selected.expr)),
         },
         .pattern_error => blk: {
-            const pattern = selected.pattern orelse unreachable;
+            const pattern = selected.pattern orelse
+                checkedArtifactInvariant("pattern-error hoisted root has no binding pattern", .{});
             const checked_type = try checkedTypeIdForVar(allocator, module, checked_types, ModuleEnv.varFrom(pattern));
             break :blk .{
                 .expr = try checked_body_builder.appendSyntheticExpr(allocator, .{ .pattern_error = selected_index }, checked_type, module.regionAt(ModuleEnv.nodeIdxFrom(pattern)), .{ .runtime_error = .{} }),
@@ -30658,23 +30566,17 @@ pub const TopLevelValueTable = struct {
                     ) };
                 }
                 const root_id = compile_time_roots.lookupIdByPattern(checked_pattern) orelse {
-                    if (builtin.mode == .debug) {
-                        base.invariant(
-                            "checked artifact invariant violated: function-valued binding {d} has no compile-time callable root",
-                            .{@backingInt(def.pattern.idx)},
-                        );
-                    }
-                    unreachable;
+                    base.invariant(
+                        "checked artifact invariant violated: function-valued binding {d} has no compile-time callable root",
+                        .{@backingInt(def.pattern.idx)},
+                    );
                 };
                 const root = compile_time_roots.root(root_id);
                 if (root.kind != .callable_binding) {
-                    if (builtin.mode == .debug) {
-                        base.invariant(
-                            "checked artifact invariant violated: function-valued binding {d} mapped to non-callable compile-time root",
-                            .{@backingInt(def.pattern.idx)},
-                        );
-                    }
-                    unreachable;
+                    base.invariant(
+                        "checked artifact invariant violated: function-valued binding {d} mapped to non-callable compile-time root",
+                        .{@backingInt(def.pattern.idx)},
+                    );
                 }
                 const checked_fn_root = root.checked_type;
                 const callable_template = try callable_eval_templates.append(
@@ -32783,10 +32685,7 @@ const ImportedTemplateClosureBuilder = struct {
         scheme_key: canonical.CanonicalTypeSchemeKey,
     ) Allocator.Error!void {
         const scheme = self.context.checked_types.schemeForKey(scheme_key) orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("checked artifact invariant violated: exported template references missing checked type scheme", .{});
-            }
-            unreachable;
+            base.invariant("checked artifact invariant violated: exported template references missing checked type scheme", .{});
         };
         const ref = ArtifactCheckedTypeSchemeRef{ .artifact = self.context.artifact_key, .scheme = scheme.id };
         _ = try self.checked_type_schemes.append(self.context.allocator, ref);
@@ -32996,10 +32895,7 @@ const ImportedTemplateClosureBuilder = struct {
         if (!std.meta.eql(const_ref.artifact.bytes, self.context.artifact_key.bytes)) return;
 
         const scheme = self.context.checked_types.schemeForKey(const_ref.source_scheme) orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("checked artifact invariant violated: const template references missing checked type scheme", .{});
-            }
-            unreachable;
+            base.invariant("checked artifact invariant violated: const template references missing checked type scheme", .{});
         };
         try self.appendCheckedTypeRoot(scheme.root);
         try self.appendCheckedTypeScheme(const_ref.source_scheme);
@@ -33305,10 +33201,7 @@ fn buildProcedureBindingClosure(
                 context.checked_templates.get(synthetic.template.template),
             ),
             .lifted => {
-                if (builtin.mode == .debug) {
-                    base.invariant("checked artifact invariant violated: exported checked binding cannot reference lifted templates before mono", .{});
-                }
-                unreachable;
+                base.invariant("checked artifact invariant violated: exported checked binding cannot reference lifted templates before mono", .{});
             },
         },
         .checked_error => .{},
@@ -33669,10 +33562,7 @@ pub const ExportedConstTemplateTable = struct {
 };
 
 fn checkedArtifactInvariant(comptime message: []const u8, args: anytype) noreturn {
-    if (builtin.mode == .debug) {
-        base.invariant("checked artifact invariant violated: " ++ message, args);
-    }
-    unreachable;
+    base.invariant("checked artifact invariant violated: " ++ message, args);
 }
 
 fn checkedArtifactKeyLessThan(_: void, a: CheckedModuleArtifactKey, b: CheckedModuleArtifactKey) bool {
@@ -34856,7 +34746,7 @@ pub const CheckedModuleArtifact = struct {
                     .for_,
                     .hosted_lambda,
                     .run_low_level,
-                    => unreachable,
+                    => unreachable, // literalConversionRoot returns a root only for numeral and str_from_quote data
                 };
                 const valid = if (plan_id) |id| blk: {
                     if (@backingInt(root_id) >= self.compile_time_roots.roots.len) break :blk false;
@@ -35762,8 +35652,7 @@ pub const CheckedModuleArtifact = struct {
                         std.debug.assert(owner_template.proc_base == template.proc_base);
                         std.debug.assert(std.meta.eql(owner_template.artifact.bytes, self.key.bytes));
                     },
-                    // A template's span never references a default-root site.
-                    .default_root => unreachable,
+                    .default_root => checkedArtifactInvariant("template nested procedure span references a default-root site", .{}),
                 }
             }
         }
@@ -36448,7 +36337,7 @@ const CheckedTypeStoreImportProjector = struct {
                     std.debug.assert(results.next == results.items.len);
                     _ = run.pop();
                 },
-                .done => unreachable,
+                .done => unreachable, // done frames are popped at the top of the loop
             }
         }
     }
@@ -36605,7 +36494,7 @@ const CheckedTypeStoreImportProjector = struct {
     ) Allocator.Error!CheckedTypePayloadBuild {
         const gpa = self.allocator;
         return switch (payload) {
-            .pending => unreachable,
+            .pending => unreachable, // appendPayloadOps rejects pending payloads before any frame finishes
             .err => .err,
             .empty_record => .empty_record,
             .empty_tag_union => .empty_tag_union,
@@ -36847,13 +36736,10 @@ fn directImportArtifactKeysFromModule(
         const import_idx: CIR.Import.Idx = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
         const resolved_module_idx = module_env.imports.getResolvedModule(import_idx) orelse continue;
         const key = publishImportKeyForModule(imports, resolved_module_idx) orelse {
-            if (builtin.mode == .debug) {
-                base.invariant(
-                    "checked artifact publication invariant violated: import {d} resolved to module {d} without a published artifact key",
-                    .{ i, resolved_module_idx },
-                );
-            }
-            unreachable;
+            base.invariant(
+                "checked artifact publication invariant violated: import {d} resolved to module {d} without a published artifact key",
+                .{ i, resolved_module_idx },
+            );
         };
         try keys.append(allocator, key);
     }
@@ -36946,7 +36832,7 @@ fn verifyLoweringVisibleNamesInterned(
         .names = names,
         .idents = module_env.getIdentStoreConst(),
     };
-    scanLoweringVisibleNames(module_env, &visitor) catch unreachable;
+    scanLoweringVisibleNames(module_env, &visitor) catch unreachable; // VerifyLoweringVisibleNameVisitor methods only assert, so the scan cannot fail
 }
 
 fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allocator.Error!void {
@@ -40749,7 +40635,7 @@ fn testCallableWithRowTail(
     store: *CheckedTypeStore,
     tail: CheckedTypeId,
 ) Allocator.Error!CheckedTypeId {
-    if (!builtin.is_test) unreachable;
+    if (!builtin.is_test) unreachable; // test scaffolding: only test blocks call this
 
     const unit = try store.appendSyntheticPayloadRoot(allocator, names, .empty_record);
     const tags = try allocator.alloc(CheckedTagBuild, 1);
@@ -40767,7 +40653,7 @@ fn testRowTail(
     key_byte: u8,
     payload: CheckedTypePayloadBuild,
 ) Allocator.Error!CheckedTypeId {
-    if (!builtin.is_test) unreachable;
+    if (!builtin.is_test) unreachable; // test scaffolding: only test blocks call this
 
     const tail = try store.reserveSyntheticTypeRoot(allocator, testCanonicalTypeKey(key_byte), true);
     try testFillSyntheticVariableRoot(allocator, store, tail, payload);

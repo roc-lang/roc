@@ -80,6 +80,8 @@ pub const roc_version = @import("roc_version.zig");
 pub const doc_comment = @import("doc_comment.zig");
 /// Canonical byte encodings shared across compiler stages.
 pub const byte_encoding = @import("byte_encoding.zig");
+/// Strict line-oriented text records for on-disk compiler metadata.
+pub const line_record = @import("line_record.zig");
 
 /// Allocator wrapper that recycles freed large blocks instead of unmapping them.
 pub const LargeBlockAllocator = @import("LargeBlockAllocator.zig");
@@ -120,6 +122,7 @@ test {
     std.testing.refAllDecls(module_path_mod);
     std.testing.refAllDecls(@import("roc_version.zig"));
     std.testing.refAllDecls(@import("typo.zig"));
+    std.testing.refAllDecls(line_record);
 }
 
 /// Whether a function calls itself.

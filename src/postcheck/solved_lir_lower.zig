@@ -3716,7 +3716,7 @@ const Lowerer = struct {
         return switch (expr.data) {
             .list => |items| try self.uniformListOfItems(arena, items, ty, value_layout),
             .bytes_lit => |literal| try self.uniformListOfPackedItems(arena, literal, ty, value_layout),
-            .nominal, .static_data_candidate => unreachable,
+            .nominal, .static_data_candidate => unreachable, // the loop above unwraps every nominal and static_data_candidate
             .unit,
             .int_lit,
             .frac_f32_lit,
@@ -4028,7 +4028,7 @@ const Lowerer = struct {
                     if (access.elem_index >= items.len) Common.invariant("tuple access index exceeded tuple type");
                     ty = GuardedList.at(items, @intCast(access.elem_index));
                 },
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable, // path holds only the field and tuple accesses collected above
             }
             try self.expr_context_tys.put(path.items[index], ty);
         }
@@ -4306,7 +4306,7 @@ const Lowerer = struct {
                         .members = members,
                     } },
                     .lambda_set => .{ .callable = members },
-                    .link, .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .zst, .hole, .mono => unreachable,
+                    .link, .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .zst, .hole, .mono => unreachable, // TypeVarCursor.callable is set only for func, erased, and lambda_set contents
                 });
             },
             TypeVarCursor.children => try self.acceptTypeChild(frame, task, input.?.ty),
@@ -4343,7 +4343,7 @@ const Lowerer = struct {
                     .declared_order = input.?.span,
                 } });
             },
-            TypeVarCursor.named_declared_order + 1...std.math.maxInt(u8) => unreachable,
+            TypeVarCursor.named_declared_order + 1...std.math.maxInt(u8) => unreachable, // frame.cursor is only ever set to a TypeVarCursor constant
         }
         return try self.nextTypeChild(frame, task);
     }
@@ -4368,7 +4368,7 @@ const Lowerer = struct {
                 frame.index += 1;
             },
             .tag_union => try task.tys.append(self.allocator, lowered),
-            .link, .unbound, .forall, .primitive, .func, .lambda_set, .erased, .zst, .hole, .mono => unreachable,
+            .link, .unbound, .forall, .primitive, .func, .lambda_set, .erased, .zst, .hole, .mono => unreachable, // TypeVarCursor.children is set only for list, box, tuple, record, tag_union, and named contents
         }
     }
 
@@ -4462,7 +4462,7 @@ const Lowerer = struct {
                 frame.cursor = TypeVarCursor.named_declared_order;
                 return .{ .call = .{ .declared_order = .{ .span = named.declared_order } } };
             },
-            .link, .unbound, .forall, .primitive, .func, .lambda_set, .erased, .zst, .hole, .mono => unreachable,
+            .link, .unbound, .forall, .primitive, .func, .lambda_set, .erased, .zst, .hole, .mono => unreachable, // cursor start returns for every content without children
         }
     }
 
@@ -4769,7 +4769,7 @@ const Lowerer = struct {
                     .request = root.request,
                     .proc = proc,
                     .ret_layout = ret_layout,
-                    .ret_type = try self.constTypeOfType(entry.ret),
+                    .ret_type = try self.constTypeOfType(try self.declaredRootType(entry.ret, self.solved.lifted.getFn(self.solved.lifted.rootsView()[root.request_index].fn_id).ret)),
                     .plan = try self.constPlanOfType(entry.ret),
                     .value_slot = if (completed_values.get(root.request_index)) |value_root|
                         try self.comptimeValueSlot(value_root, entry.ret, ret_layout)
@@ -4830,6 +4830,576 @@ const Lowerer = struct {
 
     fn constTypeOfType(self: *Lowerer, ty: Type.TypeId) Common.LowerError!const_store.ConstTypeId {
         return (try self.runConstSchema(.{ .ty = .{ .ty = ty } })).get(.ty);
+    }
+
+    /// A program type paired with the declared Monotype type it was lowered
+    /// from.
+    const DeclaredTypePair = struct { program: Type.TypeId, declared: MonoType.TypeId };
+
+    /// The type a compile-time root is stored at: `program_ty`, the root's
+    /// return in this program, with every tag union brought back to the row
+    /// `declared_ty`, the root's lifted Monotype return, declares. The type a
+    /// root is stored and cached at is a function of its declaring module
+    /// alone (design.md "Row Joins"), while this program's joins may have
+    /// widened the root's rows, even to one label at two payload types. A
+    /// value of the declared row inhabits only its tags, so the stored value
+    /// is unchanged, and a program restoring it widens it to its own row.
+    /// Only the parts a join widened are copied. Each walk keeps its own
+    /// explicit stack, so type nesting never becomes native call depth.
+    fn declaredRootType(self: *Lowerer, program_ty: Type.TypeId, declared_ty: MonoType.TypeId) Common.LowerError!Type.TypeId {
+        var walk = DeclaredWalk.init(self.allocator);
+        defer walk.deinit();
+        return try self.narrowToDeclared(&walk, .{ .program = program_ty, .declared = declared_ty });
+    }
+
+    /// The state of one `declaredRootType` walk.
+    const DeclaredWalk = struct {
+        /// Whether each pair analyzed reaches a row the program widened.
+        widened: std.AutoHashMap(DeclaredTypePair, bool),
+        /// Each pair's type at the declared rows, once built. A named
+        /// type's entry is its copy from the moment the copy begins, so a
+        /// recursive reference reaches it.
+        narrowed: std.AutoHashMap(DeclaredTypePair, Type.TypeId),
+        /// Pairs whose narrowed type is being built.
+        active: std.AutoHashMap(DeclaredTypePair, void),
+        /// Scratch for one widening query.
+        visited: std.AutoHashMap(DeclaredTypePair, void),
+        pending: std.ArrayList(DeclaredTypePair) = .empty,
+        children: std.ArrayList(DeclaredTypePair) = .empty,
+        /// The narrowing build: open frames, their child pairs, the chosen
+        /// variant of each declared tag, and finished children's types.
+        frames: std.ArrayList(NarrowFrame) = .empty,
+        frame_pairs: std.ArrayList(DeclaredTypePair) = .empty,
+        frame_tags: std.ArrayList(Type.Tag) = .empty,
+        results: std.ArrayList(Type.TypeId) = .empty,
+
+        fn init(allocator: Allocator) DeclaredWalk {
+            return .{
+                .widened = std.AutoHashMap(DeclaredTypePair, bool).init(allocator),
+                .narrowed = std.AutoHashMap(DeclaredTypePair, Type.TypeId).init(allocator),
+                .active = std.AutoHashMap(DeclaredTypePair, void).init(allocator),
+                .visited = std.AutoHashMap(DeclaredTypePair, void).init(allocator),
+            };
+        }
+
+        fn deinit(self: *DeclaredWalk) void {
+            const allocator = self.widened.allocator;
+            self.widened.deinit();
+            self.narrowed.deinit();
+            self.active.deinit();
+            self.visited.deinit();
+            self.pending.deinit(allocator);
+            self.children.deinit(allocator);
+            self.frames.deinit(allocator);
+            self.frame_pairs.deinit(allocator);
+            self.frame_tags.deinit(allocator);
+            self.results.deinit(allocator);
+        }
+    };
+
+    /// One pair whose narrowed type waits for its children's.
+    const NarrowFrame = struct {
+        pair: DeclaredTypePair,
+        /// `DeclaredWalk.frame_pairs[children_start..][0..children_len]`.
+        children_start: u32,
+        children_len: u32,
+        next: u32 = 0,
+        /// Where this frame's children's types start in `DeclaredWalk.results`.
+        results_start: u32,
+        /// Where a tag union's chosen variants start in `DeclaredWalk.frame_tags`.
+        tags_start: u32,
+        /// A named type's copy.
+        copy: ?Type.TypeId = null,
+    };
+
+    /// Whether a pair reaches a tag union whose program row lists a tag its
+    /// declaration does not, or a label twice.
+    fn widenedBeyondDeclared(self: *Lowerer, walk: *DeclaredWalk, start: DeclaredTypePair) Common.LowerError!bool {
+        if (walk.widened.get(start)) |known| return known;
+        const allocator = self.allocator;
+        walk.visited.clearRetainingCapacity();
+        walk.pending.clearRetainingCapacity();
+        try walk.visited.put(start, {});
+        try walk.pending.append(allocator, start);
+        while (walk.pending.pop()) |pair| {
+            if (walk.widened.get(pair)) |known| {
+                if (known) {
+                    try walk.widened.put(start, true);
+                    return true;
+                }
+                // Nothing this pair reaches is widened.
+                continue;
+            }
+            walk.children.clearRetainingCapacity();
+            if (try self.widenedHere(pair, &walk.children)) {
+                try walk.widened.put(start, true);
+                return true;
+            }
+            for (walk.children.items) |child| {
+                if ((try walk.visited.getOrPut(child)).found_existing) continue;
+                try walk.pending.append(allocator, child);
+            }
+        }
+        // Every pair this query reached reaches only pairs it reached.
+        var reached = walk.visited.keyIterator();
+        while (reached.next()) |pair| try walk.widened.put(pair.*, false);
+        return false;
+    }
+
+    /// Whether `pair`'s own row is widened beyond its declaration; appends
+    /// the pairs beneath it to `children` otherwise.
+    fn widenedHere(self: *Lowerer, pair: DeclaredTypePair, children: *std.ArrayList(DeclaredTypePair)) Common.LowerError!bool {
+        const allocator = self.allocator;
+        const declared_types = self.solved.lifted.types.view();
+        const declared = declared_types.get(pair.declared);
+        switch (self.types.get(pair.program)) {
+            .tag_union => |span| {
+                if (declared != .tag_union) return false;
+                const declared_tags = declared_types.tagSpan(declared.tag_union);
+                if (span.len != declared_tags.len) return true;
+                for (declared_tags, 0..) |declared_tag, index| {
+                    const tag = self.types.tagAt(span, index);
+                    if (tag.name != declared_tag.name) return true;
+                    const declared_payloads = declared_types.span(declared_tag.payloads);
+                    if (declared_payloads.len != tag.payloads.len) return false;
+                    for (declared_payloads, 0..) |declared_payload, payload_index| {
+                        try children.append(allocator, .{ .program = self.types.typeAt(tag.payloads, payload_index), .declared = declared_payload });
+                    }
+                }
+                return false;
+            },
+            .record => |span| {
+                if (declared != .record) return false;
+                const declared_fields = declared_types.fieldSpan(declared.record);
+                if (declared_fields.len != span.len) return false;
+                for (declared_fields, 0..) |declared_field, index| {
+                    try children.append(allocator, .{ .program = self.types.fieldAt(span, index).ty, .declared = declared_field.ty });
+                }
+                return false;
+            },
+            .tuple => |span| {
+                if (declared != .tuple) return false;
+                const declared_items = declared_types.span(declared.tuple);
+                if (declared_items.len != span.len) return false;
+                for (declared_items, 0..) |declared_item, index| {
+                    try children.append(allocator, .{ .program = self.types.typeAt(span, index), .declared = declared_item });
+                }
+                return false;
+            },
+            .list => |elem| {
+                if (declared == .list) try children.append(allocator, .{ .program = elem, .declared = declared.list });
+                return false;
+            },
+            .box => |elem| {
+                if (declared == .box) try children.append(allocator, .{ .program = elem, .declared = declared.box });
+                return false;
+            },
+            .named => |named| {
+                if (declared != .named) return false;
+                const declared_args = declared_types.span(declared.named.args);
+                if (declared_args.len != named.args.len) return false;
+                for (declared_args, 0..) |declared_arg, index| {
+                    try children.append(allocator, .{ .program = self.types.typeAt(named.args, index), .declared = declared_arg });
+                }
+                const backing = named.backing orelse return false;
+                const declared_backing = declared.named.backing orelse return false;
+                try children.append(allocator, .{ .program = backing.ty, .declared = declared_backing.ty });
+                return false;
+            },
+            .primitive, .capture_record, .callable, .erased_fn, .erased_capture_ptr, .zst, .hole => return false,
+        }
+    }
+
+    /// `pair.program` with every widened row brought back to its
+    /// declaration.
+    fn narrowToDeclared(self: *Lowerer, walk: *DeclaredWalk, root: DeclaredTypePair) Common.LowerError!Type.TypeId {
+        if (try self.enterNarrow(walk, root)) |done| return done;
+        while (walk.frames.items.len != 0) {
+            const top = &walk.frames.items[walk.frames.items.len - 1];
+            if (top.next < top.children_len) {
+                const child = walk.frame_pairs.items[top.children_start + top.next];
+                top.next += 1;
+                if (try self.enterNarrow(walk, child)) |done| try walk.results.append(self.allocator, done);
+                continue;
+            }
+            const frame = walk.frames.pop().?;
+            const built = try self.finishNarrow(walk, frame);
+            walk.results.shrinkRetainingCapacity(frame.results_start);
+            walk.frame_pairs.shrinkRetainingCapacity(frame.children_start);
+            walk.frame_tags.shrinkRetainingCapacity(frame.tags_start);
+            _ = walk.active.remove(frame.pair);
+            try walk.narrowed.put(frame.pair, built);
+            if (walk.frames.items.len == 0) return built;
+            try walk.results.append(self.allocator, built);
+        }
+        unreachable; // the loop returns once it pops the root frame enterNarrow pushed
+    }
+
+    /// `pair`'s narrowed type when it needs no frame, or null after opening
+    /// one whose children follow.
+    fn enterNarrow(self: *Lowerer, walk: *DeclaredWalk, pair: DeclaredTypePair) Common.LowerError!?Type.TypeId {
+        if (walk.narrowed.get(pair)) |done| return done;
+        if (!try self.widenedBeyondDeclared(walk, pair)) {
+            try walk.narrowed.put(pair, pair.program);
+            return pair.program;
+        }
+        // Types reach themselves only through named types, whose copies
+        // are entered before their children.
+        if ((try walk.active.getOrPut(pair)).found_existing) Common.invariant("a compile-time root's type reached itself outside a named type");
+        const allocator = self.allocator;
+        const declared_types = self.solved.lifted.types.view();
+        const declared = declared_types.get(pair.declared);
+        var frame: NarrowFrame = .{
+            .pair = pair,
+            .children_start = @intCast(walk.frame_pairs.items.len),
+            .children_len = 0,
+            .results_start = @intCast(walk.results.items.len),
+            .tags_start = @intCast(walk.frame_tags.items.len),
+        };
+        switch (self.types.get(pair.program)) {
+            .tag_union => |span| {
+                const declared_tags = switch (declared) {
+                    .tag_union => |tags| declared_types.tagSpan(tags),
+                    .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst, .hole => Common.invariant("a compile-time root's tag union was declared as another kind of type"),
+                };
+                for (declared_tags) |declared_tag| {
+                    // A label is two variants only where their payloads
+                    // conflict, so exactly one variant fits the declared
+                    // payloads.
+                    var chosen: ?Type.Tag = null;
+                    for (0..span.len) |index| {
+                        const program_tag = self.types.tagAt(span, index);
+                        if (program_tag.name != declared_tag.name) continue;
+                        if (!try self.fitsDeclaredPayloads(program_tag.payloads, declared_tag.payloads)) continue;
+                        if (chosen != null) Common.invariant("two variants of one label both fit a compile-time root's declared payloads");
+                        chosen = program_tag;
+                    }
+                    const tag = chosen orelse Common.invariant("a compile-time root's declared tag has no variant in its program row");
+                    try walk.frame_tags.append(allocator, tag);
+                    for (declared_types.span(declared_tag.payloads), 0..) |declared_payload, index| {
+                        try walk.frame_pairs.append(allocator, .{ .program = self.types.typeAt(tag.payloads, index), .declared = declared_payload });
+                    }
+                }
+            },
+            .record => |span| {
+                const declared_fields = switch (declared) {
+                    .record => |fields| declared_types.fieldSpan(fields),
+                    .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("a compile-time root's record was declared as another kind of type"),
+                };
+                if (declared_fields.len != span.len) Common.invariant("a compile-time root's record has other fields than its declaration");
+                for (declared_fields, 0..) |declared_field, index| {
+                    try walk.frame_pairs.append(allocator, .{ .program = self.types.fieldAt(span, index).ty, .declared = declared_field.ty });
+                }
+            },
+            .tuple => |span| {
+                const declared_items = switch (declared) {
+                    .tuple => |items| declared_types.span(items),
+                    .primitive, .named, .record, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("a compile-time root's tuple was declared as another kind of type"),
+                };
+                if (declared_items.len != span.len) Common.invariant("a compile-time root's tuple has another arity than its declaration");
+                for (declared_items, 0..) |declared_item, index| {
+                    try walk.frame_pairs.append(allocator, .{ .program = self.types.typeAt(span, index), .declared = declared_item });
+                }
+            },
+            .list => |elem| {
+                const declared_elem = switch (declared) {
+                    .list => |item| item,
+                    .primitive, .named, .record, .tuple, .tag_union, .box, .func, .erased, .zst, .hole => Common.invariant("a compile-time root's list was declared as another kind of type"),
+                };
+                try walk.frame_pairs.append(allocator, .{ .program = elem, .declared = declared_elem });
+            },
+            .box => |elem| {
+                const declared_elem = switch (declared) {
+                    .box => |item| item,
+                    .primitive, .named, .record, .tuple, .tag_union, .list, .func, .erased, .zst, .hole => Common.invariant("a compile-time root's box was declared as another kind of type"),
+                };
+                try walk.frame_pairs.append(allocator, .{ .program = elem, .declared = declared_elem });
+            },
+            .named => |named| {
+                const declared_named = switch (declared) {
+                    .named => |declared_named| declared_named,
+                    .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => Common.invariant("a compile-time root's named type was declared as another kind of type"),
+                };
+                // A recursive named type reaches itself again through its
+                // backing; that reference is this copy.
+                const copy = try self.types.add(.zst);
+                try walk.narrowed.put(pair, copy);
+                frame.copy = copy;
+                const declared_args = declared_types.span(declared_named.args);
+                if (declared_args.len != named.args.len) Common.invariant("a compile-time root's named type has other arguments than its declaration");
+                for (declared_args, 0..) |declared_arg, index| {
+                    try walk.frame_pairs.append(allocator, .{ .program = self.types.typeAt(named.args, index), .declared = declared_arg });
+                }
+                if (named.backing) |backing| {
+                    const declared_backing = declared_named.backing orelse Common.invariant("a compile-time root's named type has a backing its declaration lacks");
+                    try walk.frame_pairs.append(allocator, .{ .program = backing.ty, .declared = declared_backing.ty });
+                }
+            },
+            // Callables, erased values, scalars and holes hold no row a join widens
+            // at the root's own type, so none is ever widened.
+            .primitive, .capture_record, .callable, .erased_fn, .erased_capture_ptr, .zst, .hole => Common.invariant("a compile-time root's leaf type was widened"),
+        }
+        frame.children_len = @as(u32, @intCast(walk.frame_pairs.items.len)) - frame.children_start;
+        try walk.frames.append(allocator, frame);
+        return null;
+    }
+
+    /// Build a frame's narrowed type from its children's.
+    fn finishNarrow(self: *Lowerer, walk: *DeclaredWalk, frame: NarrowFrame) Common.LowerError!Type.TypeId {
+        const children = walk.frame_pairs.items[frame.children_start..][0..frame.children_len];
+        const results = walk.results.items[frame.results_start..];
+        if (results.len != children.len) Common.invariant("a narrowed compile-time root type lost a child's type");
+        var changed = false;
+        for (children, results) |child, result| changed = changed or result != child.program;
+        switch (self.types.get(frame.pair.program)) {
+            .tag_union => |span| {
+                const chosen = walk.frame_tags.items[frame.tags_start..];
+                if (chosen.len != span.len) changed = true;
+                if (!changed) return frame.pair.program;
+                const kept = try self.allocator.alloc(Type.Tag, chosen.len);
+                defer self.allocator.free(kept);
+                var next: usize = 0;
+                for (chosen, kept) |tag, *out| {
+                    const payloads = results[next..][0..tag.payloads.len];
+                    const program_payloads = children[next..][0..tag.payloads.len];
+                    next += tag.payloads.len;
+                    var payloads_changed = false;
+                    for (program_payloads, payloads) |program_payload, payload| payloads_changed = payloads_changed or payload != program_payload.program;
+                    out.* = .{ .name = tag.name, .checked_name = tag.checked_name, .payloads = if (payloads_changed) try self.types.addSpan(payloads) else tag.payloads };
+                }
+                return try self.types.add(.{ .tag_union = try self.types.addTags(kept) });
+            },
+            .record => |span| {
+                if (!changed) return frame.pair.program;
+                const fields = try self.allocator.alloc(Type.Field, span.len);
+                defer self.allocator.free(fields);
+                for (fields, results, 0..) |*field, result, index| {
+                    field.* = self.types.fieldAt(span, index);
+                    field.ty = result;
+                }
+                return try self.types.add(.{ .record = try self.types.addFields(fields) });
+            },
+            .tuple => {
+                if (!changed) return frame.pair.program;
+                return try self.types.add(.{ .tuple = try self.types.addSpan(results) });
+            },
+            .list => return if (changed) try self.types.add(.{ .list = results[0] }) else frame.pair.program,
+            .box => return if (changed) try self.types.add(.{ .box = results[0] }) else frame.pair.program,
+            .named => |named| {
+                const copy = frame.copy orelse Common.invariant("a narrowed named type had no copy");
+                var narrowed = named;
+                narrowed.args = try self.types.addSpan(results[0..named.args.len]);
+                if (narrowed.backing) |*backing| backing.ty = results[named.args.len];
+                try self.types.set(copy, .{ .named = narrowed });
+                return copy;
+            },
+            .primitive, .capture_record, .callable, .erased_fn, .erased_capture_ptr, .zst, .hole => Common.invariant("a compile-time root's leaf type was widened"),
+        }
+    }
+
+    /// One requirement of a pair fitting its declaration: it holds when one
+    /// of its alternatives does. `FitAlternative`s are spans of pairs that
+    /// must all fit.
+    const FitRequirement = struct { alternatives_start: u32, alternatives_len: u32 };
+    const FitAlternative = struct { pairs_start: u32, pairs_len: u32 };
+
+    /// One pair being checked: every requirement must hold.
+    const FitFrame = struct {
+        pair: DeclaredTypePair,
+        requirements_start: u32,
+        requirements_len: u32,
+        requirement: u32 = 0,
+        alternative: u32 = 0,
+        pair_index: u32 = 0,
+    };
+
+    /// The state of one fit check.
+    const FitWalk = struct {
+        /// Each pair's finished answer; a pair still being checked fits as
+        /// far as its other parts do.
+        answers: std.AutoHashMap(DeclaredTypePair, bool),
+        active: std.AutoHashMap(DeclaredTypePair, void),
+        frames: std.ArrayList(FitFrame) = .empty,
+        requirements: std.ArrayList(FitRequirement) = .empty,
+        alternatives: std.ArrayList(FitAlternative) = .empty,
+        pairs: std.ArrayList(DeclaredTypePair) = .empty,
+
+        fn deinit(self: *FitWalk) void {
+            const allocator = self.answers.allocator;
+            self.answers.deinit();
+            self.active.deinit();
+            self.frames.deinit(allocator);
+            self.requirements.deinit(allocator);
+            self.alternatives.deinit(allocator);
+            self.pairs.deinit(allocator);
+        }
+    };
+
+    /// Whether a variant's program payloads fit its declared payloads: the
+    /// same kinds of type, primitives, record fields, arities and labels,
+    /// the checks that keep two variants of one label apart (design.md "Row
+    /// Joins").
+    fn fitsDeclaredPayloads(self: *Lowerer, program_payloads: Type.Span, declared_payloads: MonoType.Span) Common.LowerError!bool {
+        const declared = self.solved.lifted.types.view().span(declared_payloads);
+        if (declared.len != program_payloads.len) return false;
+        var walk: FitWalk = .{
+            .answers = std.AutoHashMap(DeclaredTypePair, bool).init(self.allocator),
+            .active = std.AutoHashMap(DeclaredTypePair, void).init(self.allocator),
+        };
+        defer walk.deinit();
+        for (declared, 0..) |declared_payload, index| {
+            if (!try self.fitsDeclared(&walk, .{ .program = self.types.typeAt(program_payloads, index), .declared = declared_payload })) return false;
+        }
+        return true;
+    }
+
+    fn fitsDeclared(self: *Lowerer, walk: *FitWalk, root: DeclaredTypePair) Common.LowerError!bool {
+        var answer: bool = if (try self.enterFit(walk, root)) |done| return done else undefined;
+        while (walk.frames.items.len != 0) {
+            const top = &walk.frames.items[walk.frames.items.len - 1];
+            const step = self.nextFitPair(walk, top);
+            switch (step) {
+                .pair => |pair| {
+                    if (try self.enterFit(walk, pair)) |done| self.takeFitAnswer(walk, done);
+                    continue;
+                },
+                .done => |fits| answer = fits,
+            }
+            const frame = walk.frames.pop().?;
+            walk.requirements.shrinkRetainingCapacity(frame.requirements_start);
+            _ = walk.active.remove(frame.pair);
+            try walk.answers.put(frame.pair, answer);
+            if (walk.frames.items.len == 0) return answer;
+            self.takeFitAnswer(walk, answer);
+        }
+        unreachable; // the loop returns once it pops the root frame enterFit pushed
+    }
+
+    const FitStep = union(enum) { pair: DeclaredTypePair, done: bool };
+
+    /// The next pair the top frame waits on, or its answer once every
+    /// requirement held or one could not.
+    fn nextFitPair(_: *Lowerer, walk: *FitWalk, frame: *FitFrame) FitStep {
+        while (true) {
+            if (frame.requirement == frame.requirements_len) return .{ .done = true };
+            const requirement = walk.requirements.items[frame.requirements_start + frame.requirement];
+            if (frame.alternative == requirement.alternatives_len) return .{ .done = false };
+            const alternative = walk.alternatives.items[requirement.alternatives_start + frame.alternative];
+            if (frame.pair_index == alternative.pairs_len) {
+                frame.requirement += 1;
+                frame.alternative = 0;
+                frame.pair_index = 0;
+                continue;
+            }
+            return .{ .pair = walk.pairs.items[alternative.pairs_start + frame.pair_index] };
+        }
+    }
+
+    /// Advance the top frame past the pair it waited on.
+    fn takeFitAnswer(_: *Lowerer, walk: *FitWalk, fits: bool) void {
+        const frame = &walk.frames.items[walk.frames.items.len - 1];
+        if (fits) {
+            frame.pair_index += 1;
+        } else {
+            frame.alternative += 1;
+            frame.pair_index = 0;
+        }
+    }
+
+    /// `pair`'s answer when it needs no frame, or null after opening one.
+    fn enterFit(self: *Lowerer, walk: *FitWalk, pair: DeclaredTypePair) Common.LowerError!?bool {
+        if (walk.answers.get(pair)) |known| return known;
+        // A pair met again inside itself fits as far as its other parts do.
+        if (walk.active.contains(pair)) return true;
+        const allocator = self.allocator;
+        const declared_types = self.solved.lifted.types.view();
+        const declared = declared_types.get(pair.declared);
+        const requirements_start: u32 = @intCast(walk.requirements.items.len);
+        const Single = struct {
+            fn add(w: *FitWalk, a: Allocator, child: DeclaredTypePair) Allocator.Error!void {
+                try w.requirements.append(a, .{ .alternatives_start = @intCast(w.alternatives.items.len), .alternatives_len = 1 });
+                try w.alternatives.append(a, .{ .pairs_start = @intCast(w.pairs.items.len), .pairs_len = 1 });
+                try w.pairs.append(a, child);
+            }
+        };
+        switch (self.types.get(pair.program)) {
+            .primitive => |primitive| return declared == .primitive and std.meta.eql(primitive, declared.primitive),
+            .record => |span| {
+                if (declared != .record) return false;
+                const declared_fields = declared_types.fieldSpan(declared.record);
+                if (declared_fields.len != span.len) return false;
+                for (declared_fields, 0..) |declared_field, index| {
+                    const field = self.types.fieldAt(span, index);
+                    if (field.name != declared_field.name) {
+                        walk.requirements.shrinkRetainingCapacity(requirements_start);
+                        return false;
+                    }
+                    try Single.add(walk, allocator, .{ .program = field.ty, .declared = declared_field.ty });
+                }
+            },
+            .tuple => |span| {
+                if (declared != .tuple) return false;
+                const declared_items = declared_types.span(declared.tuple);
+                if (declared_items.len != span.len) return false;
+                for (declared_items, 0..) |declared_item, index| {
+                    try Single.add(walk, allocator, .{ .program = self.types.typeAt(span, index), .declared = declared_item });
+                }
+            },
+            .tag_union => |span| {
+                if (declared != .tag_union) return false;
+                for (declared_types.tagSpan(declared.tag_union)) |declared_tag| {
+                    const declared_payloads = declared_types.span(declared_tag.payloads);
+                    const alternatives_start: u32 = @intCast(walk.alternatives.items.len);
+                    for (0..span.len) |index| {
+                        const tag = self.types.tagAt(span, index);
+                        if (tag.name != declared_tag.name or tag.payloads.len != declared_payloads.len) continue;
+                        try walk.alternatives.append(allocator, .{ .pairs_start = @intCast(walk.pairs.items.len), .pairs_len = @intCast(declared_payloads.len) });
+                        for (declared_payloads, 0..) |declared_payload, payload_index| {
+                            try walk.pairs.append(allocator, .{ .program = self.types.typeAt(tag.payloads, payload_index), .declared = declared_payload });
+                        }
+                    }
+                    const alternatives_len = @as(u32, @intCast(walk.alternatives.items.len)) - alternatives_start;
+                    if (alternatives_len == 0) {
+                        walk.requirements.shrinkRetainingCapacity(requirements_start);
+                        return false;
+                    }
+                    try walk.requirements.append(allocator, .{ .alternatives_start = alternatives_start, .alternatives_len = alternatives_len });
+                }
+            },
+            .list => |elem| {
+                if (declared != .list) return false;
+                try Single.add(walk, allocator, .{ .program = elem, .declared = declared.list });
+            },
+            .box => |elem| {
+                if (declared != .box) return false;
+                try Single.add(walk, allocator, .{ .program = elem, .declared = declared.box });
+            },
+            .named => |named| {
+                if (declared != .named or !std.meta.eql(named.def, declared.named.def)) return false;
+                const declared_args = declared_types.span(declared.named.args);
+                if (declared_args.len != named.args.len) return false;
+                for (declared_args, 0..) |declared_arg, index| {
+                    try Single.add(walk, allocator, .{ .program = self.types.typeAt(named.args, index), .declared = declared_arg });
+                }
+            },
+            .callable, .erased_fn => return declared == .func or declared == .erased,
+            .zst => return switch (declared) {
+                .zst => true,
+                .record => |fields| fields.len == 0,
+                .tuple => |items| items.len == 0,
+                .primitive, .named, .tag_union, .list, .box, .func, .erased, .hole => false,
+            },
+            // A hole equals only itself.
+            .hole => return declared == .hole,
+            .capture_record, .erased_capture_ptr => return false,
+        }
+        try walk.active.put(pair, {});
+        try walk.frames.append(allocator, .{
+            .pair = pair,
+            .requirements_start = requirements_start,
+            .requirements_len = @as(u32, @intCast(walk.requirements.items.len)) - requirements_start,
+        });
+        return null;
     }
 
     // Const schemas //
@@ -5037,11 +5607,17 @@ const Lowerer = struct {
                     task.plans[task.index] = component.get(.plan);
                     task.index += 1;
                 }
-                if (task.index < task.plans.len) return .{ .call = .{ .plan = .{ .ty = switch (content) {
-                    .tuple => |items| self.types.typeAt(items, task.index),
-                    .record => |fields| self.types.fieldAt(fields, task.index).ty,
-                    .primitive, .named, .capture_record, .tag_union, .callable, .list, .box, .erased_fn, .erased_capture_ptr, .zst, .hole => unreachable,
-                } } } };
+                if (task.index < task.plans.len) return .{
+                    .call = .{
+                        .plan = .{
+                            .ty = switch (content) {
+                                .tuple => |items| self.types.typeAt(items, task.index),
+                                .record => |fields| self.types.fieldAt(fields, task.index).ty,
+                                .primitive, .named, .capture_record, .tag_union, .callable, .list, .box, .erased_fn, .erased_capture_ptr, .zst, .hole => unreachable, // this switch is inside the .tuple, .record prong
+                            },
+                        },
+                    },
+                };
                 const plans = task.plans;
                 task.plans = &.{};
                 break :blk if (content == .tuple) .{ .tuple = plans } else .{ .record = plans };
@@ -5200,7 +5776,7 @@ const Lowerer = struct {
                         }
                     },
                     .tuple, .tag_union, .callable, .erased_fn => try task.ids.append(allocator, component),
-                    .primitive, .zst, .hole, .capture_record, .erased_capture_ptr => unreachable,
+                    .primitive, .zst, .hole, .capture_record, .erased_capture_ptr => unreachable, // cursor start returns for primitive and zst and rejects hole, capture_record, and erased_capture_ptr
                 }
             },
             ConstTypeCursor.field_value => {
@@ -5237,7 +5813,7 @@ const Lowerer = struct {
                     .ret = input.?.get(.ty),
                 } });
             },
-            ConstTypeCursor.callable_ret + 1...std.math.maxInt(u8) => unreachable,
+            ConstTypeCursor.callable_ret + 1...std.math.maxInt(u8) => unreachable, // task.cursor is only ever set to a ConstTypeCursor constant
         }
 
         switch (content) {
@@ -5315,7 +5891,7 @@ const Lowerer = struct {
                 task.cursor = ConstTypeCursor.callable_ret;
                 return constTypeStep(try self.lowerType(func.ret));
             },
-            .primitive, .zst, .hole, .list, .box, .capture_record, .erased_capture_ptr => unreachable,
+            .primitive, .zst, .hole, .list, .box, .capture_record, .erased_capture_ptr => unreachable, // cursor start returns for primitive, zst, and capture contents, rejects hole, and cursor components returns for list and box
         }
     }
 
@@ -10114,7 +10690,7 @@ const Lowerer = struct {
                             .done => |done| result = done,
                         }
                     },
-                    .erased_fn, .primitive, .callable, .erased_capture_ptr, .zst, .hole => unreachable,
+                    .erased_fn, .primitive, .callable, .erased_capture_ptr, .zst, .hole => unreachable, // frames are pushed only for named, box, list, record, capture_record, tuple, and tag_union types
                 }
                 if (exhaustions == top.exhaustions_before) try self.erased_demands.put(top.ty, result);
                 _ = frames.pop();
@@ -10169,7 +10745,7 @@ const Lowerer = struct {
                 }
                 return .{ .done = if (any_single_variant.*) .single_slot else .none };
             },
-            .erased_fn, .named, .box, .list, .primitive, .callable, .erased_capture_ptr, .zst, .hole => unreachable,
+            .erased_fn, .named, .box, .list, .primitive, .callable, .erased_capture_ptr, .zst, .hole => unreachable, // callers pass only record, capture_record, tuple, and tag_union types
         }
     }
 
@@ -11319,7 +11895,7 @@ const Lowerer = struct {
                 .frac_f64_lit,
                 .str_lit,
                 .str_pattern,
-                => unreachable,
+                => unreachable, // PatternRefutability calls child only after patternClass reports .child
             };
         }
 
@@ -11515,15 +12091,17 @@ const Lowerer = struct {
             },
             .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => switch (task.lowering) {
                 .bind => return .{ .ret = task.next },
-                .test_then => return .{ .ret = switch (pat_data) {
-                    .int_lit => |value| try self.lowerLiteralPatternThen(where, task.source, task.ty, .{ .int_lit = value }, task.next, task.miss),
-                    .dec_lit => |value| try self.lowerLiteralPatternThen(where, task.source, task.ty, .{ .dec_lit = value }, task.next, task.miss),
-                    .frac_f32_lit => |value| try self.lowerLiteralPatternThen(where, task.source, task.ty, .{ .frac_f32_lit = value }, task.next, task.miss),
-                    .frac_f64_lit => |value| try self.lowerLiteralPatternThen(where, task.source, task.ty, .{ .frac_f64_lit = value }, task.next, task.miss),
-                    .str_lit => |value| try self.lowerLiteralPatternThen(where, task.source, task.ty, .{ .str_lit = value }, task.next, task.miss),
-                    .str_pattern => |str| try self.lowerStrPatternThen(where, str, task.source, task.next, task.miss),
-                    .bind, .wildcard, .as, .record, .tuple, .tag, .list, .nominal => unreachable,
-                } },
+                .test_then => return .{
+                    .ret = switch (pat_data) {
+                        .int_lit => |value| try self.lowerLiteralPatternThen(where, task.source, task.ty, .{ .int_lit = value }, task.next, task.miss),
+                        .dec_lit => |value| try self.lowerLiteralPatternThen(where, task.source, task.ty, .{ .dec_lit = value }, task.next, task.miss),
+                        .frac_f32_lit => |value| try self.lowerLiteralPatternThen(where, task.source, task.ty, .{ .frac_f32_lit = value }, task.next, task.miss),
+                        .frac_f64_lit => |value| try self.lowerLiteralPatternThen(where, task.source, task.ty, .{ .frac_f64_lit = value }, task.next, task.miss),
+                        .str_lit => |value| try self.lowerLiteralPatternThen(where, task.source, task.ty, .{ .str_lit = value }, task.next, task.miss),
+                        .str_pattern => |str| try self.lowerStrPatternThen(where, str, task.source, task.next, task.miss),
+                        .bind, .wildcard, .as, .record, .tuple, .tag, .list, .nominal => unreachable, // this switch is inside the literal-pattern prong
+                    },
+                },
             },
         }
     }
@@ -11555,7 +12133,7 @@ const Lowerer = struct {
                     if (items.len != self.tupleItemTypes(task.source_ty).len) Common.invariant("tuple pattern arity differed from target tuple type");
                     break :blk items.len;
                 },
-                .bind, .wildcard, .as, .list, .tag, .nominal, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => unreachable,
+                .bind, .wildcard, .as, .list, .tag, .nominal, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => unreachable, // stepStructPattern is called only for record and tuple patterns
             };
         }
         if (task.index == 0) return .{ .ret = task.current };
@@ -11573,7 +12151,7 @@ const Lowerer = struct {
                 task.part_ty = GuardedList.at(self.tupleItemTypes(task.source_ty), i);
                 break :blk GuardedList.at(self.solved.lifted.patSpan(span), i);
             },
-            .bind, .wildcard, .as, .list, .tag, .nominal, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => unreachable,
+            .bind, .wildcard, .as, .list, .tag, .nominal, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => unreachable, // stepStructPattern is called only for record and tuple patterns
         };
         task.part_local = try self.addTemp(task.part_ty);
         return .{ .call = subpatternTask(task, child_pat, task.part_ty, task.part_local, task.current) };
@@ -11709,7 +12287,7 @@ const Lowerer = struct {
                     task.current = try self.assignU64Literal(where, index_local, @intCast(i), task.current);
                 }
             },
-            ListPatternCursor.element + 1...std.math.maxInt(u8) => unreachable,
+            ListPatternCursor.element + 1...std.math.maxInt(u8) => unreachable, // task.cursor is only ever set to a ListPatternCursor constant
         }
 
         if (task.index != 0) {
@@ -12178,7 +12756,7 @@ const Lowerer = struct {
         const eq_op: LIR.LowLevel = switch (primitive) {
             .str => .str_is_eq,
             .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => .num_is_eq,
-            .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .bool => unreachable,
+            .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .bool => unreachable, // bool returned above, and SIMD vectors returned through the U128 comparison
         };
         const args = [_]LIR.LocalId{ lhs, rhs };
         const not_op: LIR.LowLevel = .bool_not;
@@ -12815,18 +13393,15 @@ const Lowerer = struct {
             return .{ .ret = try self.assignLocal(where, target, backing_local, next) };
         }
 
-        if (@import("builtin").mode == .debug) {
-            base.invariant(
-                "postcheck invariant violated: LIR lowering expected nominal layouts to stay on one side of layout boxing, target={d} ({s}) source={d} ({s})",
-                .{
-                    @backingInt(target_layout),
-                    @tagName(target_content.tag),
-                    @backingInt(backing_layout),
-                    @tagName(backing_content.tag),
-                },
-            );
-        }
-        unreachable;
+        base.invariant(
+            "postcheck invariant violated: LIR lowering expected nominal layouts to stay on one side of layout boxing, target={d} ({s}) source={d} ({s})",
+            .{
+                @backingInt(target_layout),
+                @tagName(target_content.tag),
+                @backingInt(backing_layout),
+                @tagName(backing_content.tag),
+            },
+        );
     }
 
     fn runBoundary(self: *Lowerer, where: LowerSite, root: BoundaryTask) Common.LowerError!?LIR.CFStmtId {
@@ -13016,7 +13591,7 @@ const Lowerer = struct {
                 return .{ .call = .{ .box = .{ .target = frame.first, .source = task.source, .source_layout = self.result.store.getLocal(task.source).layout_idx, .next = current } } };
             },
             IntoStorageCursor.unboxed => return .{ .ret = input.?.? },
-            IntoStorageCursor.unboxed + 1...std.math.maxInt(u8) => unreachable,
+            IntoStorageCursor.unboxed + 1...std.math.maxInt(u8) => unreachable, // frame.cursor is only ever set to an IntoStorageCursor constant
         }
     }
 
@@ -13062,7 +13637,7 @@ const Lowerer = struct {
             },
             BoxCursor.struct_layout => if (input.?) |converted| return .{ .ret = converted },
             BoxCursor.tag_union_layout => if (input.?) |converted| return .{ .ret = converted },
-            BoxCursor.tag_union_layout + 1...std.math.maxInt(u8) => unreachable,
+            BoxCursor.tag_union_layout + 1...std.math.maxInt(u8) => unreachable, // frame.cursor is only ever set to a BoxCursor constant
         }
         if (frame.cursor != BoxCursor.tag_union_layout and target_content.tag == .tag_union and source_content.tag == .tag_union) {
             frame.cursor = BoxCursor.tag_union_layout;
@@ -13078,18 +13653,15 @@ const Lowerer = struct {
             return .{ .ret = try self.assignZst(where, target, next) };
         }
 
-        if (@import("builtin").mode == .debug) {
-            base.invariant(
-                "postcheck invariant violated: LIR lowering expected layouts to match or differ by an explicit Box edge, target={d} ({s}) source={d} ({s})",
-                .{
-                    @backingInt(target_layout),
-                    @tagName(target_content.tag),
-                    @backingInt(task.source_layout),
-                    @tagName(source_content.tag),
-                },
-            );
-        }
-        unreachable;
+        base.invariant(
+            "postcheck invariant violated: LIR lowering expected layouts to match or differ by an explicit Box edge, target={d} ({s}) source={d} ({s})",
+            .{
+                @backingInt(target_layout),
+                @tagName(target_content.tag),
+                @backingInt(task.source_layout),
+                @tagName(source_content.tag),
+            },
+        );
     }
 
     /// A record's, tuple's, or capture record's fields, last to first: each
@@ -13103,7 +13675,7 @@ const Lowerer = struct {
                     .record => self.types.fieldSpan(task.target_span).len,
                     .capture_record => self.types.captureFieldSpan(task.target_span).len,
                     .tuple => self.types.span(task.target_span).len,
-                    .tag_union, .callable, .callable_to_erased => unreachable,
+                    .tag_union, .callable, .callable_to_erased => unreachable, // fields boundaries are built only for record, tuple, and capture_record kinds
                 };
                 if (task.kind == .tuple and target_len != self.types.span(task.source_span).len) Common.invariant("tuple boundary saw different arities");
                 frame.locals = try self.allocator.alloc(LIR.LocalId, target_len);
@@ -13153,7 +13725,7 @@ const Lowerer = struct {
                 target_ty = GuardedList.at(self.types.span(task.target_span), i);
                 source_ty = GuardedList.at(self.types.span(task.source_span), i);
             },
-            .tag_union, .callable, .callable_to_erased => unreachable,
+            .tag_union, .callable, .callable_to_erased => unreachable, // fields boundaries are built only for record, tuple, and capture_record kinds
         }
         frame.source_index = @intCast(source_index);
         frame.layout_idx = self.localFieldLayout(task.source, frame.source_index);
@@ -13169,7 +13741,7 @@ const Lowerer = struct {
         const source_len: usize = switch (task.kind) {
             .tag_union => self.types.tagSpan(task.source_span).len,
             .callable, .callable_to_erased => self.types.fnVariantSpan(task.source_span).len,
-            .record, .tuple, .capture_record => unreachable,
+            .record, .tuple, .capture_record => unreachable, // variants boundaries are built only for tag_union, callable, and callable_to_erased kinds
         };
         if (input) |branch| {
             frame.branches[frame.index] = .{ .value = @intCast(frame.index), .body = branch.? };
@@ -13194,13 +13766,13 @@ const Lowerer = struct {
                     if (self.isZstLocal(task.source)) return .{ .ret = try self.assignZst(where, task.target, task.next) };
                 },
                 .callable_to_erased => if (source_len == 0) Common.invariant("callable-to-erased boundary saw an empty source callable set"),
-                .record, .tuple, .capture_record => unreachable,
+                .record, .tuple, .capture_record => unreachable, // variants boundaries are built only for tag_union, callable, and callable_to_erased kinds
             }
             if (self.isZstLocal(task.source)) {
                 switch (task.kind) {
                     .tag_union => if (source_len != 1) Common.invariant("zero-sized source tag union had multiple variants"),
                     .callable_to_erased => if (source_len != 1) Common.invariant("zero-sized callable-to-erased boundary saw multiple source variants"),
-                    .callable, .record, .tuple, .capture_record => unreachable,
+                    .callable, .record, .tuple, .capture_record => unreachable, // a zero-sized .callable source returned above, and variants boundaries carry no struct kinds
                 }
                 return .{ .tail = .{ .variant = self.variantConversion(task, 0) } };
             }
@@ -13254,7 +13826,7 @@ const Lowerer = struct {
                     .next = task.next,
                 };
             },
-            .record, .tuple, .capture_record => unreachable,
+            .record, .tuple, .capture_record => unreachable, // variants boundaries are built only for tag_union, callable, and callable_to_erased kinds
         }
     }
 
@@ -13282,7 +13854,7 @@ const Lowerer = struct {
                 .op = .tagPayloadStruct(task.source, task.source_index, task.source_index),
                 .next = input.?.?,
             } } },
-            VariantCursor.payload + 1...std.math.maxInt(u8) => unreachable,
+            VariantCursor.payload + 1...std.math.maxInt(u8) => unreachable, // frame.cursor is only ever set to a VariantCursor constant
         }
         const target = task.target;
         const next = task.next;
@@ -14760,7 +15332,7 @@ const Lowerer = struct {
         fn beginNodeContent(self: *LayoutGraphBuilder, ty: Type.TypeId, node: layout.GraphNodeId) Common.LowerError!BuildStep {
             const types = &self.lowerer.types;
             switch (types.get(ty)) {
-                .primitive, .zst, .hole, .erased_capture_ptr => unreachable,
+                .primitive, .zst, .hole, .erased_capture_ptr => unreachable, // beginInput answers primitive, zst, hole, and erased_capture_ptr types without reserving a node
                 .named => |named| return .{ .child = (named.backing orelse Common.invariant("named type without runtime backing reached layout selection")).ty },
                 .record => |fields| {
                     const field_span = types.fieldSpan(fields);
@@ -14821,7 +15393,7 @@ const Lowerer = struct {
                 .tag_union, .callable => .{ .tag_union = result.refs },
                 .list => .{ .list = result.input },
                 .box => .{ .box = result.input },
-                .primitive, .zst, .hole, .erased_capture_ptr, .erased_fn => unreachable,
+                .primitive, .zst, .hole, .erased_capture_ptr, .erased_fn => unreachable, // beginInput reserves no node for primitive, zst, hole, or erased_capture_ptr, and beginNodeContent finishes erased_fn nodes itself
             };
         }
 
@@ -15130,7 +15702,7 @@ const Lowerer = struct {
                 if (variant_index >= variants.len) Common.invariant("tag payload variant exceeded committed tag-union layout");
                 break :blk variants.get(@intCast(variant_index)).payload_layout;
             },
-            .box => unreachable,
+            .box => unreachable, // the loop above unwraps every box layout
             .box_of_zst, .zst, .scalar => .zst,
             .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr, .hole => Common.invariant("tag payload operation expected tag-union layout"),
         };

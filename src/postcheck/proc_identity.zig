@@ -640,7 +640,7 @@ const Engine = struct {
             }
         }.lessThan);
         for (sorted_labels, 0..) |label, rank| {
-            const slot = distinct_labels.getPtr(label) orelse unreachable;
+            const slot = distinct_labels.getPtr(label) orelse unreachable; // sorted_labels holds exactly the keys of distinct_labels
             slot.* = @intCast(rank);
         }
         try self.rank_of_member.resize(self.gpa, member_count);
@@ -649,7 +649,7 @@ const Engine = struct {
         const block_rep = self.block_rep.items;
         @memset(block_rep, no_position);
         for (members, 0..) |node, pos| {
-            const rank = distinct_labels.get(labels[pos]) orelse unreachable;
+            const rank = distinct_labels.get(labels[pos]) orelse unreachable; // distinct_labels holds every label of the final stable round
             rank_of_member[pos] = rank;
             // The partition is stable, so any member represents its position.
             if (block_rep[rank] == no_position) block_rep[rank] = node;
@@ -691,7 +691,7 @@ const Engine = struct {
         // A rolled-out copy of any position unfolds to the same one-step
         // encoding, so it folds to that position's digest.
         for (members) |node| {
-            const digest = self.nodes.items[node].digest orelse unreachable;
+            const digest = self.nodes.items[node].digest orelse unreachable; // the loop above finalized every member's digest
             try self.renderer.memo.unfoldings.put(self.unfoldingKey(node), digest);
         }
     }

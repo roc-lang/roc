@@ -1599,7 +1599,7 @@ const BoundedWriteTestIo = struct {
         const self: *@This() = @ptrCast(@alignCast(context.?));
         const request = switch (operation) {
             .file_write_streaming => |request| request,
-            .file_read_streaming, .device_io_control, .net_receive, .net_send, .net_read, .net_write => unreachable,
+            .file_read_streaming, .device_io_control, .net_receive, .net_send, .net_read, .net_write => std.debug.panic("BoundedWriteTestIo serves only streaming file writes, got {t}", .{std.meta.activeTag(operation)}),
         };
         std.debug.assert(request.header.len == 0 and request.data.len == 1 and request.splat == 1);
         const bytes = request.data[0];
@@ -1638,7 +1638,7 @@ test "OS writeFile bounds large writes and preserves short-write progress" {
             try std.testing.expectEqual(size, mock.written);
             try std.testing.expectEqual(@as(usize, 1), mock.creates);
             try std.testing.expectEqual(@as(usize, 1), mock.closes);
-            if (!short_writes) try std.testing.expectEqual(std.math.divCeil(usize, size, limit) catch unreachable, mock.calls);
+            if (!short_writes) try std.testing.expectEqual(try std.math.divCeil(usize, size, limit), mock.calls);
         }
     }
 }
