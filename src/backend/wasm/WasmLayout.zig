@@ -91,6 +91,7 @@ pub fn wasmReprWithStore(layout_idx: layout.Idx, ls: *const layout.Store, simd_e
                 if (tu_layout.size <= 4 and tu_layout.discriminant_offset == 0) break :blk .{ .primitive = .i32 };
                 break :blk .{ .stack_memory = tu_layout.size };
             },
+            .hole => unreachable, // a hole is only a List item or Box payload its body never reads, so no value has its representation
             .zst => .{ .primitive = .i32 }, // zero-sized, dummy i32
             .box, .box_of_zst, .erased_box, .erased_callable, .ptr => .{ .primitive = .i32 }, // pointer
             .list, .list_of_zst => .{ .stack_memory = ls.sizeAt(l, wasm_target) }, // RocList

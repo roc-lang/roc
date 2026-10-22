@@ -2716,6 +2716,7 @@ const TypeTable = struct {
             .list => |list_repr| {
                 const elem_layout: layout.Idx = switch (layout_val.tag) {
                     .list => layout_val.getIdx(),
+                    .hole => unreachable, // glue reads only host-boundary layouts, and a hole appears only in a demand-shaped specialization's parameters
                     .list_of_zst => .zst,
                     .scalar, .box, .box_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr, .erased_box => glueInvariant("list glue type reached ABI attachment with {s} layout", .{@tagName(layout_val.tag)}),
                 };
@@ -2749,7 +2750,7 @@ const TypeTable = struct {
                 const inner_layout: layout.Idx = switch (layout_val.tag) {
                     .box => layout_val.getIdx(),
                     .box_of_zst => .zst,
-                    .scalar, .list, .list_of_zst, .struct_, .closure, .zst, .tag_union, .ptr, .erased_box, .erased_callable => glueInvariant("box glue type reached ABI attachment with {s} layout", .{@tagName(layout_val.tag)}),
+                    .scalar, .list, .list_of_zst, .struct_, .closure, .zst, .hole, .tag_union, .ptr, .erased_box, .erased_callable => glueInvariant("box glue type reached ABI attachment with {s} layout", .{@tagName(layout_val.tag)}),
                 };
                 const slot = try self.childSlotFor(store, box_repr.inner_id, inner_layout);
                 self.entries.items[@intCast(entry_idx)].repr.box.inner_id = slot.entry;
@@ -3684,6 +3685,7 @@ const GlueRocValueWriter = struct {
         const list_layout = self.layouts.getLayout(list_layout_idx);
         return switch (list_layout.tag) {
             .list => list_layout.getIdx(),
+            .hole => unreachable, // glue reads only host-boundary layouts, and a hole appears only in a demand-shaped specialization's parameters
             .list_of_zst => .zst,
             .scalar, .box, .box_of_zst, .erased_box, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => glueInvariant("glue expected list layout, got {s}", .{@tagName(list_layout.tag)}),
         };

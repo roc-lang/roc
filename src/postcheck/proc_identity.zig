@@ -121,7 +121,7 @@ pub const Renderer = struct {
         writeBytes(&hasher, return_reuse);
         const signature = switch (self.types.get(self.renderedRoot(solved_fn_ty))) {
             .func => |func| func,
-            .link, .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .lambda_set, .erased, .zst, .mono => Common.invariant("procedure identity requires a solved function signature"),
+            .link, .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .lambda_set, .erased, .zst, .hole, .mono => Common.invariant("procedure identity requires a solved function signature"),
         };
         writeBytes(&hasher, "args");
         const args = self.types.span(signature.args);
@@ -316,6 +316,7 @@ const Engine = struct {
                 try self.putBytes(@tagName(primitive));
             },
             .zst => try self.putBytes("zst"),
+            .hole => try self.putBytes("hole"),
             // An erased callable is one pointer-sized value called through
             // the convention of its source function type, whichever closures
             // the program puts in it, so its members are not part of the

@@ -169,6 +169,7 @@ const Builder = struct {
                 .box_of_zst => self.graph.writeWord(job.dest, 0),
                 .box => try self.boxed(job, source_plan.box, source_physical.getIdx(), element, physical.getIdx()),
                 .erased_callable => try self.enqueue(source_plan.box, job.source_layout, element, job.layout_idx, job.source, job.dest, .value, .value),
+                .hole => invariant("a demand hole reached a frozen root"),
                 .scalar, .list, .list_of_zst, .struct_, .closure, .zst, .tag_union, .ptr, .erased_box => invariant("invalid box layout"),
             },
             .tuple, .record => |children_| {

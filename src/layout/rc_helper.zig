@@ -190,6 +190,9 @@ pub const Resolver = struct {
     pub fn plan(self: *const Resolver, key: HelperKey) Plan {
         const op = key.op.performed();
         const l = self.store.getLayout(key.layout_idx);
+        if (self.store.layoutHoldsHole(key.layout_idx)) {
+            base.invariant("layout/ARC invariant violated: a value holding a demand hole has no refcount plan", .{});
+        }
         if (!self.nestedContainsRefcounted(l)) {
             return .noop;
         }
@@ -199,6 +202,7 @@ pub const Resolver = struct {
                 "layout/ARC invariant violated: a layout without refcounted data reached RC planning",
                 .{},
             ),
+            .hole => base.invariant("layout/ARC invariant violated: a demand hole has no refcount plan", .{}),
             .scalar => switch (l.getScalar().tag) {
                 .str => switch (op) {
                     .incref => .str_incref,

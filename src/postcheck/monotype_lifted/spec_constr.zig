@@ -2653,7 +2653,12 @@ const Pass = struct {
                     .def_ref,
                     .fn_def,
                     => Common.invariant("pre-lift function expression reached call-pattern specialization"),
-                    .call_proc => |call| if (Ast.localDirectCallee(call)) |callee|
+                    // A demand-shaped call's operands keep the caller's types,
+                    // not the callee's, so its patterns cannot specialize the
+                    // callee.
+                    .call_proc => |call| if (call.demand_shaped)
+                        .descend
+                    else if (Ast.localDirectCallee(call)) |callee|
                         (if (@backingInt(callee) < visitor.pass.plans.len) .descend_then_exit else .descend)
                     else
                         .descend,
@@ -4310,6 +4315,7 @@ const Pass = struct {
                     .iterator_procedure = call.iterator_procedure,
                     .captures = try clone.captureOperandSpan(call.captures, children[call.args.len..]),
                     .is_cold = call.is_cold,
+                    .demand_shaped = call.demand_shaped,
                 } },
                 .call_value => .{ .call_value = .{
                     .callee = @fromBackingInt(@intCast(children[0])),
@@ -4702,7 +4708,9 @@ const Pass = struct {
     }
 
     /// Once the specialization graph is complete, clone only functions whose
-    /// loop result ABI contains fields their exact continuation cannot observe.
+    /// loop result tuple their exact continuation never observes whole: the
+    /// exit then transfers the components the continuation reads, dropping
+    /// any it cannot observe.
     /// Calls and loop-carried state stay unchanged in this final pass; its sole
     /// authority is the producer-visible result binding and continuation.
     fn projectUnusedLoopResults(self: *Pass) Common.LowerError!void {
@@ -4778,6 +4786,7 @@ const Pass = struct {
     }
 
     fn rewriteCallProc(self: *Pass, expr_id: Ast.ExprId, call: @import("../monotype/ast.zig").CallProc) Allocator.Error!void {
+        if (call.demand_shaped) return;
         const callee = Ast.localDirectCallee(call) orelse return;
         const raw = @backingInt(callee);
         if (raw >= self.plans.len) return;
@@ -9895,7 +9904,7 @@ const Cloner = struct {
         switch (frame.cursor) {
             CallProcCursor.start => {
                 const rewrites = if (Ast.localDirectCallee(call)) |callee|
-                    !call.is_cold and self.rewrite_call_patterns and @backingInt(callee) < self.pass.plans.len
+                    !call.is_cold and !call.demand_shaped and self.rewrite_call_patterns and @backingInt(callee) < self.pass.plans.len
                 else
                     false;
                 if (!rewrites) {
@@ -9918,6 +9927,7 @@ const Cloner = struct {
                 .iterator_procedure = call.iterator_procedure,
                 .captures = input.?.get(.capture_span),
                 .is_cold = call.is_cold,
+                .demand_shaped = call.demand_shaped,
             } } })),
             CallProcCursor.analyzed_arg => {
                 task.analyzed[frame.index] = input.?.get(.cloned);
@@ -9950,6 +9960,7 @@ const Cloner = struct {
                     .iterator_procedure = call.iterator_procedure,
                     .captures = input.?.get(.capture_span),
                     .is_cold = call.is_cold,
+                    .demand_shaped = call.demand_shaped,
                 } } });
                 return retExpr(try self.wrapBindings(task.chain.*, residual));
             },
@@ -11286,7 +11297,12 @@ const Cloner = struct {
         switch (frame.cursor) {
             InlineDirectCursor.start => {
                 const source_fn = self.pass.program.getFn(callee);
-                task.result_ty = self.pass.program.getExpr(task.original_expr).ty;
+                const original = self.pass.program.getExpr(task.original_expr);
+                // A demand-shaped callee's body is typed at its holes and layout
+                // representatives, not at this call's types, so it stays a
+                // call (design.md "Specialization By Demand").
+                if (original.data == .call_proc and original.data.call_proc.demand_shaped) return plainDirectCall(frame, task);
+                task.result_ty = original.ty;
                 const source = try self.pass.inlineSourceBody(callee) orelse return plainDirectCall(frame, task);
                 if (!source.size.admits()) return plainDirectCall(frame, task);
                 if (try exprContainsReturn(self.pass.allocator, self.pass.program, source.expr) or
@@ -19226,6 +19242,108 @@ test "loop exit demand is linear in tuple width and rejects whole tuple uses" {
         try whole.collect(whole_use);
         try std.testing.expect(!whole.hasSelection());
     }
+}
+
+test "loop exit demand selects a fully read tuple exactly when a component may be refcounted" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+    const ty = try program.types.add(.{ .list = try program.types.add(.zst) });
+    const tuple_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{ ty, ty }) });
+    const input = try program.addLocal(@fromBackingInt(@intCast(1)), tuple_ty);
+    const ref = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .local = input } });
+    const exit = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .break_ = ref } });
+    const loop = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .loop_ = .{
+        .params = .empty(),
+        .initial_values = .empty(),
+        .body = exit,
+    } } });
+
+    // Both components bound by the pattern and both read.
+    const first = try program.addLocal(@fromBackingInt(@intCast(2)), ty);
+    const second = try program.addLocal(@fromBackingInt(@intCast(3)), ty);
+    const pats = [_]Ast.PatId{
+        try program.addPat(.{ .ty = ty, .data = .{ .bind = first } }),
+        try program.addPat(.{ .ty = ty, .data = .{ .bind = second } }),
+    };
+    const pat = try program.addPat(.{ .ty = tuple_ty, .data = .{ .tuple = try program.addPatSpan(&pats) } });
+    const reads = [_]Ast.ExprId{
+        try program.addExpr(.{ .ty = ty, .data = .{ .local = first } }),
+        try program.addExpr(.{ .ty = ty, .data = .{ .local = second } }),
+    };
+    const rest = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .tuple = try program.addExprSpan(&reads) } });
+    const body = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .let_ = .{ .bind = pat, .value = loop, .rest = rest } } });
+    var demand = ExitDemand.Inventory.init(allocator, &program);
+    defer demand.deinit();
+    try demand.collect(body);
+    const plan = demand.get(pat) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 2), plan.used_count);
+
+    // Both components projected from a bound aggregate.
+    const aggregate = try program.addLocal(@fromBackingInt(@intCast(4)), tuple_ty);
+    const aggregate_pat = try program.addPat(.{ .ty = tuple_ty, .data = .{ .bind = aggregate } });
+    const aggregate_ref = [_]Ast.ExprId{
+        try program.addExpr(.{ .ty = tuple_ty, .data = .{ .local = aggregate } }),
+        try program.addExpr(.{ .ty = tuple_ty, .data = .{ .local = aggregate } }),
+    };
+    const projections = [_]Ast.ExprId{
+        try program.addExpr(.{ .ty = ty, .data = .{ .tuple_access = .{ .tuple = aggregate_ref[0], .elem_index = 0 } } }),
+        try program.addExpr(.{ .ty = ty, .data = .{ .tuple_access = .{ .tuple = aggregate_ref[1], .elem_index = 1 } } }),
+    };
+    const projected = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .tuple = try program.addExprSpan(&projections) } });
+    const projected_body = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .let_ = .{
+        .bind = aggregate_pat,
+        .value = loop,
+        .rest = projected,
+    } } });
+    var projected_demand = ExitDemand.Inventory.init(allocator, &program);
+    defer projected_demand.deinit();
+    try projected_demand.collect(projected_body);
+    try std.testing.expect(projected_demand.get(aggregate_pat) != null);
+
+    // The same projections followed by a read of the whole tuple.
+    const whole_ref = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .local = aggregate } });
+    const both = [_]Ast.ExprId{ projected, whole_ref };
+    const both_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{ tuple_ty, tuple_ty }) });
+    const whole_rest = try program.addExpr(.{ .ty = both_ty, .data = .{ .tuple = try program.addExprSpan(&both) } });
+    const whole_body = try program.addExpr(.{ .ty = both_ty, .data = .{ .let_ = .{
+        .bind = aggregate_pat,
+        .value = loop,
+        .rest = whole_rest,
+    } } });
+    var whole = ExitDemand.Inventory.init(allocator, &program);
+    defer whole.deinit();
+    try whole.collect(whole_body);
+    try std.testing.expect(!whole.hasSelection());
+
+    // Scalar components, both read, keep the tuple.
+    const scalar_ty = try program.types.add(.{ .primitive = .u64 });
+    const scalar_tuple_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{ scalar_ty, scalar_ty }) });
+    const scalar_input = try program.addLocal(@fromBackingInt(@intCast(5)), scalar_tuple_ty);
+    const scalar_ref = try program.addExpr(.{ .ty = scalar_tuple_ty, .data = .{ .local = scalar_input } });
+    const scalar_exit = try program.addExpr(.{ .ty = scalar_tuple_ty, .data = .{ .break_ = scalar_ref } });
+    const scalar_loop = try program.addExpr(.{ .ty = scalar_tuple_ty, .data = .{ .loop_ = .{
+        .params = .empty(),
+        .initial_values = .empty(),
+        .body = scalar_exit,
+    } } });
+    const scalar_first = try program.addLocal(@fromBackingInt(@intCast(6)), scalar_ty);
+    const scalar_second = try program.addLocal(@fromBackingInt(@intCast(7)), scalar_ty);
+    const scalar_pats = [_]Ast.PatId{
+        try program.addPat(.{ .ty = scalar_ty, .data = .{ .bind = scalar_first } }),
+        try program.addPat(.{ .ty = scalar_ty, .data = .{ .bind = scalar_second } }),
+    };
+    const scalar_pat = try program.addPat(.{ .ty = scalar_tuple_ty, .data = .{ .tuple = try program.addPatSpan(&scalar_pats) } });
+    const scalar_reads = [_]Ast.ExprId{
+        try program.addExpr(.{ .ty = scalar_ty, .data = .{ .local = scalar_first } }),
+        try program.addExpr(.{ .ty = scalar_ty, .data = .{ .local = scalar_second } }),
+    };
+    const scalar_rest = try program.addExpr(.{ .ty = scalar_tuple_ty, .data = .{ .tuple = try program.addExprSpan(&scalar_reads) } });
+    const scalar_body = try program.addExpr(.{ .ty = scalar_tuple_ty, .data = .{ .let_ = .{ .bind = scalar_pat, .value = scalar_loop, .rest = scalar_rest } } });
+    var scalars = ExitDemand.Inventory.init(allocator, &program);
+    defer scalars.deinit();
+    try scalars.collect(scalar_body);
+    try std.testing.expect(scalars.get(scalar_pat) == null);
 }
 
 test "loop exit projection retains typed boundaries around known tuples" {

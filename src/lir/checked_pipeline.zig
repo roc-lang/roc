@@ -2683,7 +2683,7 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
             const gop = try visited.getOrPut(ty);
             if (gop.found_existing) continue;
             switch (types.get(ty)) {
-                .primitive, .zst => {},
+                .primitive, .zst, .hole => {},
                 .erased, .func => return true,
                 .named => |named| {
                     try stack.appendSlice(allocator, types.span(named.args));
@@ -2701,7 +2701,7 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
     fn classifyRequestShape(allocator: Allocator, types: MonoType.Store.View, root: MonoType.TypeId, shape: *RequestShape) Allocator.Error!void {
         const func = switch (types.get(root)) {
             .func => |func| func,
-            .primitive, .zst, .erased, .named, .record, .tuple, .tag_union, .list, .box => return,
+            .primitive, .zst, .hole, .erased, .named, .record, .tuple, .tag_union, .list, .box => return,
         };
         for (types.span(func.args)) |arg| {
             switch (types.get(arg)) {
@@ -2714,7 +2714,7 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
                     if (higher) shape.fn_higher_order = true else shape.fn_bare_param = true;
                 },
                 .erased => shape.fn_bare_param = true,
-                .primitive, .zst, .named, .record, .tuple, .tag_union, .list, .box => {
+                .primitive, .zst, .hole, .named, .record, .tuple, .tag_union, .list, .box => {
                     if (try typeMentionsFn(allocator, types, arg)) shape.fn_nested_in_data = true;
                 },
             }
@@ -2735,6 +2735,7 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
             },
             .primitive,
             .zst,
+            .hole,
             .erased,
             .named,
             .record,
@@ -2748,7 +2749,7 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
             const gop = try visited.getOrPut(ty);
             if (gop.found_existing) continue;
             switch (types.get(ty)) {
-                .primitive, .zst => {},
+                .primitive, .zst, .hole => {},
                 .erased => shape.has_erased = true,
                 .func => |func| {
                     shape.has_fn = true;
@@ -2778,6 +2779,7 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
         switch (types.get(ty)) {
             .primitive => |p| try w.writeAll(@tagName(p)),
             .zst => try w.writeAll("zst"),
+            .hole => try w.writeAll("hole"),
             .erased => try w.writeAll("erased"),
             .func => |func| {
                 try w.writeAll("(");
