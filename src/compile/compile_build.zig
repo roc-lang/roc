@@ -916,8 +916,10 @@ pub const BuildEnv = struct {
     /// retained lowering session rather than begin another specialization pass.
     pub fn runtimeProgramSession(self: *BuildEnv) ?*eval.CompileTimeFinalization.ProgramSession {
         if (self.runtime_lowering == null) return null;
-        const coordinator = self.coordinator orelse unreachable;
-        return if (coordinator.program_session) |*session| session else unreachable;
+        const coordinator = self.coordinator orelse
+            base.invariant("build env invariant violated: runtime lowering is configured before coordinator initialization", .{});
+        if (coordinator.program_session) |*session| return session;
+        base.invariant("build env invariant violated: runtime lowering is configured but the checked program retained no program session", .{});
     }
 
     /// The compile-time evaluation program this compilation lowered and
@@ -937,10 +939,18 @@ pub const BuildEnv = struct {
     }
 
     /// Register a directory as a workspace root, skipping it if an existing root
-    /// already contains it. Takes ownership of nothing; copies `dir` when stored.
+    /// already contains it. The root is stored resolved, the form every sandbox
+    /// check resolves its candidate path into before comparing bytes, so the
+    /// spelling a caller found the directory under (a cache root taken from the
+    /// environment, say) never decides whether a path is inside it.
     fn addWorkspaceRoot(self: *BuildEnv, dir: []const u8) Allocator.Error!void {
-        if (PathUtils.isWithinRoot(dir, self.workspace_roots.items)) return;
-        try self.workspace_roots.append(try self.gpa.dupe(u8, dir));
+        const resolved = try std.fs.path.resolve(self.gpa, &.{dir});
+        errdefer self.gpa.free(resolved);
+        if (PathUtils.isWithinRoot(resolved, self.workspace_roots.items)) {
+            self.gpa.free(resolved);
+            return;
+        }
+        try self.workspace_roots.append(resolved);
     }
 
     /// Phase 1: Parse headers, create package entries, extract TargetsConfig, and populate
@@ -1274,9 +1284,10 @@ pub const BuildEnv = struct {
     }
 
     pub fn finishCheckedProgram(self: *BuildEnv) CompileDiscoveredError!void {
-        const coord = self.coordinator orelse unreachable;
+        const coord = self.coordinator orelse
+            base.invariant("build env invariant violated: checked program finished before coordinator initialization", .{});
         if (self.compile_time_object_cache_owner) |owner| owner.bind(owner.context, self);
-        const test_modules = try self.collectProgramTestModules(self.gpa);
+        const test_modules = try self.collectProgramTestModules(self.gpa, coord);
         defer self.gpa.free(test_modules);
         coord.program_test_modules = test_modules;
         defer coord.program_test_modules = &.{};
@@ -1670,24 +1681,30 @@ pub const BuildEnv = struct {
     /// Uses the filesystem vtable which works on both POSIX, Windows, and wasm
     /// (unlike std.posix.getenv which only works on POSIX systems).
     fn logicalModuleToPath(self: *BuildEnv, root_dir: []const u8, logical_name: []const u8) (Allocator.Error || error{PathOutsideWorkspace})![]const u8 {
+        // `std.fs.path.join` of `root_dir` and the logical name's non-empty
+        // segments, then the extension, built in one buffer. Every segment
+        // adds at most its length plus one separator, so the capacity holds
+        // the whole path.
+        var with_ext = std.ArrayList(u8).empty;
+        defer with_ext.deinit(self.gpa);
+        try with_ext.ensureTotalCapacityPrecise(self.gpa, root_dir.len + logical_name.len + 1 + ".roc".len);
+        with_ext.appendSliceAssumeCapacity(root_dir);
         var parts = std.mem.splitScalar(u8, logical_name, '/');
-        var segs = std.ArrayList([]const u8).empty;
-        defer segs.deinit(self.gpa);
-
-        try segs.append(self.gpa, root_dir);
-        while (parts.next()) |p| {
-            if (p.len == 0) continue;
-            try segs.append(self.gpa, p);
+        while (parts.next()) |part| {
+            if (part.len == 0) continue;
+            if (with_ext.items.len == 0) {
+                with_ext.appendSliceAssumeCapacity(part);
+                continue;
+            }
+            const prev_sep = std.fs.path.isSep(with_ext.items[with_ext.items.len - 1]);
+            const this_sep = std.fs.path.isSep(part[0]);
+            if (!prev_sep and !this_sep) with_ext.appendAssumeCapacity(std.fs.path.sep);
+            with_ext.appendSliceAssumeCapacity(if (prev_sep and this_sep) part[1..] else part);
         }
-
-        const joined = try std.fs.path.join(self.gpa, segs.items);
-        defer self.gpa.free(joined);
-
-        const with_ext = try std.fmt.allocPrint(self.gpa, "{s}.roc", .{joined});
-        defer self.gpa.free(with_ext);
+        with_ext.appendSliceAssumeCapacity(".roc");
 
         // Canonicalize and sandbox
-        const canon = try std.fs.path.resolve(self.gpa, &.{with_ext});
+        const canon = try std.fs.path.resolve(self.gpa, &.{with_ext.items});
         // Enforce sandbox for dotted resolution: must be within the current package root (first workspace root).
         // If multiple roots are registered, we still require the resolved path to match at least one.
         if (!PathUtils.isWithinRoot(canon, self.workspace_roots.items)) {
@@ -2237,7 +2254,7 @@ pub const BuildEnv = struct {
 
     fn remapSyntheticRootSourceRegion(
         self: *BuildEnv,
-        allocator: Allocator,
+        document: *reporting.Document,
         region: *reporting.SourceCodeDisplayRegion,
         original_line_starts: []const u32,
     ) Allocator.Error!void {
@@ -2255,9 +2272,7 @@ pub const BuildEnv = struct {
         // the staging appended, which is not the user's code; that region
         // keeps its own text and only its file name maps back.
         if (original_line_starts.len == 0 or original_end_line > original_line_starts.len) {
-            const owned_filename = try allocator.dupe(u8, original_path);
-            if (region.filename) |old_filename| allocator.free(old_filename);
-            region.filename = owned_filename;
+            region.filename = try document.ownString(original_path);
             return;
         }
 
@@ -2268,13 +2283,8 @@ pub const BuildEnv = struct {
             .end_col_idx = region.end_column - 1,
         };
 
-        const line_text = try allocator.dupe(u8, region_info.calculateLineText(original_source, original_line_starts));
-        errdefer allocator.free(line_text);
-        const owned_filename = try allocator.dupe(u8, original_path);
-        errdefer allocator.free(owned_filename);
-
-        allocator.free(region.line_text);
-        if (region.filename) |old_filename| allocator.free(old_filename);
+        const line_text = try document.ownString(region_info.calculateLineText(original_source, original_line_starts));
+        const owned_filename = try document.ownString(original_path);
 
         region.line_text = line_text;
         region.filename = owned_filename;
@@ -2284,15 +2294,15 @@ pub const BuildEnv = struct {
 
     fn remapSyntheticRootDocumentElement(
         self: *BuildEnv,
-        allocator: Allocator,
+        document: *reporting.Document,
         element: *reporting.DocumentElement,
         original_line_starts: []const u32,
     ) Allocator.Error!void {
         switch (element.*) {
-            .source_code_region => |*region| try self.remapSyntheticRootSourceRegion(allocator, region, original_line_starts),
+            .source_code_region => |*region| try self.remapSyntheticRootSourceRegion(document, region, original_line_starts),
             .source_code_with_underlines => |*underlines| {
                 const old_start_line = underlines.display_region.start_line;
-                try self.remapSyntheticRootSourceRegion(allocator, &underlines.display_region, original_line_starts);
+                try self.remapSyntheticRootSourceRegion(document, &underlines.display_region, original_line_starts);
                 const header_lines = self.synthetic_root_header_lines;
                 if (header_lines == 0 or old_start_line <= header_lines) return;
                 for (underlines.underline_regions) |*underline| {
@@ -2312,9 +2322,7 @@ pub const BuildEnv = struct {
                 const header_lines = self.synthetic_root_header_lines;
                 if (header_lines > 0 and location.line <= header_lines) return;
 
-                const owned_filename = try allocator.dupe(u8, original_path);
-                if (location.filename) |old_filename| allocator.free(old_filename);
-                location.filename = owned_filename;
+                location.filename = try document.ownString(original_path);
                 if (location.line > header_lines) location.line -= header_lines;
             },
             .text,
@@ -2346,7 +2354,7 @@ pub const BuildEnv = struct {
         defer original_line_starts.deinit(self.gpa);
         for (report.document.elements.items) |*element| {
             try self.remapSyntheticRootDocumentElement(
-                report.document.allocator,
+                &report.document,
                 element,
                 original_line_starts.items.items,
             );
@@ -2508,7 +2516,7 @@ pub const BuildEnv = struct {
                 .present => .{ .hash = dep.content_hash },
                 .missing => .missing,
                 .unreadable => .unreadable,
-                .pending => unreachable,
+                .pending => base.invariant("build env invariant violated: file dependency {s} is still pending after canonicalization read it", .{relative_path}),
             };
             try self.appendWatchInputState(inputs, seen, full_path, state);
         }
@@ -2519,8 +2527,7 @@ pub const BuildEnv = struct {
     /// BuildEnv allocator and must be released with `freeWatchInputStates`.
     pub fn collectWatchInputStates(self: *BuildEnv) Allocator.Error![]const watch_inputs.Input {
         if (!self.track_watch_inputs) {
-            if (builtin.mode == .debug) base.invariant("collectWatchInputStates called without watch input tracking enabled", .{});
-            unreachable;
+            base.invariant("build env invariant violated: collectWatchInputStates called without watch input tracking enabled", .{});
         }
 
         var inputs = std.ArrayList(watch_inputs.Input).empty;
@@ -2535,10 +2542,8 @@ pub const BuildEnv = struct {
         while (build_pkg_it.next()) |entry| {
             const pkg = entry.value_ptr.*;
             if (pkg.url != null) continue;
-            const state = pkg.root_file_state orelse {
-                if (builtin.mode == .debug) base.invariant("build package {s} has root_file without root_file_state", .{entry.key_ptr.*});
-                unreachable;
-            };
+            const state = pkg.root_file_state orelse
+                base.invariant("build env invariant violated: build package {s} has root_file without root_file_state", .{entry.key_ptr.*});
             try self.appendWatchInputState(&inputs, &seen, pkg.root_file, state);
         }
 
@@ -2548,10 +2553,8 @@ pub const BuildEnv = struct {
                 const pkg = entry.value_ptr.*;
                 if (pkg.url != null) continue;
                 for (pkg.modules.items) |*mod| {
-                    const state = mod.source_file_state orelse {
-                        if (builtin.mode == .debug) base.invariant("coordinator module {s} has no source_file_state", .{mod.name});
-                        unreachable;
-                    };
+                    const state = mod.source_file_state orelse
+                        base.invariant("build env invariant violated: coordinator module {s} has no source_file_state", .{mod.name});
                     try self.appendWatchInputState(&inputs, &seen, mod.path, state);
                     const module_env = mod.moduleEnv() orelse continue;
                     try self.appendFileDependencyWatchInputStates(&inputs, &seen, mod.canonicalSourceDir(), module_env);
@@ -2836,8 +2839,8 @@ pub const BuildEnv = struct {
     fn collectProgramTestModules(
         self: *BuildEnv,
         allocator: Allocator,
+        coord: *Coordinator,
     ) Allocator.Error![]check.CheckedArtifact.CheckedModuleArtifactKey {
-        const coord = self.coordinator orelse unreachable;
         var test_owned_packages = try self.collectTestOwnedPackages(allocator);
         defer test_owned_packages.deinit(allocator);
 
@@ -3054,7 +3057,7 @@ pub const BuildEnv = struct {
                 const module_id = coord_package.getPublicModuleId(public_module.name) orelse continue;
                 const module_state = coord_package.getModule(module_id) orelse continue;
                 const checked = module_state.checkedModule() orelse continue;
-                const public_target = coord_package.getPublicModuleTarget(public_module.name) orelse unreachable;
+                const public_target = coord_package.getPublicModuleTarget(public_module.name) orelse unreachable; // getPublicModuleId above found this name in the same public surface
                 const source_decl: ?CIR.Statement.Idx = switch (public_target.selection) {
                     .type_decl => |statement| statement,
                     .whole_module => null,
@@ -3259,18 +3262,10 @@ pub const BuildEnv = struct {
     }
 
     pub fn executableRootCheckedArtifact(self: *BuildEnv) *const check.CheckedArtifact.CheckedModuleArtifact {
-        const semantic = self.getExecutableRootSemanticData() orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("build env invariant violated: executable root semantic data is missing", .{});
-            }
-            unreachable;
-        };
-        return semantic.checked_artifact orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("build env invariant violated: executable root has no checked artifact", .{});
-            }
-            unreachable;
-        };
+        const semantic = self.getExecutableRootSemanticData() orelse
+            base.invariant("build env invariant violated: executable root semantic data is missing", .{});
+        return semantic.checked_artifact orelse
+            base.invariant("build env invariant violated: executable root has no checked artifact", .{});
     }
 
     /// How the object cache files a module's pack: `pkg` for a module of a
@@ -3298,9 +3293,8 @@ pub const BuildEnv = struct {
     ) ?PackPlacement {
         const coord = self.coordinator orelse return null;
         const location = coord.checked_artifact_index.get(key.bytes) orelse return null;
-        const pkg = self.packages.get(location.pkg_name) orelse return null;
-        const coord_pkg = coord.packages.get(location.pkg_name) orelse return null;
-        const module = coord_pkg.getModule(location.module_id) orelse return null;
+        const pkg = self.packages.get(location.pkg.name) orelse return null;
+        const module = location.pkg.getModule(location.module_id) orelse return null;
         var hasher = base.Sha256.init(.{});
         if (pkg.url) |url| {
             hasher.update("pkg\x00");
@@ -3357,10 +3351,8 @@ pub const BuildEnv = struct {
     }
 
     fn builtCoordinator(self: *BuildEnv) *Coordinator {
-        return self.coordinator orelse {
-            if (builtin.mode == .debug) base.invariant("build env invariant violated: artifact views requested before a build", .{});
-            unreachable;
-        };
+        return self.coordinator orelse
+            base.invariant("build env invariant violated: artifact views requested before a build", .{});
     }
 
     fn checkedArtifactKeysEqual(
@@ -3505,7 +3497,10 @@ pub const BuildEnv = struct {
                             line_starts.items.items,
                             mapped_region.start.offset,
                             mapped_region.end.offset,
-                        ) catch unreachable;
+                        ) catch |err| base.invariant(
+                            "build env invariant violated: a staged root region past its synthetic header does not map into the original source: {s}",
+                            .{@errorName(err)},
+                        );
 
                         const owned_path = try report.addOwnedString(original_path);
                         try report.document.addSourceRegion(
@@ -4228,6 +4223,38 @@ test "issue 9737: logicalModuleToPath frees its scratch path exactly once on the
     // it must free its `with_ext` scratch allocation exactly once; freeing it a
     // second time is a double free that the testing allocator detects.
     try std.testing.expectError(error.PathOutsideWorkspace, env.logicalModuleToPath("/tmp/roc-issue-9737", "Mod"));
+}
+
+test "issue 12374: a workspace root keeps paths inside it however its directory was spelled" {
+    const gpa = std.testing.allocator;
+
+    // addWorkspaceRoot and logicalModuleToPath only read `gpa` and
+    // `workspace_roots`, so a minimal BuildEnv with just those fields set is
+    // enough to exercise them.
+    var env: BuildEnv = undefined;
+    env.gpa = gpa;
+    env.workspace_roots = std.array_list.Managed([]const u8).init(gpa);
+    defer {
+        for (env.workspace_roots.items) |root| gpa.free(root);
+        env.workspace_roots.deinit();
+    }
+
+    // A URL package's directory is registered as the cache root was spelled in
+    // the environment joined with its hash. A doubled separator (or, on
+    // Windows, a `/` inside a `\` path) is the same directory, and the
+    // resolved module path inside it must count as inside the workspace.
+    try env.addWorkspaceRoot("/roc-issue-12374//packages/hash");
+    try std.testing.expectEqual(@as(usize, 1), env.workspace_roots.items.len);
+
+    const module_path = try env.logicalModuleToPath("/roc-issue-12374/packages/hash", "Mod");
+    defer gpa.free(module_path);
+    const expected = try std.fs.path.resolve(gpa, &.{"/roc-issue-12374/packages/hash/Mod.roc"});
+    defer gpa.free(expected);
+    try std.testing.expectEqualStrings(expected, module_path);
+
+    // Registering the same directory under another spelling adds nothing.
+    try env.addWorkspaceRoot("/roc-issue-12374/packages//hash/");
+    try std.testing.expectEqual(@as(usize, 1), env.workspace_roots.items.len);
 }
 
 // Regression test for https://github.com/roc-lang/roc/issues/11714

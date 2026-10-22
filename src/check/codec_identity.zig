@@ -22,7 +22,7 @@ pub fn intern(allocator: Allocator, types: checked.CheckedTypeStoreView, table: 
     defer buckets.deinit();
     const next = try allocator.alloc(?u32, table.generated_codec_derivations.len);
     defer allocator.free(next);
-    var comparer = Comparer{ .allocator = allocator, .types = types, .table = table };
+    var comparer = Comparer{ .allocator = allocator, .types = types, .table = table, .type_scratch = .init(allocator) };
     defer comparer.deinit();
     for (table.generated_codec_derivations, 0..) |*derivation, index| {
         const raw: u32 = @intCast(index);
@@ -66,6 +66,12 @@ pub fn digestContents(
     names: *const canonical.CanonicalNameStore,
     table: *dispatch.StaticDispatchPlanTable,
 ) Allocator.Error!void {
+    const derivations = table.generated_codec_derivations;
+    const own = try allocator.alloc(dispatch.GeneratedCodecContentDigest, derivations.len);
+    defer allocator.free(own);
+    const component = try allocator.alloc(u32, derivations.len);
+    defer allocator.free(component);
+    @memset(component, unassigned);
     var digester = ContentDigester{
         .allocator = allocator,
         .owner = owner,
@@ -73,23 +79,27 @@ pub fn digestContents(
         .names = names,
         .table = table,
         .keys = checked.CheckedTypeKeys.init(allocator, names, store),
+        .own = own,
+        .component = component,
+        .orderer = checked.CheckedIdentityOrderer.init(allocator, names, store),
     };
     defer digester.deinit();
-    for (table.generated_codec_derivations, 0..) |*derivation, index| {
-        const representative = @backingInt(derivation.identity);
-        derivation.content = if (representative == index)
-            try digester.digest(@intCast(index))
-        else
-            table.generated_codec_derivations[representative].content;
-    }
+    try digester.digestComponents();
+    for (derivations) |*derivation| derivation.content = own[@backingInt(derivation.identity)];
 }
+
+/// No component assigned yet.
+const unassigned = std.math.maxInt(u32);
 
 /// A depth-first canonical encoding of one contract's proof graph. Contracts
 /// and evidence nodes are numbered by first visit, so shared and recursive
-/// references encode as back-references. A type encodes as its canonical key
-/// plus the joint first-visit numbers of its variables in key order, so
-/// variables shared between roots stay shared. Methods encode by name and
-/// targets by their owning artifacts; no module-local id is written.
+/// references encode as back-references. A nested contract outside the
+/// contract's own strongly connected component encodes as its own digest,
+/// computed first, so a chain of nested contracts is encoded once per
+/// contract rather than once per contract above it. A type encodes as its
+/// canonical key plus the joint first-visit numbers of its variables in key
+/// order, so variables shared between roots stay shared. Methods encode by
+/// name and targets by their owning artifacts; no module-local id is written.
 const ContentDigester = struct {
     allocator: Allocator,
     owner: checked.ModuleId,
@@ -97,33 +107,155 @@ const ContentDigester = struct {
     names: *const canonical.CanonicalNameStore,
     table: *const dispatch.StaticDispatchPlanTable,
     keys: checked.CheckedTypeKeys,
+    /// Each contract's digest as the root of its own encoding.
+    own: []dispatch.GeneratedCodecContentDigest,
+    /// Each contract's strongly connected component, numbered in the order
+    /// components complete, which puts every component after the ones its
+    /// contracts reach.
+    component: []u32,
     hasher: TypeDigestHasher = undefined,
+    /// The component of the contract being digested.
+    root_component: u32 = unassigned,
     codec_ordinals: std.AutoHashMapUnmanaged(u32, u32) = .empty,
     evidence_ordinals: std.AutoHashMapUnmanaged(u32, u32) = .empty,
     variable_ordinals: collections.DenseMapUnmanaged(TypeId, u32) = .empty,
-    /// Each root's variables in key order. Checked types are immutable here,
-    /// so the order is computed once per root for every contract.
-    identity_orders: collections.DenseMapUnmanaged(TypeId, []const TypeId) = .empty,
+    /// Each root's variables in key order, as a span of `identity_order_pool`.
+    /// Checked types are immutable here, so the order is computed once per
+    /// root for every contract.
+    identity_orders: collections.DenseMapUnmanaged(TypeId, Span) = .empty,
+    identity_order_pool: std.ArrayList(TypeId) = .empty,
+    orderer: checked.CheckedIdentityOrderer,
     tasks: std.ArrayList(Task) = .empty,
     children: std.ArrayList(Task) = .empty,
+    /// The contracts each visited contract names, as ranges of `nested`.
+    nested: std.ArrayList(u32) = .empty,
+    nested_seen: std.AutoHashMapUnmanaged(u32, void) = .empty,
+    visit_index: []u32 = &.{},
+    low_link: []u32 = &.{},
+    component_stack: std.ArrayList(u32) = .empty,
+    frames: std.ArrayList(ComponentFrame) = .empty,
 
     const Task = union(enum) { codec: u32, evidence: u32, refs: Span };
+
+    /// A contract whose successors `nested[next..end]` are being visited.
+    const ComponentFrame = struct { codec: u32, next: usize, end: usize };
 
     fn deinit(self: *ContentDigester) void {
         self.keys.deinit();
         self.codec_ordinals.deinit(self.allocator);
         self.evidence_ordinals.deinit(self.allocator);
         self.variable_ordinals.deinit(self.allocator);
-        var orders = self.identity_orders.valueIterator();
-        while (orders.next()) |order| self.allocator.free(order.*);
         self.identity_orders.deinit(self.allocator);
+        self.identity_order_pool.deinit(self.allocator);
+        self.orderer.deinit();
         self.tasks.deinit(self.allocator);
         self.children.deinit(self.allocator);
+        self.nested.deinit(self.allocator);
+        self.nested_seen.deinit(self.allocator);
+        self.allocator.free(self.visit_index);
+        self.allocator.free(self.low_link);
+        self.component_stack.deinit(self.allocator);
+        self.frames.deinit(self.allocator);
+    }
+
+    /// Digest every contract, one strongly connected component of the
+    /// nested-contract graph at a time (Tarjan's algorithm), each component
+    /// as soon as it completes, when every component it reaches has been
+    /// digested.
+    fn digestComponents(self: *ContentDigester) Allocator.Error!void {
+        const count = self.own.len;
+        self.visit_index = try self.allocator.alloc(u32, count);
+        @memset(self.visit_index, unassigned);
+        self.low_link = try self.allocator.alloc(u32, count);
+        var next_index: u32 = 0;
+        var next_component: u32 = 0;
+        for (0..count) |start| {
+            if (self.visit_index[start] != unassigned) continue;
+            try self.enterComponentFrame(@intCast(start), &next_index);
+            while (self.frames.items.len > 0) {
+                const frame = &self.frames.items[self.frames.items.len - 1];
+                const codec = frame.codec;
+                if (frame.next < frame.end) {
+                    const nested = self.nested.items[frame.next];
+                    frame.next += 1;
+                    if (self.visit_index[nested] == unassigned) {
+                        try self.enterComponentFrame(nested, &next_index);
+                    } else if (self.component[nested] == unassigned) {
+                        self.low_link[codec] = @min(self.low_link[codec], self.visit_index[nested]);
+                    }
+                    continue;
+                }
+                self.frames.items.len -= 1;
+                if (self.frames.items.len > 0) {
+                    const parent = self.frames.items[self.frames.items.len - 1].codec;
+                    self.low_link[parent] = @min(self.low_link[parent], self.low_link[codec]);
+                }
+                if (self.low_link[codec] != self.visit_index[codec]) continue;
+                var members_start = self.component_stack.items.len - 1;
+                while (self.component_stack.items[members_start] != codec) members_start -= 1;
+                const members = self.component_stack.items[members_start..];
+                for (members) |member| self.component[member] = next_component;
+                self.root_component = next_component;
+                for (members) |member| self.own[member] = try self.digest(member);
+                self.component_stack.items.len = members_start;
+                next_component += 1;
+            }
+        }
+    }
+
+    fn enterComponentFrame(self: *ContentDigester, codec: u32, next_index: *u32) Allocator.Error!void {
+        self.visit_index[codec] = next_index.*;
+        self.low_link[codec] = next_index.*;
+        next_index.* += 1;
+        try self.component_stack.append(self.allocator, codec);
+        const start = self.nested.items.len;
+        try self.appendNestedCodecs(codec);
+        try self.frames.append(self.allocator, .{ .codec = codec, .next = start, .end = self.nested.items.len });
+    }
+
+    /// Append the contracts `codec`'s encoding reaches without passing
+    /// through another contract: the `.codec` children that `writeCodec`,
+    /// `writeEvidence`, and `writeRefs` queue below it.
+    fn appendNestedCodecs(self: *ContentDigester, codec: u32) Allocator.Error!void {
+        self.nested_seen.clearRetainingCapacity();
+        self.evidence_ordinals.clearRetainingCapacity();
+        self.tasks.clearRetainingCapacity();
+        for (self.table.generated_codec_derivations[codec].callsSlice(self.table)) |call| switch (call.resolution) {
+            .pending => unreachable, // every codec call is resolved before identities are digested
+            .checked_error => {},
+            .callable => |node| try self.tasks.append(self.allocator, .{ .evidence = @backingInt(node) }),
+            .structural => |nested| try self.appendNestedCodec(@backingInt(nested)),
+        };
+        while (self.tasks.pop()) |task| switch (task) {
+            .codec => unreachable, // this walk queues only evidence and refs tasks; nested codecs go through appendNestedCodec
+            .evidence => |id| {
+                if ((try self.evidence_ordinals.getOrPut(self.allocator, id)).found_existing) continue;
+                const node = self.table.evidence_nodes[id];
+                if (node.generated_codec_derivation) |nested| try self.appendNestedCodec(@backingInt(nested));
+                switch (node.nested) {
+                    .from_callable => {},
+                    .resolved => |span| try self.tasks.append(self.allocator, .{ .refs = span }),
+                }
+            },
+            .refs => |span| for (self.table.evidence_refs[span.start..][0..span.len]) |ref| {
+                switch (ref.resolution) {
+                    .direct => |node| try self.tasks.append(self.allocator, .{ .evidence = @backingInt(node) }),
+                    .structural => |structural| if (structural.generated_codec_derivation) |nested| try self.appendNestedCodec(@backingInt(nested)),
+                    .constraint, .from_callable, .from_scheme, .checked_error, .unreachable_value => {},
+                }
+                try self.tasks.append(self.allocator, .{ .refs = ref.callable_contracts });
+            },
+        };
+    }
+
+    fn appendNestedCodec(self: *ContentDigester, codec: u32) Allocator.Error!void {
+        if ((try self.nested_seen.getOrPut(self.allocator, codec)).found_existing) return;
+        try self.nested.append(self.allocator, codec);
     }
 
     fn digest(self: *ContentDigester, root: u32) Allocator.Error!dispatch.GeneratedCodecContentDigest {
         self.hasher = TypeDigestHasher.init();
-        self.hasher.update("roc.generated_codec.content.v1");
+        self.hasher.update("roc.generated_codec.content.v2");
         self.codec_ordinals.clearRetainingCapacity();
         self.evidence_ordinals.clearRetainingCapacity();
         self.variable_ordinals.clearRetainingCapacity();
@@ -132,7 +264,12 @@ const ContentDigester = struct {
         while (self.tasks.pop()) |task| {
             self.children.clearRetainingCapacity();
             switch (task) {
-                .codec => |id| try self.writeCodec(id),
+                .codec => |id| if (self.component[id] == self.root_component) {
+                    try self.writeCodec(id);
+                } else {
+                    self.writeU8(2);
+                    self.hasher.update(&self.own[id].bytes);
+                },
                 .evidence => |id| try self.writeEvidence(id),
                 .refs => |span| try self.writeRefs(span),
             }
@@ -175,7 +312,7 @@ const ContentDigester = struct {
             try self.writeOptionalType(call.subject_ty);
             self.writeU8(@backingInt(std.meta.activeTag(call.resolution)));
             switch (call.resolution) {
-                .pending => unreachable,
+                .pending => unreachable, // EvidencePass.linkGeneratedCodecCalls resolves every call before codec identities are computed
                 .checked_error => {},
                 .callable => |node| try self.children.append(self.allocator, .{ .evidence = @backingInt(node) }),
                 .structural => |nested| try self.children.append(self.allocator, .{ .codec = @backingInt(nested) }),
@@ -301,9 +438,14 @@ const ContentDigester = struct {
         const entry = try self.identity_orders.getOrPut(self.allocator, ty);
         if (!entry.found_existing) {
             errdefer _ = self.identity_orders.remove(ty);
-            entry.value_ptr.* = try checked.collectCheckedIdentityRootsInKeyOrder(self.allocator, self.store, self.names, ty);
+            const order = try self.orderer.identityRoots(ty);
+            const start = std.math.cast(u32, self.identity_order_pool.items.len) orelse return error.OutOfMemory;
+            const len = std.math.cast(u32, order.len) orelse return error.OutOfMemory;
+            try self.identity_order_pool.appendSlice(self.allocator, order);
+            entry.value_ptr.* = .{ .start = start, .len = len };
         }
-        return entry.value_ptr.*;
+        const span = entry.value_ptr.*;
+        return self.identity_order_pool.items[span.start..][0..span.len];
     }
 
     fn writeText(self: *ContentDigester, text: []const u8) void {
@@ -339,14 +481,14 @@ pub fn callsEquivalent(
     left: dispatch.GeneratedCodecCall,
     right: dispatch.GeneratedCodecCall,
 ) Allocator.Error!bool {
-    var comparer = Comparer{ .allocator = allocator, .types = types, .table = table, .types_eql = .alias_transparent };
+    var comparer = Comparer{ .allocator = allocator, .types = types, .table = table, .types_eql = .alias_transparent, .type_scratch = .init(allocator) };
     defer comparer.deinit();
     if (left.method != right.method or std.meta.activeTag(left.resolution) != std.meta.activeTag(right.resolution)) return false;
     try comparer.typesPair(left.dispatcher_ty, right.dispatcher_ty);
     try comparer.typesPair(left.callable_ty, right.callable_ty);
     if (!try comparer.optionalTypes(left.subject_ty, right.subject_ty)) return false;
     switch (left.resolution) {
-        .pending => unreachable,
+        .pending => unreachable, // EvidencePass.linkGeneratedCodecCalls resolves every call before calls are compared
         .checked_error => {},
         .callable => |id| try comparer.work.append(allocator, .{ .kind = .evidence, .left = @backingInt(id), .right = @backingInt(right.resolution.callable) }),
         .structural => |id| if (!try comparer.codecs(id, right.resolution.structural)) return false,
@@ -370,8 +512,10 @@ const Comparer = struct {
     seen: std.AutoHashMapUnmanaged(Pair, void) = .empty,
     left_types: std.ArrayList(TypeId) = .empty,
     right_types: std.ArrayList(TypeId) = .empty,
+    type_scratch: checked.CheckedTypeStoreView.EqualityScratch,
 
     fn deinit(self: *Comparer) void {
+        self.type_scratch.deinit();
         self.work.deinit(self.allocator);
         self.seen.deinit(self.allocator);
         self.left_types.deinit(self.allocator);
@@ -471,7 +615,7 @@ const Comparer = struct {
                         try self.typesPair(ac.callable_ty, bc.callable_ty);
                         if (!try self.optionalTypes(ac.subject_ty, bc.subject_ty)) return false;
                         switch (ac.resolution) {
-                            .pending => unreachable,
+                            .pending => unreachable, // EvidencePass.linkGeneratedCodecCalls resolves every call before codec identities are computed
                             .checked_error => {},
                             .callable => |id| try self.work.append(self.allocator, .{ .kind = .evidence, .left = @backingInt(id), .right = @backingInt(bc.resolution.callable) }),
                             .structural => |id| if (!try self.codecs(id, bc.resolution.structural)) return false,
@@ -503,8 +647,8 @@ const Comparer = struct {
         // One bijection covers all roots, including sharing across nested
         // evidence and source/frozen roles. Individual root equality is weaker.
         return switch (self.types_eql) {
-            .exact => self.types.rootsAlphaExactEql(self.allocator, self.left_types.items, self.right_types.items),
-            .alias_transparent => self.types.rootsAliasTransparentAlphaEql(self.allocator, self.left_types.items, self.right_types.items),
+            .exact => self.types.rootsAlphaExactEql(&self.type_scratch, self.left_types.items, self.right_types.items),
+            .alias_transparent => self.types.rootsAliasTransparentAlphaEql(&self.type_scratch, self.left_types.items, self.right_types.items),
         };
     }
 };
@@ -626,4 +770,77 @@ test "codec content digest is independent of the recording module's ids and keep
     const distinct = try digestTestContract(0, false);
     try std.testing.expectEqual(distinct, try digestTestContract(3, false));
     try std.testing.expect(!std.meta.eql(shared, distinct));
+}
+
+/// A chain of encoder contracts in which each one's single call resolves to
+/// the next, laid out in `order` (table position of each chain link, outermost
+/// first). The innermost contract's call names `method` and resolves to a
+/// checked error, or back to the outermost when `cyclic`. Returns the
+/// outermost contract's digest.
+fn digestTestChain(order: []const u32, comptime method: []const u8, cyclic: bool) Allocator.Error!dispatch.GeneratedCodecContentDigest {
+    const gpa = std.testing.allocator;
+    var types = checked.CheckedTypeStore{};
+    defer types.deinit(gpa);
+    const ty = try types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @as([32]u8, @splat(7)) }, true);
+    try types.fillSyntheticTypeRoot(gpa, ty, .{ .flex = .{} });
+    var names = canonical.CanonicalNameStore.init(gpa);
+    defer names.deinit();
+    const outer_method = try names.internMethodName("to_encoder");
+    const inner_method = try names.internMethodName(method);
+    var derivations: [4]dispatch.GeneratedCodecDerivation = undefined;
+    var calls: [4]dispatch.GeneratedCodecCall = undefined;
+    std.debug.assert(order.len == derivations.len);
+    for (order, 0..) |position, link| {
+        derivations[position] = .{
+            .identity = @fromBackingInt(position),
+            .kind = .encoder,
+            .source_constructor_ty = ty,
+            .source_runtime_ty = ty,
+            .source_shape_ty = ty,
+            .source_body_shape_ty = ty,
+            .source_encoding_ty = ty,
+            .source_state_ty = ty,
+            .source_error_ty = ty,
+            .constructor_ty = ty,
+            .runtime_ty = ty,
+            .shape_ty = ty,
+            .body_shape_ty = ty,
+            .encoding_ty = ty,
+            .state_ty = ty,
+            .error_ty = ty,
+            .calls = .{ .start = position, .len = 1 },
+        };
+        const innermost = link + 1 == order.len;
+        calls[position] = .{
+            .method = if (innermost) inner_method else outer_method,
+            .method_role = 0,
+            .dispatcher_ty = ty,
+            .callable_ty = ty,
+            .resolution = if (!innermost)
+                .{ .structural = @fromBackingInt(order[link + 1]) }
+            else if (cyclic)
+                .{ .structural = @fromBackingInt(order[0]) }
+            else
+                .checked_error,
+        };
+    }
+    var table = dispatch.StaticDispatchPlanTable{
+        .generated_codec_derivations = &derivations,
+        .generated_codec_calls = &calls,
+    };
+    try digestContents(gpa, .{}, &types, &names, &table);
+    return derivations[order[0]].content;
+}
+
+test "codec content digest of a nested chain is independent of table order and reaches its innermost contract" {
+    const outermost_first = try digestTestChain(&.{ 0, 1, 2, 3 }, "to_encoder", false);
+    try std.testing.expectEqual(outermost_first, try digestTestChain(&.{ 3, 2, 1, 0 }, "to_encoder", false));
+    try std.testing.expectEqual(outermost_first, try digestTestChain(&.{ 1, 3, 0, 2 }, "to_encoder", false));
+    try std.testing.expect(!std.meta.eql(outermost_first, try digestTestChain(&.{ 0, 1, 2, 3 }, "encoder_for", false)));
+}
+
+test "codec content digest of a recursive cycle of contracts is independent of table order" {
+    const cycle = try digestTestChain(&.{ 0, 1, 2, 3 }, "encoder_for", true);
+    try std.testing.expectEqual(cycle, try digestTestChain(&.{ 2, 0, 3, 1 }, "encoder_for", true));
+    try std.testing.expect(!std.meta.eql(cycle, try digestTestChain(&.{ 0, 1, 2, 3 }, "encoder_for", false)));
 }

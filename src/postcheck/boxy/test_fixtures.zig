@@ -67,28 +67,31 @@ pub fn addBoolDeclaration(
 
 /// The checked-source module env every fixture checked module and numeral literal
 /// shares; its CIR fields are initialized once.
-pub fn testModuleEnv() *can.ModuleEnv {
+pub fn testModuleEnv() Allocator.Error!*can.ModuleEnv {
     const S = struct {
         var env: ?*can.ModuleEnv = null;
     };
     if (S.env) |existing| return existing;
     const page_allocator = std.heap.page_allocator;
-    const env = page_allocator.create(can.ModuleEnv) catch unreachable;
-    env.* = can.ModuleEnv.init(page_allocator, "") catch unreachable;
-    env.initCIRFields("Test") catch unreachable;
+    const env = try page_allocator.create(can.ModuleEnv);
+    errdefer page_allocator.destroy(env);
+    env.* = try can.ModuleEnv.init(page_allocator, "");
+    errdefer env.deinit();
+    try env.initCIRFields("Test");
     S.env = env;
     return env;
 }
 
 /// An empty checked module for unit tests that build plans and lowerings by hand.
-pub fn minimalCheckedModule(allocator: Allocator) checked.CheckedModuleArtifact {
+pub fn minimalCheckedModule(allocator: Allocator) Allocator.Error!checked.CheckedModuleArtifact {
+    const env = try testModuleEnv();
     return .{
         .key = moduleKey(1),
         .source_hash = @as([32]u8, @splat(0)),
         .canonical_names = names.CanonicalNameStore.init(allocator),
         .module_identity = testModuleIdentity(),
         .checking_context_identity = .{},
-        .module_env = .{ .checked_source = testModuleEnv() },
+        .module_env = .{ .checked_source = env },
         .exports = .{},
         .provides_requires = .{},
         .method_registry = .{},
@@ -212,7 +215,7 @@ pub fn recordTestNumeral(
     var after_buffer: [16]u8 = undefined;
     const before_digits = base256Digits(before, &before_buffer);
     const after_digits = if (scale == 0) &.{} else base256Digits(after, &after_buffer);
-    const env = testModuleEnv();
+    const env = try testModuleEnv();
     const node = @as(can.CIR.Node.Idx, @fromBackingInt(@intCast(tableIndex(0))));
     try env.recordNumeralLiteral(
         node,
@@ -224,7 +227,7 @@ pub fn recordTestNumeral(
         is_fractional,
         true,
     );
-    return env.numeralLiteralForNode(node) orelse unreachable;
+    return env.numeralLiteralForNode(node) orelse unreachable; // recordNumeralLiteral just upserted a literal for this node
 }
 
 fn base256Digits(value: u128, buffer: *[16]u8) []const u8 {

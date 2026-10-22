@@ -56,6 +56,7 @@ const reporting = @import("reporting");
 
 const Allocator = std.mem.Allocator;
 const Version = base.url.Version;
+const line_record = base.line_record;
 const ModuleEnv = can.ModuleEnv;
 pub const CompilerOwnedPlatform = compiler_platforms.CompilerOwnedPlatform;
 
@@ -358,13 +359,33 @@ pub fn versionBumpNotes(
     return notes.toOwnedSlice(allocator);
 }
 
-/// Sidecar metadata recorded next to each extracted bundle in the cache.
-/// `format` guards against changes to the sidecar layout and to the header
-/// rules that decide what a scan records (or rejects); unknown formats are
-/// regenerated from the extracted bundle, never trusted.
+/// Sidecar metadata recorded next to each extracted bundle in the cache, in
+/// the file `<hash>.deps`.
+///
+/// The file is line-oriented text, every line ending in `\n`:
+///
+/// ```
+/// roc-package-deps <format>
+/// kind <app|package|platform|module>
+/// expanded_bytes <u64>
+/// content_bytes <u64>
+/// root_source_hash <64 lowercase hex digits>
+/// deps <count>
+/// dep <0|1> <-|compiler-owned platform name> <len>:<alias bytes> <len>:<spec bytes>
+/// ```
+///
+/// with exactly `count` `dep` lines and nothing after the last one. The
+/// `dep` fields are `is_platform`, `compiler_owned_platform` (`-` for none),
+/// `alias` and `spec`. Numbers are decimal with no sign and no leading zeros.
+/// Alias and spec bytes are written raw after their byte length, so they may
+/// contain any bytes, spaces and newlines included.
+///
+/// `format` guards against changes to this layout and to the header rules
+/// that decide what a scan records (or rejects). A file with any other
+/// format, or one that does not match this grammar exactly, is regenerated
+/// from the extracted bundle, never trusted.
 pub const Sidecar = struct {
-    format: u32,
-    kind: []const u8,
+    kind: HeaderKind,
     /// Decompressed size of the bundle's tar stream, recorded at extraction
     /// time. The per-package size limit is enforced against this on warm
     /// cache reads too, so having a package cached never changes whether it
@@ -376,16 +397,123 @@ pub const Sidecar = struct {
     content_bytes: u64,
     /// Hash of the normalized root source bytes consumed while scanning this bundle.
     root_source_hash: [32]u8,
-    deps: []const SidecarDep,
+    deps: []const ScannedDep,
 
-    pub const SidecarDep = struct {
-        alias: []const u8,
-        spec: []const u8,
-        is_platform: bool,
-        compiler_owned_platform: ?CompilerOwnedPlatform = null,
-    };
+    pub const current_format: u32 = 5;
+    /// Appended to the package directory's path to name its sidecar.
+    pub const file_suffix = ".deps";
+    /// Suffix of sidecars in the JSON format, which nothing reads; the
+    /// stale-entry sweep deletes them.
+    pub const json_file_suffix = ".deps.json";
 
-    pub const current_format: u32 = 4;
+    const magic = "roc-package-deps ";
+    /// The shortest possible `dep` line, which bounds how many a file of a
+    /// given size can hold.
+    const min_dep_line_len = "dep 0 - 0: 0:\n".len;
+
+    pub fn encode(self: Sidecar, allocator: Allocator) Allocator.Error![]u8 {
+        var buffer: std.Io.Writer.Allocating = .init(allocator);
+        defer buffer.deinit();
+        self.writeTo(&buffer.writer) catch return error.OutOfMemory;
+        return try buffer.toOwnedSlice();
+    }
+
+    fn writeTo(self: Sidecar, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        try writer.print(magic ++ "{d}\n", .{current_format});
+        try writer.print("kind {s}\n", .{@tagName(self.kind)});
+        try writer.print("expanded_bytes {d}\n", .{self.expanded_bytes});
+        try writer.print("content_bytes {d}\n", .{self.content_bytes});
+        try writer.print("root_source_hash {s}\n", .{std.fmt.bytesToHex(self.root_source_hash, .lower)});
+        try writer.print("deps {d}\n", .{self.deps.len});
+        for (self.deps) |dep| {
+            const owned: []const u8 = if (dep.compiler_owned_platform) |platform| @tagName(platform) else "-";
+            try writer.print("dep {d} {s} ", .{ @intFromBool(dep.is_platform), owned });
+            try line_record.writeLengthPrefixed(writer, dep.alias);
+            try writer.writeByte(' ');
+            try line_record.writeLengthPrefixed(writer, dep.spec);
+            try writer.writeByte('\n');
+        }
+    }
+
+    /// Parse sidecar bytes, or return null when they are not a sidecar of
+    /// the current format. The result's aliases and specs borrow from
+    /// `bytes`; only its `deps` array is allocated, from `allocator`.
+    pub fn decode(allocator: Allocator, bytes: []const u8) Allocator.Error!?Sidecar {
+        var reader = line_record.Reader{ .bytes = bytes };
+        if (!reader.literal(magic)) return null;
+        const format = reader.decimal(u32, '\n') orelse return null;
+        if (format != current_format) return null;
+
+        if (!reader.literal("kind ")) return null;
+        const kind = std.meta.stringToEnum(HeaderKind, reader.until('\n') orelse return null) orelse return null;
+        if (!reader.literal("expanded_bytes ")) return null;
+        const expanded_bytes = reader.decimal(u64, '\n') orelse return null;
+        if (!reader.literal("content_bytes ")) return null;
+        const content_bytes = reader.decimal(u64, '\n') orelse return null;
+        if (!reader.literal("root_source_hash ")) return null;
+        const root_source_hash = parseLowerHex32(reader.until('\n') orelse return null) orelse return null;
+        if (!reader.literal("deps ")) return null;
+        const dep_count = reader.decimal(usize, '\n') orelse return null;
+        if (dep_count > reader.remaining() / min_dep_line_len) return null;
+
+        const deps = try allocator.alloc(ScannedDep, dep_count);
+        if (readDeps(&reader, deps) and reader.remaining() == 0) {
+            return .{
+                .kind = kind,
+                .expanded_bytes = expanded_bytes,
+                .content_bytes = content_bytes,
+                .root_source_hash = root_source_hash,
+                .deps = deps,
+            };
+        }
+        allocator.free(deps);
+        return null;
+    }
+
+    fn readDeps(reader: *line_record.Reader, deps: []ScannedDep) bool {
+        for (deps) |*dep| {
+            if (!reader.literal("dep ")) return false;
+            const is_platform = switch (reader.byte() orelse return false) {
+                '0' => false,
+                '1' => true,
+                else => return false,
+            };
+            if (!reader.literal(" ")) return false;
+            const owned_text = reader.until(' ') orelse return false;
+            const compiler_owned_platform: ?CompilerOwnedPlatform = if (std.mem.eql(u8, owned_text, "-"))
+                null
+            else
+                std.meta.stringToEnum(CompilerOwnedPlatform, owned_text) orelse return false;
+            const alias = reader.lengthPrefixed(' ') orelse return false;
+            const spec = reader.lengthPrefixed('\n') orelse return false;
+            dep.* = .{
+                .alias = alias,
+                .spec = spec,
+                .is_platform = is_platform,
+                .compiler_owned_platform = compiler_owned_platform,
+            };
+        }
+        return true;
+    }
+
+    fn parseLowerHex32(text: []const u8) ?[32]u8 {
+        if (text.len != 64) return null;
+        var out: [32]u8 = undefined;
+        for (&out, 0..) |*b, i| {
+            const high = lowerHexDigit(text[2 * i]) orelse return null;
+            const low = lowerHexDigit(text[2 * i + 1]) orelse return null;
+            b.* = (high << 4) | low;
+        }
+        return out;
+    }
+
+    fn lowerHexDigit(c: u8) ?u8 {
+        return switch (c) {
+            '0'...'9' => c - '0',
+            'a'...'f' => c - 'a' + 10,
+            else => null,
+        };
+    }
 };
 
 /// One validated `--replace-dep` request.
@@ -744,10 +872,9 @@ pub const Resolver = struct {
         var out = std.ArrayListUnmanaged(u8).empty;
         for (keys.items) |key| {
             const choice = choices.get(key).?;
-            const line = try std.fmt.allocPrint(self.arena(), "{s}\x00{d}.{d}.{d}\x00{s}\x01", .{
+            try out.print(self.arena(), "{s}\x00{d}.{d}.{d}\x00{s}\x01", .{
                 key, choice.version.major, choice.version.minor, choice.version.patch, choice.hash,
             });
-            try out.appendSlice(self.arena(), line);
         }
         return out.items;
     }
@@ -1327,7 +1454,7 @@ pub const Resolver = struct {
                         .{
                             if (task.missing.is_platform) "platform" else "package",
                             task.missing.url,
-                            task.max_expanded_bytes orelse unreachable,
+                            task.max_expanded_bytes orelse base.invariant("package resolution invariant violated: a fetch without a size limit reported {s}", .{@errorName(err)}),
                             if (task.missing.is_platform) "--max-transitive-mb" else "--max-package-mb",
                         },
                     );
@@ -1625,7 +1752,7 @@ pub const Resolver = struct {
         // Index 0: the root. A URL-launched root carries its bundle URL as
         // both identity and UrlInfo, exactly like a URL dependency would.
         const root_url_info: ?Resolved.UrlInfo = if (self.root_url) |url| blk: {
-            const parsed = base.url.parseUrlPath(url) catch unreachable;
+            const parsed = base.url.parseUrlPath(url) catch unreachable; // BuildEnv.setRootUrl rejects URLs parseUrlPath does not accept
             break :blk .{
                 .url = try out.dupe(u8, url),
                 .url_id = parsed.url_id,
@@ -1680,7 +1807,7 @@ pub const Resolver = struct {
                 });
             } else {
                 const node = self.url_nodes.get(choice.hash).?;
-                const parsed = base.url.parseUrlPath(choice.url) catch unreachable;
+                const parsed = base.url.parseUrlPath(choice.url) catch unreachable; // URL-group candidates are recorded only after parseUrlPath accepted their spec
                 try group_to_index.put(self.gpa, try self.arena().dupe(u8, group), @intCast(packages.items.len));
                 try packages.append(out, .{
                     .kind = node.kind,
@@ -1745,7 +1872,7 @@ pub const Resolver = struct {
                 .url => |target| target.group,
                 .local => |group| group,
                 .compiler_owned => |platform| compiler_platforms.groupKey(platform),
-                .invalid => unreachable,
+                .invalid => unreachable, // an invalid edge records a diagnostic, which returned ResolutionFailed above
             };
             break :blk group_to_index.get(group).?;
         } else null;
@@ -2323,23 +2450,34 @@ pub fn publishStagedPackage(
 /// Far longer than any download lives, so age alone proves abandonment.
 const stale_staging_ns: i128 = 24 * std.time.ns_per_hour;
 
-/// Delete package staging directories left behind by processes that died
-/// before publishing or cleaning up. Nothing ever reads them again, they only
-/// cost disk. Only directories older than `stale_staging_ns` go, since a
-/// younger one may belong to a download still in flight. Best effort: a
-/// sweep that fails costs nothing but the disk it would have freed.
-pub fn sweepStalePackageStaging(fs: CoreCtx, allocator: Allocator, cache_dir: []const u8) void {
-    // Staging directories only ever sit directly under the cache directory,
-    // so the sweep never needs to walk into the cached packages themselves.
+/// Delete cache entries that nothing reads again and that only cost disk:
+/// package staging directories left behind by processes that died before
+/// publishing or cleaning up, and sidecar files in the format older
+/// compilers named `<hash>.deps.json`. Only staging directories older than
+/// `stale_staging_ns` go, since a younger one may belong to a download still
+/// in flight. Best effort: a sweep that fails costs nothing but the disk it
+/// would have freed.
+pub fn sweepStalePackageCacheEntries(fs: CoreCtx, allocator: Allocator, cache_dir: []const u8) void {
+    // Staging directories and sidecars only ever sit directly under the
+    // cache directory, so the sweep never needs to walk into the cached
+    // packages themselves.
     const entries = fs.listDirTop(cache_dir, allocator) catch return;
     const now = fs.timestampNow();
     for (entries) |entry| {
-        if (entry.kind != .directory) continue;
-        if (!std.mem.endsWith(u8, entry.path, ".tmp")) continue;
-        const info = fs.stat(entry.path) catch continue;
-        const mtime = info.mtime_ns orelse continue;
-        if (now - mtime <= stale_staging_ns) continue;
-        fs.deleteTree(entry.path) catch {};
+        switch (entry.kind) {
+            .file => {
+                if (!std.mem.endsWith(u8, entry.path, Sidecar.json_file_suffix)) continue;
+                fs.deleteFile(entry.path) catch {};
+            },
+            .directory => {
+                if (!std.mem.endsWith(u8, entry.path, ".tmp")) continue;
+                const info = fs.stat(entry.path) catch continue;
+                const mtime = info.mtime_ns orelse continue;
+                if (now - mtime <= stale_staging_ns) continue;
+                fs.deleteTree(entry.path) catch {};
+            },
+            .other => {},
+        }
     }
 }
 
@@ -2391,14 +2529,14 @@ pub const CtxFetcher = struct {
         const cache_dir = self.cache_packages_dir orelse return error.Unsupported;
 
         const package_dir = try std.fs.path.join(allocator, &.{ cache_dir, hash });
-        const sidecar_path = try std.fmt.allocPrint(allocator, "{s}.deps.json", .{package_dir});
+        const sidecar_path = try std.mem.concat(allocator, u8, &.{ package_dir, Sidecar.file_suffix });
         const root_file = try std.fs.path.join(allocator, &.{ package_dir, "main.roc" });
 
         // Warm path: a sidecar means the bundle was fully extracted and
         // scanned before. The size limit applies to cached bundles too, so
         // having a package cached never changes whether it is accepted.
         if (self.fs.fileExists(sidecar_path)) {
-            if (self.readSidecar(allocator, sidecar_path, package_dir, root_file)) |cached| {
+            if (try self.readSidecar(allocator, sidecar_path, package_dir, root_file)) |cached| {
                 if (max_expanded_bytes) |max| {
                     if (cached.expanded_bytes > max) return error.ExpandedSizeLimitExceeded;
                 }
@@ -2462,7 +2600,7 @@ pub const CtxFetcher = struct {
         max_expanded_bytes: ?u64,
     ) FetchError!?u64 {
         self.fs.makePath(cache_dir) catch return error.DownloadFailed;
-        sweepStalePackageStaging(self.fs, allocator, cache_dir);
+        sweepStalePackageCacheEntries(self.fs, allocator, cache_dir);
 
         const staging_dir = try packageStagingDirPath(self.fs.std_io, allocator, package_dir);
         self.fs.createDir(staging_dir) catch |err| switch (err) {
@@ -2540,19 +2678,24 @@ pub const CtxFetcher = struct {
         expanded_bytes: u64,
     };
 
-    fn readSidecar(self: *CtxFetcher, allocator: Allocator, sidecar_path: []const u8, package_dir: []const u8, root_file: []const u8) ?CachedPackage {
-        const bytes = self.fs.readFile(sidecar_path, allocator) catch return null;
-        const parsed = std.json.parseFromSlice(Sidecar, self.gpa, bytes, .{}) catch return null;
-        defer parsed.deinit();
-        if (parsed.value.format != Sidecar.current_format) return null;
+    fn readSidecar(self: *CtxFetcher, allocator: Allocator, sidecar_path: []const u8, package_dir: []const u8, root_file: []const u8) Allocator.Error!?CachedPackage {
+        const bytes = self.fs.readFile(sidecar_path, allocator) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.AccessDenied,
+            error.FileNotFound,
+            error.IoError,
+            error.StreamTooLong,
+            => return null,
+        };
+        defer allocator.free(bytes);
+        const sidecar = try Sidecar.decode(allocator, bytes) orelse return null;
+        defer allocator.free(sidecar.deps);
 
-        const kind = std.meta.stringToEnum(HeaderKind, parsed.value.kind) orelse return null;
-
-        const deps = allocator.alloc(ScannedDep, parsed.value.deps.len) catch return null;
-        for (deps, parsed.value.deps) |*dep, source| {
+        const deps = try allocator.alloc(ScannedDep, sidecar.deps.len);
+        for (deps, sidecar.deps) |*dep, source| {
             dep.* = .{
-                .alias = allocator.dupe(u8, source.alias) catch return null,
-                .spec = allocator.dupe(u8, source.spec) catch return null,
+                .alias = try allocator.dupe(u8, source.alias),
+                .spec = try allocator.dupe(u8, source.spec),
                 .is_platform = source.is_platform,
                 .compiler_owned_platform = source.compiler_owned_platform,
             };
@@ -2560,15 +2703,15 @@ pub const CtxFetcher = struct {
 
         return .{
             .fetched = .{
-                .kind = kind,
+                .kind = sidecar.kind,
                 .root_file = root_file,
-                .root_dir = allocator.dupe(u8, package_dir) catch return null,
-                .root_source_hash = parsed.value.root_source_hash,
-                .content_bytes = parsed.value.content_bytes,
+                .root_dir = try allocator.dupe(u8, package_dir),
+                .root_source_hash = sidecar.root_source_hash,
+                .content_bytes = sidecar.content_bytes,
                 .compiler_owned_platform = null,
                 .deps = deps,
             },
-            .expanded_bytes = parsed.value.expanded_bytes,
+            .expanded_bytes = sidecar.expanded_bytes,
         };
     }
 
@@ -2578,36 +2721,23 @@ pub const CtxFetcher = struct {
         sidecar_path: []const u8,
         scanned: FetchedPackage,
         expanded_bytes: u64,
-    ) (Allocator.Error || error{WriteFailed} || CoreCtx.WriteError || CoreCtx.RenameError)!void {
-        const deps = try allocator.alloc(Sidecar.SidecarDep, scanned.deps.len);
-        for (deps, scanned.deps) |*dep, source| {
-            dep.* = .{
-                .alias = source.alias,
-                .spec = source.spec,
-                .is_platform = source.is_platform,
-                .compiler_owned_platform = source.compiler_owned_platform,
-            };
-        }
+    ) (Allocator.Error || CoreCtx.WriteError || CoreCtx.RenameError)!void {
         const sidecar = Sidecar{
-            .format = Sidecar.current_format,
-            .kind = @tagName(scanned.kind),
+            .kind = scanned.kind,
             .expanded_bytes = expanded_bytes,
             .content_bytes = scanned.content_bytes,
             .root_source_hash = scanned.root_source_hash,
-            .deps = deps,
+            .deps = scanned.deps,
         };
-
-        var buffer: std.Io.Writer.Allocating = .init(allocator);
-        defer buffer.deinit();
-        try std.json.Stringify.value(sidecar, .{}, &buffer.writer);
-        const json_bytes = try buffer.toOwnedSlice();
+        const sidecar_bytes = try sidecar.encode(allocator);
+        defer allocator.free(sidecar_bytes);
 
         // Write via a temp file and rename so readers never see a partial
         // sidecar. Concurrent writers race benignly: the content is a pure
         // function of the (content-addressed) bundle, so any writer's file
         // is correct.
         const tmp_path = try std.fmt.allocPrint(allocator, "{s}.tmp", .{sidecar_path});
-        try self.fs.writeFile(tmp_path, json_bytes);
+        try self.fs.writeFile(tmp_path, sidecar_bytes);
         try self.fs.rename(tmp_path, sidecar_path);
     }
 };
@@ -4152,9 +4282,9 @@ test "the reserved 0.0.0 version is rejected" {
 /// The knobs are globals because `fetchUrl` is a bare function pointer in the
 /// `CoreCtx` vtable, with nowhere to hang per-test state. The tests using them
 /// run in one thread, one after another.
-fn testReplaceConfig(args: []const ReplaceDepArg) Config {
+fn testReplaceConfig(args: []const ReplaceDepArg) error{TooManyReplacements}!Config {
     var config = Config{};
-    for (args) |arg| config.replace_deps.append(arg) catch unreachable;
+    for (args) |arg| try config.replace_deps.append(arg);
     return config;
 }
 
@@ -4211,7 +4341,7 @@ test "replace-dep: a local replacement covers direct and transitive declarations
     try testRegisterAsciiAnsi(&registry, test_ascii_url);
     defer testFreeAsciiAnsi(&registry);
 
-    var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&.{
+    var resolver = Resolver.init(gpa, registry.fetcher(), try testReplaceConfig(&.{
         .{ .old = test_ascii_url, .new = "/work/roc-ascii/main.roc" },
     }));
     defer resolver.deinit();
@@ -4248,7 +4378,7 @@ test "replace-dep: separate release URLs require separate flags" {
 
     // One flag leaves ANSI's other release untouched.
     {
-        var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&.{
+        var resolver = Resolver.init(gpa, registry.fetcher(), try testReplaceConfig(&.{
             .{ .old = test_ascii_url, .new = "/work/roc-ascii/main.roc" },
         }));
         defer resolver.deinit();
@@ -4264,7 +4394,7 @@ test "replace-dep: separate release URLs require separate flags" {
         .{ .{ .old = test_ascii_other_url, .new = "/work/roc-ascii/main.roc" }, .{ .old = test_ascii_url, .new = "/work/roc-ascii/main.roc" } },
     };
     for (orders) |order| {
-        var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&order));
+        var resolver = Resolver.init(gpa, registry.fetcher(), try testReplaceConfig(&order));
         defer resolver.deinit();
         var resolved = try resolver.resolve("/app/main.roc");
         defer resolved.deinit();
@@ -4294,7 +4424,7 @@ test "replace-dep: the replacement's header supplies dependencies, at every dept
         .{ .alias = "chars", .spec = test_ascii_url, .is_platform = false },
     } });
 
-    var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&.{
+    var resolver = Resolver.init(gpa, registry.fetcher(), try testReplaceConfig(&.{
         .{ .old = test_ansi_url, .new = "/work/roc-ansi/main.roc" },
         .{ .old = test_ascii_url, .new = "/work/roc-ascii/main.roc" },
     }));
@@ -4317,7 +4447,7 @@ test "replace-dep: declarations only inside a discarded original do not count as
     defer testFreeAsciiAnsi(&registry);
     try registry.locals.put("/work/roc-ansi/main.roc", .{});
 
-    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+    try testExpectResolutionFails(&registry, "/app/main.roc", try testReplaceConfig(&.{
         .{ .old = test_ansi_url, .new = "/work/roc-ansi/main.roc" },
         .{ .old = test_ascii_other_url, .new = "/work/roc-ascii/main.roc" },
     }), "Unused Dependency Replacement");
@@ -4331,7 +4461,7 @@ test "replace-dep: an unused flag is an error" {
     defer testFreeAsciiAnsi(&registry);
 
     // A near-miss URL (different hash) matches nothing.
-    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+    try testExpectResolutionFails(&registry, "/app/main.roc", try testReplaceConfig(&.{
         .{ .old = "https://example.com/ascii/0.5.0/hashTypo.tar.zst", .new = "/work/roc-ascii/main.roc" },
     }), "Unused Dependency Replacement");
 }
@@ -4351,23 +4481,23 @@ test "replace-dep: aliases, directories, and the compiler are rejected for OLD a
     try std.testing.expectEqual(ReplaceDepSource.url, classifyReplaceDepSource(test_ascii_url));
     try std.testing.expectEqual(ReplaceDepSource.compiler, classifyReplaceDepSource("roc"));
 
-    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+    try testExpectResolutionFails(&registry, "/app/main.roc", try testReplaceConfig(&.{
         .{ .old = "ascii", .new = "/work/roc-ascii/main.roc" },
     }), "Invalid Dependency Replacement");
-    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+    try testExpectResolutionFails(&registry, "/app/main.roc", try testReplaceConfig(&.{
         .{ .old = test_ascii_url, .new = "ascii" },
     }), "Invalid Dependency Replacement");
-    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+    try testExpectResolutionFails(&registry, "/app/main.roc", try testReplaceConfig(&.{
         .{ .old = test_ascii_url, .new = "/work/roc-ascii" },
     }), "Invalid Dependency Replacement");
-    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+    try testExpectResolutionFails(&registry, "/app/main.roc", try testReplaceConfig(&.{
         .{ .old = "roc", .new = "/work/roc-ascii/main.roc" },
     }), "Compiler Cannot Be Replaced");
     // Malformed URLs and paths that do not exist are rejected too.
-    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+    try testExpectResolutionFails(&registry, "/app/main.roc", try testReplaceConfig(&.{
         .{ .old = test_ascii_url, .new = "http://example.com/ascii/0.5.0/hashAscii.tar.zst" },
     }), "Invalid Dependency Replacement");
-    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+    try testExpectResolutionFails(&registry, "/app/main.roc", try testReplaceConfig(&.{
         .{ .old = test_ascii_url, .new = "/work/missing/main.roc" },
     }), "Invalid Dependency Replacement");
 }
@@ -4381,24 +4511,24 @@ test "replace-dep: duplicate sources, chains, and cycles are rejected" {
     try registry.symlinks.put("/work/link/main.roc", "/work/roc-ascii/main.roc");
     try registry.locals.put("/work/other/main.roc", .{});
 
-    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+    try testExpectResolutionFails(&registry, "/app/main.roc", try testReplaceConfig(&.{
         .{ .old = test_ascii_url, .new = "/work/roc-ascii/main.roc" },
         .{ .old = test_ascii_url, .new = "/work/other/main.roc" },
     }), "Duplicate Dependency Replacement");
     // Two spellings of one root file are one source.
-    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+    try testExpectResolutionFails(&registry, "/app/main.roc", try testReplaceConfig(&.{
         .{ .old = "/work/roc-ascii/main.roc", .new = test_ascii_url },
         .{ .old = "/work/link/main.roc", .new = test_ascii_other_url },
     }), "Duplicate Dependency Replacement");
-    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+    try testExpectResolutionFails(&registry, "/app/main.roc", try testReplaceConfig(&.{
         .{ .old = test_ascii_url, .new = test_ascii_other_url },
         .{ .old = test_ascii_other_url, .new = "/work/roc-ascii/main.roc" },
     }), "Dependency Replacement Chain");
-    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+    try testExpectResolutionFails(&registry, "/app/main.roc", try testReplaceConfig(&.{
         .{ .old = test_ascii_url, .new = test_ascii_other_url },
         .{ .old = test_ascii_other_url, .new = test_ascii_url },
     }), "Dependency Replacement Chain");
-    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+    try testExpectResolutionFails(&registry, "/app/main.roc", try testReplaceConfig(&.{
         .{ .old = test_ascii_url, .new = test_ascii_url },
     }), "Dependency Replacement Cycle");
 }
@@ -4413,7 +4543,7 @@ test "replace-dep: replacing a package and a dependency declared inside it is no
         .{ .alias = "ascii", .spec = test_ascii_url, .is_platform = false },
     } });
 
-    var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&.{
+    var resolver = Resolver.init(gpa, registry.fetcher(), try testReplaceConfig(&.{
         .{ .old = test_ansi_url, .new = "/work/roc-ansi/main.roc" },
         .{ .old = test_ascii_url, .new = "/work/roc-ascii/main.roc" },
     }));
@@ -4437,7 +4567,7 @@ test "replace-dep: a published replacement is exact and never version-solved awa
 
     // A -> B replaces every A, and the app root accepts the new release.
     {
-        var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&.{
+        var resolver = Resolver.init(gpa, registry.fetcher(), try testReplaceConfig(&.{
             .{ .old = test_ascii_url, .new = fork_url },
         }));
         defer resolver.deinit();
@@ -4453,7 +4583,7 @@ test "replace-dep: a published replacement is exact and never version-solved awa
         .{ .alias = "ascii", .spec = test_ascii_url, .is_platform = false },
         .{ .alias = "newer", .spec = fork_newer_url, .is_platform = false },
     } });
-    try testExpectResolutionFails(&registry, "/pkg/main.roc", testReplaceConfig(&.{
+    try testExpectResolutionFails(&registry, "/pkg/main.roc", try testReplaceConfig(&.{
         .{ .old = test_ascii_url, .new = fork_url },
     }), "Dependency Replacement Conflict");
 
@@ -4462,7 +4592,7 @@ test "replace-dep: a published replacement is exact and never version-solved awa
         .{ .alias = "ascii", .spec = test_ascii_url, .is_platform = false },
         .{ .alias = "older", .spec = fork_url, .is_platform = false },
     } });
-    var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&.{
+    var resolver = Resolver.init(gpa, registry.fetcher(), try testReplaceConfig(&.{
         .{ .old = test_ascii_url, .new = fork_newer_url },
     }));
     defer resolver.deinit();
@@ -4482,7 +4612,7 @@ test "replace-dep: a failed replacement download never uses the original" {
     try testRegisterAsciiAnsi(&registry, test_ascii_url);
     defer testFreeAsciiAnsi(&registry);
 
-    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+    try testExpectResolutionFails(&registry, "/app/main.roc", try testReplaceConfig(&.{
         .{ .old = test_ascii_url, .new = "https://example.com/gone/ascii/0.5.0/hashGone.tar.zst" },
     }), "Package Download Failed");
 }
@@ -4496,7 +4626,7 @@ test "replace-dep: platforms are replaceable and must stay platforms" {
     try registry.locals.put("/work/basic-cli/platform/main.roc", .{ .kind = .platform });
 
     {
-        var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&.{
+        var resolver = Resolver.init(gpa, registry.fetcher(), try testReplaceConfig(&.{
             .{ .old = test_platform_url, .new = "/work/basic-cli/platform/main.roc" },
         }));
         defer resolver.deinit();
@@ -4507,10 +4637,10 @@ test "replace-dep: platforms are replaceable and must stay platforms" {
         try std.testing.expectEqual(HeaderKind.platform, selected.kind);
     }
 
-    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+    try testExpectResolutionFails(&registry, "/app/main.roc", try testReplaceConfig(&.{
         .{ .old = test_platform_url, .new = "/work/roc-ascii/main.roc" },
     }), "Invalid Platform");
-    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+    try testExpectResolutionFails(&registry, "/app/main.roc", try testReplaceConfig(&.{
         .{ .old = test_ascii_url, .new = "/work/basic-cli/platform/main.roc" },
     }), "Invalid Package Dependency");
 }
@@ -4533,12 +4663,12 @@ test "replace-dep: platform consistency is validated against effective sources" 
     } });
 
     // Replacing only one of two differing declarations is a mismatch...
-    try testExpectResolutionFails(&registry, "/app/main.roc", testReplaceConfig(&.{
+    try testExpectResolutionFails(&registry, "/app/main.roc", try testReplaceConfig(&.{
         .{ .old = test_platform_url, .new = "/work/platform/main.roc" },
     }), "Platform Dependency Mismatch");
 
     // ...and mapping both onto one source makes the graph consistent.
-    var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&.{
+    var resolver = Resolver.init(gpa, registry.fetcher(), try testReplaceConfig(&.{
         .{ .old = test_platform_url, .new = "/work/platform/main.roc" },
         .{ .old = other_platform_url, .new = "/work/platform/main.roc" },
     }));
@@ -4574,7 +4704,7 @@ test "replace-dep: a relative platform declaration resolves while local sources 
     try registry.urls.put(test_ascii_url, .{});
     try registry.locals.put("/work/roc-ascii/main.roc", .{});
 
-    var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&.{
+    var resolver = Resolver.init(gpa, registry.fetcher(), try testReplaceConfig(&.{
         .{ .old = test_ascii_url, .new = "/work/roc-ascii/main.roc" },
     }));
     defer resolver.deinit();
@@ -4608,7 +4738,7 @@ test "replace-dep: local and versionless sources match by canonical path and exa
     // The command-line selector is relative to the working directory.
     try registry.symlinks.put("./vendor/json/main.roc", "/repo/vendor/json/main.roc");
 
-    var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&.{
+    var resolver = Resolver.init(gpa, registry.fetcher(), try testReplaceConfig(&.{
         .{ .old = "./vendor/json/main.roc", .new = "/work/json/main.roc" },
         .{ .old = versionless_url, .new = "/work/tools/main.roc" },
     }));
@@ -4640,7 +4770,7 @@ test "replace-dep: a local declaration with no canonical path is an error, not a
     // `/repo/missing/main.roc` is not registered, so it cannot be
     // canonicalized. Resolution must report that edge explicitly instead of
     // continuing with its spelling.
-    var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&.{
+    var resolver = Resolver.init(gpa, registry.fetcher(), try testReplaceConfig(&.{
         .{ .old = "./vendor/json/main.roc", .new = "/work/json/main.roc" },
     }));
     defer resolver.deinit();
@@ -4671,7 +4801,7 @@ test "replace-dep: identical aliases for unrelated sources are not conflated" {
     } });
 
     // A platform root works like any other root.
-    var resolver = Resolver.init(gpa, registry.fetcher(), testReplaceConfig(&.{
+    var resolver = Resolver.init(gpa, registry.fetcher(), try testReplaceConfig(&.{
         .{ .old = test_ascii_url, .new = "/work/roc-ascii/main.roc" },
     }));
     defer resolver.deinit();
@@ -4784,7 +4914,7 @@ test "a downloaded bundle with header problems is rejected with located reports 
     );
     try std.testing.expectEqual(@as(usize, 1), rejection_reports.items.len);
     try std.testing.expectEqualStrings("Duplicate Package Shorthand", rejection_reports.items[0].title);
-    try std.testing.expect(!harness.fetcher.fs.fileExists(try std.fmt.allocPrint(gpa, "{s}.deps.json", .{try harness.packageDir(gpa)})));
+    try std.testing.expect(!harness.fetcher.fs.fileExists(try std.mem.concat(gpa, u8, &.{ try harness.packageDir(gpa), Sidecar.file_suffix })));
 }
 
 test "bundle links - rejected archives leave warm cache slots unchanged and no staging directories" {
@@ -4811,7 +4941,7 @@ test "bundle links - rejected archives leave warm cache slots unchanged and no s
     const victim_files = [_][]const u8{
         victim_hash ++ "/main.roc",
         victim_hash ++ "/Thing.roc",
-        victim_hash ++ ".deps.json",
+        victim_hash ++ Sidecar.file_suffix,
     };
     var original: [victim_files.len][]const u8 = undefined;
     for (victim_files, &original) |path, *bytes| {
@@ -4867,7 +4997,7 @@ test "bundle links - rejected archives leave warm cache slots unchanged and no s
         // attacker slot, sidecar, or staging directory survives rejection.
         try std.testing.expectEqual(@as(usize, 2), (try harness.entryNames(gpa)).len);
         try std.testing.expect(try harness.hasEntry(gpa, victim_hash));
-        try std.testing.expect(try harness.hasEntry(gpa, victim_hash ++ ".deps.json"));
+        try std.testing.expect(try harness.hasEntry(gpa, victim_hash ++ Sidecar.file_suffix));
         _ = try CtxFetcher.fetchUrlImpl(&harness.fetcher, gpa, victim_url, victim_hash, null, &rejection_reports);
         try std.testing.expectEqual(index + 1, StubDownload.attempts);
     }
@@ -4966,7 +5096,7 @@ test "a downloaded package is published under its hash" {
     // the download, so nothing beyond the package and its sidecar is left.
     const names = try harness.entryNames(gpa);
     try std.testing.expectEqual(@as(usize, 2), names.len);
-    try std.testing.expect(try harness.hasEntry(gpa, CacheTestHarness.hash ++ ".deps.json"));
+    try std.testing.expect(try harness.hasEntry(gpa, CacheTestHarness.hash ++ Sidecar.file_suffix));
 }
 
 test "a package directory does not appear until the download is complete" {
@@ -5098,4 +5228,166 @@ test "a staging directory younger than a day is not swept" {
 
     try std.testing.expect(try harness.hasEntry(gpa, orphan));
     try std.testing.expect(try harness.hasEntry(gpa, CacheTestHarness.hash));
+}
+
+test "a sidecar round-trips aliases and specs containing any bytes" {
+    const gpa = std.testing.allocator;
+    const deps = [_]ScannedDep{
+        .{ .alias = "pf", .spec = "https://example.com/pf/1.0.0/abc.tar.zst", .is_platform = true },
+        .{ .alias = "glue", .spec = "glue", .is_platform = true, .compiler_owned_platform = .glue },
+        .{ .alias = "with space", .spec = "a b\nc 3:x \n", .is_platform = false },
+        .{ .alias = "", .spec = "", .is_platform = false },
+        .{ .alias = "dep 0 - 0: 0:\n", .spec = "\x00\xff:\r\t\\\"", .is_platform = false },
+    };
+    var hash: [32]u8 = undefined;
+    for (&hash, 0..) |*b, i| b.* = @intCast(i * 8 + 1);
+    const original = Sidecar{
+        .kind = .platform,
+        .expanded_bytes = std.math.maxInt(u64),
+        .content_bytes = 0,
+        .root_source_hash = hash,
+        .deps = &deps,
+    };
+
+    const bytes = try original.encode(gpa);
+    defer gpa.free(bytes);
+    const decoded = (try Sidecar.decode(gpa, bytes)) orelse return error.TestUnexpectedResult;
+    defer gpa.free(decoded.deps);
+
+    try std.testing.expectEqual(original.kind, decoded.kind);
+    try std.testing.expectEqual(original.expanded_bytes, decoded.expanded_bytes);
+    try std.testing.expectEqual(original.content_bytes, decoded.content_bytes);
+    try std.testing.expectEqualSlices(u8, &original.root_source_hash, &decoded.root_source_hash);
+    try std.testing.expectEqual(deps.len, decoded.deps.len);
+    for (deps, decoded.deps) |expected, actual| {
+        try std.testing.expectEqualStrings(expected.alias, actual.alias);
+        try std.testing.expectEqualStrings(expected.spec, actual.spec);
+        try std.testing.expectEqual(expected.is_platform, actual.is_platform);
+        try std.testing.expectEqual(expected.compiler_owned_platform, actual.compiler_owned_platform);
+    }
+}
+
+test "a sidecar is written in the documented line format" {
+    const gpa = std.testing.allocator;
+    const deps = [_]ScannedDep{
+        .{ .alias = "pf", .spec = "../pf/main.roc", .is_platform = true },
+        .{ .alias = "glue", .spec = "glue", .is_platform = true, .compiler_owned_platform = .glue },
+    };
+    const sidecar = Sidecar{
+        .kind = .package,
+        .expanded_bytes = 1234,
+        .content_bytes = 567,
+        .root_source_hash = @splat(0xab),
+        .deps = &deps,
+    };
+    const bytes = try sidecar.encode(gpa);
+    defer gpa.free(bytes);
+    try std.testing.expectEqualStrings(
+        "roc-package-deps 5\n" ++
+            "kind package\n" ++
+            "expanded_bytes 1234\n" ++
+            "content_bytes 567\n" ++
+            "root_source_hash " ++ "abababababababababababababababababababababababababababababababab" ++ "\n" ++
+            "deps 2\n" ++
+            "dep 1 - 2:pf 14:../pf/main.roc\n" ++
+            "dep 1 glue 4:glue 4:glue\n",
+        bytes,
+    );
+}
+
+test "a sidecar that does not match the format exactly is rejected" {
+    const gpa = std.testing.allocator;
+    const hash_line = "root_source_hash " ++ "0000000000000000000000000000000000000000000000000000000000000000" ++ "\n";
+    const prefix = "roc-package-deps 5\nkind package\nexpanded_bytes 10\ncontent_bytes 20\n" ++ hash_line;
+    const valid = prefix ++ "deps 1\ndep 0 - 1:a 3:b c\n";
+
+    // The baseline the malformed cases below are variations of.
+    const accepted = (try Sidecar.decode(gpa, valid)) orelse return error.TestUnexpectedResult;
+    gpa.free(accepted.deps);
+
+    const malformed = [_][]const u8{
+        "",
+        "{\"format\":4}",
+        // Unknown and non-canonical format numbers.
+        "roc-package-deps 4\nkind package\nexpanded_bytes 10\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
+        "roc-package-deps 6\nkind package\nexpanded_bytes 10\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
+        "roc-package-deps 05\nkind package\nexpanded_bytes 10\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
+        "roc-package-deps +5\nkind package\nexpanded_bytes 10\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
+        // Bad scalar fields.
+        "roc-package-deps 5\nkind library\nexpanded_bytes 10\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
+        "roc-package-deps 5\nkind package\nexpanded_bytes 1_0\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
+        "roc-package-deps 5\nkind package\nexpanded_bytes 18446744073709551616\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
+        "roc-package-deps 5\nkind package\nexpanded_bytes \ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
+        "roc-package-deps 5\nkind package\ncontent_bytes 20\nexpanded_bytes 10\n" ++ hash_line ++ "deps 0\n",
+        "roc-package-deps 5\nkind  package\nexpanded_bytes 10\ncontent_bytes 20\n" ++ hash_line ++ "deps 0\n",
+        prefix[0 .. prefix.len - hash_line.len] ++ "root_source_hash " ++ "ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB" ++ "\ndeps 0\n",
+        prefix[0 .. prefix.len - hash_line.len] ++ "root_source_hash " ++ "00000000000000000000000000000000000000000000000000000000000000" ++ "\ndeps 0\n",
+        prefix[0 .. prefix.len - hash_line.len] ++ "root_source_hash " ++ "000000000000000000000000000000000000000000000000000000000000000000" ++ "\ndeps 0\n",
+        // Dependency counts that disagree with the lines that follow.
+        prefix ++ "deps 2\ndep 0 - 1:a 3:b c\n",
+        prefix ++ "deps 0\ndep 0 - 1:a 3:b c\n",
+        prefix ++ "deps 18446744073709551615\ndep 0 - 1:a 3:b c\n",
+        // Bad dependency lines.
+        prefix ++ "deps 1\ndep 2 - 1:a 3:b c\n",
+        prefix ++ "deps 1\ndep 0 other 1:a 3:b c\n",
+        prefix ++ "deps 1\ndep 0 - 2:a 3:b c\n",
+        prefix ++ "deps 1\ndep 0 - 1:a 4:b c\n",
+        prefix ++ "deps 1\ndep 0 - 1:a 2:b c\n",
+        prefix ++ "deps 1\ndep 0 - 01:a 3:b c\n",
+        prefix ++ "deps 1\ndep 0 - 1:a 99:b c\n",
+        prefix ++ "deps 1\ndep 0 - 1:a 3:b c",
+        prefix ++ "deps 1\ndep 0 - 1:a\n",
+        // Trailing bytes.
+        valid ++ "\n",
+        valid ++ "extra 1\n",
+    };
+    for (malformed) |bytes| {
+        if (try Sidecar.decode(gpa, bytes)) |decoded| {
+            gpa.free(decoded.deps);
+            std.debug.print("accepted malformed sidecar: {s}\n", .{bytes});
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "a malformed sidecar is regenerated from the extracted bundle" {
+    var arena = base.SingleThreadArena.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+    var harness = try CacheTestHarness.init(gpa);
+    defer harness.deinit();
+    const io = std.testing.io;
+
+    _ = try harness.fetch(gpa);
+    const sidecar_name = CacheTestHarness.hash ++ Sidecar.file_suffix;
+    const generated = try harness.tmp.dir.readFileAlloc(io, sidecar_name, gpa, .limited(1024 * 1024));
+
+    try harness.tmp.dir.writeFile(io, .{ .sub_path = sidecar_name, .data = "roc-package-deps 5\nkind package\n" });
+    const fetched = try harness.fetch(gpa);
+
+    try std.testing.expectEqual(HeaderKind.package, fetched.kind);
+    try std.testing.expectEqual(@as(usize, 1), StubDownload.attempts);
+    const regenerated = try harness.tmp.dir.readFileAlloc(io, sidecar_name, gpa, .limited(1024 * 1024));
+    try std.testing.expectEqualStrings(generated, regenerated);
+}
+
+test "a download sweeps sidecars left in the old JSON format" {
+    var arena = base.SingleThreadArena.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+    var harness = try CacheTestHarness.init(gpa);
+    defer harness.deinit();
+
+    // Sidecars older compilers wrote for this package and for another one.
+    const own_json = CacheTestHarness.hash ++ Sidecar.json_file_suffix;
+    const other_json = "11111111111111111111111111111111" ++ Sidecar.json_file_suffix;
+    try harness.tmp.dir.writeFile(std.testing.io, .{ .sub_path = own_json, .data = "{\"format\":4}" });
+    try harness.tmp.dir.writeFile(std.testing.io, .{ .sub_path = other_json, .data = "{\"format\":4}" });
+
+    _ = try harness.fetch(gpa);
+
+    try std.testing.expect(!try harness.hasEntry(gpa, own_json));
+    try std.testing.expect(!try harness.hasEntry(gpa, other_json));
+    try std.testing.expect(try harness.hasEntry(gpa, CacheTestHarness.hash ++ Sidecar.file_suffix));
+    try std.testing.expectEqual(@as(usize, 2), (try harness.entryNames(gpa)).len);
 }

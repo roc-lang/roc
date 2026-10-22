@@ -160,9 +160,15 @@ const Normalizer = struct {
     symbols: Common.SymbolGen,
     sinks: std.ArrayList(Statements) = .empty,
     frames: std.ArrayList(Frame) = .empty,
+    /// The rows of the record or closure span being rebuilt, before they are
+    /// appended as one span.
+    field_scratch: std.ArrayList(Ast.FieldExpr) = .empty,
+    capture_scratch: std.ArrayList(Ast.CaptureOperand) = .empty,
 
     fn deinit(self: *Normalizer) void {
         const allocator = self.program.allocator;
+        self.capture_scratch.deinit(allocator);
+        self.field_scratch.deinit(allocator);
         for (self.frames.items) |*frame| switch (frame.kind) {
             .expr => |*expr| expr.deinit(allocator),
             .stmts, .scope => {},
@@ -291,7 +297,7 @@ const Normalizer = struct {
                 .let_ => |*binding| binding.value = child,
                 .expr, .dbg, .expect => |*value| value.* = child,
                 .return_ => |*ret| ret.value = child,
-                .uninitialized, .crash, .checked_error => unreachable,
+                .uninitialized, .crash, .checked_error => unreachable, // frame.current holds only statements that requested a child, and these request none
             }
             const saved = current.saved;
             const stmt = current.stmt;
@@ -449,7 +455,7 @@ const Normalizer = struct {
             .comptime_exhaustiveness_failed,
             .expect_err,
             .literal_rejected,
-            => unreachable,
+            => unreachable, // finishOperand turns terminal operands into a terminated sink, where finishOperands stops before naming
             .lambda,
             .def_ref,
             .fn_def,
@@ -519,8 +525,8 @@ const Normalizer = struct {
     }
 
     fn fieldSpanFrom(self: *Normalizer, span: Ast.Span(Ast.FieldExpr), values: []const Ast.ExprId) Allocator.Error!Ast.Span(Ast.FieldExpr) {
-        const items = try self.program.allocator.alloc(Ast.FieldExpr, span.len);
-        defer self.program.allocator.free(items);
+        self.field_scratch.clearRetainingCapacity();
+        const items = try self.field_scratch.addManyAsSlice(self.program.allocator, span.len);
         for (items, values, 0..) |*item, value, index| {
             item.* = GuardedList.at(self.program.fieldExprSpan(span), index);
             item.value = value;
@@ -529,8 +535,8 @@ const Normalizer = struct {
     }
 
     fn captureSpanFrom(self: *Normalizer, span: Ast.Span(Ast.CaptureOperand), values: []const Ast.ExprId) Allocator.Error!Ast.Span(Ast.CaptureOperand) {
-        const items = try self.program.allocator.alloc(Ast.CaptureOperand, span.len);
-        defer self.program.allocator.free(items);
+        self.capture_scratch.clearRetainingCapacity();
+        const items = try self.capture_scratch.addManyAsSlice(self.program.allocator, span.len);
         for (items, values, 0..) |*item, value, index| {
             item.* = GuardedList.at(self.program.captureOperandSpan(span), index);
             item.value = value;
@@ -612,7 +618,7 @@ const Normalizer = struct {
                 hash.value = values[0];
                 hash.hasher = values[1];
             },
-            .local, .unit, .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .uninitialized, .uninitialized_payload, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .nominal, .let_, .field_access, .tuple_access, .match_, .if_, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .join_point, .comptime_branch_taken, .dbg, .expect, .@"unreachable", .break_, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .expect_err, .literal_rejected, .lambda, .def_ref, .fn_def => unreachable,
+            .local, .unit, .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .uninitialized, .uninitialized_payload, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .nominal, .let_, .field_access, .tuple_access, .match_, .if_, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .join_point, .comptime_branch_taken, .dbg, .expect, .@"unreachable", .break_, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .expect_err, .literal_rejected, .lambda, .def_ref, .fn_def => unreachable, // beginOperands groups none of these, so applyOperands never runs for them
         }
     }
 
@@ -646,7 +652,7 @@ const Normalizer = struct {
         }
         switch (frame.data) {
             .loop_ => |*loop| loop.body = delivered.?,
-            .list, .tuple, .record, .record_update, .tag, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .continue_, .jump, .local, .unit, .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .uninitialized, .uninitialized_payload, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .nominal, .let_, .field_access, .tuple_access, .match_, .if_, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .join_point, .comptime_branch_taken, .dbg, .expect, .@"unreachable", .break_, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .expect_err, .literal_rejected, .lambda, .def_ref, .fn_def => unreachable,
+            .list, .tuple, .record, .record_update, .tag, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .continue_, .jump, .local, .unit, .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .uninitialized, .uninitialized_payload, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .nominal, .let_, .field_access, .tuple_access, .match_, .if_, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .join_point, .comptime_branch_taken, .dbg, .expect, .@"unreachable", .break_, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .expect_err, .literal_rejected, .lambda, .def_ref, .fn_def => unreachable, // only .loop_ requests a child after its operand group, so only it is delivered here
         }
         return try self.finishExpr(frame);
     }
@@ -747,7 +753,7 @@ const Normalizer = struct {
                 return .{ .done = frame.source };
             },
             .local, .unit, .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .uninitialized, .uninitialized_payload, .crash, .checked_error, .comptime_exhaustiveness_failed => return .{ .done = frame.source },
-            .list, .tuple, .record, .record_update, .tag, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .loop_, .continue_, .jump => unreachable,
+            .list, .tuple, .record, .record_update, .tag, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .loop_, .continue_, .jump => unreachable, // beginOperands groups these, so stepExpr never hands them to stepStructured
         }
     }
 

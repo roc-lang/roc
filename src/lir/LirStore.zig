@@ -22,6 +22,7 @@ const JoinPointSpan = lir_defs.JoinPointSpan;
 const InlineScope = lir_defs.InlineScope;
 const InlineScopeId = lir_defs.InlineScopeId;
 const OriginKind = lir_defs.OriginKind;
+const StoredOriginKind = lir_defs.StoredOriginKind;
 const StmtOrigin = lir_defs.StmtOrigin;
 const LirProcSpec = lir_defs.LirProcSpec;
 const LirProcSpecId = lir_defs.LirProcSpecId;
@@ -134,58 +135,68 @@ comptime {
     }
 }
 
-/// Hashes a row id by one multiplication. Row ids are distinct small
-/// integers, so spreading their bits is all a probe sequence needs.
-const RowIdContext = struct {
-    pub fn hash(_: RowIdContext, id: u32) u64 {
-        return @as(u64, id) *% 0x9E3779B97F4A7C15;
+/// Which coordinator rows a procedure rewrite has prepared so far, one bit
+/// per row of each rewritable column. Owned by the caller so the marks keep
+/// their capacity across procedures; a rewrite clears exactly the bits it
+/// set before `cloneForProcRewrite` returns, so between rewrites every bit
+/// is clear.
+pub const RewriteMarks = struct {
+    cf_stmts: std.bit_set.DynamicBitSetUnmanaged = .{},
+    cf_switch_branches: std.bit_set.DynamicBitSetUnmanaged = .{},
+    str_match_arms: std.bit_set.DynamicBitSetUnmanaged = .{},
+    join_points: std.bit_set.DynamicBitSetUnmanaged = .{},
+    allocator: Allocator,
+
+    pub fn init(allocator: Allocator) RewriteMarks {
+        return .{ .allocator = allocator };
     }
 
-    pub fn eql(_: RowIdContext, lhs: u32, rhs: u32) bool {
-        return lhs == rhs;
+    pub fn deinit(self: *RewriteMarks) void {
+        inline for (rewrite_columns) |field| @field(self, field).deinit(self.allocator);
+    }
+
+    /// Cover every row of `source`'s rewritable columns.
+    fn cover(self: *RewriteMarks, source: *const Self) Allocator.Error!void {
+        inline for (rewrite_columns) |field| {
+            const rows = @field(source, field).len();
+            if (@field(self, field).bit_length < rows) try @field(self, field).resize(self.allocator, rows, false);
+        }
     }
 };
 
 /// The global ids a procedure rewrite has prepared in one column, and each
 /// id's position among them. Sparse, prepared copies retain global
-/// identities without allocating a global-sized index. Sorting before
+/// identities without allocating a global-sized index: after `finish` the
+/// ids are sorted, so a lookup is a binary search over them. Sorting before
 /// borrowing preserves overlapping spans.
 const RewriteKeys = struct {
-    indices: std.HashMap(u32, u32, RowIdContext, std.hash_map.default_max_load_percentage),
     ids: std.ArrayList(u32) = .empty,
-    /// Whether `ids` is sorted, so a lookup is a binary search over it
-    /// rather than a hash probe. Set by `finish`, cleared by `prepare`.
-    sorted: bool = false,
-
-    fn init(allocator: Allocator) RewriteKeys {
-        return .{ .indices = std.HashMap(u32, u32, RowIdContext, std.hash_map.default_max_load_percentage).initContext(allocator, .{}) };
-    }
 
     fn deinit(self: *RewriteKeys, allocator: Allocator) void {
-        self.indices.deinit();
         self.ids.deinit(allocator);
     }
 
-    fn prepare(self: *RewriteKeys, allocator: Allocator, id: u32) Allocator.Error!bool {
-        const entry = try self.indices.getOrPut(id);
-        if (entry.found_existing) return false;
-        entry.value_ptr.* = 0;
+    /// Record `id` unless `marks` shows it prepared already.
+    fn prepare(self: *RewriteKeys, allocator: Allocator, marks: *std.bit_set.DynamicBitSetUnmanaged, id: u32) Allocator.Error!bool {
+        if (marks.isSet(id)) return false;
         try self.ids.append(allocator, id);
-        self.sorted = false;
+        marks.set(id);
         return true;
     }
 
-    fn finish(self: *RewriteKeys) void {
+    /// Sort the prepared ids and clear their marks.
+    fn finish(self: *RewriteKeys, marks: *std.bit_set.DynamicBitSetUnmanaged) void {
+        for (self.ids.items) |id| marks.unset(id);
         std.mem.sort(u32, self.ids.items, {}, std.sort.asc(u32));
-        for (self.ids.items, 0..) |id, dense_index| {
-            self.indices.getPtr(id).?.* = @intCast(dense_index);
-        }
-        self.sorted = true;
+    }
+
+    /// Clear the marks of an unfinished preparation.
+    fn abandon(self: *const RewriteKeys, marks: *std.bit_set.DynamicBitSetUnmanaged) void {
+        for (self.ids.items) |id| marks.unset(id);
     }
 
     /// The dense position of `id` among the prepared ids, if prepared.
     fn lookup(self: *const RewriteKeys, id: u32) ?u32 {
-        if (!self.sorted) return self.indices.get(id);
         var low: usize = 0;
         var high: usize = self.ids.items.len;
         while (low < high) {
@@ -215,7 +226,7 @@ const RewriteKeys = struct {
 fn RewriteRows(comptime T: type, comptime field: []const u8) type {
     return struct {
         rows: GuardedList.List(T, "LirStore." ++ field) = .empty,
-        dirty: std.ArrayList(bool) = .empty,
+        dirty: std.bit_set.DynamicBitSetUnmanaged = .{},
         materialized: bool = false,
 
         const Rows = @This();
@@ -230,12 +241,8 @@ fn RewriteRows(comptime T: type, comptime field: []const u8) type {
         /// never copies its body. Until then a prepared row reads through to
         /// the frozen coordinator.
         fn finish(self: *Rows, allocator: Allocator, keys: *const RewriteKeys) Allocator.Error!void {
-            try self.rows.ensureTotalCapacity(allocator, keys.ids.items.len);
-            try self.dirty.ensureTotalCapacity(allocator, keys.ids.items.len);
-            for (keys.ids.items) |_| {
-                try self.rows.append(allocator, undefined);
-                try self.dirty.append(allocator, false);
-            }
+            try self.rows.appendNTimes(allocator, undefined, keys.ids.items.len);
+            try self.dirty.resize(allocator, keys.ids.items.len, false);
         }
 
         /// Whether this column's prepared rows hold private copies. Spans may
@@ -257,20 +264,22 @@ fn RewriteRows(comptime T: type, comptime field: []const u8) type {
                 }
                 self.materialized = true;
             }
-            @memset(self.dirty.items[first..][0..len], true);
+            self.dirty.setRangeValue(.{ .start = first, .end = first + len }, true);
             return first;
         }
 
         fn commit(self: *const Rows, keys: *const RewriteKeys, destination: *Self, prefix: BodyPrefix, relocation: BodyRelocation) void {
-            for (keys.ids.items, self.dirty.items, 0..) |id, dirty, index_| {
-                if (dirty) @field(destination, field).getPtrImmediate(id).* =
+            var dirty = self.dirty.iterator(.{});
+            while (dirty.next()) |index_| {
+                @field(destination, field).getPtrImmediate(keys.ids.items[index_]).* =
                     relocateBodyValue(T, self.rows.get(index_), prefix, relocation);
             }
         }
 
         fn changed(self: *const Rows, keys: *const RewriteKeys, source: *const Self) bool {
-            for (keys.ids.items, self.dirty.items, 0..) |id, dirty, dense_index| {
-                if (dirty and !std.meta.eql(self.rows.get(dense_index), @field(source, field).get(id)))
+            var dirty = self.dirty.iterator(.{});
+            while (dirty.next()) |dense_index| {
+                if (!std.meta.eql(self.rows.get(dense_index), @field(source, field).get(keys.ids.items[dense_index])))
                     return true;
             }
             return false;
@@ -281,27 +290,18 @@ fn RewriteRows(comptime T: type, comptime field: []const u8) type {
 /// One rewritten column with its own keys.
 fn RewriteColumn(comptime T: type, comptime field: []const u8) type {
     return struct {
-        keys: RewriteKeys,
+        keys: RewriteKeys = .{},
         data: RewriteRows(T, field) = .{},
 
         const Column = @This();
-
-        fn init(allocator: Allocator) Column {
-            return .{ .keys = RewriteKeys.init(allocator) };
-        }
 
         fn deinit(self: *Column, allocator: Allocator) void {
             self.keys.deinit(allocator);
             self.data.deinit(allocator);
         }
 
-        fn prepare(self: *Column, allocator: Allocator, id: u32) Allocator.Error!bool {
-            return try self.keys.prepare(allocator, id);
-        }
-
-        fn finish(self: *Column, allocator: Allocator, _: *const Self) Allocator.Error!void {
-            self.keys.finish();
-            try self.data.finish(allocator, &self.keys);
+        fn prepare(self: *Column, allocator: Allocator, marks: *RewriteMarks, id: u32) Allocator.Error!bool {
+            return try self.keys.prepare(allocator, &@field(marks, field), id);
         }
 
         fn owned(self: *const Column, dense_index: u32) bool {
@@ -340,15 +340,15 @@ const origin_columns = .{ "cf_stmt_locs", "cf_stmt_regions", "cf_stmt_inline_sco
 const ProcRewrite = struct {
     proc_id: LirProcSpecId,
     proc: LirProcSpec,
-    cf_stmts: RewriteColumn(CFStmt, "cf_stmts"),
+    cf_stmts: RewriteColumn(CFStmt, "cf_stmts") = .{},
     /// Statement provenance rows, keyed by `cf_stmts.keys`.
     cf_stmt_locs: RewriteRows(base.SourceLoc, "cf_stmt_locs") = .{},
     cf_stmt_regions: RewriteRows(base.Region, "cf_stmt_regions") = .{},
     cf_stmt_inline_scopes: RewriteRows(InlineScopeId, "cf_stmt_inline_scopes") = .{},
-    cf_stmt_origin_kinds: RewriteRows(OriginKind, "cf_stmt_origin_kinds") = .{},
-    cf_switch_branches: RewriteColumn(CFSwitchBranch, "cf_switch_branches"),
-    str_match_arms: RewriteColumn(StrMatchArm, "str_match_arms"),
-    join_points: RewriteColumn(JoinPoint, "join_points"),
+    cf_stmt_origin_kinds: RewriteRows(StoredOriginKind, "cf_stmt_origin_kinds") = .{},
+    cf_switch_branches: RewriteColumn(CFSwitchBranch, "cf_switch_branches") = .{},
+    str_match_arms: RewriteColumn(StrMatchArm, "str_match_arms") = .{},
+    join_points: RewriteColumn(JoinPoint, "join_points") = .{},
 
     fn deinit(self: *ProcRewrite, allocator: Allocator) void {
         inline for (rewrite_columns) |field| @field(self, field).deinit(allocator);
@@ -357,14 +357,14 @@ const ProcRewrite = struct {
 
     /// Typed traversal deliberately stops at unrelated identities and immutable
     /// spans. It includes producer tail-call links as well as CFG successors.
-    fn prepareValue(self: *ProcRewrite, source: *const Self, allocator: Allocator, comptime T: type, value: T) Allocator.Error!void {
+    fn prepareValue(self: *ProcRewrite, source: *const Self, allocator: Allocator, marks: *RewriteMarks, comptime T: type, value: T) Allocator.Error!void {
         if (T == CFStmtId) {
-            _ = try self.cf_stmts.prepare(allocator, @backingInt(value));
+            _ = try self.cf_stmts.prepare(allocator, marks, @backingInt(value));
             return;
         }
         if (T == lir_defs.TailCallLink) {
             if (value.isSite()) {
-                if (value.next()) |next| try self.prepareValue(source, allocator, CFStmtId, next);
+                if (value.next()) |next| try self.prepareValue(source, allocator, marks, CFStmtId, next);
             }
             return;
         }
@@ -376,24 +376,24 @@ const ProcRewrite = struct {
             if (T == column[0]) {
                 for (value.start..value.start + value.len) |index| {
                     const id: u32 = @intCast(index);
-                    if (try @field(self, column[1]).prepare(allocator, id))
-                        try self.prepareValue(source, allocator, column[2], @field(source, column[1]).get(id));
+                    if (try @field(self, column[1]).prepare(allocator, marks, id))
+                        try self.prepareValue(source, allocator, marks, column[2], @field(source, column[1]).get(id));
                 }
                 return;
             }
         }
         const info = @typeInfo(T);
         if (comptime std.meta.activeTag(info) == .optional) {
-            if (value) |payload| try self.prepareValue(source, allocator, info.optional.child, payload);
+            if (value) |payload| try self.prepareValue(source, allocator, marks, info.optional.child, payload);
         } else if (comptime std.meta.activeTag(info) == .@"struct") {
             inline for (info.@"struct".field_names, info.@"struct".field_types) |field_name, field_type| {
-                try self.prepareValue(source, allocator, field_type, @field(value, field_name));
+                try self.prepareValue(source, allocator, marks, field_type, @field(value, field_name));
             }
         } else if (comptime std.meta.activeTag(info) == .@"union") {
             const Tag = info.@"union".tag_type orelse return;
             inline for (info.@"union".field_names, info.@"union".field_types) |field_name, field_type| {
                 if (std.meta.activeTag(value) == @field(Tag, field_name)) {
-                    try self.prepareValue(source, allocator, field_type, @field(value, field_name));
+                    try self.prepareValue(source, allocator, marks, field_type, @field(value, field_name));
                     return;
                 }
             }
@@ -405,25 +405,34 @@ const ProcRewrite = struct {
 /// The coordinator must remain frozen until every worker in this phase has
 /// finished. Only reachable mutable rows and this procedure's metadata are owned.
 pub fn cloneForProcRewrite(self: *const Self, allocator: Allocator, proc_id: LirProcSpecId) Allocator.Error!Self {
+    var marks = RewriteMarks.init(allocator);
+    defer marks.deinit();
+    return self.cloneForProcRewriteWithMarks(allocator, proc_id, &marks);
+}
+
+/// `cloneForProcRewrite` with the caller's retained marks, whose bits are
+/// all clear again when this returns.
+pub fn cloneForProcRewriteWithMarks(self: *const Self, allocator: Allocator, proc_id: LirProcSpecId, marks: *RewriteMarks) Allocator.Error!Self {
     std.debug.assert(self.body_coordinator == null);
+    try marks.cover(self);
     var result = try self.cloneForBodyShard(allocator);
     errdefer result.deinit();
     result.proc_rewrite = .{
         .proc_id = proc_id,
         .proc = self.getProcSpec(proc_id),
-        .cf_stmts = .init(allocator),
-        .cf_switch_branches = .init(allocator),
-        .str_match_arms = .init(allocator),
-        .join_points = .init(allocator),
     };
     const rewrite = &result.proc_rewrite.?;
-    try rewrite.prepareValue(self, allocator, LirProcSpec, rewrite.proc);
-    var cursor: usize = 0;
-    while (cursor < rewrite.cf_stmts.keys.ids.items.len) : (cursor += 1) {
-        const id = rewrite.cf_stmts.keys.ids.items[cursor];
-        try rewrite.prepareValue(self, allocator, CFStmt, self.getCFStmt(@fromBackingInt(id)));
+    {
+        errdefer inline for (rewrite_columns) |field| @field(rewrite, field).keys.abandon(&@field(marks, field));
+        try rewrite.prepareValue(self, allocator, marks, LirProcSpec, rewrite.proc);
+        var cursor: usize = 0;
+        while (cursor < rewrite.cf_stmts.keys.ids.items.len) : (cursor += 1) {
+            const id = rewrite.cf_stmts.keys.ids.items[cursor];
+            try rewrite.prepareValue(self, allocator, marks, CFStmt, self.getCFStmtImmediate(@fromBackingInt(id)).*);
+        }
     }
-    inline for (rewrite_columns) |field| try @field(rewrite, field).finish(allocator, self);
+    inline for (rewrite_columns) |field| @field(rewrite, field).keys.finish(&@field(marks, field));
+    inline for (rewrite_columns) |field| try @field(rewrite, field).data.finish(allocator, &@field(rewrite, field).keys);
     inline for (origin_columns) |field| try @field(rewrite, field).finish(allocator, &rewrite.cf_stmts.keys);
     return result;
 }
@@ -744,6 +753,7 @@ fn relocateBodyValue(comptime T: type, value: T, prefix: BodyPrefix, bases: Body
         return if (raw < bases.join_point_id_first_fresh) value else @fromBackingInt(@intCast(bases.join_point_id_base + raw));
     }
     if (T == InlineScopeId) return value;
+    if (T == StoredOriginKind) return relocateBodyValue(OriginKind, value.unpack(), prefix, bases).pack();
     if (T == LocalSpan) return if (value.len == 0) value else .{ .start = movedIndex(value.start, prefix.local_ids, bases.local_ids), .len = value.len };
     if (T == CFSwitchBranchSpan) return if (value.len == 0) value else .{ .start = movedIndex(value.start, prefix.cf_switch_branches, bases.cf_switch_branches), .len = value.len };
     if (T == StrMatchStepSpan) return if (value.len == 0) value else .{ .start = movedIndex(value.start, prefix.str_match_steps, bases.str_match_steps), .len = value.len };
@@ -778,7 +788,7 @@ fn relocateBodyValue(comptime T: type, value: T, prefix: BodyPrefix, bases: Body
                 return @unionInit(T, field_name, relocateBodyValue(field_type, payload, prefix, bases));
             }
         }
-        unreachable;
+        unreachable; // the inline loop covers every union field, so one of them matches the active tag
     }
     return value;
 }
@@ -938,7 +948,7 @@ pub fn appendBodyShardWithJoinRelocation(
     }
     for (source.cf_stmt_origin_kinds.unsafeRawItemsForView()[source_prefix.cf_stmts..]) |kind| {
         self.cf_stmt_origin_kinds.appendAssumeCapacity(
-            relocateBodyValue(OriginKind, kind, prefix, bases),
+            relocateBodyValue(StoredOriginKind, kind, prefix, bases),
         );
     }
 
@@ -1007,7 +1017,7 @@ cf_stmt_inline_scopes: GuardedList.List(InlineScopeId, "LirStore.cf_stmt_inline_
 /// Why each statement exists, parallel to `cf_stmts`. Together with
 /// `cf_stmt_locs`, `cf_stmt_regions`, and `cf_stmt_inline_scopes` this forms
 /// the statement's `StmtOrigin` (see `stmtOrigin`).
-cf_stmt_origin_kinds: GuardedList.List(OriginKind, "LirStore.cf_stmt_origin_kinds"),
+cf_stmt_origin_kinds: GuardedList.List(StoredOriginKind, "LirStore.cf_stmt_origin_kinds"),
 /// Interned virtual source-frame graph.
 inline_scopes: GuardedList.List(InlineScope, "LirStore.inline_scopes"),
 /// Immutable coordinator storage visible to a body worker. A null pointer
@@ -1359,14 +1369,14 @@ pub fn stmtOriginKind(self: *const Self, id: CFStmtId) OriginKind {
     const index = @backingInt(id);
     if (self.proc_rewrite) |*rewrite| {
         if (rewrite.cf_stmts.keys.lookup(index)) |private| {
-            if (rewrite.cf_stmt_origin_kinds.owned(private)) return rewrite.cf_stmt_origin_kinds.rows.get(private);
+            if (rewrite.cf_stmt_origin_kinds.owned(private)) return rewrite.cf_stmt_origin_kinds.rows.get(private).unpack();
         }
     }
     if (self.body_coordinator) |coordinator| {
         if (index < self.body_prefix.cf_stmts) return coordinator.stmtOriginKind(id);
-        return self.cf_stmt_origin_kinds.get(index - self.body_prefix.cf_stmts);
+        return self.cf_stmt_origin_kinds.get(index - self.body_prefix.cf_stmts).unpack();
     }
-    return self.cf_stmt_origin_kinds.get(index);
+    return self.cf_stmt_origin_kinds.get(index).unpack();
 }
 
 /// Complete provenance of a statement. Rewrites and copies pass this value to
@@ -1481,12 +1491,7 @@ pub fn insertStringAligned(self: *Self, text: []const u8, alignment: u32) Alloca
         u32,
         self.body_prefix.string_bytes,
         @backingInt(local),
-    ) catch {
-        if (builtin.mode == .debug) {
-            base.invariant("LirStore invariant violated: worker string identity overflow", .{});
-        }
-        unreachable;
-    }));
+    ) catch base.invariant("LirStore invariant violated: worker string identity overflow", .{})));
 }
 
 /// Interns string backing bytes and returns a literal view into them.
@@ -1511,10 +1516,7 @@ pub fn insertStringViewAligned(
     const offset_usize: usize = offset;
     const len_usize: usize = len;
     if (offset_usize > backing.len or len_usize > backing.len - offset_usize) {
-        if (builtin.mode == .debug) {
-            base.invariant("LirStore invariant violated: string literal view exceeded backing bytes", .{});
-        }
-        unreachable;
+        base.invariant("LirStore invariant violated: string literal view exceeded backing bytes", .{});
     }
 
     return .{
@@ -1540,10 +1542,7 @@ pub fn getStringLiteral(self: *const Self, literal: lir_defs.StrLiteral) []const
     const offset: usize = literal.offset;
     const len: usize = literal.len;
     if (offset > backing.len or len > backing.len - offset) {
-        if (builtin.mode == .debug) {
-            base.invariant("LirStore invariant violated: string literal view exceeded stored backing bytes", .{});
-        }
-        unreachable;
+        base.invariant("LirStore invariant violated: string literal view exceeded stored backing bytes", .{});
     }
     return backing[offset..][0..len];
 }
@@ -1555,18 +1554,12 @@ pub fn getStringLiteralBacking(self: *const Self, literal: lir_defs.StrLiteral) 
 
 fn assertStringsInsertable(self: *const Self) void {
     if (self.strings_insertable) return;
-    if (comptime builtin.mode == .debug) {
-        base.invariant("LirStore invariant violated: attempted to insert into frozen string literal store", .{});
-    }
-    unreachable;
+    base.invariant("LirStore invariant violated: attempted to insert into frozen string literal store", .{});
 }
 
 fn assertBodyMetadataImmutable(self: *const Self) void {
     if (self.body_coordinator == null) return;
-    if (comptime builtin.mode == .debug) {
-        base.invariant("LirStore invariant violated: attempted to mutate coordinator metadata from body worker", .{});
-    }
-    unreachable;
+    base.invariant("LirStore invariant violated: attempted to mutate coordinator metadata from body worker", .{});
 }
 
 /// Registers one LIR local and returns its id.
@@ -1846,7 +1839,7 @@ pub fn addCFStmt(self: *Self, stmt: CFStmt, origin: StmtOrigin) Allocator.Error!
     self.cf_stmt_locs.appendAssumeCapacity(origin.loc);
     self.cf_stmt_regions.appendAssumeCapacity(origin.region);
     self.cf_stmt_inline_scopes.appendAssumeCapacity(origin.inline_scope);
-    self.cf_stmt_origin_kinds.appendAssumeCapacity(origin.kind);
+    self.cf_stmt_origin_kinds.appendAssumeCapacity(origin.kind.pack());
     self.noteStmtShapes(stmt);
     const id: CFStmtId = @fromBackingInt(@intCast(@as(u32, @intCast(idx))));
     if (self.tail_call_builder) |builder| try builder.record(id, stmt);
@@ -1866,14 +1859,14 @@ pub fn replaceCFStmt(self: *Self, id: CFStmtId, stmt: CFStmt, origin: StmtOrigin
             rewrite.cf_stmt_locs.rows.getPtrImmediate(rewrite.cf_stmt_locs.mark(&rewrite.cf_stmts.keys, coordinator, index, 1)).* = origin.loc;
             rewrite.cf_stmt_regions.rows.getPtrImmediate(rewrite.cf_stmt_regions.mark(&rewrite.cf_stmts.keys, coordinator, index, 1)).* = origin.region;
             rewrite.cf_stmt_inline_scopes.rows.getPtrImmediate(rewrite.cf_stmt_inline_scopes.mark(&rewrite.cf_stmts.keys, coordinator, index, 1)).* = origin.inline_scope;
-            rewrite.cf_stmt_origin_kinds.rows.getPtrImmediate(rewrite.cf_stmt_origin_kinds.mark(&rewrite.cf_stmts.keys, coordinator, index, 1)).* = origin.kind;
+            rewrite.cf_stmt_origin_kinds.rows.getPtrImmediate(rewrite.cf_stmt_origin_kinds.mark(&rewrite.cf_stmts.keys, coordinator, index, 1)).* = origin.kind.pack();
         } else if (!std.meta.eql(self.stmtOrigin(id), origin)) self.assertBodyMetadataImmutable();
     } else {
         const own = index - if (self.body_coordinator != null) self.body_prefix.cf_stmts else 0;
         self.cf_stmt_locs.getPtrImmediate(own).* = origin.loc;
         self.cf_stmt_regions.getPtrImmediate(own).* = origin.region;
         self.cf_stmt_inline_scopes.getPtrImmediate(own).* = origin.inline_scope;
-        self.cf_stmt_origin_kinds.getPtrImmediate(own).* = origin.kind;
+        self.cf_stmt_origin_kinds.getPtrImmediate(own).* = origin.kind.pack();
     }
     if (self.tail_call_builder) |builder| try builder.record(id, stmt);
 }
@@ -2613,7 +2606,7 @@ test "body shard relocates nonzero local and body suffixes" {
 
 test "body shard append preserves destination on every reserve-stage allocation failure" {
     const Helper = struct {
-        fn run(fail_index: usize) (Allocator.Error || error{TestExpectedEqual})!bool {
+        fn run(fail_index: usize) (Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!bool {
             var source = Self.init(std.testing.allocator);
             defer source.deinit();
             const source_prefix = source.captureBodyPrefix();
@@ -2712,7 +2705,7 @@ test "body shard append preserves destination on every reserve-stage allocation 
             const destination_string_bytes = destination.ownStringByteCount();
             const destination_inline_scopes = destination.inline_scopes.len();
 
-            const shard = source.captureBodyShard(source_prefix) catch unreachable;
+            const shard = source.captureBodyShard(source_prefix) catch return error.TestUnexpectedResult;
             var failing_allocator = std.testing.FailingAllocator.init(std.testing.allocator, .{
                 .fail_index = fail_index,
             });
@@ -2843,9 +2836,9 @@ pub fn compactProcSpecs(self: *Self, reachable: []const bool) void {
 /// Compacts control-flow statements and their parallel debug metadata in place,
 /// drops every out-of-line row no remaining statement names, and releases the
 /// capacity the removed statements and rows occupied.
-pub fn compactCFStmts(self: *Self, reachable: []const bool) Allocator.Error!void {
+pub fn compactCFStmts(self: *Self, reachable: *const std.bit_set.DynamicBitSetUnmanaged) Allocator.Error!void {
     std.debug.assert(self.body_coordinator == null and self.proc_rewrite == null);
-    std.debug.assert(reachable.len == self.cf_stmts.len());
+    std.debug.assert(reachable.bit_length == self.cf_stmts.len());
     std.debug.assert(self.cf_stmts.len() == self.cf_stmt_locs.len());
     std.debug.assert(self.cf_stmts.len() == self.cf_stmt_regions.len());
     std.debug.assert(self.cf_stmts.len() == self.cf_stmt_inline_scopes.len());
@@ -2858,7 +2851,7 @@ pub fn compactCFStmts(self: *Self, reachable: []const bool) Allocator.Error!void
     const cf_stmt_inline_scopes = self.cf_stmt_inline_scopes.unsafeRawItemsMutForStore();
     const cf_stmt_origin_kinds = self.cf_stmt_origin_kinds.unsafeRawItemsMutForStore();
     for (cf_stmts, cf_stmt_locs, cf_stmt_regions, cf_stmt_inline_scopes, cf_stmt_origin_kinds, 0..) |stmt, loc, region, inline_scope, origin_kind, index| {
-        if (!reachable[index]) continue;
+        if (!reachable.isSet(index)) continue;
         cf_stmts[write] = stmt;
         cf_stmt_locs[write] = loc;
         cf_stmt_regions[write] = region;

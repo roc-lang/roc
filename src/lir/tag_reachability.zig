@@ -32,33 +32,49 @@ const PayloadSlot = struct {
     payload: u32,
 };
 
+/// Known discriminants of a tag value. Discriminants below 64 are bits of
+/// `low`; the rare larger ones are listed in `high`, which is sized exactly.
 const TagSet = struct {
     all: bool = false,
-    /// Known discriminants in first-seen order.
-    values: std.AutoArrayHashMapUnmanaged(u32, void) = .empty,
+    low: u64 = 0,
+    high: []u32 = &.{},
 
     fn deinit(self: *TagSet, allocator: Allocator) void {
-        self.values.deinit(allocator);
+        allocator.free(self.high);
     }
 
     fn markAll(self: *TagSet, allocator: Allocator) bool {
         if (self.all) return false;
-        self.values.clearAndFree(allocator);
+        allocator.free(self.high);
+        self.high = &.{};
+        self.low = 0;
         self.all = true;
         return true;
     }
 
     fn add(self: *TagSet, allocator: Allocator, value: u32) Allocator.Error!bool {
         if (self.all) return false;
-        const entry = try self.values.getOrPut(allocator, value);
-        return !entry.found_existing;
+        if (value < 64) {
+            const bit = @as(u64, 1) << @intCast(value);
+            if (self.low & bit != 0) return false;
+            self.low |= bit;
+            return true;
+        }
+        if (std.mem.findScalar(u32, self.high, value) != null) return false;
+        const grown = try allocator.alloc(u32, self.high.len + 1);
+        @memcpy(grown[0..self.high.len], self.high);
+        grown[self.high.len] = value;
+        allocator.free(self.high);
+        self.high = grown;
+        return true;
     }
 
     fn mergeFrom(self: *TagSet, allocator: Allocator, other: *const TagSet) Allocator.Error!bool {
         if (self.all) return false;
         if (other.all) return self.markAll(allocator);
-        var changed = false;
-        for (other.values.keys()) |value| {
+        var changed = other.low & ~self.low != 0;
+        self.low |= other.low;
+        for (other.high) |value| {
             if (try self.add(allocator, value)) changed = true;
         }
         return changed;
@@ -66,16 +82,22 @@ const TagSet = struct {
 
     fn contains(self: *const TagSet, value: u32) bool {
         if (self.all) return true;
-        return self.values.contains(value);
+        if (value < 64) return self.low & (@as(u64, 1) << @intCast(value)) != 0;
+        return std.mem.findScalar(u32, self.high, value) != null;
+    }
+
+    fn count(self: *const TagSet) usize {
+        return @popCount(self.low) + self.high.len;
     }
 
     fn singleton(self: *const TagSet) ?u32 {
-        if (self.all or self.values.count() != 1) return null;
-        return self.values.keys()[0];
+        if (self.all or self.count() != 1) return null;
+        if (self.low != 0) return @ctz(self.low);
+        return self.high[0];
     }
 
     fn hasKnownValues(self: *const TagSet) bool {
-        return !self.all and self.values.count() != 0;
+        return !self.all and self.count() != 0;
     }
 };
 
@@ -180,7 +202,7 @@ const Pass = struct {
 
     fn seedBoundaries(self: *Pass) Allocator.Error!void {
         for (0..self.store.procSpecCount()) |proc_index| {
-            const proc = self.store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
+            const proc = self.store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
             if (proc.body == null or proc.hosted != null) {
                 _ = self.proc_returns[proc_index].markAll(self.allocator);
             }
@@ -197,7 +219,7 @@ const Pass = struct {
         while (changed) {
             changed = false;
             for (0..self.store.procSpecCount()) |proc_index| {
-                const proc = self.store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
+                const proc = self.store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
                 const body = proc.body orelse continue;
                 if (try self.analyzeProc(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))), body)) {
                     changed = true;
@@ -314,8 +336,8 @@ const Pass = struct {
         if (source.tags.all) return self.localInfoMut(target).markAll(self.allocator);
         var changed = false;
         for (source.constructions.items) |construction| {
-            const stmt = self.store.getCFStmt(construction);
-            if (stmt != .assign_struct) continue;
+            const stmt = self.store.getCFStmtImmediate(construction);
+            if (stmt.* != .assign_struct) continue;
             const fields = self.store.getLocalSpan(stmt.assign_struct.fields);
             if (field_index >= fields.len) tagReachabilityInvariant("field projection exceeded its constructor arity");
             const field = GuardedList.at(fields, field_index);
@@ -330,8 +352,8 @@ const Pass = struct {
         if (!source_info.tags.contains(slot.variant)) return false;
         var changed = false;
         for (source_info.constructions.items) |construction| {
-            const stmt = self.store.getCFStmt(construction);
-            if (stmt != .assign_tag or stmt.assign_tag.discriminant != slot.variant) continue;
+            const stmt = self.store.getCFStmtImmediate(construction);
+            if (stmt.* != .assign_tag or stmt.assign_tag.discriminant != slot.variant) continue;
             const payload = stmt.assign_tag.payload orelse continue;
             if (slot.payload == payload_struct_slot) {
                 if (try self.localInfoMut(target).mergeFrom(self.allocator, self.localInfo(payload))) changed = true;
@@ -351,8 +373,8 @@ const Pass = struct {
         var stmt_index: usize = 0;
         while (stmt_index < self.store.cfStmtCount()) : (stmt_index += 1) {
             const stmt_id: LIR.CFStmtId = @fromBackingInt(@intCast(@as(u32, @intCast(stmt_index))));
-            const stmt = self.store.getCFStmt(stmt_id);
-            if (stmt != .switch_stmt) continue;
+            const stmt = self.store.getCFStmtImmediate(stmt_id);
+            if (stmt.* != .switch_stmt) continue;
             const switch_stmt = stmt.switch_stmt;
             const tags = &self.localInfo(switch_stmt.cond).tags;
             if (!tags.hasKnownValues()) continue;
@@ -399,12 +421,12 @@ const Pass = struct {
         var stmt_index: usize = 0;
         while (stmt_index < self.store.cfStmtCount()) : (stmt_index += 1) {
             const stmt_id: LIR.CFStmtId = @fromBackingInt(@intCast(@as(u32, @intCast(stmt_index))));
-            const stmt = self.store.getCFStmt(stmt_id);
-            if (stmt != .assign_ref) continue;
+            const stmt = self.store.getCFStmtImmediate(stmt_id);
+            if (stmt.* != .assign_ref) continue;
             const assign = stmt.assign_ref;
             if (assign.op.kind != .discriminant) continue;
-            const next_stmt = self.store.getCFStmt(assign.next);
-            if (next_stmt != .switch_stmt) continue;
+            const next_stmt = self.store.getCFStmtImmediate(assign.next);
+            if (next_stmt.* != .switch_stmt) continue;
             const switch_stmt = next_stmt.switch_stmt;
             if (switch_stmt.cond != assign.target) continue;
             if (self.useCount(assign.target) != 1) continue;
@@ -460,10 +482,7 @@ const Pass = struct {
 };
 
 fn tagReachabilityInvariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .debug) {
-        base.invariant("tag reachability invariant violated: {s}", .{message});
-    }
-    unreachable;
+    base.invariant("tag reachability invariant violated: {s}", .{message});
 }
 
 test "tag reachability declarations are referenced" {

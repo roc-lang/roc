@@ -65,7 +65,7 @@ const app_body =
 const Function = struct { name: []const u8, body: []const u8 };
 
 /// The only function in `ir` that calls itself from `sites` call sites.
-fn findSelfCaller(ir: []const u8, sites: usize) ?Function {
+fn findSelfCaller(ir: []const u8, sites: usize) error{TestUnexpectedResult}!?Function {
     var found: ?Function = null;
     var rest = ir;
     while (std.mem.find(u8, rest, "\ndefine ")) |define| {
@@ -76,7 +76,7 @@ fn findSelfCaller(ir: []const u8, sites: usize) ?Function {
         const body_end = body_start + std.mem.find(u8, rest[body_start..], "\n}").?;
         const function = Function{ .name = rest[name_start..name_end], .body = rest[body_start..body_end] };
         var call_pattern: [256]u8 = undefined;
-        const pattern = std.fmt.bufPrint(&call_pattern, "@{s}(", .{function.name}) catch unreachable;
+        const pattern = std.fmt.bufPrint(&call_pattern, "@{s}(", .{function.name}) catch return error.TestUnexpectedResult;
         if (std.mem.count(u8, function.body, pattern) == sites) {
             if (found != null) return null;
             found = function;
@@ -107,9 +107,9 @@ fn expectRecursiveCallSlotsHaveLifetimes(
         else => return error.TestUnexpectedResult,
     };
 
-    const walk = findSelfCaller(ir.written(), 4) orelse return error.TestUnexpectedResult;
+    const walk = try findSelfCaller(ir.written(), 4) orelse return error.TestUnexpectedResult;
     var call_pattern: [256]u8 = undefined;
-    const pattern = std.fmt.bufPrint(&call_pattern, "@{s}(", .{walk.name}) catch unreachable;
+    const pattern = std.fmt.bufPrint(&call_pattern, "@{s}(", .{walk.name}) catch return error.TestUnexpectedResult;
 
     var recursive_calls: usize = 0;
     var bracketed_slots: usize = 0;
@@ -122,13 +122,13 @@ fn expectRecursiveCallSlotsHaveLifetimes(
             if (!std.mem.startsWith(u8, arg, "ptr ")) continue;
             const operand = std.mem.trimEnd(u8, arg[std.mem.findScalarLast(u8, arg, ' ').? + 1 ..], ")");
             var buf: [256]u8 = undefined;
-            const alloca = std.fmt.bufPrint(&buf, "{s} = alloca ", .{operand}) catch unreachable;
+            const alloca = std.fmt.bufPrint(&buf, "{s} = alloca ", .{operand}) catch return error.TestUnexpectedResult;
             if (std.mem.find(u8, walk.body, alloca) == null) continue;
             // Every slot this call addresses lives only while the branch
             // that makes the call needs it.
-            const start = std.fmt.bufPrint(&buf, "@llvm.lifetime.start.p0(ptr {s})", .{operand}) catch unreachable;
+            const start = std.fmt.bufPrint(&buf, "@llvm.lifetime.start.p0(ptr {s})", .{operand}) catch return error.TestUnexpectedResult;
             try std.testing.expect(std.mem.find(u8, walk.body, start) != null);
-            const end = std.fmt.bufPrint(&buf, "@llvm.lifetime.end.p0(ptr {s})", .{operand}) catch unreachable;
+            const end = std.fmt.bufPrint(&buf, "@llvm.lifetime.end.p0(ptr {s})", .{operand}) catch return error.TestUnexpectedResult;
             try std.testing.expect(std.mem.find(u8, walk.body, end) != null);
             bracketed_slots += 1;
         }

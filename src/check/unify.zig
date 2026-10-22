@@ -41,7 +41,6 @@
 //! subsequent unification runs.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const base = @import("base");
 const tracy = @import("tracy");
 const collections = @import("collections");
@@ -1758,10 +1757,7 @@ const Unifier = struct {
             if (nominal.sourceDecl().present) {
                 // Invariant: every keyed nominal application in a store can
                 // resolve its declaration in that store.
-                if (builtin.mode == .debug) {
-                    base.invariant("unify invariant violated: nominal application has a source declaration but no declaration table entry", .{});
-                }
-                unreachable;
+                base.invariant("unify invariant violated: nominal application has a source declaration but no declaration table entry", .{});
             }
             return .no_decl;
         };
@@ -2318,7 +2314,7 @@ const Unifier = struct {
             .b_is_nominal => vars.a.var_,
         };
         const evidence: RawTypePair = switch (self.nominal_record_mismatch_role) {
-            .none => unreachable,
+            .none => unreachable, // the early return above handles .none
             .expected => .{ .expected = opened_backing, .actual = anonymous_var },
             .actual => .{ .expected = anonymous_var, .actual = opened_backing },
         };
@@ -2391,12 +2387,12 @@ const Unifier = struct {
         var iter = self.types_store.iterRecordFields(fields);
         while (iter.next()) |field| {
             const unknown = switch (field.presence.decode()) {
-                .required => unreachable,
+                .required => unreachable, // validateAbsorbableRecordRow rejects required fields before recording
                 .unknown => |unknown| unknown,
             };
             const presence = switch (self.types_store.resolveVar(unknown.presence).desc.content) {
                 .field_presence => |presence| presence,
-                .flex, .rigid, .alias, .structure, .err => unreachable,
+                .flex, .rigid, .alias, .structure, .err => unreachable, // validateAbsorbableRecordRow rejects unresolved field presences before recording
             };
             switch (presence) {
                 .optional => {},
@@ -2408,7 +2404,7 @@ const Unifier = struct {
                         .enclosing_records = self.enclosing_records,
                     });
                 },
-                .required => unreachable,
+                .required => unreachable, // validateAbsorbableRecordRow rejects required presences before recording
             }
         }
     }
@@ -2441,9 +2437,9 @@ const Unifier = struct {
                     .fn_unbound,
                     .tag_union,
                     .empty_tag_union,
-                    => unreachable,
+                    => unreachable, // validateAbsorbableRecordRow rejects non-record row extensions before recording
                 },
-                .rigid, .field_presence, .err => unreachable,
+                .rigid, .field_presence, .err => unreachable, // validateAbsorbableRecordRow rejects these row extensions before recording
             }
         }
     }
@@ -2951,19 +2947,12 @@ const Unifier = struct {
         }
     }
 
-    /// A function made pure whose own dependencies are still being demanded.
-    const PureDemand = struct {
-        var_: Var,
-        func: Func,
-        next: u32 = 0,
-    };
-
     fn demandPureFunction(self: *Self, dep_var: Var) Error!void {
-        const allocator = self.scratch.gpa;
-        var pending = std.ArrayList(PureDemand).empty;
-        defer pending.deinit(allocator);
-        self.demandPureStep(&pending, dep_var) catch |err| return self.undoPureDemands(&pending, err);
-        while (pending.items.len > 0) {
+        const pending = &self.scratch.pure_demands;
+        const pending_base = pending.items.len;
+        defer pending.shrinkRetainingCapacity(pending_base);
+        self.demandPureStep(dep_var) catch |err| return self.undoPureDemands(pending_base, err);
+        while (pending.items.len > pending_base) {
             const top = &pending.items[pending.items.len - 1];
             const deps = top.func.effect_deps;
             if (top.next == deps.len()) {
@@ -2972,15 +2961,17 @@ const Unifier = struct {
             }
             const next = self.types_store.getVarAt(deps, top.next);
             top.next += 1;
-            self.demandPureStep(&pending, next) catch |err| return self.undoPureDemands(&pending, err);
+            self.demandPureStep(next) catch |err| return self.undoPureDemands(pending_base, err);
         }
     }
 
     /// A dependency that fails the demand fails every function waiting on
     /// it, and each of those functions' effects then still depends on it, so
     /// their pure writes are undone.
-    fn undoPureDemands(self: *Self, pending: *std.ArrayList(PureDemand), err: Error) Error {
-        while (pending.pop()) |demand| {
+    fn undoPureDemands(self: *Self, pending_base: usize, err: Error) Error {
+        const pending = &self.scratch.pure_demands;
+        while (pending.items.len > pending_base) {
+            const demand = pending.pop().?;
             try self.types_store.setVarContent(demand.var_, .{ .structure = .{ .fn_unbound = demand.func } });
         }
         return err;
@@ -2988,7 +2979,8 @@ const Unifier = struct {
 
     /// Demands one function be pure. An effect-polymorphic function becomes
     /// pure in place and is queued so its own dependencies are demanded.
-    fn demandPureStep(self: *Self, pending: *std.ArrayList(PureDemand), dep_var: Var) Error!void {
+    fn demandPureStep(self: *Self, dep_var: Var) Error!void {
+        const pending = &self.scratch.pure_demands;
         var current = dep_var;
         while (true) {
             const resolved = self.types_store.resolveVar(current);
@@ -3016,9 +3008,7 @@ const Unifier = struct {
                     .empty_tag_union,
                     => return,
                 },
-                // An effect dependency is recorded from a call, which has
-                // already given the callee a function shape.
-                .flex, .rigid, .field_presence => unreachable,
+                .flex, .rigid, .field_presence => unreachable, // effect dependencies are recorded from calls, which already gave the callee a function shape
                 .err => return,
             }
         }
@@ -3587,7 +3577,7 @@ const Unifier = struct {
     ) Error!void {
         for (self.scratch.only_in_a_static_dispatch_constraints.items.items[retained_group_start..]) |*existing| {
             if (!sameFixedLiteralClass(existing.origin, constraint.origin)) continue;
-            existing.* = mergeStaticDispatchConstraintMetadata(constraint, existing.*);
+            existing.* = try mergeStaticDispatchConstraintMetadata(self.types_store, constraint, existing.*);
             try self.types_store.static_dispatch_relation_merges.append(self.types_store.gpa, .{
                 .dropped_fn_var = constraint.fn_var,
                 .retained_fn_var = existing.fn_var,
@@ -3938,16 +3928,18 @@ fn sameFixedLiteralClass(
 }
 
 fn mergeStaticDispatchConstraintMetadata(
+    store: *types_mod.Store,
     other: StaticDispatchConstraint,
     retained: StaticDispatchConstraint,
-) StaticDispatchConstraint {
+) std.mem.Allocator.Error!StaticDispatchConstraint {
     var merged = retained;
-    if (other.origin == .from_literal and retained.origin == .from_literal) {
-        if (mergeFromNumeralLiteralInfo(
-            other.origin.numeralInfo(),
-            retained.origin.numeralInfo(),
-        )) |numeral_info| {
-            merged.origin = .{ .from_literal = .{ .numeral = numeral_info } };
+    if (retained.origin.literalKind() == .numeral) {
+        // Same-class numeral relations each carry their literal's facts.
+        const other_info = store.constraintNumeralInfo(other).?;
+        const retained_info = store.constraintNumeralInfo(retained).?;
+        const merged_info = types_mod.NumeralInfo.merged(other_info, retained_info);
+        if (!std.meta.eql(merged_info, retained_info)) {
+            merged.numeral = try store.appendNumeralInfo(merged_info);
         }
     }
 
@@ -3961,15 +3953,6 @@ fn mergeStaticDispatchConstraintMetadata(
         merged.interpolation = other.interpolation;
     }
     return merged;
-}
-
-fn mergeFromNumeralLiteralInfo(
-    a: ?types_mod.NumeralInfo,
-    b: ?types_mod.NumeralInfo,
-) ?types_mod.NumeralInfo {
-    const a_info = a orelse return b;
-    const b_info = b orelse return a;
-    return types_mod.NumeralInfo.merged(a_info, b_info);
 }
 
 /// A list of constraint that should apply to concrete type
@@ -4231,6 +4214,13 @@ pub const BoundedRowViolation = struct {
 /// An unordered pair of resolved type descriptors.
 const VisitedPairKey = struct { low: u32, high: u32 };
 
+/// A function made pure whose own dependencies are still being demanded.
+const PureDemand = struct {
+    var_: Var,
+    func: Func,
+    next: u32 = 0,
+};
+
 /// The contents of a reported mismatch's root operands before poisoning.
 pub const RejectedRoots = struct {
     expected: Content,
@@ -4284,6 +4274,9 @@ pub const Scratch = struct {
     /// Linear, merge-local union of directed effect formulas.
     effect_dependency_seen: collections.DenseMap(Var, void),
     effect_dependencies: std.ArrayListUnmanaged(Var) = .empty,
+    /// Functions made pure whose own dependencies a pure demand is still
+    /// visiting.
+    pure_demands: std.ArrayListUnmanaged(PureDemand) = .empty,
 
     // explicit unification work stack
     unify_work_stack: WorkFrame.SafeList,
@@ -4518,6 +4511,7 @@ pub const Scratch = struct {
         self.fresh_vars.deinit(self.gpa);
         self.effect_dependency_seen.deinit();
         self.effect_dependencies.deinit(self.gpa);
+        self.pure_demands.deinit(self.gpa);
         self.unify_work_stack.deinit(self.gpa);
         self.mismatch_flags.deinit(self.gpa);
         self.gathered_fields.deinit(self.gpa);
@@ -4886,5 +4880,5 @@ fn writeActiveVariant(comptime U: type, dest: *U, src: U) void {
             return;
         }
     }
-    unreachable;
+    unreachable; // the loop covers every field of U, one of which is active
 }

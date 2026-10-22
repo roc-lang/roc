@@ -436,7 +436,7 @@ pub const ContentNames = struct {
         if (!item.program_local_name or self.names.contains(item.name)) return;
         var hasher = Sha256.init(.{});
         _ = try self.write(&hasher, item);
-        const digest = self.digests.get(item.name) orelse unreachable;
+        const digest = self.digests.get(item.name) orelse unreachable; // a top-level write has no enclosing active item, so it records the item's digest
         const content_name = try std.fmt.allocPrint(self.arena.allocator(), content_data_prefix ++ "{s}", .{&std.fmt.bytesToHex(digest[0..16].*, .lower)});
         try self.names.put(self.allocator, item.name, content_name);
     }
@@ -674,6 +674,11 @@ pub fn extractPrepared(
     const unwind = codegen.getUnwindFunctions();
     const relocations = try codegen.artifactRelocations(allocator);
     defer allocator.free(relocations);
+    // Each symbol's name, copied into the set once however many relocations
+    // name it, by symbol id.
+    const owned_names = try allocator.alloc(?[]const u8, codegen.getSymbolNames().len);
+    defer allocator.free(owned_names);
+    @memset(owned_names, null);
     const refs = codegen.codeRefs();
 
     // Standalone branch islands belong to this placement, not the artifact
@@ -696,7 +701,7 @@ pub fn extractPrepared(
             .boxy_thunk => |proc_id| .{ .boxy_thunk = proc_specs[@backingInt(proc_id)].identity },
             .entrypoint => .entrypoint,
             .message_pool_run => .message_pool_run,
-            .branch_island, .hosted_stub => unreachable,
+            .branch_island, .hosted_stub => unreachable, // regionHasArtifact is false for these, so artifact_of_region skipped them above
             .spliced_proc => |identity| .{ .proc = identity },
             .spliced_boxy_thunk => |identity| .{ .boxy_thunk = identity },
             .spliced_helper => .{ .rc_helper = try arena_allocator.dupe(u8, codegen.splicedHelperName(region.start + region.entry) orelse return error.DanglingReference) },
@@ -804,17 +809,17 @@ pub fn extractPrepared(
             try region_relocations.append(arena_allocator, switch (relocation) {
                 .linked_function => |function| .{
                     .offset = @intCast(offset - region.start),
-                    .name = try arena_allocator.dupe(u8, codegen.symbolName(function.symbol)),
+                    .name = try ownedSymbolName(CG, arena_allocator, codegen, owned_names, function.symbol),
                     .scope = codegen.symbolScope(function.symbol),
                     .kind = .function,
                 },
                 .linked_data => |data| .{
                     .offset = @intCast(offset - region.start),
-                    .name = try arena_allocator.dupe(u8, codegen.symbolName(data.symbol)),
+                    .name = try ownedSymbolName(CG, arena_allocator, codegen, owned_names, data.symbol),
                     .scope = codegen.symbolScope(data.symbol),
                     .kind = .{ .data = data.kind },
                 },
-                .retired, .local_data, .jmp_to_return => unreachable,
+                .retired, .local_data, .jmp_to_return => unreachable, // the switch above skipped or rejected these kinds
             });
         }
 
@@ -845,6 +850,15 @@ pub fn extractPrepared(
     const source_files = try arena_allocator.alloc([32]u8, codegen.store.sourceFileCount());
     for (source_files, 0..) |*identity, file| identity.* = codegen.store.sourceFileModuleIdentity(@intCast(file));
     return .{ .arena = arena, .artifacts = artifacts, .source_files = source_files };
+}
+
+/// `symbol`'s name, copied into the set's arena the first time it is asked for.
+fn ownedSymbolName(comptime CG: type, arena_allocator: Allocator, codegen: *const CG, owned_names: []?[]const u8, symbol: anytype) Allocator.Error![]const u8 {
+    const slot = &owned_names[@backingInt(symbol)];
+    if (slot.*) |name| return name;
+    const name = try arena_allocator.dupe(u8, codegen.symbolName(symbol));
+    slot.* = name;
+    return name;
 }
 
 fn captureData(
@@ -1324,9 +1338,9 @@ pub fn splice(
 
     for (order.items) |index| {
         const artifact = set.artifacts[index];
-        const start = placed.get(index) orelse unreachable;
+        const start = placed.get(index) orelse unreachable; // the placement loop above put every index in order
         for (artifact.refs) |ref| {
-            const target_start = placed.get(ref.target) orelse unreachable;
+            const target_start = placed.get(ref.target) orelse unreachable; // the traversal pushed every ref target, so each was placed as existing or appended to order
             const target_artifact = set.artifacts[ref.target];
             const target: CG.CodeRefTarget = switch (target_artifact.kind) {
                 .proc => |identity| if (procs_by_identity.get(identity)) |proc_id| .{ .proc = proc_id } else .{ .offset = target_start + ref.delta },

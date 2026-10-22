@@ -85,31 +85,21 @@ const WindowsUnwindState = if (builtin.os.tag == .windows) struct {
         var total: usize = 0;
         for (functions) |function| {
             if (function.start_offset >= function.end_offset) {
-                if (builtin.mode == .debug) {
-                    base.invariant("JIT unwind invariant violated: invalid function range {d}-{d}", .{ function.start_offset, function.end_offset });
-                }
-                unreachable;
+                base.invariant("JIT unwind invariant violated: invalid function range {d}-{d}", .{ function.start_offset, function.end_offset });
             }
             total += try writer.functionXdataSize(function);
         }
         return total;
     }
 
-    fn lessThanFunction(_: void, lhs: coff.FunctionInfo, rhs: coff.FunctionInfo) bool {
-        return lhs.start_offset < rhs.start_offset;
-    }
-
     fn init(
         memory: []align(std.heap.page_size_min) u8,
         code_size: usize,
         xdata_offset: usize,
-        functions: []const coff.FunctionInfo,
+        /// Disjoint and sorted by start offset, as `coff.splitNestedFunctions` returns them.
+        sorted_functions: []const coff.FunctionInfo,
     ) (Allocator.Error || error{ UnsupportedPlatform, UnwindRegistrationFailed })!WindowsUnwindState {
-        if (functions.len == 0) return .{};
-
-        const sorted_functions = try allocator.dupe(coff.FunctionInfo, functions);
-        defer allocator.free(sorted_functions);
-        std.mem.sort(coff.FunctionInfo, sorted_functions, {}, lessThanFunction);
+        if (sorted_functions.len == 0) return .{};
 
         var writer = try coff.CoffWriter.init(allocator, try coffArch());
         defer writer.deinit();
@@ -123,10 +113,7 @@ const WindowsUnwindState = if (builtin.os.tag == .windows) struct {
         var previous_end: u32 = 0;
         for (sorted_functions, 0..) |function, i| {
             if (function.start_offset >= function.end_offset or function.end_offset > code_size or function.start_offset < previous_end) {
-                if (builtin.mode == .debug) {
-                    base.invariant("JIT unwind invariant violated: invalid or overlapping function range {d}-{d} for code size {d}", .{ function.start_offset, function.end_offset, code_size });
-                }
-                unreachable;
+                base.invariant("JIT unwind invariant violated: invalid or overlapping function range {d}-{d} for code size {d}", .{ function.start_offset, function.end_offset, code_size });
             }
             previous_end = function.end_offset;
 
@@ -153,7 +140,7 @@ const WindowsUnwindState = if (builtin.os.tag == .windows) struct {
                     .UnwindData = xdata_rva,
                 }
             else
-                unreachable;
+                unreachable; // coffArch above returned UnsupportedPlatform for every other architecture
         }
 
         if (win32.RtlAddFunctionTable(entries.ptr, @intCast(entries.len), @intFromPtr(memory.ptr)) == .FALSE) {
@@ -429,9 +416,7 @@ fn freeMemory(memory: []align(std.heap.page_size_min) u8) void {
         .windows => {
             _ = win32.VirtualFree(memory.ptr, 0, win32.MEM_RELEASE);
         },
-        // allocateMemory returns error.UnsupportedPlatform for other OSes,
-        // so freeMemory should never be called on them
-        .unsupported => unreachable,
+        .unsupported => unreachable, // allocateMemory returns UnsupportedPlatform on these OSes, so no memory exists to free
     }
 }
 

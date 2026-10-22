@@ -80,7 +80,7 @@ pub fn classifyType(store: *const Store, start: Idx) Class {
             // Glue exposes an erased callable as `RocErasedCallable`, a pointer
             // typedef. The pointer value itself is therefore the direct ABI value.
             .erased_callable => return .{ .direct = idx },
-            .zst => unreachable,
+            .zst => unreachable, // the size assertion above holds: callers never pass zero-sized values across the C ABI
         }
     }
 }

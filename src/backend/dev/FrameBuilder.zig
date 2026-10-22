@@ -133,10 +133,7 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
         /// path preserves the incoming value before this prologue overwrites it.
         pub fn setCallerStackArgBaseReg(self: *Self, reg: GeneralReg) void {
             if (!is_aarch64) {
-                if (std.debug.runtime_safety) {
-                    invariant("{s}", .{"caller stack-argument base register is only meaningful on aarch64"});
-                }
-                unreachable;
+                invariant("{s}", .{"caller stack-argument base register is only meaningful on aarch64"});
             }
             self.caller_stack_arg_base_reg = reg;
         }
@@ -168,7 +165,7 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             } else if (is_aarch64) {
                 return self.emitPrologueAarch64(emit);
             } else {
-                unreachable;
+                unreachable; // CalleeSavedInfo is a compile error for every architecture other than x86_64 and aarch64
             }
         }
 
@@ -184,7 +181,7 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             } else if (is_aarch64) {
                 return self.emitEpilogueAarch64(emit);
             } else {
-                unreachable;
+                unreachable; // CalleeSavedInfo is a compile error for every architecture other than x86_64 and aarch64
             }
         }
 
@@ -208,7 +205,7 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
                 }
                 try emit.ret();
             } else {
-                unreachable;
+                unreachable; // CalleeSavedInfo is a compile error for every architecture other than x86_64 and aarch64
             }
         }
 
@@ -226,7 +223,7 @@ pub fn DeferredFrameBuilder(comptime EmitType: type) type {
             } else if (is_aarch64) {
                 return self.emitRestoreCalleeSavedAarch64(emit);
             } else {
-                unreachable;
+                unreachable; // CalleeSavedInfo is a compile error for every architecture other than x86_64 and aarch64
             }
         }
 

@@ -775,7 +775,7 @@ const InlineAnalyzer = struct {
                 .operand, .body => item.role,
             };
             const role: WrapperRole = switch (position) {
-                .arm => unreachable,
+                .arm => unreachable, // the switch above maps an arm to .operand or skips it
                 .operand => switch (expr.data) {
                     .local,
                     .unit,

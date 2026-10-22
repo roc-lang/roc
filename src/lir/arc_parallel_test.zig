@@ -148,11 +148,20 @@ const ReverseExecutor = struct {
     }
 };
 
+/// The use-order topology's read, definition, and predecessor tables: one
+/// session of three tasks before the first uniqueness wave. A post-take
+/// settlement reuses the topology and runs no such session.
+const topology_tasks = 3;
+
 fn expectUniquenessMetrics(expected: arc_solve.UniquenessMetrics, actual: arc_solve.UniquenessMetrics) error{ TestExpectedEqual, TestUnexpectedResult }!void {
     try testing.expectEqual(@as(u64, 0), expected.task_submitted);
     try testing.expectEqual(@as(u64, 0), expected.task_committed);
     try testing.expect(actual.task_submitted > 0);
     try testing.expectEqual(actual.task_submitted, actual.task_committed);
+    try testing.expectEqual(@as(u64, 0), expected.topology_tasks_submitted);
+    try testing.expectEqual(@as(u64, 0), expected.topology_tasks_committed);
+    try testing.expectEqual(@as(u64, topology_tasks), actual.topology_tasks_submitted);
+    try testing.expectEqual(@as(u64, topology_tasks), actual.topology_tasks_committed);
     inline for (.{ "settlements", "components", "component_runs", "signature_waves", "signature_changes", "statement_visits", "local_visits" }) |counter| {
         try testing.expectEqual(@field(expected, counter), @field(actual, counter));
     }
@@ -200,7 +209,7 @@ test "ARC executor reverse completions match inline RC bodies and identities acr
         var metrics: arc.ParallelMetrics = .{};
         try candidate.run(&interface, &metrics);
         try runner.expectDrained();
-        try testing.expectEqual(@as(u64, 120) + metrics.uniqueness.task_committed + metrics.dismantle_tasks_committed, runner.received);
+        try testing.expectEqual(@as(u64, 120) + metrics.uniqueness.topology_tasks_committed + metrics.uniqueness.task_committed + metrics.dismantle_tasks_committed, runner.received);
         try expectUniquenessMetrics(inline_metrics.uniqueness, metrics.uniqueness);
         // Forty statements fit one dismantle fact range.
         try testing.expectEqual(@as(u64, 1), metrics.dismantle_tasks_submitted);
@@ -224,22 +233,32 @@ test "ARC executor reverse completions match inline RC bodies and identities acr
 }
 
 /// One executor session of `Fixture.init(8)`: the task whose submission or
-/// output fails, and the callbacks every earlier session already received.
+/// output fails, the callbacks every earlier session already received, the
+/// callbacks the session itself drains at least once its output fails, and
+/// whether that task allocates any output in this fixture.
 const FixturePhase = struct {
     session: usize,
     fail_task: usize,
     earlier: usize,
+    window: usize = 4,
+    allocates: bool = true,
 };
 
-/// Uniqueness, dismantle facts, source, planning, emission. The pinned
-/// scalar-return fixture has exactly one uniqueness wave, asserted by the
-/// successful test above, and its eight statements fit one fact range.
+/// Topology tables, uniqueness, dismantle facts, source, planning, emission.
+/// The pinned scalar-return fixture has exactly one uniqueness wave, asserted
+/// by the successful test above, and its eight statements fit one fact range.
+/// Its return-only bodies define nothing and have no successor edges, so of
+/// the topology tables only the reads allocate, and the dismantle fact range
+/// allocates nothing; their sweeps run against fixtures with statements.
 const fixture_phases = [_]FixturePhase{
-    .{ .session = 0, .fail_task = 2, .earlier = 0 },
-    .{ .session = 1, .fail_task = 0, .earlier = 8 },
-    .{ .session = 2, .fail_task = 2, .earlier = 9 },
-    .{ .session = 3, .fail_task = 2, .earlier = 17 },
-    .{ .session = 4, .fail_task = 2, .earlier = 25 },
+    .{ .session = 0, .fail_task = 0, .earlier = 0, .window = topology_tasks },
+    .{ .session = 0, .fail_task = 1, .earlier = 0, .window = topology_tasks, .allocates = false },
+    .{ .session = 0, .fail_task = 2, .earlier = 0, .window = topology_tasks, .allocates = false },
+    .{ .session = 1, .fail_task = 2, .earlier = topology_tasks },
+    .{ .session = 2, .fail_task = 0, .earlier = topology_tasks + 8, .allocates = false },
+    .{ .session = 3, .fail_task = 2, .earlier = topology_tasks + 9 },
+    .{ .session = 4, .fail_task = 2, .earlier = topology_tasks + 17 },
+    .{ .session = 5, .fail_task = 2, .earlier = topology_tasks + 25 },
 };
 
 test "ARC executor submit failures drain accepted callbacks in each phase" {
@@ -261,11 +280,9 @@ test "ARC executor submit failures drain accepted callbacks in each phase" {
     }
 }
 
-test "ARC executor sweeps retained allocations through uniqueness source planning and emission bodies" {
-    // The dismantle fact range of these return-only bodies allocates nothing;
-    // its own sweep runs against a fixture with statements to record.
+test "ARC executor sweeps retained allocations through topology uniqueness source planning and emission bodies" {
     for (fixture_phases) |phase| {
-        if (phase.session == 1) continue;
+        if (!phase.allocates) continue;
         var fail_index: usize = 0;
         while (true) : (fail_index += 1) {
             var source = try Fixture.init(8);
@@ -284,12 +301,14 @@ test "ARC executor sweeps retained allocations through uniqueness source plannin
             try runner.expectDrained();
             if (runner.output_failure.has_induced_failure) {
                 try testing.expectError(error.OutOfMemory, result);
-                try testing.expect(runner.received >= phase.earlier + 4);
+                try testing.expect(runner.received >= phase.earlier + phase.window);
                 try testing.expectEqual(@as(u64, 0), metrics.emission_tasks_committed);
                 try expectSame(&source, &candidate);
             } else {
                 try result;
-                try testing.expect(fail_index > 1);
+                // A planning task of these return-only bodies retains a single
+                // arena chunk; its transient work lives in the task scratch.
+                try testing.expect(fail_index > 0);
                 try testing.expectEqual(@as(u64, 8), metrics.emission_tasks_committed);
                 break;
             }
@@ -301,10 +320,10 @@ test "ARC executor later wave failure drains without rolling back earlier commit
     var candidate = try Fixture.init(40);
     defer candidate.deinit();
     const before = candidate.store.cfStmtCount();
-    // One uniqueness wave, one dismantle fact range, two source batches, then
-    // planning/emission for the first 32 bodies, followed by planning/emission
-    // for the final eight.
-    var runner: ReverseExecutor = .{ .fail_session = 7, .fail_submit = true };
+    // The topology tables, one uniqueness wave, one dismantle fact range, two
+    // source batches, then planning/emission for the first 32 bodies, followed
+    // by planning/emission for the final eight.
+    var runner: ReverseExecutor = .{ .fail_session = 8, .fail_submit = true };
     defer runner.deinit();
     const interface = runner.interface();
     var metrics: arc.ParallelMetrics = .{};
@@ -471,14 +490,25 @@ test "ARC public solve sweeps changing uniqueness callbacks and drains later wav
     var reference_metrics: arc_solve.UniquenessMetrics = .{};
     var reference = try fixture.solve(null, &reference_metrics);
     defer reference.deinit();
-    // Initial analysis (task 0) changes a unique-return signature; the later wave
-    // fails its first submission only after the initial barrier committed.
-    for ([_]bool{ false, true }) |fail_submit| {
+    // Every topology table of these bodies has rows to release when another
+    // fails. Initial analysis (task 0) changes a unique-return signature; the
+    // later wave fails its first submission only after the initial barrier
+    // committed.
+    const Case = struct { session: usize, task: usize, fail_submit: bool = false };
+    const cases = [_]Case{
+        .{ .session = 0, .task = 0 },
+        .{ .session = 0, .task = 1 },
+        .{ .session = 0, .task = 2 },
+        .{ .session = 1, .task = 0 },
+        .{ .session = 2, .task = 0, .fail_submit = true },
+    };
+    for (cases) |case| {
+        const fail_submit = case.fail_submit;
         var fail_index: usize = 0;
         while (true) : (fail_index += 1) {
             var runner: ReverseExecutor = .{
-                .fail_session = if (fail_submit) 1 else 0,
-                .fail_task = 0,
+                .fail_session = case.session,
+                .fail_task = case.task,
                 .fail_submit = fail_submit,
                 .output_failure = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = fail_index }),
             };

@@ -656,7 +656,7 @@ fn driveFrames(self: *TypeWriter, writer: *ByteWrite, frames_base: usize, root_v
 /// either finish it outright (returning true) or push the frame that will
 /// render its children (returning false).
 fn requestVar(self: *TypeWriter, writer: *ByteWrite, var_: Var, context: TypeContext, root_var: Var) error{ OutOfMemory, WriteFailed }!bool {
-    if (@backingInt(var_) >= self.types.slots.backing.len()) {
+    if (@backingInt(var_) >= self.types.len()) {
         // Variable is out of bounds - this can happen with corrupted type data
         try writer.writeAll("Error");
         return true;
@@ -664,7 +664,7 @@ fn requestVar(self: *TypeWriter, writer: *ByteWrite, var_: Var, context: TypeCon
 
     const resolved = self.types.resolveVar(var_);
 
-    if (@backingInt(resolved.var_) >= self.types.slots.backing.len()) {
+    if (@backingInt(resolved.var_) >= self.types.len()) {
         // Variable is out of bounds - this can happen with corrupted type data
         try writer.writeAll("Error");
         return true;
@@ -1364,7 +1364,7 @@ pub fn writeFlexVarName(self: *TypeWriter, writer: *ByteWrite, var_: Var, contex
     const resolved_var = self.types.resolveVar(var_).var_;
 
     // If resolved var is out of bounds, it's corrupted - just write a simple name
-    if (@backingInt(resolved_var) >= self.types.slots.backing.len()) {
+    if (@backingInt(resolved_var) >= self.types.len()) {
         try writer.writeAll("_");
         try self.generateContextualName(writer, context);
         return;
@@ -1474,7 +1474,7 @@ fn countVarOccurrencesOutsideOwnConstraints(self: *TypeWriter, search_var: Var, 
 /// outright (returning true) or push the frame that will visit its children
 /// (returning false).
 fn countRequest(self: *TypeWriter, current_var: Var) std.mem.Allocator.Error!bool {
-    if (@backingInt(current_var) >= self.types.slots.backing.len()) return true;
+    if (@backingInt(current_var) >= self.types.len()) return true;
 
     const resolved = self.types.resolveVar(current_var);
 
@@ -1660,7 +1660,7 @@ fn generateContextualName(self: *TypeWriter, writer: *ByteWrite, context: TypeCo
             self.name_tmp.clearRetainingCapacity();
             const len = std.fmt.count("{s}{}", .{ base_name, counter + 1 });
             try self.name_tmp.resize(len);
-            _ = std.fmt.bufPrint(self.name_tmp.items, "{s}{}", .{ base_name, counter + 1 }) catch unreachable;
+            _ = std.fmt.bufPrint(self.name_tmp.items, "{s}{}", .{ base_name, counter + 1 }) catch unreachable; // name_tmp was resized to exactly the formatted length
             break :blk self.name_tmp.items;
         };
 

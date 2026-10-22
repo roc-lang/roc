@@ -212,7 +212,7 @@ fn pushEscapedString(tree: *SExprTree, value: []const u8) Allocator.Error!void {
             '\r' => try escaped.appendSlice("\\r"),
             0x00...0x08, 0x0b, 0x0c, 0x0e...0x1f, 0x7f => {
                 var buf: [8]u8 = undefined;
-                const formatted = std.fmt.bufPrint(&buf, "\\u{{{x:0>2}}}", .{byte}) catch unreachable;
+                const formatted = std.fmt.bufPrint(&buf, "\\u{{{x:0>2}}}", .{byte}) catch unreachable; // "\u{XX}" is 6 bytes, within the 8-byte buffer
                 try escaped.appendSlice(formatted);
             },
             else => try escaped.append(byte),
@@ -250,16 +250,16 @@ test "canonical S-expression covers every document element variant" {
     try doc.addVerticalStack(&.{ .line_break, .{ .indent = 1 } });
     try doc.addHorizontalConcat(&.{ .{ .space = 1 }, .annotation_end });
 
-    // Builder-less variants: the document takes ownership of line_text, so dupe it.
+    // Builder-less variant: element content belongs to the document's arena.
     try doc.elements.append(.{
         .source_code_region = .{
-            .line_text = try gpa.dupe(u8, "x = foo"),
+            .line_text = try doc.ownString("x = foo"),
             .start_line = 3,
             .start_column = 5,
             .end_line = 3,
             .end_column = 8,
             .region_annotation = .error_highlight,
-            .filename = try gpa.dupe(u8, "/some/snapshots/example.md"),
+            .filename = try doc.ownString("/some/snapshots/example.md"),
         },
     });
     try doc.addSourceMultiRegion(
@@ -272,7 +272,7 @@ test "canonical S-expression covers every document element variant" {
     );
     try doc.addSourceCodeWithUnderlines(
         .{
-            .line_text = try gpa.dupe(u8, "y = bar"),
+            .line_text = "y = bar",
             .start_line = 4,
             .start_column = 1,
             .end_line = 4,

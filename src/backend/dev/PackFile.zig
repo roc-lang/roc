@@ -207,9 +207,23 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
     return try bytes.toOwnedSlice(allocator);
 }
 
-/// Decode a pack. Every slice in the result is owned by the pack's arena.
+/// Decode a pack. Every slice in the result is owned by the pack's arena,
+/// which holds one copy of `bytes` that the decoded strings alias.
 pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
+    // A pack of another format is declined before anything is copied.
+    try checkFormat(bytes, magic);
     var arena = collections.SingleThreadArena.init(allocator);
+    const owned = arena.allocator().dupe(u8, bytes) catch |err| {
+        arena.deinit();
+        return err;
+    };
+    return readOwned(arena, owned);
+}
+
+/// Decode a pack whose bytes `arena` already owns. The pack takes `arena`,
+/// on failure too, and its strings alias `bytes`.
+pub fn readOwned(owning_arena: collections.SingleThreadArena, bytes: []const u8) ReadError!Pack {
+    var arena = owning_arena;
     errdefer arena.deinit();
     const arena_allocator = arena.allocator();
     var reader = Reader{ .bytes = bytes };
@@ -226,7 +240,7 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
     for (artifacts) |*artifact| {
         const kind: ProcArtifact.Kind = switch (try reader.byte()) {
             0 => .{ .proc = .{ .bytes = (try reader.raw(32))[0..32].* } },
-            1 => .{ .rc_helper = try reader.strOwned(arena_allocator) },
+            1 => .{ .rc_helper = try reader.str() },
             2 => .{ .boxy_thunk = .{ .bytes = (try reader.raw(32))[0..32].* } },
             3 => .entrypoint,
             4 => .message_pool_run,
@@ -250,7 +264,7 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
             },
             else => return error.MalformedPack,
         };
-        const code = try reader.strOwned(arena_allocator);
+        const code = try reader.str();
         const refs = try arena_allocator.alloc(ProcArtifact.Reference, try reader.word());
         for (refs) |*ref| {
             ref.* = .{
@@ -285,7 +299,7 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
                 },
                 .target = switch (try reader.byte()) {
                     0 => .{ .proc = .{ .bytes = (try reader.raw(32))[0..32].* } },
-                    1 => .{ .rc_helper = try reader.strOwned(arena_allocator) },
+                    1 => .{ .rc_helper = try reader.str() },
                     2 => .{ .boxy_thunk = .{ .bytes = (try reader.raw(32))[0..32].* } },
                     else => return error.MalformedPack,
                 },
@@ -304,7 +318,7 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
             const offset = try reader.word();
             const kind_tag = try reader.byte();
             const data_kind_raw = try reader.byte();
-            const name = try reader.strOwned(arena_allocator);
+            const name = try reader.str();
             const scope = std.enums.fromInt(ProcArtifact.SymbolScope, try reader.byte()) orelse return error.MalformedPack;
             relocation.* = .{
                 .offset = offset,
@@ -319,8 +333,8 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
         }
         const data = try arena_allocator.alloc(ProcArtifact.DataItem, try reader.word());
         for (data) |*item| {
-            const name = try reader.strOwned(arena_allocator);
-            const item_bytes = try reader.strOwned(arena_allocator);
+            const name = try reader.str();
+            const item_bytes = try reader.str();
             const alignment = try reader.word();
             const symbol_offset = try reader.word();
             const data_relocations = try arena_allocator.alloc(ProcArtifact.DataRelocation, try reader.word());
@@ -339,7 +353,7 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
                 };
                 relocation.* = .{
                     .offset = offset,
-                    .name = try reader.strOwned(arena_allocator),
+                    .name = try reader.str(),
                     .addend = addend,
                     .function = function,
                     .external = external,
@@ -415,9 +429,23 @@ pub fn writeObject(
     return try bytes.toOwnedSlice(allocator);
 }
 
-/// Decode an object pack. Every slice in the result is owned by its arena.
+/// Decode an object pack. Every slice in the result is owned by its arena,
+/// which holds one copy of `bytes` that the object aliases.
 pub fn readObject(allocator: Allocator, bytes: []const u8) ReadError!ObjectPack {
+    // A pack of another format is declined before anything is copied.
+    try checkFormat(bytes, object_magic);
     var arena = collections.SingleThreadArena.init(allocator);
+    const owned = arena.allocator().dupe(u8, bytes) catch |err| {
+        arena.deinit();
+        return err;
+    };
+    return readObjectOwned(arena, owned);
+}
+
+/// Decode an object pack whose bytes `arena` already owns. The pack takes
+/// `arena`, on failure too, and its object aliases `bytes`.
+pub fn readObjectOwned(owning_arena: collections.SingleThreadArena, bytes: []const u8) ReadError!ObjectPack {
+    var arena = owning_arena;
     errdefer arena.deinit();
     const arena_allocator = arena.allocator();
     var reader = Reader{ .bytes = bytes };
@@ -427,7 +455,7 @@ pub fn readObject(allocator: Allocator, bytes: []const u8) ReadError!ObjectPack 
     for (identities) |*identity| identity.* = .{ .bytes = (try reader.raw(32))[0..32].* };
     const spec_count = try reader.word();
     const specs = try readSpecs(&reader, arena_allocator, spec_count, @intCast(identities.len));
-    const object = try reader.strOwned(arena_allocator);
+    const object = try reader.str();
     if (reader.offset != bytes.len) return error.MalformedPack;
     return .{ .arena = arena, .object = object, .identities = identities, .specs = specs };
 }
@@ -519,6 +547,13 @@ const Writer = struct {
     }
 };
 
+/// Reject bytes that do not start with `expected_magic` and this format version.
+fn checkFormat(bytes: []const u8, expected_magic: []const u8) ReadError!void {
+    var reader = Reader{ .bytes = bytes };
+    if (!std.mem.eql(u8, try reader.raw(expected_magic.len), expected_magic)) return error.MalformedPack;
+    if (try reader.word() != format_version) return error.UnsupportedPackVersion;
+}
+
 const Reader = struct {
     bytes: []const u8,
     offset: usize = 0,
@@ -542,9 +577,9 @@ const Reader = struct {
         return std.mem.readInt(u64, (try self.raw(8))[0..8], .little);
     }
 
-    fn strOwned(self: *Reader, allocator: Allocator) ReadError![]u8 {
+    fn str(self: *Reader) ReadError![]const u8 {
         const len = try self.word();
-        return try allocator.dupe(u8, try self.raw(len));
+        return try self.raw(len);
     }
 };
 
