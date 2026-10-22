@@ -749,7 +749,7 @@ pub const Writer = struct {
             },
             .named => |*named| (&named.backing)[0..1],
             .record, .tuple => |children| children,
-            .pending, .layout_only => unreachable,
+            .pending, .layout_only => writerInvariant("product eligibility reached an unfinished const plan"),
             .str, .list, .box, .boxy_box, .tag_union, .fn_value, .erased_fn => return false,
         };
         try frames.append(self.allocator, .{ .id = id, .children = children });
@@ -772,8 +772,8 @@ pub const Writer = struct {
     }
 
     fn storeProductList(self: *Writer, node: checked.ConstNodeId, plan: *const lir.PackedData.Plan, list: *const RocList) Allocator.Error!void {
-        const byte_len = std.math.mul(usize, list.len(), plan.packed_width) catch unreachable;
-        const memory_len = std.math.mul(usize, list.len(), plan.memory_width) catch unreachable;
+        const byte_len = std.math.mul(usize, list.len(), plan.packed_width) catch unreachable; // packed leaves are disjoint parts of an element, so this is at most memory_len
+        const memory_len = std.math.mul(usize, list.len(), plan.memory_width) catch unreachable; // the list's elements occupy this many bytes of live memory
         const memory = if (memory_len == 0) &.{} else list.bytes.?[0..memory_len];
         const data = if (plan.isIdentity() and builtin.cpu.arch.endian() == .little)
             try self.module.const_store.addBlobData(memory)
@@ -1212,10 +1212,7 @@ fn checkedU32(value: usize, comptime message: []const u8) u32 {
 }
 
 fn writerInvariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .debug) {
-        base.invariant("ConstStore writer invariant violated: {s}", .{message});
-    }
-    unreachable;
+    base.invariant("ConstStore writer invariant violated: {s}", .{message});
 }
 
 test "const store writer declarations are referenced" {

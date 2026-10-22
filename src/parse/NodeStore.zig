@@ -1273,7 +1273,7 @@ fn spanWithExt(store: *const NodeStore, data: Node.Data) struct { span: base.Dat
                     .end = store.extra_data.items[pos + 4],
                 },
             } },
-            3 => unreachable,
+            3 => unreachable, // addSpanWithExt encodes only kinds 0 (closed), 1 (open), and 2 (named)
         },
     };
 }
@@ -2619,7 +2619,7 @@ pub fn collectRedundantReturns(store: *const NodeStore) Allocator.Error!std.Dyna
                     .type_decl,
                     .type_anno,
                     .malformed,
-                    => unreachable,
+                    => unreachable, // the tag switch above continued for every statement other than expr and return
                 }
             },
             .if_then_else => |cond| {
@@ -2675,7 +2675,7 @@ pub fn collectRedundantReturns(store: *const NodeStore) Allocator.Error!std.Dyna
             .@"break",
             .for_expr,
             .malformed,
-            => unreachable,
+            => unreachable, // the tag switch above continued for every expression other than block, if_then_else, tuple, match, and return
         }
     }
     return returns;

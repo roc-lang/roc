@@ -91,6 +91,14 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// still needs their exact in-body call reservations, by the call's
         /// instruction word.
         retired_call_veneers: collections.DenseMapUnmanaged(u32, usize) = .empty,
+        /// Every site whose location, veneer, or target was set, each with
+        /// the buffer length at that moment, in the order they were set. A
+        /// field is only ever set to an offset already emitted, so every site
+        /// with a field inside a body appears at or after the first entry
+        /// recorded once the buffer reached the body's start.
+        branch_site_log: std.ArrayList(BranchSiteLogEntry) = .empty,
+        /// The distinct sites a shift visits.
+        branch_shift_sites: std.ArrayList(u32) = .empty,
         /// Every site before this index is resolved or has a veneer.
         branch_open_scan: u32,
         /// Open sites without a veneer.
@@ -99,6 +107,8 @@ pub fn CodeGen(comptime target: RocTarget) type {
         branch_resolved: usize,
         /// Direct reach assumed for island decisions; tests lower it.
         branch_reach_limit: usize,
+
+        pub const BranchSiteLogEntry = struct { emitted: usize, index: u32 };
 
         pub const ExternStub = struct {
             call: usize,
@@ -134,6 +144,8 @@ pub fn CodeGen(comptime target: RocTarget) type {
             self.branch_sites.deinit(self.allocator);
             self.branch_site_index.deinit(self.allocator);
             self.retired_call_veneers.deinit(self.allocator);
+            self.branch_site_log.deinit(self.allocator);
+            self.branch_shift_sites.deinit(self.allocator);
         }
 
         pub fn reset(self: *Self) void {
@@ -149,6 +161,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
             self.branch_sites.clearRetainingCapacity();
             self.branch_site_index.clearRetainingCapacity();
             self.retired_call_veneers.clearRetainingCapacity();
+            self.branch_site_log.clearRetainingCapacity();
             self.branch_open_scan = 0;
             self.branch_open_unveneered = 0;
             self.branch_resolved = 0;
@@ -619,6 +632,14 @@ pub fn CodeGen(comptime target: RocTarget) type {
             try self.branch_sites.append(self.allocator, site);
             try self.branch_site_index.put(self.allocator, word, index);
             self.branch_open_unveneered += 1;
+            try self.logBranchSite(index);
+        }
+
+        fn logBranchSite(self: *Self, index: u32) Allocator.Error!void {
+            const emitted = self.emit.buf.items.len;
+            const log = self.branch_site_log.items;
+            std.debug.assert(log.len == 0 or log[log.len - 1].emitted <= emitted);
+            try self.branch_site_log.append(self.allocator, .{ .emitted = emitted, .index = index });
         }
 
         fn branchSiteAt(self: *const Self, loc: usize) ?u32 {
@@ -626,12 +647,8 @@ pub fn CodeGen(comptime target: RocTarget) type {
         }
 
         fn branchSiteIndex(self: *Self, loc: usize) u32 {
-            return self.branchSiteAt(loc) orelse {
-                if (builtin.mode == .debug) {
-                    invariant("AArch64 branch patch at 0x{x} names no registered branch site", .{loc});
-                }
-                unreachable;
-            };
+            return self.branchSiteAt(loc) orelse
+                invariant("AArch64 branch patch at 0x{x} names no registered branch site", .{loc});
         }
 
         /// Emit unconditional jump (returns patch location for fixup)
@@ -679,7 +696,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
             try self.registerAssembledCallSite(loc);
             if (veneer) |reserved| {
                 const index = self.branchSiteIndex(loc);
-                if (self.branch_sites.items[index].veneer == null) self.attachVeneer(index, reserved);
+                if (self.branch_sites.items[index].veneer == null) try self.attachVeneer(index, reserved);
             }
         }
 
@@ -810,18 +827,19 @@ pub fn CodeGen(comptime target: RocTarget) type {
                         }
                     }
                 },
-                .extern_call => unreachable,
+                .extern_call => unreachable, // only patchJump and patchCall reach here, and they require jump or call sites; extern calls resolve through emitExternStub
             }
-            self.markBranchSiteResolved(index, target_loc);
+            try self.markBranchSiteResolved(index, target_loc);
         }
 
-        fn markBranchSiteResolved(self: *Self, index: u32, target_loc: usize) void {
+        fn markBranchSiteResolved(self: *Self, index: u32, target_loc: usize) Allocator.Error!void {
             const site = &self.branch_sites.items[index];
             if (site.target == null) {
                 if (site.veneer == null) self.branch_open_unveneered -= 1;
                 self.branch_resolved += 1;
             }
             site.target = target_loc;
+            try self.logBranchSite(index);
         }
 
         fn veneerForSite(self: *Self, index: u32) Allocator.Error!usize {
@@ -831,7 +849,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
             try self.emit.b(@intCast(4 + pcrel_veneer_bytes));
             const veneer = self.currentOffset();
             try self.emitVeneerPlaceholder();
-            self.attachVeneer(index, veneer);
+            try self.attachVeneer(index, veneer);
             return veneer;
         }
 
@@ -860,19 +878,19 @@ pub fn CodeGen(comptime target: RocTarget) type {
             self.relocations.items[site.reloc_index] = .retired;
             try self.relocations.append(self.allocator, .{ .linked_data = .{ .offset = @intCast(stub), .symbol = symbol, .kind = .page21 } });
             try self.relocations.append(self.allocator, .{ .linked_data = .{ .offset = @intCast(stub + 4), .symbol = symbol, .kind = .pageoff12 } });
-            self.attachVeneer(index, stub);
+            try self.attachVeneer(index, stub);
             self.writeInst(site.loc, encodeBl(@divExact(branchByteOffset(site.loc, stub), 4)));
-            self.markBranchSiteResolved(index, stub);
+            try self.markBranchSiteResolved(index, stub);
         }
 
         fn placeVeneer(self: *Self, index: u32) Allocator.Error!void {
             if (self.branch_sites.items[index].kind == .extern_call) return self.emitExternStub(index);
             const veneer = self.currentOffset();
             try self.emitVeneerPlaceholder();
-            self.attachVeneer(index, veneer);
+            try self.attachVeneer(index, veneer);
         }
 
-        fn attachVeneer(self: *Self, index: u32, veneer: usize) void {
+        fn attachVeneer(self: *Self, index: u32, veneer: usize) Allocator.Error!void {
             const site = &self.branch_sites.items[index];
             std.debug.assert(site.veneer == null);
             if (builtin.mode == .debug) {
@@ -882,6 +900,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
             }
             if (site.target == null) self.branch_open_unveneered -= 1;
             site.veneer = veneer;
+            try self.logBranchSite(index);
         }
 
         fn islandNeeded(self: *const Self, oldest_loc: usize, open_count: usize, limit: usize) bool {
@@ -971,19 +990,53 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// different sides of the boundary. A target equal to `body_start`
         /// moves only for a site inside the body: from outside, that offset
         /// names the entry, which the prepended prologue now occupies.
+        fn firstExternStubAtOrAfter(self: *const Self, offset: usize) usize {
+            const stubs = self.extern_stubs.items;
+            var low: usize = 0;
+            var high: usize = stubs.len;
+            while (low < high) {
+                const mid = low + (high - low) / 2;
+                if (self.relocations.items[stubs[mid].page_relocation].linked_data.offset < offset) low = mid + 1 else high = mid;
+            }
+            return low;
+        }
+
+        /// Only sites logged once the buffer reached `body_start`, and stubs
+        /// placed at or after it, can have anything inside the body.
         pub fn shiftBranchSites(self: *Self, body_start: usize, body_end: usize, delta: usize) Allocator.Error!void {
-            for (self.extern_stubs.items) |*stub| {
+            for (self.extern_stubs.items[self.firstExternStubAtOrAfter(body_start)..]) |*stub| {
                 if (stub.call >= body_start and stub.call < body_end) stub.call += delta;
             }
+            const log = self.branch_site_log.items;
+            var low: usize = 0;
+            var high: usize = log.len;
+            while (low < high) {
+                const mid = low + (high - low) / 2;
+                if (log[mid].emitted < body_start) low = mid + 1 else high = mid;
+            }
+            const visited = &self.branch_shift_sites;
+            visited.clearRetainingCapacity();
+            for (log[low..]) |entry| try visited.append(self.allocator, entry.index);
+            std.mem.sort(u32, visited.items, {}, std.sort.asc(u32));
+            var distinct: usize = 0;
+            for (visited.items) |index| {
+                if (distinct > 0 and visited.items[distinct - 1] == index) continue;
+                visited.items[distinct] = index;
+                distinct += 1;
+            }
+            visited.shrinkRetainingCapacity(distinct);
+
             const items = self.branch_sites.items;
-            for (items) |site| {
+            for (visited.items) |index| {
+                const site = items[index];
                 if (site.loc >= body_start and site.loc < body_end) _ = self.branch_site_index.remove(instructionWord(site.loc).?);
             }
-            for (items, 0..) |*site, index| {
+            for (visited.items) |index| {
+                const site = &items[index];
                 const loc_moved = site.loc >= body_start and site.loc < body_end;
                 if (loc_moved) {
                     site.loc += delta;
-                    try self.branch_site_index.put(self.allocator, try recordedInstructionWord(site.loc), @intCast(index));
+                    try self.branch_site_index.put(self.allocator, try recordedInstructionWord(site.loc), index);
                 }
                 var veneer_moved = false;
                 if (site.veneer) |veneer| {
@@ -1014,10 +1067,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
                     }
                     if (veneer_moved != target_moved) self.writePcRelSequence(veneer, target_loc, .IP0, .IP1);
                 } else if (loc_moved != target_moved) {
-                    if (builtin.mode == .debug) {
-                        invariant("AArch64 resolved branch at 0x{x} straddles the shifted body [0x{x}, 0x{x})", .{ site.loc, body_start, body_end });
-                    }
-                    unreachable;
+                    invariant("AArch64 resolved branch at 0x{x} straddles the shifted body [0x{x}, 0x{x})", .{ site.loc, body_start, body_end });
                 }
             }
         }
@@ -1025,6 +1075,9 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// Drop resolved sites. Only valid where nothing can patch them again,
         /// which is between top-level procedures.
         pub fn compactBranchSites(self: *Self) Allocator.Error!void {
+            // No body is open here, so no shift needs an earlier entry, and
+            // the sites the log names are renumbered below.
+            self.branch_site_log.clearRetainingCapacity();
             const items = self.branch_sites.items;
             if (self.branch_resolved < 4096 or self.branch_resolved * 2 < items.len) return;
             for (items) |site| {
@@ -1060,20 +1113,17 @@ pub fn CodeGen(comptime target: RocTarget) type {
         fn assertBranchFits(offset_words: i64, comptime bits: u6, comptime kind: []const u8) void {
             if (fitsSignedBits(offset_words, bits)) return;
 
-            if (builtin.mode == .debug) {
-                invariant(
-                    "AArch64 {s} target out of range: word offset {d} does not fit in signed {d}-bit immediate",
-                    .{ kind, offset_words, bits },
-                );
-            }
-            unreachable;
+            invariant(
+                "AArch64 {s} target out of range: word offset {d} does not fit in signed {d}-bit immediate",
+                .{ kind, offset_words, bits },
+            );
         }
 
         fn encodeDirectBranch(kind: BranchSiteKind, offset_words: i64) u32 {
             return switch (kind) {
                 .jump => encodeB(offset_words),
                 .call => encodeBl(offset_words),
-                .cond_jump, .extern_call => unreachable,
+                .cond_jump, .extern_call => unreachable, // callers pass only jump or call kinds, mapping cond_jump and extern_call to those first
             };
         }
 

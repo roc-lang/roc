@@ -179,6 +179,11 @@ pub const Resolver = struct {
 
     /// Plan the RC behavior for a canonical helper key.
     ///
+    /// The plan is `.noop` exactly when `Store.layoutContainsRefcounted` is
+    /// false for the key's layout. Builtins rely on this: a backend passes an
+    /// item or payload RC callback exactly when the builtin's
+    /// "items are refcounted" flag, which is that same predicate, is set.
+    ///
     /// A `host_drop` adapter performs its layout's `decref`, so it plans as
     /// one; the two differ only in the signature the backend gives the
     /// generated function.
@@ -190,22 +195,27 @@ pub const Resolver = struct {
         }
 
         return switch (l.tag) {
-            // ptr is never refcounted, so the early return above already handled it.
-            .zst, .ptr => .noop,
-            .scalar => if (l.getScalar().tag == .str)
-                switch (op) {
+            .zst, .ptr, .box_of_zst => base.invariant(
+                "layout/ARC invariant violated: a layout without refcounted data reached RC planning",
+                .{},
+            ),
+            .scalar => switch (l.getScalar().tag) {
+                .str => switch (op) {
                     .incref => .str_incref,
                     .decref => .str_decref,
                     .free => .str_free,
-                }
-            else
-                .noop,
+                },
+                .int, .frac, .opaque_ptr, .vector => base.invariant(
+                    "layout/ARC invariant violated: a non-Str scalar reached RC planning",
+                    .{},
+                ),
+            },
             .list, .list_of_zst => switch (op) {
                 .incref => .{ .list_incref = self.listPlan(key.layout_idx) },
                 .decref => .{ .list_decref = self.listPlan(key.layout_idx) },
                 .free => .{ .list_free = self.listPlan(key.layout_idx) },
             },
-            .box, .box_of_zst => switch (op) {
+            .box => switch (op) {
                 .incref => .box_incref,
                 .decref => .{ .box_decref = self.boxPlan(key.layout_idx) },
                 .free => .{ .box_free = self.boxPlan(key.layout_idx) },

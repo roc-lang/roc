@@ -215,7 +215,7 @@ fn writeUnaligned(dst: [*]u8, bytes: []const u8) void {
 fn invoke(ctl: *const Call) void {
     if (builtin.cpu.arch == .aarch64 or builtin.cpu.arch == .aarch64_be or builtin.cpu.arch == .x86_64) {
         rocCallTrampoline(ctl);
-    } else unreachable;
+    } else unreachable; // call returns UnsupportedArch before reaching invoke on every other architecture
 }
 
 // The fixed trampoline, defined in `host_trampoline.S`. It saves the control pointer in a

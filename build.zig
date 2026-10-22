@@ -864,6 +864,14 @@ const CheckPanicStep = struct {
     }
 };
 
+/// Build step that requires every `unreachable` under src/ to carry a
+/// same-line comment naming the invariant that makes the case impossible.
+const CheckUnreachableRationaleStep = struct {
+    fn create(b: *std.Build) *Step.Run {
+        return buildChecksRun(b, "check-unreachable-rationale");
+    }
+};
+
 /// Build step that checks for global stdio usage in CLI code.
 ///
 /// The CLI code uses a context-based I/O pattern where stdout/stderr are accessed
@@ -1714,6 +1722,7 @@ pub fn build(b: *std.Build) void {
     const run_check_semantic_audit_step = b.step("run-check-semantic-audit", "Run the checked-data audit gate");
     const run_check_postcheck_architecture_step = b.step("run-check-postcheck-architecture", "Check that deleted post-check output/remapping APIs stay gone");
     const run_check_panic_step = b.step("run-check-panic", "Check forbidden panic usage in interpreter and builtins");
+    const run_check_unreachable_rationale_step = b.step("run-check-unreachable-rationale", "Check that every unreachable states its invariant");
     const run_check_cli_global_stdio_step = b.step("run-check-cli-global-stdio", "Check forbidden global stdio usage in CLI code");
     const run_check_test_wiring_step = b.step("run-check-test-wiring", "Check test files are wired");
     const run_check_builtin_format_step = b.step("run-check-builtin-format", "Check Builtin.roc formatting");
@@ -3071,10 +3080,18 @@ pub fn build(b: *std.Build) void {
     run_simd_runtime_dev.addArgs(&.{ "--opt=dev", "--no-cache", "test/simd/differential.roc" });
     run_simd_runtime_dev.step.dependOn(build_test_hosts_step);
 
+    // The host architecture's `v1` target is a consumer of its own: its dev
+    // backend lowers every op whose default instructions sit above the
+    // baseline through different sequences.
+    const run_simd_runtime_v1_dev = b.addSystemCommand(&.{ "bash", "ci/run_simd_v1_differential.sh" });
+    run_simd_runtime_v1_dev.addFileArg(fixture_roc);
+    run_simd_runtime_v1_dev.setCwd(test_fixtures.mutableRoot(&.{build_test_hosts_step}));
+    run_simd_runtime_v1_dev.step.dependOn(&run_simd_runtime_dev.step);
+
     const run_simd_runtime_speed = b.addRunArtifact(roc_exe);
     run_simd_runtime_speed.setCwd(test_fixtures.mutableRoot(&.{build_test_hosts_step}));
     run_simd_runtime_speed.addArgs(&.{ "--opt=speed", "--no-cache", "test/simd/differential.roc" });
-    run_simd_runtime_speed.step.dependOn(&run_simd_runtime_dev.step);
+    run_simd_runtime_speed.step.dependOn(&run_simd_runtime_v1_dev.step);
 
     const run_simd_ctfe = b.addRunArtifact(roc_exe);
     run_simd_ctfe.setCwd(test_fixtures.mutableRoot(&.{build_test_hosts_step}));
@@ -4384,6 +4401,10 @@ pub fn build(b: *std.Build) void {
     // Check for @panic and std.debug.panic in interpreter and builtins
     const check_panic = CheckPanicStep.create(b);
     run_check_panic_step.dependOn(&check_panic.step);
+
+    // Check that every `unreachable` under src/ states its invariant
+    const check_unreachable_rationale = CheckUnreachableRationaleStep.create(b);
+    run_check_unreachable_rationale_step.dependOn(&check_unreachable_rationale.step);
 
     // Add check for global stdio usage in CLI code
     const check_cli_stdio = CheckCliGlobalStdioStep.create(b);

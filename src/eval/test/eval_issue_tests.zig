@@ -4923,4 +4923,24 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "3" },
     },
+    .{
+        // The loop's iteration method names the element record only through
+        // the iterator type's argument. The record's row is open inside
+        // `sum_x`, so Boxy reads its descriptor from the method's evidence,
+        // which must describe that type-argument position of the signature.
+        .name = "open record named only through an iterator's type argument is read through the method evidence",
+        .source =
+        \\{
+        \\    sum_x = |points| {
+        \\        var $x = 0.I64
+        \\        for point in points {
+        \\            $x = $x + point.x
+        \\        }
+        \\        $x
+        \\    }
+        \\    sum_x([{ x: 1, y: 2 }, { x: 30, y: 40 }])
+        \\}
+        ,
+        .expected = .{ .inspect_str = "31" },
+    },
 };

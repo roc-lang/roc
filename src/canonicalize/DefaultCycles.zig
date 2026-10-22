@@ -657,7 +657,7 @@ const Pass = struct {
                     state.lowlink_of[parent] = @min(state.lowlink_of[parent], state.lowlink_of[node]);
                 }
                 if (state.lowlink_of[node] != state.index_of[node]) continue;
-                const scc_start = std.mem.findScalarLast(u32, state.stack.items, node) orelse unreachable;
+                const scc_start = std.mem.findScalarLast(u32, state.stack.items, node) orelse unreachable; // a visited node stays on `stack` until its SCC root pops it, and `node` is that root
                 const scc = state.stack.items[scc_start..];
                 const cyclic = scc.len > 1 or self.hasSelfEdge(node);
                 if (cyclic) try self.reportScc(scc);

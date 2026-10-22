@@ -170,6 +170,17 @@ user-facing failure (malformed source, a type error, a missing or unreadable
 file, allocation failure, a corrupt cache entry) is not a compiler invariant:
 it is reported or propagated as described for that failure, never asserted.
 
+Every `unreachable` keyword in the compiler's source carries a `//` comment
+at the end of its own line naming the upstream invariant that makes the case
+impossible: the pass that normalized the input away, the validation that
+rejected it, the enum variants handled above, the loop condition, the
+capacity reserved earlier. Only closing delimiters, `;`, and `,` may stand
+between the `unreachable` and that comment. A site whose invariant cannot be
+named calls `base.invariant` (or its stage's wrapper) with a message stating
+the expected invariant instead, so builds with runtime safety report which
+claim broke. `zig build run-check-unreachable-rationale` enforces this for
+every `.zig` file under `src/`.
+
 A test pins that an invariant fires with `base.death_test.expectPanic`, which
 re-runs the calling test in a child copy of the test binary, calls the
 violating trigger there, and passes when the child panics with the expected
@@ -654,6 +665,20 @@ offers an entry whose code reaches a linked entry, so a program that splices
 dev code never needs an object it did not ask for. A build whose store lacks
 a URL-package module's object pack builds it once the module is checked and
 before the program lowers, so that build already links it.
+
+After version resolution selects the final package versions and checking
+publishes their constants, caching check, run, and build commands prepare the URL
+packages' host dev packs under `<host>-dev/pkg/`. This includes `roc check`,
+so a package checked when downloaded already has its dev packs when its first
+app build starts. Preparation compiles each module's closed exports with the
+ordinary dev pack policy; it neither writes local-module packs nor starts
+background optimization. Existing packs are left alone, and missing or evicted
+packs are rebuilt from the checked modules. A command with errors or
+`--no-cache` prepares none.
+New packs are also offered directly to the command's cache providers, so
+runtime lowering can use them even if compile-time evaluation already loaded
+the store. Decoded packs retain stable addresses as new offers arrive; artifacts
+already handed to evaluation remain valid.
 
 The wasm32 dev backend cannot splice dev code, so a wasm32 dev build
 reads and writes no dev packs and takes only object packs' entries
@@ -7074,7 +7099,11 @@ That interned identity is local to one checked module, so each class also
 carries a content digest that is its identity across modules. The digest is a
 SHA-256 of a fixed-order depth-first encoding of the class's first member's proof
 graph. Contracts and evidence nodes are numbered by first visit, so shared and
-cyclic references encode as back-references. Each type encodes as its type
+cyclic references encode as back-references. A nested contract outside the
+encoded contract's strongly connected component of nested-contract references
+encodes as its own digest, so digests are computed one component at a time,
+each after every component it reaches, and a chain of nested contracts encodes
+each contract once rather than once per contract above it. Each type encodes as its type
 key followed by the joint first-visit numbers of its variables in key order, so
 cross-root sharing is part of the digest. Methods encode by name. A procedure
 target encodes by its owning checked module's refs, a local procedure target by
@@ -18489,7 +18518,11 @@ rule the interpreter reads. The call passes the exact descriptor attached to
 the input or result list plus the committed item layout; the runtime projects
 the item descriptor and performs the operation's internal ownership work. A
 list without a descriptor, or whose items are scalars, continues to use the
-ordinary builtin ABI with concrete RC helpers. A backend must never set an
+ordinary builtin ABI with concrete RC helpers. The "items are refcounted" flag
+is `layoutContainsRefcounted` of the item's runtime layout, and the RC helper
+plan of a layout is `.noop` exactly when that predicate is false, so a backend
+supplies the item callbacks exactly when it sets the flag and never consults
+the helper plan to decide whether to pass one. A backend must never set an
 "items are refcounted" flag while supplying a missing callback, derive a
 callback from erased storage, or inspect a descriptor to choose RC behavior.
 An erased-box list that reaches such an operation without its explicit list
@@ -20786,7 +20819,10 @@ consumed read through it takes those slots from the container, and its
 other uses observe its whole range. Its definition copies only the
 container's representation, which may name slots the container has already
 given away on that path; ARC writes those slots on the definition as the
-view's residual shell, numbered in the view's own layout. This is what lets
+view's residual shell, numbered in the view's own layout. A view whose shell
+names every refcounted slot of its layout carries nothing but that
+representation, so it is readable after the container has given every slot
+away. This is what lets
 `{ cursor, builder: { nodes, children }, node }` returned from one call
 hand `builder.nodes` to the next append without a retain: the builder is
 read as a view each time the source names it, and each list leaves the dying
@@ -21561,7 +21597,11 @@ use (otherwise the callee holds a retained copy). The signature bits and
 rows settle to a fixpoint with the analysis, since a new row only adds
 edges. One settlement retains the immutable statement inventory, control-flow
 topology, and exact ordered-use answers while rebuilding signature-dependent
-lattice state when its inputs change. Procedures sharing reachable statement
+lattice state when its inputs change. The topology's read, definition, and
+predecessor row tables depend only on the statement inventory and the jump
+targets, so with several worker lanes they are built as one executor session
+of three tasks; each table belongs to the output allocator of the lane that
+built it. Procedures sharing reachable statement
 identities or ownership-relevant locals form one analysis component, preserving
 the base solver's combined definition and use constraints. Direct calls establish
 directed signature dependencies between components rather than merging a call
@@ -22118,6 +22158,99 @@ stack-argument copies emitted after frame finalization instead explicitly use
 X9-X11, which are volatile and carry no incoming C-ABI arguments. They preserve
 all argument registers and introduce no new callee-save or frame requirements.
 
+## LLVM Value Representation
+
+Immediately before emitting a procedure's body, the LLVM backend plans how each
+of the procedure's LIR locals is represented (`src/backend/llvm/ValuePlan.zig`).
+The plan is LLVM-specific preparation: it runs only inside the LLVM backend's
+procedure emission, so dev-backend, wasm, interpreter, and compile-time
+compilations never run it, and nothing upstream of the backend changes for it.
+It consumes explicit data only: the procedure's statements and their operands,
+local layouts, join declarations, the emitter's shared-statement edge counts,
+`lir.StackPlan` liveness over the explicit control-flow graph, and the
+procedure signatures of the Internal Calling Convention. It is valid for the
+emission of that one body; its store-indexed representation and value columns
+are reset from the procedure's own inventory when the body finishes, including
+on allocation failure, so specializations that reuse a `LocalId` never observe
+each other's plans.
+
+A local is either `memory`, one fixed-size entry-block slot with activation
+lifetime, or SSA, a sequence of LLVM values. Only a layout with a scalar
+carrier can be SSA: Bool as `i1`, an integer as `iN`, Dec as `i128`, F32 and F64,
+and a SIMD vector as its LLVM vector type. Strings, lists, boxes, pointers,
+records, tag unions, and callables stay in memory, because their consumers (RC
+helpers, builtins, field projections, host boundaries) take addresses. The
+backend does not split aggregates into components: Record Component Bindings
+and Join-Parameter Scalarization already give LIR one scalar local per component
+wherever a program reads an aggregate component-wise, and those locals become
+SSA here. A second aggregate-splitting mechanism in the backend is forbidden.
+
+A scalar-carrier local is SSA unless some operand position needs its address.
+Each operand position has a declared access. A `value` access reaches the local
+only through the emitter's representation-agnostic helpers (scalar and Bool
+reads and writes, copies, reads and writes of the local's bytes at an explicit
+memory destination, and register-piece assembly); an `address` access uses the
+local's slot. `ValuePlan.lowLevelAccess` declares the value accesses of
+low-level operations, `noteAddressedOperands` declares each statement kind's,
+and calls and the prologue follow the procedure signatures: register pieces and
+tail-group storage are value accesses, while an argument passed indirectly, a
+result returned through a pointer, a result a tail driver writes, and every
+operand of a hosted call are address accesses. A required address is a planned
+representation, not an emission-time fallback. Asking for the slot of an SSA
+local is a compiler invariant violation.
+
+An SSA local is `dominating` when it has one definition, or is a parameter that
+only the prologue defines, and is not live on entry to the procedure. Liveness
+then proves the definition dominates every read, so the emitter records its
+value once. Every other SSA local is `merged`. The merge points are exactly the
+blocks the emitter enters along more than one edge: a join's body, entered by
+its jumps (a loop's back edge is a jump), and a statement with more than one
+incoming edge, which the emitter gives a shared block. For each merge point the
+plan lists the merged locals live on entry to it, from `StackPlan`'s exact
+read-before-write liveness, so phis are pruned to live locals.
+
+Emission is a rename walk over the emitter's structured control flow. The
+emitter holds each SSA local's current definition, and every write of a merged
+local is journaled. Each branch arm (switch cases and default, both sides of an
+initialized-payload switch, string-match arms and miss, both sides of a Boxy tag
+match) and each join body first rolls the journal back to the length recorded at
+its branch or join statement, so an arm starts from exactly the definitions that
+reach it and never from a sibling arm's, whatever order the arms are emitted in.
+Every edge into a merge point, a jump or an arrival at a shared statement,
+records its block and the current definitions of the point's live merged
+locals. Entering a merge point creates one phi per such local at the start of
+its block and makes the phi the local's definition. The phis are open: their
+incoming lists are completed after the whole body is emitted, so back edges and
+edges recorded before the phis exist (a join's remainder is emitted before its
+body) need no special case. The construction never uses the most recently
+emitted value of a `LocalId`, which need not dominate the next use.
+
+The emitter creates blocks in emission order, which is not dominance order: a
+join's body block exists before the remainder that jumps to it, and a shared
+statement's block before arms emitted later. The LLVM builder therefore lays a
+function's blocks out in reverse postorder when it finishes the function, so
+every definition precedes its non-phi uses in layout order, as the bitcode
+encoding of operands by backward distance requires.
+
+A read that no definition reaches, in code no path from entry reaches or of a
+possibly-uninitialized local that LIR reads only behind its initialization
+guard, yields zero of the local's type, never `undef` or `poison`.
+
+Join parameters are ordinary locals: LIR jumps carry no operands, and lowering
+snapshots every replacement value before writing any parameter. Each write is
+an ordinary definition in program order, so simultaneous updates, including
+swaps and refcounted values released after the rebinding, keep LIR's order. The
+backend emits LIR's explicit `incref`, `decref`, and `free` statements unchanged
+and infers no ownership from SSA form.
+
+Memory boundaries are explicit helpers that write an SSA local's bytes to a
+destination or define it from bytes at a source: aggregate construction, field
+and payload loads, packed argument buffers, tail-group storage, and result
+pointers. A Bool is `i1` in SSA form and one byte in memory, and reading the byte
+tests it against zero. With local debug info enabled, a named SSA local reports
+each definition, phis included, with `llvm.dbg.value` in its procedure's own
+scope. Memory locals keep `llvm.dbg.declare`.
+
 ## Internal Calling Convention
 
 The LLVM backend gives every procedure two functions. The packed function,
@@ -22130,10 +22263,48 @@ classifies them: scalars and small aggregates as register pieces, large
 aggregates by pointer, and a small result returned by value. It is internal
 and `fastcc`, so the classification only decides how a value splits into
 scalars while LLVM assigns the registers. A direct Roc call targets the fast
-function, loading each argument's pieces from its slot and storing a by-value
-result into the target slot; the packed function is an adapter that unpacks
-the argument bytes and calls the fast one. Erased callables keep the public
-erased ABI, and hosted procedures keep the C ABI of the host.
+function; the packed function is an adapter that unpacks the argument bytes
+and calls the fast one. Erased callables keep the public erased ABI, and hosted
+procedures keep the C ABI of the host.
+
+Only a direct Roc call, an ordinary or frame-replacing `assign_call` whose
+callee has a body, and a WebAssembly tail driver dispatching to a member of its
+tail group reach a fast function, and all of them read the callee's one
+signature. Every boundary whose consumer does
+not know the callee's signature keeps a fixed ABI and reaches the body through
+the packed adapter: exported entrypoint wrappers (the platform's C ABI on one
+side, the packed function on the other), in-process evaluation entrypoints,
+Boxy dictionary thunks, procedure references stored in values (`proc_ref`
+literals and packed erased functions), frozen and static-data relocations and
+object-cache packs, which name the packed function by its external symbol.
+Erased callables are only ever called through
+function pointers and keep the erased ABI with no fast function. Hosted calls
+use the host's C ABI, builtins use their declared signatures, and none of these
+boundaries changes when a fast signature does. An escaping procedure is always
+reached through its packed function, so its fast function never needs a
+signature its consumers know.
+
+Each procedure's fast signature is built once, when the procedure is declared,
+and the declaration, the body's prologue and returns, direct and
+frame-replacing calls, the packed adapter, tail drivers, and the value plan all
+read that one signature. Register pieces move between an SSA local and its
+parameters or result directly: the local's bits are split into pieces at the
+call or return, and pieces are combined into the local's value in the prologue
+or after the call, by byte offset and target endianness. A scalar helper kept
+out of line is therefore `define internal fastcc i64 @f(i64)` with no argument
+pack or result slot, and its callers pass and receive values. An aggregate
+argument's pieces load from its slot, and a by-value aggregate result stores
+into the target's slot.
+
+The attributes follow from these contracts. An indirect argument points at the
+caller's own slot for the argument local, not at a private copy, so it is
+`readonly` and `nocapture` (the callee copies it into its own frame on entry)
+but never `noalias`: one local can be passed twice. The `sret` result pointer is
+`noalias` because the caller passes the target's slot, which no argument of the
+same call names. The packed function's argument pack is a fresh caller buffer,
+so it is `noalias`, `readonly`, and `nocapture`. The erased ABI's result,
+capture, and reuse pointers carry no `noalias`, since the result can be written
+into a reused allocation that the capture points into.
 
 ## Dev Backend Register Lifetimes
 
@@ -24268,9 +24439,8 @@ x86-64, `x64v1*` means the psABI x86-64-v1 floor (SSE2 and no later
 extensions). On AArch64, `arm64v1*` means Armv8.0-A; Apple Silicon has no v1
 twin because every supported Mac already implements the macOS floor. On wasm,
 `wasm32v1` means the WebAssembly 1.0 core instruction set without simd128.
-Operations unavailable at v1 use exact alternate instruction sequences or the
-target-independent builtin implementation; the source-level result is
-unchanged.
+Operations unavailable at v1 use exact alternate instruction sequences; the
+source-level result is unchanged.
 
 A default-level target and its v1 twin are separate platform target names with
 separate host inputs. A compiler must never link the default target's host into
@@ -24564,7 +24734,15 @@ tests. Both native dev backends instead dispatch exhaustively on the static LIR
 operation and its explicit source/destination lane kinds and emit native
 packed-integer instruction sequences. There is no compiled scalar evaluator,
 runtime operation descriptor, or fallback call. Missing native coverage is a
-compile-time exhaustiveness failure. A Lambda Mono value that does not have an
+compile-time exhaustiveness failure. At the `v1` level the x86-64 dev backend
+emits SSE2 sequences, in the legacy encoding, for every operation whose
+default-level instructions are SSSE3 or later (byte shuffles, 64-bit lane
+compares, the SSE4.1 min/max, multiply, and extension forms, horizontal adds,
+`pext`, and carryless multiply). Permutations use fixed dword and word
+shuffles, shifts, and packs; a runtime-indexed lane read and `table_lookup`
+read through a stack spill. Carryless multiply on both x86-64 and AArch64
+`v1` is a fixed 64-step shift-and-xor loop in general-purpose registers,
+because PCLMULQDQ and 64-bit PMULL both come from crypto extensions. A Lambda Mono value that does not have an
 integer bit representation is rejected explicitly rather than being replaced
 with zero. Wasm emits `v128` operations and exact helper sequences, including
 software carryless multiplication where simd128 has no instruction.
@@ -24612,7 +24790,11 @@ and verifies direct and nested vector values in both call directions.
 
 `zig build run-test-simd-differential` owns the shared proof source and runs the
 standalone dev and LLVM programs, optimized compile-time tests, every evaluator
-backend, and the Lambda Mono comparison in sequence. The corpus contains 294
+backend, and the Lambda Mono comparison in sequence. On Linux x86-64 and
+AArch64 hosts it also builds and runs the corpus as a dev program for the host
+architecture's `v1` musl target, and requires that binary to contain no
+instruction above the architecture baseline, with the default-level build of
+the same corpus as the scan's positive control. The corpus contains 294
 operation/type cases, fixed boundary values, algebraic properties, and at least
 64 deterministic generated inputs per applicable case. Every generated input
 checks each shift operation directly against the scalar oracle at its generated
