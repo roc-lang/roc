@@ -949,6 +949,9 @@ fn appendStaticDataExports(
         // A zero-fill export has no relocations, so this offset is only ever
         // used for exports placed in readonly data.
         const aligned_offset = std.mem.alignForward(usize, start, @intCast(data_export.alignment));
+        // A data symbol named by the relocation before is the symbol it
+        // interned: a list of copies of one value names it once per item.
+        var previous_data: ?struct { name: []const u8, id: SymbolTable.Id } = null;
         for (data_export.relocations) |relocation| {
             const id = switch (relocation.target) {
                 .data_symbol => |target| data_symbols[@backingInt(target)],
@@ -965,7 +968,10 @@ fn appendStaticDataExports(
                         helpers.put(helper, id) catch return CompilationError.OutOfMemory;
                         break :blk id;
                     }
-                    break :blk table.internEmitted(allocator, relocation.target_symbol_name) catch return CompilationError.OutOfMemory;
+                    if (previous_data) |previous| if (std.mem.eql(u8, previous.name, relocation.target_symbol_name)) break :blk previous.id;
+                    const id = table.internEmitted(allocator, relocation.target_symbol_name) catch return CompilationError.OutOfMemory;
+                    previous_data = .{ .name = relocation.target_symbol_name, .id = id };
+                    break :blk id;
                 },
             };
             relocations.append(allocator, .{

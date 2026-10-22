@@ -12443,7 +12443,15 @@ const Builder = struct {
                 .list => |list| switch (list) {
                     .packed_bytes, .empty => true,
                     .nodes => |children| blk: {
-                        for (children) |child| try items.add(child);
+                        // An item stored as the item before it adds nothing
+                        // to the conjunction: a list of copies of one value
+                        // names it once per item.
+                        var previous: ?checked.ConstNodeId = null;
+                        for (children) |child| {
+                            if (previous == child) continue;
+                            previous = child;
+                            try items.add(child);
+                        }
                         break :blk null;
                     },
                 },

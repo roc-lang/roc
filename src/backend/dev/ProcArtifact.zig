@@ -298,7 +298,8 @@ fn captureFragmentPrepared(
 
 fn cloneData(a: Allocator, item: DataItem) Allocator.Error!DataItem {
     const relocations = try a.dupe(DataRelocation, item.relocations);
-    for (relocations) |*relocation| relocation.name = try a.dupe(u8, relocation.name);
+    var copier = NameCopier{};
+    for (relocations) |*relocation| relocation.name = try copier.copy(a, relocation.name);
     return .{
         .name = try a.dupe(u8, item.name),
         .bytes = try a.dupe(u8, item.bytes),
@@ -308,6 +309,21 @@ fn cloneData(a: Allocator, item: DataItem) Allocator.Error!DataItem {
         .program_local_name = item.program_local_name,
     };
 }
+
+/// Copies relocation target names into an allocator, once for each run of
+/// relocations in a row that name the same symbol, which share the copy: a
+/// list of copies of one value names it once per item.
+const NameCopier = struct {
+    source: ?[]const u8 = null,
+    copied: []const u8 = &.{},
+
+    fn copy(self: *NameCopier, a: Allocator, name: []const u8) Allocator.Error![]const u8 {
+        if (self.source) |source| if (std.mem.eql(u8, source, name)) return self.copied;
+        self.copied = try a.dupe(u8, name);
+        self.source = name;
+        return self.copied;
+    }
+};
 
 /// Deep-copy sets into one ownership domain, rebasing only set-local references.
 /// Callers select cache entries using their full compilation provenance.
@@ -656,16 +672,41 @@ pub const ContentNames = struct {
     /// Writes the digest of `item`'s rendering and returns the shallowest
     /// stack depth that rendering referred back to.
     fn write(self: *ContentNames, hasher: *Sha256, item: DataItem) Allocator.Error!u32 {
-        if (self.active.get(item.name)) |depth| {
-            hasher.update("cycle");
-            writeWord(hasher, self.depth - depth);
-            return depth;
+        const rendered = try self.render(item);
+        writeNaming(hasher, rendered.naming);
+        return rendered.low;
+    }
+
+    /// How a rendering names a program-local constant: by the stack depth it
+    /// is active at, or by its digest.
+    const Naming = union(enum) {
+        cycle: u32,
+        data: [32]u8,
+    };
+
+    const Rendered = struct {
+        naming: Naming,
+        /// The shallowest stack depth the rendering referred back to.
+        low: u32,
+    };
+
+    fn writeNaming(hasher: *Sha256, naming: Naming) void {
+        switch (naming) {
+            .cycle => |distance| {
+                hasher.update("cycle");
+                writeWord(hasher, distance);
+            },
+            .data => |digest| {
+                hasher.update("data");
+                hasher.update(&digest);
+            },
         }
-        if (self.digests.get(item.name)) |digest| {
-            hasher.update("data");
-            hasher.update(&digest);
-            return no_reference;
-        }
+    }
+
+    /// How `item` is named where a rendering refers to it.
+    fn render(self: *ContentNames, item: DataItem) Allocator.Error!Rendered {
+        if (self.active.get(item.name)) |depth| return .{ .naming = .{ .cycle = self.depth - depth }, .low = depth };
+        if (self.digests.get(item.name)) |digest| return .{ .naming = .{ .data = digest }, .low = no_reference };
         const depth = self.depth;
         try self.active.putNoClobber(self.allocator, item.name, depth);
         self.depth += 1;
@@ -691,13 +732,28 @@ pub const ContentNames = struct {
         };
         defer if (!in_order) self.allocator.free(relocations);
         writeWord(&sub, @intCast(relocations.len));
+        // A relocation naming the same symbol, the same way, as the one before
+        // it renders the same reference: rendering a target leaves the active
+        // stack as it found it, and one already rendered renders again as it
+        // did. A list of copies of one value names it once per item.
+        var previous: ?struct { name: []const u8, code: bool, target: ?Rendered } = null;
         for (relocations) |relocation| {
             writeWord(&sub, relocation.offset);
             writeWide(&sub, @bitCast(relocation.addend));
             sub.update(&.{ @intFromBool(relocation.function), @intFromBool(relocation.external) });
-            const target = if (relocation.function or relocation.external) null else self.items.get(relocation.name);
-            if (target != null and target.?.program_local_name) {
-                low = @min(low, try self.write(&sub, target.?));
+            const code = relocation.function or relocation.external;
+            const repeated = if (previous) |last| last.code == code and std.mem.eql(u8, last.name, relocation.name) else false;
+            if (!repeated) {
+                const target = if (code) null else self.items.get(relocation.name);
+                previous = .{
+                    .name = relocation.name,
+                    .code = code,
+                    .target = if (target != null and target.?.program_local_name) try self.render(target.?) else null,
+                };
+            }
+            if (previous.?.target) |rendered| {
+                writeNaming(&sub, rendered.naming);
+                low = @min(low, rendered.low);
             } else {
                 sub.update("named");
                 writeWord(&sub, @intCast(relocation.name.len));
@@ -705,13 +761,11 @@ pub const ContentNames = struct {
             }
         }
         const digest = sub.finalResult();
-        hasher.update("data");
-        hasher.update(&digest);
         if (low >= depth) {
             try self.digests.put(self.allocator, item.name, digest);
-            return no_reference;
+            return .{ .naming = .{ .data = digest }, .low = no_reference };
         }
-        return low;
+        return .{ .naming = .{ .data = digest }, .low = low };
     }
 
     fn relocationOffsetBefore(_: void, a: DataRelocation, b: DataRelocation) bool {
@@ -758,6 +812,7 @@ pub const PreparedData = struct {
         }
         for (constant_exports) |constant| {
             const relocations = try a.alloc(DataRelocation, constant.relocations.len);
+            var copier = NameCopier{};
             for (constant.relocations, relocations) |relocation, *out| {
                 const name = switch (relocation.target) {
                     .data_symbol => |target| constant_exports[@backingInt(target)].symbol_name,
@@ -765,7 +820,7 @@ pub const PreparedData = struct {
                 };
                 out.* = .{
                     .offset = @intCast(relocation.offset),
-                    .name = try a.dupe(u8, name),
+                    .name = try copier.copy(a, name),
                     .addend = relocation.addend,
                     .function = switch (relocation.kind) {
                         .address => false,
@@ -1240,10 +1295,7 @@ fn captureData(
         if (visited.found_existing) continue;
         const item = prepared.items.get(name) orelse return error.DanglingReference;
         try data.append(arena_allocator, try cloneData(arena_allocator, item));
-        for (item.relocations) |relocation| {
-            if (relocation.function or relocation.external) continue;
-            try pending.append(allocator, relocation.name);
-        }
+        try appendDataTargets(allocator, &pending, item.relocations);
     }
     return try data.toOwnedSlice(arena_allocator);
 }
@@ -1270,10 +1322,32 @@ pub fn dataClosure(
         if ((try seen.getOrPut(name)).found_existing) continue;
         const item = catalog.items.get(name) orelse return error.DanglingReference;
         try out.append(allocator, item);
-        for (item.relocations) |relocation| {
-            if (relocation.function or relocation.external) continue;
-            try pending.append(allocator, relocation.name);
-        }
+        try appendDataTargets(allocator, &pending, item.relocations);
+    }
+}
+
+/// Append to `pending` every symbol `relocations` name, code included, each
+/// once per run of relocations that name it in a row.
+fn appendRelocationTargets(allocator: Allocator, pending: *std.ArrayList([]const u8), relocations: []const DataRelocation) Allocator.Error!void {
+    var previous: ?[]const u8 = null;
+    for (relocations) |relocation| {
+        if (previous) |name| if (std.mem.eql(u8, name, relocation.name)) continue;
+        previous = relocation.name;
+        try pending.append(allocator, relocation.name);
+    }
+}
+
+/// Append to `pending` the constants `relocations` name, skipping code
+/// targets. A target the relocation before it also names is the same
+/// constant, already appended: a list of copies of one value names it once
+/// per item.
+fn appendDataTargets(allocator: Allocator, pending: *std.ArrayList([]const u8), relocations: []const DataRelocation) Allocator.Error!void {
+    var previous: ?[]const u8 = null;
+    for (relocations) |relocation| {
+        if (relocation.function or relocation.external) continue;
+        if (previous) |name| if (std.mem.eql(u8, name, relocation.name)) continue;
+        previous = relocation.name;
+        try pending.append(allocator, relocation.name);
     }
 }
 
@@ -1395,7 +1469,7 @@ pub fn retainReachable(allocator: Allocator, set: *const Set, catalog: *const Pr
             }
             if ((try data_seen.getOrPut(name)).found_existing) continue;
             const item = catalog.items.get(name) orelse continue;
-            for (item.relocations) |relocation| try data_work.append(allocator, relocation.name);
+            try appendRelocationTargets(allocator, &data_work, item.relocations);
         }
     }
 
@@ -1613,7 +1687,17 @@ pub fn canonicalize(allocator: Allocator, set: *const Set, host_visible: []const
 
 fn renamedData(a: Allocator, item: DataItem, names: *const ContentNames) Allocator.Error!DataItem {
     const relocations = try a.dupe(DataRelocation, item.relocations);
-    for (relocations) |*relocation| relocation.name = try a.dupe(u8, names.of(relocation.name));
+    var copier = NameCopier{};
+    var previous: ?[]const u8 = null;
+    var renamed: []const u8 = &.{};
+    for (relocations) |*relocation| {
+        const same = if (previous) |name| std.mem.eql(u8, name, relocation.name) else false;
+        if (!same) {
+            previous = relocation.name;
+            renamed = names.of(relocation.name);
+        }
+        relocation.name = try copier.copy(a, renamed);
+    }
     return .{
         .name = try a.dupe(u8, names.of(item.name)),
         .bytes = try a.dupe(u8, item.bytes),
