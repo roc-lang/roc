@@ -8502,11 +8502,14 @@ and ordinary value flow expose a known iterator constructor, SpecConstr can:
 
 When the continuation never observes a tuple loop result whole, SpecConstr
 gives the loop an exit ABI of the components it reads, dropping any it cannot
-observe, without narrowing its back-edge state. That includes a result whose
-every component is read: built as a tuple at each exit and read back field by
-field, each read of a refcounted tuple would retain and release every
-refcounted component, which a loop left by `break` from inside an enclosing
-loop pays on every pass. This applies equally to source tuples and
+observe, without narrowing its back-edge state. A result whose every component
+is read takes that ABI too unless every component is a scalar (a primitive
+other than `Str`, or zero-sized): built as a tuple at each exit and read back
+field by field, each read would retain and release every refcounted component,
+which a loop left by `break` from inside an enclosing loop pays on every pass.
+A tuple of scalars costs nothing to build and take apart, and keeping it leaves
+each exit its own copy of the continuation, where values the exit fixes stay
+constants. This applies equally to source tuples and
 compiler-generated state tuples; tuple type does not imply a statically
 visible tuple constructor.
 

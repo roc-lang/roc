@@ -15,6 +15,9 @@ pub const Plan = struct {
     used_count: usize = 0,
     /// Some use observes the complete tuple rather than its components.
     whole: bool = false,
+    /// Every component is a primitive other than `Str`, or zero-sized, so
+    /// no component carries a reference count.
+    scalars_only: bool = false,
 
     pub const Item = struct {
         ty: Type.TypeId,
@@ -23,13 +26,17 @@ pub const Plan = struct {
     };
 
     /// Whether the exit should transfer the demanded components directly.
-    /// That holds whenever no use observes the tuple whole, including when
-    /// every component is demanded: a tuple the continuation only takes
-    /// apart is otherwise built at each exit and read field by field after
-    /// it, and each read of a refcounted tuple pays a retain and a release
-    /// of every refcounted component.
+    /// That holds when the continuation leaves some component unread, and,
+    /// when it reads every one, whenever some component may carry a
+    /// reference count: a tuple the continuation only takes apart is
+    /// otherwise built at each exit and read field by field after it, and
+    /// each read pays a retain and a release of every refcounted component.
+    /// A tuple of scalars costs nothing to build and take apart, and keeping
+    /// it leaves each exit's continuation its own copy, where values the
+    /// exit fixes stay constants.
     pub fn selected(self: Plan) bool {
-        return self.used_count != 0 and !self.whole;
+        if (self.used_count == 0 or self.whole) return false;
+        return self.used_count != self.items.len or !self.scalars_only;
     }
 
     fn useItem(self: *Plan, index: usize) void {
@@ -121,8 +128,24 @@ pub const Inventory = struct {
             };
             if (item.local) |local| try self.uses.put(local, .{ .plan = plan, .item = i });
         }
+        plan.scalars_only = for (plan.items) |item| {
+            if (!self.isScalar(item.ty)) break false;
+        } else true;
         if (plan.aggregate) |local| try self.uses.put(local, .{ .plan = plan, .item = null });
         try self.plans.put(pat_id, plan);
+    }
+
+    /// Whether values of `ty` never carry a reference count: a primitive
+    /// other than `Str`, or a zero-sized type.
+    fn isScalar(self: *const Inventory, ty: Type.TypeId) bool {
+        return switch (self.program.types.get(ty)) {
+            .primitive => |primitive| switch (primitive) {
+                .str => false,
+                .bool, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => true,
+            },
+            .zst => true,
+            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased => false,
+        };
     }
 
     fn useLocal(self: *Inventory, local: Ast.LocalId, field: ?u32) void {

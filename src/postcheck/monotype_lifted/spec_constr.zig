@@ -19084,11 +19084,11 @@ test "loop exit demand is linear in tuple width and rejects whole tuple uses" {
     }
 }
 
-test "loop exit demand selects a tuple whose every component is read apart" {
+test "loop exit demand selects a fully read tuple exactly when a component may be refcounted" {
     const allocator = std.testing.allocator;
     var program = emptyLiftedProgramForTest(allocator);
     defer program.deinit();
-    const ty = try program.types.add(.zst);
+    const ty = try program.types.add(.{ .list = try program.types.add(.zst) });
     const tuple_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{ ty, ty }) });
     const input = try program.addLocal(@fromBackingInt(@intCast(1)), tuple_ty);
     const ref = try program.addExpr(.{ .ty = tuple_ty, .data = .{ .local = input } });
@@ -19155,6 +19155,35 @@ test "loop exit demand selects a tuple whose every component is read apart" {
     defer whole.deinit();
     try whole.collect(whole_body);
     try std.testing.expect(!whole.hasSelection());
+
+    // Scalar components, both read, keep the tuple.
+    const scalar_ty = try program.types.add(.{ .primitive = .u64 });
+    const scalar_tuple_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{ scalar_ty, scalar_ty }) });
+    const scalar_input = try program.addLocal(@fromBackingInt(@intCast(5)), scalar_tuple_ty);
+    const scalar_ref = try program.addExpr(.{ .ty = scalar_tuple_ty, .data = .{ .local = scalar_input } });
+    const scalar_exit = try program.addExpr(.{ .ty = scalar_tuple_ty, .data = .{ .break_ = scalar_ref } });
+    const scalar_loop = try program.addExpr(.{ .ty = scalar_tuple_ty, .data = .{ .loop_ = .{
+        .params = .empty(),
+        .initial_values = .empty(),
+        .body = scalar_exit,
+    } } });
+    const scalar_first = try program.addLocal(@fromBackingInt(@intCast(6)), scalar_ty);
+    const scalar_second = try program.addLocal(@fromBackingInt(@intCast(7)), scalar_ty);
+    const scalar_pats = [_]Ast.PatId{
+        try program.addPat(.{ .ty = scalar_ty, .data = .{ .bind = scalar_first } }),
+        try program.addPat(.{ .ty = scalar_ty, .data = .{ .bind = scalar_second } }),
+    };
+    const scalar_pat = try program.addPat(.{ .ty = scalar_tuple_ty, .data = .{ .tuple = try program.addPatSpan(&scalar_pats) } });
+    const scalar_reads = [_]Ast.ExprId{
+        try program.addExpr(.{ .ty = scalar_ty, .data = .{ .local = scalar_first } }),
+        try program.addExpr(.{ .ty = scalar_ty, .data = .{ .local = scalar_second } }),
+    };
+    const scalar_rest = try program.addExpr(.{ .ty = scalar_tuple_ty, .data = .{ .tuple = try program.addExprSpan(&scalar_reads) } });
+    const scalar_body = try program.addExpr(.{ .ty = scalar_tuple_ty, .data = .{ .let_ = .{ .bind = scalar_pat, .value = scalar_loop, .rest = scalar_rest } } });
+    var scalars = ExitDemand.Inventory.init(allocator, &program);
+    defer scalars.deinit();
+    try scalars.collect(scalar_body);
+    try std.testing.expect(scalars.get(scalar_pat) == null);
 }
 
 test "loop exit projection retains typed boundaries around known tuples" {
