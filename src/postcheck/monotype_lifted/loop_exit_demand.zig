@@ -143,7 +143,7 @@ pub const Inventory = struct {
                 .str => false,
                 .bool, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => true,
             },
-            .zst => true,
+            .zst, .hole => true,
             .named, .record, .tuple, .tag_union, .list, .box, .func, .erased => false,
         };
     }
