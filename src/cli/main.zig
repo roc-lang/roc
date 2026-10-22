@@ -10681,6 +10681,88 @@ fn staticDataLinkRootSymbols(
     return symbols.items;
 }
 
+/// The static data a dev object's link must keep: each constant the host binds
+/// by name. A dev object defines only its host-visible constants under their
+/// own names (design.md "Canonical Dev Images"); every other constant is named
+/// by its content and reached through the code that names it, so a program's
+/// own name for it (such as a static-data slot's) is not a symbol of the
+/// object. A link told to keep such a name fails where a forced undefined
+/// symbol must resolve, as on COFF.
+fn devObjectLinkRootSymbols(arena: Allocator, static_data_exports: []const backend.StaticDataExport) Allocator.Error![]const []const u8 {
+    var symbols = std.ArrayList([]const u8).empty;
+    for (static_data_exports) |data_export| {
+        if (data_export.is_exported) try symbols.append(arena, data_export.symbol_name);
+    }
+    return symbols.items;
+}
+
+test "a dev object defines every static datum its link keeps" {
+    const allocator = std.testing.allocator;
+    const text = "a constant the program names for itself";
+    inline for (.{ RocTarget.x64linux, RocTarget.x64win }) |target| {
+        var arena_state = base.SingleThreadArena.init(allocator);
+        defer arena_state.deinit();
+        const a = arena_state.allocator();
+        var store = lir.LirStore.init(a);
+        defer store.deinit();
+        var layouts = try layout.Store.init(a, .u64);
+        defer layouts.deinit();
+        // The entry reads static-data slot 7, whose string the program names
+        // for itself; the host binds `roc_answer` by name.
+        const local = try store.addLocal(.{ .layout_idx = .str });
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
+        const body = try store.addCFStmt(.{ .assign_literal = .{
+            .target = local,
+            .value = .{ .static_data = .{ .id = @fromBackingInt(@intCast(7)) } },
+            .next = ret,
+        } }, .test_fixture);
+        const proc = try store.addProcSpec(.{
+            .name = store.freshSyntheticSymbol(),
+            .identity = lir.ProcIdentity.forTest(719),
+            .args = .empty(),
+            .body = body,
+            .ret_layout = .str,
+        }, .none);
+        const descriptor = try a.alloc(u8, 24);
+        @memset(descriptor, 0);
+        std.mem.writeInt(u64, descriptor[8..16], text.len << 1, .little);
+        std.mem.writeInt(u64, descriptor[16..24], text.len, .little);
+        const backing = try a.alloc(u8, 16 + text.len);
+        @memset(backing[0..16], 0);
+        @memcpy(backing[16..], text);
+        const relocation = try a.alloc(backend.StaticDataRelocation, 1);
+        relocation[0] = .{
+            .offset = 0,
+            .target_symbol_name = "roc__d7_1",
+            .target = .{ .data_symbol = @fromBackingInt(@intCast(1)) },
+            .addend = 8,
+        };
+        const exports = [_]backend.StaticDataExport{
+            .{ .symbol_name = "roc__d7", .value_id = @fromBackingInt(@intCast(7)), .bytes = descriptor, .alignment = 8, .is_global = true, .is_exported = false, .relocations = relocation },
+            .{ .symbol_name = "roc__d7_1", .bytes = backing, .symbol_offset = 8, .alignment = 8, .is_global = true, .is_exported = false },
+            .{ .symbol_name = "roc_answer", .bytes = try a.dupe(u8, "\x2a\x00\x00\x00\x00\x00\x00\x00"), .alignment = 8, .is_global = true, .is_exported = true },
+        };
+        const entrypoints = [_]backend.Entrypoint{.{ .symbol_name = "roc__main", .proc = proc, .arg_layouts = &.{}, .ret_layout = .str }};
+        var compiler = backend.ObjectFileCompiler.init(allocator);
+        var result = try compiler.compileToObjectFile(&store, &layouts, &entrypoints, &exports, store.getProcSpecs(), &.{}, &.{}, &.{}, target);
+        defer result.deinit();
+
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.o", .data = result.object_bytes });
+        const object_path = try tmp.dir.realPathFileAlloc(std.testing.io, "app.o", a);
+        const roots = try devObjectLinkRootSymbols(a, &exports);
+        try std.testing.expectEqualDeep(@as([]const []const u8, &.{"roc_answer"}), roots);
+        const kept = try host_symbols.scanHostInputs(a, std.testing.io, &.{object_path}, roots);
+        try std.testing.expect(kept.all_inputs_scanned);
+        try std.testing.expectEqual(@as(usize, 0), kept.missing.len);
+        // The slot is named by its content in the object, never as the
+        // program named it.
+        const slot = try host_symbols.scanHostInputs(a, std.testing.io, &.{object_path}, &.{ "roc__d7", "roc__d7_1" });
+        try std.testing.expectEqual(@as(usize, 2), slot.missing.len);
+    }
+}
+
 fn sharedLibraryAppExports(
     ctx: *CliCtx,
     entrypoints: []const backend.Entrypoint,
@@ -11876,7 +11958,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
 
     const link_facts: ProgramOutput.LinkFacts = .{
         .hosted_symbols = try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store),
-        .link_root_symbols = try staticDataLinkRootSymbols(ctx, static_data_exports, false),
+        .link_root_symbols = try devObjectLinkRootSymbols(ctx.arena, static_data_exports),
         .app_export_symbols = try sharedLibraryAppExports(ctx, entrypoints, static_data_exports),
     };
     // The optimized object packs that served this program's specializations.
