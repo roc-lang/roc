@@ -848,24 +848,29 @@ pub const InterfaceConstraints = struct {
     /// expansions of one request constrain its interface identically exactly
     /// when these bytes agree.
     pub fn equivalenceIdentityInto(self: InterfaceConstraints, graph: *InstGraph, allocator: Allocator) Allocator.Error![]const u8 {
-        var arena = graph.acquireArena();
-        defer graph.releaseArena(arena);
         // An open class without a witness reads its settled type from an
-        // instance of these constraints.
+        // instance of these constraints. The instance lives in a graph of its
+        // own over `graph`'s stores: comparing two summaries must leave the
+        // graph they describe exactly as it was, or the nodes of the instance
+        // would join every later scan of that graph's classes.
+        const instance_graph = try InstGraph.create(graph.allocator, graph.types, graph.name_store);
+        defer instance_graph.destroy();
+        var arena = instance_graph.acquireArena();
+        defer instance_graph.releaseArena(arena);
         const instance = try arena.allocator().alloc(NodeId, self.nodes.len);
-        try self.instantiateNodes(graph, instance, GraphDomain{});
-        var renumberer = EquivalenceRenumberer{ .source = self, .graph = graph, .instance = instance, .types = graph.types, .name_store = graph.name_store, .allocator = arena.allocator() };
+        try self.instantiateNodes(instance_graph, instance, GraphDomain{});
+        var renumberer = EquivalenceRenumberer{ .source = self, .graph = instance_graph, .instance = instance, .types = instance_graph.types, .name_store = instance_graph.name_store, .allocator = arena.allocator() };
         const constraints = try renumberer.run();
         var writer = IdentityWriter{
-            .graph = graph,
-            .bytes = graph.identity_bytes_scratch,
-            .leaves = graph.identity_leaves_scratch,
+            .graph = instance_graph,
+            .bytes = instance_graph.identity_bytes_scratch,
+            .leaves = instance_graph.identity_leaves_scratch,
         };
         defer {
             writer.bytes.clearRetainingCapacity();
             writer.leaves.clearRetainingCapacity();
-            graph.identity_bytes_scratch = writer.bytes;
-            graph.identity_leaves_scratch = writer.leaves;
+            instance_graph.identity_bytes_scratch = writer.bytes;
+            instance_graph.identity_leaves_scratch = writer.leaves;
         }
         try writer.write(InterfaceConstraints, constraints);
         return try allocator.dupe(u8, writer.bytes.items);
@@ -14948,6 +14953,38 @@ test "interface agreement ignores finished witnesses of open classes" {
     const expected = try settled_capture.equivalenceIdentityInto(graph, graph.arena());
     try std.testing.expectEqualSlices(u8, expected, try live_capture.equivalenceIdentityInto(graph, graph.arena()));
     try std.testing.expectEqualSlices(u8, expected, try witnessed_capture.equivalenceIdentityInto(graph, graph.arena()));
+}
+
+test "comparing interface summaries leaves the graph they describe unchanged" {
+    const allocator = std.testing.allocator;
+    var types = Type.Store.init(allocator);
+    defer types.deinit();
+    var name_store = names.NameStore.init(allocator);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(allocator, &types, &name_store);
+    defer graph.destroy();
+    const def: Type.TypeDef = .{
+        .module = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xC6)))),
+        .type_name = try name_store.internTypeName("Compared"),
+    };
+    var args = [_]NodeId{try graph.newNode(.{ .unresolved = InstVariable.placeholder() })};
+    const instance = try graph.newNode(try graph.namedContent(.{
+        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1) },
+        .def = def,
+        .kind = .nominal,
+        .builtin_owner = null,
+        .args = &args,
+        .backing = .{ .node = try graph.newNode(.empty_record), .use = .inspectable },
+    }));
+    const capture = try InterfaceConstraints.capture(graph, graph.arena(), &.{instance});
+    try std.testing.expect(capture.nodes[0] == .open);
+    const nodes_before = graph.nodes.items.len;
+    _ = try capture.equivalenceIdentityInto(graph, graph.arena());
+    // A comparison that instantiated its constraints here would leave a
+    // second named instance with an unfilled argument in the graph, which a
+    // later scan of every class, such as generated iterator finalization,
+    // would seal.
+    try std.testing.expectEqual(nodes_before, graph.nodes.items.len);
 }
 
 test "interface constraints keep cycles open when a later edge reaches a variable" {
