@@ -571,12 +571,9 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         source.* = .{
             .template = &inserter,
             .proc = proc,
-            // A static initializer is construction-only LIR that the static
-            // data materializer evaluates symbolically and no backend ever
-            // emits, so reference counts in it would never run: ARC neither
-            // prepares nor emits it, and nothing calls it, so no variant
-            // inherits its body.
-            .body = if (spec.is_static_initializer) null else spec.body,
+            // ARC neither prepares nor emits a static initializer, and
+            // nothing calls one, so no variant inherits its body.
+            .body = spec.arcBody(),
             .frame = spec.frame_locals,
         };
     }
@@ -711,7 +708,7 @@ fn recordObjectCacheFacts(
     try recordTailGroups(store, solution);
     for (0..proc_count) |proc_index| {
         const proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
-        if (store.getProcSpecImmediate(proc).body == null) continue;
+        if (store.getProcSpecImmediate(proc).arcBody() == null) continue;
         const sig = solution.sigOf(proc);
         const rows = solution.sigTable().retConditionsOf(sig);
         const words = try store.allocator.alloc(u32, rows.len);
