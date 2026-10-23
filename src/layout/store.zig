@@ -977,7 +977,7 @@ pub const Store = struct {
         }
 
         pub fn eql(ctx: RecursiveKeyAdapter, key: RecursiveGraphAnalysis.RecursiveKey, position: u32) bool {
-            return std.mem.eql(u8, &key, &ctx.entries[position].key);
+            return std.meta.eql(key, ctx.entries[position].key);
         }
     };
 
