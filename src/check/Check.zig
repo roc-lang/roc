@@ -1123,14 +1123,15 @@ ambiguity_candidates: std.ArrayListUnmanaged(AmbiguityCandidate) = .empty,
 /// remain distinct, while repeated explicit requirements on one shared outer
 /// receiver contribute only one judgment candidate.
 ambiguity_candidate_by_key: std.AutoHashMapUnmanaged(AmbiguityCandidateKey, u32) = .empty,
-/// Undo journal for `requires_current_resolution` escalations performed while
-/// a probe is open: each entry is the index of a candidate whose flag an
-/// in-probe repeated observation flipped. `Probe.rollback` resets the flags
-/// its scope journaled (the observation was speculative work that did not
+/// Undo journal for the monotone candidate payload flips performed while a
+/// probe is open: each entry names a candidate and the payload an in-probe
+/// repeated observation flipped (`requires_current_resolution` escalated, or
+/// `position` raised to `.row_tail`). `Probe.rollback` resets the flips its
+/// scope journaled (the observation was speculative work that did not
 /// survive), while `Probe.commit` drops the entries keeping the flips (a
-/// committed probe's observation is as real as an unprobed one). Escalations
+/// committed probe's observation is as real as an unprobed one). Flips
 /// performed with no probe open are permanent and never journaled.
-ambiguity_escalation_journal: std.ArrayListUnmanaged(u32) = .empty,
+ambiguity_candidate_journal: std.ArrayListUnmanaged(AmbiguityCandidateFlip) = .empty,
 /// Index into `ambiguity_candidates` where the currently-processing top-level
 /// def's entries begin. Generalization events scan only from here: entries
 /// below the cursor belong to earlier defs and are either already judged or
@@ -1821,7 +1822,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .pending_scheme_requirement_dispatchers = .boundary,
     .ambiguity_candidates = .boundary,
     .ambiguity_candidate_by_key = .keyed,
-    .ambiguity_escalation_journal = .frame_partitioned,
+    .ambiguity_candidate_journal = .frame_partitioned,
     .ambiguity_candidates_def_start = .lexical,
     .ambiguity_candidates_residual_checked = .keyed,
     .ambiguity_verdicts = .settled,
@@ -2340,6 +2341,13 @@ const AmbiguityCandidate = struct {
         /// gated on an in-module dispatch use or a body-forced contract.
         instantiation,
     };
+};
+
+/// One journaled flip of a candidate's monotone payload
+/// (`ambiguity_candidate_journal`).
+const AmbiguityCandidateFlip = struct {
+    candidate: u32,
+    payload: enum(u8) { requires_current_resolution, row_tail },
 };
 
 const AmbiguityCandidateKey = struct {
@@ -15489,26 +15497,28 @@ fn recordAmbiguityCandidate(
     if (entry.found_existing) {
         // Repeated observations of one obligation are one judgment candidate,
         // but the payload is monotone: any direct executable observation makes
-        // current resolution mandatory. An in-probe observation of a pre-probe
-        // candidate flips the flag like any other—the probe's rollback
-        // truncates candidate entries, not their payloads, so the flip is
-        // journaled (`ambiguity_escalation_journal`) and the probe scope
-        // settles it: rollback resets it (no phantom escalation from
-        // speculative work), commit keeps it (a committed probe's observation
-        // is as real as an unprobed one).
+        // current resolution mandatory, and any observation of the receiver
+        // in a row's tail gives it that row's default. An in-probe observation
+        // of a pre-probe candidate flips the payload like any other—the
+        // probe's rollback truncates candidate entries, not their payloads, so
+        // the flip is journaled (`ambiguity_candidate_journal`) and the probe
+        // scope settles it: rollback resets it (no phantom escalation or row
+        // default from speculative work), commit keeps it (a committed probe's
+        // observation is as real as an unprobed one).
         const candidate_idx = entry.value_ptr.*;
-        if (requires_current_resolution and
-            !self.ambiguity_candidates.items[candidate_idx].requires_current_resolution)
-        {
+        const candidate = &self.ambiguity_candidates.items[candidate_idx];
+        if (requires_current_resolution and !candidate.requires_current_resolution) {
             if (self.probe_depth > 0) {
-                try self.ambiguity_escalation_journal.append(self.gpa, candidate_idx);
+                try self.ambiguity_candidate_journal.append(self.gpa, .{ .candidate = candidate_idx, .payload = .requires_current_resolution });
             }
-            self.ambiguity_candidates.items[candidate_idx].requires_current_resolution = true;
+            candidate.requires_current_resolution = true;
         }
-        // A variable that stands in a row's tail stands only in row tails, so
-        // any observation of that position is a fact about the receiver
-        // itself, which a probe rollback does not retract.
-        if (position == .row_tail) self.ambiguity_candidates.items[candidate_idx].position = .row_tail;
+        if (position == .row_tail and candidate.position != .row_tail) {
+            if (self.probe_depth > 0) {
+                try self.ambiguity_candidate_journal.append(self.gpa, .{ .candidate = candidate_idx, .payload = .row_tail });
+            }
+            candidate.position = .row_tail;
+        }
         return;
     }
     errdefer {
@@ -36695,7 +36705,7 @@ const Probe = struct {
     instantiation_dispatchers_checked: usize,
     pending_scheme_requirement_dispatchers_len: usize,
     ambiguity_candidates_len: usize,
-    ambiguity_escalation_journal_len: usize,
+    ambiguity_candidate_journal_len: usize,
     scheme_requirement_candidates_len: usize,
     open_literal_vars_len: usize,
     open_numeral_literals_len: usize,
@@ -36741,12 +36751,16 @@ const Probe = struct {
         self.check.instantiation_dispatchers.shrinkRetainingCapacity(self.instantiation_dispatchers_len);
         self.check.instantiation_dispatchers_checked = self.instantiation_dispatchers_checked;
         self.check.pending_scheme_requirement_dispatchers.shrinkRetainingCapacity(self.pending_scheme_requirement_dispatchers_len);
-        // Escalation flips journaled by this probe scope were speculative
-        // work: reset them before the candidate truncation below, while every
+        // Payload flips journaled by this probe scope were speculative work:
+        // reset them before the candidate truncation below, while every
         // journaled index is still in bounds.
-        while (self.check.ambiguity_escalation_journal.items.len > self.ambiguity_escalation_journal_len) {
-            const flipped_idx = self.check.ambiguity_escalation_journal.pop().?;
-            self.check.ambiguity_candidates.items[flipped_idx].requires_current_resolution = false;
+        while (self.check.ambiguity_candidate_journal.items.len > self.ambiguity_candidate_journal_len) {
+            const flip = self.check.ambiguity_candidate_journal.pop().?;
+            const flipped = &self.check.ambiguity_candidates.items[flip.candidate];
+            switch (flip.payload) {
+                .requires_current_resolution => flipped.requires_current_resolution = false,
+                .row_tail => flipped.position = .value,
+            }
         }
         self.check.shrinkAmbiguityCandidatesTo(self.ambiguity_candidates_len);
         self.check.shrinkSchemeRequirementCandidatesTo(self.scheme_requirement_candidates_len);
@@ -36819,10 +36833,10 @@ const Probe = struct {
         std.debug.assert(self.check.probe_depth > 0);
         self.check.types.commitSavepoint(&self.savepoint);
         self.check.probe_depth -= 1;
-        // Escalation flips this scope journaled are kept—the committed
+        // Payload flips this scope journaled are kept—the committed
         // observations are real—so the journal entries are dead weight and
         // drop with the scope.
-        self.check.ambiguity_escalation_journal.shrinkRetainingCapacity(self.ambiguity_escalation_journal_len);
+        self.check.ambiguity_candidate_journal.shrinkRetainingCapacity(self.ambiguity_candidate_journal_len);
         if (self.check.probe_depth == 0 and !self.check.commit_probe_active) {
             try self.check.registerProbeLinks();
         }
@@ -36834,7 +36848,7 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
     const instantiation_dispatchers_len = self.instantiation_dispatchers.items.len;
     const pending_scheme_requirement_dispatchers_len = self.pending_scheme_requirement_dispatchers.items.len;
     const ambiguity_candidates_len = self.ambiguity_candidates.items.len;
-    const ambiguity_escalation_journal_len = self.ambiguity_escalation_journal.items.len;
+    const ambiguity_candidate_journal_len = self.ambiguity_candidate_journal.items.len;
     const scheme_requirement_candidates_len = self.scheme_requirement_candidates.items.len;
     const open_literal_vars_len = self.open_literal_vars.items.len;
     const open_numeral_literals_len = self.open_numeral_literals.items.len;
@@ -36876,7 +36890,7 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
         .instantiation_dispatchers_checked = self.instantiation_dispatchers_checked,
         .pending_scheme_requirement_dispatchers_len = pending_scheme_requirement_dispatchers_len,
         .ambiguity_candidates_len = ambiguity_candidates_len,
-        .ambiguity_escalation_journal_len = ambiguity_escalation_journal_len,
+        .ambiguity_candidate_journal_len = ambiguity_candidate_journal_len,
         .scheme_requirement_candidates_len = scheme_requirement_candidates_len,
         .open_literal_vars_len = open_literal_vars_len,
         .open_numeral_literals_len = open_numeral_literals_len,
@@ -52508,10 +52522,10 @@ test "an orphan dispatch obligation is adopted only by the outermost frame" {
     );
 }
 
-// THE ESCALATION JOURNAL CONTRACT (`ambiguity_escalation_journal`): a repeated
+// THE CANDIDATE JOURNAL CONTRACT (`ambiguity_candidate_journal`): a repeated
 // in-probe observation that flips a pre-probe candidate's
-// `requires_current_resolution` is speculative exactly as long as its probe
-// can still roll back. Rollback must reset the flip (no phantom escalation
+// `requires_current_resolution` or `position` is speculative exactly as long
+// as its probe can still roll back. Rollback must reset the flip (no phantom escalation
 // from work that did not survive) and commit must keep it (a committed
 // probe's observation is as real as an unprobed one). Driven directly through
 // the probe API: the flip sites are reachable from several dispatch paths,
@@ -52544,7 +52558,7 @@ test "in-probe ambiguity escalation is journaled: rollback resets, commit keeps"
         probe.rollback();
     }
     try std.testing.expect(!checker.ambiguity_candidates.items[candidate_idx].requires_current_resolution);
-    try std.testing.expectEqual(@as(usize, 0), checker.ambiguity_escalation_journal.items.len);
+    try std.testing.expectEqual(@as(usize, 0), checker.ambiguity_candidate_journal.items.len);
 
     // Escalation inside a probe that commits: the flip is permanent and the
     // journal entry drops with the scope.
@@ -52554,7 +52568,39 @@ test "in-probe ambiguity escalation is journaled: rollback resets, commit keeps"
         try probe.commit();
     }
     try std.testing.expect(checker.ambiguity_candidates.items[candidate_idx].requires_current_resolution);
-    try std.testing.expectEqual(@as(usize, 0), checker.ambiguity_escalation_journal.items.len);
+    try std.testing.expectEqual(@as(usize, 0), checker.ambiguity_candidate_journal.items.len);
+}
+
+test "in-probe row-tail observation is journaled: rollback resets, commit keeps" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.init("RowTailJournal", "value : U64\nvalue = 42");
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+
+    const checker = &test_env.checker;
+    const receiver = try checker.types.fresh();
+    checker.checking_executable_root = false;
+
+    try checker.recordAmbiguityCandidate(receiver, .creation, null, .value);
+    const candidate_idx = checker.ambiguity_candidates.items.len - 1;
+    try std.testing.expectEqual(.value, checker.ambiguity_candidates.items[candidate_idx].position);
+
+    {
+        var probe = try checker.beginProbe(null);
+        try checker.recordAmbiguityCandidate(receiver, .creation, null, .row_tail);
+        try std.testing.expectEqual(.row_tail, checker.ambiguity_candidates.items[candidate_idx].position);
+        probe.rollback();
+    }
+    try std.testing.expectEqual(.value, checker.ambiguity_candidates.items[candidate_idx].position);
+    try std.testing.expectEqual(@as(usize, 0), checker.ambiguity_candidate_journal.items.len);
+
+    {
+        var probe = try checker.beginProbe(null);
+        try checker.recordAmbiguityCandidate(receiver, .creation, null, .row_tail);
+        try probe.commit();
+    }
+    try std.testing.expectEqual(.row_tail, checker.ambiguity_candidates.items[candidate_idx].position);
+    try std.testing.expectEqual(@as(usize, 0), checker.ambiguity_candidate_journal.items.len);
 }
 
 const DerivedMapAnalysis = struct {

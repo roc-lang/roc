@@ -1631,3 +1631,19 @@ test "check - issue 12521 - a hashed payload in an unpinned call's open row stay
     defer test_env.deinit();
     try test_env.assertOneTypeError("Missing Method");
 }
+
+test "check - issue 12521 - a hashed row tail that is also a value type is closed at an unpinned call" {
+    // `others` ends the first set's row and is the second set's element type.
+    // Its row default closes every occurrence to the empty row.
+    const src =
+        \\make : U64 -> (Set([X, ..others]), Set(others))
+        \\    where [others.to_hash : others, Hasher -> Hasher, others.is_eq : others, others -> Bool]
+        \\make = |_n| (Set.empty().insert(X), Set.empty())
+        \\
+        \\count : U64
+        \\count = make(0).1.len()
+    ;
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
