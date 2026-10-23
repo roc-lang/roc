@@ -719,7 +719,9 @@ const cases = [_]Case{
         \\        |_| False,
         \\    )
         \\    shared_kept = List.keep_if(shared, |text| text.count_utf8_bytes() > 33)
-        \\    oks = List.keep_oks(shared, |text| if text.count_utf8_bytes() > 33 { Ok(text) } else { Err(text) })
+        \\    shared_all = List.keep_if(shared, |_| True)
+        \\    shared_none = List.keep_if(shared, |_| False)
+        \\    oks =List.keep_oks(shared, |text| if text.count_utf8_bytes() > 33 { Ok(text) } else { Err(text) })
         \\    errs = List.keep_errs(
         \\        List.concat(
         \\            ["a list element long enough to allocate", "another list element long enough"],
@@ -731,6 +733,8 @@ const cases = [_]Case{
         \\        + List.len(unique_dropped)
         \\        + List.len(unique_none)
         \\        + List.len(shared_kept)
+        \\        + List.len(shared_all)
+        \\        + List.len(shared_none)
         \\        + List.len(oks)
         \\        + List.len(errs)
         \\        + List.len(holder)

@@ -1782,6 +1782,60 @@ const core_tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "([\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\", \"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\"], [\"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\"])" },
     },
+    // A shared list is returned as it is while every item is kept. Once an
+    // item is dropped, the kept prefix and the kept items after it are copied.
+    .{
+        .name = "inspect: List.keep_if over shared list drops first, middle and last items",
+        .source =
+        \\{
+        \\    a = List.concat([1, 2, 3], [4, 5, 6])
+        \\    (
+        \\        a,
+        \\        List.keep_if(a, |x| x != 1),
+        \\        List.keep_if(a, |x| x != 3 and x != 4),
+        \\        List.keep_if(a, |x| x != 6),
+        \\        List.keep_if(a, |_| True),
+        \\        List.keep_if(a, |_| False),
+        \\    )
+        \\}
+        ,
+        .expected = .{ .inspect_str = "([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], [2.0, 3.0, 4.0, 5.0, 6.0], [1.0, 2.0, 5.0, 6.0], [1.0, 2.0, 3.0, 4.0, 5.0], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0], [])" },
+    },
+    .{
+        .name = "inspect: List.keep_oks and List.keep_errs with nothing to keep",
+        .source =
+        \\{
+        \\    a = List.concat([Str.repeat("x", 30)], [Str.repeat("y", 30)])
+        \\    no_oks : List(Str)
+        \\    no_oks = List.keep_oks(a, |s| Err(s))
+        \\    no_errs : List(Str)
+        \\    no_errs = List.keep_errs(a, |s| Ok(s))
+        \\    (a, no_oks, no_errs)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "([\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\", \"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\"], [], [])" },
+    },
+    // Two list literals and the concat allocate. Keeping every item of the
+    // shared list returns it, and keeping none allocates nothing.
+    .{
+        .name = "allocation - List.keep_if over shared list keeping all or none",
+        .source =
+        \\{
+        \\    a = List.concat([1, 2, 3], [4, 5, 6])
+        \\    all = List.keep_if(a, |_| True)
+        \\    none = List.keep_if(a, |_| False)
+        \\    if all.len() == 6 and none.len() == 0 and a.len() == 6 {
+        \\        "ok"
+        \\    } else {
+        \\        "bad"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .allocations_at_most = .{
+            .output = "ok",
+            .max_allocations = 3,
+        } },
+    },
     .{
         .name = "inspect: List.drop_if in place keeps order",
         .source = "List.drop_if(List.concat([1, 2, 3], [4, 5, 6]), |x| x == 2 or x == 5)",

@@ -4741,13 +4741,33 @@ Builtin :: [].{
 					List.drop_last($out, len - $kept)
 				}
 				_ => {
-					var $new_list = List.with_capacity(len)
-					for item in prepared {
-						if predicate(item) {
-							$new_list = list_append_unsafe($new_list, item)
-						}
+					# A shared list is returned as it is when every item is kept.
+					var $first_dropped = 0
+					while $first_dropped < len and predicate(list_get_unsafe(prepared, $first_dropped)) {
+						$first_dropped = $first_dropped + 1
 					}
-					$new_list
+					if $first_dropped == len {
+						prepared
+					} else {
+						# Copy the kept items. The items before $first_dropped were
+						# already tested, and the copy is allocated only when the first
+						# kept item needs a place, so keeping nothing allocates nothing.
+						var $new_list = []
+						var $index = 0
+						while $index < len {
+							item = list_get_unsafe(prepared, $index)
+							if $index < $first_dropped or ($index > $first_dropped and predicate(item)) {
+								reserved = if $new_list.is_empty() {
+									List.with_capacity(len)
+								} else {
+									$new_list
+								}
+								$new_list = list_append_unsafe(reserved, item)
+							}
+							$index = $index + 1
+						}
+						$new_list
+					}
 				}
 			}
 		}
@@ -4772,10 +4792,19 @@ Builtin :: [].{
 		## ```
 		keep_oks : List(before), (before -> Try(after, _err)) -> List(after)
 		keep_oks = |list, transform| {
-			var $out = List.with_capacity(list.len())
+			# Allocated when the first Ok value needs a place, so a list with no
+			# Ok value allocates nothing.
+			var $out = []
 			for item in list {
 				$out = match transform(item) {
-					Ok(after) => list_append_unsafe($out, after)
+					Ok(after) => {
+						reserved = if $out.is_empty() {
+							List.with_capacity(list.len())
+						} else {
+							$out
+						}
+						list_append_unsafe(reserved, after)
+					}
 					Err(_) => $out
 				}
 			}
@@ -4790,10 +4819,19 @@ Builtin :: [].{
 		## ```
 		keep_errs : List(before), (before -> Try(_ok, after)) -> List(after)
 		keep_errs = |list, transform| {
-			var $out = List.with_capacity(list.len())
+			# Allocated when the first Err value needs a place, so a list with no
+			# Err value allocates nothing.
+			var $out = []
 			for item in list {
 				$out = match transform(item) {
-					Err(after) => list_append_unsafe($out, after)
+					Err(after) => {
+						reserved = if $out.is_empty() {
+							List.with_capacity(list.len())
+						} else {
+							$out
+						}
+						list_append_unsafe(reserved, after)
+					}
 					Ok(_) => $out
 				}
 			}
