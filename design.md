@@ -6382,6 +6382,11 @@ consume those checked data; they must not name nested functions by allocation
 order, generated symbols, source display strings, body shape, capture shape,
 runtime layout, or LIR procedure ids.
 
+The nested-site table stores each site's checked expression, owner, lexical
+scope, evidence, and runtime captures. It does not retain a copy of the
+traversal path to each site: site identity is already explicit, and storing
+all ancestor paths costs quadratic space for deeply nested functions.
+
 Monotype body lowering tracks two function-context digests:
 
 - the owner function digest for local procedure sites output by the checked
