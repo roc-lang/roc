@@ -437,6 +437,11 @@ pub const Instantiator = struct {
     /// An entry learns the tags of the union it extends when that union's
     /// copy is finished (`OpenedMarkerExt.listed_tags`).
     opened_marker_exts: ?*std.ArrayListUnmanaged(OpenedMarkerExt) = null,
+    /// When set, the resolved fresh copy of every row extension whose source
+    /// is a constrained flex or rigid is added here: the copy stands in a row's
+    /// tail position, where the row default closes it to the empty row
+    /// (design.md "Derived Equality And Hashing Over Open Rows").
+    constrained_row_tail_copies: ?*DenseMap(Var, void) = null,
     /// How to resolve polarity vars (see `PolarityVarBehavior`). `.close`
     /// reproduces the written (closed) row and is the safe default.
     polarity_var_behavior: PolarityVarBehavior = .close,
@@ -1789,6 +1794,7 @@ pub const Instantiator = struct {
                 },
                 .await_ext => {
                     const fresh_ext = machine.value_stack.pop().?;
+                    try self.recordConstrainedRowTailCopy(frame.ext, fresh_ext);
                     try self.finishFrame(frame.common, Content{ .structure = FlatType{ .record = Record{
                         .fields = frame.fields_range,
                         .ext = fresh_ext,
@@ -1797,6 +1803,17 @@ pub const Instantiator = struct {
                 },
             }
         }
+    }
+
+    fn recordConstrainedRowTailCopy(self: *Self, source_ext: Var, fresh_ext: Var) std.mem.Allocator.Error!void {
+        const sink = self.constrained_row_tail_copies orelse return;
+        const constraints = switch (self.store.resolveVar(source_ext).desc.content) {
+            .flex => |flex| flex.constraints,
+            .rigid => |rigid| rigid.constraints,
+            .alias, .structure, .err, .field_presence => return,
+        };
+        if (constraints.len() == 0) return;
+        try sink.put(self.store.resolveVar(fresh_ext).var_, {});
     }
 
     /// Pair each copied field axis on the value stack with its re-fetched
@@ -1872,6 +1889,7 @@ pub const Instantiator = struct {
                 },
                 .await_ext => {
                     const fresh_ext = machine.value_stack.pop().?;
+                    try self.recordConstrainedRowTailCopy(frame.ext, fresh_ext);
                     // A marker resolved open is this union's ext: hand the
                     // post-body audit the tags it sits next to, so its report
                     // can suggest a listed tag for an unlisted near-miss, and
