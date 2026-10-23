@@ -10797,7 +10797,8 @@ Validation uses ordinary unification and retains the exact selected calls and
 contract roots. Their snapshot waits until final type settlement, so error-row
 widening does not require validating the shape again. Unsettled inputs retain
 their complete receiver/callable requirement when any refinable component of
-that relation escapes. Capturing an error-only dependency does not authorize
+that relation escapes through a member's interface or belongs to an enclosing
+scope. Capturing an error-only dependency does not authorize
 closing an unfinished input row. Boundary work consumes only the boundary's
 explicitly owned candidates and reaches quiescence before generalization.
 
@@ -11316,6 +11317,15 @@ callable copy, which is never attached to the shared receiver. This carries
 requirements transitively through
 helper definitions without turning ordinary same-rank creation sites into
 schemes or reconstructing ownership from solved type shape.
+
+A boundary whose root does not generalize publishes no scheme, and no use of
+its monomorphic binding instantiates one, so `retireNonGeneralizedTypeSchemes`
+hands each requirement it captured to the innermost enclosing root still
+prospective, exactly as a use's copy would; every use shares the binding's one
+type, so that single copy stands for all of them. A generated codec relation
+over an enclosing scope's variable (`g = |{}| Json.to_str(W.(r))` inside a
+function of `r`) is attached to no receiver descriptor, so this transfer is how
+the enclosing scheme learns of it and validates it at each of its own uses.
 
 Owner keys are stable raw source vars. An annotation or expected type may
 introduce a separate solved var without changing the owner key passed to the
@@ -16721,7 +16731,9 @@ uninhabited resolves by the unpinned-dispatch rule
 (`unpinnedDispatchResolution`), the same one the checker applies to a
 dispatcher no edge can pin, before any structural derivation is attempted: a
 derived map needs a payload selection only checking can make, and no value
-exists to map. If compile-time
+exists to map. A generated encoder likewise gives a tag whose payload is
+proven uninhabited no branch: no value has that tag, and the checker discharged
+that payload's encoder as statically unreachable. If compile-time
 evaluation stores that function inside another value before the
 callable is concrete, `ConstStore` retains the same symbolic entry in the
 function's evidence vector, including inside nested evidence trees. Pool offsets are not

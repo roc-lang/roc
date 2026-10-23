@@ -19685,7 +19685,7 @@ fn finishRecursiveGroupBoundary(self: *Self, defs: []const CIR.Def.Idx, member_r
             try self.bindBindingSchemeVar(expr_var, predeclared_scheme_var);
         }
     }
-    self.retireNonGeneralizedTypeSchemes(member_roots);
+    try self.retireNonGeneralizedTypeSchemes(member_roots);
     try self.retireStructurallyPublishedTypeSchemeRequirements(member_roots, env);
     try self.activateSchemeDeferredCodecConstraints(member_roots);
     try self.judgeAmbiguityCandidatesAtGeneralizationMultiRoot(member_roots);
@@ -26886,7 +26886,7 @@ const ExprCheckFrame = struct {
             env,
         );
         try checker.publishBindingScheme(self.expr_var_raw);
-        checker.retireNonGeneralizedTypeSchemes(&.{.{ .owner = self.expr_var_raw, .interface = self.expr_var }});
+        try checker.retireNonGeneralizedTypeSchemes(&.{.{ .owner = self.expr_var_raw, .interface = self.expr_var }});
         try checker.retireStructurallyPublishedTypeSchemeRequirements(
             &.{.{ .owner = self.expr_var_raw, .interface = self.expr_var }},
             env,
@@ -29500,7 +29500,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
                 try self.deduplicateGeneralizedDispatchRequirements(decl_pattern_var, decl_pattern_var, env);
                 try self.publishBindingScheme(decl_pattern_var);
                 try self.bindTypeSchemeVar(decl_pattern_var, decl_expr_var);
-                self.retireNonGeneralizedTypeSchemes(&.{.{ .owner = decl_pattern_var, .interface = decl_pattern_var }});
+                try self.retireNonGeneralizedTypeSchemes(&.{.{ .owner = decl_pattern_var, .interface = decl_pattern_var }});
                 try self.retireStructurallyPublishedTypeSchemeRequirements(
                     &.{.{ .owner = decl_pattern_var, .interface = decl_pattern_var }},
                     env,
@@ -40519,11 +40519,30 @@ fn finalizeTypeSchemeRequirementsAtCheckedBoundary(self: *Self) Allocator.Error!
 /// will become schemes; discard side-table entries for members that the
 /// boundary did not explicitly classify as schemes. Root rank is insufficient:
 /// a partially generalized scheme can have a monomorphic structural root.
-fn retireNonGeneralizedTypeSchemes(self: *Self, roots: []const BoundaryRoot) void {
+///
+/// A discarded scheme's captured requirements are not discarded with it. No
+/// use of a monomorphic binding instantiates a scheme, so nothing would copy
+/// them out; every use shares the binding's one type instead, so the innermost
+/// enclosing root still prospective receives each requirement exactly as a
+/// use's copy would. A generated codec relation over an enclosing scope's
+/// variable depends on this: it is attached to no receiver descriptor, so the
+/// enclosing scheme can only learn of it from this explicit transfer.
+fn retireNonGeneralizedTypeSchemes(self: *Self, roots: []const BoundaryRoot) Allocator.Error!void {
     for (roots) |root| {
         const scheme_idx = self.typeSchemeIndexForRoot(root.owner) orelse continue;
         const scheme = &self.type_schemes.items[scheme_idx];
         if (self.isBindingSchemeVar(scheme.root_var)) continue;
+        // Recording a candidate never adds or removes a scheme, so the index
+        // and the requirements list stay valid across the loop.
+        for (self.type_schemes.items[scheme_idx].dispatch_requirements.items) |requirement| {
+            try self.recordSchemeRequirementCandidate(
+                requirement.receiver_var,
+                requirement.constraint,
+                .scheme_copy,
+                requirement.structural_origin,
+                requirement.deferred_generated_codec,
+            );
+        }
         self.removeTypeSchemeAt(scheme_idx);
     }
 }
@@ -40675,6 +40694,19 @@ fn refinableVarsIntersect(self: *Self, a: *const collections.DenseMap(Var, void)
     return false;
 }
 
+/// Whether any refinable var in `vars` belongs to a definition enclosing the
+/// boundary at `rank`. The outermost rank is the module's own scope, which no
+/// definition's scheme encloses.
+fn refinableVarsEscapeRank(self: *Self, vars: *const collections.DenseMap(Var, void), rank: Rank) bool {
+    var iter = vars.constKeyIterator();
+    while (iter.next()) |var_| {
+        if (!self.laterUseCanRefine(var_)) continue;
+        const var_rank = @backingInt(self.types.resolveVar(var_).desc.rank);
+        if (var_rank > @backingInt(Rank.outermost) and var_rank < @backingInt(rank)) return true;
+    }
+    return false;
+}
+
 /// A codec's output error row is a constraint result, not an input to shape
 /// selection. Settled local inputs can produce those constraints before the
 /// result generalizes, while the exact calls wait for final row settlement.
@@ -40798,7 +40830,12 @@ fn captureSchemeDispatchRequirements(
                 // Unsettled codec inputs need the complete relation, including
                 // an escaping error row after the success shape was erased.
                 try self.collectReachableVars(candidate.constraint.fn_var, &codec_relation_vars);
-                break :blk self.refinableVarsIntersect(&codec_relation_vars, &interface_vars);
+                if (self.refinableVarsIntersect(&codec_relation_vars, &interface_vars)) break :blk true;
+                // A refinable input owned by an enclosing scope is refined by
+                // that scope's uses rather than this boundary's, so the
+                // relation escapes exactly as an outer-rank ordinary receiver
+                // does and needs an explicit requirement to reach them.
+                break :blk self.refinableVarsEscapeRank(&codec_relation_vars, rank);
             } else blk: {
                 if (receiver.desc.content != .flex) break :blk false;
                 if (receiver.desc.rank == .generalized) break :blk false;
