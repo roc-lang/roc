@@ -346,6 +346,9 @@ used_patterns: collections.DenseMap(Pattern.Idx, void),
 globally_resolvable_patterns: collections.DenseMap(Pattern.Idx, void),
 /// Builtin types that are automatically available in every non-Builtin module.
 builtin_auto_imported_types: collections.DenseMap(Ident.Idx, AutoImportedType),
+/// Auto-imported builtin type names that some type declaration in this
+/// source also declares. Only these can yield to a source declaration.
+builtin_type_names_declared_in_source: collections.DenseMap(Ident.Idx, void),
 /// Map from module identifier to Import.Idx for tracking unique imports.
 import_indices: collections.DenseMap(Ident.Idx, Import.Idx),
 /// Canonicalization state for parser-owned type declarations.
@@ -545,6 +548,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .used_patterns = .keyed,
     .globally_resolvable_patterns = .keyed,
     .builtin_auto_imported_types = .input,
+    .builtin_type_names_declared_in_source = .input,
     .import_indices = .keyed,
     .parser_type_decl_states = .keyed,
     .forward_prepared_type_decls = .keyed,
@@ -981,6 +985,7 @@ pub fn deinit(
     self.used_patterns.deinit();
     self.globally_resolvable_patterns.deinit();
     self.builtin_auto_imported_types.deinit();
+    self.builtin_type_names_declared_in_source.deinit();
     self.parser_type_decl_states.deinit();
     self.forward_prepared_type_decls.deinit(gpa);
     self.forward_type_scope_eligibility.deinit();
@@ -1083,6 +1088,7 @@ fn initInternal(
         .active_decl_import_aliases = .init(gpa),
         .exposed_idents = .init(gpa),
         .builtin_auto_imported_types = .init(gpa),
+        .builtin_type_names_declared_in_source = .init(gpa),
         .alias_cycle_references = .init(gpa),
         .alias_cycle_scopes = .init(gpa),
         .value_forward_references = std.AutoHashMapUnmanaged(ValueForwardKey, Scope.ForwardReference){},
@@ -1127,6 +1133,7 @@ fn initInternal(
                 context.builtin_types.builtin_indices,
             );
             try result.setupAutoImportedBuiltinTypes(env, gpa);
+            try result.recordBuiltinTypeNamesDeclaredInSource();
         }
     }
 
@@ -1849,6 +1856,23 @@ pub fn populateModuleEnvs(
             .qualified_type_ident = qualified_ident,
             .import_identity = .compiler_builtin,
         });
+    }
+}
+
+fn recordBuiltinTypeNamesDeclaredInSource(self: *Self) std.mem.Allocator.Error!void {
+    const decl_index = &self.parse_ir.decl_index;
+    for (decl_index.type_paths.items) |path| {
+        if (self.builtin_auto_imported_types.contains(path.name)) {
+            try self.builtin_type_names_declared_in_source.put(path.name, {});
+        }
+    }
+    for (decl_index.scopes.items, 0..) |_, scope_pos| {
+        const scope_idx: AST.DeclIndex.ScopeIdx = @fromBackingInt(@intCast(scope_pos));
+        for (decl_index.scopeNames(scope_idx, .type)) |name| {
+            if (self.builtin_auto_imported_types.contains(name.ident)) {
+                try self.builtin_type_names_declared_in_source.put(name.ident, {});
+            }
+        }
     }
 }
 
@@ -20677,6 +20701,7 @@ fn scopeLookupOrPrepareTypeBinding(self: *Self, ident_idx: Ident.Idx) std.mem.Al
         // An auto-imported builtin yields to a source declaration of the same
         // name that is visible here but not canonicalized yet.
         if (!typeBindingIsAutoImportedBuiltin(binding.binding.*)) return binding;
+        if (!self.builtin_type_names_declared_in_source.contains(ident_idx)) return binding;
         if (try self.ensureParserTypeBinding(ident_idx)) |declared| return declared;
         return binding;
     }
