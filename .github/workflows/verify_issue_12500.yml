@@ -1,0 +1,60 @@
+name: Verify issue 12500 memory
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/verify_issue_12500.yml
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        commit:
+          - name: before-12330
+            sha: 73df27a5bb5507e174b7afe050a54b084efcba3b
+          - name: 12330-merged
+            sha: 534956997e8e5c62888bc14cbc763f60109d0b72
+          - name: main-with-fix
+            sha: 16a3cb76e58055d9ca330d0bae2f71ef8c5a7daf
+        target:
+          - native
+          - x86-linux-musl
+    name: ${{ matrix.commit.name }} (${{ matrix.target }})
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
+        with:
+          ref: ${{ matrix.commit.sha }}
+      - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
+        with:
+          version: 0.17.0
+          use-cache: false
+
+      - name: Build the eval runner
+        run: |
+          target_flag=""
+          if [ "${{ matrix.target }}" != native ]; then target_flag="-Dtarget=${{ matrix.target }}"; fi
+          zig build build-test-eval-runner -Doptimize=ReleaseSmall $target_flag --prefix "$RUNNER_TEMP/out"
+          file "$RUNNER_TEMP/out/bin/eval-test-runner"
+
+      - name: Run the curried lambdas test
+        run: |
+          set +e
+          /usr/bin/time -v "$RUNNER_TEMP/out/bin/eval-test-runner" --timeout 300000 \
+            --filter 'issue 11698: curried lambdas' > "$RUNNER_TEMP/run.log" 2>&1
+          status=$?
+          grep -E 'curried|passed|failed|OutOfMemory|Maximum resident|Elapsed' "$RUNNER_TEMP/run.log"
+          {
+            echo "### ${{ matrix.commit.name }} (${{ matrix.target }})"
+            echo '```'
+            grep -E 'curried|passed|failed|OutOfMemory|Maximum resident|Elapsed' "$RUNNER_TEMP/run.log"
+            echo "exit status: $status"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $status
