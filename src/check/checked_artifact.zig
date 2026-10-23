@@ -3173,9 +3173,9 @@ pub const StoredNominalId = enum(u32) { _ };
 /// `pool_owner` is a `CheckedTypeStore` or `CheckedTypeStoreView`. Slice fields
 /// alias the pools; no allocation.
 ///
-/// ALIASING INVARIANT: the returned slices point INTO the store's pools. On a
-/// frozen/deserialized store the pools are immutable (buffer-backed), so this is
-/// unconditionally safe—the common case (all post-load consumers: lowering, glue).
+/// ALIASING INVARIANT: returned slices and owner-module pointers borrow the
+/// store's pools and payload array. On a frozen/deserialized store the pools
+/// are immutable (buffer-backed), so this is unconditionally safe—the common case (all post-load consumers: lowering, glue).
 /// During CONSTRUCTION the pools are growable `ArrayList`s, so a build-time caller
 /// must not retain a returned slice across a subsequent pool-growing call
 /// (`appendPool`/`commitPayload`/…), which may reallocate and dangle it; snapshot
@@ -38773,6 +38773,58 @@ test "checked type substitution reuses a closed source root without cloning" {
 
     try std.testing.expectEqual(closed, substituted);
     try std.testing.expectEqual(root_count_before, store.roots.items.len);
+}
+
+test "issue 12505 named application retains owner when substitution grows payload storage" {
+    const allocator = std.testing.allocator;
+    for ([_]bool{ false, true }) |nominal| {
+        var names = canonical.CanonicalNameStore.init(allocator);
+        defer names.deinit();
+        var store = CheckedTypeStore{};
+        defer store.deinit(allocator);
+        const owner = testCheckedModuleKey(91);
+        const origin = try names.internModuleIdentity(&owner.bytes);
+        const name = try names.internTypeName("Wrapped");
+        const formal = try store.reserveSyntheticTypeRoot(allocator, testCanonicalTypeKey(68), true);
+        try testFillSyntheticVariableRoot(allocator, &store, formal, .{ .flex = .{} });
+        const actual = try appendExplicitCheckedTypePayload(allocator, &names, &store, .empty_record);
+        const backing = try store.appendSyntheticFunctionRoot(allocator, .pure, &.{formal}, formal);
+        const args = try allocator.dupe(CheckedTypeId, &.{formal});
+        const generic = try appendExplicitCheckedTypePayload(allocator, &names, &store, if (nominal) .{ .nominal = .{
+            .name = name,
+            .origin_module = origin,
+            .owner_module = owner.digest(),
+            .source_decl = 1,
+            .builtin = null,
+            .is_opaque = true,
+            .representation = .opaque_without_backing,
+            .args = args,
+            .padding_field_types = try allocator.dupe(CheckedTypeId, &.{backing}),
+        } } else .{ .alias = .{
+            .name = name,
+            .origin_module = origin,
+            .owner_module = owner.digest(),
+            .source_decl = 1,
+            .backing = backing,
+            .args = args,
+        } });
+
+        // Make the first substituted child grow the payload array. The named
+        // type's owner is a borrowed pointer into this array, unlike its other
+        // scalar metadata.
+        while (store.payloads.items.len < store.payloads.capacity) {
+            const filler = try store.reserveSyntheticTypeRoot(allocator, testCanonicalTypeKey(@intCast(store.payloads.items.len + 100)), true);
+            try testFillSyntheticVariableRoot(allocator, &store, filler, .{ .flex = .{} });
+        }
+        const applied = try appendInstantiatedNamedApplicationFromTemplate(allocator, &names, &store, generic, &.{actual});
+        const payload = store.payload(applied);
+        const applied_owner = if (nominal) payload.nominal.owner_module else payload.alias.owner_module;
+        try std.testing.expectEqualSlices(u8, &owner.bytes, &applied_owner.bytes);
+        const applied_backing = if (nominal) payload.nominal.padding_field_types[0] else payload.alias.backing;
+        const function = store.payload(applied_backing).function;
+        try std.testing.expectEqualSlices(CheckedTypeId, &.{actual}, function.args);
+        try std.testing.expectEqual(actual, function.ret);
+    }
 }
 
 test "checked type store preserves distinct identity roots with equal variable shape" {

@@ -266,6 +266,30 @@ const issue11377GenericNominalCollectionSource =
 /// Public value `tests`.
 pub const tests = [_]TestCase{
     .{
+        .name = "issue 12505: record tuple and tag snapshots survive loop updates",
+        .source =
+        \\{
+        \\    make = |n| { a: n, b: n + 1, text: Str.concat("a heap allocated aggregate field: ", n.to_str()), items: [n, n + 2] }
+        \\    var $index = 0.U64
+        \\    var $state = make($index)
+        \\    var $sum = 0.U64
+        \\    while $index < 6 {
+        \\        snapshot = $state
+        \\        pair = (snapshot, $index)
+        \\        wrapped = if $index == 1 Empty else Full(pair)
+        \\        $index = $index + 1
+        \\        $state = make($index)
+        \\        $sum = $sum + match wrapped {
+        \\            Empty => 0
+        \\            Full((old, old_index)) => old.a + old.b + old_index + old.items.len().to_u64() + Str.count_utf8_bytes(old.text).to_u64()
+        \\        }
+        \\    }
+        \\    $sum.to_str()
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"232\"" },
+    },
+    .{
         .name = "issue 11992: local value captures itself through a function field",
         .source_kind = .module,
         .source =
