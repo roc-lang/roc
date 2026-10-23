@@ -914,7 +914,7 @@ fn resolveObjectSymbols(
         .linked_function => |function| {
             symbols[@backingInt(function.symbol)].is_function = true;
         },
-        .linked_data, .local_data, .jmp_to_return, .retired => {},
+        .linked_data, .local_data, .retired => {},
     };
     for (definitions) |definition| {
         const symbol = &symbols[@backingInt(definition.id)];

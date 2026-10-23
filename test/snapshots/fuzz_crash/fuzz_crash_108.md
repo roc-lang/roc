@@ -97,8 +97,8 @@ main! = |0| || "".P
 (inferred-types
 	(defs
 		(patt (type "Str => {}"))
-		(patt (type "a -> (({}) -> _ret) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_eq : a, a -> Bool]")))
+		(patt (type "a -> (() -> _ret) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_eq : a, a -> Bool]")))
 	(expressions
 		(expr (type "Str => {}"))
-		(expr (type "a -> (({}) -> _ret) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_eq : a, a -> Bool]"))))
+		(expr (type "a -> (() -> _ret) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_eq : a, a -> Bool]"))))
 ~~~

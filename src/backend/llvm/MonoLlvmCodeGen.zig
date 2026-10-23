@@ -2605,7 +2605,8 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Bind the fast function's parameters to the procedure's parameters:
     /// register pieces store into a slot or assemble an SSA value, and
-    /// indirect and stored arguments copy out of the caller's memory.
+    /// indirect arguments borrow stable storage when proven immutable, while
+    /// stored tail-group arguments copy out of the caller's memory.
     fn unpackFastProcArgs(self: *MonoLlvmCodeGen, proc: LirProcSpec, sig: *const FastSignature) Error!void {
         const builder, const wip = try self.builderAndWip();
         const params = self.store.getLocalSpan(proc.args);
@@ -2625,6 +2626,17 @@ pub const MonoLlvmCodeGen = struct {
                 .indirect => {
                     const src = wip.arg(cursor);
                     cursor += 1;
+                    if (self.value_plan.place(param) == .parameter) {
+                        const sa = self.sizeAlignOf(arg_layout);
+                        self.local_slots[@backingInt(param)] = .{
+                            .ptr = src,
+                            .layout_idx = arg_layout,
+                            .size = sa.size,
+                            .alignment = self.llvmAlignment(sa.alignment),
+                            .allocated = true,
+                        };
+                        continue;
+                    }
                     const param_slot = self.slot(param);
                     if (param_slot.size != 0) {
                         try self.copyBytes(param_slot.ptr, src, self.layoutDataSize(arg_layout), param_slot.alignment);
@@ -2921,6 +2933,18 @@ pub const MonoLlvmCodeGen = struct {
         } else {
             try self.unpackProcArgs(proc);
         }
+        for (self.value_plan.inventory.items) |local| {
+            const place = self.value_plan.place(local);
+            if (place != .view) continue;
+            const sa = self.sizeAlignOf(self.localLayout(local));
+            self.local_slots[@backingInt(local)] = .{
+                .ptr = try self.offsetPtr(self.slot(place.view.source).ptr, place.view.offset),
+                .layout_idx = self.localLayout(local),
+                .size = sa.size,
+                .alignment = self.llvmAlignment(sa.alignment),
+                .allocated = true,
+            };
+        }
         // The prologue's definitions are where every path starts.
         self.value_journal.clearRetainingCapacity();
         if (proc.boxy_runtime_entry) try self.emitBoxyRuntimeInit();
@@ -2996,9 +3020,51 @@ pub const MonoLlvmCodeGen = struct {
             return hasSsaCarrier(self.codegen.localLayout(local));
         }
 
+        pub fn borrowParam(self: PlanOps, index: usize) bool {
+            const sig = self.fast_sig orelse return false;
+            // Tail-group argument storage is overwritten before the next
+            // member enters; those parameters must keep their snapshots.
+            return self.proc.tail_group == null and !sig.tail_args.stored[index] and sig.lowered.args[index] == .indirect;
+        }
+
+        pub fn memoryView(self: PlanOps, assign: @FieldType(lir.LIR.CFStmt, "assign_ref")) ?ValuePlan.View {
+            const cg = self.codegen;
+            const target_layout = cg.localLayout(assign.target);
+            const target = cg.layoutValue(target_layout);
+            if (target.tag != .struct_ and target.tag != .tag_union) return null;
+            const source_layout = cg.localLayout(assign.op.source);
+            const source = cg.layoutValue(source_layout);
+            if (source.tag != .struct_ and source.tag != .tag_union) return null;
+            var field_layout = source_layout;
+            var offset: u32 = 0;
+            switch (assign.op.kind) {
+                .local, .nominal, .list_reinterpret => {},
+                .field => {
+                    if (source.tag != .struct_) return null;
+                    offset = cg.layouts().getStructFieldOffsetByOriginalIndex(source.getStruct().idx, assign.op.index);
+                    field_layout = cg.layouts().getStructFieldLayoutByOriginalIndex(source.getStruct().idx, assign.op.index);
+                },
+                .tag_payload, .tag_payload_struct => {
+                    if (source.tag != .tag_union) return null;
+                    field_layout = cg.tagPayloadLayout(source_layout, assign.op.tag_discriminant);
+                    const payload = cg.layoutValue(field_layout);
+                    if (assign.op.kind == .tag_payload and payload.tag == .struct_) {
+                        offset = cg.layouts().getStructFieldOffsetByOriginalIndex(payload.getStruct().idx, assign.op.index);
+                        field_layout = cg.layouts().getStructFieldLayoutByOriginalIndex(payload.getStruct().idx, assign.op.index);
+                    }
+                },
+                .discriminant => return null,
+            }
+            if (cg.layoutDataSize(field_layout) != cg.layoutDataSize(target_layout)) return null;
+            const source_sa = cg.sizeAlignOf(field_layout);
+            const target_sa = cg.sizeAlignOf(target_layout);
+            if (target_sa.size > source_sa.size or target_sa.alignment.toByteUnits() > source_sa.alignment.toByteUnits()) return null;
+            return .{ .source = assign.op.source, .offset = offset };
+        }
+
         /// The prologue reads register pieces and copies packed or erased
-        /// arguments by value; a fast argument passed indirectly or in tail
-        /// group storage is copied into its slot, and an erased callable's
+        /// arguments by value; an indirect fast argument borrows memory or
+        /// copies a snapshot, while tail-group storage is copied into its slot, and an erased callable's
         /// hidden capture, reuse, and descriptor parameters are written
         /// through theirs.
         pub fn paramAccess(self: PlanOps, index: usize) ValuePlan.Access {
@@ -3508,6 +3574,7 @@ pub const MonoLlvmCodeGen = struct {
     fn allocProcLocalSlot(self: *MonoLlvmCodeGen, local_id: LocalId) Error!void {
         const local_slot = &self.local_slots[@backingInt(local_id)];
         if (local_slot.allocated or self.isSsaLocal(local_id)) return;
+        if (self.value_plan.place(local_id) != .slot) return;
 
         const local = self.store.getLocal(local_id);
         const sa = self.sizeAlignOf(local.layout_idx);
@@ -4431,6 +4498,7 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn emitAssignRef(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LIR.RefOp) Error!void {
+        if (self.value_plan.place(target) == .view) return;
         switch (op.kind) {
             .local => try self.copyLocal(target, op.source),
             inline .list_reinterpret, .nominal => try self.copyLocal(target, op.source),
@@ -4909,6 +4977,10 @@ pub const MonoLlvmCodeGen = struct {
 
         pub const AppendError = Error;
 
+        pub fn storageRoot(self: AddressedCallLocals, local: LocalId) LocalId {
+            return self.codegen.value_plan.storageRoot(local);
+        }
+
         pub fn appendAddressed(self: AddressedCallLocals, call: @FieldType(lir.LIR.CFStmt, "assign_call"), out: *std.ArrayList(LocalId)) AppendError!void {
             const codegen = self.codegen;
             if (codegen.store.stmtRowOrDefault(call.extra).replaces_frame) return;
@@ -5006,7 +5078,7 @@ pub const MonoLlvmCodeGen = struct {
 
     /// A direct call through the callee's register-passing function: each
     /// argument's pieces load straight from its slot, an indirect argument
-    /// passes its slot's address for the callee to copy, and a by-value
+    /// passes its storage address for the callee to borrow, and a by-value
     /// result stores into the target slot.
     fn emitFastDirectCall(
         self: *MonoLlvmCodeGen,
@@ -5034,7 +5106,7 @@ pub const MonoLlvmCodeGen = struct {
             // The `sret` pointer is `noalias`: no argument may name its slot.
             if (builtin.mode == .debug) {
                 for (0..arg_locals.len) |i| {
-                    if (GuardedList.at(arg_locals, i) == target) invariant("LLVM codegen invariant violated: call target {d} is also one of its arguments", .{@backingInt(target)});
+                    if (self.value_plan.storageRoot(GuardedList.at(arg_locals, i)) == self.value_plan.storageRoot(target)) invariant("LLVM codegen invariant violated: call target {d} is also one of its arguments", .{@backingInt(target)});
                 }
             }
             try param_types.append(self.allocator, ptr_ty);
@@ -15188,6 +15260,115 @@ fn printedFunction(ir: []const u8, name: []const u8) ?[]const u8 {
         start = line_end;
     }
     return null;
+}
+
+test "issue 12505: addressed Bool alias materializes its SSA source" {
+    const gpa = std.testing.allocator;
+    var store = lir.LirStore.init(gpa);
+    defer store.deinit();
+    var layouts = try layout.Store.init(gpa, .u64);
+    defer layouts.deinit();
+    const input = try store.addLocal(.{ .layout_idx = .bool });
+    const alias = try store.addLocal(.{ .layout_idx = .bool });
+    const result = try store.addLocal(.{ .layout_idx = .u32 });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+    const read = try store.addCFStmt(.{ .assign_ref = .{ .target = result, .op = .{ .kind = .discriminant, .source = alias }, .next = ret } }, .test_fixture);
+    const body = try store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = .local(input), .next = read } }, .test_fixture);
+    _ = try store.addProcSpec(.{
+        .name = .fromRaw(1),
+        .identity = lir.LIR.ProcIdentity.forTest(1),
+        .args = try store.addLocalSpan(&.{input}),
+        .frame_locals = try store.addLocalSpan(&.{ alias, result }),
+        .body = body,
+        .ret_layout = .u32,
+    }, .none);
+    var codegen = MonoLlvmCodeGen.init(gpa, &store, &.{}, &.{}, &.{});
+    defer codegen.deinit();
+    codegen.layout_store = &layouts;
+    var builder = try codegen.createBuilder("addressed_bool_alias");
+    defer builder.deinit();
+    codegen.builder = &builder;
+    defer codegen.builder = null;
+    try codegen.compileAllProcSpecs(store.getProcSpecs());
+    var ir: std.Io.Writer.Allocating = .init(gpa);
+    defer ir.deinit();
+    try builder.print(&ir.writer);
+    const function = printedFunction(ir.written(), "roc_proc_0.fast") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, function, "alloca"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, function, "store i8"));
+}
+
+test "issue 12505: large record tuple and tag payload projections borrow storage" {
+    const gpa = std.testing.allocator;
+    const Shape = enum { record, tuple, tag_payload, tag_payload_struct };
+    inline for (.{ std.Target.Cpu.Arch.x86_64, .aarch64 }) |arch| {
+        inline for ([_]Shape{ .record, .tuple, .tag_payload, .tag_payload_struct }) |shape| {
+            var store = lir.LirStore.init(gpa);
+            defer store.deinit();
+            var layouts = try layout.Store.init(gpa, .u64);
+            defer layouts.deinit();
+            var fields: [64]layout.StructField = undefined;
+            for (&fields, 0..) |*field, i| field.* = .{ .index = @intCast(i), .layout = .u64 };
+            const wide = try layouts.putStructFields(&fields);
+            const wrapper = try layouts.putStructFields(&.{ .{ .index = 0, .layout = .u64 }, .{ .index = 1, .layout = wide } });
+            const outer = switch (shape) {
+                .record => wrapper,
+                .tuple => try layouts.putTuple(&.{ layouts.getLayout(.u64), layouts.getLayout(wide) }),
+                .tag_payload, .tag_payload_struct => try layouts.putTagUnion(&.{ .zst, wrapper }),
+            };
+            const input = try store.addLocal(.{ .layout_idx = outer });
+            const alias = try store.addLocal(.{ .layout_idx = outer });
+            const payload = try store.addLocal(.{ .layout_idx = wrapper });
+            const projected = try store.addLocal(.{ .layout_idx = wide });
+            const copied = try store.addLocal(.{ .layout_idx = wide });
+            const result = try store.addLocal(.{ .layout_idx = .u64 });
+            var body = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+            body = try store.addCFStmt(.{ .assign_ref = .{ .target = result, .op = lir.LIR.RefOp.field(copied, 63), .next = body } }, .test_fixture);
+            body = try store.addCFStmt(.{ .assign_ref = .{ .target = copied, .op = lir.LIR.RefOp.local(projected), .next = body } }, .test_fixture);
+            body = try store.addCFStmt(.{
+                .assign_ref = .{
+                    .target = projected,
+                    .op = switch (shape) {
+                        .record, .tuple => lir.LIR.RefOp.field(alias, 1),
+                        .tag_payload => lir.LIR.RefOp.tagPayload(alias, 1, 1, 1),
+                        .tag_payload_struct => lir.LIR.RefOp.field(payload, 1),
+                    },
+                    .next = body,
+                },
+            }, .test_fixture);
+            if (shape == .tag_payload_struct) body = try store.addCFStmt(.{ .assign_ref = .{ .target = payload, .op = lir.LIR.RefOp.tagPayloadStruct(alias, 1, 1), .next = body } }, .test_fixture);
+            body = try store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = lir.LIR.RefOp.local(input), .next = body } }, .test_fixture);
+            const proc = try store.addProcSpec(.{
+                .name = .fromRaw(1),
+                .identity = lir.LIR.ProcIdentity.forTest(1),
+                .args = try store.addLocalSpan(&.{input}),
+                .frame_locals = try store.addLocalSpan(if (shape == .tag_payload_struct) &.{ alias, payload, projected, copied, result } else &.{ alias, projected, copied, result }),
+                .body = body,
+                .ret_layout = .u64,
+            }, .none);
+            const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = arch, .os_tag = .linux });
+            var codegen = MonoLlvmCodeGen.initForLinkedObject(gpa, &store, &.{}, &.{}, &.{}, target);
+            defer codegen.deinit();
+            codegen.layout_store = &layouts;
+            codegen.proc_symbol_mode = .local_index;
+            var builder = try codegen.createBuilder("aggregate_views");
+            defer builder.deinit();
+            codegen.builder = &builder;
+            defer codegen.builder = null;
+            try codegen.compileAllProcSpecs(store.getProcSpecs());
+            var ir: std.Io.Writer.Allocating = .init(gpa);
+            defer ir.deinit();
+            try builder.print(&ir.writer);
+            const name = try std.fmt.allocPrint(gpa, "roc_proc_{d}.fast", .{@backingInt(proc)});
+            defer gpa.free(name);
+            const function = printedFunction(ir.written(), name) orelse return error.TestUnexpectedResult;
+            // Before LLVM optimization: the input stays a pointer, projections
+            // are offsets, and only the requested scalar is loaded.
+            try std.testing.expect(std.mem.find(u8, function, ".fast(ptr ") != null);
+            for ([_][]const u8{ "alloca", "memcpy", "store " }) |op| try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, function, op));
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, function, "load i64"));
+        }
+    }
 }
 
 test "issue 11500: an out-of-line scalar helper passes and returns values without slots" {

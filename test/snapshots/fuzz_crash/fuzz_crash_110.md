@@ -48,7 +48,7 @@ MISSING METHOD - fuzz_crash_110.md:1:61:1:62
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "({}) -> _ret")
+			(text "() -> _ret")
 			(annotation-end))))
 ~~~
 # TOKENS
@@ -126,12 +126,12 @@ R000ee(k) := [No0e(R000ee(o))].{
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "({}) -> _ret")))
+		(patt (type "() -> _ret")))
 	(type_decls
 		(nominal (type "Error")
 			(ty-header (name "R000ee")
 				(ty-args
 					(ty-rigid-var (name "k"))))))
 	(expressions
-		(expr (type "({}) -> _ret"))))
+		(expr (type "() -> _ret"))))
 ~~~

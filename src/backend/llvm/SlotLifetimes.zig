@@ -109,21 +109,35 @@ pub fn plan(self: *Self, store: *const LirStore, root: CFStmtId, params: anytype
     defer self.indexes.keepPlan(&stack_plan);
     self.planned.clearRetainingCapacity();
     defer self.indexes.clear();
-    try stack_plan.addProcGraph(store, &self.indexes, root, &self.planned, Tracked{ .candidates = &self.candidates });
+    try stack_plan.addProcGraph(store, &self.indexes, root, &self.planned, Tracked(@TypeOf(calls)){ .candidates = &self.candidates, .calls = calls });
+    // Views extend their owner's lifetime; their definitions do not write
+    // the owner's bytes. StackPlan merges those accesses before solving.
+    var index: usize = 0;
+    while (index < stack_plan.values.items.len) : (index += 1) {
+        const local = stack_plan.values.items[index].local;
+        const owner = calls.storageRoot(local);
+        if (owner != local) {
+            const owner_index = try stack_plan.local(owner);
+            stack_plan.values.items[index].representative = owner_index;
+        }
+    }
     for (stack_plan.values.items) |*value| value.size = 1;
     try stack_plan.solveLifetimes();
     try self.placeMarkers(&stack_plan, root);
 }
 
-const Tracked = struct {
-    candidates: *const std.AutoHashMapUnmanaged(u32, void),
+fn Tracked(comptime Calls: type) type {
+    return struct {
+        candidates: *const std.AutoHashMapUnmanaged(u32, void),
+        calls: Calls,
 
-    pub fn tracks(self: Tracked, local: LocalId) bool {
-        return self.candidates.contains(@backingInt(local));
-    }
+        pub fn tracks(self: @This(), local: LocalId) bool {
+            return self.candidates.contains(@backingInt(self.calls.storageRoot(local)));
+        }
 
-    pub fn statement(_: Tracked, _: *StackPlan, _: u32, _: lir.LIR.CFStmt) Allocator.Error!void {}
-};
+        pub fn statement(_: @This(), _: *StackPlan, _: u32, _: lir.LIR.CFStmt) Allocator.Error!void {}
+    };
+}
 
 fn collectCandidates(self: *Self, store: *const LirStore, root: CFStmtId, params: anytype, calls: anytype) (Allocator.Error || @TypeOf(calls).AppendError)!void {
     self.candidates.clearRetainingCapacity();
@@ -140,7 +154,7 @@ fn collectCandidates(self: *Self, store: *const LirStore, root: CFStmtId, params
             .assign_call => |call| {
                 addressed.clearRetainingCapacity();
                 try calls.appendAddressed(call, &addressed);
-                for (addressed.items) |local| try self.candidates.put(self.allocator, @backingInt(local), {});
+                for (addressed.items) |local| try self.candidates.put(self.allocator, @backingInt(calls.storageRoot(local)), {});
             },
             .assign_ref => |assign| switch (assign.op.kind) {
                 .local, .list_reinterpret, .nominal => try self.copies.append(self.allocator, .{ @backingInt(assign.op.source), @backingInt(assign.target) }),
@@ -260,4 +274,44 @@ fn statementEntry(self: *const Self, stack_plan: *const StackPlan, node: u32) u3
     const body = successors.next().?;
     std.debug.assert(successors.next() == null);
     return self.node_stmts.items[body];
+}
+
+test "issue 12505 projected call arguments extend their storage owner's lifetime" {
+    const gpa = std.testing.allocator;
+    var store = LirStore.init(gpa);
+    defer store.deinit();
+    var layouts = try @import("layout").Store.init(gpa, .u64);
+    defer layouts.deinit();
+    const inner = try layouts.putStructFields(&.{ .{ .index = 0, .layout = .u64 }, .{ .index = 1, .layout = .str } });
+    const outer = try layouts.putStructFields(&.{.{ .index = 0, .layout = inner }});
+    const owner = try store.addLocal(.{ .layout_idx = outer });
+    const view = try store.addLocal(.{ .layout_idx = inner });
+    const result = try store.addLocal(.{ .layout_idx = .u64 });
+    const producer = try store.addProcSpec(.{ .name = .fromRaw(1), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .ret_layout = outer }, .none);
+    const param = try store.addLocal(.{ .layout_idx = inner });
+    const consumer = try store.addProcSpec(.{ .name = .fromRaw(2), .identity = lir.LIR.ProcIdentity.forTest(2), .args = try store.addLocalSpan(&.{param}), .ret_layout = .u64 }, .none);
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+    const consume = try store.addCFStmt(.{ .assign_call = .{ .target = result, .proc = consumer, .args = try store.addLocalSpan(&.{view}), .next = ret } }, .test_fixture);
+    const project = try store.addCFStmt(.{ .assign_ref = .{ .target = view, .op = lir.LIR.RefOp.field(owner, 0), .next = consume } }, .test_fixture);
+    const produce = try store.addCFStmt(.{ .assign_call = .{ .target = owner, .proc = producer, .args = .empty(), .next = project } }, .test_fixture);
+    const Calls = struct {
+        owner: LocalId,
+        view: LocalId,
+        pub const AppendError = Allocator.Error;
+        pub fn storageRoot(self: @This(), local: LocalId) LocalId {
+            return if (local == self.view) self.owner else local;
+        }
+        pub fn appendAddressed(self: @This(), call: @FieldType(lir.LIR.CFStmt, "assign_call"), out: *std.ArrayList(LocalId)) AppendError!void {
+            // Only the consumer passes an address; the producer does not
+            // independently put the owner in the candidate set.
+            if (call.args.len != 0) try out.append(std.testing.allocator, self.view);
+        }
+    };
+    var lifetimes = Self.init(gpa);
+    defer lifetimes.deinit();
+    try lifetimes.plan(&store, produce, store.getLocalSpan(.empty()), Calls{ .owner = owner, .view = view });
+    try std.testing.expectEqualSlices(Marker, &.{.{ .kind = .start, .local = owner }}, lifetimes.at(produce));
+    try std.testing.expectEqual(@as(usize, 0), lifetimes.at(project).len);
+    try std.testing.expectEqual(@as(usize, 0), lifetimes.at(consume).len);
+    try std.testing.expectEqualSlices(Marker, &.{.{ .kind = .end, .local = owner }}, lifetimes.at(ret));
 }

@@ -1035,6 +1035,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     .linked_function = .{
                         .offset = @intCast(code_offset + 1),
                         .symbol = symbol,
+                        .kind = .x86_call_rel32,
                     },
                 });
             }

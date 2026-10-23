@@ -15086,9 +15086,9 @@ fn fnBodySizeWithin(allocator: Allocator, program: *const Ast.Program, body: Ast
     };
 }
 
-/// Count the expressions in `expr_id`, stopping once more than `limit` have
-/// been seen. The count is order-independent, so the walk keeps its own
-/// work stack.
+/// Measure clone work in `expr_id`, including implicit record-update fields,
+/// stopping once it exceeds `limit`. The count is order-independent, so the
+/// walk keeps its own work stack.
 ///
 /// A constant read counts as one expression whichever form it has: a
 /// compile-time root read whose proof call is never executed, or a static
@@ -15112,7 +15112,17 @@ fn exprBodySizeWithin(allocator: Allocator, program: *const Ast.Program, expr_id
                 .fn_def,
                 => Common.invariant("pre-lift function expression reached SpecConstr body-size counting"),
                 .static_data_candidate, .comptime_value => {},
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => try Ast.appendChildren(allocator, program, id, &stack),
+                .record_update => {
+                    // The value-aware clone snapshots unchanged fields and
+                    // reconstructs the result. That work is implicit in the
+                    // source update, but explicit in the emitted constructor.
+                    // Charge its complete row before admitting the inline.
+                    const fields = recordUpdateFieldSpan(program, program.getExpr(id).ty);
+                    if (fields.len > remaining) return .over_limit;
+                    remaining -= fields.len;
+                    try Ast.appendChildren(allocator, program, id, &stack);
+                },
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .typed_boundary, .row_widen, .list, .tuple, .record, .tag, .nominal, .let_, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => try Ast.appendChildren(allocator, program, id, &stack),
             }
         },
     };
@@ -18253,6 +18263,65 @@ test "issue 10760 SpecConstr bounds cloning of rewritten inline bodies" {
 
     // An admitted inline must charge enough source-body work to bound what it
     // emits. Declining the inline may emit only the original residual call.
+    const growth_limit = charged_work + root_source_size;
+    try std.testing.expectEqual(growth_limit, @max(growth_limit, growth));
+}
+
+test "issue 12505 SpecConstr charges wide record update expansion to inline growth" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const u64_ty = try program.types.add(.{ .primitive = .u64 });
+    var fields: [64]Type.Field = undefined;
+    for (&fields, 0..) |*field, index| {
+        var buffer: [32]u8 = undefined;
+        const name = try std.fmt.bufPrint(&buffer, "field{d:0>3}", .{index});
+        field.* = .{
+            .name = try program.names.internRecordFieldLabel(name),
+            .ty = u64_ty,
+            .default = null,
+        };
+    }
+    const record_ty = try program.types.add(.{ .record = try program.types.addRecordFields(&program.names, &fields) });
+    const arg = try program.addLocal(@fromBackingInt(@intCast(1)), record_ty);
+    const base = try program.addExpr(.{ .ty = record_ty, .data = .{ .local = arg } });
+    const replacement = try program.addExpr(.{ .ty = u64_ty, .data = .{ .int_lit = .{ .bytes = @bitCast(@as(u128, 1)), .kind = .u128 } } });
+    const update = try program.addExpr(.{ .ty = record_ty, .data = .{ .record_update = .{
+        .base = base,
+        .fields = try program.addFieldExprSpan(&.{.{ .name = fields[0].name, .value = replacement }}),
+    } } });
+    const callee = try program.addFn(.{
+        .shapes = program.finishFnShapes(.{}),
+        .symbol = @fromBackingInt(@intCast(2)),
+        .args = try program.addTypedLocalSpan(&.{.{ .local = arg, .ty = record_ty }}),
+        .captures = Ast.Span(Ast.TypedLocal).empty(),
+        .body = .{ .roc = update },
+        .ret = record_ty,
+    });
+    const input = try program.addLocal(@fromBackingInt(@intCast(3)), record_ty);
+    const input_ref = try program.addExpr(.{ .ty = record_ty, .data = .{ .local = input } });
+    const call = try program.addExpr(.{ .ty = record_ty, .data = .{ .call_proc = .{
+        .callee = .{ .lifted = callee },
+        .args = try program.addExprSpan(&.{input_ref}),
+        .captures = Ast.Span(Ast.CaptureOperand).empty(),
+    } } });
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+    const root_source_size = (try exprBodySizeWithin(allocator, &program, call, spec_constr_body_expr_threshold)).exactValue() orelse return error.TestUnexpectedResult;
+    const before_exprs = program.exprCount();
+    const before_work = cloner.inline_body_growth.remaining;
+    _ = try cloner.cloneExpr(call);
+    const growth = program.exprCount() - before_exprs;
+    const charged_work = before_work - cloner.inline_body_growth.remaining;
+
+    // https://github.com/roc-lang/roc/issues/12505
+    // As in the issue 10760 regression above, admitted expansion must be
+    // covered by its charge. Updating one field can expand every other field;
+    // those generated expressions must not bypass the growth budget.
     const growth_limit = charged_work + root_source_size;
     try std.testing.expectEqual(growth_limit, @max(growth_limit, growth));
 }

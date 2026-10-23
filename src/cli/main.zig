@@ -9717,7 +9717,7 @@ test "pack offers an entry that carries its program data and withholds one that 
             .refs = &.{},
             .relocations = &.{
                 .{ .offset = 0, .name = "roc__d0", .scope = .program, .kind = .{ .data = .rel32 } },
-                .{ .offset = 4, .name = "roc_builtins_str_concat", .scope = .shared, .kind = .function },
+                .{ .offset = 4, .name = "roc_builtins_str_concat", .scope = .shared, .kind = .{ .function = .x86_call_rel32 } },
             },
             .data = &.{.{
                 .name = "roc__d0",
@@ -9733,7 +9733,7 @@ test "pack offers an entry that carries its program data and withholds one that 
             .entry = 0,
             .frame = null,
             .refs = &.{},
-            .relocations = &.{.{ .offset = 0, .name = "roc_boxy_drop", .scope = .program, .kind = .function }},
+            .relocations = &.{.{ .offset = 0, .name = "roc_boxy_drop", .scope = .program, .kind = .{ .function = .x86_call_rel32 } }},
             .data = &.{},
         },
     };
@@ -11245,12 +11245,52 @@ fn failLink(ctx: *CliCtx, err: linker.LinkError, target: []const u8) CliError {
 
 /// Removes whatever a previous build left at the output path before this
 /// build does anything else, so a build that fails cannot leave the earlier
-/// program behind looking like its result.
+/// program behind looking like its result. An absent output file is fine,
+/// but an absent parent directory is an output-path error.
 fn removeStaleBuildOutput(ctx: *CliCtx, final_output_path: []const u8) CliError!void {
     std.Io.Dir.cwd().deleteFile(ctx.io.std_io, final_output_path) catch |err| switch (err) {
-        error.FileNotFound => {},
+        error.FileNotFound => {
+            // Deleting a missing file and deleting through a missing parent
+            // both return FileNotFound. Only the former is ready for a build.
+            const parent = std.fs.path.dirname(final_output_path) orelse ".";
+            var dir = std.Io.Dir.cwd().openDir(ctx.io.std_io, parent, .{}) catch |open_err|
+                return ctx.fail(.{ .file_write_failed = .{ .path = final_output_path, .err = open_err } });
+            dir.close(ctx.io.std_io);
+        },
         else => return ctx.fail(.{ .file_write_failed = .{ .path = final_output_path, .err = err } }),
     };
+}
+
+test "build output preparation reports a missing parent directory" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    var io_state = Io.create(testing.io);
+    var ctx = CliCtx.init(testing.allocator, arena.allocator(), &io_state, .build);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", arena.allocator());
+    const output_path = try std.fs.path.join(arena.allocator(), &.{ root, "missing", "app" });
+
+    // https://github.com/roc-lang/roc/issues/12476: an absent parent must be
+    // reported as an output-path failure before compilation or linking.
+    try testing.expectError(error.CliError, removeStaleBuildOutput(&ctx, output_path));
+    try testing.expectEqual(@as(usize, 1), ctx.problems.items.len);
+    const problem = ctx.problems.items[0].file_write_failed;
+    try testing.expectEqualStrings(output_path, problem.path);
+    try testing.expectEqual(error.FileNotFound, problem.err);
+
+    try tmp.dir.createDir(testing.io, "missing", .default_dir);
+    try removeStaleBuildOutput(&ctx, output_path);
+
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "missing/app", .data = "old output" });
+    try removeStaleBuildOutput(&ctx, output_path);
+    try testing.expectError(error.FileNotFound, tmp.dir.access(testing.io, "missing/app", .{}));
+    try testing.expectEqual(@as(usize, 1), ctx.problems.items.len);
 }
 
 /// Final output path for `roc build`: an explicit `--output` is used as-is,

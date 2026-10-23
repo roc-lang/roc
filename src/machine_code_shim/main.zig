@@ -297,8 +297,9 @@ fn loadDevProgram(
     for (view.relocations, relocation_records) |record, *relocation| {
         const name = try view.symbolName(record.symbol);
         const shim_function_addr = resolveShimFunction(name);
-        const data_kind: ?@FieldType(@FieldType(backend.Relocation, "linked_data"), "kind") = switch (try record.relocationKind()) {
-            .linked_function => null,
+        const encoding = try record.relocationKind();
+        const data_kind: ?@FieldType(@FieldType(backend.Relocation, "linked_data"), "kind") = switch (encoding) {
+            .linked_function_x86_call_rel32, .linked_function_aarch64_call26 => null,
             .linked_data_abs64 => .abs64,
             .linked_data_rel32 => .rel32,
             .linked_data_page21 => .page21,
@@ -316,10 +317,17 @@ fn loadDevProgram(
         } else {
             const target_addr = shim_function_addr orelse return unresolvedSymbol(name);
             try ensureFunctionStub(gpa, &function_stubs, name, target_addr);
-            relocation.* = .{ .linked_function = .{
-                .offset = record.code_offset,
-                .name = name,
-            } };
+            relocation.* = .{
+                .linked_function = .{
+                    .offset = record.code_offset,
+                    .name = name,
+                    .kind = switch (encoding) {
+                        .linked_function_x86_call_rel32 => .x86_call_rel32,
+                        .linked_function_aarch64_call26 => .aarch64_call26,
+                        .linked_data_abs64, .linked_data_rel32, .linked_data_page21, .linked_data_pageoff12 => unreachable, // data encodings were handled above
+                    },
+                },
+            };
         }
     }
     const stub_size = try jumpStubSize();

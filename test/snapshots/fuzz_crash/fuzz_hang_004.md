@@ -126,8 +126,8 @@ a = || {}
 (inferred-types
 	(defs
 		(patt (type "List(_b)"))
-		(patt (type "({}) -> {}")))
+		(patt (type "() -> {}")))
 	(expressions
 		(expr (type "List(_b)"))
-		(expr (type "({}) -> {}"))))
+		(expr (type "() -> {}"))))
 ~~~

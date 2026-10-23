@@ -34,7 +34,7 @@ MISSING METHOD - call_float_literal.md:1:5:1:10
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "({}) -> _ret")
+			(text "() -> _ret")
 			(annotation-end))))
 ~~~
 # TOKENS

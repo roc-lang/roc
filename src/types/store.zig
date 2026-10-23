@@ -3088,7 +3088,7 @@ test "the bulk fill takes freed descriptors before growing" {
     try store.union_(a, b, .{ .content = .{ .flex = Flex.init() }, .rank = Rank.outermost });
     const descs_before = store.descs.backing.len();
 
-    try store.ensureTotalCapacity(store.len() + 2);
+    try store.ensureTotalCapacity(@intCast(store.len() + 2));
     const c = store.appendFromContentAssumeCapacity(.{ .structure = .empty_record }, Rank.outermost);
     const d = store.appendFromContentAssumeCapacity(.{ .flex = Flex.init() }, Rank.outermost);
     try std.testing.expectEqual(a_desc, store.resolveVar(c).desc_idx);

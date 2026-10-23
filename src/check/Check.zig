@@ -45620,9 +45620,10 @@ fn fieldPresenceResolvedRequired(self: *const Self, presence: Var) bool {
 }
 
 /// Append a ground type as a tree: each node's content in depth-first order,
-/// with no variable identities, so two types encode equally exactly when they
-/// are equal. A record or tag union row stored across extension records or
-/// unions encodes as one row with its fields or tags sorted by name, and a
+/// with no variable identities or transparent alias wrappers, so two types
+/// encode equally exactly when they are equal. A record or tag union row stored
+/// across extension records or unions encodes as one row with its fields or
+/// tags sorted by name, and a
 /// field whose kind variable resolved to required encodes as a required field,
 /// so equal rows encode equally however they are stored.
 fn appendReplayTree(self: *Self, root: Var, out: *std.ArrayListUnmanaged(u8)) Allocator.Error!void {
@@ -45634,7 +45635,7 @@ fn appendReplayTree(self: *Self, root: Var, out: *std.ArrayListUnmanaged(u8)) Al
     defer row_tags.deinit(self.gpa);
     try stack.append(self.gpa, root);
     while (stack.pop()) |next| {
-        const content = self.types.resolveVar(next).desc.content;
+        const content = self.types.resolveThroughAliases(next).desc.content;
         switch (content) {
             .err => try out.append(self.gpa, 0),
             .flex => try out.append(self.gpa, 1),
@@ -45648,15 +45649,7 @@ fn appendReplayTree(self: *Self, root: Var, out: *std.ArrayListUnmanaged(u8)) Al
                     try appendReplayWord(out, self.gpa, id.expr_node);
                 },
             },
-            .alias => |alias| {
-                try out.append(self.gpa, 4);
-                try appendReplayWord(out, self.gpa, @bitCast(alias.ident.ident_idx));
-                try appendReplayWord(out, self.gpa, @backingInt(alias.origin_module));
-                const args = self.types.sliceAliasAllArgs(alias);
-                try appendReplayWord(out, self.gpa, @intCast(args.len));
-                try stack.append(self.gpa, self.types.getAliasBackingVar(alias));
-                try appendReplayChildren(&stack, self.gpa, args);
-            },
+            .alias => unreachable, // resolveThroughAliases expands every transparent alias before encoding.
             .structure => |flat| switch (flat) {
                 .empty_record => try out.append(self.gpa, 5),
                 .empty_tag_union => try out.append(self.gpa, 6),
@@ -45695,7 +45688,7 @@ fn appendReplayTree(self: *Self, root: Var, out: *std.ArrayListUnmanaged(u8)) Al
                         for (fields.items(.name), fields.items(.presence)) |name, presence| {
                             try row_fields.append(self.gpa, .{ .name = name, .presence = presence });
                         }
-                        switch (self.types.resolveVar(ext).desc.content) {
+                        switch (self.types.resolveThroughAliases(ext).desc.content) {
                             .structure => |ext_flat| switch (ext_flat) {
                                 .record => |ext_record| {
                                     ext = ext_record.ext;
@@ -45738,7 +45731,7 @@ fn appendReplayTree(self: *Self, root: Var, out: *std.ArrayListUnmanaged(u8)) Al
                         for (tags.items(.name), tags.items(.args)) |name, args| {
                             try row_tags.append(self.gpa, .{ .name = name, .args = args });
                         }
-                        switch (self.types.resolveVar(ext).desc.content) {
+                        switch (self.types.resolveThroughAliases(ext).desc.content) {
                             .structure => |ext_flat| switch (ext_flat) {
                                 .tag_union => |ext_union| {
                                     ext = ext_union.ext;
@@ -52010,6 +52003,35 @@ test "literal dispatch finalization preserves generalized specialization obligat
     }
     try std.testing.expect(numeral_found);
     try std.testing.expect(quote_found);
+}
+
+test "issue 12505 dispatch replay compares transparent aliases by their backing types" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.initExpr("ReplayAliases", "1.I64");
+    defer test_env.deinit();
+    const checker = &test_env.checker;
+    const gpa = std.testing.allocator;
+    const ident = types_mod.TypeIdent{ .ident_idx = try checker.cir.getIdentStore().insert(gpa, Ident.for_text("State")) };
+    const backing = try checker.types.freshFromContent(.{ .structure = .empty_record });
+    const other_backing = try checker.types.freshFromContent(.{ .structure = .empty_tag_union });
+    const local_origin = checker.cir.selfModuleIdentity();
+    const foreign_origin = try checker.cir.internModuleIdentity(&(@as(base.ModuleIdentity.Hash, @splat(0x5A))), ident.ident_idx);
+    const first = try checker.types.freshFromContent(try checker.types.mkAlias(ident, backing, &.{}, local_origin));
+    const second = try checker.types.freshFromContent(try checker.types.mkAlias(ident, backing, &.{}, foreign_origin));
+    const different = try checker.types.freshFromContent(try checker.types.mkAlias(ident, other_backing, &.{}, foreign_origin));
+    var expected: std.ArrayListUnmanaged(u8) = .empty;
+    defer expected.deinit(gpa);
+    var actual: std.ArrayListUnmanaged(u8) = .empty;
+    defer actual.deinit(gpa);
+    try checker.appendReplayTree(first, &expected);
+    try checker.appendReplayTree(second, &actual);
+    try std.testing.expectEqualSlices(u8, expected.items, actual.items);
+    actual.clearRetainingCapacity();
+    try checker.appendReplayTree(backing, &actual);
+    try std.testing.expectEqualSlices(u8, expected.items, actual.items);
+    actual.clearRetainingCapacity();
+    try checker.appendReplayTree(different, &actual);
+    try std.testing.expect(!replayShapeEql(expected.items, actual.items));
 }
 
 test "imported method schemes are copied once and freshly instantiated per use" {

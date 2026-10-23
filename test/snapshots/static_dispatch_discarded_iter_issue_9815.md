@@ -122,7 +122,7 @@ run = || {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "({}) -> [Ok({})]")))
+		(patt (type "() -> [Ok({})]")))
 	(expressions
-		(expr (type "({}) -> [Ok({})]"))))
+		(expr (type "() -> [Ok({})]"))))
 ~~~

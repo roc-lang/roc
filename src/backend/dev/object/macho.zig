@@ -8,6 +8,7 @@
 const std = @import("std");
 const invariant = @import("base").invariant;
 const Allocator = std.mem.Allocator;
+const FunctionRelocationKind = @import("../Relocation.zig").FunctionRelocationKind;
 const DataRelocationKind = @import("../Relocation.zig").DataRelocationKind;
 const roc_target = @import("roc_target");
 const object = @import("mod.zig");
@@ -202,13 +203,6 @@ pub const Architecture = enum {
         };
     }
 
-    fn branchRelocType(self: Architecture) u4 {
-        return switch (self) {
-            .x86_64 => MachO.X86_64_RELOC_BRANCH,
-            .aarch64 => MachO.ARM64_RELOC_BRANCH26,
-        };
-    }
-
     /// The relocation type of an absolute address field.
     fn unsignedRelocType(self: Architecture) u4 {
         return switch (self) {
@@ -339,14 +333,21 @@ pub const MachOWriter = struct {
     }
 
     /// Add a text relocation
-    pub fn addTextRelocation(self: *Self, offset: u32, symbol_idx: u32, is_extern: bool) Allocator.Error!void {
+    pub fn addTextRelocation(self: *Self, offset: u32, symbol_idx: u32, is_extern: bool, kind: FunctionRelocationKind) Allocator.Error!void {
+        std.debug.assert(self.arch == switch (kind) {
+            .x86_call_rel32 => Architecture.x86_64,
+            .aarch64_call26 => Architecture.aarch64,
+        });
         try self.text_relocs.append(self.allocator, .{
             .offset = offset,
             .symbol_idx = symbol_idx,
             .is_extern = is_extern,
             .pcrel = true,
             .length = 2,
-            .reloc_type = self.arch.branchRelocType(),
+            .reloc_type = switch (kind) {
+                .x86_call_rel32 => MachO.X86_64_RELOC_BRANCH,
+                .aarch64_call26 => MachO.ARM64_RELOC_BRANCH26,
+            },
         });
     }
 
@@ -844,7 +845,7 @@ test "macho with external call" {
     writer.setCode(&[_]u8{ 0xE8, 0x00, 0x00, 0x00, 0x00, 0xC3 });
 
     const ext_idx = try writer.addExternalSymbol("_external_func");
-    try writer.addTextRelocation(1, ext_idx, true);
+    try writer.addTextRelocation(1, ext_idx, true, .x86_call_rel32);
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -935,7 +936,7 @@ test "macho segment file extent contains every declared section" {
     defer writer.deinit();
     writer.setCode(&.{ 0xc0, 0x03, 0x5f, 0xd6 });
     const external = try writer.addExternalSymbol("_external");
-    try writer.addTextRelocation(0, external, true);
+    try writer.addTextRelocation(0, external, true, .aarch64_call26);
     writer.debug.line = &(@as([256]u8, @splat(0)));
     writer.debug.abbrev = &(@as([64]u8, @splat(0)));
     writer.debug.info = &(@as([128]u8, @splat(0)));

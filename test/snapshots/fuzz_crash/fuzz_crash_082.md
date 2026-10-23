@@ -163,10 +163,10 @@ o = || {
 	(defs
 		(patt (type "Error"))
 		(patt (type "i"))
-		(patt (type "({}) -> {}")))
+		(patt (type "() -> {}")))
 	(expressions
 		(expr (type "Error"))
 		(expr (type "i"))
-		(expr (type "({}) -> {}"))
+		(expr (type "() -> {}"))
 		(expr (type "Error"))))
 ~~~
