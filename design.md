@@ -24086,6 +24086,11 @@ Checking remains responsible for validating implementations and entrypoint types
 
 ## Build Outputs And The Targets Header
 
+Build output preparation distinguishes a missing destination file from a missing
+parent directory. Missing parents are file-write errors that name the requested
+output path and explain the missing directory, before compilation or linking.
+User-selected output directories are not created implicitly.
+
 The `check`, `build`, `run`, and `test` command family resolves its final process
 status only after completing all requested independent work. Any check-phase
 error makes the final status 1. Otherwise, warnings make the final status 2 and
