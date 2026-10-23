@@ -434,6 +434,7 @@ const CustomCase = enum {
     spliced_procedure_debug_lines,
     linked_object_pack,
     package_dev_packs,
+    package_dev_pack_dict_reuse,
     wasm_linked_object_pack,
     wasm32v1_vector_lowering,
     run_object_cache,
@@ -2848,6 +2849,8 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "I128/U128 to Dec conversion runs on interpreter", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/Int128ToDecTry.roc", .exit = .success } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10022: deep tail recursion with a List runs on LLVM speed backend", .backend = .speed, .body = .{ .custom = .issue_10022_deep_tail_recursion } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12010: a while loop takes each branch its bounded counter reaches on LLVM speed backend", .backend = .speed, .body = .{ .command = .{ .args = &.{ "run", "--opt=speed", "--no-cache" }, .roc_file = "test/fx-open/issue_12010_while_try_branch.roc", .exit = .success, .stdout_exact = "0:0\n1:2\n2:2\n3:2\n4:2\n5:2\n6:2\n7:2\n8:2\n9:2\n10:10\n11:10\n12:10\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12495: a Dict filled from runtime values builds and finds its keys on LLVM speed backend", .backend = .speed, .body = .{ .command = .{ .args = &.{ "run", "--opt=speed", "--no-cache" }, .roc_file = "test/fx-open/issue_12495_optimized_dict.roc", .app_args = &.{ "first", "second" }, .exit = .success, .stdout_exact = "TTT\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12495: a Dict filled from runtime values builds and finds its keys on LLVM size backend", .backend = .size, .body = .{ .command = .{ .args = &.{ "run", "--opt=size", "--no-cache" }, .roc_file = "test/fx-open/issue_12495_optimized_dict.roc", .app_args = &.{ "first", "second" }, .exit = .success, .stdout_exact = "TTT\n" } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11784: Iter.sum and Iter.map over a range run within the perf guard", .backend = .speed, .timeout_ms = 10_000, .body = .{ .command = .{ .args = &.{ "run", "--opt=speed", "--no-cache" }, .roc_file = "test/fx-open/issue_11784_range_iter_sum_perf.roc", .exit = .success, .stdout_exact = "all sums correct\n" } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10529: open Try ? chain builds in dev within the perf guard", .backend = .dev, .timeout_ms = 30_000, .body = .{ .command = .{ .args = &.{ "build", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/Issue10529OpenTryChainBuildTime.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "segmentation fault" }, .{ .stream = .stderr, .text = "reached unreachable code" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11072: hooks chain interns its interchangeable closure layouts once and builds in dev within the perf guard", .backend = .dev, .timeout_ms = 60_000, .body = .{ .command = .{ .args = &.{ "build", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/Issue11072HooksChainBuildTime.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "segmentation fault" }, .{ .stream = .stderr, .text = "reached unreachable code" } } } } },
@@ -3179,6 +3182,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "object cache: editing an app lambda's body keeps the package specializations that receive it cached, calling the edited lambda", .timeout_ms = 600_000, .body = .{ .custom = .edited_lambda_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: an edited app is served higher-order specializations by their procedure identity", .timeout_ms = 600_000, .body = .{ .custom = .proc_identity_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12374: checking a URL package prepares reusable dev packs before the first app build", .timeout_ms = 600_000, .body = .{ .custom = .package_dev_packs } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12495: dev builds served a URL package's cached dev packs find every key the package's Dict was given", .timeout_ms = 600_000, .body = .{ .custom = .package_dev_pack_dict_reuse } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: a dev build links a URL package's optimized object pack and behaves like the uncached build", .timeout_ms = 900_000, .body = .{ .custom = .linked_object_pack } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: a wasm32 dev build composes a URL package's size-optimized object pack and behaves like the uncached build", .timeout_ms = 900_000, .backend = .size, .body = .{ .custom = .wasm_linked_object_pack } },
     .{ .id = 0, .suite = .subcommands, .name = "wasm32v1 builds lower vector code to WebAssembly 1.0 at every optimization level", .timeout_ms = 900_000, .backend = .size, .body = .{ .custom = .wasm32v1_vector_lowering } },
@@ -5152,6 +5156,7 @@ fn runCustomCase(
         .boxed_closure_object_cache => customBoxedClosureObjectCache(io, allocator, &env, &timer, timeout_ms),
         .spliced_procedure_debug_lines => customSplicedProcedureDebugLines(io, allocator, &env, &timer, timeout_ms),
         .package_dev_packs => customPackageDevPacks(io, allocator, &env, &timer, timeout_ms),
+        .package_dev_pack_dict_reuse => customPackageDevPackDictReuse(io, allocator, &env, &timer, timeout_ms),
         .linked_object_pack => customLinkedObjectPack(io, allocator, &env, &timer, timeout_ms),
         .wasm_linked_object_pack => customWasmLinkedObjectPack(io, allocator, &env, &timer, timeout_ms),
         .wasm32v1_vector_lowering => customWasm32v1VectorLowering(io, allocator, &env, &timer, timeout_ms),
@@ -8586,11 +8591,16 @@ fn hasIdentityHit(stderr: []const u8) bool {
 /// Seed `cache_root`'s package directory with the URL package of
 /// `test/cli/linked_object_pack`, as a download would.
 fn seedLinkedObjectPackage(io: std.Io, allocator: Allocator, cache_root: []const u8) CliRunnerError!void {
-    const hash = "FakeHashAbcDefGhiJkLmNoPqRsTuVwXyZ123456789o";
+    return seedUrlPackage(io, allocator, cache_root, "FakeHashAbcDefGhiJkLmNoPqRsTuVwXyZ123456789o", "test/cli/linked_object_pack/package", &.{ "main.roc", "Numeric.roc" });
+}
+
+/// Seed `cache_root`'s package directory with the files `names` of
+/// `source_dir` under the package hash `hash`, as a download would.
+fn seedUrlPackage(io: std.Io, allocator: Allocator, cache_root: []const u8, hash: []const u8, source_dir: []const u8, names: []const []const u8) CliRunnerError!void {
     const package_dir = try std.fs.path.join(allocator, &.{ cache_root, "roc", "packages", hash });
     try std.Io.Dir.cwd().createDirPath(io, package_dir);
-    for ([_][]const u8{ "main.roc", "Numeric.roc" }) |name| {
-        const source = try std.fs.path.join(allocator, &.{ "test/cli/linked_object_pack/package", name });
+    for (names) |name| {
+        const source = try std.fs.path.join(allocator, &.{ source_dir, name });
         const bytes = try std.Io.Dir.cwd().readFileAlloc(io, source, allocator, .limited(1024 * 1024));
         const destination = try std.fs.path.join(allocator, &.{ package_dir, name });
         try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = destination, .data = bytes });
@@ -8682,6 +8692,50 @@ fn customPackageDevPacks(
         .args = &.{},
         .stdout_exact = "sum of squares to 10: 385\n506\n29\n",
     });
+}
+
+/// `Check.probe` fills a `Dict` in a `for` loop from a list another module's
+/// method returns in a `Try`, then looks up every key it inserted. Dev builds
+/// that share one cache, and so are served the package's cached dev packs,
+/// must find all of them, exactly as an uncached build does.
+fn customPackageDevPackDictReuse(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const cache_root = std.fmt.allocPrint(allocator, "{s}/package_dev_pack_dict_reuse_cache", .{env.dirs.work_dir}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate cache root: {}", .{err});
+    seedUrlPackage(io, allocator, cache_root, "FakeHashAbcDefGhiJkLmNoPqRsTuVwXyZ12495Dicto", "test/cli/issue_12495_cached_package_dict/package", &.{ "main.roc", "Tree.roc", "Check.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to seed the URL package: {}", .{err});
+    var cache_env = CaseEnv{
+        .dirs = env.dirs,
+        .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "failed to clone the environment: {}", .{err}),
+    };
+    defer cache_env.env_map.deinit();
+    for ([_][]const u8{ "ROC_CACHE_DIR", "XDG_CACHE_HOME" }) |key| {
+        cache_env.env_map.put(key, cache_root) catch |err|
+            return customInfraFailure(allocator, timer, "failed to set cache root: {}", .{err});
+    }
+    const roc_file = "test/cli/issue_12495_cached_package_dict/App.roc";
+    for (0..3) |build_index| {
+        const exe = std.fmt.allocPrint(allocator, "{s}/package_dev_pack_dict_reuse_{d}", .{ env.dirs.work_dir, build_index }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+        const out_arg = outputArg(allocator, exe) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output argument: {}", .{err});
+        const command_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a build");
+        const built = runRocInEnv(io, allocator, &cache_env, &.{ "build", "--opt=dev", out_arg }, roc_file, .relative, &.{}, null, command_timeout) catch |err|
+            return customInfraFailure(allocator, timer, "build spawn error: {}", .{err});
+        if (!processSucceeded(built.term)) return failureFromRun(allocator, timer, built, "dev build did not succeed");
+        if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{
+            .args = &.{},
+            .stdout_exact = "probes=TTTTT\n",
+        })) |failure| return failure;
+    }
+    return null;
 }
 
 /// An optimized build files a URL package's object pack, and every later
