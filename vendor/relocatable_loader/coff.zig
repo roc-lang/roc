@@ -382,7 +382,9 @@ fn applyArm64(ctx: *loader.Apply) LoadError!void {
         .pagebase_rel21 => {
             if (ctx.code.len < 4) return error.MalformedObject;
             const inst = ctx.code[0..4];
-            const A: i64 = @as(i64, aarch64.readAdrImm(inst)) << 12;
+            // COFF keeps this addend in the instruction's immediate as a byte
+            // offset, not a page count.
+            const A: i64 = aarch64.readAdrImm(inst);
             aarch64.writeAdrImm(inst, aarch64.calcNumberOfPages(P, S + A) catch return error.RelocationOutOfRange);
         },
         .pageoffset_12a => {

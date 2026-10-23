@@ -152,7 +152,7 @@ const ObservedExecutor = struct {
     /// with at least one task per worker. Sessions are waves, whose sizes do
     /// not depend on the worker count, so a probe run's sizes choose a wave a
     /// later run can rendezvous in without waiting for tasks that never come.
-    fn firstFullWave(self: *const ObservedExecutor, from: usize, workers: usize) AssertionError!usize {
+    fn firstFullWave(self: *const ObservedExecutor, from: u64, workers: usize) AssertionError!usize {
         var start: usize = 0;
         for (self.session_sizes[0..self.session_count]) |size| {
             if (start >= from and size >= workers) return start;

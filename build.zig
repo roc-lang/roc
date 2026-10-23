@@ -3111,9 +3111,8 @@ pub fn build(b: *std.Build) void {
         }),
     });
     configureBackend(wasm_archive_exe, b.graph.host);
-    wasm_archive_exe.root_module.addImport("bundle", roc_modules.bundle);
+    wasm_archive_exe.root_module.addImport("bundle", roc_modules.bundleWithZstd(b, host_zstd));
     wasm_archive_exe.root_module.addImport("build_options", roc_modules.build_options);
-    wasm_archive_exe.root_module.linkLibrary(host_zstd.artifact("zstd"));
 
     // The playground Wasm module compiles the whole compiler for wasm32, which
     // makes it the most expensive job in `build-ci`. Measured peak linker RSS

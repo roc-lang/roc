@@ -1141,7 +1141,7 @@ fn refSite(ref: anytype) ?usize {
 fn relocationOffset(relocation: anytype) ?usize {
     return switch (relocation) {
         .retired => null,
-        .linked_function, .linked_data => relocation.getOffset(),
+        .linked_function, .linked_data => @intCast(relocation.getOffset()),
         .local_data => unreachable, // extraction rejected these kinds before grouping relocations
     };
 }

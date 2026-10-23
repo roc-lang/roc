@@ -611,6 +611,18 @@ pub const RocModules = struct {
     vendor_llvm_ir: *Module,
     vendor_llvm_compile_bindings: *Module,
 
+    /// A `bundle` module linked against `zstd`'s library rather than the
+    /// compiler target's, for a build tool compiled for the build machine.
+    pub fn bundleWithZstd(self: RocModules, b: *Build, zstd: *Dependency) *Module {
+        const module = b.createModule(.{ .root_source_file = self.bundle.root_source_file });
+        var imports = self.bundle.import_table.iterator();
+        while (imports.next()) |entry| {
+            if (!std.mem.eql(u8, entry.key_ptr.*, "zstd")) module.addImport(entry.key_ptr.*, entry.value_ptr.*);
+        }
+        linkZstd(b, module, zstd);
+        return module;
+    }
+
     pub fn create(b: *Build, build_options_step: *Step.Options, zstd: ?*Dependency) RocModules {
         var self: RocModules = undefined;
         inline for (comptime std.enums.values(ModuleType)) |module_type| {
@@ -634,18 +646,7 @@ pub const RocModules = struct {
 
         // Link zstd to bundle module if available (it's unsupported on wasm32, so don't link it)
         // Note: unbundle uses Zig's stdlib zstd for WASM compatibility
-        if (zstd) |z| {
-            const library = z.artifact("zstd");
-            const headers = b.addWriteFiles();
-            const translate = b.addTranslateC(.{
-                .root_source_file = headers.add("roc_zstd.h", "#define ZSTD_STATIC_LINKING_ONLY 1\n#include <zstd.h>\n"),
-                .target = library.root_module.resolved_target.?,
-                .optimize = library.root_module.optimize.?,
-            });
-            translate.addIncludePath(library.getEmittedIncludeTree());
-            self.bundle.addImport("zstd", translate.createModule());
-            self.bundle.linkLibrary(library);
-        }
+        if (zstd) |z| linkZstd(b, self.bundle, z);
 
         // The interpreter's hosted-call trampoline is hand-written assembly (see
         // host_trampoline.S); attach it to the eval module so it is assembled and linked into
@@ -803,3 +804,16 @@ pub const RocModules = struct {
         };
     }
 };
+
+fn linkZstd(b: *Build, module: *Module, zstd: *Dependency) void {
+    const library = zstd.artifact("zstd");
+    const headers = b.addWriteFiles();
+    const translate = b.addTranslateC(.{
+        .root_source_file = headers.add("roc_zstd.h", "#define ZSTD_STATIC_LINKING_ONLY 1\n#include <zstd.h>\n"),
+        .target = library.root_module.resolved_target.?,
+        .optimize = library.root_module.optimize.?,
+    });
+    translate.addIncludePath(library.getEmittedIncludeTree());
+    module.addImport("zstd", translate.createModule());
+    module.linkLibrary(library);
+}
