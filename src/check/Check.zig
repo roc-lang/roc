@@ -49574,49 +49574,22 @@ fn closeDerivedCodecUnitTagDictKeyRow(
     env: *Env,
     region: Region,
 ) Allocator.Error!bool {
-    return switch (self.types.resolveThroughAliases(var_).desc.content) {
-        .structure => |structure| switch (structure) {
-            .tag_union => |tag_union| blk: {
-                const tags = self.types.getTagsSlice(tag_union.tags);
-                if (tags.items(.name).len == 0) break :blk false;
-                for (tags.items(.args)) |args| {
-                    if (args.len() != 0) break :blk false;
-                }
-                break :blk try self.closeDerivedCodecUnitTagDictKeyExt(tag_union.ext, env, region);
-            },
-            .record,
-            .tuple,
-            .nominal_type,
-            .fn_pure,
-            .fn_effectful,
-            .fn_unbound,
-            .empty_record,
-            .empty_tag_union,
-            => false,
-        },
-        .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
-        .flex, .rigid, .field_presence, .err => false,
-    };
-}
-
-fn closeDerivedCodecUnitTagDictKeyExt(
-    self: *Self,
-    var_: Var,
-    env: *Env,
-    region: Region,
-) Allocator.Error!bool {
-    // Follow the row's extension chain, closing an open tail.
+    // Follow the row's extension chain, closing an open tail. A row can be
+    // stored as several segments, any of which may list no tags, so the
+    // row's tags are counted across all of them.
     var current = var_;
+    var has_tag = false;
     while (true) {
-        switch (self.types.resolveVar(current).desc.content) {
+        switch (self.types.resolveThroughAliases(current).desc.content) {
             .structure => |structure| switch (structure) {
-                .empty_tag_union => return true,
-                .tag_union => |tag_union| {
-                    const tags = self.types.getTagsSlice(tag_union.tags);
+                .empty_tag_union => return has_tag,
+                .tag_union => |segment| {
+                    const tags = self.types.getTagsSlice(segment.tags);
+                    if (tags.items(.name).len > 0) has_tag = true;
                     for (tags.items(.args)) |args| {
                         if (args.len() != 0) return false;
                     }
-                    current = tag_union.ext;
+                    current = segment.ext;
                 },
                 .record,
                 .tuple,
@@ -49627,8 +49600,9 @@ fn closeDerivedCodecUnitTagDictKeyExt(
                 .empty_record,
                 => return false,
             },
-            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
             .flex => {
+                if (!has_tag) return false;
                 const empty = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region);
                 return (try self.unify(current, empty, env)).isEstablished();
             },
@@ -49638,30 +49612,21 @@ fn closeDerivedCodecUnitTagDictKeyExt(
 }
 
 fn tagUnionIsClosedAndUnit(self: *Self, tag_union: types_mod.TagUnion) std.mem.Allocator.Error!bool {
-    const tags = self.types.getTagsSlice(tag_union.tags);
-    if (tags.items(.name).len == 0) return false;
-    for (tags.items(.args)) |tag_args_range| {
-        if (tag_args_range.len() != 0) return false;
-    }
-    return try self.tagExtIsClosedAndUnit(tag_union.ext);
-}
-
-fn tagExtIsClosedAndUnit(self: *Self, ext_var: Var) std.mem.Allocator.Error!bool {
-    // Follow the row's extension chain: every row along it must list only
-    // payload-free tags, and it must end closed.
-    var current = ext_var;
+    // Follow the row's extension chain: every segment along it must list only
+    // payload-free tags, and it must end closed. A segment may list no tags,
+    // but the row as a whole must list at least one.
+    var segment = tag_union;
+    var has_tag = false;
     while (true) {
-        switch (self.types.resolveVar(current).desc.content) {
+        const tags = self.types.getTagsSlice(segment.tags);
+        if (tags.items(.name).len > 0) has_tag = true;
+        for (tags.items(.args)) |tag_args_range| {
+            if (tag_args_range.len() != 0) return false;
+        }
+        switch (self.types.resolveThroughAliases(segment.ext).desc.content) {
             .structure => |structure| switch (structure) {
-                .empty_tag_union => return true,
-                .tag_union => |tag_union| {
-                    const tags = self.types.getTagsSlice(tag_union.tags);
-                    if (tags.items(.name).len == 0) return false;
-                    for (tags.items(.args)) |tag_args_range| {
-                        if (tag_args_range.len() != 0) return false;
-                    }
-                    current = tag_union.ext;
-                },
+                .empty_tag_union => return has_tag,
+                .tag_union => |next| segment = next,
                 .record,
                 .tuple,
                 .nominal_type,
@@ -49671,7 +49636,7 @@ fn tagExtIsClosedAndUnit(self: *Self, ext_var: Var) std.mem.Allocator.Error!bool
                 .empty_record,
                 => return false,
             },
-            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .alias => unreachable, // resolveThroughAliases follows alias backings until the content is not an alias
             .err => return true,
             .flex, .rigid, .field_presence => return false,
         }

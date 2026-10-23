@@ -6,6 +6,23 @@ Parsed(a) : Try(a, [InvalidJson(Str), MissingRequiredField(Str)])
 ## derived parser instead of deriving one shape apiece.
 Tagged : [Nought, One(U64), Pair(U64, Str), Triple(U64, Str, Bool)]
 
+## A row alias closed with `[]` is the closed union of the tags it lists.
+## Function signatures keep `[]` as its own row segment, so these helpers
+## check that segment adds no tags to the codecs or the dict key protocol.
+Light(r) : [Red, Green, ..r]
+
+encode_light : Light([]) -> Str
+encode_light = |light| Json.to_str(light)
+
+parse_light : Str -> Parsed(Light([]))
+parse_light = |s| Json.parse(s)
+
+encode_light_counts : Dict(Light([]), U64) -> Str
+encode_light_counts = |d| Json.to_str(d)
+
+parse_light_counts : Str -> Parsed(Dict(Light([]), U64))
+parse_light_counts = |s| Json.parse(s)
+
 ## An unannotated parsed tag union stays open until equality constrains and
 ## identifies its known tag. Derived parser dispatch closes that inferred row.
 expect Ok(Friendly) == Json.parse("\"Friendly\"")
@@ -127,4 +144,19 @@ expect {
 	d = Dict.from_list([(Red, 1)])
 
 	Str.is_eq(Json.to_str(d), "{\"Red\":1}")
+}
+
+expect Str.is_eq(encode_light(Green), "\"Green\"")
+
+expect parse_light("\"Red\"") == Ok(Red)
+
+expect Str.is_eq(encode_light_counts(Dict.from_list([(Red, 1)])), "{\"Red\":1}")
+
+expect {
+	result = parse_light_counts("{\"Red\":1,\"Green\":2}")
+
+	match result {
+		Ok(d) => Dict.get(d, Red) == Ok(1) and Dict.get(d, Green) == Ok(2)
+		Err(_) => False
+	}
 }
