@@ -117,7 +117,6 @@ pub fn analyze(
 
 const Decision = union(enum) {
     unknown,
-    visiting,
     never,
     inline_body: Candidate,
 };
@@ -142,7 +141,6 @@ const InlineAnalyzer = struct {
     solved: *const Solved.Program,
     solved_types: SolvedType.Store.View,
     decisions: []Decision,
-    stack: std.ArrayList(Lifted.FnId),
     keep_keyed_specializations: bool,
     /// How a body qualifies as used once: by the whole program's calls, or
     /// by its module's source.
@@ -168,16 +166,10 @@ const InlineAnalyzer = struct {
             .solved = solved,
             .solved_types = solved.types.view(),
             .decisions = decisions,
-            .stack = .empty,
             .keep_keyed_specializations = keep_keyed_specializations,
             .single_use = single_use,
         };
-        defer analyzer.stack.deinit(allocator);
-
-        for (0..solved.lifted.fnCount()) |index| {
-            const fn_id: Lifted.FnId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
-            _ = try analyzer.inlineBody(fn_id);
-        }
+        try analyzer.decideCandidates();
 
         const materialization_states = try allocator.alloc(MaterializationState, decisions.len);
         defer allocator.free(materialization_states);
@@ -195,7 +187,6 @@ const InlineAnalyzer = struct {
             body.* = switch (decision) {
                 .inline_body => |candidate| candidate.body,
                 .unknown,
-                .visiting,
                 .never,
                 => null,
             };
@@ -291,125 +282,97 @@ const InlineAnalyzer = struct {
         return .empty();
     }
 
-    /// One function whose inline eligibility is being decided. Its candidate
-    /// body is walked on its own work list, which suspends at each direct
-    /// call until that callee's decision is made, so neither call chains nor
-    /// expression nesting become native call depth.
-    const Visit = struct {
+    /// A function whose candidate body is closed, and the range of
+    /// `CandidateGraph.callees` its body calls directly.
+    const CandidateNode = struct {
         fn_id: Lifted.FnId,
         candidate: Candidate,
-        walk: std.ArrayList(WalkItem),
+        callees_start: u32,
+        callees_end: u32,
     };
 
-    const WalkItem = struct { child: Lifted.ExprChild, loop_depth: usize };
+    const CandidateGraph = struct {
+        nodes: std.ArrayList(CandidateNode) = .empty,
+        callees: std.ArrayList(Lifted.FnId) = .empty,
+        /// Per lifted function, its index in `nodes`.
+        node_of: []?u32,
 
-    const Entered = union(enum) {
-        /// The function's decision was already made.
-        decided: ?Lifted.ExprId,
-        /// A visit of the function's candidate body began.
-        started,
+        fn deinit(self: *CandidateGraph, allocator: std.mem.Allocator) void {
+            self.nodes.deinit(allocator);
+            self.callees.deinit(allocator);
+            allocator.free(self.node_of);
+        }
+
+        fn calleeNodes(self: *const CandidateGraph, node: u32) []const Lifted.FnId {
+            const n = self.nodes.items[node];
+            return self.callees.items[n.callees_start..n.callees_end];
+        }
     };
 
-    fn inlineBody(self: *InlineAnalyzer, fn_id: Lifted.FnId) std.mem.Allocator.Error!?Lifted.ExprId {
-        var visits: std.ArrayList(Visit) = .empty;
-        defer {
-            for (visits.items) |*visit| visit.walk.deinit(self.allocator);
-            visits.deinit(self.allocator);
+    /// Decide every function. A function is inlined when it has a candidate
+    /// body that is closed and leaving it inlined lets no cycle of direct
+    /// calls among such bodies inline without bound (`rejectCandidateCycles`),
+    /// so inlining always terminates. Cycles are the graph's strongly
+    /// connected components, which depend on the call graph alone: a
+    /// procedure's identity names the same bodies and calls in every program,
+    /// so every program decides it the same way, whatever order its functions
+    /// are numbered in.
+    fn decideCandidates(self: *InlineAnalyzer) std.mem.Allocator.Error!void {
+        const fn_count = self.solved.lifted.fnCount();
+        var graph = CandidateGraph{ .node_of = try self.allocator.alloc(?u32, fn_count) };
+        defer graph.deinit(self.allocator);
+        @memset(graph.node_of, null);
+
+        for (0..fn_count) |index| {
+            const fn_id: Lifted.FnId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
+            const candidate = try self.inlineCandidate(fn_id) orelse {
+                self.decisions[index] = .never;
+                continue;
+            };
+            const callees_start: u32 = @intCast(graph.callees.items.len);
+            switch (try self.scanCandidateBody(candidate.body, &graph.callees)) {
+                .closed => {},
+                .open => {
+                    graph.callees.shrinkRetainingCapacity(callees_start);
+                    self.decisions[index] = .never;
+                    continue;
+                },
+            }
+            graph.node_of[index] = @intCast(graph.nodes.items.len);
+            try graph.nodes.append(self.allocator, .{
+                .fn_id = fn_id,
+                .candidate = candidate,
+                .callees_start = callees_start,
+                .callees_end = @intCast(graph.callees.items.len),
+            });
         }
-        switch (try self.enterInlineBody(fn_id, &visits)) {
-            .decided => |body| return body,
-            .started => {},
-        }
-        while (true) {
-            const visit = &visits.items[visits.items.len - 1];
-            const outcome = try self.walkVisit(visit, &visits);
-            if (outcome == .suspended) continue;
-            const finished = visits.pop().?;
-            var walk = finished.walk;
-            walk.deinit(self.allocator);
-            const body = self.finishVisit(finished, outcome == .closed);
-            if (visits.items.len == 0) return body;
-        }
+
+        try self.rejectCandidateCycles(&graph, .all);
+        // Rejecting a cycle's wrappers can leave a cycle of single-use
+        // bodies alone, which every member of then leaves.
+        try self.rejectCandidateCycles(&graph, .accepted);
     }
 
-    fn enterInlineBody(self: *InlineAnalyzer, fn_id: Lifted.FnId, visits: *std.ArrayList(Visit)) std.mem.Allocator.Error!Entered {
-        const index = @backingInt(fn_id);
-        switch (self.decisions[index]) {
-            .unknown => {},
-            .visiting => {
-                self.markCycle(fn_id, visits.items);
-                return .{ .decided = null };
-            },
-            .never => return .{ .decided = null },
-            .inline_body => |candidate| return .{ .decided = candidate.body },
-        }
-
-        self.decisions[index] = .visiting;
-        try self.stack.append(self.allocator, fn_id);
-
-        const candidate = try self.inlineCandidate(fn_id) orelse {
-            self.decisions[index] = .never;
-            self.leaveInlineBody(fn_id);
-            return .{ .decided = null };
-        };
-
-        // Visit every proc called anywhere in the candidate body, including calls
-        // nested inside low-level operands or other call arguments. A self-call
-        // re-enters this function while it is `.visiting`, so `markCycle` keeps
-        // enough of the cycle out of the inline plan to stop it inlining
-        // without bound.
-        var walk: std.ArrayList(WalkItem) = .empty;
-        errdefer walk.deinit(self.allocator);
-        try walk.append(self.allocator, .{ .child = .{ .expr = candidate.body }, .loop_depth = 0 });
-        try visits.append(self.allocator, .{ .fn_id = fn_id, .candidate = candidate, .walk = walk });
-        return .started;
-    }
-
-    fn leaveInlineBody(self: *InlineAnalyzer, fn_id: Lifted.FnId) void {
-        const popped = self.stack.pop() orelse Common.invariant("inline analysis stack underflow");
-        if (popped != fn_id) Common.invariant("inline analysis stack was corrupted");
-    }
-
-    fn finishVisit(self: *InlineAnalyzer, visit: Visit, closed: bool) ?Lifted.ExprId {
-        const index = @backingInt(visit.fn_id);
-        defer self.leaveInlineBody(visit.fn_id);
-        if (!closed) {
-            self.decisions[index] = .never;
-            return null;
-        }
-        switch (self.decisions[index]) {
-            .never => return null,
-            .visiting => {},
-            .unknown,
-            .inline_body,
-            => Common.invariant("inline analysis decision changed unexpectedly while visiting a candidate"),
-        }
-        self.decisions[index] = .{ .inline_body = visit.candidate };
-        return visit.candidate.body;
-    }
-
-    const WalkOutcome = enum {
-        /// A callee's visit began; this walk resumes after it.
-        suspended,
-        /// The body is closed: no escaping return, break, or continue.
+    const BodyShape = enum {
+        /// No escaping return, break, or continue.
         closed,
         /// The body can transfer control out of itself.
         open,
     };
 
-    /// Walk a candidate body, proving that every break and continue is owned
-    /// by a loop inside the body while visiting every proc it calls, so
-    /// cycles consisting entirely of selected bodies are rejected before
-    /// lowering; combining the checks avoids a second traversal. Positions
-    /// are visited in source order.
-    fn walkVisit(self: *InlineAnalyzer, visit: *Visit, visits: *std.ArrayList(Visit)) std.mem.Allocator.Error!WalkOutcome {
-        const walk = &visit.walk;
+    const WalkItem = struct { child: Lifted.ExprChild, loop_depth: usize };
+
+    /// Prove that every break and continue in `body` is owned by a loop
+    /// inside it, appending each procedure it calls directly to `callees`.
+    fn scanCandidateBody(self: *InlineAnalyzer, body: Lifted.ExprId, callees: *std.ArrayList(Lifted.FnId)) std.mem.Allocator.Error!BodyShape {
+        var walk: std.ArrayList(WalkItem) = .empty;
+        defer walk.deinit(self.allocator);
         var children: std.ArrayList(Lifted.ExprChild) = .empty;
         defer children.deinit(self.allocator);
+        try walk.append(self.allocator, .{ .child = .{ .expr = body }, .loop_depth = 0 });
         while (walk.pop()) |item| {
             const depth = item.loop_depth;
             children.clearRetainingCapacity();
-            var callee: ?Lifted.FnId = null;
             switch (item.child) {
                 .stmt => |stmt_id| switch (self.solved.lifted.getStmt(stmt_id)) {
                     .return_ => return .open,
@@ -432,7 +395,7 @@ const InlineAnalyzer = struct {
                     .comptime_exhaustiveness_failed,
                     => {},
                     .call_proc => |call| {
-                        callee = Lifted.localDirectCallee(call);
+                        if (Lifted.localDirectCallee(call)) |callee| try callees.append(self.allocator, callee);
                         try Lifted.appendChildren(self.allocator, &self.solved.lifted, expr_id, &children);
                     },
                     .@"unreachable",
@@ -478,18 +441,131 @@ const InlineAnalyzer = struct {
                     => try Lifted.appendChildren(self.allocator, &self.solved.lifted, expr_id, &children),
                 },
             }
-            var index = children.items.len;
-            while (index > 0) {
-                index -= 1;
-                try walk.append(self.allocator, .{ .child = children.items[index], .loop_depth = depth });
-            }
-            // The callee is decided before the call's operands are visited.
-            if (callee) |target| switch (try self.enterInlineBody(target, visits)) {
-                .decided => {},
-                .started => return .suspended,
-            };
+            for (children.items) |child| try walk.append(self.allocator, .{ .child = child, .loop_depth = depth });
         }
         return .closed;
+    }
+
+    /// Which nodes of the candidate graph one cycle pass considers.
+    const CyclePass = enum {
+        /// Every node: a node on no cycle takes its candidate, and a cycle
+        /// leaves only its wrappers, or every member when it has none.
+        all,
+        /// The nodes the first pass accepted: a cycle among them, which holds
+        /// no wrapper, leaves every member.
+        accepted,
+    };
+
+    /// Keep every cycle of candidates (a strongly connected component of more
+    /// than one node, or a node that calls itself) from inlining without
+    /// bound. Leaving any one member a procedure breaks a cycle, so a cycle
+    /// first rejects only its wrappers: a wrapper is inlined at every call as
+    /// an optimization, while a single-use body is lowered only at its one
+    /// call, and keeping those inlined keeps a recursion through a lambda a
+    /// self-call. Tarjan's algorithm, run on an explicit stack so call chains
+    /// never become native call depth.
+    fn rejectCandidateCycles(self: *InlineAnalyzer, graph: *const CandidateGraph, pass: CyclePass) std.mem.Allocator.Error!void {
+        const node_count = graph.nodes.items.len;
+        const unvisited = std.math.maxInt(u32);
+        const order = try self.allocator.alloc(u32, node_count);
+        defer self.allocator.free(order);
+        const low = try self.allocator.alloc(u32, node_count);
+        defer self.allocator.free(low);
+        const on_stack = try self.allocator.alloc(bool, node_count);
+        defer self.allocator.free(on_stack);
+        @memset(order, unvisited);
+        @memset(on_stack, false);
+
+        const Frame = struct { node: u32, next_callee: u32 };
+        var frames: std.ArrayList(Frame) = .empty;
+        defer frames.deinit(self.allocator);
+        var component_stack: std.ArrayList(u32) = .empty;
+        defer component_stack.deinit(self.allocator);
+        var next_order: u32 = 0;
+
+        for (0..node_count) |root_index| {
+            const root: u32 = @intCast(root_index);
+            if (order[root] != unvisited) continue;
+            if (pass == .accepted and !self.acceptedNode(graph, root)) continue;
+            order[root] = next_order;
+            low[root] = next_order;
+            next_order += 1;
+            try component_stack.append(self.allocator, root);
+            on_stack[root] = true;
+            try frames.append(self.allocator, .{ .node = root, .next_callee = 0 });
+
+            while (frames.items.len != 0) {
+                const frame = &frames.items[frames.items.len - 1];
+                const node = frame.node;
+                const callees = graph.calleeNodes(node);
+                if (frame.next_callee < callees.len) {
+                    const callee_fn = callees[frame.next_callee];
+                    frame.next_callee += 1;
+                    const callee = graph.node_of[@backingInt(callee_fn)] orelse continue;
+                    if (pass == .accepted and !self.acceptedNode(graph, callee)) continue;
+                    if (order[callee] == unvisited) {
+                        order[callee] = next_order;
+                        low[callee] = next_order;
+                        next_order += 1;
+                        try component_stack.append(self.allocator, callee);
+                        on_stack[callee] = true;
+                        try frames.append(self.allocator, .{ .node = callee, .next_callee = 0 });
+                    } else if (on_stack[callee]) {
+                        low[node] = @min(low[node], order[callee]);
+                    }
+                    continue;
+                }
+
+                _ = frames.pop();
+                if (frames.items.len != 0) {
+                    const parent = frames.items[frames.items.len - 1].node;
+                    low[parent] = @min(low[parent], low[node]);
+                }
+                if (low[node] != order[node]) continue;
+
+                const top = component_stack.items.len;
+                var start = top;
+                while (true) {
+                    start -= 1;
+                    on_stack[component_stack.items[start]] = false;
+                    if (component_stack.items[start] == node) break;
+                }
+                const component = component_stack.items[start..top];
+                const on_cycle = component.len > 1 or callsItself(graph, node);
+                var has_wrapper = false;
+                for (component) |member| {
+                    if (graph.nodes.items[member].candidate.kind == .wrapper) has_wrapper = true;
+                }
+                for (component) |member| {
+                    const member_node = graph.nodes.items[member];
+                    const index = @backingInt(member_node.fn_id);
+                    if (on_cycle) {
+                        if (!has_wrapper or member_node.candidate.kind == .wrapper) self.decisions[index] = .never;
+                    } else if (pass == .all) {
+                        self.decisions[index] = .{ .inline_body = member_node.candidate };
+                    }
+                }
+                // A cycle that kept its single-use bodies is settled by the
+                // second pass.
+                if (on_cycle and has_wrapper and pass == .all) for (component) |member| {
+                    const member_node = graph.nodes.items[member];
+                    if (member_node.candidate.kind != .wrapper) self.decisions[@backingInt(member_node.fn_id)] = .{ .inline_body = member_node.candidate };
+                };
+                component_stack.shrinkRetainingCapacity(start);
+            }
+        }
+    }
+
+    fn acceptedNode(self: *const InlineAnalyzer, graph: *const CandidateGraph, node: u32) bool {
+        return self.decisions[@backingInt(graph.nodes.items[node].fn_id)] != .never;
+    }
+
+    fn callsItself(graph: *const CandidateGraph, node: u32) bool {
+        const fn_id = graph.nodes.items[node].fn_id;
+        for (graph.calleeNodes(node)) |callee| {
+            if (callee == fn_id) return true;
+        }
+        return false;
     }
 
     /// Resolve outer single-use candidates before their descendants. Demoting
@@ -538,9 +614,7 @@ const InlineAnalyzer = struct {
                             result = true;
                             continue;
                         },
-                        .unknown,
-                        .visiting,
-                        => Common.invariant("inline materialization analysis saw an unfinished decision"),
+                        .unknown => Common.invariant("inline materialization analysis saw an unfinished decision"),
                     };
                     if (candidate.kind != .single_use) {
                         _ = frames.pop();
@@ -584,9 +658,7 @@ const InlineAnalyzer = struct {
                             frames.items[frames.items.len - 1] = .{ .resolve = fn_id };
                             continue;
                         },
-                        .unknown,
-                        .visiting,
-                        => Common.invariant("inline materialization analysis saw an unfinished owner decision"),
+                        .unknown => Common.invariant("inline materialization analysis saw an unfinished owner decision"),
                     }
 
                     switch (states[index]) {
@@ -901,38 +973,5 @@ const InlineAnalyzer = struct {
                 .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .bytes_lit, .static_data_candidate, .comptime_value, .row_widen, .list, .tuple, .record, .record_update, .tag, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return false,
             }
         }
-    }
-
-    /// Keep a cycle of candidates from inlining without bound. Leaving any
-    /// one member a procedure breaks the cycle, so only the wrappers in it
-    /// are rejected: a wrapper is inlined at every call as an optimization,
-    /// while a single-use body is lowered only at its one call, and keeping
-    /// those inlined keeps a recursion through a lambda a self-call. A cycle
-    /// with no wrapper rejects every member.
-    fn markCycle(self: *InlineAnalyzer, repeated: Lifted.FnId, visits: []const Visit) void {
-        var cycle_start: ?usize = null;
-        for (self.stack.items, 0..) |fn_id, index| {
-            if (fn_id == repeated) {
-                cycle_start = index;
-                break;
-            }
-        }
-        const start = cycle_start orelse Common.invariant("inline cycle did not refer to a visiting function");
-        const members = self.stack.items[start..];
-        var has_wrapper = false;
-        for (members) |fn_id| {
-            if (visitKind(visits, fn_id) == .wrapper) has_wrapper = true;
-        }
-        for (members) |fn_id| {
-            if (!has_wrapper or visitKind(visits, fn_id) == .wrapper) self.decisions[@backingInt(fn_id)] = .never;
-        }
-    }
-
-    /// The candidate kind of a function whose visit is in progress.
-    fn visitKind(visits: []const Visit, fn_id: Lifted.FnId) InlineKind {
-        for (visits) |visit| {
-            if (visit.fn_id == fn_id) return visit.candidate.kind;
-        }
-        Common.invariant("inline cycle member had no visit in progress");
     }
 };

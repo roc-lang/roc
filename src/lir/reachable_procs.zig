@@ -426,6 +426,8 @@ const Pass = struct {
             try self.markFrozenExport(export_id);
         } else if (self.result.static_data_values.items[index].initializer) |initializer| {
             try self.markProc(initializer);
+        } else if (self.result.static_data_values.items[index].stored) |stored| {
+            try self.markConstPlan(stored.plan);
         } else if (self.frozen != null) {
             // A program lowered after some compile-time values completed
             // evaluates the rest itself.

@@ -12104,7 +12104,7 @@ test "exact path spelling preserves case and honors platform separators" {
     }
 }
 
-test "shared CTFE and runtime requests specialize once across workers and target widths" {
+test "shared CTFE and runtime requests specialize once per evaluation across workers and target widths" {
     if (is_freestanding) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var tmp_dir = std.testing.tmpDir(.{});
@@ -12180,15 +12180,21 @@ test "shared CTFE and runtime requests specialize once across workers and target
             coord.runtime_lowering = .{ .target = target, .explicit_roots = requests, .root_module = app };
             try coord.finishCheckedProgram(.none);
             try std.testing.expect(!coord.hasUserErrors());
-            const stage_count: u32 = @intCast(coord.program_session.?.completed.?.programs().len);
-            try std.testing.expect(coord.program_session.?.runtime_prepared != null);
-            try std.testing.expectEqual(@as(u32, 1), metrics.monotype_runs);
-            try std.testing.expectEqual(@as(u32, 1), metrics.solved_runs);
+            const session = &coord.program_session.?;
+            // Evaluation completed `answer`, so the runtime program is
+            // specialized once more, from the stored value, with no stage of
+            // its own: it registers no literal root.
+            try std.testing.expect(session.runtime_stages == .respecialized);
+            try std.testing.expect(session.runtime_stages.respecialized == null);
+            const stage_count: u32 = @intCast(session.completed.?.programs().len);
+            try std.testing.expect(session.runtime_prepared != null);
+            try std.testing.expectEqual(@as(u32, 2), metrics.monotype_runs);
+            try std.testing.expectEqual(@as(u32, 2), metrics.solved_runs);
             try std.testing.expectEqual(stage_count, metrics.lir_continuations);
-            var runtime = try coord.program_session.?.takeRuntime(allocator, requests, target);
+            var runtime = try session.takeRuntime(allocator, requests, target);
             defer runtime.deinit();
-            try std.testing.expectEqual(@as(u32, 1), metrics.monotype_runs);
-            try std.testing.expectEqual(@as(u32, 1), metrics.solved_runs);
+            try std.testing.expectEqual(@as(u32, 2), metrics.monotype_runs);
+            try std.testing.expectEqual(@as(u32, 2), metrics.solved_runs);
             try std.testing.expectEqual(stage_count + 1, metrics.lir_continuations);
             try std.testing.expectEqual(@as(usize, 1), runtime.lir_result.root_procs.items.len);
             // The runtime consumer lowers its own continuation, where the

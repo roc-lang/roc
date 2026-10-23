@@ -46286,7 +46286,8 @@ fn recordUseReplaySource(self: *Self, use_idx: u32) Allocator.Error!void {
 /// Freeze a copy of a use replay source's instance—its copy of the scheme
 /// root, every variable its substitution names, and every requirement its
 /// relations derived—and restate over that copy its substitution, in
-/// `scheme_use_pairs`, and the dispatch-target records its relations wrote.
+/// `scheme_use_pairs`, the dispatch-target records its relations wrote, and
+/// the payloads its derived `map`/`map!` relations selected.
 fn freezeUseReplaySource(self: *Self, source_idx: u32, env: *Env) Allocator.Error!void {
     self.use_replay_sources.items[source_idx].freeze = .unusable;
     const use = self.use_instances.items[self.use_replay_sources.items[source_idx].use];
@@ -46374,6 +46375,7 @@ fn freezeUseReplaySource(self: *Self, source_idx: u32, env: *Env) Allocator.Erro
         }
         try self.cir.recordSchemeUse(written.node_idx, .dispatch_target, @backingInt(edge_var), @fromBackingInt(@intCast(written.scheme_root)), self.scratch_replay_pairs.items);
     }
+    try self.restateFrozenDerivedMapPlans();
     const tree_start: u32 = @intCast(self.use_replay_trees.items.len);
     if (std.debug.runtime_safety) {
         try self.appendReplayTree(frozen_root, &self.use_replay_trees);
@@ -46394,6 +46396,19 @@ fn freezeUseReplaySource(self: *Self, source_idx: u32, env: *Env) Allocator.Erro
         .tree_start = tree_start,
         .tree_len = @as(u32, @intCast(self.use_replay_trees.items.len)) - tree_start,
     };
+}
+
+/// Give the frozen copy of each derived `map`/`map!` relation's callable,
+/// among the classes `freezeTypeGraphRoots` just froze, the payload that
+/// relation selected: a replayed use's substitution names the frozen
+/// callable, and checked evidence reads the payload by the callable's class
+/// (`Store.derivedMapPlan`).
+fn restateFrozenDerivedMapPlans(self: *Self) Allocator.Error!void {
+    for (self.types.static_dispatch_constraints.items.items) |constraint| {
+        const plan = self.types.derivedMapPlan(constraint.fn_var) orelse continue;
+        const frozen = self.scratch_freeze_map.get(self.types.resolveVar(constraint.fn_var).var_) orelse continue;
+        try self.types.setDerivedMapPlan(frozen, plan);
+    }
 }
 
 /// The frozen variable standing for `var_` in a use replay source's frozen

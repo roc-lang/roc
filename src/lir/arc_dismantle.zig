@@ -1873,7 +1873,7 @@ const ComponentDominance = struct {
             for (successors.items) |next| try edges.append(gpa, .{ .from = @intCast(index), .to = self.dense[@backingInt(next)] });
         }
         for (procs) |proc| {
-            const body = store.getProcSpec(@fromBackingInt(@intCast(proc))).body orelse continue;
+            const body = store.getProcSpec(@fromBackingInt(@intCast(proc))).arcBody() orelse continue;
             try edges.append(gpa, .{ .from = entry, .to = self.dense[@backingInt(body)] });
         }
         return StatementDominance.initGraph(gpa, stmts.items.len + 1, entry, edges.items);
@@ -2816,7 +2816,7 @@ pub fn compute(
     @memset(direct_call_position_by_arg, std.math.maxInt(u8));
     for (0..store.procSpecCount()) |proc_index| {
         const proc = store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
-        const body = proc.body orelse continue;
+        const body = proc.arcBody() orelse continue;
         const params = store.getLocalSpan(proc.args);
         for (0..GuardedList.borrowLen(params)) |position| {
             const param = GuardedList.at(params, position);

@@ -87,7 +87,12 @@ pub fn literalSymbolName(allocator: Allocator, bytes: []const u8, alignment: u32
     hasher.update(&alignment_bytes);
     hasher.update(bytes);
     const digest = hasher.finalResult();
-    return std.fmt.allocPrint(allocator, lir.Program.content_data_symbol_prefix ++ "{s}", .{&std.fmt.bytesToHex(digest[0..16].*, .lower)});
+    const prefix = lir.Program.content_data_symbol_prefix;
+    const hex = std.fmt.bytesToHex(digest[0..16].*, .lower);
+    const name = try allocator.alloc(u8, prefix.len + hex.len);
+    @memcpy(name[0..prefix.len], prefix);
+    @memcpy(name[prefix.len..], &hex);
+    return name;
 }
 
 /// Build readonly data exports from the exact LIR procedure backing demand.

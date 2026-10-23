@@ -1023,6 +1023,13 @@ pub const CodeProvision = enum {
     /// As `host_dev_objects`, emitted as an object file that is linked, so the
     /// link can also take object-cache objects (`LIR.LirProcSpec.c_abi_entry`).
     host_linked_dev_objects,
+    /// As `host_dev_objects`, for a producer shared with a consumer whose
+    /// code is linked (`host_linked_dev_objects`). The producer takes no
+    /// linked object's entry, since compile-time evaluation runs its code in
+    /// process, and no dev entry whose code includes a procedure an object
+    /// provides, since the linked consumer takes that procedure from the
+    /// object.
+    host_dev_objects_beside_linked,
     /// As `target_dev_objects`, emitted as an object file that is linked.
     target_linked_dev_objects,
     /// Dev emission into a linked object by an emitter that cannot splice
@@ -1040,6 +1047,7 @@ pub const CodeProvision = enum {
     pub fn specCacheTakes(self: CodeProvision) postcheck.Common.SpecCacheTakes {
         return switch (self) {
             .source_bodies, .host_dev_objects, .target_dev_objects => .dev_code,
+            .host_dev_objects_beside_linked => .dev_code_beside_linked_objects,
             .host_linked_dev_objects, .target_linked_dev_objects => .dev_code_and_linked_objects,
             .target_linked_objects => .linked_objects,
         };
@@ -1051,15 +1059,22 @@ pub const CodeProvision = enum {
     /// shared producer never elides a body for a linked object: compile-time
     /// evaluation runs code in process, where nothing is linked.
     pub fn sharedDomain(self: CodeProvision, other: CodeProvision) CodeProvision {
-        return if (self.hostDomain() and other.hostDomain())
-            .host_dev_objects
-        else
-            .source_bodies;
+        if (!self.hostDomain() or !other.hostDomain()) return .source_bodies;
+        return if (self.linksObjects() or other.linksObjects()) .host_dev_objects_beside_linked else .host_dev_objects;
+    }
+
+    /// Whether a consumer under this provision, or one it shares its
+    /// producer with, links object-cache objects.
+    fn linksObjects(self: CodeProvision) bool {
+        return switch (self) {
+            .host_linked_dev_objects, .host_dev_objects_beside_linked, .target_linked_dev_objects, .target_linked_objects => true,
+            .source_bodies, .host_dev_objects, .target_dev_objects => false,
+        };
     }
 
     fn hostDomain(self: CodeProvision) bool {
         return switch (self) {
-            .host_dev_objects, .host_linked_dev_objects => true,
+            .host_dev_objects, .host_linked_dev_objects, .host_dev_objects_beside_linked => true,
             .source_bodies, .target_dev_objects, .target_linked_dev_objects, .target_linked_objects => false,
         };
     }
@@ -1535,9 +1550,12 @@ pub fn prepareCheckedModulesMonotype(
 }
 
 test "shared producer native provision requires every consumer in the host dev domain" {
+    const host_domain = [_]CodeProvision{ .host_dev_objects, .host_linked_dev_objects, .host_dev_objects_beside_linked };
     for (std.enums.values(CodeProvision)) |host| {
         for (std.enums.values(CodeProvision)) |runtime| {
-            const expected: CodeProvision = if ((host == .host_dev_objects or host == .host_linked_dev_objects) and (runtime == .host_dev_objects or runtime == .host_linked_dev_objects)) .host_dev_objects else .source_bodies;
+            const both_host = std.mem.findScalar(CodeProvision, &host_domain, host) != null and std.mem.findScalar(CodeProvision, &host_domain, runtime) != null;
+            const either_linked = host != .host_dev_objects or runtime != .host_dev_objects;
+            const expected: CodeProvision = if (!both_host) .source_bodies else if (either_linked) .host_dev_objects_beside_linked else .host_dev_objects;
             try std.testing.expectEqual(expected, host.sharedDomain(runtime));
             try std.testing.expectEqual(expected, runtime.sharedDomain(host));
         }

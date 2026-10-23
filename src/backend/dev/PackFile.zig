@@ -23,7 +23,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RPCK";
 /// Format version; bump whenever the encoding or artifact contents change.
-pub const format_version: u32 = 9;
+pub const format_version: u32 = 11;
 
 /// One specialization the pack can serve: its reservation-time key, the
 /// artifact holding its procedure, and the ownership signature and
@@ -84,6 +84,10 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
     var used_files = std.ArrayList([32]u8).empty;
     defer used_files.deinit(allocator);
     for (set.artifacts) |artifact| {
+        if (artifact.loc.hasLocation() and file_map[artifact.loc.file] == std.math.maxInt(u32)) {
+            file_map[artifact.loc.file] = @intCast(used_files.items.len);
+            try used_files.append(allocator, set.source_files[artifact.loc.file]);
+        }
         for (artifact.lines) |line| {
             if (!line.loc.hasLocation() or file_map[line.loc.file] != std.math.maxInt(u32)) continue;
             file_map[line.loc.file] = @intCast(used_files.items.len);
@@ -160,6 +164,10 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
                 },
             }
         }
+        const loc = ProcArtifact.rebindLoc(artifact.loc, file_map);
+        try writer.word(loc.file);
+        try writer.word(loc.line);
+        try writer.word(loc.column);
         try writer.word(@intCast(artifact.lines.len));
         for (artifact.lines) |line| {
             try writer.word(line.offset);
@@ -345,6 +353,8 @@ pub fn readOwned(owning_arena: collections.SingleThreadArena, bytes: []const u8)
                 },
             };
         }
+        const loc: base.SourceLoc = .{ .file = try reader.word(), .line = try reader.word(), .column = try reader.word() };
+        if (loc.hasLocation() and loc.file >= source_files.len) return error.MalformedPack;
         const lines = try arena_allocator.alloc(ProcArtifact.LineEntry, try reader.word());
         for (lines) |*line| {
             line.* = .{
@@ -449,6 +459,7 @@ pub fn readOwned(owning_arena: collections.SingleThreadArena, bytes: []const u8)
             .failure_sites = failure_sites,
             .relocations = relocations,
             .data = data,
+            .loc = loc,
         };
         for (refs) |ref| {
             if (ref.target >= artifact_count) return error.MalformedPack;
@@ -475,10 +486,33 @@ pub const ObjectPack = struct {
     object: []const u8,
     identities: []const lir.ProcIdentity,
     specs: []const SpecEntry,
+    binding: ObjectBinding,
+
+    /// Whether the entries of procedure `index` serve a program whose
+    /// binding key is `program_key`.
+    pub fn servesProgram(self: *const ObjectPack, index: u32, program_key: [32]u8) bool {
+        if (!self.binding.app_bound[index]) return true;
+        const app_key = self.binding.app_key orelse return false;
+        return std.mem.eql(u8, &app_key, &program_key);
+    }
 
     pub fn deinit(self: *ObjectPack) void {
         self.arena.deinit();
     }
+};
+
+/// What an object pack was built from and which program code it holds.
+pub const ObjectBinding = struct {
+    /// The inputs an optimized build's pack is a function of; zero for a
+    /// package module's pack, whose file name is its input key.
+    input_key: [32]u8 = @splat(0),
+    /// The binding key of the program whose code the app-bound entries hold
+    /// (`app_bound`), when any does.
+    app_key: ?[32]u8 = null,
+    /// Per procedure in `identities`, whether its code holds code named by
+    /// site, whose current body only its module's content pins: its entries
+    /// serve only a program whose binding key is `app_key`.
+    app_bound: []const bool,
 };
 
 /// Encode an object pack. Like `write`, a pure function of its inputs.
@@ -487,14 +521,24 @@ pub fn writeObject(
     object: []const u8,
     identities: []const lir.ProcIdentity,
     specs: []const SpecEntry,
+    binding: ObjectBinding,
 ) Allocator.Error![]u8 {
+    std.debug.assert(binding.app_bound.len == identities.len);
     var bytes = std.ArrayList(u8).empty;
     errdefer bytes.deinit(allocator);
     var writer = Writer{ .allocator = allocator, .bytes = &bytes };
     try writer.raw(object_magic);
     try writer.word(format_version);
+    try writer.raw(&binding.input_key);
+    if (binding.app_key) |app_key| {
+        try writer.byte(1);
+        try writer.raw(&app_key);
+    } else try writer.byte(0);
     try writer.word(@intCast(identities.len));
-    for (identities) |identity| try writer.raw(&identity.bytes);
+    for (identities, binding.app_bound) |identity, app_bound| {
+        try writer.raw(&identity.bytes);
+        try writer.byte(@intFromBool(app_bound));
+    }
     try writer.word(@intCast(specs.len));
     try writeSpecs(&writer, specs);
     try writer.str(object);
@@ -523,13 +567,44 @@ pub fn readObjectOwned(owning_arena: collections.SingleThreadArena, bytes: []con
     var reader = Reader{ .bytes = bytes };
     if (!std.mem.eql(u8, try reader.raw(object_magic.len), object_magic)) return error.MalformedPack;
     if (try reader.word() != format_version) return error.UnsupportedPackVersion;
-    const identities = try arena_allocator.alloc(lir.ProcIdentity, try reader.word());
-    for (identities) |*identity| identity.* = .{ .bytes = (try reader.raw(32))[0..32].* };
+    const input_key = (try reader.raw(32))[0..32].*;
+    const app_key: ?[32]u8 = switch (try reader.byte()) {
+        0 => null,
+        1 => (try reader.raw(32))[0..32].*,
+        else => return error.MalformedPack,
+    };
+    const identity_count = try reader.word();
+    const identities = try arena_allocator.alloc(lir.ProcIdentity, identity_count);
+    const app_bound = try arena_allocator.alloc(bool, identity_count);
+    for (identities, app_bound) |*identity, *bound| {
+        identity.* = .{ .bytes = (try reader.raw(32))[0..32].* };
+        bound.* = switch (try reader.byte()) {
+            0 => false,
+            1 => true,
+            else => return error.MalformedPack,
+        };
+    }
     const spec_count = try reader.word();
     const specs = try readSpecs(&reader, arena_allocator, spec_count, @intCast(identities.len));
     const object = try reader.str();
     if (reader.offset != bytes.len) return error.MalformedPack;
-    return .{ .arena = arena, .object = object, .identities = identities, .specs = specs };
+    return .{
+        .arena = arena,
+        .object = object,
+        .identities = identities,
+        .specs = specs,
+        .binding = .{ .input_key = input_key, .app_key = app_key, .app_bound = app_bound },
+    };
+}
+
+/// The input key in an object pack's header, read without decoding the
+/// rest; null when the bytes are not an object pack of this format.
+pub fn objectInputKey(bytes: []const u8) ?[32]u8 {
+    const header_len = object_magic.len + 4;
+    if (bytes.len < header_len + 32) return null;
+    if (!std.mem.eql(u8, bytes[0..object_magic.len], object_magic)) return null;
+    if (std.mem.readInt(u32, bytes[object_magic.len..][0..4], .little) != format_version) return null;
+    return bytes[header_len..][0..32].*;
 }
 
 fn writeSpecs(writer: *Writer, specs: []const SpecEntry) Allocator.Error!void {
@@ -737,6 +812,7 @@ test "pack bytes round-trip every artifact field and spec entry" {
                     }),
                 },
             }),
+            .loc = .{ .file = 1, .line = 10, .column = 2 },
         },
         .{
             .kind = .{ .rc_helper = try a.dupe(u8, "roc__rc_decref_abc") },
@@ -749,8 +825,9 @@ test "pack bytes round-trip every artifact field and spec entry" {
         },
         .{ .kind = .message_pool_run, .code = try a.dupe(u8, "hello"), .entry = 0, .frame = null, .refs = &.{}, .relocations = &.{}, .data = &.{} },
     });
-    // Lines use file 3 of the writing program's table, which the pack keeps
-    // as its own first file.
+    // The procedure's location uses file 1 of the writing program's table and
+    // its lines file 3, which the pack keeps as its own two files in that
+    // order.
     const source_files = try a.dupe([32]u8, &.{ @as([32]u8, @splat(0x30)), @as([32]u8, @splat(0x31)), @as([32]u8, @splat(0x32)), @as([32]u8, @splat(0x33)) });
     var set = ProcArtifact.Set{ .arena = arena, .artifacts = artifacts, .source_files = source_files };
     defer set.deinit();
@@ -803,7 +880,11 @@ test "pack bytes round-trip every artifact field and spec entry" {
         try testing.expectEqual(written.loc.column, read_back.loc.column);
         try testing.expectEqualSlices(u8, &source_files[written.loc.file], &pack.set.source_files[read_back.loc.file]);
     }
-    try testing.expectEqual(@as(usize, 1), pack.set.source_files.len);
+    try testing.expectEqual(@as(usize, 2), pack.set.source_files.len);
+    try testing.expectEqual(@as(u32, 10), proc.loc.line);
+    try testing.expectEqual(@as(u32, 2), proc.loc.column);
+    try testing.expectEqualSlices(u8, &source_files[1], &pack.set.source_files[proc.loc.file]);
+    try testing.expect(!pack.set.artifacts[1].loc.hasLocation());
     try testing.expectEqual(ProcArtifact.Form.addr, proc.refs[1].form);
     try testing.expectEqual(@as(u32, 9), proc.relocations[1].offset);
     try testing.expectEqualStrings("roc__d1", proc.relocations[1].name);
@@ -938,7 +1019,7 @@ test "pack writes program-local constants and every reference to them under cont
     try testing.expect(!std.mem.eql(u8, packed_names[0], packed_names[1]));
 }
 
-test "object packs round-trip their object, identities, and spec table" {
+test "object packs round-trip their object, identities, spec table, and binding" {
     const testing = std.testing;
     const identities = [_]lir.ProcIdentity{ lir.ProcIdentity.forTest(1), lir.ProcIdentity.forTest(2) };
     const specs = [_]SpecEntry{.{
@@ -952,16 +1033,24 @@ test "object packs round-trip their object, identities, and spec table" {
         .rc_ret_unique_fields = 0,
         .rc_ret_conditions = &.{0x0001_02ff},
     }};
-    const bytes = try writeObject(testing.allocator, "\x7fELF object", &identities, &specs);
+    const app_key: [32]u8 = @splat(9);
+    const binding: ObjectBinding = .{ .input_key = @splat(5), .app_key = app_key, .app_bound = &.{ false, true } };
+    const bytes = try writeObject(testing.allocator, "\x7fELF object", &identities, &specs, binding);
     defer testing.allocator.free(bytes);
     var pack = try readObject(testing.allocator, bytes);
     defer pack.deinit();
+    try testing.expectEqualDeep(binding, pack.binding);
+    try testing.expectEqual(binding.input_key, objectInputKey(bytes).?);
+    // An app-bound procedure serves only the program it was built for.
+    try testing.expect(pack.servesProgram(0, @splat(1)));
+    try testing.expect(pack.servesProgram(1, app_key));
+    try testing.expect(!pack.servesProgram(1, @splat(1)));
     try testing.expectEqualStrings("\x7fELF object", pack.object);
     try testing.expectEqualDeep(identities[0..], pack.identities);
     try testing.expectEqual(@as(u32, 1), pack.specs[0].artifact);
     try testing.expectEqual(specs[0].rc_borrowed_params, pack.specs[0].rc_borrowed_params);
     try testing.expectEqualSlices(u32, specs[0].rc_ret_conditions, pack.specs[0].rc_ret_conditions);
-    const again = try writeObject(testing.allocator, pack.object, pack.identities, pack.specs);
+    const again = try writeObject(testing.allocator, pack.object, pack.identities, pack.specs, pack.binding);
     defer testing.allocator.free(again);
     try testing.expectEqualSlices(u8, bytes, again);
     // An artifact pack is not an object pack.

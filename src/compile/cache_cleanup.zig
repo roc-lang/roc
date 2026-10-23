@@ -263,13 +263,15 @@ fn objectPackNamespaceName(buf: *[cache_config.object_pack_namespace_prefix.len 
 /// Clean up object-cache packs.
 ///
 /// Layout: `<cache_base>/<version>/objects-v<format>/<target-opt>/<local|pkg>/
-/// <module identity>/<artifact key>.rpk`, with recorded program outputs in
-/// `<target-opt>/programs/<program key>.rpo`. A namespace of any format other
-/// than `format_version` is deleted outright: its packs can never be read
-/// again. In the current namespace, packs under `pkg/` come from URL
-/// packages, are written once per package version, and keep the 30-day
-/// window; packs under `local/` are rewritten by every edit of the module and
-/// keep a one-day window, so superseded packs do not pile up. A pack ages from
+/// <module identity>/<artifact key>.rpk`, with the packs optimized builds
+/// file for their programs in `<target-opt>/optimized/<identity>.rpk`
+/// and recorded program outputs in `<target-opt>/programs/<program key>.rpo`.
+/// A namespace of any format other than `format_version` is deleted
+/// outright: its packs can never be read again. In the current namespace,
+/// packs under `pkg/` come from URL packages, are written once per package
+/// version, and keep the 30-day window, as do optimized builds' packs under
+/// `optimized/`; packs under `local/` are rewritten by every edit of the
+/// module and keep a one-day window, so superseded packs do not pile up. A pack ages from
 /// its last use, not its write: an in-use pack whose bytes never change must
 /// not be deleted and rebuilt once per window.
 fn cleanupObjectPacks(std_io: Io, cache_base: []const u8, format_version: u32, now_ns: i128, maybe_stats: ?*CleanupStats) void {
@@ -328,6 +330,13 @@ fn cleanupPackNamespace(std_io: Io, namespace_dir: Dir, now_ns: i128, maybe_stat
                 ageFilesIn(std_io, identity_dir, origin.max_age_ns, now_ns, maybe_stats);
             }
         }
+        // The pack each optimized build of a program replaces keeps the
+        // window of a package's pack.
+        if (mode_dir.openDir(std_io, "optimized", .{ .iterate = true })) |optimized_dir| {
+            var dir = optimized_dir;
+            defer dir.close(std_io);
+            ageFilesIn(std_io, dir, Config.PERSISTENT_MAX_AGE_NS, now_ns, maybe_stats);
+        } else |_| {}
         // A recorded program output names one exact program, which an edit
         // replaces, so it keeps the window of a local pack.
         var programs_dir = mode_dir.openDir(std_io, "programs", .{ .iterate = true }) catch continue;
@@ -853,8 +862,11 @@ test "object pack sweep deletes stale format namespaces and ages current packs b
     defer allocator.free(stale_namespace);
     const programs_dir = try std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "objects-v7", "x64glibc-dev", "programs" });
     defer allocator.free(programs_dir);
+    const optimized_dir = try std.fs.path.join(allocator, &.{ cache_base, "0.0.0-test", "objects-v7", "x64glibc-speed", "optimized" });
+    defer allocator.free(optimized_dir);
     try writeTestFile(local_dir, "fresh.rpk", "local", now_ns);
     try writeTestFile(pkg_dir, "fresh.rpk", "pkg", now_ns);
+    try writeTestFile(optimized_dir, "cc.rpk", "optimized", now_ns);
     try writeTestFile(stale_dir, "fresh.rpk", "stale", now_ns);
     try writeTestFile(programs_dir, "fresh.rpo", "program", now_ns);
 
@@ -871,6 +883,8 @@ test "object pack sweep deletes stale format namespaces and ages current packs b
     defer pkg_dir_handle.close(std.testing.io);
     var programs_dir_handle = try Dir.cwd().openDir(std.testing.io, programs_dir, .{});
     defer programs_dir_handle.close(std.testing.io);
+    var optimized_dir_handle = try Dir.cwd().openDir(std.testing.io, optimized_dir, .{});
+    defer optimized_dir_handle.close(std.testing.io);
     try local_dir_handle.access(std.testing.io, "fresh.rpk", .{});
     try pkg_dir_handle.access(std.testing.io, "fresh.rpk", .{});
     try programs_dir_handle.access(std.testing.io, "fresh.rpo", .{});
@@ -882,12 +896,14 @@ test "object pack sweep deletes stale format namespaces and ages current packs b
     try std.testing.expectError(error.FileNotFound, local_dir_handle.access(std.testing.io, "fresh.rpk", .{}));
     try std.testing.expectError(error.FileNotFound, programs_dir_handle.access(std.testing.io, "fresh.rpo", .{}));
     try pkg_dir_handle.access(std.testing.io, "fresh.rpk", .{});
+    try optimized_dir_handle.access(std.testing.io, "cc.rpk", .{});
 
     const past_window = now_ns + Config.PERSISTENT_MAX_AGE_NS + std.time.ns_per_s;
     var pkg_stats = CleanupStats{};
     sweep(std.testing.io, cache_base, limits, past_window, &pkg_stats);
-    try std.testing.expectEqual(@as(u32, 1), pkg_stats.cache_files_deleted);
+    try std.testing.expectEqual(@as(u32, 2), pkg_stats.cache_files_deleted);
     try std.testing.expectError(error.FileNotFound, pkg_dir_handle.access(std.testing.io, "fresh.rpk", .{}));
+    try std.testing.expectError(error.FileNotFound, optimized_dir_handle.access(std.testing.io, "cc.rpk", .{}));
 }
 
 test "size bound evicts least recently used files across families until under the limit" {

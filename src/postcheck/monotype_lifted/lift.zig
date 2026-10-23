@@ -757,7 +757,7 @@ const Lifter = struct {
                 try children.fields(update.fields);
             },
             .tag => |tag| try children.span(tag.payloads),
-            .static_data_candidate => |candidate| try children.child(candidate.runtime_expr),
+            .static_data_candidate => |candidate| if (candidate.value.subexpression()) |sub| try children.child(sub),
             .comptime_value => |candidate| try children.child(candidate.initializer),
             .typed_boundary => |boundary| try children.child(boundary.value),
             .row_widen => |widen| try children.child(widen.value),
@@ -1778,7 +1778,7 @@ fn CaptureWalk(comptime Visitor: type) type {
                     for (0..field_exprs.len) |index| try walk.child(GuardedList.at(field_exprs, index).value, ctx);
                 },
                 .tag => |tag| try walk.span(tag.payloads, ctx),
-                .static_data_candidate => |candidate| try walk.child(candidate.runtime_expr, ctx),
+                .static_data_candidate => |candidate| if (candidate.value.subexpression()) |sub| try walk.child(sub, ctx),
                 .comptime_value => |candidate| try walk.child(candidate.initializer, ctx),
                 .typed_boundary => |boundary| try walk.child(boundary.value, ctx),
                 .row_widen => |widen| try walk.child(widen.value, ctx),

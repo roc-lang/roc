@@ -1488,7 +1488,7 @@ fn computeOutcomeRestitution(
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
         if (solution.isPinnedProc(proc_id)) continue;
         const proc = store.getProcSpec(proc_id);
-        const body = proc.body orelse continue;
+        const body = proc.arcBody() orelse continue;
         if (layouts.getLayout(proc.ret_layout).tag != .tag_union) continue;
 
         const proc_stmts = statements_by_proc.of(proc_index);
@@ -2175,7 +2175,7 @@ fn liftReachableStatements(solver: *Solver) SolveError!void {
         // Bodyless procedures still have ABI parameter definitions. They
         // contribute no reachable statements, but their params are foreign
         // uniqueness origins just like the independent whole-store model.
-        const body = proc.body orelse continue;
+        const body = proc.arcBody() orelse continue;
         for (0..GuardedList.borrowLen(params)) |param_index| {
             try solver.binding_facts.append(solver.allocator, .{ .fresh = GuardedList.at(params, param_index) });
         }
@@ -2354,11 +2354,11 @@ fn reachableStatementSet(
     defer stack.deinit(allocator);
 
     if (only_proc) |proc_id| {
-        if (store.getProcSpecImmediate(proc_id).body) |body| try stack.append(allocator, body);
+        if (store.getProcSpecImmediate(proc_id).arcBody()) |body| try stack.append(allocator, body);
     } else {
         for (0..store.procSpecCount()) |proc_index| {
             const proc = store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
-            if (proc.body) |body| try stack.append(allocator, body);
+            if (proc.arcBody()) |body| try stack.append(allocator, body);
         }
     }
     while (stack.pop()) |current| {
@@ -3438,7 +3438,7 @@ fn fillPinnedProcContracts(
         // A procedure named by site keeps its identity when its body changes,
         // so code compiled against an earlier body calls it; its signature is
         // the one its types determine (`LIR.LirProcSpec.code_key`).
-        if (proc.body == null or proc.hosted != null or proc.abi == .erased_callable or proc.code_key != null) {
+        if (proc.arcBody() == null or proc.hosted != null or proc.abi == .erased_callable or proc.code_key != null) {
             pinned.set(proc_index);
         }
     }
@@ -3553,7 +3553,7 @@ fn computeVisibilityFromLift(
         for (0..proc_count) |proc_index| {
             try walked_returns.open(allocator);
             const proc = store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
-            const body = proc.body orelse continue;
+            const body = proc.arcBody() orelse continue;
             visited.clearRetainingCapacity();
             stack.clearRetainingCapacity();
             try stack.append(allocator, body);
@@ -5477,7 +5477,7 @@ fn settleUniquenessOracle(
         try proc_stmts.open(allocator);
         try returns.open(allocator);
         const proc = store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
-        const body = proc.body orelse continue;
+        const body = proc.arcBody() orelse continue;
         try appendProcStatements(allocator, store, body, &proc_stmts.items);
         for (proc_stmts.openRows()) |stmt| {
             const node = store.getCFStmtImmediate(stmt);

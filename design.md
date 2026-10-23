@@ -208,6 +208,21 @@ are two distinct identities even when their declaring modules are
 byte-identical, and no deduplication, specialization, or merging step may
 collapse two externally-bound identities into one.
 
+### Output Determinism
+
+A compiler run's output is a function of the source bytes it compiles, its
+command line, and the optimization state: the object packs that earlier
+optimized builds filed in this compiler's object store, at the paths the
+build reads them from. Nothing else decides a byte of it: not what the dev
+store, recorded program outputs, compile-time packs or discovery summaries
+hold, not thread scheduling or timing, not directory listing order or file
+times. Every cache other than the optimization state is transparent, so a
+hit produces exactly what a miss would have. The store lives in a folder of
+the compiler build (`compat-<id>`), so compilers built differently have
+separate optimization states, and two machines compiling the same source
+produce different dev executables when their optimization histories
+differ.
+
 ### Representation Capacity
 
 Every count, index, position, offset, and value that grows with the size of
@@ -601,16 +616,18 @@ and source frames from it.
 ### Object Cache Store
 
 Packs live under `<cache root>/<compiler version>/objects-v<pack format>/
-<target>-<opt>/<local|pkg>/<module identity>/<key>.rpk`. A pack's path is a
-function of its content, so a writer stages it beside its path in a file it
+<target>-<opt>/<local|pkg>/<module identity>/<key>.rpk`, and the pack an
+optimized build files for its program, which each optimized build of the
+program replaces, under `<target>-<opt>/optimized/<identity>.rpk`. Every
+other pack's path is a function of its content, so a writer stages it beside its path in a file it
 alone created (`CoreCtx.writeTempFile`), so two writers never share a partly
 written file, renames it into place, and leaves a pack already present alone; builds with runtime
 safety compare the bytes they would have written with the pack in place. The
 background sweep (`cache_cleanup.sweep`) deletes every `objects-v*` namespace
 of a format other than the compiler's own, ages the current namespace's
 `local/` packs (rewritten by every edit) and recorded program outputs
-(`programs/`, see "Recorded Program Output") on one day and its `pkg/` packs
-on thirty, by last use (`max(atime, mtime)`), and then deletes the least
+(`programs/`, see "Recorded Program Output") on one day and its `pkg/` and
+`optimized/` packs on thirty, by last use (`max(atime, mtime)`), and then deletes the least
 recently used persistent cache files of every family until the cache fits
 `CacheConfig.max_size_mb`. Eviction only deletes files; it never changes what
 a build writes.
@@ -628,16 +645,34 @@ A pack's line entries index the pack's own source-file table, which names
 each file by its module's content identity in the order the lines first use
 it. Splicing binds each to the receiving program's file for the same module
 identity, so DWARF line programs cover spliced procedures exactly as they do
-compiled ones. A procedure can be served across an edit of its module, since
-its identity does not depend on where it sits in the file; its lines then name
-a module version the program does not have, and they are not emitted rather
-than misattributed.
+compiled ones. Each procedure artifact also carries its procedure's location
+(`Artifact.loc`, `LirStore.procLoc`) in the same table, which names the
+procedure's debug entry wherever it lands. A procedure's identity does not
+depend on where it sits in its file, so an entry could be served across an
+edit of a module its code was lowered from; its lines would then name a module
+version the program does not have, while the program's own compile of the
+procedure would carry its current lines. Such an entry is not offered:
+every lookup names the asking program's modules (`Common.ProgramModules`,
+the module identities of the checked modules it lowers against), and an
+entry whose splice would place a line or location in any other module
+version does not serve it (`LoadedPacks.linesOutsideProgram`); the program
+compiles the procedure. A stable reference to a procedure counts only as far
+as a splice follows it: a procedure keeps its identity across an edit of its
+module only when named by site, and a program taking an entry that refers to
+one lowers it itself. A splice therefore binds every line, and a line it
+could not bind is an invariant violation.
 
-A URL-package module also gets an optimized object pack, filed in the same
-layout under `<target>-speed/pkg/` for a native target and
-`<target>-size/pkg/` for wasm32: its closed exports lowered under the LIR
-policy of that optimization level and compiled by LLVM at it into one object,
-with the same spec table naming each entry's procedure. The object defines everything its code
+An optimized build (`--opt=speed` or `--opt=size`) files LLVM-compiled
+object packs under its own level's store (see "Optimized Builds Feed Dev
+Builds"). A URL-package module gets one in the same layout under `pkg/`:
+its closed exports lowered under the object pack policy
+(`linkedObjectLoweringConfig`, the dev policy, so each procedure keeps the
+identity a dev build gives it and its code means what dev code means:
+expects run, reference counts are shared across threads, `Dict` has the dev
+seed) and compiled by LLVM at the build's level into one object, with the
+same spec table naming each entry's procedure. A module whose code cannot be
+a linked object gets an empty pack, which offers nothing, so it is not
+lowered again. The object defines everything its code
 needs: procedures, refcount helpers, and builtins as internal symbols, and
 each constant as weak readonly data under its `roc__h` content name, so two
 objects carrying one constant share a single copy in the link. It exports,
@@ -669,11 +704,26 @@ entry of the same procedure and lets the linked consumer switch to the
 object's entry in Direct LIR. Such a procedure is `external` with
 `c_abi_entry` set: the dev backend calls its C-ABI entry like a hosted
 function and compiles a local body that forwards to it for every other use,
-and the build links the objects whose entries it took. A dev pack never
-offers an entry whose code reaches a linked entry, so a program that splices
-dev code never needs an object it did not ask for. A build whose store lacks
-a URL-package module's object pack builds it once the module is checked and
-before the program lowers, so that build already links it.
+and the build links exactly the objects that define the entries its
+lowered program took (`LoadedPacks.settleLinkedObjects`), whatever it looked
+up along the way. Direct LIR switches a dev hit to the linked entry of the
+same procedure whether the object offers it under the specialization's key
+or under the procedure's identity key. A dev pack never offers an entry whose
+code reaches a linked entry, so a program that splices dev code never needs
+an object it did not ask for; and a consumer whose code is linked, or a
+producer it shares (`CodeProvision.host_dev_objects_beside_linked`), never
+takes a dev entry whose splice would place dev code for a procedure an
+object offers, as an entry compile-time evaluation filed can. Which of a
+program's procedures link an object's entry is then a function of the
+object packs alone, never of which dev packs exist.
+
+A dev build reads object packs by exact path, never by listing a
+directory: for the target's preferred level (`speed` natively, `size` on
+wasm32) and then the other, the pack of each URL-package module in view
+under its artifact key, in module identity order, then the optimized pack
+of its program. The first pack to offer a key or a procedure serves it, so
+which pack serves a procedure two offer, and the order the program links
+them in, are functions of the optimization state alone.
 
 After version resolution selects the final package versions and checking
 publishes their constants, caching check, run, and build commands prepare the URL
@@ -705,8 +755,8 @@ which passes vectors by lane), and the
 object's imports, the runtime and hosted functions its code calls, are
 allowed undefined in the sealed object beside the program's own.
 
-`roc run --opt=dev` links every object pack of its URL packages into the
-cached host program, beside a table of their C-ABI entries that the
+`roc run --opt=dev` links every object pack it loads into the cached host
+program, beside a table of their C-ABI entries that the
 generated platform shim defines (`roc_shim_package_names`), and its image,
 streamed to that host program, calls an entry by name: the machine-code shim
 resolves it from the table as it resolves hosted functions. The object packs
@@ -714,21 +764,6 @@ are part of the host program's identity, so editing the app reloads only
 the image, and a hot reload rebuild that would need other objects reports a
 changed host interface. The image splices the dev packs' entries the same way
 an object build does, with the data they carry.
-
-A tier 2 entry, one the program offers by identity alone, can be optimized
-only once an app requests it. After a cached dev build writes its packs, it
-starts a detached `roc build --tier2-objects=<requests>` naming the entries it
-offered by identity that no object served. That build lowers the app exactly
-as the requesting build did, so each entry keeps its identity, compiles with
-LLVM every entry whose call closure an object can define whole (no literal
-conversion, no erased call, and no procedure served from the cache, named by
-site, or holding a copy of such code), and files the object pack under the
-app module in the optimized store, named by its requests. A later dev build
-loads the root module's object packs too and links such an entry in place of
-its dev code. `roc check` never starts one, and `roc run` links only its URL
-packages' objects, so a hot reload session keeps one host program.
-In a compiler that honors developer diagnostics, `ROC_BACKGROUND_OBJECTS=off`
-disables the build and `wait` makes the dev build wait for it.
 
 A specialization whose request mentions a function type has no
 reservation-time key: which closures it receives is decided by lambda
@@ -784,6 +819,77 @@ and source digests, and procedure identities) name it by its declaration and
 the structure of its backing rather than by its module's content, so a
 package specialization at an app type keeps its identity across edits that
 leave the type's structure alone.
+
+
+### Optimized Builds Feed Dev Builds
+
+An optimized build of a program, once its executable is written and when it
+reports no error, files the object packs a later dev build links in place of
+compiling the code they hold (`writeOptimizedPacks`), under its own level's
+store: the pack of every URL-package module in view the store lacks, and the
+optimized pack of the program, which each optimized build of it
+replaces. The root's pack comes from a second lowering of the checked
+program under the object pack policy, with an empty object cache lookup, so
+every procedure has the identity and the code key a dev build that reads the
+object cache gives it. Every procedure with a body is a candidate under the
+key a dev build's Direct LIR looks it up by
+(`Common.procIdentityCacheKey(code_key orelse identity)`), and LLVM compiles
+every candidate whose call closure an object can define whole into one
+object. The pack's header carries its input key (`optimizedPackInputKey`:
+the format, target, level, specialization strategy, and every checked module
+the program lowers against); an optimized build whose stored pack has that
+key lowers nothing again.
+
+The pack is filed under the app module's placement when the program has an
+app, since every app of a platform shares the platform as its root, and
+under the root's otherwise (`pack_store.optimizedPackPlacement`). It may
+hold code named by site: a procedure with a code key, or one whose body
+copied such code, as a platform entry whose LLVM code inlined the app's
+`main!` does. Such code's current body is pinned only by its module's
+content, so a procedure whose closure holds any is app-bound
+(`PackFile.ObjectBinding.app_bound`) to the program's binding key, a digest
+of every checked module the program lowers against
+(`pack_store.programBindingKey`), and a dev build of any other version of
+the program is not offered its entries. An edit therefore drops every entry
+holding site-named code until the next optimized build, while the entries
+that hold none, package specializations at app types included, keep
+serving.
+Entries that make erased calls or convert literals are not offered, as for a
+package's pack, and a program with no candidate gets an empty pack.
+
+`roc run --opt=dev` links the root's pack too, beside its URL packages'
+packs, and keeps the objects it loaded for its whole hot reload session.
+
+### Canonical Dev Images
+
+A build's executable is a function of its source, its command line, and its
+optimization state (the object packs it links); which dev packs the object
+cache holds, and in which order or on which worker a procedure was compiled,
+must change nothing in it. The dev backend's object is therefore laid out
+canonically (`ObjectFileCompiler.compileWithCodeGen`). The code generated for
+the program, compiled now or spliced from dev packs, is lifted into artifacts
+(`ProcArtifact.extract`); a linked program keeps only the artifacts its roots
+reach, the procedures its entry wrappers call and the host-visible constants
+with what they name (`retainReachable`), since a program that took an entry
+lowers some procedures (the members of an entry's lambda sets) only so the
+entry could call them; and the remaining set is placed again into the code
+generator the object is encoded from (`canonicalize`, `assembleCanonical`):
+
+- procedures in identity order, then Boxy thunks, then refcount helpers by
+  name, each message pool run right after the one artifact whose code
+  addresses it;
+- every constant code names, and every constant a host-visible constant
+  names, under its content name (`ContentNames`), so a constant this program
+  named for itself (`roc__d{N}`) and the same constant carried by a spliced
+  entry are one symbol, in name order; host-visible constants keep their
+  names and only they are global;
+- a symbol and a debug entry for every procedure (`roc__p{identity}`, with its
+  artifact's location) and every helper with a frame, whether the program
+  declares it or only spliced code reaches it.
+
+A procedure's artifact is the same whether this program compiled it or a
+pack carried it, so the object is the same however each procedure was
+provided.
 
 ### Read-Only Type Analysis
 
@@ -1856,9 +1962,10 @@ no ownership transfers. The pass extends each affected procedure's sorted frame
 local inventory and recomputes its stack-probe requirement. Backends consume
 only these explicit ordinary LIR operations.
 
-A runtime program continued from the shared producer program after the
-compile-time consumer completed, rather than reusing that consumer's own
-program, receives the completed values in two forms. Its lowering carries the host's completed
+A program continued from the shared producer program after a compile-time
+consumer completed, rather than reusing that consumer's own program (a later
+evaluation level, or a runtime program reading completed literal roots),
+receives the completed values in two forms. Its lowering carries the host's completed
 successful scalar roots, decoded from the host's frozen image and keyed by
 checked root identity as transcoding matches slots, and emits each such read
 as the scalar literal rather than a slot read, so range proving, loop
@@ -1877,7 +1984,13 @@ keeps each empty list's evaluated capacity on the root's export, keyed by
 its byte offset within the image, and the runtime rebuilds the request so
 the first append goes in place. A list with items keeps its slot however
 uniform its contents, so the constructions are the scalars, the empty
-string, the empty list, and records, tuples and tags of those. A list of
+string, the empty list, and records, tuples and tags of those. A completed
+string shorter than three target words, the threshold below which a
+restored string needs no target storage, lowers as its literal, as a read
+restoring the stored string does, so a procedure's code is the same whether
+it reads the string completed or restored. A restored string is its own
+bytes, never a view into a longer stored backing, so whether it needs
+target storage depends on the string alone. A list of
 copies of one construction—what `List.repeat` and a constant fill loop
 complete to—additionally names, on each read, the argument-free procedure
 that builds the same list fresh (`assign_literal.fresh_alternative`), and
@@ -1998,8 +2111,11 @@ no LSS runtime consumer continues that program, as in `roc check`, the
 program roots in that union are discovery roots and only the bodies that can
 register a literal root are specialized (see "Demand-Driven Compile-Time
 Specialization" below). An
-LSS runtime consumer continues that program and borrows it: none copies it,
-none reruns any of those stages, and callable correspondence compares ids
+LSS runtime consumer continues that program and borrows it, unless the
+evaluation completed a compile-time root the program demands, when it
+continues the program specialized again from the stored values instead
+(see "Runtime Programs Read Stored Values"): none copies it,
+none reruns any of those stages for it, and callable correspondence compares ids
 from one producer domain, never ids allocated by separate solver runs. A
 consumer continuing it chooses its target width, the explicitly shared
 expect consumer mode, its LIR policy, and the completed compile-time values
@@ -2232,7 +2348,13 @@ Solved program they share. Evaluation
 and a dev build for the host serve its entries exactly as they serve runtime
 packs' (see "Early Compile-Time Object Reuse"), so a later check whose roots
 must be evaluated again, or a build of the checked program, splices the code
-instead of lowering and compiling it.
+instead of lowering and compiling it. One exception keeps a build's code
+independent of which packs exist: evaluation reads a compile-time value
+through its evaluation, where every other program reads it as a constant,
+and SpecConstr rewrites the two forms differently. The pack therefore does
+not offer an entry whose code, through every procedure it reaches, reads a
+compile-time value, a literal root's included
+(`SpecComptimeReads.Lookup.evaluated`).
 
 Native compile-time instruction generation consumes an explicit, read-only LIR
 demand closure seeded by compile-time root procedures and materialized callable
@@ -2391,16 +2513,33 @@ not silently demote the value from compile-time evaluation. No backend may
 rediscover or guess root eligibility by scanning source syntax, function
 bodies, object symbols, or generated code.
 
-Target static data is produced from explicit, closed LIR initializer procedures.
-Monotype restoration builds each initializer from the stored `ConstStore` value,
-then closure lifting, lambda solving, layout commitment, structural LIR rewrites,
-and ARC run normally. The initializer's returned LIR value is the sole source of
+Target static data comes from one of two explicit sources. A restored non-empty
+list whose stored value is data alone, reaching no function value, crash, or
+checked error (decided by a memoized walk over explicit `ConstStore` edges), is
+a stored list. Its candidate carries no expression for the list or for any
+item: only the item count and, when every item stores one value that could be a
+construction, that item restored once, which the list's fresh form repeats.
+Static data freezes a stored list straight from its node through the const plan
+of the candidate's type, at the candidate's layout. A node of stored data has
+exactly one target representation at a layout, the one its type's constructions
+build and the one the `ConstStore` writer read through the same kind of plan,
+so this freezing reconstructs nothing. A static initializer that holds a stored
+list reads it as its own static data.
+
+Every other value is produced from an explicit, closed LIR initializer
+procedure. Monotype restoration builds each initializer from the stored
+`ConstStore` value, then closure lifting, lambda solving, and layout commitment
+run normally. The initializer is straight-line construction LIR that no backend
+emits, so the procedure-local LIR rewrites and ARC leave it as lowered: it has
+no branch, call, join, or loop to rewrite, and a reference count in it would
+never run. The initializer's returned LIR value is the sole source of its
 target representation: static materialization freezes its exact bytes,
 allocations, procedure relocations, and explicit generated-RC-helper
-relocations into readonly target data. It must not
-walk `ConstStore` in reverse using a type-derived storage plan, because a
-target-independent `ConstStore` node does not preserve the contextual callable
-encoding of every nested allocation.
+relocations into readonly target data. Values that reach a function value keep
+this path, because a target-independent `ConstStore` node does not preserve
+the contextual callable encoding of every nested allocation, and so do values
+that reach a crash or checked error, which a program raises where it reads
+them.
 
 F32 and F64 are distinct representations throughout the post-check pipeline.
 An F32 local, immediate, register value, stack slot, call argument, return, and
@@ -2497,8 +2636,9 @@ reference counts.
 A dev build also records its program's runtime output: the Roc object it
 linked and the link inputs it read from the lowering (hosted symbols, link
 roots and app exports), filed under a key covering every checked module the
-program lowers against, with their code-generation keys, and the build's
-output policy, inside the store's namespace for the target, compiler and
+program lowers against, with their code-generation keys, the build's output
+policy, and a digest of the optimization state (the object packs the program
+would load, named by their paths and input keys), inside the store's namespace for the target, compiler and
 optimization level. Once a later build's program is checked and before it is
 evaluated, the build asks for that key. On a hit the program is evaluated
 exactly as a build without the record evaluates it: its specialization decides
@@ -6601,8 +6741,10 @@ Every live literal-origin record leaves checking with one explicit resolution:
   dispatch-call lowering and unwraps the result once. Its checked result type,
   shared value slot, and stored constant all describe the validated `Ok` payload.
   `Err` lowers to a `literal_rejected` terminal carrying the literal's source site.
-  Every use restores the root's stored payload, or, while its module is
-  still finalizing, reads the root's declared compile-time value. A root no
+  Every use restores the root's stored payload, or, in a program lowered
+  before the root has completed, reads the root's declared compile-time
+  value; a runtime program always restores it (see "Runtime Programs Read
+  Stored Values"). A root no
   evaluation requests (its type holds a callable, so the root is
   specialization-owned) is hoisted per program instead, as a literal root
   (see `specialization_dispatch` below). No use re-runs the conversion. A root whose conversion returns `Err` records the
@@ -8147,7 +8289,11 @@ The explicit `InlineMode` controls the optional specialization work:
   decides single use by the source instead of the program (below). Dev mode
   selects this, because the object cache links dev procedures into programs
   other than the one compiling them, and only decisions that depend on source
-  alone are the same in all of them.
+  alone are the same in all of them. For the same reason dev SpecConstr
+  (`.iterator_fusion` clone inlining) clones no workers for call patterns or
+  callables (`CloneInlining.specializesCallPatterns`): which clones a function
+  gets depends on every call the program makes to it, so a body rewritten to
+  call one would depend on the rest of the program.
 - optimized eval and focused lowering tests may select `.wrappers` directly.
 
 The mode is compiler input supplied to the checked pipeline. SpecConstr and the
@@ -8184,8 +8330,16 @@ unique call's owning functions through the selected inline plan. If an owning
 wrapper has multiple direct inline sites or also survives as a function value,
 the nested single-use body remains a procedure; a non-inlined owner establishes
 a single procedure-body boundary. Bodies with procedure-relative returns or
-loop control not owned by a loop inside the body remain procedures, and cycles
-consisting entirely of selected inline bodies are rejected before lowering. The
+loop control not owned by a loop inside the body remain procedures. A
+cycle of direct calls among closed candidate bodies (a strongly connected
+component of that call graph, or a body that calls itself) is kept from
+inlining without bound, decided before lowering: leaving one member a
+procedure breaks a cycle, so a cycle's wrappers remain procedures and its
+single-use bodies stay inlined, which keeps a recursion through a lambda a
+self-call; a cycle with no wrapper, including one among the single-use bodies
+a first pass kept, leaves every member a procedure. The components depend on the
+call graph alone, never on the order a program numbers its functions in, so
+every program that contains a procedure makes the same decisions inside it. The
 analyzer records the complete decision before LIR generation; direct
 Solved-to-LIR lowering only substitutes arguments and dumbly lowers a selected
 body at its unique call site. An argument that is a plain read of a caller
@@ -9265,7 +9419,9 @@ from its byte view. Fixed products are records, tuples, and nominal wrappers
 composed entirely of scalars and zero-sized products. Their existing checked
 types define checked field order; bytes concatenate scalar leaves in that
 order without host padding. Lists containing other value shapes retain explicit
-child nodes so their graph edges and sharing stay visible.
+child nodes so their graph edges and sharing stay visible. A restored list of
+such values that is data alone is a stored list (see "Compile-Time Evaluation
+And Static Storage"), which no stage represents item by item.
 
 Constant writing and target lowering compile a field-copy plan once per explicit
 representation. Plans use committed layout field indexes and offsets, preserve
@@ -11451,8 +11607,9 @@ a copy of the source's instance, as concrete dispatch replay does: the root's
 parts, every variable the source's scheme-use substitution names, and every
 requirement its relations derived. Functions whose effect is still open may
 be frozen there, because those classes are reached only through relations no
-later relation revisits. The source's substitution and the dispatch-target
-records its relations wrote are restated over the copy. The replayed use
+later relation revisits. The source's substitution, the dispatch-target
+records its relations wrote, and the payload each of its derived `map`/`map!`
+relations selected are restated over the copy. The replayed use
 then relates its root's parts, and every variable of its own substitution
 that carries a relation, to the frozen node at the same position. Its own
 relations are skipped, and its scheme-use record names the source's restated
@@ -13622,6 +13779,17 @@ explicit hidden parameter or capture. If a concrete call site invokes the
 function, the caller supplies the exact static dictionary for the concrete
 checked type. If a higher-order function captures a polymorphic function, the
 erased callable capture stores the hidden dictionary it needs.
+
+A derived `map`/`map!` has no declared procedure. Its implementation is a
+generated worker keyed by the checked callable type of the use that selected
+it and the payload slot checking recorded for that use
+(`WorkerSource.derived_map`). A direct structural call is planned as a direct
+call to that worker, and structural evidence for a dictionary slot resolves to
+the same worker, so a generic function's `map` dispatch calls it through the
+dictionary its caller supplies. The worker branches on the input union's
+variants, passes the selected payload slot through the transform, and moves
+every other payload into the same variant of the output union. It never
+re-judges eligibility or selects a payload itself.
 
 LIR exposes indirect dictionary calls as ordinary explicit indirect calls with
 a known LIR call shape. The LIR statement names the dictionary local or static
@@ -23689,8 +23857,40 @@ are zero-sized; its source template or layout alone cannot identify which member
 was evaluated. Solved LIR lowering records `FrozenCallableContext` alongside the frozen
 Monotype function and generated worker identity. Transcoding consumes that
 complete identity and requires one exact target member. These identities are
-positions in one Solved program, which is why every LSS runtime consumer
-continues evaluation's Solved program rather than preparing its own.
+positions in one Solved program, which is why an LSS runtime consumer reads
+completed literal roots only from the Solved program that evaluated them,
+continuing that program rather than preparing its own.
+
+### Runtime Programs Read Stored Values
+
+A build's executable is a function of its source, its command line, and its
+optimization state; whether the checked module cache already held a
+module's compile-time values is none of these. A compilation that evaluates
+a compile-time root stores the completed value in its module's constant
+store, which is exactly where a later compilation finding the module in the
+checked cache reads it from, so the runtime program reads every completed
+compile-time root from there in both: each use restores the stored value as
+a constant (static data named by content, a short string as its literal, a
+construction as its parts), and no runtime program declares a slot, a
+failure record, or a guard for a compile-time root that completed.
+
+The point at which this holds is explicit: the end of the program's
+evaluation (`finalizeProgram`). The specialization evaluation made declared
+each pending root's read as a slot read, because the value did not exist
+yet, so when that evaluation completed any compile-time root the program
+demands, its Solved program is not the one a runtime consumer continues.
+The program is specialized again from the checked modules, now holding
+every demanded value stored, exactly as a compilation that found them all
+in the cache specializes it (`ProgramSession.RuntimeStages.respecialized`).
+That specialization demands no compile-time root; it registers the
+program's literal roots again and evaluates them, and their outcomes, which
+the first evaluation already reported, report nowhere. A literal root is
+not stored by any compilation, so both kinds of compilation read literal
+roots' completed values from the stages that evaluated them, the same way.
+The evaluation's own stages, with their specializations' compile-time
+reads, are what the compile-time object pack publishes. A compilation that
+evaluated no compile-time root its program demands continues its one
+specialization, which is already that program.
 
 ### Dependency-Ordered Compile-Time Evaluation
 
@@ -23714,14 +23914,14 @@ dictionary call, comparison, hash, inspection, or adaptation is a value call
 that may run any of the program's Boxy workers.
 
 Each level is lowered as its own consumer of the Solved program once every
-level before it has run, so its code is lowered the way a build lowers code
-after evaluation: a completed value that lowers as a construction is
+level before it has run: a completed value that lowers as a construction is
 folded, any other completed value is read from a slot whose frozen bytes are
 transcoded from the stage that evaluated it (`CompletedStages`), and only a
 read of a value that failed is guarded. A read of a value the level evaluates
 itself, which only a group that reads itself makes, keeps its guard. The
 stages' programs and their frozen values are retained until the runtime
-consumer, which reads every completed value the same way, has been lowered.
+consumer has been lowered; a runtime consumer reads them only for literal
+roots (see "Runtime Programs Read Stored Values").
 
 Producers are grouped into the strongly connected groups of that graph, and
 each group gets a level one past the deepest level it reads. The roots of one
@@ -24862,8 +25062,7 @@ each phase's report.
 The compiler's developer-only environment variables (`ROC_LIR_DUMP`,
 `ROC_SPEC_CENSUS`, `ROC_PACK_TRACE`, `ROC_PACK_STATS`, `ROC_CTFE_DEMAND_TRACE`,
 `ROC_CTFE_REUSE_TRACE`, `ROC_DEV_PACK_OBJECTS`, `ROC_DEV_PACK_HITS`, the object-compile round-trip
-variable, `ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE` and
-`ROC_BACKGROUND_OBJECTS`) are honored only by a
+variable and `ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE`) are honored only by a
 compiler for which `build_options.dev_diagnostics` is true: every Debug compiler, and any
 other build made with `-Ddev-diagnostics`. Every read goes through
 `base.dev_diagnostics`, whose `Var` enum names exactly these variables and

@@ -1100,9 +1100,12 @@ const Solver = struct {
             .comptime_value => |value| {
                 return if (cursor == 0) .{ .expr = .{ .id = value.initializer, .generated_backing = true } } else null;
             },
-            .static_data_candidate, .nominal => {
-                const child = if (expr.data == .nominal) expr.data.nominal else expr.data.static_data_candidate.runtime_expr;
-                return if (cursor == 0) .{ .expr = .{ .id = child, .generated_backing = true } } else null;
+            .nominal => |backing| return if (cursor == 0) .{ .expr = .{ .id = backing, .generated_backing = true } } else null,
+            .static_data_candidate => |candidate| switch (candidate.value) {
+                .runtime => |runtime| return if (cursor == 0) .{ .expr = .{ .id = runtime, .generated_backing = true } } else null,
+                // A stored list's repeated item is one of its items, as a
+                // list literal's items are.
+                .stored => |stored| return if (cursor == 0) if (stored.uniform_item) |item| .{ .expr = .{ .id = item } } else null else null,
             },
             .let_ => |let_| {
                 if (cursor == 0) return .{ .expr = .{ .id = let_.value } };
@@ -1122,8 +1125,9 @@ const Solver = struct {
                 if (cursor == 0) return .{ .expr = .{ .id = value.initializer } };
                 try self.unifyComptimeValueRead(expr.ty, expected, value.initializer);
             },
-            .static_data_candidate => |candidate| {
-                if (cursor == 0) return .{ .expr = .{ .id = candidate.runtime_expr, .expected = expected } };
+            .static_data_candidate => |candidate| switch (candidate.value) {
+                .runtime => |runtime| if (cursor == 0) return .{ .expr = .{ .id = runtime, .expected = expected } },
+                .stored => |stored| if (cursor == 0) if (stored.uniform_item) |item| return .{ .expr = .{ .id = item, .expected = try self.listElem(expected) } },
             },
             .typed_boundary => |boundary| {
                 if (cursor == 0) return .{ .expr = .{ .id = boundary.value } };

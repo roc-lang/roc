@@ -571,7 +571,9 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         source.* = .{
             .template = &inserter,
             .proc = proc,
-            .body = spec.body,
+            // ARC neither prepares nor emits a static initializer, and
+            // nothing calls one, so no variant inherits its body.
+            .body = spec.arcBody(),
             .frame = spec.frame_locals,
         };
     }
@@ -624,10 +626,6 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
             spec.rc_ret_borrowed = job.sig.ret_mode == .borrowed;
             spec.rc_ret_lenders = job.sig.ret_lenders;
             if (sources[@backingInt(job.source)].body == null) continue;
-            // A static initializer is construction-only LIR that the static
-            // data materializer evaluates symbolically and no backend ever
-            // emits, so reference counts in it would never run.
-            if (spec.is_static_initializer) continue;
             owners[count] = .{
                 .inserter = inserter,
                 .source = &sources[@backingInt(job.source)],
@@ -723,7 +721,7 @@ fn recordObjectCacheFacts(
     try recordTailGroups(store, solution);
     for (0..proc_count) |proc_index| {
         const proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
-        if (store.getProcSpecImmediate(proc).body == null) continue;
+        if (store.getProcSpecImmediate(proc).arcBody() == null) continue;
         const sig = solution.sigOf(proc);
         const rows = solution.sigTable().retConditionsOf(sig);
         const words = try store.allocator.alloc(u32, rows.len);
@@ -1325,6 +1323,7 @@ const VariantTable = struct {
         const callee = request.source;
         const source_spec = store.getProcSpec(callee);
         if (source_spec.external) arcInvariant("ARC demanded a variant of an object-cache procedure, whose signature is fixed");
+        if (source_spec.is_static_initializer) arcInvariant("ARC demanded a variant of a static initializer, which nothing calls");
         const variant = try store.addProcSpec(.{
             .name = store.freshSyntheticSymbol(),
             .identity = variantIdentity(self.sig_table, source_spec.identity, request.demanded),

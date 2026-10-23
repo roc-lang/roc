@@ -170,6 +170,7 @@ const ResolvedWorkerBody = union(enum) {
     const_crash: checked.ConstNodeId,
     generated_codec: Plan.GeneratedCodecSource,
     generated_field_iterator: Plan.GeneratedFieldIteratorSource,
+    derived_map: Plan.DerivedMapSource,
 };
 
 /// The layout-resolved low-level a worker's body runs, when the worker is
@@ -183,6 +184,7 @@ fn resolvedWorkerLayoutResolvedOp(resolved: ResolvedWorker) ?can.CIR.Expr.LowLev
         .const_crash,
         .generated_codec,
         .generated_field_iterator,
+        .derived_map,
         => return null,
     };
     return checkedExprLayoutResolvedOp(resolved.module, body);
@@ -258,6 +260,7 @@ fn resolveWorker(plan: *const Plan.ProgramPlan, index: usize) ResolvedWorker {
     const body = plan.worker_bodies.items[index] orelse return switch (worker.source) {
         .generated_codec => |source| .{ .module = plan.moduleView(source.shape.module), .body = .{ .generated_codec = source } },
         .generated_field_iterator => |source| .{ .module = plan.moduleView(source.field_names_type.module), .body = .{ .generated_field_iterator = source } },
+        .derived_map => |source| .{ .module = plan.moduleView(source.callable_type.module), .body = .{ .derived_map = source } },
         .procedure_template, .procedure_binding, .procedure_use, .nested_expr => boxyLowerInvariant("boxy worker had no planned body"),
     };
     return .{
@@ -993,6 +996,7 @@ const ProcedureBuilder = struct {
             .intrinsic,
             .generated_codec,
             .generated_field_iterator,
+            .derived_map,
             => constructlessOrigin(.derived),
         };
     }
@@ -7607,6 +7611,7 @@ const ProcedureBuilder = struct {
         const_crash: checked.ConstNodeId,
         generated_codec: Plan.GeneratedCodecSource,
         generated_field_iterator: Plan.GeneratedFieldIteratorSource,
+        derived_map: Plan.DerivedMapSource,
         generated_evidence_intrinsic: checked.IntrinsicId,
         str_inspect: struct {
             arg: LIR.LocalId,
@@ -7642,6 +7647,10 @@ const ProcedureBuilder = struct {
             },
             .generated_codec => |source| try self.bodySourceForGeneratedCodec(proc, source),
             .generated_field_iterator => |source| try self.bodySourceForGeneratedFieldIterator(proc, source),
+            .derived_map => |source| blk: {
+                try self.bindGeneratedWorkerArgs(proc, "derived map");
+                break :blk .{ .derived_map = source };
+            },
         };
     }
 
@@ -7664,21 +7673,31 @@ const ProcedureBuilder = struct {
         proc: *ProcBodyBuilder,
         source: Plan.GeneratedCodecSource,
     ) Allocator.Error!WorkerBodySource {
+        try self.bindGeneratedWorkerArgs(proc, "generated codec");
+        return .{ .generated_codec = source };
+    }
+
+    /// Bind a generated worker's arguments at the representations of its
+    /// function's parameters.
+    fn bindGeneratedWorkerArgs(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        comptime noun: []const u8,
+    ) Allocator.Error!void {
         const worker = self.plan.workers.items[@backingInt(proc.worker_layout.worker)];
         const function = proc.functionChildrenForRep(worker.rep) orelse
-            boxyLowerInvariant("generated codec worker did not have a function representation");
+            boxyLowerInvariant(noun ++ " worker did not have a function representation");
         const worker_args = self.layout_plan.workerLayoutSlice(proc.worker_layout.args);
         if (function.arg_count != worker_args.len) {
-            boxyLowerInvariant("generated codec worker arity disagreed with worker layout");
+            boxyLowerInvariant(noun ++ " worker arity disagreed with worker layout");
         }
         const children = self.plan.childSlice(self.plan.representations.items[@backingInt(function.rep)].children);
         for (worker_args, children[function.args_start..][0..function.arg_count]) |arg_layout, child| {
             const local = try proc.addArgLocalForRep(child.rep);
             if (self.result.store.getLocal(local).layout_idx != arg_layout.layoutIdx()) {
-                boxyLowerInvariant("generated codec argument layout disagreed with its representation");
+                boxyLowerInvariant(noun ++ " argument layout disagreed with its representation");
             }
         }
-        return .{ .generated_codec = source };
     }
 
     /// Bind the declared parameters of a procedure whose declaration has no
@@ -7807,12 +7826,152 @@ const ProcedureBuilder = struct {
             },
             .generated_codec => |source| try self.lowerGeneratedCodecWorkerInto(proc, source, ret_local, ret_stmt),
             .generated_field_iterator => |source| try self.lowerGeneratedFieldIteratorStepInto(proc, source, ret_local, ret_stmt),
+            .derived_map => |source| try self.lowerDerivedMapWorkerInto(proc, source, ret_local, ret_stmt),
             .generated_evidence_intrinsic => |intrinsic| try self.lowerGeneratedEvidenceIntrinsicInto(proc, intrinsic, ret_local, ret_stmt),
             .str_inspect => |inspect| blk: {
                 try proc.markLocalDescriptorForType(inspect.arg, inspect.arg_ty);
                 break :blk try proc.lowerInspectLocalInto(ret_local, inspect.arg, inspect.arg_ty, ret_stmt);
             },
         };
+    }
+
+    /// Lower a derived `map`/`map!` worker `(union, transform) -> union`:
+    /// each variant of the input union becomes the same variant of the
+    /// output union, with the payload slot checking selected passed through
+    /// the transform and every other payload moved unchanged.
+    fn lowerDerivedMapWorkerInto(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        source: Plan.DerivedMapSource,
+        target: LIR.LocalId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const worker = self.plan.workers.items[@backingInt(proc.worker_layout.worker)];
+        const function = proc.functionChildrenForRep(worker.rep) orelse
+            boxyLowerInvariant("derived map worker was not callable");
+        if (function.arg_count != 2 or proc.arg_locals.items.len < 2) {
+            boxyLowerInvariant("derived map worker did not take a union and a transform");
+        }
+        const children = self.plan.childSlice(self.plan.representations.items[@backingInt(function.rep)].children);
+        const input_rep = children[function.args_start].rep;
+        const transform_rep = children[function.args_start + 1].rep;
+        const output_rep = function.ret;
+        const input = proc.arg_locals.items[0];
+        const transform = proc.arg_locals.items[1];
+        const plan_view = self.plan.moduleView(source.callable_type.module);
+        const selected_name = plan_view.canonical_names.?.tagLabelText(source.plan.tag);
+
+        const variants = try self.closedTagVariantsForRep(proc, input_rep, false);
+        defer self.allocator.free(variants);
+        const bodies = try self.allocator.alloc(LIR.CFStmtId, variants.len);
+        defer self.allocator.free(bodies);
+        var selected_count: usize = 0;
+        for (variants, bodies) |variant, *body| {
+            const name = proc.parent.tagVariantNameText(variant.variant);
+            const selected: ?u32 = if (std.mem.eql(u8, name, selected_name)) source.plan.payload_index else null;
+            if (selected != null) selected_count += 1;
+            body.* = try self.lowerDerivedMapVariantInto(
+                proc,
+                input,
+                variant,
+                transform,
+                transform_rep,
+                selected,
+                target,
+                output_rep,
+                proc.generatedParserTagVariant(output_rep, name),
+                next,
+            );
+        }
+        if (selected_count != 1) {
+            boxyLowerInvariant("checked derived map plan did not select exactly one variant of its union");
+        }
+        return try self.lowerGeneratedEncoderTagDispatch(proc, input, variants, bodies);
+    }
+
+    /// One branch of a derived map: read every payload of `input_variant`,
+    /// transform the `selected` one, and build `output_variant` from them.
+    fn lowerDerivedMapVariantInto(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        input: LIR.LocalId,
+        input_variant: GeneratedParserTagVariant,
+        transform: LIR.LocalId,
+        transform_rep: Plan.TypeRepId,
+        selected: ?u32,
+        target: LIR.LocalId,
+        output_rep: Plan.TypeRepId,
+        output_variant: GeneratedParserTagVariant,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const input_payloads = self.plan.childSlice(input_variant.variant.payloads);
+        const output_payloads = self.plan.childSlice(output_variant.variant.payloads);
+        if (input_payloads.len != output_payloads.len) {
+            boxyLowerInvariant("derived map changed a variant's payload arity");
+        }
+        if (selected) |selected_index| {
+            if (selected_index >= input_payloads.len) {
+                boxyLowerInvariant("checked derived map payload plan was outside the selected tag's payloads");
+            }
+        }
+
+        // The payloads are stored at the declared payload representations,
+        // which for a nominal are its declaration's formals; the output is
+        // built from values at those storage representations.
+        const items = try self.allocator.alloc(GeneratedParserTupleItem, output_payloads.len);
+        defer self.allocator.free(items);
+        for (output_payloads, items) |payload, *item| {
+            item.* = .{
+                .source_type = payload.source_type,
+                .rep = payload.rep,
+                .value = try proc.addGeneratedParserOutputLocalForRep(payload.rep),
+            };
+        }
+        var continuation = if (proc.isZstLocal(target))
+            try proc.assignZst(target, next)
+        else
+            try self.lowerGeneratedParserTagConstruction(proc, output_rep, output_variant, target, items, next);
+
+        const source_has_payload_desc = self.plan.representations.items[@backingInt(input_variant.tag_rep)].descriptor != .none or
+            self.result.store.getLocal(input).boxy_desc != null;
+        var index = input_payloads.len;
+        while (index > 0) {
+            index -= 1;
+            const stored_rep = input_payloads[index].rep;
+            const stored = try proc.addExtractedTagPayloadLocal(stored_rep, source_has_payload_desc);
+            const item = items[index];
+            const is_selected = if (selected) |selected_index| selected_index == index else false;
+            if (is_selected) {
+                // The transform takes and returns the payload at the type
+                // the union was applied at.
+                const input_actual = proc.nominalBackingActualRep(input_variant.boundary_rep, stored_rep);
+                const output_actual = proc.nominalBackingActualRep(output_variant.boundary_rep, item.rep);
+                const result = if (output_actual == item.rep) item.value else try proc.addFrameLocalForRep(output_actual);
+                if (result != item.value) {
+                    continuation = try proc.assignRepresentationBoundary(item.value, result, item.rep, output_actual, continuation);
+                }
+                const argument = if (input_actual == stored_rep) stored.local else try proc.addFrameLocalForRep(input_actual);
+                continuation = try proc.lowerErasedCallLocalsInto(result, output_actual, transform_rep, transform, &.{argument}, &.{input_actual}, continuation);
+                if (argument != stored.local) {
+                    continuation = try proc.assignRepresentationBoundary(argument, stored.local, input_actual, stored_rep, continuation);
+                }
+            } else {
+                continuation = try proc.assignRepresentationBoundary(item.value, stored.local, item.rep, stored_rep, continuation);
+            }
+            continuation = try proc.assignConcreteTagPayloadRead(
+                stored.local,
+                stored_rep,
+                stored.desc_local,
+                input,
+                input_variant.tag_rep,
+                input_variant.variant.name,
+                input_variant.index,
+                @intCast(index),
+                input_payloads.len,
+                continuation,
+            );
+        }
+        return continuation;
     }
 
     fn lowerGeneratedEvidenceIntrinsicInto(
@@ -9623,7 +9782,19 @@ const ProcedureBuilder = struct {
         shape_type: Plan.CheckedTypeIdentity,
         payload_only: bool,
     ) Allocator.Error![]GeneratedParserTagVariant {
-        const application_rep = proc.repForTypeRef(shape_type);
+        return try self.closedTagVariantsForRep(proc, proc.repForTypeRef(shape_type), payload_only);
+    }
+
+    /// The variants of the closed, flattened tag row `application_rep`
+    /// stands for (through aliases and nominals), in layout order; with
+    /// `payload_only`, just the variants that carry a payload. Owned by the
+    /// caller.
+    fn closedTagVariantsForRep(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        application_rep: Plan.TypeRepId,
+        payload_only: bool,
+    ) Allocator.Error![]GeneratedParserTagVariant {
         const tag_rep = proc.tagVariantRepForBoundary(application_rep) orelse
             boxyLowerInvariant("generated tag encoder shape had no closed tag representation");
         const rep = self.plan.representations.items[@backingInt(tag_rep)];
@@ -9659,7 +9830,7 @@ const ProcedureBuilder = struct {
             if (payload_only and self.plan.childSlice(variant.payloads).len == 0) continue;
             if (index > std.math.maxInt(u32)) boxyLowerInvariant("generated tag encoder variant index exceeded LIR range");
             variants[out_index] = .{
-                .boundary_rep = proc.repForTypeRef(shape_type),
+                .boundary_rep = application_rep,
                 .tag_rep = tag_rep,
                 .owner_rep = tag_rep,
                 .index = @intCast(index),
@@ -15935,7 +16106,7 @@ const ProcBodyBuilder = struct {
                 .parser_constructor, .encoder_constructor => false,
             },
             .generated_field_iterator => true,
-            .procedure_template, .procedure_binding, .procedure_use, .nested_expr => false,
+            .procedure_template, .procedure_binding, .procedure_use, .nested_expr, .derived_map => false,
         };
 
         try self.erased_capture_locals.ensureTotalCapacity(self.parent.allocator, captures.len);
@@ -16484,7 +16655,7 @@ const ProcBodyBuilder = struct {
                 .parser_constructor, .encoder_constructor => false,
             },
             .generated_field_iterator => true,
-            .procedure_template, .procedure_binding, .procedure_use, .nested_expr => false,
+            .procedure_template, .procedure_binding, .procedure_use, .nested_expr, .derived_map => false,
         };
 
         var continuation = next;
@@ -16659,6 +16830,7 @@ const ProcBodyBuilder = struct {
             .procedure_use,
             .generated_codec,
             .generated_field_iterator,
+            .derived_map,
             => &.{},
         };
     }
@@ -18922,7 +19094,7 @@ const ProcBodyBuilder = struct {
             .{ .module = Plan.viewModule(self.module), .expr = expr_id }
         else switch (source) {
             .nested_expr => |expr_ref| expr_ref,
-            .procedure_template, .procedure_binding, .procedure_use, .generated_codec, .generated_field_iterator => null,
+            .procedure_template, .procedure_binding, .procedure_use, .generated_codec, .generated_field_iterator, .derived_map => null,
         };
         if (closure) |closure_ref| {
             if (self.closureCaptureSnapshotLocals(closure_ref)) |locals| {
@@ -19355,11 +19527,11 @@ const ProcBodyBuilder = struct {
         switch (dispatch.resolution) {
             .direct_closed, .direct_parametric => {},
             .direct_pending => boxyLowerInvariant("unfinalized direct call reached Boxy lowering"),
-            // A structural parser or encoder runs its generated codec
-            // constructor, which planning bound as this call's direct worker.
+            // A structural parser, encoder, or derived map runs its generated
+            // worker, which planning bound as this call's direct worker.
             .structural => |derivation| switch (derivation.kind()) {
-                .parser, .encoder => {},
-                .equality, .hash, .map, .map_effectful => return try self.beginUnresolvedDispatchCall(target, call_expr, dispatch, ret_ty, next),
+                .parser, .encoder, .map, .map_effectful => {},
+                .equality, .hash => return try self.beginUnresolvedDispatchCall(target, call_expr, dispatch, ret_ty, next),
             },
             .evidence_dependent => return try self.beginUnresolvedDispatchCall(target, call_expr, dispatch, ret_ty, next),
             .checked_error, .@"unreachable" => return try self.beginCrashingDispatch(dispatch),
@@ -24490,6 +24662,7 @@ const ProcBodyBuilder = struct {
             .procedure_use,
             .generated_codec,
             .generated_field_iterator,
+            .derived_map,
             => &.{},
         };
     }

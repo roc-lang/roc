@@ -1,7 +1,7 @@
 //! A compile-time value must reach the runtime program the same way on every
-//! path that produces one: the program a build continues from compile-time
-//! evaluation (its runtime consumer reads the completed frozen image) and the
-//! program lowered from checked modules whose values the constant store
+//! path that produces one: the program a build continues once compile-time
+//! evaluation has completed (specialized again from the stored values) and
+//! the program lowered from checked modules whose values the constant store
 //! restores. Each test drives the first path through `ProgramSession`, as
 //! `roc build` does, and the second through `lowerCheckedModulesToLir`, so a
 //! divergence between them fails here instead of in a binary's size.
@@ -61,8 +61,12 @@ const Lowered = struct {
     coord: Coordinator,
     continued: lir.CheckedPipeline.LoweredProgram,
     restored: lir.CheckedPipeline.LoweredProgram,
+    /// The continued program's materialized static data: the image a build
+    /// links.
+    image: []static_data_exports.StaticDataExport,
 
     fn deinit(self: *Lowered) void {
+        static_data_exports.deinitStaticData(std.testing.allocator, self.image);
         self.restored.deinit();
         self.continued.deinit();
         self.coord.deinit();
@@ -110,9 +114,11 @@ fn lowerBothPaths(gpa: std.mem.Allocator, arena: std.mem.Allocator, tmp_dir: std
     try coord.finishCheckedProgram(.executable_artifacts);
     if (coord.hasUserErrors()) return error.TestUnexpectedResult;
     const session = &coord.program_session.?;
-    // The build continues the evaluation's specialization in a separate
-    // runtime consumer, which is the path that reads the frozen image.
+    // The build evaluated the app's compile-time roots, so its runtime
+    // consumer continues the program specialized again from their stored
+    // values.
     try std.testing.expect(session.completed != null);
+    try std.testing.expect(session.runtime_stages == .respecialized);
     try std.testing.expect(session.runtime_prepared != null);
     var continued = try session.takeRuntime(gpa, session.runtime_roots, optimizedTarget(inline_mode));
     errdefer continued.deinit();
@@ -122,7 +128,7 @@ fn lowerBothPaths(gpa: std.mem.Allocator, arena: std.mem.Allocator, tmp_dir: std
     const relations = try coord.collectRelationArtifactViews(arena, root);
     const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
     defer gpa.free(lir_roots);
-    const restored = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+    var restored = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         gpa,
         .{
             .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
@@ -135,7 +141,21 @@ fn lowerBothPaths(gpa: std.mem.Allocator, arena: std.mem.Allocator, tmp_dir: std
         },
         .{ .target_usize = base.target.TargetUsize.native, .inline_mode = inline_mode },
     );
-    return .{ .coord = coord, .continued = continued, .restored = restored };
+    errdefer restored.deinit();
+    const image = static_data_exports.buildStaticData(
+        gpa,
+        .{
+            .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
+            .imports = imports,
+        },
+        &continued,
+        roc_target.RocTarget.detectNative(),
+        .{ .include_provided_exports = true },
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.UnsupportedTarget => return error.TestUnexpectedResult,
+    };
+    return .{ .coord = coord, .continued = continued, .restored = restored, .image = image };
 }
 
 fn countListSlots(result: *const lir.Program.Result) usize {
@@ -189,13 +209,12 @@ test "two equal compile-time tables freeze to one backing in the continued runti
     defer lowered.deinit();
 
     const continued = &lowered.continued;
-    const frozen = continued.frozen_static_data orelse return error.TestUnexpectedResult;
     // Each table is its own root with its own descriptor, and the two
     // descriptors name one 4000-byte backing.
     var backings: usize = 0;
     var descriptor_targets: [2]?u32 = .{ null, null };
     var descriptors: usize = 0;
-    for (frozen.exports) |item| {
+    for (lowered.image) |item| {
         if (item.value_id) |slot| {
             const layout_idx = continued.lir_result.static_data_values.items[@backingInt(slot)].layout_idx;
             if (continued.lir_result.layouts.getLayout(layout_idx).tag != .list) continue;
@@ -534,7 +553,7 @@ fn callsPassingIntLiteral(gpa: std.mem.Allocator, result: *const lir.Program.Res
 const small_count = 100;
 const large_count = 5000;
 
-test "a constant aggregate costs the continued runtime program the same at any element count" {
+test "a constant aggregate's image does not grow with its copies, and every constant aggregate costs the runtime program the same at any item count" {
     if (is_freestanding) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     inline for (@typeInfo(AggregateShape).@"enum".field_names) |field_name| {
@@ -551,10 +570,6 @@ test "a constant aggregate costs the continued runtime program the same at any e
             sizes[index] = try programSize(&lowered.continued.lir_result);
             restored_sizes[index] = try programSize(&lowered.restored.lir_result);
             const continued = &lowered.continued;
-            // No frame holds a local per element, and no list is assembled
-            // from a span over the elements.
-            try std.testing.expect(sizes[index].widest_frame < small_count);
-            try std.testing.expect(sizes[index].widest_list < small_count);
             switch (shape) {
                 .runtime_repeat => {
                     // The copies are made by one call that takes the count,
@@ -563,19 +578,17 @@ test "a constant aggregate costs the continued runtime program the same at any e
                 },
                 .literal_scalars => {
                     // The packed buffer is emitted once.
-                    const frozen = continued.frozen_static_data orelse return error.TestUnexpectedResult;
                     var buffers: usize = 0;
-                    for (frozen.exports) |item| {
+                    for (lowered.image) |item| {
                         if (item.bytes.len >= count * @sizeOf(u64)) buffers += 1;
                     }
                     try std.testing.expectEqual(@as(usize, 1), buffers);
                 },
                 .nested_rows => {
-                    // Every element names the one frozen row.
-                    const frozen = continued.frozen_static_data orelse return error.TestUnexpectedResult;
+                    // Every element names the one row in the image.
                     var rows: usize = 0;
                     var outer: ?static_data_exports.StaticDataExport = null;
-                    for (frozen.exports) |item| {
+                    for (lowered.image) |item| {
                         // A row is its elements behind a refcount header,
                         // with no pointers of its own.
                         if (item.relocations.len == 0 and item.bytes.len >= row_len * @sizeOf(u64) and item.bytes.len <= (row_len + 2) * @sizeOf(u64)) rows += 1;
@@ -583,17 +596,19 @@ test "a constant aggregate costs the continued runtime program the same at any e
                     }
                     try std.testing.expectEqual(@as(usize, 1), rows);
                     const elements = (outer orelse return error.TestUnexpectedResult).relocations;
-                    for (elements) |relocation| try std.testing.expectEqual(elements[0].target.data_symbol, relocation.target.data_symbol);
+                    for (elements) |relocation| try std.testing.expectEqual(elements[0].target_symbol_name, relocation.target_symbol_name);
                 },
                 .heap_strings, .string_records => {},
             }
         }
+        // The runtime program restores a completed value from the constant
+        // store, as one restored from the store without an evaluation does.
+        // A packed list is a literal, a runtime repeat is one call, and every
+        // other constant list is frozen straight from its stored node, so no
+        // item becomes a local or a statement.
         try std.testing.expectEqual(sizes[0], sizes[1]);
-        // A program restored from the constant store builds packed scalars
-        // and runtime repeats at a fixed size too.
-        switch (shape) {
-            .literal_scalars, .runtime_repeat => try std.testing.expectEqual(restored_sizes[0], restored_sizes[1]),
-            .nested_rows, .heap_strings, .string_records => {},
-        }
+        try std.testing.expectEqual(restored_sizes[0], restored_sizes[1]);
+        try std.testing.expect(sizes[1].widest_frame < small_count);
+        try std.testing.expect(sizes[1].widest_list < small_count);
     }
 }

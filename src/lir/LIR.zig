@@ -2145,6 +2145,14 @@ pub const LirProcSpec = struct {
     /// only the base signature and no body, so a proc with this bit set is
     /// never offered as one.
     rc_variant_demandable: bool = false,
+
+    /// The body ARC analyzes and places reference counts in. A static
+    /// initializer is construction-only LIR that the static data
+    /// materializer evaluates and no backend emits, so nothing calls it and a
+    /// reference count in it would never run: ARC sees it as having none.
+    pub fn arcBody(self: *const LirProcSpec) ?CFStmtId {
+        return if (self.is_static_initializer) null else self.body;
+    }
 };
 
 test "a statement occupies one 32-byte slot" {

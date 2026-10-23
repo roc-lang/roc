@@ -565,6 +565,8 @@ pub const ProgramSession = struct {
     /// value the runtime consumer reads. Null when this compilation evaluated
     /// nothing.
     completed: ?CompletedStages,
+    /// The stages the runtime consumer reads completed values from.
+    runtime_stages: RuntimeStages = .evaluation,
     /// The Solved program the runtime consumer continues, when its Solved
     /// policy is compile-time evaluation's.
     runtime_prepared: ?lir.CheckedPipeline.PreparedSolved,
@@ -572,8 +574,25 @@ pub const ProgramSession = struct {
     /// plan.
     runtime_positions: []u32,
 
+    /// Where a runtime consumer reads completed values from.
+    pub const RuntimeStages = union(enum) {
+        /// `completed`: this compilation evaluated no compile-time root its
+        /// program demands, so the program its evaluation specialized is
+        /// the program a compilation finding every value stored specializes.
+        evaluation,
+        /// The program was specialized again once its evaluation had
+        /// completed, reading every completed compile-time root from its
+        /// module's store; these are the stages of that specialization's
+        /// literal roots, or null when it registered none.
+        respecialized: ?CompletedStages,
+    };
+
     pub fn deinit(self: *ProgramSession) void {
         if (self.completed) |*completed| completed.deinit();
+        switch (self.runtime_stages) {
+            .evaluation => {},
+            .respecialized => |*stages| if (stages.*) |*owned| owned.deinit(),
+        }
         if (self.runtime_prepared) |*prepared| prepared.deinit();
         self.allocator.free(self.runtime_positions);
         self.allocator.free(self.modules.root.relation_modules);
@@ -659,7 +678,11 @@ pub const ProgramSession = struct {
         var owned_live = true;
         errdefer if (owned_live) owned.deinit();
         const consumer_roots: lir.CheckedPipeline.ConsumerRoots = .{ .roots = self.runtime_positions, .literal_roots = .none };
-        const source = if (self.completed) |*completed| completed else {
+        const runtime_source: ?*CompletedStages = switch (self.runtime_stages) {
+            .evaluation => if (self.completed) |*completed| completed else null,
+            .respecialized => |*stages| if (stages.*) |*respecialized| respecialized else null,
+        };
+        const source = runtime_source orelse {
             // Nothing was evaluated, so the program reads no compile-time
             // value slot.
             owned_live = false;
@@ -1095,10 +1118,10 @@ test "shared producer requires the exact non-null provider capability" {
     const LookupResult = LookupFn.return_type.?;
     const Takes = LookupFn.param_types[2].?;
     const Callbacks = struct {
-        fn first(_: *anyopaque, _: [32]u8, _: Takes) LookupResult {
+        fn first(_: *anyopaque, _: [32]u8, _: Takes, _: LookupFn.param_types[3].?) LookupResult {
             return null;
         }
-        fn second(context: *anyopaque, _: [32]u8, _: Takes) LookupResult {
+        fn second(context: *anyopaque, _: [32]u8, _: Takes, _: LookupFn.param_types[3].?) LookupResult {
             // Distinct behavior keeps optimized builds from merging callbacks.
             const count: *u8 = @ptrCast(context);
             count.* += 1;
@@ -1179,6 +1202,173 @@ pub fn finalizeProgram(
     defer if (options.timing) |timing| timing.finish(total_started_ns, .total);
     var debug_events = DebugEvents{ .allocator = allocator };
     defer debug_events.deinit();
+    if (program_roots.source_modules.len != 0 and program_roots.source_modules.len != program_roots.requests.len)
+        finalizationInvariant("program roots omitted their checked owners");
+
+    const lss_runtime = if (runtime_target) |target| target.specialization_strategy == .lss else false;
+    const demand_driven = demandDrivenEvaluation(modules, program_roots, lss_runtime);
+    const owned_imports = try allocator.dupe(checked.ImportedModuleView, lowering_modules.imports);
+    errdefer allocator.free(owned_imports);
+    const owned_relations = try allocator.dupe(checked.ImportedModuleView, lowering_modules.root.relation_modules);
+    errdefer allocator.free(owned_relations);
+    const owned_runtime_roots = try cloneRootRequests(allocator, runtime_roots);
+    errdefer deinitRootRequests(allocator, owned_runtime_roots);
+
+    var stored_demand = StoredRootSet{};
+    defer stored_demand.deinit(allocator);
+    var specialized = try specializeAndEvaluate(allocator, modules, lowering_modules, program_roots, runtime_target, options, &debug_events, &stored_demand, true, lss_runtime, demand_driven);
+    errdefer specialized.deinit();
+    var runtime_stages: ProgramSession.RuntimeStages = .evaluation;
+    errdefer switch (runtime_stages) {
+        .evaluation => {},
+        .respecialized => |*stages| if (stages.*) |*owned| owned.deinit(),
+    };
+    var runtime_prepared: ?lir.CheckedPipeline.PreparedSolved = specialized.prepared;
+    specialized.prepared = null;
+    errdefer if (runtime_prepared) |*prepared| prepared.deinit();
+    var runtime_root_count = specialized.compile_time_root_count;
+    if (runtime_prepared != null and specialized.compile_time_root_count != 0) {
+        // Every compile-time root this program demands has completed and is
+        // stored in its module, which is where a compilation finding the
+        // modules in the checked cache reads it from. The runtime consumer
+        // must not depend on which of the two this compilation is, so it
+        // continues a program specialized again from the stored values,
+        // exactly as such a compilation specializes it: every read of a
+        // completed value restores the value as a constant. Only the
+        // literal roots that specialization registers evaluate again; their
+        // outcomes were reported when this program's evaluation ran them.
+        var evaluated_prepared = runtime_prepared.?;
+        runtime_prepared = null;
+        defer evaluated_prepared.deinit();
+        // The compile-time reads of the evaluation's specializations go into
+        // the compile-time pack beside its stages' code.
+        if (specialized.completed) |*stages| {
+            stages.spec_comptime_reads = evaluated_prepared.spec_comptime_reads;
+            evaluated_prepared.spec_comptime_reads = null;
+        }
+        const quiet_modules = try allocator.alloc(ProgramModule, modules.len);
+        defer allocator.free(quiet_modules);
+        for (modules, quiet_modules) |entry, *quiet| quiet.* = .{ .module = entry.module, .problem_store = null };
+        var quiet_unfinalized: QuietUnfinalizedReports = .{ .inner = options.unfinalized_reports };
+        var quiet_options = options;
+        quiet_options.stderr = null;
+        quiet_options.event_callback = null;
+        quiet_options.keep_artifacts = false;
+        quiet_options.unfinalized_reports = if (options.unfinalized_reports != null) quiet_unfinalized.reports() else null;
+        // The evaluation's run verified the program's restored literal
+        // values, and the compile-time pack holds the evaluation's code, so
+        // this specialization's levels are offered to no pack.
+        quiet_options.verify_literal_values = false;
+        if (quiet_options.object_cache) |*cache| cache.stage_sink = null;
+        var quiet_events = DebugEvents{ .allocator = allocator };
+        defer quiet_events.deinit();
+        var respecialized = try specializeAndEvaluate(
+            allocator,
+            quiet_modules,
+            lowering_modules,
+            program_roots,
+            runtime_target,
+            quiet_options,
+            &quiet_events,
+            null,
+            false,
+            lss_runtime,
+            demandDrivenEvaluation(quiet_modules, program_roots, lss_runtime),
+        );
+        if (respecialized.compile_time_root_count != 0)
+            finalizationInvariant("a program specialized again after its evaluation completed demanded a compile-time root again");
+        runtime_prepared = respecialized.prepared orelse finalizationInvariant("a respecialized runtime program had no Solved program to continue");
+        respecialized.prepared = null;
+        runtime_stages = .{ .respecialized = respecialized.completed };
+        respecialized.completed = null;
+        runtime_root_count = 0;
+    }
+    sealUndemandedRoots(modules);
+    const runtime_positions = try runtimeRootPositions(allocator, program_roots, runtime_roots, runtime_root_count, lss_runtime);
+    var positions_owned = true;
+    errdefer if (positions_owned) allocator.free(runtime_positions);
+    // Observations replay in sorted order once every root has evaluated:
+    // those stored for the roots this program demands, and this
+    // compilation's own.
+    const replay_filter: ?*const StoredRootSet = if (demand_driven) &stored_demand else null;
+    try debug_events.appendCached(options.cached_debug_modules, replay_filter);
+    for (modules) |entry| try debug_events.appendStored(entry.module, replay_filter);
+    try debug_events.persist(modules);
+    if (!options.defer_debug_replay) try debug_events.replay(options);
+    var retained_root = lowering_modules.root;
+    retained_root.relation_modules = owned_relations;
+    positions_owned = false;
+    const completed = specialized.completed;
+    specialized.completed = null;
+    return .{
+        .allocator = allocator,
+        .modules = .{ .root = retained_root, .imports = owned_imports },
+        .runtime_requests = owned_runtime_roots.requests,
+        .runtime_roots = owned_runtime_roots,
+        .runtime_target = runtime_target,
+        .completed = completed,
+        .runtime_stages = runtime_stages,
+        .runtime_prepared = runtime_prepared,
+        .runtime_positions = runtime_positions,
+    };
+}
+
+/// Report destinations for a specialization whose literal roots an earlier
+/// evaluation of the same program already reported: each destination's
+/// module, with no store to report to.
+const QuietUnfinalizedReports = struct {
+    inner: ?UnfinalizedReports,
+
+    fn reports(self: *QuietUnfinalizedReports) UnfinalizedReports {
+        return .{ .context = self, .module = module };
+    }
+
+    fn module(context: *anyopaque, key: checked.ModuleId) Allocator.Error!ReportDestination {
+        const self: *QuietUnfinalizedReports = @ptrCast(@alignCast(context));
+        const inner = self.inner orelse finalizationInvariant("a quiet report destination wrapped no destination");
+        var destination = try inner.module(inner.context, key);
+        destination.problem_store = null;
+        return destination;
+    }
+};
+
+/// What one specialization of a program and the evaluation of its
+/// compile-time producers leave: the stages that evaluated them, the Solved
+/// program a runtime consumer continues when it shares this one, and how
+/// many compile-time roots the program published ahead of its program roots.
+const SpecializedProgram = struct {
+    completed: ?CompletedStages = null,
+    prepared: ?lir.CheckedPipeline.PreparedSolved = null,
+    compile_time_root_count: usize = 0,
+
+    fn deinit(self: *SpecializedProgram) void {
+        if (self.completed) |*stages| stages.deinit();
+        if (self.prepared) |*prepared| prepared.deinit();
+        self.* = .{};
+    }
+};
+
+/// Specialize the modules' pending compile-time roots together with the
+/// program roots, and evaluate those roots and every literal root the
+/// specialization registers (see `finalizeProgram`). `stored_demand`, when
+/// given, receives the stored roots a demand-driven program demands. With
+/// `records_literal_values`, the values and outcomes of the literal roots
+/// that have value identities go into `Options.literal_values`; a
+/// specialization whose literal roots an earlier evaluation of the same
+/// program recorded restores from those values but records nothing.
+fn specializeAndEvaluate(
+    allocator: Allocator,
+    modules: []const ProgramModule,
+    lowering_modules: lir.CheckedPipeline.CheckedModuleSet,
+    program_roots: lir.CheckedPipeline.RootRequestSet,
+    runtime_target: ?lir.CheckedPipeline.TargetConfig,
+    options: Options,
+    debug_events: *DebugEvents,
+    stored_demand: ?*StoredRootSet,
+    records_literal_values: bool,
+    lss_runtime: bool,
+    demand_driven: bool,
+) FinalizeError!SpecializedProgram {
     var requests = std.ArrayList(checked.RootRequest).empty;
     defer requests.deinit(allocator);
     var source_modules = std.ArrayList(checked.ModuleId).empty;
@@ -1193,11 +1383,7 @@ pub fn finalizeProgram(
         }
     }
     const requested_root_count = requests.items.len;
-    if (program_roots.source_modules.len != 0 and program_roots.source_modules.len != program_roots.requests.len)
-        finalizationInvariant("program roots omitted their checked owners");
 
-    const lss_runtime = if (runtime_target) |target| target.specialization_strategy == .lss else false;
-    const demand_driven = demandDrivenEvaluation(modules, program_roots, lss_runtime);
     // Without an LSS runtime consumer to continue this specialization, the
     // program roots are discovery roots: compile-time evaluation specializes
     // a runtime body only where it can register a literal root, and lowers
@@ -1242,172 +1428,134 @@ pub fn finalizeProgram(
             });
         }
     }
-    const owned_imports = try allocator.dupe(checked.ImportedModuleView, lowering_modules.imports);
-    errdefer allocator.free(owned_imports);
-    const owned_relations = try allocator.dupe(checked.ImportedModuleView, lowering_modules.root.relation_modules);
-    errdefer allocator.free(owned_relations);
-    const owned_runtime_roots = try cloneRootRequests(allocator, runtime_roots);
-    errdefer deinitRootRequests(allocator, owned_runtime_roots);
 
-    var completed: ?CompletedStages = null;
-    errdefer if (completed) |*stages| stages.deinit();
-    var runtime_prepared: ?lir.CheckedPipeline.PreparedSolved = null;
-    errdefer if (runtime_prepared) |*prepared| prepared.deinit();
+    var result = SpecializedProgram{};
+    errdefer result.deinit();
+    if (requests.items.len == 0) {
+        for (modules) |entry| {
+            if (entry.problem_store) |store| try finishPendingExhaustiveness(entry.module, store);
+            try entry.module.const_store.verifyComplete();
+        }
+        return result;
+    }
     // The compile-time roots the specialized program publishes, ahead of its
     // program roots: every requested one, or, for a demand-driven program,
     // the ones it demands.
-    var compile_time_root_count: usize = 0;
     var demand: ?lir.CheckedPipeline.ComptimeDemand = null;
     defer if (demand) |*owned| owned.deinit();
     var published = PublishedRequests{};
     defer published.deinit(allocator);
-    var stored_demand = StoredRootSet{};
-    defer stored_demand.deinit(allocator);
 
-    if (requests.items.len != 0) {
-        var union_roots = program_roots;
-        union_roots.requests = requests.items;
-        union_roots.source_modules = source_modules.items;
-        // Test roots are addressed by their position in the request list, so
-        // a program that runs tests is never demand-driven.
-        const union_test_metadata = try allocator.dupe(@typeInfo(@TypeOf(program_roots.test_plan_metadata)).pointer.child, if (lss_runtime) program_roots.test_plan_metadata else &.{});
-        defer allocator.free(union_test_metadata);
-        for (union_test_metadata) |*metadata| metadata.request_index += @intCast(requested_root_count);
-        union_roots.test_plan_metadata = union_test_metadata;
-        if (!lss_runtime) {
-            // Discovery roots materialize nothing for a runtime consumer.
-            union_roots.include_provided_data_exports = false;
-            union_roots.include_internal_static_data = false;
-            union_roots.layout_requests = &.{};
-            union_roots.static_data_requests = &.{};
-            if (literal_demand) |*literal| {
-                union_roots.discovery_start = requested_root_count;
-                union_roots.literal_demand = literal;
-            }
+    var union_roots = program_roots;
+    union_roots.requests = requests.items;
+    union_roots.source_modules = source_modules.items;
+    // Test roots are addressed by their position in the request list, so
+    // a program that runs tests is never demand-driven.
+    const union_test_metadata = try allocator.dupe(@typeInfo(@TypeOf(program_roots.test_plan_metadata)).pointer.child, if (lss_runtime) program_roots.test_plan_metadata else &.{});
+    defer allocator.free(union_test_metadata);
+    for (union_test_metadata) |*metadata| metadata.request_index += @intCast(requested_root_count);
+    union_roots.test_plan_metadata = union_test_metadata;
+    if (!lss_runtime) {
+        // Discovery roots materialize nothing for a runtime consumer.
+        union_roots.include_provided_data_exports = false;
+        union_roots.include_internal_static_data = false;
+        union_roots.layout_requests = &.{};
+        union_roots.static_data_requests = &.{};
+        if (literal_demand) |*literal| {
+            union_roots.discovery_start = requested_root_count;
+            union_roots.literal_demand = literal;
         }
-        // An LSS runtime consumer continues this specialization, so it is
-        // made under the runtime's Solved policy.
-        const solved_policy = if (lss_runtime) lir.CheckedPipeline.SolvedPolicy.fromTarget(runtime_target.?) else check_solved_policy;
-        var host_target = compileTimeTarget(options, solved_policy);
-        host_target.demand_driven_comptime_roots = demand_driven;
-        if (options.literal_values) |values| {
-            host_target.literal_values = values.lookup();
-            host_target.verify_literal_values = options.verify_literal_values;
-        }
-        const host_lir_policy = lir.CheckedPipeline.LirPolicy.fromTarget(host_target);
-        // All readers of this producer are declared before any cache hit can
-        // erase a source body. CTFE still owns its native late-splice policy.
-        host_target.code_provision = sharedProducerProvision(host_target, runtime_target);
-        // Counting work observes the evaluation without shaping it. A program
-        // whose specializations go into the object cache needs what each one
-        // reads of compile-time evaluation: the runtime consumer's, when it
-        // asks for them, and this program's own, which the compile-time pack
-        // publishes whenever there is an object cache.
-        if (runtime_target) |target| {
-            host_target.work_metrics = target.work_metrics;
-            host_target.spec_comptime_reads = target.spec_comptime_reads;
-        }
-        if (options.object_cache != null) host_target.spec_comptime_reads = true;
-        var monotype = lir.CheckedPipeline.prepareCheckedModulesMonotype(allocator, lowering_modules, union_roots, host_target) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.HostedFunctionNotBound => finalizationInvariant("compile-time evaluation required every hosted procedure to be bound"),
-        };
-        var monotype_owned = true;
-        errdefer if (monotype_owned) monotype.deinit();
-        demand = monotype.takeComptimeDemand();
-        compile_time_root_count = demand.?.root_reads.len;
-        if (!demand_driven and compile_time_root_count != requested_root_count)
-            finalizationInvariant("compile-time evaluation published a different count of compile-time roots than it requested");
-        if (options.timing) |timing| timing.recordRoots(demand.?);
-        try published.init(allocator, modules, monotype.program.rootsView()[0..compile_time_root_count], monotype.program.view().lowering_modules);
-        if (demand_driven) try stored_demand.fill(allocator, demand.?.stored);
-        // An LSS runtime consumer continues this Solved program.
-        const shares_solved = lss_runtime;
-        monotype_owned = false;
-        var prepared = try lir.CheckedPipeline.prepareMonotypeToSolved(monotype);
-        var prepared_owned = true;
-        errdefer if (prepared_owned) prepared.deinit();
+    }
+    // An LSS runtime consumer continues this specialization, so it is
+    // made under the runtime's Solved policy.
+    const solved_policy = if (lss_runtime) lir.CheckedPipeline.SolvedPolicy.fromTarget(runtime_target.?) else check_solved_policy;
+    var host_target = compileTimeTarget(options, solved_policy);
+    host_target.demand_driven_comptime_roots = demand_driven;
+    if (options.literal_values) |values| {
+        host_target.literal_values = values.lookup();
+        host_target.verify_literal_values = options.verify_literal_values;
+    }
+    const host_lir_policy = lir.CheckedPipeline.LirPolicy.fromTarget(host_target);
+    // All readers of this producer are declared before any cache hit can
+    // erase a source body. CTFE still owns its native late-splice policy.
+    host_target.code_provision = sharedProducerProvision(host_target, runtime_target);
+    // Counting work observes the evaluation without shaping it. A program
+    // whose specializations go into the object cache needs what each one
+    // reads of compile-time evaluation: the runtime consumer's, when it
+    // asks for them, and this program's own, which the compile-time pack
+    // publishes whenever there is an object cache.
+    if (runtime_target) |target| {
+        host_target.work_metrics = target.work_metrics;
+        host_target.spec_comptime_reads = target.spec_comptime_reads;
+    }
+    if (options.object_cache != null) host_target.spec_comptime_reads = true;
+    var monotype = lir.CheckedPipeline.prepareCheckedModulesMonotype(allocator, lowering_modules, union_roots, host_target) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.HostedFunctionNotBound => finalizationInvariant("compile-time evaluation required every hosted procedure to be bound"),
+    };
+    var monotype_owned = true;
+    errdefer if (monotype_owned) monotype.deinit();
+    demand = monotype.takeComptimeDemand();
+    const compile_time_root_count = demand.?.root_reads.len;
+    result.compile_time_root_count = compile_time_root_count;
+    if (!demand_driven and compile_time_root_count != requested_root_count)
+        finalizationInvariant("compile-time evaluation published a different count of compile-time roots than it requested");
+    if (options.timing) |timing| timing.recordRoots(demand.?);
+    try published.init(allocator, modules, monotype.program.rootsView()[0..compile_time_root_count], monotype.program.view().lowering_modules);
+    if (demand_driven) if (stored_demand) |stored| try stored.fill(allocator, demand.?.stored);
+    // An LSS runtime consumer continues this Solved program.
+    const shares_solved = lss_runtime;
+    monotype_owned = false;
+    var prepared = try lir.CheckedPipeline.prepareMonotypeToSolved(monotype);
+    var prepared_owned = true;
+    errdefer if (prepared_owned) prepared.deinit();
 
-        if (compile_time_root_count != 0 or prepared.literalRootCount() != 0) {
-            // The compile-time roots are published first, so compile-time
-            // evaluation's own share of the root plan is the positions before
-            // the program roots; its literal roots join it.
-            var evaluation_options = options;
-            evaluation_options.debug_events = &debug_events;
-            var literal_capture: ?LiteralCapture = if (options.literal_values != null) try LiteralCapture.init(allocator, &demand.?) else null;
-            defer if (literal_capture) |*capture| capture.deinit();
-            if (literal_capture) |*capture| evaluation_options.literal_capture = capture;
-            completed = try evaluateStaged(allocator, modules, &published, lowering_modules, &prepared, .{
-                .target_usize = host_target.target_usize,
-                .erased_capture_prefix = host_target.erased_capture_prefix,
-                .inline_expects = host_target.inline_expects,
-                .observers = lir.CheckedPipeline.Observers.fromTarget(host_target),
-                .lir_policy = host_lir_policy,
-            }, compile_time_root_count, evaluation_options);
-            if (literal_capture) |*capture| try finishLiteralValues(allocator, options.literal_values.?, capture, &demand.?, prepared.program.lifted.literalRootsView(), lowering_modules);
-            // Every literal root the program registered is evaluated now;
-            // its outcome is settled unless evaluation printed a message.
-            const fresh_message = for (debug_events.events.items) |event| {
-                if (event.fresh) break true;
-            } else false;
-            if (options.object_cache != null and !fresh_message) {
-                completed.?.discovery_summaries = try lir.CheckedPipeline.DiscoverySummary.collect(allocator, &prepared.program.lifted);
-            }
-            if (!shares_solved) {
-                // The specializations' compile-time reads outlive the
-                // Solved program: the object cache writes them beside the
-                // program's procedures.
-                completed.?.spec_comptime_reads = prepared.spec_comptime_reads;
-                prepared.spec_comptime_reads = null;
-                prepared_owned = false;
-                prepared.deinit();
-            }
-        } else {
-            for (modules) |entry| {
-                if (entry.problem_store) |store| try finishPendingExhaustiveness(entry.module, store);
-                try entry.module.const_store.verifyComplete();
-            }
-            if (!shares_solved) {
-                prepared_owned = false;
-                prepared.deinit();
-            }
+    if (compile_time_root_count != 0 or prepared.literalRootCount() != 0) {
+        // The compile-time roots are published first, so compile-time
+        // evaluation's own share of the root plan is the positions before
+        // the program roots; its literal roots join it.
+        var evaluation_options = options;
+        evaluation_options.debug_events = debug_events;
+        var literal_capture: ?LiteralCapture = if (records_literal_values and options.literal_values != null) try LiteralCapture.init(allocator, &demand.?) else null;
+        defer if (literal_capture) |*capture| capture.deinit();
+        if (literal_capture) |*capture| evaluation_options.literal_capture = capture;
+        result.completed = try evaluateStaged(allocator, modules, &published, lowering_modules, &prepared, .{
+            .target_usize = host_target.target_usize,
+            .erased_capture_prefix = host_target.erased_capture_prefix,
+            .inline_expects = host_target.inline_expects,
+            .observers = lir.CheckedPipeline.Observers.fromTarget(host_target),
+            .lir_policy = host_lir_policy,
+        }, compile_time_root_count, evaluation_options);
+        if (literal_capture) |*capture| try finishLiteralValues(allocator, options.literal_values.?, capture, &demand.?, prepared.program.lifted.literalRootsView(), lowering_modules);
+        // Every literal root the program registered is evaluated now;
+        // its outcome is settled unless evaluation printed a message.
+        const fresh_message = for (debug_events.events.items) |event| {
+            if (event.fresh) break true;
+        } else false;
+        if (options.object_cache != null and !fresh_message) {
+            result.completed.?.discovery_summaries = try lir.CheckedPipeline.DiscoverySummary.collect(allocator, &prepared.program.lifted);
         }
-        if (shares_solved) {
-            prepared_owned = false;
-            runtime_prepared = prepared;
+        if (!shares_solved) {
+            // The specializations' compile-time reads outlive the
+            // Solved program: the object cache writes them beside the
+            // program's procedures.
+            result.completed.?.spec_comptime_reads = prepared.spec_comptime_reads;
+            prepared.spec_comptime_reads = null;
         }
-        try recordEvaluatedRootReads(allocator, modules, &published, demand.?);
     } else {
         for (modules) |entry| {
             if (entry.problem_store) |store| try finishPendingExhaustiveness(entry.module, store);
             try entry.module.const_store.verifyComplete();
         }
     }
-    sealUndemandedRoots(modules);
-    const runtime_positions = try runtimeRootPositions(allocator, program_roots, runtime_roots, compile_time_root_count, lss_runtime);
-    var positions_owned = true;
-    errdefer if (positions_owned) allocator.free(runtime_positions);
-    // Observations replay in sorted order once every root has evaluated:
-    // those stored for the roots this program demands, and this
-    // compilation's own.
-    const replay_filter: ?*const StoredRootSet = if (demand_driven) &stored_demand else null;
-    try debug_events.appendCached(options.cached_debug_modules, replay_filter);
-    for (modules) |entry| try debug_events.appendStored(entry.module, replay_filter);
-    try debug_events.persist(modules);
-    if (!options.defer_debug_replay) try debug_events.replay(options);
-    var retained_root = lowering_modules.root;
-    retained_root.relation_modules = owned_relations;
-    positions_owned = false;
-    return .{
-        .allocator = allocator,
-        .modules = .{ .root = retained_root, .imports = owned_imports },
-        .runtime_requests = owned_runtime_roots.requests,
-        .runtime_roots = owned_runtime_roots,
-        .runtime_target = runtime_target,
-        .completed = completed,
-        .runtime_prepared = runtime_prepared,
-        .runtime_positions = runtime_positions,
-    };
+    prepared_owned = false;
+    if (shares_solved) {
+        result.prepared = prepared;
+    } else {
+        prepared.deinit();
+    }
+    try recordEvaluatedRootReads(allocator, modules, &published, demand.?);
+    return result;
 }
 
 /// Whether this compilation evaluates only the compile-time roots its program

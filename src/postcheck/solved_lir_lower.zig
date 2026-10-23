@@ -282,6 +282,7 @@ pub fn runBorrowed(
     lowerer.layout_keyed_source_digests = layout_keyed_source_digests;
 
     try lowerer.result.store.setSourceFiles(solved.lifted.sourceFiles());
+    try lowerer.setProgramModules(solved.lifted.sourceFiles());
     try lowerer.result.setLoweringModules(solved.lifted.loweringModules());
     try lowerer.prepareExpectSites();
     try lowerer.indexSourceFns();
@@ -894,6 +895,10 @@ const Lowerer = struct {
     proc_debug_names: bool,
     spec_cache: ?Common.SpecCacheLookup,
     spec_cache_takes: Common.SpecCacheTakes,
+    /// The module identities of this program's source files, which the
+    /// object cache serves entries for (`Common.ProgramModules`).
+    program_modules: Common.ProgramModules = &.{},
+    program_module_buffer: [][32]u8 = &.{},
     /// This consumer's explicit share of the producer's roots and requests.
     root_manifest: ?RootManifest,
     /// Drain positions, kept across calls so a second drain resumes.
@@ -1391,7 +1396,17 @@ const Lowerer = struct {
 
     /// Release every lowering-time table. The LIR result and the runtime
     /// schema store are the output and are not touched.
+    fn setProgramModules(self: *Lowerer, files: []const base.SourceFileEntry) std.mem.Allocator.Error!void {
+        const identities = try self.allocator.alloc([32]u8, files.len);
+        for (files, identities) |file, *identity| identity.* = file.module_identity;
+        self.program_module_buffer = identities;
+        self.program_modules = Common.sortProgramModules(identities);
+    }
+
     fn deinitLoweringState(self: *Lowerer) void {
+        self.allocator.free(self.program_module_buffer);
+        self.program_module_buffer = &.{};
+        self.program_modules = &.{};
         self.deinitWorkerWorkspaces();
         self.prepared_worker_types.deinit();
         self.prepared_worker_fns.deinit();
@@ -3128,7 +3143,7 @@ const Lowerer = struct {
             if (self.spec_cache) |cache| {
                 if (source_fn.source) |template| {
                     if (template.spec_key) |key| {
-                        if (cache.lookup(key.bytes, self.spec_cache_takes)) |hit| {
+                        if (cache.lookup(key.bytes, self.spec_cache_takes, self.program_modules)) |hit| {
                             if (std.mem.eql(u8, &hit.identity, &identity.bytes)) {
                                 cached = hit;
                                 cached_key = key.bytes;
@@ -3152,7 +3167,7 @@ const Lowerer = struct {
         if (cached == null and source_fn.body == .roc and spec.abi == .finite and !spec.return_reuse.enabled()) {
             if (self.spec_cache) |cache| {
                 const key = Common.procIdentityCacheKey(if (code_key) |code| code else identity.bytes);
-                if (cache.lookup(key, self.spec_cache_takes)) |hit| {
+                if (cache.lookup(key, self.spec_cache_takes, self.program_modules)) |hit| {
                     if (std.mem.eql(u8, &hit.identity, &identity.bytes)) {
                         cached = hit;
                         cached_key = key;
@@ -3644,7 +3659,7 @@ const Lowerer = struct {
                     continue;
                 },
                 .static_data_candidate => |candidate| {
-                    current = .{ .expr = candidate.runtime_expr, .ty = current.ty, .layout_idx = current.layout_idx };
+                    current = .{ .expr = candidateConstructionExpr(candidate) orelse return .{ .done = null }, .ty = current.ty, .layout_idx = current.layout_idx };
                     continue;
                 },
                 .local,
@@ -3690,6 +3705,16 @@ const Lowerer = struct {
         }
     }
 
+    /// The expression a candidate's construction is read from: its runtime
+    /// value. A stored list has none: it has items, and a list with items
+    /// has no construction (`constructionOfListExpr`).
+    fn candidateConstructionExpr(candidate: Mono.StaticDataCandidate) ?Lifted.ExprId {
+        return switch (candidate.value) {
+            .runtime => |runtime| runtime,
+            .stored => null,
+        };
+    }
+
     /// A restored list lowers as a construction only when it is empty: an
     /// empty list's `with_capacity` request cannot survive in a slot, while
     /// a list with elements is served from static data, since rebuilding it
@@ -3710,7 +3735,10 @@ const Lowerer = struct {
                 ty = try self.nominalBackingType(ty, data.nominal);
                 expr_id = data.nominal;
             } else if (data == .static_data_candidate) {
-                expr_id = data.static_data_candidate.runtime_expr;
+                switch (data.static_data_candidate.value) {
+                    .runtime => |runtime| expr_id = runtime,
+                    .stored => |stored| return try self.uniformStoredList(arena, stored, ty, value_layout),
+                }
             } else break;
         }
         const expr = self.solved.lifted.getExpr(expr_id);
@@ -3768,6 +3796,15 @@ const Lowerer = struct {
             .expect,
             => null,
         };
+    }
+
+    /// A stored list is uniform when Monotype found its items to be one
+    /// stored value and that value has a construction, as a list literal is
+    /// when every item's construction equals the first's.
+    fn uniformStoredList(self: *Lowerer, arena: std.mem.Allocator, stored: Mono.StoredStaticList, ty: Type.TypeId, value_layout: layout.Layout) Common.LowerError!?postcheck_values.UniformList {
+        const item = stored.uniform_item orelse return null;
+        const element = try self.constructionOfExpr(arena, item, self.listElemType(ty), value_layout.getIdx()) orelse return null;
+        return .{ .element = element, .count = stored.item_count };
     }
 
     fn uniformListOfItems(self: *Lowerer, arena: std.mem.Allocator, span: Lifted.Span(Lifted.ExprId), ty: Type.TypeId, value_layout: layout.Layout) Common.LowerError!?postcheck_values.UniformList {
@@ -4178,6 +4215,9 @@ const Lowerer = struct {
     }
 
     fn lowerType(self: *Lowerer, solved_ty: SolvedType.TypeVarId) Common.LowerError!Type.TypeId {
+        // A type already lowered is its cached type, which is what the task
+        // machine's first step returns for it.
+        if (self.type_map.get(self.solved.types.root(solved_ty))) |cached| return cached;
         return (try self.runTypeTasks(.{ .type_var = .{ .var_id = solved_ty } })).ty;
     }
 
@@ -6134,7 +6174,17 @@ const Lowerer = struct {
         if (monotype_hit.c_abi_entry or !self.spec_cache_takes.takesLinkedObjects()) return monotype_hit;
         const cache = self.spec_cache orelse return monotype_hit;
         const key = template.spec_key orelse return monotype_hit;
-        const linked = cache.lookup(key.bytes, self.spec_cache_takes) orelse return monotype_hit;
+        if (cache.lookup(key.bytes, self.spec_cache_takes, self.program_modules)) |linked| {
+            if (linked.c_abi_entry and std.mem.eql(u8, &linked.identity, &monotype_hit.identity)) return linked;
+        }
+        // A linked object may offer the procedure under its identity alone,
+        // the key a lowering that found no entry under the specialization's
+        // key looks it up by. Whether the program links the entry must not
+        // depend on whether a dev pack happened to serve the specialization
+        // key first.
+        const identity: LIR.ProcIdentity = .{ .bytes = monotype_hit.identity };
+        const identity_key = Common.procIdentityCacheKey(if (procCodeKey(template, identity)) |code| code else identity.bytes);
+        const linked = cache.lookup(identity_key, self.spec_cache_takes, self.program_modules) orelse return monotype_hit;
         if (!linked.c_abi_entry or !std.mem.eql(u8, &linked.identity, &monotype_hit.identity)) return monotype_hit;
         return linked;
     }
@@ -6236,6 +6286,26 @@ const Lowerer = struct {
         }
         const gop = try self.static_initializer_map.getOrPut(request);
         if (gop.found_existing) return gop.value_ptr.*;
+        const runtime_expr = switch (candidate.value) {
+            .runtime => |runtime| runtime,
+            .stored => {
+                // Frozen straight from the stored node its request names: no
+                // initializer builds it.
+                const stored_request = self.solved.lifted.static_data_values.get(@backingInt(candidate.static_data));
+                const result_id: LIR.StaticDataId = @fromBackingInt(@intCast(@as(u32, @intCast(self.result.static_data_values.items.len))));
+                try self.result.static_data_values.append(self.allocator, .{
+                    .initializer = null,
+                    .layout_idx = layout_idx,
+                    .stored = .{
+                        .module = check.CheckedModule.constModuleId(stored_request.const_locator),
+                        .node = stored_request.node orelse Common.invariant("a stored list's static data request named no stored node"),
+                        .plan = try self.constPlanOfType(ty),
+                    },
+                });
+                gop.value_ptr.* = result_id;
+                return result_id;
+            },
+        };
 
         const proc = try self.result.store.addProcSpec(.{
             .name = lirSymbol(self.symbols.fresh()),
@@ -6245,14 +6315,14 @@ const Lowerer = struct {
             .ret_layout = layout_idx,
             .abi = .roc,
             .is_static_initializer = true,
-        }, self.solved.lifted.exprLoc(candidate.runtime_expr));
+        }, self.solved.lifted.exprLoc(runtime_expr));
         const result_id: LIR.StaticDataId = @fromBackingInt(@intCast(@as(u32, @intCast(self.result.static_data_values.items.len))));
         try self.result.static_data_values.append(self.allocator, .{
             .initializer = proc,
             .layout_idx = layout_idx,
         });
         try self.static_initializer_queue.append(self.allocator, .{
-            .expr = candidate.runtime_expr,
+            .expr = runtime_expr,
             .ty = ty,
             .proc = proc,
         });
@@ -6598,6 +6668,15 @@ const Lowerer = struct {
             if (values.constructionFor(root.module, root.root, layout_idx)) |construction| {
                 if (try self.lowerConstructionInto(where, target, construction, next)) |built| return built;
             }
+            // A string too short for target storage is its literal, as a
+            // read restoring the stored string lowers.
+            if (layout_idx == .str) if (values.shortStringFor(root.module, root.root)) |bytes| {
+                return try self.result.store.addCFStmt(.{ .assign_literal = .{
+                    .target = target,
+                    .value = .{ .str_literal = try self.result.store.insertStringView(bytes, 0, @intCast(bytes.len)) },
+                    .next = next,
+                } }, where.source());
+            };
         }
         const id = try self.comptimeValueSlot(root, ty, layout_idx);
         // A list of copies keeps its slot and also names its fresh form and
@@ -7842,12 +7921,25 @@ const Lowerer = struct {
     ) Common.LowerError!LowerStep {
         const layout_idx = self.result.store.getLocal(target).layout_idx;
         const proc_id = self.current_proc orelse Common.invariant("static data candidate lowering ran without a current procedure");
-        if (self.result.store.getProcSpecImmediate(proc_id).is_static_initializer) {
-            // Closed target initializers serialize the stored value, not a
-            // runtime construction.
-            return .{ .tail = exprTask(where, target, candidate.runtime_expr, ty, next) };
+        const in_initializer = self.result.store.getProcSpecImmediate(proc_id).is_static_initializer;
+        switch (candidate.value) {
+            .runtime => |runtime| {
+                // Closed target initializers serialize the stored value, not
+                // a runtime construction.
+                if (in_initializer) return .{ .tail = exprTask(where, target, runtime, ty, next) };
+                if (try self.lowerConstructionExprInto(where, target, runtime, ty, next)) |built| return .{ .ret = built };
+            },
+            // A stored list has items, so it has no construction, and an
+            // initializer that holds it reads its frozen value.
+            .stored => if (in_initializer) return .{ .ret = try self.result.store.addCFStmt(.{ .assign_literal = .{
+                .target = target,
+                .value = .{ .static_data = .{
+                    .id = try self.lirStaticDataFor(candidate, ty, layout_idx),
+                    .copies = .none,
+                } },
+                .next = next,
+            } }, where.source()) },
         }
-        if (try self.lowerConstructionExprInto(where, target, candidate.runtime_expr, ty, next)) |built| return .{ .ret = built };
         if (candidate.storage.needsTargetStorage(self.result.layouts.targetUsize()) and self.layoutNeedsStaticData(layout_idx)) {
             const id = try self.lirStaticDataFor(candidate, ty, layout_idx);
             // A list of copies keeps its slot and also names its fresh form
@@ -7856,9 +7948,13 @@ const Lowerer = struct {
             defer self.lane_scratch.releaseArena(arena);
             var fresh_alternative: ?LIR.LirProcSpecId = null;
             var list_len: ?u64 = null;
-            if (try self.uniformListOfExpr(arena.allocator(), candidate.runtime_expr, ty, layout_idx)) |uniform| {
-                fresh_alternative = try self.uniformListConstructor(where, uniform, layout_idx);
-                if (fresh_alternative != null) list_len = uniform.count;
+            const uniform = switch (candidate.value) {
+                .runtime => |runtime| try self.uniformListOfExpr(arena.allocator(), runtime, ty, layout_idx),
+                .stored => |stored| try self.uniformStoredList(arena.allocator(), stored, ty, self.result.layouts.getLayout(layout_idx)),
+            };
+            if (uniform) |copies| {
+                fresh_alternative = try self.uniformListConstructor(where, copies, layout_idx);
+                if (fresh_alternative != null) list_len = copies.count;
             }
             return .{ .ret = try self.result.store.addCFStmt(.{ .assign_literal = .{
                 .target = target,
@@ -7872,7 +7968,10 @@ const Lowerer = struct {
                 .next = next,
             } }, where.source()) };
         }
-        return .{ .tail = exprTask(where, target, candidate.runtime_expr, ty, next) };
+        return switch (candidate.value) {
+            .runtime => |runtime| .{ .tail = exprTask(where, target, runtime, ty, next) },
+            .stored => Common.invariant("a stored list's layout needed no static data"),
+        };
     }
 
     fn typedBoundaryStep(

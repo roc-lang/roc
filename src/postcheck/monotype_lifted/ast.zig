@@ -2150,7 +2150,7 @@ pub fn appendChildren(allocator: std.mem.Allocator, program: *const Program, exp
             try sink.fields(update.fields);
         },
         .tag => |tag| try sink.span(tag.payloads),
-        .static_data_candidate => |candidate| try sink.one(candidate.runtime_expr),
+        .static_data_candidate => |candidate| if (candidate.value.subexpression()) |sub| try sink.one(sub),
         .comptime_value => |value| try sink.one(value.initializer),
         .typed_boundary => |boundary| try sink.one(boundary.value),
         .row_widen => |widen| try sink.one(widen.value),

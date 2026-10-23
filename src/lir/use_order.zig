@@ -826,7 +826,7 @@ pub const UseOrder = struct {
         const end = if (only_proc != null) first + 1 else store.procSpecCount();
         for (first..end) |proc_index| {
             const proc = store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
-            const body = proc.body orelse continue;
+            const body = proc.arcBody() orelse continue;
             seen.clearRetainingCapacity();
             stack.clearRetainingCapacity();
             try stack.append(allocator, body);

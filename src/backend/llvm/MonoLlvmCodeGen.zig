@@ -1737,20 +1737,46 @@ pub const MonoLlvmCodeGen = struct {
         try self.ensureLocalScratch();
         try self.computeInlineEverywhere(procs);
         try self.computeTailScratch(procs);
-        for (procs, 0..) |proc, i| {
+        const order = try self.procEmitOrder(procs);
+        defer self.allocator.free(order);
+        for (order) |i| {
+            const proc = procs[i];
             if (proc.is_static_initializer) continue;
-            try self.declareProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(i)))), proc);
+            try self.declareProcSpec(@fromBackingInt(i), proc);
         }
-        if (self.usesTailDrivers()) try self.emitTailDrivers(procs);
+        if (self.usesTailDrivers()) try self.emitTailDrivers(procs, order);
         try self.declareRuntimeErrorHelper();
         try self.compileRuntimeErrorHelper();
         // A Boxy runtime entry body registers every worker's dispatch thunk,
         // so the thunks exist before any body is compiled.
         try self.generateBoxyDictProcThunks();
-        for (procs, 0..) |proc, i| {
+        for (order) |i| {
+            const proc = procs[i];
             if (proc.is_static_initializer) continue;
-            try self.compileProcBody(@fromBackingInt(@intCast(@as(u32, @intCast(i)))), proc);
+            try self.compileProcBody(@fromBackingInt(i), proc);
         }
+    }
+
+    /// The order procedures are declared and compiled in, which orders the
+    /// module's functions and numbers its helpers: the store's, or, for an
+    /// object-cache pack, identity order, since the program lowering a
+    /// pack's code numbers its procedures however its parallel lowering ran,
+    /// and the pack must be the same object every time.
+    fn procEmitOrder(self: *MonoLlvmCodeGen, procs: []const LirProcSpec) Error![]u32 {
+        const order = self.allocator.alloc(u32, procs.len) catch return error.OutOfMemory;
+        for (order, 0..) |*index, i| index.* = @intCast(i);
+        if (self.object_cache_pack) {
+            std.mem.sort(u32, order, procs, struct {
+                fn lessThan(all: []const LirProcSpec, lhs: u32, rhs: u32) bool {
+                    return switch (std.mem.order(u8, &all[lhs].identity.bytes, &all[rhs].identity.bytes)) {
+                        .lt => true,
+                        .gt => false,
+                        .eq => lhs < rhs,
+                    };
+                }
+            }.lessThan);
+        }
+        return order;
     }
 
     fn generateBoxyDictProcThunks(self: *MonoLlvmCodeGen) Error!void {
@@ -2221,11 +2247,12 @@ pub const MonoLlvmCodeGen = struct {
     /// of that result's runtime descriptor when the call returned one. While
     /// a member has left a call pending, it calls that callee with the
     /// arguments in static storage and has it write to the same addresses.
-    fn emitTailDrivers(self: *MonoLlvmCodeGen, procs: []const LirProcSpec) Error!void {
+    fn emitTailDrivers(self: *MonoLlvmCodeGen, procs: []const LirProcSpec, order: []const u32) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const ptr_ty = try self.ptrType();
         var area_size: u32 = 0;
-        for (procs, 0..) |proc, i| {
+        for (order) |i| {
+            const proc = procs[i];
             if (!isTailDriverMember(proc)) continue;
             const arg_layouts = try self.procArgLayouts(proc, .explicit);
             defer self.allocator.free(arg_layouts);
@@ -12253,6 +12280,15 @@ pub const MonoLlvmCodeGen = struct {
             const symbol = layout.rc_helper.symbolName(self.allocator, self.layout_store.?, helper_key, .atomic) catch return error.OutOfMemory;
             defer self.allocator.free(symbol);
             break :blk builder.strtabStringFmt("{s}{s}", .{ self.static_symbol_prefix, symbol }) catch return error.OutOfMemory;
+        } else if (self.object_cache_pack) blk: {
+            // A pack's object is the same however the program lowering its
+            // code numbered its layouts, so its helpers are named by content.
+            const symbol = layout.rc_helper.symbolName(self.allocator, self.layout_store.?, helper_key, switch (atomicity) {
+                .atomic => .atomic,
+                .single_thread => .single_thread,
+            }) catch return error.OutOfMemory;
+            defer self.allocator.free(symbol);
+            break :blk builder.strtabStringFmt("roc_llvm_{s}", .{symbol}) catch return error.OutOfMemory;
         } else builder.strtabStringFmt("roc_llvm_rc_{s}_{d}{s}", .{
             @tagName(helper_key.op),
             @backingInt(helper_key.layout_idx),

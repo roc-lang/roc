@@ -3427,6 +3427,43 @@ test "single-use block helper nested in a multi-use wrapper is not duplicated" {
     , "helper", false);
 }
 
+test "bodies on interlocking call cycles stay procedures in every definition order" {
+    // `a` and `b` call each other, and so do `b` and `c`. All three lie on
+    // one cycle of candidate bodies, so none is inlined, whichever order the
+    // program numbers them in.
+    const forward =
+        \\a : U64 -> U64
+        \\a = |n| if n == 0 { 0 } else { b(n - 1) }
+        \\
+        \\b : U64 -> U64
+        \\b = |n| if n == 0 { 1 } else if n == 1 { a(n - 1) } else { c(n - 1) }
+        \\
+        \\c : U64 -> U64
+        \\c = |n| if n == 0 { 2 } else { b(n - 1) }
+        \\
+        \\main : U64
+        \\main = a(5)
+    ;
+    const backward =
+        \\c : U64 -> U64
+        \\c = |n| if n == 0 { 2 } else { b(n - 1) }
+        \\
+        \\b : U64 -> U64
+        \\b = |n| if n == 0 { 1 } else if n == 1 { a(n - 1) } else { c(n - 1) }
+        \\
+        \\a : U64 -> U64
+        \\a = |n| if n == 0 { 0 } else { b(n - 1) }
+        \\
+        \\main : U64
+        \\main = c(5)
+    ;
+    for ([_][]const u8{ forward, backward }) |source| {
+        for ([_][]const u8{ "a", "b", "c" }) |name| {
+            try expectInlinePlanDecision(source, name, false);
+        }
+    }
+}
+
 test "procedure boundary keeps a deeper single-use helper inline" {
     const source =
         \\inner : List(U64), U64 -> List(U64)
