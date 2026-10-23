@@ -424,6 +424,73 @@ pub const Solution = struct {
         return if (source == no_local) null else @fromBackingInt(@intCast(source));
     }
 
+    /// Adopts the reads dismantle materialized as local aliases of their
+    /// committed representative (`alias` -> `representative`), so the borrow
+    /// facts describe the rewritten store: a borrowed alias borrows through
+    /// its representative as a pure same-value alias and joins the
+    /// representative's liveness group, and so does every borrow anchored
+    /// through it. A borrowed local always shares its lender's leader, so
+    /// only the groups an alias leaves are re-resolved, and only when some
+    /// alias changes group.
+    pub fn adoptProjectionAliases(
+        self: *Solution,
+        allocator: Allocator,
+        aliases: *const collections.DenseMap(LIR.LocalId, LIR.LocalId),
+    ) Allocator.Error!void {
+        var left_groups: std.ArrayList(u32) = .empty;
+        defer left_groups.deinit(allocator);
+        var iter = aliases.constIterator();
+        while (iter.next()) |entry| {
+            const alias = @backingInt(entry.key_ptr.*);
+            const representative = @backingInt(entry.value_ptr.*);
+            if (!self.borrowed.isSet(alias) or self.representation_alias.isSet(alias)) continue;
+            self.borrow_source[alias] = representative;
+            self.alias_source[alias] = representative;
+            if (self.leader[alias] != self.leader[representative]) try left_groups.append(allocator, self.leader[alias]);
+        }
+        if (left_groups.items.len == 0) return;
+
+        const local_count = self.leader.len;
+        var left = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+        defer left.deinit(allocator);
+        for (left_groups.items) |leader| left.set(leader);
+        // Every member of a group an alias leaves is re-resolved through its
+        // lender chain; the group's anchors keep their own leaders.
+        var pending = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+        defer pending.deinit(allocator);
+        for (self.leader, 0..) |leader, index| {
+            if (left.isSet(leader) and self.borrow_source[index] != no_local) pending.set(index);
+        }
+        var chain: std.ArrayList(u32) = .empty;
+        defer chain.deinit(allocator);
+        var pending_iter = pending.iterator(.{});
+        while (pending_iter.next()) |start| {
+            if (!pending.isSet(start)) continue;
+            chain.clearRetainingCapacity();
+            var cursor: u32 = @intCast(start);
+            while (pending.isSet(cursor)) {
+                if (chain.items.len > local_count) solveInvariant("ARC borrow-source chain contained a cycle");
+                try chain.append(allocator, cursor);
+                cursor = self.borrow_source[cursor];
+            }
+            const leader = self.leader[cursor];
+            for (chain.items) |link| {
+                self.leader[link] = leader;
+                pending.unset(link);
+            }
+        }
+        if (builtin.mode == .debug) {
+            var check = aliases.constIterator();
+            while (check.next()) |entry| {
+                const alias = @backingInt(entry.key_ptr.*);
+                if (self.borrow_source[alias] == no_local) continue;
+                if (self.leader[alias] != self.leader[@backingInt(entry.value_ptr.*)]) {
+                    solveInvariant("ARC materialized alias left its representative's liveness group");
+                }
+            }
+        }
+    }
+
     pub fn sigTable(self: *const Solution) arc_sig.SigTable {
         return .{ .sigs = self.sigs, .outcomes = self.outcomes, .ret_conditions = self.ret_conditions };
     }

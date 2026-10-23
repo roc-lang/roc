@@ -21679,6 +21679,15 @@ is a proper part of its root's layout, so the order is acyclic and each
 deferred read is settled exactly once.
 A root therefore never commits a take on a read that is emitted as an alias of
 a container already holding the root's unit.
+The borrow solve runs before dismantle, so the solution adopts each
+materialized alias before emission: a borrowed alias borrows through its
+representative as a pure same-value alias, and it and every borrow anchored
+through it join the representative's liveness group. When the representative
+is a take binding solved owned, the alias therefore leaves the root's group,
+and the take binding's unit stays live through the alias's uses while the
+root's residual shell dies at its own last use. Only the groups an alias leaves
+are re-resolved, so a program whose aliases all stay in their group pays one
+pass over its aliases.
 Dominance is computed from the explicit statement-successor graph with a
 synthetic entry for all procedure roots. Every path from that entry to a
 statement starts at the body of a procedure that reaches the statement and
