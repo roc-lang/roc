@@ -704,7 +704,15 @@ fn createFileReadFailedReport(allocator: Allocator, info: anytype) Allocator.Err
 }
 
 fn createFileWriteFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    return createPathErrorNameReport(allocator, "File Write Failed", "I could not write to the file ", info.path, ".", .runtime_error, @errorName(info.err));
+    var report = try createPathErrorNameReport(allocator, "File Write Failed", "I could not write to the file ", info.path, ".", .runtime_error, @errorName(info.err));
+    errdefer report.deinit();
+
+    if (info.err == error.FileNotFound) {
+        try report.document.addLineBreaks(2);
+        try report.document.addText("A directory in this path does not exist. Create the missing directory and try again.");
+    }
+
+    return report;
 }
 
 fn createDirectoryCreateFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
