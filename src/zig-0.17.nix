@@ -27,6 +27,12 @@ zig.overrideAttrs (previous: {
       (lib.cmakeFeature "ZIG_TARGET_DYNAMIC_LINKER" stdenv.cc.bintools.dynamicLinker)
       (lib.cmakeBool "ZIG_USE_LLVM_CONFIG" true)
     ];
+  postPatch = (previous.postPatch or "") + lib.optionalString stdenv.hostPlatform.isDarwin ''
+    # `zig build` refuses to schedule a step whose declared memory bound
+    # exceeds the machine's memory, and the compiler's own step declares 8 GB.
+    # GitHub's macOS runners have 7 GB.
+    substituteInPlace build.zig --replace-fail ".max_rss = 8_000_000_000," ".max_rss = 7_000_000_000,"
+  '';
   nativeBuildInputs = previous.nativeBuildInputs ++ lib.optionals stdenv.hostPlatform.isLinux [ patchelf ];
   # CMake already strips the Release compiler. After an RPATH expansion,
   # binutils strip moves its .dynstr section outside the loadable segment.

@@ -555,6 +555,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
                 .linked_function = .{
                     .offset = @intCast(offset + 1), // After E8 opcode
                     .symbol = symbol,
+                    .kind = .x86_call_rel32,
                 },
             });
         }

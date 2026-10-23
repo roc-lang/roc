@@ -56,7 +56,7 @@ test "where clause - effectful method constraint preserves callable kind" {
 
     try test_env.assertDefType(
         "helper!",
-        "a => {} where [a.run! : ({}) => {}]",
+        "a => {} where [a.run! : () => {}]",
     );
 }
 
@@ -816,7 +816,7 @@ test "where clause - whole method hole accepts a nullary effectful implementatio
     ;
     var test_env = try TestEnv.init("EffectfulMethodHole", source);
     defer test_env.deinit();
-    try test_env.assertDefType("main!", "({}) => {}");
+    try test_env.assertDefType("main!", "() => {}");
 }
 
 test "where clause - explicit nullary method hole cannot accept a receiver" {

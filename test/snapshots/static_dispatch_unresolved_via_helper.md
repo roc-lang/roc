@@ -137,12 +137,12 @@ ok = conv(5.U8)
 (inferred-types
 	(defs
 		(patt (type "a -> b where [a.to_i128 : a -> b]"))
-		(patt (type "({}) -> _ret"))
+		(patt (type "() -> _ret"))
 		(patt (type "_a"))
 		(patt (type "I128")))
 	(expressions
 		(expr (type "a -> b where [a.to_i128 : a -> b]"))
-		(expr (type "({}) -> _ret"))
+		(expr (type "() -> _ret"))
 		(expr (type "_a"))
 		(expr (type "I128"))))
 ~~~

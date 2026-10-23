@@ -304,24 +304,9 @@ pub const ScopeMap = struct {
                 const destructs = module_env.store.sliceRecordDestructs(p.destructs);
                 for (destructs) |destruct_idx| {
                     const destruct = module_env.store.getRecordDestruct(destruct_idx);
-                    // The field identifier is bound
-                    try self.bindings.append(self.allocator, .{
-                        .ident = destruct.ident,
-                        .pattern_idx = pattern_idx,
-                        .visible_from = visible_from,
-                        .visible_to = visible_to,
-                        .is_parameter = is_parameter,
-                    });
-
-                    switch (destruct.kind) {
-                        .SubPattern => |nested_pattern| {
-                            try self.extractBindingsFromPattern(module_env, nested_pattern, visible_from, visible_to, is_parameter);
-                        },
-                        .Rest => |nested_pattern| {
-                            try self.extractBindingsFromPattern(module_env, nested_pattern, visible_from, visible_to, is_parameter);
-                        },
-                        .Required => {},
-                    }
+                    // Field labels are not bindings. Required fields, sub-patterns,
+                    // and rests all carry the pattern that introduces their bindings.
+                    try self.extractBindingsFromPattern(module_env, destruct.kind.toPatternIdx(), visible_from, visible_to, is_parameter);
                 }
             },
             .list => |p| {

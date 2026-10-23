@@ -49,6 +49,12 @@ pub const Rep = enum(u8) {
     merged,
 };
 
+/// A memory value can name an immutable byte range in another local instead
+/// of owning another slot. Offsets come only from committed LIR layouts.
+pub const View = struct { source: LocalId, offset: u32 };
+/// The storage used by a memory local in the current procedure.
+pub const Place = union(enum) { slot, parameter, view: View };
+
 /// How the emitter accesses one operand.
 pub const Access = enum {
     /// Only through the representation-agnostic value helpers.
@@ -646,6 +652,10 @@ indexes: StackPlan.Indexes,
 /// Each local's representation, by local id. Rows outside the current
 /// procedure's inventory hold `.memory`.
 reps: std.ArrayList(Rep) = .empty,
+places: std.ArrayList(Place) = .empty,
+inventory: std.ArrayList(LocalId) = .empty,
+view_states: std.ArrayList(ViewState) = .empty,
+view_work: std.ArrayList(LocalId) = .empty,
 /// Whether some operand of the current procedure needs the local's address,
 /// by local id. Cleared from the procedure's inventory.
 addressed: std.ArrayList(bool) = .empty,
@@ -657,9 +667,13 @@ merge_locals: std.ArrayList(LocalId) = .empty,
 visited: std.AutoHashMapUnmanaged(u32, void) = .empty,
 work: std.ArrayList(CFStmtId) = .empty,
 planned: std.ArrayList(CFStmtId) = .empty,
-value_accesses: std.ArrayList(StackPlan.Range) = .empty,
+value_accesses: std.ArrayList(ValueAccesses) = .empty,
 merge_nodes: std.ArrayList(MergeNode) = .empty,
 pairs: std.ArrayList(MergePair) = .empty,
+
+const ValueAccesses = struct { start: u32, end: u32, definition: ?u32 = null };
+
+const ViewState = enum { untracked, candidate, pending, visiting, resolved, parameter };
 
 const MergeNode = struct { position: u32, node: u32, stmt: u32 };
 const MergePair = struct { stmt: u32, local: LocalId };
@@ -671,6 +685,10 @@ pub fn init(allocator: Allocator) Self {
 pub fn deinit(self: *Self) void {
     self.indexes.deinit();
     self.reps.deinit(self.allocator);
+    self.places.deinit(self.allocator);
+    self.inventory.deinit(self.allocator);
+    self.view_states.deinit(self.allocator);
+    self.view_work.deinit(self.allocator);
     self.addressed.deinit(self.allocator);
     self.ssa_locals.deinit(self.allocator);
     self.merges.deinit(self.allocator);
@@ -690,6 +708,20 @@ pub fn rep(self: *const Self, local: LocalId) Rep {
     return self.reps.items[raw];
 }
 
+/// The memory location selected for `local`.
+pub fn place(self: *const Self, local: LocalId) Place {
+    const raw = @backingInt(local);
+    return if (raw < self.places.items.len) self.places.items[raw] else .slot;
+}
+
+/// The local owning the bytes read through `local`, after view flattening.
+pub fn storageRoot(self: *const Self, local: LocalId) LocalId {
+    return switch (self.place(local)) {
+        .view => |view| view.source,
+        .slot, .parameter => local,
+    };
+}
+
 /// The merged locals live on entry to the merge point `stmt`: a join body or
 /// a statement the emitter shares between several incoming edges.
 pub fn mergeLocals(self: *const Self, stmt: CFStmtId) []const LocalId {
@@ -704,6 +736,11 @@ pub fn ssaLocals(self: *const Self) []const LocalId {
 
 /// Forget the planned procedure.
 pub fn clear(self: *Self) void {
+    for (self.inventory.items) |local| {
+        self.places.items[@backingInt(local)] = .slot;
+        self.view_states.items[@backingInt(local)] = .untracked;
+    }
+    self.inventory.clearRetainingCapacity();
     for (self.ssa_locals.items) |local| self.reps.items[@backingInt(local)] = .memory;
     self.ssa_locals.clearRetainingCapacity();
     self.merges.clearRetainingCapacity();
@@ -717,7 +754,9 @@ pub fn clear(self: *Self) void {
 /// `isCandidate(local)` (the layout has a scalar carrier), `paramAccess(index)`
 /// (how the prologue binds parameter `index`), `callAccess(call, operand)`
 /// (how a direct call passes argument `operand.arg` or receives its result),
-/// and `isShared(stmt)` (the emitter enters `stmt` through a shared block).
+/// `isShared(stmt)` (the emitter enters `stmt` through a shared block),
+/// `borrowParam(index)` (the ABI supplies stable parameter storage), and
+/// `memoryView(assign)` (the committed byte range of an aggregate alias).
 pub fn plan(
     self: *Self,
     store: *const LirStore,
@@ -735,6 +774,16 @@ pub fn plan(
         try self.addressed.resize(self.allocator, local_count);
         @memset(self.addressed.items[old_len..], false);
     }
+    if (self.places.items.len < local_count) {
+        const old_len = self.places.items.len;
+        try self.places.resize(self.allocator, local_count);
+        @memset(self.places.items[old_len..], .slot);
+    }
+    if (self.view_states.items.len < local_count) {
+        const old_len = self.view_states.items.len;
+        try self.view_states.resize(self.allocator, local_count);
+        @memset(self.view_states.items[old_len..], .untracked);
+    }
     const param_locals = store.getLocalSpan(params);
     const frame = store.getLocalSpan(frame_locals);
     defer {
@@ -742,8 +791,16 @@ pub fn plan(
         for (0..frame.len) |i| self.addressed.items[@backingInt(GuardedList.at(frame, i))] = false;
     }
 
+    // Record the complete reset inventory before changing any per-local
+    // columns, including when a later allocation fails.
+    try self.inventory.ensureTotalCapacity(self.allocator, param_locals.len + frame.len);
+    for ([_]@TypeOf(frame){ param_locals, frame }) |locals| {
+        for (0..locals.len) |i| self.inventory.appendAssumeCapacity(GuardedList.at(locals, i));
+    }
+
     // Operands the emitter reaches through an address.
     for (0..param_locals.len) |i| {
+        if (ops.borrowParam(i)) self.view_states.items[@backingInt(GuardedList.at(param_locals, i))] = .candidate;
         if (ops.paramAccess(i) == .address) self.addressed.items[@backingInt(GuardedList.at(param_locals, i))] = true;
     }
     self.visited.clearRetainingCapacity();
@@ -751,7 +808,14 @@ pub fn plan(
     try self.work.append(self.allocator, root);
     while (self.work.pop()) |id| {
         if ((try self.visited.getOrPut(self.allocator, @backingInt(id))).found_existing) continue;
-        self.noteAddressedOperands(store, store.getCFStmt(id), ops);
+        const stmt = store.getCFStmt(id);
+        self.noteAddressedOperands(store, stmt, ops);
+        if (stmt == .assign_ref) {
+            if (ops.memoryView(stmt.assign_ref)) |view| {
+                self.view_states.items[@backingInt(stmt.assign_ref.target)] = .candidate;
+                self.view_states.items[@backingInt(view.source)] = .candidate;
+            }
+        }
         try lir.BodyClone.appendSuccessors(store, &self.work, id, self.allocator);
     }
 
@@ -766,24 +830,119 @@ pub fn plan(
         }
         if (list == 0) param_count = self.ssa_locals.items.len;
     }
-    if (self.ssa_locals.items.len == 0) return;
-    try self.classify(store, param_count, root, ops);
+    const has_memory_candidates = for (self.inventory.items) |local| {
+        if (self.view_states.items[@backingInt(local)] == .candidate) break true;
+    } else false;
+    if (self.ssa_locals.items.len == 0 and !has_memory_candidates) return;
+    try self.classify(store, params, param_count, root, ops);
 }
 
 const Tracked = struct {
     plan: *const Self,
 
     pub fn tracks(self: Tracked, local: LocalId) bool {
-        return self.plan.rep(local) != .memory;
+        return self.plan.rep(local) != .memory or self.plan.view_states.items[@backingInt(local)] != .untracked;
     }
 
     pub fn statement(_: Tracked, _: *StackPlan, _: u32, _: lir.LIR.CFStmt) Allocator.Error!void {}
 };
 
+/// Share only immutable storage. A static single definition can execute again
+/// in a loop: the view must not be live on entry to that definition. This is
+/// checked against the ultimate storage owner, including through view chains.
+fn planMemory(self: *Self, store: *const LirStore, stack: *StackPlan, params: LocalSpan, root: CFStmtId, ops: anytype) Allocator.Error!void {
+    const accesses = stack.sortedAccesses();
+    const entry = self.indexes.nodeOf(root).?;
+    const param_locals = store.getLocalSpan(params);
+    for (0..param_locals.len) |i| {
+        const local = GuardedList.at(param_locals, i);
+        self.view_states.items[@backingInt(local)] = .parameter;
+        if (self.rep(local) != .memory) continue;
+        const definitions = if (stack.localIndex(local)) |index| stack.values.items[index].definitions else 0;
+        if (definitions == 0 and ops.borrowParam(i)) {
+            self.places.items[@backingInt(local)] = .parameter;
+        }
+    }
+    for (self.planned.items) |id| {
+        const stmt = store.getCFStmt(id);
+        if (stmt == .join) {
+            const locals = store.getLocalSpan(stmt.join.params);
+            for (0..locals.len) |i| {
+                if (stack.localIndex(GuardedList.at(locals, i))) |index| stack.values.items[index].mutable = true;
+            }
+        } else if (stmt == .set_local) {
+            if (stack.localIndex(stmt.set_local.target)) |index| stack.values.items[index].mutable = true;
+        } else if (stmt == .init_uninitialized) {
+            if (stack.localIndex(stmt.init_uninitialized.target)) |index| stack.values.items[index].mutable = true;
+        }
+    }
+    for (self.planned.items) |id| {
+        const stmt = store.getCFStmt(id);
+        if (stmt != .assign_ref) continue;
+        const target = stmt.assign_ref.target;
+        if (self.rep(target) != .memory or self.view_states.items[@backingInt(target)] == .parameter) continue;
+        const view = ops.memoryView(stmt.assign_ref) orelse continue;
+        // A layout can also have an SSA carrier (Bool is a tag union). An
+        // addressed alias must materialize that value, not borrow its address.
+        if (self.rep(view.source) != .memory) continue;
+        const t = stack.localIndex(target).?;
+        const s = stack.localIndex(view.source).?;
+        if (stack.values.items[t].definitions != 1 or stack.values.items[t].mutable or
+            stack.values.items[s].definitions > 1 or stack.values.items[s].mutable) continue;
+        if (stack.values.items[s].definitions == 0 and self.view_states.items[@backingInt(view.source)] != .parameter) continue;
+        const span = self.value_accesses.items[t];
+        if (stack.liveIn(t, accesses[span.start..span.end], entry)) continue;
+        self.places.items[@backingInt(target)] = .{ .view = view };
+        self.view_states.items[@backingInt(target)] = .pending;
+    }
+    self.view_work.clearRetainingCapacity();
+    for (self.inventory.items) |local| {
+        if (self.view_states.items[@backingInt(local)] != .pending) continue;
+        var cursor = local;
+        while (self.view_states.items[@backingInt(cursor)] == .pending) {
+            self.view_states.items[@backingInt(cursor)] = .visiting;
+            try self.view_work.append(self.allocator, cursor);
+            cursor = self.places.items[@backingInt(cursor)].view.source;
+        }
+        if (self.view_states.items[@backingInt(cursor)] == .visiting) {
+            // A cyclic alias definition has no immutable storage origin.
+            for (self.view_work.items) |cyclic| {
+                self.places.items[@backingInt(cyclic)] = .slot;
+                self.view_states.items[@backingInt(cyclic)] = .resolved;
+            }
+            self.view_work.clearRetainingCapacity();
+            continue;
+        }
+        while (self.view_work.pop()) |target| {
+            const raw = @backingInt(target);
+            var view = self.places.items[raw].view;
+            if (self.place(view.source) == .view) {
+                const parent = self.place(view.source).view;
+                view.source = parent.source;
+                view.offset += parent.offset;
+            }
+            const source_index = stack.localIndex(view.source).?;
+            const target_index = stack.localIndex(target).?;
+            const source_span = self.value_accesses.items[source_index];
+            const target_span = self.value_accesses.items[target_index];
+            const target_accesses = accesses[target_span.start..target_span.end];
+            // Admission proved the owner has at most one static definition.
+            // Its node was inventoried once with the accesses: do not rescan
+            // every read of a wide, heavily projected owner for each view.
+            const snapshot_needed = if (source_span.definition) |definition|
+                stack.liveIn(target_index, target_accesses, definition)
+            else
+                false;
+            self.places.items[raw] = if (snapshot_needed) .slot else .{ .view = view };
+            self.view_states.items[raw] = .resolved;
+        }
+    }
+}
+
 /// Split the SSA locals into dominating and merged ones, and give every merge
 /// point the merged locals live on entry to it.
 /// The first `param_count` SSA locals are parameters.
-fn classify(self: *Self, store: *const LirStore, param_count: usize, root: CFStmtId, ops: anytype) Allocator.Error!void {
+fn classify(self: *Self, store: *const LirStore, params: LocalSpan, param_count: usize, root: CFStmtId, ops: anytype) Allocator.Error!void {
     var stack_plan = self.indexes.takePlan();
     defer self.indexes.keepPlan(&stack_plan);
     self.planned.clearRetainingCapacity();
@@ -800,10 +959,15 @@ fn classify(self: *Self, store: *const LirStore, param_count: usize, root: CFStm
     while (begin < accesses.len) {
         const value = accesses[begin].value;
         var end = begin;
-        while (end < accesses.len and accesses[end].value == value) : (end += 1) {}
-        self.value_accesses.items[value] = .{ .start = @intCast(begin), .end = @intCast(end) };
+        var definition: ?u32 = null;
+        while (end < accesses.len and accesses[end].value == value) : (end += 1) {
+            if (accesses[end].write) definition = accesses[end].node;
+        }
+        self.value_accesses.items[value] = .{ .start = @intCast(begin), .end = @intCast(end), .definition = definition };
         begin = end;
     }
+
+    try self.planMemory(store, &stack_plan, params, root, ops);
 
     const entry = self.indexes.nodeOf(root).?;
     var any_merged = false;
@@ -976,6 +1140,7 @@ fn noteAddressedOperands(self: *Self, store: *const LirStore, stmt: lir.LIR.CFSt
 
 const TestOps = struct {
     store: *const LirStore,
+    local_alias_views: bool = false,
 
     pub fn isCandidate(self: TestOps, local: LocalId) bool {
         return switch (self.store.getLocal(local).layout_idx) {
@@ -986,6 +1151,15 @@ const TestOps = struct {
 
     pub fn paramAccess(_: TestOps, _: usize) Access {
         return .value;
+    }
+
+    pub fn borrowParam(self: TestOps, _: usize) bool {
+        return self.local_alias_views;
+    }
+
+    pub fn memoryView(self: TestOps, assign: @FieldType(lir.LIR.CFStmt, "assign_ref")) ?View {
+        if (self.local_alias_views and assign.op.kind == .local and !self.isCandidate(assign.target)) return .{ .source = assign.op.source, .offset = 0 };
+        return null;
     }
 
     pub fn callAccess(_: TestOps, _: @FieldType(lir.LIR.CFStmt, "assign_call"), _: CallOperand) Access {
@@ -1162,6 +1336,12 @@ test "a local live into a shared continuation from two arms merges there" {
         pub fn paramAccess(self: @This(), index: usize) Access {
             return self.inner.paramAccess(index);
         }
+        pub fn borrowParam(self: @This(), index: usize) bool {
+            return self.inner.borrowParam(index);
+        }
+        pub fn memoryView(self: @This(), assign: @FieldType(lir.LIR.CFStmt, "assign_ref")) ?View {
+            return self.inner.memoryView(assign);
+        }
         pub fn callAccess(self: @This(), call: @FieldType(lir.LIR.CFStmt, "assign_call"), operand: CallOperand) Access {
             return self.inner.callAccess(call, operand);
         }
@@ -1174,4 +1354,62 @@ test "a local live into a shared continuation from two arms merges there" {
     try value_plan.plan(&store, try store.addLocalSpan(&.{c}), try store.addLocalSpan(&.{v}), body, SharedReturn{ .inner = .{ .store = &store }, .shared = ret });
     try std.testing.expectEqual(Rep.merged, value_plan.rep(v));
     try std.testing.expectEqualSlices(LocalId, &.{v}, value_plan.mergeLocals(ret));
+}
+
+test "issue 12505 memory aliases share immutable parameters but retain mutable snapshots" {
+    const gpa = std.testing.allocator;
+    var store = LirStore.init(gpa);
+    defer store.deinit();
+    // The test policy admits aliases of an addressable layout. Production
+    // admission uses committed struct and inline tag layouts instead.
+    const input = try store.addLocal(.{ .layout_idx = .str });
+    const replacement = try store.addLocal(.{ .layout_idx = .str });
+    const snapshot = try store.addLocal(.{ .layout_idx = .str });
+    const alias = try store.addLocal(.{ .layout_idx = .str });
+    const params = try store.addLocalSpan(&.{ input, replacement });
+    const frame = try store.addLocalSpan(&.{ snapshot, alias });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = alias } }, .test_fixture);
+    const read_snapshot = try store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = lir.LIR.RefOp.local(snapshot), .next = ret } }, .test_fixture);
+    const original = try store.addCFStmt(.{ .assign_ref = .{ .target = snapshot, .op = lir.LIR.RefOp.local(input), .next = read_snapshot } }, .test_fixture);
+    var plan_value = Self.init(gpa);
+    defer plan_value.deinit();
+    const ops = TestOps{ .store = &store, .local_alias_views = true };
+    try plan_value.plan(&store, params, frame, original, ops);
+    try std.testing.expect(plan_value.place(input) == .parameter);
+    try std.testing.expectEqual(input, plan_value.place(snapshot).view.source);
+    try std.testing.expectEqual(input, plan_value.place(alias).view.source);
+
+    // Replan the same local ids: snapshot must keep the old input bytes when
+    // input changes; the later alias can still share the snapshot's storage.
+    const mutate = try store.addCFStmt(.{ .set_local = .{ .target = input, .value = replacement, .mode = .replace_existing, .next = read_snapshot } }, .test_fixture);
+    const modified = try store.addCFStmt(.{ .assign_ref = .{ .target = snapshot, .op = lir.LIR.RefOp.local(input), .next = mutate } }, .test_fixture);
+    try plan_value.plan(&store, params, frame, modified, ops);
+    try std.testing.expect(plan_value.place(input) == .slot);
+    try std.testing.expect(plan_value.place(snapshot) == .slot);
+    try std.testing.expectEqual(snapshot, plan_value.place(alias).view.source);
+
+    // A parameter is initialized by the prologue even when its incoming
+    // value is unused. A body assignment may not turn its slot into a view.
+    const replace_parameter = try store.addCFStmt(.{ .assign_ref = .{ .target = input, .op = lir.LIR.RefOp.local(replacement), .next = original } }, .test_fixture);
+    try plan_value.plan(&store, params, frame, replace_parameter, ops);
+    try std.testing.expect(plan_value.place(input) == .slot);
+
+    // A call may read the snapshot while overwriting its former owner.
+    // Keeping those bytes separate also preserves the result's noalias ABI.
+    const callee_param = try store.addLocal(.{ .layout_idx = .str });
+    const callee = try store.addProcSpec(.{ .name = .fromRaw(1), .identity = lir.LIR.ProcIdentity.forTest(1), .args = try store.addLocalSpan(&.{callee_param}), .ret_layout = .str }, .none);
+    const overwrite = try store.addCFStmt(.{ .assign_call = .{ .target = input, .proc = callee, .args = try store.addLocalSpan(&.{snapshot}), .next = read_snapshot } }, .test_fixture);
+    const before_call = try store.addCFStmt(.{ .assign_ref = .{ .target = snapshot, .op = lir.LIR.RefOp.local(input), .next = overwrite } }, .test_fixture);
+    try plan_value.plan(&store, params, frame, before_call, ops);
+    try std.testing.expect(plan_value.place(input) == .slot);
+    try std.testing.expect(plan_value.place(snapshot) == .slot);
+    try std.testing.expectEqual(snapshot, plan_value.place(alias).view.source);
+
+    // Joining mutable storage also prevents treating the join's value as a
+    // permanently immutable origin, even when the join has no body writes.
+    var join_points = JoinPointIds{};
+    const join = try store.addCFStmt(.{ .join = .{ .id = join_points.fresh(), .params = try store.addLocalSpan(&.{snapshot}), .body = read_snapshot, .remainder = original } }, .test_fixture);
+    try plan_value.plan(&store, params, frame, join, ops);
+    try std.testing.expect(plan_value.place(snapshot) == .slot);
+    try std.testing.expect(plan_value.place(alias) == .slot);
 }

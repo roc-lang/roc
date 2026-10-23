@@ -162,10 +162,10 @@ main! = |_| {
 (inferred-types
 	(defs
 		(patt (type "Str => {}"))
-		(patt (type "({}) => {}"))
+		(patt (type "() => {}"))
 		(patt (type "_arg => [Ok({})]")))
 	(expressions
 		(expr (type "Str => {}"))
-		(expr (type "({}) => {}"))
+		(expr (type "() => {}"))
 		(expr (type "_arg => [Ok({})]"))))
 ~~~
