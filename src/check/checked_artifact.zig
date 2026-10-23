@@ -19239,22 +19239,36 @@ const EvidencePass = struct {
     /// The substitution one instantiation record applied to a scheme: for
     /// each quantified variable of `scheme_root` (in slot order) the checked
     /// type of its copy at that edge, or of the variable itself when the edge
-    /// shared it.
+    /// shared it. A type `renamings` renames is replaced by its copy.
     fn appendSiteSubstitution(
         self: *EvidencePass,
         scheme_root: Var,
         pairs: []const ModuleEnv.SchemeUsePair,
+        renamings: []const ModuleEnv.GeneratedCodecRenaming,
     ) Allocator.Error!artifact_serialize.Span {
         const identity_vars = try self.identityVarsForSchemeRoot(scheme_root);
         const start: u32 = @intCast(self.site_substitutions.items.len);
         try self.site_substitutions.ensureUnusedCapacity(self.allocator, identity_vars.len);
         for (identity_vars) |identity_var| {
             const root = self.types.resolveVar(identity_var).var_;
-            const edge_var = self.pairForResolved(pairs, root) orelse root;
+            const edge_var = self.renamedVar(renamings, self.pairForResolved(pairs, root) orelse root);
             self.site_substitutions.appendAssumeCapacity(self.checked_types.rootForSourceVar(self.module, edge_var) orelse
                 checkedArtifactInvariant("instantiated scheme variable type was not published", .{}));
         }
         return .{ .start = start, .len = @intCast(identity_vars.len) };
+    }
+
+    /// The copy `renamings` makes of `var_`'s type, or `var_` itself when it
+    /// renames none.
+    fn renamedVar(self: *EvidencePass, renamings: []const ModuleEnv.GeneratedCodecRenaming, var_: Var) Var {
+        if (renamings.len == 0) return var_;
+        const root = self.types.resolveVar(var_).var_;
+        for (renamings) |renaming| {
+            if (self.types.resolveVar(@fromBackingInt(@intCast(renaming.source_var))).var_ == root) {
+                return @fromBackingInt(@intCast(renaming.copy_var));
+            }
+        }
+        return var_;
     }
 
     /// Whether a variable of the scheme at `scheme_var` extends a tag row that
@@ -19575,7 +19589,10 @@ const EvidencePass = struct {
                             target,
                             call.dispatcher_ty,
                             evidence_var,
-                            call.callable_ty,
+                            .{
+                                .callable_ty = call.callable_ty,
+                                .renamings = module_env.generated_codec_renamings.items.items[source_derivation.renamings_start..][0..source_derivation.renamings_len],
+                            },
                             .derivation,
                         );
                         switch (self.evidence_nodes.items[@backingInt(node_id)].nested) {
@@ -20730,7 +20747,7 @@ const EvidencePass = struct {
         target: static_dispatch.MethodTarget,
         dispatcher_ty: ?CheckedTypeId,
         constraint_fn_var: ?Var,
-        contract_callable_ty: ?CheckedTypeId,
+        contract: ?ContractCallable,
         selection: MethodTargetSelection,
     ) Allocator.Error!static_dispatch.EvidenceNodeId {
         var frames = std.ArrayList(EvidenceRecordFrame).empty;
@@ -20741,7 +20758,7 @@ const EvidencePass = struct {
             }
             frames.deinit(self.allocator);
         }
-        switch (try self.beginEvidenceNode(target, dispatcher_ty, constraint_fn_var, contract_callable_ty, selection)) {
+        switch (try self.beginEvidenceNode(target, dispatcher_ty, constraint_fn_var, contract, selection)) {
             .done => |node_id| return node_id,
             .record => |frame| try frames.append(self.allocator, frame),
         }
@@ -20794,6 +20811,8 @@ const EvidencePass = struct {
         procedure_schema: ?ProcedureEvidenceSchema,
         scheme_root: Var,
         pairs: []const ModuleEnv.SchemeUsePair,
+        /// The renaming a generated codec contract's callable carries.
+        renamings: []const ModuleEnv.GeneratedCodecRenaming,
         params: std.ArrayListUnmanaged(EvidenceParam) = .empty,
         entries: std.ArrayListUnmanaged(static_dispatch.CheckedEvidence) = .empty,
         next: usize = 0,
@@ -20806,6 +20825,14 @@ const EvidencePass = struct {
         }
     };
 
+    /// The callable a generated codec contract names for one of its calls,
+    /// with the renaming the contract's snapshot applied. The call's recorded
+    /// substitution names the originals of the types the snapshot renamed.
+    const ContractCallable = struct {
+        callable_ty: CheckedTypeId,
+        renamings: []const ModuleEnv.GeneratedCodecRenaming,
+    };
+
     const EvidenceNodeStart = union(enum) {
         done: static_dispatch.EvidenceNodeId,
         /// The target's recorded nested evidence must be resolved first.
@@ -20815,7 +20842,7 @@ const EvidencePass = struct {
     fn finishEvidenceNode(self: *EvidencePass, frame: *const EvidenceRecordFrame) Allocator.Error!static_dispatch.EvidenceNodeId {
         const nested: RecordSiteSpans = .{
             .refs = try self.appendEvidenceRefs(frame.entries.items),
-            .subst = try self.appendSiteSubstitution(frame.scheme_root, frame.pairs),
+            .subst = try self.appendSiteSubstitution(frame.scheme_root, frame.pairs, frame.renamings),
         };
         if (frame.procedure_schema == .requires_record or frame.procedure_schema == .from_target) {
             const target_view = self.procedureEvidenceView(frame.target);
@@ -20841,13 +20868,14 @@ const EvidencePass = struct {
         target: static_dispatch.MethodTarget,
         dispatcher_ty: ?CheckedTypeId,
         constraint_fn_var: ?Var,
-        contract_callable_ty: ?CheckedTypeId,
+        contract: ?ContractCallable,
         selection: MethodTargetSelection,
     ) Allocator.Error!EvidenceNodeStart {
         if (target.kind == .structural) {
             checkedArtifactInvariant("structural method registry result reached the callable evidence-node graph", .{});
         }
-        const callable_ty = contract_callable_ty orelse if (constraint_fn_var) |fn_var|
+        const renamings: []const ModuleEnv.GeneratedCodecRenaming = if (contract) |named| named.renamings else &.{};
+        const callable_ty = if (contract) |named| named.callable_ty else if (constraint_fn_var) |fn_var|
             self.checked_types.rootForSourceVar(self.module, fn_var) orelse
                 checkedArtifactInvariant("checked direct evidence callable type was not published", .{})
         else
@@ -20877,6 +20905,7 @@ const EvidencePass = struct {
                 break :blk try self.appendSiteSubstitution(
                     @fromBackingInt(@intCast(record.scheme_root)),
                     module_env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len],
+                    renamings,
                 );
             } else .{};
             return .{ .done = try self.internEvidenceNode(.{
@@ -20938,6 +20967,7 @@ const EvidencePass = struct {
                 .procedure_schema = procedure_schema,
                 .scheme_root = @fromBackingInt(@intCast(record.scheme_root)),
                 .pairs = module_env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len],
+                .renamings = renamings,
             };
             errdefer frame.deinit(self.allocator);
             try self.enumerateParams(frame.scheme_root, &frame.params);
@@ -21120,7 +21150,7 @@ const EvidencePass = struct {
         // stores it. Either way the pairs name each quantified variable's copy.
         const spans: RecordSiteSpans = .{
             .refs = try self.appendEvidenceRefs(entries.items),
-            .subst = try self.appendSiteSubstitution(@fromBackingInt(@intCast(record.scheme_root)), pairs),
+            .subst = try self.appendSiteSubstitution(@fromBackingInt(@intCast(record.scheme_root)), pairs, &.{}),
         };
         if (key) |shared| try self.record_spans_by_substitution.put(self.allocator, shared, spans);
         return spans;
@@ -21453,7 +21483,7 @@ const EvidencePass = struct {
                 entries.appendAssumeCapacity(evidence);
             }
             const span = try self.appendEvidenceRefs(entries.items);
-            const subst = try self.appendSiteSubstitution(scope.scheme_var, &.{});
+            const subst = try self.appendSiteSubstitution(scope.scheme_var, &.{}, &.{});
             try self.site_seen.put(site_key, {});
             try self.site_evidence.append(self.allocator, .{
                 .key = site_key,
@@ -21537,7 +21567,7 @@ const EvidencePass = struct {
         }
 
         const span = try self.appendEvidenceRefs(entries.items);
-        const subst = try self.appendSiteSubstitution(@fromBackingInt(@intCast(record.scheme_root)), pairs);
+        const subst = try self.appendSiteSubstitution(@fromBackingInt(@intCast(record.scheme_root)), pairs, &.{});
         if (key) |shared| try self.procedure_value_spans_by_substitution.put(self.allocator, shared, .{ .refs = span, .subst = subst });
         try self.site_seen.put(site_key, {});
         try self.site_evidence.append(self.allocator, .{

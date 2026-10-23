@@ -36646,6 +36646,7 @@ const Probe = struct {
     waiting_predeclared_dispatch_uses_len: usize,
     generated_codec_derivations_len: usize,
     generated_codec_calls_len: usize,
+    generated_codec_renamings_len: usize,
     boundary_codec_derivations_len: usize,
     boundary_codec_calls_len: usize,
     codec_row_demands_len: usize,
@@ -36712,6 +36713,7 @@ const Probe = struct {
         self.check.waiting_predeclared_dispatch_uses.shrinkRetainingCapacity(self.waiting_predeclared_dispatch_uses_len);
         self.check.cir.generated_codec_derivations.items.shrinkRetainingCapacity(self.generated_codec_derivations_len);
         self.check.cir.generated_codec_calls.items.shrinkRetainingCapacity(self.generated_codec_calls_len);
+        self.check.cir.generated_codec_renamings.items.shrinkRetainingCapacity(self.generated_codec_renamings_len);
         self.check.boundary_codec_derivations.shrinkRetainingCapacity(self.boundary_codec_derivations_len);
         self.check.boundary_codec_calls.shrinkRetainingCapacity(self.boundary_codec_calls_len);
         self.check.codec_row_demands.shrinkRetainingCapacity(self.codec_row_demands_len);
@@ -36785,6 +36787,7 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
     const waiting_predeclared_dispatch_uses_len = self.waiting_predeclared_dispatch_uses.items.len;
     const generated_codec_derivations_len = self.cir.generated_codec_derivations.items.items.len;
     const generated_codec_calls_len = self.cir.generated_codec_calls.items.items.len;
+    const generated_codec_renamings_len = self.cir.generated_codec_renamings.items.items.len;
     const boundary_codec_derivations_len = self.boundary_codec_derivations.items.len;
     const boundary_codec_calls_len = self.boundary_codec_calls.items.len;
     const codec_row_demands_len = self.codec_row_demands.items.len;
@@ -36827,6 +36830,7 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
         .waiting_predeclared_dispatch_uses_len = waiting_predeclared_dispatch_uses_len,
         .generated_codec_derivations_len = generated_codec_derivations_len,
         .generated_codec_calls_len = generated_codec_calls_len,
+        .generated_codec_renamings_len = generated_codec_renamings_len,
         .boundary_codec_derivations_len = boundary_codec_derivations_len,
         .boundary_codec_calls_len = boundary_codec_calls_len,
         .codec_row_demands_len = codec_row_demands_len,
@@ -53452,6 +53456,16 @@ fn recordGeneratedCodecDerivationSnapshot(
     instantiator.rank_behavior = .ignore_rank;
     instantiator.polarity_var_behavior = .preserve;
     const copied_root = try instantiator.instantiateVar(snapshot_root);
+    // The snapshot renames every type that holds a variable. Its calls'
+    // scheme substitutions were recorded against the originals, so publish
+    // the renaming for them to be read in the snapshot's terms.
+    var renamings = std.ArrayList(ModuleEnv.GeneratedCodecRenaming).empty;
+    defer renamings.deinit(self.gpa);
+    for (ground_marks.order.items, ground_marks.ground.items) |source, is_ground| {
+        if (is_ground) continue;
+        const copy = instantiator.var_map.get(source) orelse continue;
+        try renamings.append(self.gpa, .{ .source_var = @backingInt(source), .copy_var = @backingInt(copy) });
+    }
     var copied_iter = instantiator.var_map.valueIterator();
     while (copied_iter.next()) |copied| {
         if (shared_copies.contains(copied.*)) continue;
@@ -53515,6 +53529,7 @@ fn recordGeneratedCodecDerivationSnapshot(
         copied_vars[5],
         copied_vars[6],
         copied_calls.items,
+        renamings.items,
     );
 }
 
