@@ -1714,6 +1714,129 @@ const core_tests = [_]TestCase{
         .expected = .{ .crash = {} },
     },
 
+    // List.keep_if compacts a unique list in place. Kept items move down in
+    // their original order and the final truncation releases the dropped ones.
+    .{
+        .name = "inspect: List.keep_if in place keeps order",
+        .source = "List.keep_if(List.concat([1, 2, 3], [4, 5, 6]), |x| x != 2 and x != 5)",
+        .expected = .{ .inspect_str = "[1.0, 3.0, 4.0, 6.0]" },
+    },
+    .{
+        .name = "inspect: List.keep_if in place keeps every item",
+        .source = "List.keep_if(List.concat([1, 2], [3]), |_| True)",
+        .expected = .{ .inspect_str = "[1.0, 2.0, 3.0]" },
+    },
+    .{
+        .name = "inspect: List.keep_if in place keeps no item",
+        .source = "List.keep_if(List.concat([1, 2], [3]), |_| False)",
+        .expected = .{ .inspect_str = "[]" },
+    },
+    .{
+        .name = "inspect: List.keep_if over emptied unique list",
+        .source = "List.keep_if(List.drop_first(List.concat([1], [2]), 2), |_| True)",
+        .expected = .{ .inspect_str = "[]" },
+    },
+    // A unique seamless slice must not be compacted in place, because its
+    // buffer points into the middle of an allocation.
+    .{
+        .name = "inspect: List.keep_if over unique seamless slice",
+        .source = "List.keep_if(List.sublist(List.concat([1, 2], [3, 4]), { start: 1, len: 3 }), |x| x != 3)",
+        .expected = .{ .inspect_str = "[2.0, 4.0]" },
+    },
+    .{
+        .name = "inspect: List.keep_if leaves shared list unchanged",
+        .source =
+        \\{
+        \\    a = List.concat([1, 2], [3, 4])
+        \\    b = List.keep_if(a, |x| x != 2)
+        \\    (a, b)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "([1.0, 2.0, 3.0, 4.0], [1.0, 3.0, 4.0])" },
+    },
+    // The predicate captures the list, which holds its refcount above 1. An
+    // in-place compaction here would let the predicate see moved items.
+    .{
+        .name = "inspect: List.keep_if predicate capturing the filtered list",
+        .source =
+        \\{
+        \\    a = List.concat([5, 7], [5, 9])
+        \\    List.keep_if(a, |x| x != (a.get(0) ?? 0) and a.len() == 4)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "[7.0, 9.0]" },
+    },
+    .{
+        .name = "inspect: List.keep_if in place over unique list of heap strings",
+        .source = "List.keep_if(List.concat([Str.repeat(\"x\", 30), Str.repeat(\"y\", 30)], [Str.repeat(\"z\", 30)]), |s| !Str.starts_with(s, \"y\"))",
+        .expected = .{ .inspect_str = "[\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\", \"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\"]" },
+    },
+    .{
+        .name = "inspect: List.keep_if leaves shared string list unchanged",
+        .source =
+        \\{
+        \\    a = List.concat([Str.repeat("x", 30)], [Str.repeat("y", 30)])
+        \\    b = List.keep_if(a, |s| Str.starts_with(s, "y"))
+        \\    (a, b)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "([\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\", \"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\"], [\"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\"])" },
+    },
+    .{
+        .name = "inspect: List.drop_if in place keeps order",
+        .source = "List.drop_if(List.concat([1, 2, 3], [4, 5, 6]), |x| x == 2 or x == 5)",
+        .expected = .{ .inspect_str = "[1.0, 3.0, 4.0, 6.0]" },
+    },
+    .{
+        .name = "inspect: List.keep_oks and List.keep_errs keep order",
+        .source =
+        \\{
+        \\    a = List.concat([Str.repeat("x", 30), Str.repeat("y", 30)], [Str.repeat("z", 30)])
+        \\    oks = List.keep_oks(a, |s| if Str.starts_with(s, "y") { Err(s) } else { Ok(s) })
+        \\    errs = List.keep_errs(a, |s| if Str.starts_with(s, "y") { Err(s) } else { Ok(s) })
+        \\    (oks, errs)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "([\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\", \"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\"], [\"yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy\"])" },
+    },
+    // Two list literals and the concat allocate; the in-place keep_if adds
+    // nothing. The copy path would allocate one more and fail this ceiling.
+    .{
+        .name = "allocation - List.keep_if compacts unique list in place",
+        .source =
+        \\{
+        \\    kept = List.keep_if(List.concat([1, 2, 3], [4, 5, 6]), |x| x != 2 and x != 5)
+        \\    if kept.len() == 4 and kept.first() == Ok(1) and kept.last() == Ok(6) {
+        \\        "ok"
+        \\    } else {
+        \\        "bad"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .allocations_at_most = .{
+            .output = "ok",
+            .max_allocations = 3,
+        } },
+    },
+    .{
+        .name = "allocation - List.keep_if compacts unique list in place, optimized",
+        .source =
+        \\{
+        \\    kept = List.keep_if(List.concat([1, 2, 3], [4, 5, 6]), |x| x != 2 and x != 5)
+        \\    if kept.len() == 4 and kept.first() == Ok(1) and kept.last() == Ok(6) {
+        \\        "ok"
+        \\    } else {
+        \\        "bad"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .allocations_at_most = .{
+            .output = "ok",
+            .max_allocations = 3,
+            .optimized = true,
+        } },
+    },
+
     // Basic expressions and control flow
     .{ .name = "inspect: integer literal", .source = "42", .expected = .{ .inspect_str = "42.0" } },
     .{ .name = "inspect: negative integer literal", .source = "-1234", .expected = .{ .inspect_str = "-1234.0" } },

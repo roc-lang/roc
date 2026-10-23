@@ -4720,17 +4720,37 @@ Builtin :: [].{
 		## list unaltered.
 		##
 		keep_if : List(a), (a -> Bool) -> List(a)
-		keep_if = |list, predicate|
-			List.fold(
-				list,
-				[],
-				|acc, item|
-					if predicate(item) {
-						List.concat(acc, [item])
-					} else {
-						acc
-					},
-			)
+		keep_if = |list, predicate| {
+			prepared = list_map_prepare_reuse(list)
+			len = prepared.len()
+			match list_owned_unique(prepared) {
+				1 => {
+					# Swap each kept item down to the end of the kept prefix, so the
+					# kept items stay in order and the dropped ones collect behind
+					# them for drop_last to release.
+					var $out = prepared
+					var $kept = 0
+					var $index = 0
+					while $index < len {
+						if predicate(list_get_unsafe($out, $index)) {
+							$out = list_swap_unsafe($out, $kept, $index)
+							$kept = $kept + 1
+						}
+						$index = $index + 1
+					}
+					List.drop_last($out, len - $kept)
+				}
+				_ => {
+					var $new_list = List.with_capacity(len)
+					for item in prepared {
+						if predicate(item) {
+							$new_list = list_append_unsafe($new_list, item)
+						}
+					}
+					$new_list
+				}
+			}
+		}
 
 		## Run the given function on each item of a list, and return all the
 		## items for which the function returned `Bool.False`.
@@ -4742,17 +4762,7 @@ Builtin :: [].{
 		## `List.drop_if` has the same performance characteristics as [List.keep_if].
 		## See its documentation for details on those characteristics!
 		drop_if : List(a), (a -> Bool) -> List(a)
-		drop_if = |list, predicate|
-			List.fold(
-				list,
-				[],
-				|acc, item|
-					if predicate(item) {
-						acc
-					} else {
-						List.concat(acc, [item])
-					},
-			)
+		drop_if = |list, predicate| List.keep_if(list, |item| !predicate(item))
 
 		## Run the given function on each item of a list, and return a list of
 		## the values it wrapped in `Ok`. Items the function maps to `Err` are
@@ -4761,16 +4771,16 @@ Builtin :: [].{
 		## expect [1.I64, 2, 3, 4].keep_oks(|n| if n.is_even() { Ok(n) } else { Err({}) }) == [2, 4]
 		## ```
 		keep_oks : List(before), (before -> Try(after, _err)) -> List(after)
-		keep_oks = |list, transform|
-			List.fold(
-				list,
-				[],
-				|acc, item|
-					match transform(item) {
-						Ok(after) => List.concat(acc, [after])
-						Err(_) => acc
-					},
-			)
+		keep_oks = |list, transform| {
+			var $out = List.with_capacity(list.len())
+			for item in list {
+				$out = match transform(item) {
+					Ok(after) => list_append_unsafe($out, after)
+					Err(_) => $out
+				}
+			}
+			$out
+		}
 
 		## Run the given function on each item of a list, and return a list of
 		## the values it wrapped in `Err`. Items the function maps to `Ok` are
@@ -4779,16 +4789,16 @@ Builtin :: [].{
 		## expect [1.I64, 2, 3, 4].keep_errs(|n| if n.is_even() { Ok(n) } else { Err(n) }) == [1, 3]
 		## ```
 		keep_errs : List(before), (before -> Try(_ok, after)) -> List(after)
-		keep_errs = |list, transform|
-			List.fold(
-				list,
-				[],
-				|acc, item|
-					match transform(item) {
-						Err(after) => List.concat(acc, [after])
-						Ok(_) => acc
-					},
-			)
+		keep_errs = |list, transform| {
+			var $out = List.with_capacity(list.len())
+			for item in list {
+				$out = match transform(item) {
+					Err(after) => list_append_unsafe($out, after)
+					Ok(_) => $out
+				}
+			}
+			$out
+		}
 
 		## Run the given function on each item of a list, and return the
 		## number of items for which the function returned `Bool.True`.
