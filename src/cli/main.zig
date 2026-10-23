@@ -20069,7 +20069,7 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
                 ),
                 .private_type_in_public_api => try std.fmt.allocPrint(
                     ctx.arena,
-                    "The {s} package's public API references the type `{s}`, which is not itself part of the exposed API.",
+                    "The {s} package's public API references the type `{s}`, which is not itself part of the exposed API.\n\nTip: Expose the module that declares it, or give it a public name with a type alias in an exposed module.",
                     .{ side, info.detail },
                 ),
             };
