@@ -49921,6 +49921,22 @@ fn derivedParseSupport(self: *Self, root: DerivedParseQuery) Allocator.Error!Der
     return support;
 }
 
+/// Queue one storage segment of a tag union's row: its payloads and the rest
+/// of the row. Whether the whole union has any tag is a property of the
+/// logical union, decided once at its head, so a segment may have none.
+fn pushDerivedParseTagRowSegment(
+    self: *Self,
+    segment: types_mod.TagUnion,
+    pending: *std.ArrayListUnmanaged(DerivedParseQuery),
+) Allocator.Error!void {
+    try pending.append(self.gpa, .{ .tag_ext = segment.ext });
+    for (self.types.getTagsSlice(segment.tags).items(.args)) |tag_args_range| {
+        for (self.types.sliceVars(tag_args_range)) |tag_arg| {
+            try pending.append(self.gpa, .{ .shape = tag_arg });
+        }
+    }
+}
+
 /// The query's own answer; positions it depends on go on `pending`.
 fn expandDerivedParseQuery(
     self: *Self,
@@ -49973,7 +49989,10 @@ fn expandDerivedParseQuery(
         .tag_ext => |var_| return switch (self.types.resolveThroughAliases(var_).desc.content) {
             .structure => |structure| switch (structure) {
                 .empty_tag_union => .supported,
-                .tag_union => try self.expandDerivedParseQuery(.{ .flat = structure }, pending),
+                .tag_union => |segment| blk: {
+                    try self.pushDerivedParseTagRowSegment(segment, pending);
+                    break :blk .supported;
+                },
                 .record,
                 .tuple,
                 .nominal_type,
@@ -50006,12 +50025,7 @@ fn expandDerivedParseQuery(
                     .supported => {},
                     .unsupported, .unresolved => |support| return support,
                 }
-                try pending.append(self.gpa, .{ .tag_ext = tag_union.ext });
-                for (self.types.getTagsSlice(tag_union.tags).items(.args)) |tag_args_range| {
-                    for (self.types.sliceVars(tag_args_range)) |tag_arg| {
-                        try pending.append(self.gpa, .{ .shape = tag_arg });
-                    }
-                }
+                try self.pushDerivedParseTagRowSegment(tag_union, pending);
                 return .supported;
             },
             .tuple => |tuple| {
@@ -50408,6 +50422,22 @@ fn derivedEncodeSupport(self: *Self, root: DerivedEncodeQuery) Allocator.Error!D
     return support;
 }
 
+/// Queue one storage segment of a tag union's row: its payloads and the rest
+/// of the row. Whether the whole union has any tag is a property of the
+/// logical union, decided once at its head, so a segment may have none.
+fn pushDerivedEncodeTagRowSegment(
+    self: *Self,
+    segment: types_mod.TagUnion,
+    pending: *std.ArrayListUnmanaged(DerivedEncodeQuery),
+) Allocator.Error!void {
+    try pending.append(self.gpa, .{ .tag_ext = segment.ext });
+    for (self.types.getTagsSlice(segment.tags).items(.args)) |tag_args_range| {
+        for (self.types.sliceVars(tag_args_range)) |tag_arg| {
+            try pending.append(self.gpa, .{ .shape = tag_arg });
+        }
+    }
+}
+
 /// The query's own answer; positions it depends on go on `pending`.
 fn expandDerivedEncodeQuery(
     self: *Self,
@@ -50457,7 +50487,10 @@ fn expandDerivedEncodeQuery(
         .tag_ext => |var_| return switch (self.types.resolveThroughAliases(var_).desc.content) {
             .structure => |structure| switch (structure) {
                 .empty_tag_union => .supported,
-                .tag_union => try self.expandDerivedEncodeQuery(.{ .flat = structure }, pending),
+                .tag_union => |segment| blk: {
+                    try self.pushDerivedEncodeTagRowSegment(segment, pending);
+                    break :blk .supported;
+                },
                 .record,
                 .tuple,
                 .nominal_type,
@@ -50485,12 +50518,7 @@ fn expandDerivedEncodeQuery(
                     .supported => {},
                     .unsupported, .unresolved => |support| return support,
                 }
-                try pending.append(self.gpa, .{ .tag_ext = tag_union.ext });
-                for (self.types.getTagsSlice(tag_union.tags).items(.args)) |tag_args_range| {
-                    for (self.types.sliceVars(tag_args_range)) |tag_arg| {
-                        try pending.append(self.gpa, .{ .shape = tag_arg });
-                    }
-                }
+                try self.pushDerivedEncodeTagRowSegment(tag_union, pending);
                 return .supported;
             },
             .tuple => |tuple| {
