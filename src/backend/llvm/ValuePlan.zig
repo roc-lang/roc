@@ -1407,7 +1407,8 @@ test "issue 12505 memory aliases share immutable parameters but retain mutable s
 
     // Joining mutable storage also prevents treating the join's value as a
     // permanently immutable origin, even when the join has no body writes.
-    const join = try store.addCFStmt(.{ .join = .{ .id = @fromBackingInt(0), .params = try store.addLocalSpan(&.{snapshot}), .body = read_snapshot, .remainder = original } }, .test_fixture);
+    var join_points = JoinPointIds{};
+    const join = try store.addCFStmt(.{ .join = .{ .id = join_points.fresh(), .params = try store.addLocalSpan(&.{snapshot}), .body = read_snapshot, .remainder = original } }, .test_fixture);
     try plan_value.plan(&store, params, frame, join, ops);
     try std.testing.expect(plan_value.place(snapshot) == .slot);
     try std.testing.expect(plan_value.place(alias) == .slot);

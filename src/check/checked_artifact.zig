@@ -38802,7 +38802,7 @@ test "issue 12505 named application retains owner when substitution grows payloa
         const generic = try appendExplicitCheckedTypePayload(allocator, &names, &store, if (nominal) .{ .nominal = .{
             .name = name,
             .origin_module = origin,
-            .owner_module = owner,
+            .owner_module = owner.digest(),
             .source_decl = 1,
             .builtin = null,
             .is_opaque = true,
@@ -38812,7 +38812,7 @@ test "issue 12505 named application retains owner when substitution grows payloa
         } } else .{ .alias = .{
             .name = name,
             .origin_module = origin,
-            .owner_module = owner,
+            .owner_module = owner.digest(),
             .source_decl = 1,
             .backing = backing,
             .args = args,

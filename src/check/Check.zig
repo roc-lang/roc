@@ -52014,9 +52014,11 @@ test "issue 12505 dispatch replay compares transparent aliases by their backing 
     const ident = types_mod.TypeIdent{ .ident_idx = try checker.cir.getIdentStore().insert(gpa, Ident.for_text("State")) };
     const backing = try checker.types.freshFromContent(.{ .structure = .empty_record });
     const other_backing = try checker.types.freshFromContent(.{ .structure = .empty_tag_union });
-    const first = try checker.types.freshFromContent(try checker.types.mkAlias(ident, backing, &.{}, @fromBackingInt(0)));
-    const second = try checker.types.freshFromContent(try checker.types.mkAlias(ident, backing, &.{}, @fromBackingInt(1)));
-    const different = try checker.types.freshFromContent(try checker.types.mkAlias(ident, other_backing, &.{}, @fromBackingInt(1)));
+    const local_origin = checker.cir.selfModuleIdentity();
+    const foreign_origin = try checker.cir.internModuleIdentity(&(@as(base.ModuleIdentity.Hash, @splat(0x5A))), ident.ident_idx);
+    const first = try checker.types.freshFromContent(try checker.types.mkAlias(ident, backing, &.{}, local_origin));
+    const second = try checker.types.freshFromContent(try checker.types.mkAlias(ident, backing, &.{}, foreign_origin));
+    const different = try checker.types.freshFromContent(try checker.types.mkAlias(ident, other_backing, &.{}, foreign_origin));
     var expected: std.ArrayListUnmanaged(u8) = .empty;
     defer expected.deinit(gpa);
     var actual: std.ArrayListUnmanaged(u8) = .empty;
