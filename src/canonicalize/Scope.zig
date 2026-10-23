@@ -429,7 +429,15 @@ fn currentCollisionDecision(existing: TypeBinding, incoming: TypeBindingInput) T
             .external_nominal => |existing_external| TypeBindingDecision{ .replaced_current_external = existing_external },
             .local_nominal, .local_alias, .local_where_alias, .associated_nominal => TypeBindingDecision{ .redeclared_current = existing },
         },
-        .associated_nominal => TypeBindingDecision{ .redeclared_current = existing },
+        .associated_nominal => switch (existing) {
+            // A nested type's unqualified name takes precedence over the same
+            // name the compiler auto-imports from its baked `Builtin`.
+            .external_nominal => |existing_external| if (existing_external.is_compiler_builtin)
+                TypeBindingDecision{ .replaced_current_external = existing_external }
+            else
+                TypeBindingDecision{ .redeclared_current = existing },
+            .local_nominal, .local_alias, .local_where_alias, .associated_nominal => TypeBindingDecision{ .redeclared_current = existing },
+        },
     };
 }
 

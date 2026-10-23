@@ -13,10 +13,23 @@ handleSuccess : Foo.Try -> Str
 handleSuccess = |res| "success"
 ~~~
 # EXPECTED
+BUILTIN TYPE SHADOWED - nominal_associated_in_patterns.md:2:5:2:40
 UNUSED VARIABLE - nominal_associated_in_patterns.md:6:18:6:21
 # PROBLEMS
 ~~~clojure
 (reports
+	(report
+		(severity warning)
+		(title "Builtin Type Shadowed")
+		(region (start 2 5) (end 2 40))
+		(headline
+			(text "The type ")
+			(annotated symbol-unqualified "Try")
+			(text " shadows a builtin type."))
+		(document
+			(reflow "This may make the builtin type inaccessible in this scope.")
+			(line-break)
+			(source-region (file "nominal_associated_in_patterns.md") (start 2 5) (end 2 40) (annotation warning) (line-text "    Try := [Success(U64), Failure(Str)]"))))
 	(report
 		(severity warning)
 		(title "Unused Variable")
