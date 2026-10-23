@@ -103,9 +103,9 @@ result = poly() == poly()
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "({}) -> _ret"))
+		(patt (type "() -> _ret"))
 		(patt (type "Bool")))
 	(expressions
-		(expr (type "({}) -> _ret"))
+		(expr (type "() -> _ret"))
 		(expr (type "Bool"))))
 ~~~

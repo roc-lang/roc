@@ -316,21 +316,21 @@ test "issue 10296: single quote literals do not emit defaulted warning" {
     const source =
         \\x = || 'M' == 'M'
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "({}) -> Bool");
+    try checkTypesModule(source, .{ .pass = .last_def }, "() -> Bool");
 }
 
 test "issue 10296: single quote literal compared to number literal without warning" {
     const source =
         \\y = || 'M' == 1
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "({}) -> Bool");
+    try checkTypesModule(source, .{ .pass = .last_def }, "() -> Bool");
 }
 
 test "issue 10296: single quote literal compared to fractional number without warning" {
     const source =
         \\z = || 'M' == 1.5
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "({}) -> Bool");
+    try checkTypesModule(source, .{ .pass = .last_def }, "() -> Bool");
 }
 
 test "check type - is_eq operands must have same type - I64 eq I32 should fail" {
@@ -6967,8 +6967,8 @@ test "check type - effectful zero-arg function annotation" {
     // Expected: zero-arg effectful function returning empty record
     // If the parser bug exists, this would fail with TYPE MISMATCH because:
     // - annotation parses as: (()) => {} (one empty-tuple arg)
-    // - lambda infers as: ({}) -> {} (zero args, pure)
-    try checkTypesModule(source, .{ .pass = .last_def }, "({}) => {}");
+    // - lambda infers as: () -> {} (zero args, pure)
+    try checkTypesModule(source, .{ .pass = .last_def }, "() => {}");
 }
 
 test "check type - pure zero-arg function annotation" {
@@ -6979,7 +6979,7 @@ test "check type - pure zero-arg function annotation" {
         \\foo = || {}
     ;
     // Expected: zero-arg pure function returning empty record
-    try checkTypesModule(source, .{ .pass = .last_def }, "({}) -> {}");
+    try checkTypesModule(source, .{ .pass = .last_def }, "() -> {}");
 }
 
 test "qualified imports don't produce MODULE NOT FOUND during canonicalization" {
@@ -9070,7 +9070,7 @@ test "check type - polarity - output is inferred as open" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "mk_my_tag", .expected = "({}) -> [MyTag]" },
+            .{ .def = "mk_my_tag", .expected = "() -> [MyTag]" },
         },
     );
 }
