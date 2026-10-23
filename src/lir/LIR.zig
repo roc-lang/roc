@@ -2081,11 +2081,16 @@ pub const LirProcSpec = struct {
     /// content (`Mono.FnTemplate.site_identity`): its identity together with
     /// its module's content key, which names its code. Cached code of the
     /// procedure is taken and placed only under an equal code key; a null key
-    /// means the identity names the code. Code compiled against an earlier
-    /// body of the procedure calls it by identity, so ARC pins its signature
-    /// to the one its types determine. Set only in a program using the
-    /// object cache.
+    /// means the identity names the code. Set in every program, whether or
+    /// not it uses the object cache.
     code_key: ?[32]u8 = null,
+    /// A procedure with a code key that code without one can call: a member
+    /// of a lambda set in such a procedure's signature, or an app function
+    /// such a procedure's code reaches. That code keeps its identity across
+    /// an edit of this procedure's body, so cached copies of it call this
+    /// procedure's current body; ARC pins its base signature to the one its
+    /// types determine (`Lowerer.markStableSignatures`).
+    stable_signature: bool = false,
     /// The Monotype function this procedure lowers, which keys the producer's
     /// summary of the compile-time roots its code reads
     /// (`SpecComptimeReads.fnReads`); null for a procedure no Monotype

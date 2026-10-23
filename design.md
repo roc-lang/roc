@@ -217,7 +217,9 @@ build reads them from. Nothing else decides a byte of it: not what the dev
 store, recorded program outputs, compile-time packs or discovery summaries
 hold, not thread scheduling or timing, not directory listing order or file
 times. Every cache other than the optimization state is transparent, so a
-hit produces exactly what a miss would have. The store lives in a folder of
+hit produces exactly what a miss would have, and a command that uses no cache
+at all (`--no-cache`) produces exactly what one with an empty optimization
+state does. The store lives in a folder of
 the compiler build (`compat-<id>`), so compilers built differently have
 separate optimization states, and two machines compiling the same source
 produce different dev executables when their optimization histories
@@ -806,9 +808,23 @@ callee exactly when it reaches the entry. A splice never follows a symbolic
 reference to a procedure the program compiles itself, so the entry calls the
 program's current code of each closure it receives. Because such code was compiled
 against an earlier body of the procedures it calls by identity, ARC pins
-every procedure with a code key to the signature its types determine (every
+every stable procedure to the signature its types determine (every
 parameter owned except one holding a demand hole, which is borrowed; the
-return owned; no return uniqueness). An entry whose code reaches the
+return owned; no return uniqueness). A procedure with a code key is stable
+(`LIR.LirProcSpec.stable_signature`) when code without one can call it: it
+is a member of a lambda set in the signature of a procedure without a code
+key, or an app function such a procedure's code reaches. These are exactly
+the procedures a program taking that procedure from a pack lowers for it,
+and they follow from the program's types and source, so every program finds
+the same ones whatever it took from a pack. Every other procedure with a code
+key is called only by code compiled with its current body, whose code key
+changes with that body, so ARC solves its signature and variants like any
+other procedure's. A stable procedure keeps its outcome variant ("Outcome-
+Conditioned Argument Restitution") for callers with a code key; a caller
+without one calls its pinned base. A variant of a procedure with a code key
+has a code key derived from it, since the variant's code is the source's.
+Every program gives its site-named procedures code keys, whether or not it
+uses the object cache. An entry whose code reaches the
 app from outside it (`Lifted.Program.appCalleesReachedBy`) is offered under
 its identity only, never under a reservation-time key, and a program that
 takes it lowers every app function it reaches as a served callee of the
@@ -20588,7 +20604,8 @@ before solving and never weakened:
 - hosted procs: every refcounted arg owned by the host, result owned. This
   keeps the LirImage And Hosted Functions contract unchanged.
 - erased-callable procs (`ProcAbi.erased_callable`): all-owned, as above.
-- code-keyed procs (`LIR.LirProcSpec.code_key`): all-owned, as above.
+- stable procs (`LIR.LirProcSpec.stable_signature`): all-owned, as above;
+  their outcome variants remain available to callers with a code key.
 - a parameter holding a demand hole, in every pinned signature: borrowed
   ("Specialization By Demand").
 - low-level ops: each concrete operation's `RcEffect` is its signature; it is
@@ -21245,7 +21262,12 @@ positions whose exact entry units are present again after that outcome. The
 rows cover every normally returned discriminant admitted by the signature;
 an absent or incomplete span means that the procedure has no restitution
 capability. Pinned, hosted, erased, dictionary-dispatched, bodyless, and
-address-escaping procedures never carry restitution rows.
+address-escaping procedures never carry restitution rows, except a procedure
+pinned only because it is stable (`LIR.LirProcSpec.stable_signature`): its
+body is the program's, so callers compiled with that body, which are exactly
+the callers with a code key, may demand its outcome variant
+(`Solution.outcomeSpanForCall`), while every other caller uses its pinned
+base.
 
 The initial closed capability is deliberately exact and total. It applies only
 to a direct Roc procedure whose committed return layout is a top-level tag
