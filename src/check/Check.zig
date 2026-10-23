@@ -1232,11 +1232,11 @@ scratch_replay_matches: std.ArrayListUnmanaged(u32) = .empty,
 link_var_map: collections.DenseMap(Var, Var),
 link_scratch_pairs: std.ArrayListUnmanaged(ModuleEnv.SchemeUsePair) = .empty,
 link_scratch_owned: std.ArrayListUnmanaged(Var) = .empty,
-link_new_copies: std.ArrayListUnmanaged(SavedCopy) = .empty,
+link_new_copies: std.ArrayListUnmanaged(LinkedCopy) = .empty,
 /// Uses linked inside the current probes, with the copies their links made,
 /// registered when the outermost probe commits.
 probe_links: std.ArrayListUnmanaged(ProbeLink) = .empty,
-probe_link_copies: std.ArrayListUnmanaged(SavedCopy) = .empty,
+probe_link_copies: std.ArrayListUnmanaged(LinkedCopy) = .empty,
 /// Schemes one of whose uses settled as a replay source would: only their
 /// uses encode a shape.
 use_replayable_schemes: collections.DenseMapUnmanaged(Var, void) = .empty,
@@ -2316,9 +2316,16 @@ const AmbiguityCandidate = struct {
     /// nested closure bodies remain false because their invocation is still
     /// outside the checked body.
     requires_current_resolution: bool,
+    position: Position,
     /// Set once the candidate has been judged (either verdict or acquittal) so
     /// later events and the end-of-check residual pass skip it.
     judged: bool = false,
+
+    /// Where the receiver stands in the type that produced it. A row tail is a
+    /// record or tag union's extension: when nothing pins it, its row default
+    /// closes it to the empty row, which discharges `is_eq` and `to_hash`
+    /// (design.md "Derived Equality And Hashing Over Open Rows").
+    const Position = enum(u8) { value, row_tail };
 
     const Source = enum(u8) {
         /// The constraint was created directly at a dispatch expression the
@@ -2540,6 +2547,14 @@ const ProbeLink = struct {
 const SavedCopy = struct {
     old: Var,
     fresh: Var,
+};
+
+/// One variable linking a use's deferred callables copied, with where the
+/// link placed the copy.
+const LinkedCopy = struct {
+    old: Var,
+    fresh: Var,
+    position: AmbiguityCandidate.Position,
 };
 
 /// The instantiation state linking a use's deferred callables restores, so
@@ -2931,6 +2946,7 @@ fn registerInstantiatedSchemeRequirement(
     requirement: InstantiatedSchemeDispatchRequirement,
     instantiation_expr: ?CIR.Expr.Idx,
     parent_constraint_fn_var: ?Var,
+    receiver_position: AmbiguityCandidate.Position,
     env: *Env,
 ) Allocator.Error!void {
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{requirement.constraint});
@@ -2968,6 +2984,7 @@ fn registerInstantiatedSchemeRequirement(
         requirement.receiver_var,
         .instantiation,
         instantiation_expr,
+        receiver_position,
     );
     try self.recordSchemeRequirementCandidate(
         requirement.receiver_var,
@@ -2984,6 +3001,7 @@ fn registerInstantiatedAttachedDispatch(
     constraints: StaticDispatchConstraint.SafeList.Range,
     instantiation_expr: ?CIR.Expr.Idx,
     owner_group_index: ?u32,
+    receiver_position: AmbiguityCandidate.Position,
 ) Allocator.Error!void {
     try self.instantiation_dispatchers.append(self.gpa, .{
         .dispatcher_var = receiver_var,
@@ -2991,7 +3009,7 @@ fn registerInstantiatedAttachedDispatch(
         .instantiation_expr = instantiation_expr,
         .owner_group_index = owner_group_index,
     });
-    try self.recordAmbiguityCandidate(receiver_var, .instantiation, instantiation_expr);
+    try self.recordAmbiguityCandidate(receiver_var, .instantiation, instantiation_expr, receiver_position);
     // An attached constraint copied by instantiation lives on the fresh
     // receiver's descriptor exactly like a creation-site attached constraint,
     // so it is indexed as a creation candidate: the owning boundary stores an
@@ -10543,6 +10561,11 @@ fn instantiateVarHelpFromScheme(
 
     // First, reset state
     instantiator.var_map.clearRetainingCapacity();
+    var row_tail_copies = collections.DenseMap(Var, void).init(self.gpa);
+    defer row_tail_copies.deinit();
+    std.debug.assert(instantiator.constrained_row_tail_copies == null);
+    instantiator.constrained_row_tail_copies = &row_tail_copies;
+    defer instantiator.constrained_row_tail_copies = null;
 
     // Vars the caller asked to share keep their identity in the copy: the
     // walk's `var_map` lookup resolves them to themselves instead of minting
@@ -10636,7 +10659,14 @@ fn instantiateVarHelpFromScheme(
     if (instantiator.var_map.count() > 0) {
         var iterator = instantiator.var_map.iterator();
         while (iterator.next()) |x| {
-            try self.registerInstantiatedVar(x.key_ptr.*, x.value_ptr.*, instantiator.var_map, var_context, env);
+            try self.registerInstantiatedVar(
+                x.key_ptr.*,
+                x.value_ptr.*,
+                instantiator.var_map,
+                var_context,
+                self.instantiatedReceiverPosition(&row_tail_copies, x.value_ptr.*),
+                env,
+            );
         }
     }
     for (self.scratch_deferred_callables.items) |deferred| {
@@ -10697,10 +10727,12 @@ fn instantiateVarHelpFromScheme(
     // and propagate an unresolved outer-rank relation into an enclosing scheme.
     const requirement_parent = if (target) |site| site.constraint_fn_var else null;
     for (requirements_start..self.instantiated_requirements_stack.items.len) |requirement_idx| {
+        const requirement = self.instantiated_requirements_stack.items[requirement_idx];
         try self.registerInstantiatedSchemeRequirement(
-            self.instantiated_requirements_stack.items[requirement_idx],
+            requirement,
             self.discarded_binding_rhs_expr orelse self.instantiation_source_expr,
             requirement_parent,
+            self.instantiatedReceiverPosition(&row_tail_copies, requirement.receiver_var),
             env,
         );
     }
@@ -10776,15 +10808,27 @@ const InstantiatedVarContext = struct {
     deferred: ?*const collections.DenseMap(Var, Var),
 };
 
+/// Where an instantiation placed a variable it copied: a row tail when the
+/// instantiator recorded the copy in a row's extension position
+/// (`Instantiator.constrained_row_tail_copies`).
+fn instantiatedReceiverPosition(
+    self: *Self,
+    row_tail_copies: *const collections.DenseMap(Var, void),
+    receiver_var: Var,
+) AmbiguityCandidate.Position {
+    return if (row_tail_copies.contains(self.types.resolveVar(receiver_var).var_)) .row_tail else .value;
+}
+
 /// Register one variable an instantiation copied (`old` in the scheme,
-/// `fresh` its copy): its substitution pairs, its relations, its rank pool and
-/// its region.
+/// `fresh` its copy, standing at `position` in the copied type): its
+/// substitution pairs, its relations, its rank pool and its region.
 inline fn registerInstantiatedVar(
     self: *Self,
     old: Var,
     fresh_copy: Var,
     var_map: *const collections.DenseMap(Var, Var),
     ctx: InstantiatedVarContext,
+    position: AmbiguityCandidate.Position,
     env: *Env,
 ) Allocator.Error!void {
     // Get the newly created var
@@ -10900,6 +10944,7 @@ inline fn registerInstantiatedVar(
                     flex.constraints,
                     instantiation_expr,
                     ctx.group_index,
+                    position,
                 );
             }
         }
@@ -15426,6 +15471,7 @@ fn recordAmbiguityCandidate(
     receiver_var: Var,
     source: AmbiguityCandidate.Source,
     instantiation_expr: ?CIR.Expr.Idx,
+    position: AmbiguityCandidate.Position,
 ) std.mem.Allocator.Error!void {
     const dedup_owner = self.active_scheme_root orelse if (instantiation_expr orelse self.instantiation_source_expr) |expr_idx|
         ModuleEnv.varFrom(expr_idx)
@@ -15459,6 +15505,10 @@ fn recordAmbiguityCandidate(
             }
             self.ambiguity_candidates.items[candidate_idx].requires_current_resolution = true;
         }
+        // A variable that stands in a row's tail stands only in row tails, so
+        // any observation of that position is a fact about the receiver
+        // itself, which a probe rollback does not retract.
+        if (position == .row_tail) self.ambiguity_candidates.items[candidate_idx].position = .row_tail;
         return;
     }
     errdefer {
@@ -15472,6 +15522,7 @@ fn recordAmbiguityCandidate(
         .source = source,
         .dedup_owner = dedup_owner,
         .requires_current_resolution = requires_current_resolution,
+        .position = position,
     });
 }
 
@@ -15529,8 +15580,9 @@ const AmbiguitySelection = struct {
 ///   candidate instead, which keys on the expression whose OWN type is the
 ///   receiver.
 /// - `to_hash` is deliberately NOT skipped: a structural hash on a concrete
-///   key resolves its receiver before judgment, so what reaches here is a
-///   `to_hash` contract on a genuinely undetermined key (issue 9644)—a real
+///   key resolves its receiver before judgment, and a row tail's hash is
+///   discharged by its row default before selection, so what reaches here is
+///   a `to_hash` contract on a genuinely undetermined key (issue 9644)—a real
 ///   dead end reported via the body-forced path like any other unsatisfiable
 ///   contract.
 /// - An instantiated `where`-clause contract gets priority (it is an explicit
@@ -15645,6 +15697,10 @@ fn judgeAmbiguityCandidate(
     resolved_rank: Rank,
     constraints_range: StaticDispatchConstraint.SafeList.Range,
 ) Allocator.Error!void {
+    // An unpinned row tail is closed by its row default, and the empty row
+    // satisfies every constraint this one carries.
+    if (candidate.position == .row_tail and self.rowDefaultDischargesConstraints(constraints_range)) return;
+
     const constraints = self.types.sliceStaticDispatchConstraints(constraints_range);
     const selection = try self.selectAmbiguityConstraint(
         constraints,
@@ -20314,8 +20370,11 @@ fn replayPredeclaredSchemeUse(
         try seeded_body_vars.put(body_root, {});
     }
 
+    var row_tail_copies = collections.DenseMap(Var, void).init(self.gpa);
+    defer row_tail_copies.deinit();
     var instantiator = self.baseInstantiator(env.rank(), .fresh_flex);
     instantiator.polarity_var_behavior = .close;
+    instantiator.constrained_row_tail_copies = &row_tail_copies;
     const requirements_start = self.instantiated_requirements_stack.items.len;
     defer self.instantiated_requirements_stack.shrinkRetainingCapacity(requirements_start);
     if (self.typeSchemeIndexForRoot(scheme_root)) |scheme_idx| {
@@ -20383,6 +20442,7 @@ fn replayPredeclaredSchemeUse(
                         flex.constraints,
                         pending.source_expr,
                         self.currentGroupIndex(),
+                        self.instantiatedReceiverPosition(&row_tail_copies, fresh_var),
                     );
                 }
             }
@@ -20402,10 +20462,12 @@ fn replayPredeclaredSchemeUse(
     }, env);
 
     for (requirements_start..self.instantiated_requirements_stack.items.len) |requirement_idx| {
+        const requirement = self.instantiated_requirements_stack.items[requirement_idx];
         try self.registerInstantiatedSchemeRequirement(
-            self.instantiated_requirements_stack.items[requirement_idx],
+            requirement,
             pending.source_expr,
             null, // Named value uses start their own dispatch lineage.
+            self.instantiatedReceiverPosition(&row_tail_copies, requirement.receiver_var),
             env,
         );
     }
@@ -34191,7 +34253,7 @@ fn mkBinopConstraint(
 
     _ = try self.unify(constrained_var, lhs_var, env);
     try self.recordSchemeRequirementCandidate(lhs_var, constraint, .creation, null, false);
-    try self.recordAmbiguityCandidate(lhs_var, .creation, constraintIntroExpr(constraint));
+    try self.recordAmbiguityCandidate(lhs_var, .creation, constraintIntroExpr(constraint), .value);
     return constraint_fn_var;
 }
 
@@ -34291,7 +34353,7 @@ fn mkUnaryOp(
 
     _ = try self.unify(constrained_var, arg_var, env);
     try self.recordSchemeRequirementCandidate(arg_var, constraint, .creation, null, false);
-    try self.recordAmbiguityCandidate(arg_var, .creation, constraintIntroExpr(constraint));
+    try self.recordAmbiguityCandidate(arg_var, .creation, constraintIntroExpr(constraint), .value);
 }
 
 fn publishUnaryDispatchExpr(
@@ -34560,7 +34622,7 @@ fn mkReceiverDispatchConstraint(
 
     _ = try self.unify(constrained_var, receiver_var, env);
     try self.recordSchemeRequirementCandidate(receiver_var, constraint, .creation, null, false);
-    try self.recordAmbiguityCandidate(receiver_var, .creation, constraintIntroExpr(constraint));
+    try self.recordAmbiguityCandidate(receiver_var, .creation, constraintIntroExpr(constraint), .value);
     return constraint_fn_var;
 }
 
@@ -34599,7 +34661,7 @@ fn mkTypeMethodCallConstraint(
 
     _ = try self.unify(constrained_var, dispatcher_var, env);
     try self.recordSchemeRequirementCandidate(dispatcher_var, constraint, .creation, null, false);
-    try self.recordAmbiguityCandidate(dispatcher_var, .creation, constraintIntroExpr(constraint));
+    try self.recordAmbiguityCandidate(dispatcher_var, .creation, constraintIntroExpr(constraint), .value);
     return constraint_fn_var;
 }
 
@@ -45856,6 +45918,8 @@ fn linkUseCallables(self: *Self, use_idx: u32) Allocator.Error!void {
         try self.link_var_map.put(copy.old, copy.fresh);
     }
     const first_new = self.types.len();
+    var row_tail_copies = collections.DenseMap(Var, void).init(self.gpa);
+    defer row_tail_copies.deinit();
     var instantiator = Instantiator{
         .store = self.types,
         .idents = self.cir.getIdentStoreConst(),
@@ -45865,6 +45929,7 @@ fn linkUseCallables(self: *Self, use_idx: u32) Allocator.Error!void {
         .polarity_var_ident = self.cir.idents.polarity_var,
         .anonymous_ext_ident = self.cir.idents.open_ext,
         .polarity_var_behavior = .close,
+        .constrained_row_tail_copies = &row_tail_copies,
     };
     for (self.use_deferred_callables.items[use.deferred_start..][0..use.deferred_len]) |deferred| {
         const copy = try instantiator.instantiateDeferredCallable(deferred);
@@ -45874,7 +45939,11 @@ fn linkUseCallables(self: *Self, use_idx: u32) Allocator.Error!void {
     var copies = self.link_var_map.iterator();
     while (copies.next()) |copy| {
         if (@backingInt(copy.value_ptr.*) < first_new) continue;
-        try self.link_new_copies.append(self.gpa, .{ .old = copy.key_ptr.*, .fresh = copy.value_ptr.* });
+        try self.link_new_copies.append(self.gpa, .{
+            .old = copy.key_ptr.*,
+            .fresh = copy.value_ptr.*,
+            .position = self.instantiatedReceiverPosition(&row_tail_copies, copy.value_ptr.*),
+        });
     }
 
     // Inside a probe the copies are part of the speculation: a rollback
@@ -45901,7 +45970,7 @@ fn linkUseCallables(self: *Self, use_idx: u32) Allocator.Error!void {
 /// would have, under that instantiation's own state, collecting their
 /// substitution pairs and relation callables apart from any instantiation in
 /// progress, and extend the use's substitution and relations with them.
-fn registerLinkedCopies(self: *Self, use_idx: u32, new_copies: []const SavedCopy) Allocator.Error!void {
+fn registerLinkedCopies(self: *Self, use_idx: u32, new_copies: []const LinkedCopy) Allocator.Error!void {
     const use = self.use_instances.items[use_idx];
     const link = use.link.?;
     const env = link.env;
@@ -45961,7 +46030,7 @@ fn registerLinkedCopies(self: *Self, use_idx: u32, new_copies: []const SavedCopy
         .deferred = null,
     };
     for (new_copies) |copy| {
-        try self.registerInstantiatedVar(copy.old, copy.fresh, &self.link_var_map, var_context, env);
+        try self.registerInstantiatedVar(copy.old, copy.fresh, &self.link_var_map, var_context, copy.position, env);
     }
 
     // A replayed use's record names its source's substitution.
@@ -49377,7 +49446,7 @@ fn varDeriveComponentObligations(
                         if (admit_rigids) break :blk;
                         // The nominal's own method is the component comparison:
                         // dispatch it exactly like a direct comparison would.
-                        _ = try self.mkDerivedComponentConstraint(resolved.var_, derivation, parent_constraint, env, owner);
+                        _ = try self.mkDerivedComponentConstraint(resolved.var_, derivation, parent_constraint, env, owner, .value);
                         break :blk;
                     }
                     if (self.nominalIsBuiltinDecl(nominal, .box)) break :blk;
@@ -49396,7 +49465,7 @@ fn varDeriveComponentObligations(
             },
             .flex, .rigid => {
                 if (!admit_rigids) {
-                    const fn_var = try self.mkDerivedComponentConstraint(resolved.var_, derivation, parent_constraint, env, owner);
+                    const fn_var = try self.mkDerivedComponentConstraint(resolved.var_, derivation, parent_constraint, env, owner, if (item.row_extension != null) .row_tail else .value);
                     if (item.row_extension) |row| try self.row_extension_derivations.append(self.gpa, .{ .fn_var = fn_var, .row = row.row, .kind = row.kind });
                 }
             },
@@ -49449,6 +49518,7 @@ fn mkDerivedComponentConstraint(
     parent_constraint: StaticDispatchConstraint,
     env: *Env,
     owner: DeferredDispatchObligationOwner,
+    position: AmbiguityCandidate.Position,
 ) Allocator.Error!Var {
     const method_name = switch (derivation) {
         .equality => self.cir.idents.is_eq,
@@ -49500,7 +49570,7 @@ fn mkDerivedComponentConstraint(
     );
     _ = try self.runUnifyWithDispatchOwner(constrained_var, component_var, env, .{}, owner);
     try self.recordSchemeRequirementCandidate(component_var, constraint, .creation, null, false);
-    try self.recordAmbiguityCandidate(component_var, .creation, constraintIntroExpr(constraint));
+    try self.recordAmbiguityCandidate(component_var, .creation, constraintIntroExpr(constraint), position);
     return constraint_fn_var;
 }
 
@@ -52458,7 +52528,7 @@ test "in-probe ambiguity escalation is journaled: rollback resets, commit keeps"
     // Baseline record outside any probe and outside executable-root checking:
     // the candidate starts unescalated.
     checker.checking_executable_root = false;
-    try checker.recordAmbiguityCandidate(receiver, .creation, null);
+    try checker.recordAmbiguityCandidate(receiver, .creation, null, .value);
     const candidate_idx = checker.ambiguity_candidates.items.len - 1;
     try std.testing.expect(!checker.ambiguity_candidates.items[candidate_idx].requires_current_resolution);
 
@@ -52469,7 +52539,7 @@ test "in-probe ambiguity escalation is journaled: rollback resets, commit keeps"
     // journal is drained.
     {
         var probe = try checker.beginProbe(null);
-        try checker.recordAmbiguityCandidate(receiver, .creation, null);
+        try checker.recordAmbiguityCandidate(receiver, .creation, null, .value);
         try std.testing.expect(checker.ambiguity_candidates.items[candidate_idx].requires_current_resolution);
         probe.rollback();
     }
@@ -52480,7 +52550,7 @@ test "in-probe ambiguity escalation is journaled: rollback resets, commit keeps"
     // journal entry drops with the scope.
     {
         var probe = try checker.beginProbe(null);
-        try checker.recordAmbiguityCandidate(receiver, .creation, null);
+        try checker.recordAmbiguityCandidate(receiver, .creation, null, .value);
         try probe.commit();
     }
     try std.testing.expect(checker.ambiguity_candidates.items[candidate_idx].requires_current_resolution);

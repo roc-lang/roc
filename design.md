@@ -11086,7 +11086,17 @@ constraints is grounded to the empty row by unifying the tail with it
 (`Check.closeValueRowTailsCarryingDerivations`), as every row of a top-level
 value closes when its module finishes checking (Value Rows: Uses Share One
 Row). A function's tail is left open: it
-generalizes, and each instantiation supplies its row. Displayed in an output position, such a tail is implicit openness
+generalizes, and each instantiation supplies its row. An instantiation whose
+copy of the tail nothing pins leaves that copy to its row default too, so the
+ambiguity judgment never reports it: `make : U64 -> Set([X, Y])` built with
+`insert` gives its implicitly opened tail a `to_hash` requirement, and
+`make(0).len()` closes the call's copy rather than reporting a hash with no
+owner. The instantiator records each copy it places in a row's extension
+position (`Instantiator.constrained_row_tail_copies`), the derivation records
+the extension it constrains, and the judgment acquits a candidate in that
+position (`AmbiguityCandidate.Position`) whose constraints the empty row
+discharges. A payload in the same row has no default, so an undetermined
+payload is still reported. Displayed in an output position, such a tail is implicit openness
 like an unconstrained one.
 
 The row variable's evidence parameter is an `erased_row_remainder`: Monotype
