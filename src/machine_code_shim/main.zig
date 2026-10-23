@@ -324,7 +324,7 @@ fn loadDevProgram(
                     .kind = switch (encoding) {
                         .linked_function_x86_call_rel32 => .x86_call_rel32,
                         .linked_function_aarch64_call26 => .aarch64_call26,
-                        else => unreachable, // data encodings were handled above
+                        .linked_data_abs64, .linked_data_rel32, .linked_data_page21, .linked_data_pageoff12 => unreachable, // data encodings were handled above
                     },
                 },
             };
