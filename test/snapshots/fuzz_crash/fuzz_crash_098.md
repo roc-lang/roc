@@ -10,7 +10,7 @@ a=(0\r.e)
 ~~~
 # EXPECTED
 MISPLACED CARRIAGE RETURN - :0:0:0:0
-MISSING METHOD - fuzz_crash_098.md:1:4:1:5
+TYPE MISMATCH - fuzz_crash_098.md:1:4:1:5
 # PROBLEMS
 ~~~clojure
 (reports
@@ -22,22 +22,14 @@ MISSING METHOD - fuzz_crash_098.md:1:4:1:5
 		(document))
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
+		(title "Type Mismatch")
 		(region (start 1 4) (end 1 5))
 		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "from_numeral")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
+			(reflow "This number is being used where a non-number type is needed."))
 		(document
 			(source-region (file "fuzz_crash_098.md") (start 1 4) (end 1 5) (annotation error) (line-text "a=(0\r.e)"))
 			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "from_numeral")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
+			(reflow "Other code expects this to have the type:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)

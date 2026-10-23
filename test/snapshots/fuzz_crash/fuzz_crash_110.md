@@ -9,7 +9,7 @@ R000ee(k):=[No0e(R000ee(o))].{e={||{match 0{R000ee.No0e(0)=>0}}()}}
 ~~~
 # EXPECTED
 UNDECLARED TYPE VARIABLE - fuzz_crash_110.md:1:25:1:26
-MISSING METHOD - fuzz_crash_110.md:1:61:1:62
+TYPE MISMATCH - fuzz_crash_110.md:1:61:1:62
 # PROBLEMS
 ~~~clojure
 (reports
@@ -28,22 +28,18 @@ MISSING METHOD - fuzz_crash_110.md:1:61:1:62
 			(source-region (file "fuzz_crash_110.md") (start 1 25) (end 1 26) (annotation error) (line-text "R000ee(k):=[No0e(R000ee(o))].{e={||{match 0{R000ee.No0e(0)=>0}}()}}"))))
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
+		(title "Type Mismatch")
 		(region (start 1 61) (end 1 62))
 		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "from_numeral")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
+			(reflow "This number is being used where a non-number type is needed."))
 		(document
 			(source-region (file "fuzz_crash_110.md") (start 1 61) (end 1 62) (annotation error) (line-text "R000ee(k):=[No0e(R000ee(o))].{e={||{match 0{R000ee.No0e(0)=>0}}()}}"))
 			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "from_numeral")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
+			(reflow "The type was determined to be non-numeric here:")
+			(line-break)
+			(source-region (file "fuzz_crash_110.md") (start 1 36) (end 1 66) (annotation error) (line-text "R000ee(k):=[No0e(R000ee(o))].{e={||{match 0{R000ee.No0e(0)=>0}}()}}"))
+			(line-break)
+			(reflow "Other code expects this to have the type:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)

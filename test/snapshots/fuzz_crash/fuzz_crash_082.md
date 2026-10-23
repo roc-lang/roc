@@ -15,7 +15,7 @@ UNDECLARED TYPE - fuzz_crash_082.md:1:3:1:4
 EMPTY TUPLE NOT ALLOWED - fuzz_crash_082.md:4:4:4:6
 DECLARATION HAS NO VALUE - fuzz_crash_082.md:1:1:1:4
 DECLARATION HAS NO VALUE - fuzz_crash_082.md:2:1:2:4
-MISSING METHOD - fuzz_crash_082.md:3:10:3:11
+TYPE MISMATCH - fuzz_crash_082.md:3:10:3:11
 # PROBLEMS
 ~~~clojure
 (reports
@@ -65,22 +65,14 @@ MISSING METHOD - fuzz_crash_082.md:3:10:3:11
 			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
+		(title "Type Mismatch")
 		(region (start 3 10) (end 3 11))
 		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "from_numeral")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
+			(reflow "This number is being used where a non-number type is needed."))
 		(document
 			(source-region (file "fuzz_crash_082.md") (start 3 10) (end 3 11) (annotation error) (line-text "o=||{D()=0}"))
 			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "from_numeral")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
+			(reflow "Other code expects this to have the type:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)

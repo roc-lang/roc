@@ -921,6 +921,11 @@ pub const DispatcherNotNominal = struct {
     /// Region of the expression that owns the failed obligation (see
     /// `DispatcherDoesNotImplMethod.owner_region`).
     owner_region: ?base.Region = null,
+    /// Numeric literal info for `from_literal` constraints of kind `numeral`
+    num_literal: ?types_mod.NumeralInfo = null,
+    /// Source region of the string literal for `from_literal` constraints of
+    /// kind `quote` or `interpolation`
+    string_literal_region: ?base.Region = null,
 };
 
 /// Error when you try to static dispatch but the dispatcher does not have that method
@@ -939,8 +944,9 @@ pub const DispatcherDoesNotImplMethod = struct {
     owner_region: ?base.Region = null,
     /// Optional numeric literal info for `from_literal` constraints of kind `numeral`
     num_literal: ?types_mod.NumeralInfo = null,
-    /// Source region of the string literal for `from_literal` constraints of kind `quote`
-    quote_region: ?base.Region = null,
+    /// Source region of the string literal for `from_literal` constraints of
+    /// kind `quote` or `interpolation`
+    string_literal_region: ?base.Region = null,
     /// Set when the dispatcher is a record's or tag union's `..` extension,
     /// whose obligation came from deriving the method for that whole type.
     row_extension_of: ?RowExtension = null,
