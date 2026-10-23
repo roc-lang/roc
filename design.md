@@ -377,6 +377,14 @@ violates this invariant.
 
 ### Native relocation identity
 
+Every linked function relocation carries the exact call encoding selected by
+its emitter: x86-64 `call rel32` or AArch64 `BL` with an imm26. The encoding
+defines the relocation's byte offset, PC base, displacement units, and patched
+bits. Named/indexed conversions, procedure packs, run images, and object writers
+preserve and consume it. Consumers never infer an encoding from code bytes or
+instruction lengths. Early returns are resolved by the target code generator's
+local jump patching and do not cross the relocation boundary.
+
 Native code generators own an append-only symbol declaration table. Machine
 relocations carry its dense store-local symbol IDs, and the name column travels
 with the generated code. Builtin, hosted, literal, and static-value producers
@@ -6381,6 +6389,11 @@ function type and the lowered monomorphic function type. Post-check stages must
 consume those checked data; they must not name nested functions by allocation
 order, generated symbols, source display strings, body shape, capture shape,
 runtime layout, or LIR procedure ids.
+
+The nested-site table stores each site's checked expression, owner, lexical
+scope, evidence, and runtime captures. It does not retain a copy of the
+traversal path to each site: site identity is already explicit, and storing
+all ancestor paths costs quadratic space for deeply nested functions.
 
 Monotype body lowering tracks two function-context digests:
 
@@ -24080,6 +24093,11 @@ not allocate a type store, run an extra checking pass, or retain dependency ASTs
 Checking remains responsible for validating implementations and entrypoint types.
 
 ## Build Outputs And The Targets Header
+
+Build output preparation distinguishes a missing destination file from a missing
+parent directory. Missing parents are file-write errors that name the requested
+output path and explain the missing directory, before compilation or linking.
+User-selected output directories are not created implicitly.
 
 The `check`, `build`, `run`, and `test` command family resolves its final process
 status only after completing all requested independent work. Any check-phase

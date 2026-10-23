@@ -22501,15 +22501,6 @@ pub const NestedProcEvidenceSource = enum {
     checked_site,
 };
 
-/// Public `NestedProcPathComponent` declaration.
-pub const NestedProcPathComponent = union(enum) {
-    expr: CheckedExprId,
-    pattern: CheckedPatternId,
-    statement: CheckedStatementId,
-    branch: u32,
-    desugar: u32,
-};
-
 /// Root that lexically owns a nested procedure site. Almost every site sits
 /// inside a checked procedure template's body (or an entry wrapper's generated
 /// body, which borrows its template's identity). Defaulted-field expressions
@@ -22539,11 +22530,6 @@ pub const NestedProcSite = struct {
     /// come the binders that constructing the local procedures this procedure
     /// (or a procedure nested in it) selects requires, ordered by binder id.
     runtime_captures: artifact_serialize.Span = .{},
-    /// Range into the owning `NestedProcSiteTable.path_components` pool. Stored as
-    /// a POD `(start,len)` (transform B) instead of an embedded slice so the
-    /// element relocates with a single fixup.
-    path_start: u32,
-    path_len: u32,
     kind: NestedProcKind,
     checked_expr: ?CheckedExprId,
     checked_pattern: ?CheckedPatternId,
@@ -22559,16 +22545,12 @@ pub const NestedProcSite = struct {
 pub const NestedProcSiteTable = struct {
     sites: []NestedProcSite = &.{},
     template_refs: []canonical.NestedProcSiteId = &.{},
-    /// Flat pool of all sites' path components (transform-B side list). Each site
-    /// holds a `(path_start, path_len)` range into this.
-    path_components: []const NestedProcPathComponent = &.{},
     /// Flat pool of every site's `runtime_captures`.
     runtime_captures: []CheckedCapture = &.{},
 
     pub const Serialized = extern struct {
         sites: SerializedSlice(NestedProcSite) = .{},
         template_refs: SerializedSlice(canonical.NestedProcSiteId) = .{},
-        path_components: SerializedSlice(NestedProcPathComponent) = .{},
         runtime_captures: SerializedSlice(CheckedCapture) = .{},
         const Serde = artifact_serialize.SliceStoreSerde(NestedProcSiteTable, @This());
         pub const serialize = Serde.serialize;
@@ -22624,7 +22606,6 @@ pub const NestedProcSiteTable = struct {
         // procedure), a default's root lambda is an ordinary nested function
         // value.
         for (checked_bodies.default_exprs.items) |default| {
-            builder.path.clearRetainingCapacity();
             builder.current_scope = .root;
             try builder.scanExpr(default.checked_expr, .default_root, false);
         }
@@ -22632,8 +22613,6 @@ pub const NestedProcSiteTable = struct {
         const sites = try builder.sites.toOwnedSlice(allocator);
         errdefer allocator.free(sites);
         try markSingleSourceCalls(allocator, checked_bodies, sites);
-        const path_components = try builder.path_pool.toOwnedSlice(allocator);
-        errdefer allocator.free(path_components);
 
         const runtime_captures = try builder.publishRuntimeCaptures(sites);
         errdefer allocator.free(runtime_captures);
@@ -22641,7 +22620,6 @@ pub const NestedProcSiteTable = struct {
         return .{
             .sites = sites,
             .template_refs = try builder.template_refs.toOwnedSlice(allocator),
-            .path_components = path_components,
             .runtime_captures = runtime_captures,
         };
     }
@@ -23348,9 +23326,6 @@ const NestedProcSiteBuilder = struct {
     current_scope: DispatchScope,
     sites: std.ArrayList(NestedProcSite),
     template_refs: std.ArrayList(canonical.NestedProcSiteId),
-    path: std.ArrayList(NestedProcPathComponent),
-    /// Accumulated flat pool of every site's path; moved into the finished table.
-    path_pool: std.ArrayList(NestedProcPathComponent),
     work: std.ArrayList(ScanWork) = .empty,
     /// Resolves local lookups to the local procedures they select. Absent only
     /// in type-inventory unit tests, which select no procedures.
@@ -23392,8 +23367,6 @@ const NestedProcSiteBuilder = struct {
             .current_scope = .root,
             .sites = .empty,
             .template_refs = .empty,
-            .path = .empty,
-            .path_pool = .empty,
         };
     }
 
@@ -23403,24 +23376,20 @@ const NestedProcSiteBuilder = struct {
         self.open_sites.deinit(self.allocator);
         self.selected_procs.deinit(self.allocator);
         self.work.deinit(self.allocator);
-        self.path.deinit(self.allocator);
     }
 
     fn deinitAll(self: *NestedProcSiteBuilder) void {
         self.sites.deinit(self.allocator);
         self.template_refs.deinit(self.allocator);
-        self.path_pool.deinit(self.allocator);
     }
 
     fn scanCheckedBody(self: *NestedProcSiteBuilder, body_id: CheckedBodyId) Allocator.Error!void {
         const body = self.checked_bodies.body(body_id);
-        self.path.clearRetainingCapacity();
         self.current_scope = .root;
         try self.scanExpr(body.root_expr, .{ .template = body.owner_template }, true);
     }
 
     fn scanEntryWrapper(self: *NestedProcSiteBuilder, wrapper: EntryWrapper) Allocator.Error!void {
-        self.path.clearRetainingCapacity();
         self.current_scope = .root;
         try self.scanExpr(wrapper.body_expr, .{ .template = wrapper.template }, false);
     }
@@ -23433,8 +23402,6 @@ const NestedProcSiteBuilder = struct {
         checked_pattern: ?CheckedPatternId,
     ) Allocator.Error!void {
         const site: canonical.NestedProcSiteId = @fromBackingInt(@intCast(@as(u32, @intCast(self.sites.items.len))));
-        const path_start: u32 = @intCast(self.path_pool.items.len);
-        try self.path_pool.appendSlice(self.allocator, self.path.items);
 
         const evidence_source, const evidence = switch (self.current_scope) {
             .root => .{ NestedProcEvidenceSource.inherited, artifact_serialize.Span{} },
@@ -23460,8 +23427,6 @@ const NestedProcSiteBuilder = struct {
             .lexical_scope = self.current_scope,
             .evidence_source = evidence_source,
             .evidence = evidence,
-            .path_start = path_start,
-            .path_len = @intCast(self.path.items.len),
             .kind = kind,
             .checked_expr = checked_expr,
             .checked_pattern = checked_pattern,
@@ -23491,12 +23456,10 @@ const NestedProcSiteBuilder = struct {
         while (self.work.items.len > base_len) {
             switch (self.work.pop().?) {
                 .expr => |item| try self.enterExpr(item.id, item.owner, item.suppress_current_site),
-                .exit_expr => |exit| try self.exitExpr(exit),
+                .exit_expr => |exit| self.exitExpr(exit),
                 .pattern => |item| try self.enterPattern(item.id, item.owner),
                 .statement => |item| try self.enterStatement(item.id, item.owner),
                 .generated_interpolation_segments => |item| try self.pushInterpolationChildren(item.id, item.owner),
-                .push_branch_path => |branch| try self.path.append(self.allocator, .{ .branch = branch }),
-                .pop_path => self.path.items.len -= 1,
             }
         }
     }
@@ -23507,8 +23470,6 @@ const NestedProcSiteBuilder = struct {
         pattern: struct { id: CheckedPatternId, owner: NestedProcSiteOwner },
         statement: struct { id: CheckedStatementId, owner: NestedProcSiteOwner },
         generated_interpolation_segments: struct { id: CheckedExprId, owner: NestedProcSiteOwner },
-        push_branch_path: u32,
-        pop_path,
     };
 
     /// The lexical state an expression restores once its children are scanned.
@@ -23545,8 +23506,6 @@ const NestedProcSiteBuilder = struct {
         owner: NestedProcSiteOwner,
         suppress_current_site: bool,
     ) Allocator.Error!void {
-        try self.path.append(self.allocator, .{ .expr = expr_id });
-
         const previous_scope = self.current_scope;
         self.current_scope = nestedProcLexicalScope(
             previous_scope,
@@ -23581,12 +23540,10 @@ const NestedProcSiteBuilder = struct {
             },
             .match_ => |match| {
                 try self.pushExpr(match.cond, owner);
-                for (match.branches, 0..) |branch, i| {
-                    try self.pushWork(.{ .push_branch_path = @intCast(i) });
+                for (match.branches) |branch| {
                     for (branch.patternsSlice(self.checked_bodies)) |branch_pattern| try self.pushPattern(branch_pattern.pattern, owner);
                     if (branch.guard) |guard| try self.pushExpr(guard, owner);
                     try self.pushExpr(branch.value, owner);
-                    try self.pushWork(.pop_path);
                 }
             },
             .if_ => |if_| {
@@ -23678,10 +23635,9 @@ const NestedProcSiteBuilder = struct {
         self.endChildren(children);
     }
 
-    fn exitExpr(self: *NestedProcSiteBuilder, exit: ExprExit) Allocator.Error!void {
+    fn exitExpr(self: *NestedProcSiteBuilder, exit: ExprExit) void {
         self.open_sites.items.len = exit.open_site_mark;
         self.current_scope = exit.previous_scope;
-        self.path.items.len -= 1;
     }
 
     /// Push a static-dispatch plan's checked operands among the children
@@ -23727,9 +23683,6 @@ const NestedProcSiteBuilder = struct {
         pattern_id: CheckedPatternId,
         owner: NestedProcSiteOwner,
     ) Allocator.Error!void {
-        try self.path.append(self.allocator, .{ .pattern = pattern_id });
-        try self.pushWork(.pop_path);
-
         const pattern = self.checked_bodies.pattern(pattern_id);
         switch (pattern.data) {
             .assign => |binder| try self.recordBinderSite(binder),
@@ -23778,9 +23731,6 @@ const NestedProcSiteBuilder = struct {
         statement_id: CheckedStatementId,
         owner: NestedProcSiteOwner,
     ) Allocator.Error!void {
-        try self.path.append(self.allocator, .{ .statement = statement_id });
-        try self.pushWork(.pop_path);
-
         const statement = self.checked_bodies.statement(statement_id);
         const children = self.beginChildren();
         switch (statement.data) {
@@ -34254,7 +34204,7 @@ pub const CheckedModuleArtifact = struct {
             // export requirements, and the portability column one more. Stored
             // function evidence keeps its target and structural payloads in
             // two pools of their own. Template demand vectors add one.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 247);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 246);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -35803,8 +35753,6 @@ pub const CheckedModuleArtifact = struct {
 
         for (self.nested_proc_sites.sites, 0..) |site, i| {
             std.debug.assert(@backingInt(site.site) == i);
-            std.debug.assert(site.path_len > 0);
-            std.debug.assert(site.path_start + site.path_len <= self.nested_proc_sites.path_components.len);
             switch (site.owner) {
                 .template => |owner_template| std.debug.assert(@backingInt(owner_template.template) < self.checked_procedure_templates.templates.items.len),
                 // A default-root site always names its checked lambda/closure
@@ -38450,6 +38398,49 @@ test "local procedure uses carry exact producer-recorded dispatch scope ownershi
     );
 }
 
+test "issue 12520 nested procedure publication uses linear allocation space" {
+    const allocator = std.testing.allocator;
+    const depth = 1024;
+    var bodies = CheckedBodyStore{};
+    defer bodies.deinit(allocator);
+    const exprs = try allocator.alloc(CheckedExpr, depth + 1);
+    defer allocator.free(exprs);
+    for (exprs, 0..) |*expr, i| {
+        expr.* = .{
+            .id = testIndexId(CheckedExprId, i),
+            .ty = testIndexId(CheckedTypeId, 0),
+            .source_region = base.Region.zero(),
+            .data = if (i == depth) .empty_record else .{ .lambda = .{
+                .args = &.{},
+                .body = testIndexId(CheckedExprId, i + 1),
+            } },
+        };
+    }
+    try bodies.commitExprs(allocator, exprs);
+    try bodies.default_exprs.append(allocator, .{
+        .expr_node = 0,
+        .checked_expr = exprs[0].id,
+    });
+    var templates = CheckedProcedureTemplateTable{};
+    defer templates.deinit(allocator);
+
+    // Count only site publication, independently of checked body storage.
+    // A copied path per site grows quadratically even though the output has
+    // only one site per lambda. Allow ample room for linear scratch tables.
+    var bytes = std.testing.FailingAllocator.init(allocator, .{});
+    const gpa = bytes.allocator();
+    var sites = try NestedProcSiteTable.fromTemplates(gpa, &bodies, &.{}, &.{}, &.{}, &.{}, &templates, &.{});
+    defer sites.deinit(gpa);
+    try std.testing.expectEqual(depth, sites.sites.len);
+    for (sites.sites, 0..) |site, i| {
+        try std.testing.expectEqual(i, @backingInt(site.site));
+        try std.testing.expectEqual(exprs[i].id, site.checked_expr.?);
+        try std.testing.expectEqual(.default_root, std.meta.activeTag(site.owner));
+        try std.testing.expectEqual(.local_function, site.kind);
+    }
+    try std.testing.expect(bytes.allocated_bytes <= 1024 * depth);
+}
+
 test "nested procedure sites inherit exact producer-recorded lexical scopes" {
     const allocator = std.testing.allocator;
     const scopes = [_]DispatchRefScope{
@@ -40459,8 +40450,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x6E, 0xDF, 0x6C, 0xE1, 0x1F, 0x36, 0x54, 0x09, 0xD6, 0xE9, 0x97, 0x14, 0x0A, 0x36, 0x2B, 0xF2,
-        0x03, 0xB9, 0x3A, 0x8B, 0xE1, 0x26, 0xC8, 0xB4, 0x51, 0x1D, 0x9D, 0x1D, 0x40, 0x55, 0x82, 0xD0,
+        0x9E, 0x95, 0xA0, 0x89, 0xD4, 0xE9, 0x7E, 0x19, 0x87, 0xFC, 0xED, 0x27, 0x77, 0x05, 0x99, 0x55,
+        0xC9, 0xC3, 0x41, 0xB7, 0x4F, 0x99, 0xC6, 0x55, 0x92, 0xD1, 0x99, 0x9C, 0x95, 0x00, 0x70, 0x61,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

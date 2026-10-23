@@ -23,7 +23,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RPCK";
 /// Format version; bump whenever the encoding or artifact contents change.
-pub const format_version: u32 = 11;
+pub const format_version: u32 = 12;
 
 /// One specialization the pack can serve: its reservation-time key, the
 /// artifact holding its procedure, and the ownership signature and
@@ -218,9 +218,9 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
         for (artifact.relocations) |relocation| {
             try writer.word(relocation.offset);
             switch (relocation.kind) {
-                .function => {
+                .function => |function_kind| {
                     try writer.byte(0);
-                    try writer.byte(0);
+                    try writer.byte(@backingInt(function_kind));
                 },
                 .data => |data_kind| {
                     try writer.byte(1);
@@ -398,7 +398,7 @@ pub fn readOwned(owning_arena: collections.SingleThreadArena, bytes: []const u8)
         for (relocations) |*relocation| {
             const offset = try reader.word();
             const kind_tag = try reader.byte();
-            const data_kind_raw = try reader.byte();
+            const encoding_raw = try reader.byte();
             const name = try reader.str();
             const scope = std.enums.fromInt(ProcArtifact.SymbolScope, try reader.byte()) orelse return error.MalformedPack;
             relocation.* = .{
@@ -406,8 +406,8 @@ pub fn readOwned(owning_arena: collections.SingleThreadArena, bytes: []const u8)
                 .name = name,
                 .scope = scope,
                 .kind = switch (kind_tag) {
-                    0 => .function,
-                    1 => .{ .data = std.enums.fromInt(RelocationMod.DataRelocationKind, data_kind_raw) orelse return error.MalformedPack },
+                    0 => .{ .function = std.enums.fromInt(RelocationMod.FunctionRelocationKind, encoding_raw) orelse return error.MalformedPack },
+                    1 => .{ .data = std.enums.fromInt(RelocationMod.DataRelocationKind, encoding_raw) orelse return error.MalformedPack },
                     else => return error.MalformedPack,
                 },
             };
@@ -748,7 +748,7 @@ fn testOwnedPack(allocator: Allocator) (ReadError || error{TestExpectedEqual})!v
             .refs = &.{.{ .site = 0, .form = .call, .target = 0, .delta = 0, .veneer = 3 }},
             .symbolic_refs = &.{.{ .site = 1, .form = .call, .target = .{ .rc_helper = "external" } }},
             .lines = &.{.{ .offset = 0, .loc = .{ .file = 0, .line = 10, .column = 8 }, .region = base.Region.zero() }},
-            .relocations = &.{.{ .offset = 0, .name = "builtin", .scope = .shared, .kind = .function }},
+            .relocations = &.{.{ .offset = 0, .name = "builtin", .scope = .shared, .kind = .{ .function = .x86_call_rel32 } }},
             .data = &.{.{
                 .name = "datum",
                 .bytes = "bytes",
@@ -779,7 +779,7 @@ test "pack bytes round-trip every artifact field and spec entry" {
         .{ .site = 12, .form = .addr, .target = 0, .delta = 0 },
     });
     const relocations = try a.dupe(ProcArtifact.NamedRelocation, &.{
-        .{ .offset = 3, .name = try a.dupe(u8, "roc_builtins_str_concat"), .scope = .shared, .kind = .function },
+        .{ .offset = 3, .name = try a.dupe(u8, "roc_builtins_str_concat"), .scope = .shared, .kind = .{ .function = .x86_call_rel32 } },
         .{ .offset = 9, .name = try a.dupe(u8, "roc__d1"), .scope = .program, .kind = .{ .data = .rel32 } },
     });
     const artifacts = try a.dupe(ProcArtifact.Artifact, &.{

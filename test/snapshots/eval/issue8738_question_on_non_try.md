@@ -189,10 +189,10 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "Try(ok, _err), ok -> ok"))
-		(patt (type "({}) -> Try({}, err)"))
+		(patt (type "() -> Try({}, err)"))
 		(patt (type "Try({}, err)")))
 	(expressions
 		(expr (type "Try(ok, _err), ok -> ok"))
-		(expr (type "({}) -> Try({}, err)"))
+		(expr (type "() -> Try({}, err)"))
 		(expr (type "Try({}, err)"))))
 ~~~
