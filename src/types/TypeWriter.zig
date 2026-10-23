@@ -830,7 +830,7 @@ fn startFunc(
     wrap_in_parens: bool,
 ) error{ OutOfMemory, WriteFailed }!bool {
     if (func.args.len() == 0) {
-        try writer.writeAll("({})");
+        try writer.writeAll("()");
     }
     try self.frames.append(.{ .func = .{
         .args = func.args,
@@ -1836,6 +1836,28 @@ test "TypeWriter renders required and optional fields in records with a flex ext
     );
 }
 
+test "TypeWriter renders zero-argument functions distinctly from empty-record arguments" {
+    var env = try TestEnv.init(testing.allocator, 32);
+    defer env.deinit();
+
+    const empty_record = try env.types.freshFromContent(.{ .structure = .empty_record });
+    const pure = try env.types.freshFromContent(try env.types.mkFuncPure(&.{}, empty_record));
+    const effectful = try env.types.freshFromContent(try env.types.mkFuncEffectful(&.{}, empty_record));
+    const unbound = try env.types.freshFromContent(try env.types.mkFuncUnbound(&.{}, empty_record));
+
+    try env.expectRender(pure, "() -> {}");
+    try env.expectRender(effectful, "() => {}");
+    try env.expectRender(unbound, "() -> {}");
+    try env.expectRender(
+        try env.types.freshFromContent(try env.types.mkFuncPure(&.{empty_record}, empty_record)),
+        "{} -> {}",
+    );
+    try env.expectRender(
+        try env.types.freshFromContent(try env.types.mkFuncPure(&.{pure}, effectful)),
+        "(() -> {}) -> (() => {})",
+    );
+}
+
 test "TypeWriter renders every shape the walk descends through" {
     var env = try TestEnv.init(testing.allocator, 128);
     defer env.deinit();
@@ -1892,7 +1914,7 @@ test "TypeWriter renders every shape the walk descends through" {
     );
     try env.expectRender(
         try env.types.freshFromContent(try env.types.mkFuncEffectful(&.{}, empty_record)),
-        "({}) => {}",
+        "() => {}",
     );
     try env.expectRender(try env.tuple(&.{inner_fn}), "({} -> [])");
 

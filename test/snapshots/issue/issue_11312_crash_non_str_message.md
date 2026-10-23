@@ -122,9 +122,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "({}) -> a where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]"))
+		(patt (type "() -> a where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]"))
 		(patt (type "Bool")))
 	(expressions
-		(expr (type "({}) -> a where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]"))
+		(expr (type "() -> a where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]"))
 		(expr (type "Bool"))))
 ~~~
