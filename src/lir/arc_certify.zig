@@ -2010,6 +2010,8 @@ const Certifier = struct {
     domain_values_scratch: collections.DenseMap(ValueId, void),
     value_reach_seen: collections.DenseMap(ValueId, void),
     value_reach_stack: std.ArrayList(ValueId) = .empty,
+    /// Values the target of `copyReachedValues` binds to some local.
+    target_carried_scratch: collections.DenseMap(ValueId, void),
     /// Scratch bitset over values, reused by the liveness and borrow-anchor
     /// chain walks. Both walks unset every bit they set on the way out, so
     /// the set is all zero between top-level calls and only ever needs to
@@ -2061,6 +2063,7 @@ const Certifier = struct {
             .region_of_join = collections.DenseMap(LIR.JoinPointId, u32).init(allocator),
             .domain_scratch = collections.DenseMap(u32, void).init(allocator),
             .carrier_scratch = collections.DenseMap(ValueId, u32).init(allocator),
+            .target_carried_scratch = collections.DenseMap(ValueId, void).init(allocator),
             .provenance_carrier_scratch = collections.DenseMap(u32, void).init(allocator),
             .summary_index_scratch = collections.DenseMap(u32, u32).init(allocator),
             .domain_values_scratch = collections.DenseMap(ValueId, void).init(allocator),
@@ -2118,6 +2121,7 @@ const Certifier = struct {
         self.domain_scratch.deinit();
         self.domain_list_scratch.deinit(self.allocator);
         self.carrier_scratch.deinit();
+        self.target_carried_scratch.deinit();
         self.provenance_carrier_scratch.deinit();
         self.summary_index_scratch.deinit();
         self.relevant_bound_scratch.deinit(self.allocator);
@@ -5242,10 +5246,9 @@ const Certifier = struct {
 
     /// Copies every value reachable from `value_reach_stack` (through
     /// lenders, holders, and payload sources) with its ownership facts from
-    /// `source` into `target`. Payload sources also retain a carrier binding:
-    /// later summaries encode ownership projections by carrier local, so an
-    /// anonymous source alone cannot preserve the path to its stored unit.
-    /// This applies even when the carrier was defined inside an exited region.
+    /// `source` into `target`. The containers through which a reached taken
+    /// projection still owes its claim also retain a carrier binding (see
+    /// `bindTakenProjectionCarriers`).
     fn copyReachedValues(self: *Certifier, source: *const State, target: *State) Allocator.Error!void {
         self.repr_scratch.clearRetainingCapacity();
         var bindings = source.local_value.iterator();
@@ -5253,6 +5256,9 @@ const Certifier = struct {
             const carrier = try self.repr_scratch.getOrPut(binding.value);
             if (!carrier.found_existing) carrier.value_ptr.* = binding.index;
         }
+        self.target_carried_scratch.clearRetainingCapacity();
+        var carried = target.local_value.iterator();
+        while (carried.next()) |binding| try self.target_carried_scratch.put(binding.value, {});
         while (self.value_reach_stack.pop()) |value| {
             if (value == no_value) continue;
             const seen = try self.value_reach_seen.getOrPut(value);
@@ -5268,13 +5274,33 @@ const Certifier = struct {
             if (source.knownVariant(value)) |known| try target.setKnownVariant(value, known);
             const info = self.values.items[value];
             try self.value_reach_stack.appendSlice(self.allocator, info.lenders);
-            if (info.payload_source != no_value) {
-                if (self.repr_scratch.get(info.payload_source)) |carrier| {
-                    try target.bindValue(self.proc_locals.items[carrier], info.payload_source);
-                }
-                try self.value_reach_stack.append(self.allocator, info.payload_source);
-            }
+            if (info.payload_taken and balance <= 0) try self.bindTakenProjectionCarriers(source, target, value);
+            try self.value_reach_stack.append(self.allocator, info.payload_source);
             try self.value_reach_stack.append(self.allocator, holder);
+        }
+    }
+
+    /// A taken projection without a unit of its own claims its stored unit
+    /// by walking its container chain (`tryClaimSeen`) through views up to
+    /// the first container that holds a unit or claims; one with a unit
+    /// never walks it. Later summaries encode that path by carrier
+    /// local, so an anonymous container alone cannot preserve it: each
+    /// container on the path that `target` does not already carry keeps its
+    /// lowest carrier from `source`, even a local of an exited region.
+    /// Borrowed projections spend no stored unit; summaries reduce their
+    /// unnamed containers to live anchors instead.
+    fn bindTakenProjectionCarriers(self: *Certifier, source: *const State, target: *State, taken: ValueId) Allocator.Error!void {
+        var container = self.values.items[taken].payload_source;
+        while (container != no_value) : (container = self.values.items[container].payload_source) {
+            if (!self.target_carried_scratch.contains(container)) {
+                if (self.repr_scratch.get(container)) |carrier| {
+                    try target.bindValue(self.proc_locals.items[carrier], container);
+                    try self.target_carried_scratch.put(container, {});
+                }
+            }
+            if (source.balanceOf(container) != 0 or
+                !source.claimsOf(container).isEmpty() or
+                source.conditionalConditionOf(container) != null) break;
         }
     }
 
