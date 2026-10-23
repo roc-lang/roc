@@ -9,6 +9,7 @@
 const std = @import("std");
 const invariant = @import("base").invariant;
 const Allocator = std.mem.Allocator;
+const FunctionRelocationKind = @import("../Relocation.zig").FunctionRelocationKind;
 const DataRelocationKind = @import("../Relocation.zig").DataRelocationKind;
 const object = @import("mod.zig");
 const DebugReloc = object.DebugReloc;
@@ -147,13 +148,6 @@ pub const Architecture = enum {
         return switch (self) {
             .x86_64 => COFF.IMAGE_FILE_MACHINE_AMD64,
             .aarch64 => COFF.IMAGE_FILE_MACHINE_ARM64,
-        };
-    }
-
-    fn branchRelocType(self: Architecture) u16 {
-        return switch (self) {
-            .x86_64 => COFF.IMAGE_REL_AMD64_REL32,
-            .aarch64 => COFF.IMAGE_REL_ARM64_BRANCH26,
         };
     }
 
@@ -377,11 +371,18 @@ pub const CoffWriter = struct {
     }
 
     /// Add a relocation to the text section
-    pub fn addTextRelocation(self: *Self, offset: u32, symbol_idx: u32) Allocator.Error!void {
+    pub fn addTextRelocation(self: *Self, offset: u32, symbol_idx: u32, kind: FunctionRelocationKind) Allocator.Error!void {
+        std.debug.assert(self.arch == switch (kind) {
+            .x86_call_rel32 => Architecture.x86_64,
+            .aarch64_call26 => Architecture.aarch64,
+        });
         try self.text_relocs.append(self.allocator, .{
             .offset = offset,
             .symbol_idx = symbol_idx,
-            .reloc_type = self.arch.branchRelocType(),
+            .reloc_type = switch (kind) {
+                .x86_call_rel32 => COFF.IMAGE_REL_AMD64_REL32,
+                .aarch64_call26 => COFF.IMAGE_REL_ARM64_BRANCH26,
+            },
         });
     }
 
@@ -1294,7 +1295,7 @@ test "coff with external symbol" {
     const ext_idx = try writer.addExternalSymbol("external_func");
 
     // Add relocation for the call
-    try writer.addTextRelocation(1, ext_idx);
+    try writer.addTextRelocation(1, ext_idx, .x86_call_rel32);
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);

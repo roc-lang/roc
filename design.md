@@ -377,6 +377,14 @@ violates this invariant.
 
 ### Native relocation identity
 
+Every linked function relocation carries the exact call encoding selected by
+its emitter: x86-64 `call rel32` or AArch64 `BL` with an imm26. The encoding
+defines the relocation's byte offset, PC base, displacement units, and patched
+bits. Named/indexed conversions, procedure packs, run images, and object writers
+preserve and consume it. Consumers never infer an encoding from code bytes or
+instruction lengths. Early returns are resolved by the target code generator's
+local jump patching and do not cross the relocation boundary.
+
 Native code generators own an append-only symbol declaration table. Machine
 relocations carry its dense store-local symbol IDs, and the name column travels
 with the generated code. Builtin, hosted, literal, and static-value producers

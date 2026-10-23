@@ -10,6 +10,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const invariant = @import("base").invariant;
+const FunctionRelocationKind = @import("../Relocation.zig").FunctionRelocationKind;
 const DataRelocationKind = @import("../Relocation.zig").DataRelocationKind;
 const object = @import("mod.zig");
 const DebugReloc = object.DebugReloc;
@@ -286,10 +287,18 @@ pub const ElfWriter = struct {
     }
 
     /// Add a relocation to the text section
-    pub fn addTextRelocation(self: *Self, offset: u64, symbol_idx: u32, addend: i64) Allocator.Error!void {
-        const reloc_type: u32 = switch (self.arch) {
-            .x86_64 => ELF.R_X86_64_PLT32,
-            .aarch64 => ELF.R_AARCH64_CALL26,
+    pub fn addTextRelocation(self: *Self, offset: u64, symbol_idx: u32, kind: FunctionRelocationKind) Allocator.Error!void {
+        std.debug.assert(self.arch == switch (kind) {
+            .x86_call_rel32 => Architecture.x86_64,
+            .aarch64_call26 => Architecture.aarch64,
+        });
+        const reloc_type: u32 = switch (kind) {
+            .x86_call_rel32 => ELF.R_X86_64_PLT32,
+            .aarch64_call26 => ELF.R_AARCH64_CALL26,
+        };
+        const addend: i64 = switch (kind) {
+            .x86_call_rel32 => -4,
+            .aarch64_call26 => 0,
         };
 
         try self.text_relocs.append(self.allocator, .{
@@ -710,7 +719,7 @@ test "elf with external symbol" {
     const ext_idx = try writer.addExternalSymbol("external_func");
 
     // Add relocation for the call
-    try writer.addTextRelocation(1, ext_idx, -4);
+    try writer.addTextRelocation(1, ext_idx, .x86_call_rel32);
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
