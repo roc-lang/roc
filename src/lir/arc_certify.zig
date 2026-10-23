@@ -2446,11 +2446,14 @@ const Certifier = struct {
     }
 
     /// A container that must claim its own unit from its parent before the
-    /// field under it is claimed.
+    /// field under it is claimed. When `settles_spent`, the container's one
+    /// explicit unit is already fully spent by its claims: the parent's unit
+    /// replaces it, so those claims settle and the field starts a fresh set.
     const PendingContainerClaim = struct {
         container: ValueId,
         claim: ClaimSet,
         existing: ClaimSet,
+        settles_spent: bool = false,
     };
 
     /// A range of a struct's ownership slots.
@@ -2565,9 +2568,27 @@ const Certifier = struct {
             if (claim.isEmpty()) break :walk false;
             const existing = state.claimsOf(container);
             if (existing.intersects(claim)) {
-                // Only a complete projection can spend another whole unit;
-                // repeating a partial field claim would lose its other fields.
-                if (!required.eql(claim)) break :walk false;
+                if (!required.eql(claim)) {
+                    // A partial field claim repeats an earlier one only when
+                    // that earlier claim set spent a whole unit. The field is
+                    // then spent from another unit of the container: an
+                    // intact surplus unit, or its original unit, which a
+                    // retained projection still holds in its parent. The
+                    // spent claims settle against the unit they spent.
+                    // Repeating a field of an incomplete claim set would
+                    // lose its other fields.
+                    if (!existing.eql(required)) break :walk false;
+                    if (state.conditionalConditionOf(container) != null) break :walk false;
+                    if (state.balanceOf(container) >= 2) {
+                        try self.settleSpentClaims(state, container, existing, mutations);
+                        try self.claimContainerField(state, container, claim, .{}, mutations);
+                        break :walk true;
+                    }
+                    if (state.balanceOf(container) != 1) break :walk false;
+                    try pending.append(self.allocator, .{ .container = container, .claim = claim, .existing = .{}, .settles_spent = true });
+                    value = container;
+                    continue :walk;
+                }
                 // A second stamped take of the same projection spends that field
                 // from an intact surplus aggregate unit. The first unit remains
                 // represented by the existing claim set.
@@ -2611,10 +2632,37 @@ const Certifier = struct {
                 .before = before,
                 .after = before + 1,
             } });
+            if (claim.settles_spent) try self.settleSpentClaims(state, claim.container, state.claimsOf(claim.container), mutations);
             try self.claimContainerField(state, claim.container, claim.claim, claim.existing, mutations);
             claimed = true;
         }
         return claimed;
+    }
+
+    /// Settles a claim set that spent one whole unit of `container` while it
+    /// holds another: the spent unit and its claims are both gone.
+    fn settleSpentClaims(
+        self: *Certifier,
+        state: *State,
+        container: ValueId,
+        spent: ClaimSet,
+        mutations: ?*std.ArrayList(OwnershipMutation),
+    ) Allocator.Error!void {
+        const balance = state.balanceOf(container);
+        try state.setClaims(container, .{});
+        try state.addBalance(container, -1);
+        if (mutations) |list| {
+            try list.append(self.allocator, .{ .claims = .{
+                .value = container,
+                .before = spent,
+                .after = .{},
+            } });
+            try list.append(self.allocator, .{ .balance = .{
+                .value = container,
+                .before = balance,
+                .after = balance - 1,
+            } });
+        }
     }
 
     fn claimContainerField(
@@ -2635,20 +2683,7 @@ const Certifier = struct {
         if (balance >= 2) {
             if (try self.requiredClaims(container)) |required| {
                 if (updated.eql(required)) {
-                    try state.setClaims(container, .{});
-                    try state.addBalance(container, -1);
-                    if (mutations) |list| {
-                        try list.append(self.allocator, .{ .claims = .{
-                            .value = container,
-                            .before = existing,
-                            .after = .{},
-                        } });
-                        try list.append(self.allocator, .{ .balance = .{
-                            .value = container,
-                            .before = balance,
-                            .after = balance - 1,
-                        } });
-                    }
+                    try self.settleSpentClaims(state, container, existing, mutations);
                     return;
                 }
             }
@@ -10534,5 +10569,47 @@ test "issue 12505 escaping nested projection cannot spend its field twice" {
     var f = try CertifyTest.init(testing.allocator);
     defer f.deinit();
     try buildEscapingProjectionWithLiveRoot(&f, true);
+    try testing.expectError(error.Certification, f.certify());
+}
+
+/// A record taken from its parent is retained once and dismantled field by
+/// field, then dismantled again starting from a field the first claim set
+/// already spent. With `retain` the second dismantle spends the record's
+/// original unit, still held in the parent; without it that unit is the one
+/// the first dismantle already spent.
+fn buildRetainedRecordDismantledFromParentTwice(f: *CertifyTest, retain: bool) Allocator.Error!void {
+    const parent_layout = try f.layouts.putStructFields(&.{.{ .index = 0, .layout = f.pair_str }});
+    const parent = try f.local(parent_layout);
+    const record = try f.local(f.pair_str);
+    const first_a = try f.local(.str);
+    const first_b = try f.local(.str);
+    const second_a = try f.local(.str);
+    const second_b = try f.local(.str);
+    const result = try f.local(.i64);
+    var body = try f.assignI64(result, try f.ret(result));
+    body = try f.decrefStmt(second_a, .str, body);
+    body = try takeFieldStmt(f, second_a, record, 0, body);
+    body = try f.decrefStmt(second_b, .str, body);
+    body = try takeFieldStmt(f, second_b, record, 1, body);
+    body = try f.decrefStmt(first_b, .str, body);
+    body = try takeFieldStmt(f, first_b, record, 1, body);
+    body = try f.decrefStmt(first_a, .str, body);
+    body = try takeFieldStmt(f, first_a, record, 0, body);
+    if (retain) body = try f.increfStmt(record, f.pair_str, body);
+    body = try takeFieldStmt(f, record, parent, 0, body);
+    _ = try f.addProc(&.{parent}, body, .i64);
+}
+
+test "issue 12505 a retained record's second dismantle spends its unit held in the parent" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildRetainedRecordDismantledFromParentTwice(&f, true);
+    try f.certify();
+}
+
+test "issue 12505 a record taken from its parent cannot be dismantled twice from one unit" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildRetainedRecordDismantledFromParentTwice(&f, false);
     try testing.expectError(error.Certification, f.certify());
 }
