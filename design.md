@@ -23215,11 +23215,17 @@ compile-time evaluator does not interpret Monotype IR, Lambda Solved IR,
 logical Lambda Mono expressions, or any source-level IR.
 
 The only interpreter path is for compiler hosts that cannot run generated native
-code, currently wasm32 and freestanding compiler builds. This decision is made
-from the compiler's own build target. The Roc program target selected by
-`roc --target` does not affect the compile-time evaluation strategy. A native
-compiler host without host dev-backend code generation support is unsupported for
-compile-time evaluation; it must not silently use the interpreter.
+code: freestanding compiler builds, and every host the dev backend has no code
+generator for (`host_lir_codegen_available`), currently wasm32 and 32-bit ARM
+and x86. This decision is made from the compiler's own build target. The Roc
+program target selected by `roc --target` does not affect the compile-time
+evaluation strategy. The interpreter evaluates at the compiler host's pointer
+width, and a program target of another width receives the completed values
+re-encoded at its own layouts, exactly as a 64-bit host's values reach a
+32-bit target. Roc exposes no pointer-width type, so a value means the same at
+either width; one too large for its destination's widths (a 32-bit target's
+lengths, or the ConstStore's) is `error.OutOfMemory`, as it would be on that
+target at runtime.
 
 Diagnostic behavior must be identical between the dev-backend evaluator and the
 host-restricted LIR interpreter. A mismatch in crashes, expect failures,
