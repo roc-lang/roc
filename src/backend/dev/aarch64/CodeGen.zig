@@ -675,12 +675,6 @@ pub fn CodeGen(comptime target: RocTarget) type {
             return patch_loc;
         }
 
-        /// Whether the word at `loc` is a BL, as opposed to the PC-relative
-        /// address sequence `emitDirectCall` uses for a far target.
-        pub fn isBlAt(self: *Self, loc: usize) bool {
-            return isBlInst(self.readInst(loc));
-        }
-
         /// Register a BL inside assembled artifact bytes as an open call site,
         /// so re-resolving it can route through a veneer exactly as a call
         /// emitted here would.
@@ -746,7 +740,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
             const loc = self.currentOffset();
             try self.emit.bl(0);
             const reloc_index: u32 = @intCast(self.relocations.items.len);
-            try self.relocations.append(self.allocator, .{ .linked_function = .{ .offset = @intCast(loc), .symbol = symbol } });
+            try self.relocations.append(self.allocator, .{ .linked_function = .{ .offset = @intCast(loc), .symbol = symbol, .kind = .aarch64_call26 } });
             try self.registerBranchSite(.{ .loc = loc, .kind = .extern_call, .reloc_index = reloc_index });
         }
 

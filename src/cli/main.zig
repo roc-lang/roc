@@ -9717,7 +9717,7 @@ test "pack offers an entry that carries its program data and withholds one that 
             .refs = &.{},
             .relocations = &.{
                 .{ .offset = 0, .name = "roc__d0", .scope = .program, .kind = .{ .data = .rel32 } },
-                .{ .offset = 4, .name = "roc_builtins_str_concat", .scope = .shared, .kind = .function },
+                .{ .offset = 4, .name = "roc_builtins_str_concat", .scope = .shared, .kind = .{ .function = .x86_call_rel32 } },
             },
             .data = &.{.{
                 .name = "roc__d0",
@@ -9733,7 +9733,7 @@ test "pack offers an entry that carries its program data and withholds one that 
             .entry = 0,
             .frame = null,
             .refs = &.{},
-            .relocations = &.{.{ .offset = 0, .name = "roc_boxy_drop", .scope = .program, .kind = .function }},
+            .relocations = &.{.{ .offset = 0, .name = "roc_boxy_drop", .scope = .program, .kind = .{ .function = .x86_call_rel32 } }},
             .data = &.{},
         },
     };
