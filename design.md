@@ -10808,11 +10808,14 @@ copies are kept only while it is unchanged, and a probe remembers none, since
 its copies roll back with it. Nested contracts whose shapes nest therefore
 share all the structure below their own level.
 
-A codec whose shape, encoding, and state are settled and local to the closing
-boundary is validated once at that boundary. None of their refinable components
-may escape through a member's interface or belong to an enclosing scope.
-Validation uses ordinary unification and retains the exact selected calls and
-contract roots. Their snapshot waits until final type settlement, so error-row
+A codec whose shape, encoding, and state are settled at the closing boundary is
+validated once at that boundary, so its error-row demands (such as a record's
+`MissingRequiredField(Str)`) reach the definition's type before it generalizes
+and before any use copies it. None of their refinable components may belong to
+an enclosing scope. When a refinable component escapes through a member's
+interface, a use can still refine it, so the relation also stays in the scheme
+and each use validates it at its own types. Validation uses ordinary
+unification and retains the exact selected calls and contract roots. Their snapshot waits until final type settlement, so error-row
 widening does not require validating the shape again. Unsettled inputs retain
 their complete receiver/callable requirement when any refinable component of
 that relation escapes. Capturing an error-only dependency does not authorize
