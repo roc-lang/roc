@@ -26197,7 +26197,7 @@ test "branch location checkpoints restore only changed bindings in a wide proced
     try std.testing.expectEqual(@as(i64, 8), codegen.local_locations.get(8).?.immediate_i64);
 }
 
-fn expectSingleByteResultStoreIsOneStore(comptime target: roc_target_mod.RocTarget, value_reg: anytype, ptr_reg: anytype, result_layout: layout.Idx) !void {
+fn expectSingleByteResultStoreIsOneStore(comptime target: roc_target_mod.RocTarget, value_reg: anytype, ptr_reg: anytype, result_layout: layout.Idx) (Allocator.Error || error{TestExpectedEqual})!void {
     const allocator = std.testing.allocator;
     var store = LirStore.init(allocator);
     defer store.deinit();
