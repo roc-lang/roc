@@ -699,7 +699,7 @@ pub const Writer = struct {
     fn storeStr(self: *Writer, value: Value) Error!checked.ConstValue {
         const roc_str: *const RocStr = @ptrCast(@alignCast(value.ptr));
         const slice = roc_str.asSlice();
-        const len = checkedU32(slice.len, "string length exceeds ConstStore limit");
+        const len = try checkedU32(slice.len);
 
         if (!roc_str.isSmallStr()) {
             if (roc_str.isSeamlessSlice()) {
@@ -716,7 +716,7 @@ pub const Writer = struct {
                         }
                         return .{ .str = .{
                             .data = backing.data,
-                            .offset = checkedU32(slice_start, "string slice offset exceeds ConstStore limit"),
+                            .offset = try checkedU32(slice_start),
                             .len = len,
                         } };
                     }
@@ -815,8 +815,8 @@ pub const Writer = struct {
             break :blk try self.store.commitBlobData(byte_len);
         };
         self.store.fill(node, .{ .list = .{ .packed_bytes = .{
-            .bytes = .{ .data = data, .offset = 0, .len = checkedU32(byte_len, "packed product bytes exceed ConstStore limit") },
-            .len = checkedU32(list.len(), "packed product length exceeds ConstStore limit"),
+            .bytes = .{ .data = data, .offset = 0, .len = try checkedU32(byte_len) },
+            .len = try checkedU32(list.len()),
             .element = null,
             .product_width = plan.packed_width,
         } } });
@@ -908,8 +908,8 @@ pub const Writer = struct {
         }
         const data = try self.store.commitBlobData(byte_len);
         self.store.fill(target_node, .{ .list = .{ .packed_bytes = .{
-            .bytes = .{ .data = data, .offset = 0, .len = checkedU32(byte_len, "packed list byte length exceeds ConstStore limit") },
-            .len = checkedU32(roc_list.len(), "packed list length exceeds ConstStore limit"),
+            .bytes = .{ .data = data, .offset = 0, .len = try checkedU32(byte_len) },
+            .len = try checkedU32(roc_list.len()),
             .element = element,
         } } });
     }
@@ -1243,9 +1243,10 @@ fn writePackedU128(out: []u8, value: u128) void {
     base.byte_encoding.writeIntLittle(u128, out, value);
 }
 
-fn checkedU32(value: usize, comptime message: []const u8) u32 {
-    if (value > std.math.maxInt(u32)) writerInvariant(message);
-    return @intCast(value);
+/// `value` as a ConstStore width. A value past it is a constant larger than
+/// the store holds, which the evaluated program could reach.
+fn checkedU32(value: usize) Allocator.Error!u32 {
+    return std.math.cast(u32, value) orelse error.OutOfMemory;
 }
 
 fn writerInvariant(comptime message: []const u8) noreturn {
