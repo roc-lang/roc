@@ -707,6 +707,7 @@ pub const ProgramSession = struct {
             .erased_capture_prefix = target.erased_capture_prefix,
             .inline_expects = target.inline_expects,
             .completed_scalar_values = &source.scalar_values,
+            .completed_erased_members = &source.erased_members,
             .frozen_materializer = .{
                 .context = source,
                 .materialize = CompletedStages.materializeStage,
@@ -737,6 +738,8 @@ pub const CompletedStages = struct {
     sources: std.AutoHashMapUnmanaged(SlotKey, StageSlot) = .empty,
     /// The completed successful values that lower as constructions.
     scalar_values: lir.CheckedPipeline.CompletedScalarValues,
+    /// The erased callables the stages' completed values hold.
+    erased_members: lir.CheckedPipeline.CompletedErasedMembers = .{},
     /// The producers of the stage being lowered, whose slots it evaluates.
     pending: std.AutoHashMapUnmanaged(ProducerSlotKey, void) = .empty,
     /// The specializations' compile-time reads, which the object cache
@@ -776,6 +779,7 @@ pub const CompletedStages = struct {
         self.stage_symbols.deinit(self.allocator);
         self.sources.deinit(self.allocator);
         self.scalar_values.deinit(self.allocator);
+        self.erased_members.deinit(self.allocator);
         self.pending.deinit(self.allocator);
         if (self.spec_comptime_reads) |*reads| reads.deinit();
         for (self.artifacts.items) |*set| set.deinit();
@@ -824,6 +828,7 @@ pub const CompletedStages = struct {
         for (stage_producers) |ordinal| try self.pending.put(self.allocator, producerSlotKey(producers, lowering_modules, ordinal), {});
         var stage_consumer = consumer;
         stage_consumer.completed_scalar_values = &self.scalar_values;
+        stage_consumer.completed_erased_members = &self.erased_members;
         stage_consumer.frozen_materializer = .{ .context = self, .materialize = materializeStage };
         const stage = try self.allocator.create(lir.CheckedPipeline.LoweredProgram);
         errdefer self.allocator.destroy(stage);
@@ -858,6 +863,7 @@ pub const CompletedStages = struct {
             gop.value_ptr.* = .{ .stage = stage_index, .slot = @intCast(ordinal) };
         }
         try self.scalar_values.add(self.allocator, &stage.lir_result, frozen, .{ .context = self, .admits = admitsPending });
+        try self.erased_members.add(self.allocator, &stage.lir_result, frozen);
         self.pending.clearRetainingCapacity();
     }
 

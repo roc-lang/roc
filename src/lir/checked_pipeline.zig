@@ -21,6 +21,7 @@ const SingleUseInline = @import("single_use_inline.zig");
 
 /// Completed compile-time scalar roots a forked continuation lowers as literals.
 pub const CompletedScalarValues = postcheck.ComptimeScalarValues.CompletedScalarValues;
+pub const CompletedErasedMembers = postcheck.CompletedErasedMembers;
 /// Which runtime specializations compile-time evaluation must lower.
 pub const LiteralDemand = postcheck.LiteralDemand;
 /// See `postcheck.Common.LiteralValueLookup`.
@@ -1151,6 +1152,8 @@ pub const Consumer = struct {
     inline_expects: InlineExpectMode,
     /// Completed compile-time scalar roots this consumer reads as literals.
     completed_scalar_values: ?*const CompletedScalarValues = null,
+    /// The erased callables held by the completed values this consumer reads.
+    completed_erased_members: ?*const CompletedErasedMembers = null,
     /// Completed values produced by an earlier consumer, materialized in this
     /// consumer's representation after LIR generation and before reachability.
     /// The materializer receives the un-compacted target program so callable
@@ -1833,6 +1836,7 @@ fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResou
         .test_plan_metadata = prepared.test_plan_metadata,
         .parallel_metrics = parallel_metrics,
         .completed_scalar_values = target.completed_scalar_values,
+        .completed_erased_members = consumer.completed_erased_members,
     });
     if (target.timing) |timing| timing.addSolvedLirParallel(parallel_metrics.?.*);
     lir_gen_timing_scope.end();
