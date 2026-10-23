@@ -267,7 +267,8 @@ pub fn compressHardware(state: *State, blocks: []const Block) void {
     switch (arch_class) {
         .aarch64 => compressAarch64Sha2(state, blocks),
         .x86_64 => compressX86Sha(state, blocks),
-        .other => @compileError("SHA-256 hardware compression is only implemented for aarch64 and x86_64"),
+        // Only aarch64 and x86_64 CPUs have hardware rounds to select.
+        .other => unreachable,
     }
 }
 

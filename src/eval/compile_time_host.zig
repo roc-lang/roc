@@ -30,11 +30,11 @@ const allocation_header_bytes = 16;
 const max_allocation_alignment = allocation_header_bytes;
 /// Debug-only stamp a live header carries, so a pointer Roc hands back that
 /// no compile-time allocation produced is caught.
-const allocation_header_stamp: usize = 0x5f6d_6f63_7074_696d;
+const allocation_header_stamp: u64 = 0x5f6d_6f63_7074_696d;
 
 const AllocationHeader = extern struct {
     size: usize,
-    stamp: usize,
+    stamp: u64,
 };
 
 comptime {
