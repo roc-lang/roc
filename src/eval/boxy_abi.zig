@@ -94,7 +94,6 @@ const RegisteredProc = struct {
 };
 
 const RegisteredErasedProc = struct {
-    proc_id: u32,
     ret_layout: layout_mod.Idx,
     metadata_offset: u32,
     arg_layouts: LIR.BoxySpan,
@@ -915,13 +914,10 @@ fn abiCrashMissingDescriptorCapture(
 
 fn abiCrashNullErasedArgDescriptor(
     g: *GlobalBoxyRuntime,
-    proc_id: u32,
     key: LIR.ErasedArgDescKey,
 ) noreturn {
     var message: CrashMessage = .{};
-    message.str("boxy runtime erased call supplied a null descriptor to proc ");
-    message.uint(proc_id);
-    message.str(" for key (");
+    message.str("boxy runtime erased call supplied a null descriptor for key (");
     message.uint(key.arg_index);
     message.str(", ");
     message.uint(key.descriptor_index);
@@ -931,14 +927,11 @@ fn abiCrashNullErasedArgDescriptor(
 
 fn abiCrashMissingErasedArgDescriptor(
     g: *GlobalBoxyRuntime,
-    proc_id: u32,
     key: LIR.ErasedArgDescKey,
     supplied_keys: []const LIR.ErasedArgDescKey,
 ) noreturn {
     var message: CrashMessage = .{};
-    message.str("boxy runtime erased proc ");
-    message.uint(proc_id);
-    message.str(" required descriptor key (");
+    message.str("boxy runtime erased proc required descriptor key (");
     message.uint(key.arg_index);
     message.str(", ");
     message.uint(key.descriptor_index);
@@ -949,13 +942,10 @@ fn abiCrashMissingErasedArgDescriptor(
 
 fn abiCrashDuplicateErasedArgDescriptor(
     g: *GlobalBoxyRuntime,
-    proc_id: u32,
     key: LIR.ErasedArgDescKey,
 ) noreturn {
     var message: CrashMessage = .{};
-    message.str("boxy runtime erased call supplied duplicate descriptors to proc ");
-    message.uint(proc_id);
-    message.str(" for key (");
+    message.str("boxy runtime erased call supplied duplicate descriptors for key (");
     message.uint(key.arg_index);
     message.str(", ");
     message.uint(key.descriptor_index);
@@ -1070,7 +1060,6 @@ pub fn roc_boxy_register_proc(
 /// address is the relocated runtime address.
 pub fn roc_boxy_register_erased_proc(
     fn_ptr: ?*const anyopaque,
-    proc_id: u32,
     ret_layout: u32,
     metadata_offset: u32,
     arg_layouts_start: u32,
@@ -1090,7 +1079,6 @@ pub fn roc_boxy_register_erased_proc(
         abiCrash(g, "erased proc argument-layout registration");
     }
     g.erased_procs.put(g.gpa, @intFromPtr(ptr), .{
-        .proc_id = proc_id,
         .ret_layout = layoutIdx(ret_layout),
         .metadata_offset = metadata_offset,
         .arg_layouts = .{
@@ -1150,18 +1138,18 @@ fn erasedInvocationCaptureWithKeys(
         for (keys, 0..) |key, desc_index| {
             if (!std.meta.eql(key, offset.key)) continue;
             if (matching_desc_index != null) {
-                abiCrashDuplicateErasedArgDescriptor(g, registered.proc_id, offset.key);
+                abiCrashDuplicateErasedArgDescriptor(g, offset.key);
             }
             matching_desc_index = desc_index;
         }
         const desc_index = matching_desc_index orelse
-            abiCrashMissingErasedArgDescriptor(g, registered.proc_id, offset.key, keys);
+            abiCrashMissingErasedArgDescriptor(g, offset.key, keys);
         const destination = @as(usize, registered.capture_offset_base) + offset.offset;
         if (destination + @sizeOf(?*const BoxyTypeDesc) > invocation.len) {
             abiCrash(g, "erased invocation descriptor destination");
         }
         const desc = descs[desc_index] orelse
-            abiCrashNullErasedArgDescriptor(g, registered.proc_id, offset.key);
+            abiCrashNullErasedArgDescriptor(g, offset.key);
         const payload_index = @backingInt(desc.payload_layout);
         if (payload_index >= g.runtime.layout_store.layoutCount()) {
             abiCrash(g, "erased invocation descriptor payload layout");

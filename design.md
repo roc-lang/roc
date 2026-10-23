@@ -891,6 +891,22 @@ A procedure's artifact is the same whether this program compiled it or a
 pack carried it, so the object is the same however each procedure was
 provided.
 
+The Boxy runtime reads its sidecar tables by numbers the code passes it:
+layout indices and the starts of runs of erased argument layouts. A program
+numbers both in the order its lowering reached them, which depends on which
+procedures it lowered and which a pack served, so code loads each such number
+with a fixed-width instruction sequence and records it as a runtime reference
+(`RuntimeRef`) that its artifact carries. Once the image's code is placed,
+each number is given its canonical one in the order the placed code first
+loads it, and every load is patched to it (`LirCodeGen.renumberRuntimeRefs`,
+`RuntimeTables.Numbering`); the fixed layouts keep their indices. The sidecar
+linked beside the object holds exactly what that order names, then every
+layout those and the Boxy tables reach, in the order a walk from them first
+meets each (`LirImage.buildCanonicalSidecarBlob`). Code that loads a runtime
+table number is never offered by a pack, since the number is its program's
+own. No code passes the runtime a procedure's index: it is the program's own
+numbering too.
+
 ### Read-Only Type Analysis
 
 Read-only type analysis must not use permanent solver allocation as scratch.

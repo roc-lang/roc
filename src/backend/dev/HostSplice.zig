@@ -161,7 +161,7 @@ pub const HostSplice = struct {
                     if (self.static_data) |layout| if (layout.symbolOffset(name) != null) continue;
                     break :blk name;
                 },
-                .local_data, .jmp_to_return, .retired => continue,
+                .local_data, .jmp_to_return, .retired, .runtime_ref => continue,
             };
             if (compilerFunction(name, boxy_native_fns) != null or code_symbols.contains(name) or self.data_names.contains(name) or self.hosted_stubs.contains(name)) continue;
             if (!containsName(needed.items, name)) try needed.append(self.allocator, name);
@@ -193,7 +193,8 @@ pub const HostSplice = struct {
         defer relocations.deinit(self.allocator);
         for (codegen.getRelocations()) |indexed| {
             try relocations.append(self.allocator, switch (indexed) {
-                .retired => continue,
+                // The image keeps the program's own table numbers.
+                .retired, .runtime_ref => continue,
                 .linked_function => |function| .{ .linked_function = .{ .offset = function.offset, .name = names[@backingInt(function.symbol)] } },
                 .linked_data => |data| .{ .linked_data = .{ .offset = data.offset, .name = names[@backingInt(data.symbol)], .kind = data.kind } },
                 .local_data => |data| .{ .local_data = data },

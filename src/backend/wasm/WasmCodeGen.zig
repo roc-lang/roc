@@ -6867,7 +6867,7 @@ pub fn registerBoxySymbolTargets(self: *Self) HostedSymbolError!void {
     try self.registerBoxySymbol("roc_boxy_dynamic_frac_literal_ref", &.{ .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_call_dict", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_register_proc", &.{ .i32, .i32, .i32, .i64, .i32, .i64 }, &.{});
-    try self.registerBoxySymbol("roc_boxy_register_erased_proc", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
+    try self.registerBoxySymbol("roc_boxy_register_erased_proc", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_call_erased", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_defer_erased", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_drive_pending", &.{ .i32, .i32, .i32, .i32 }, &.{});
@@ -7123,6 +7123,7 @@ fn emitBoxyPlanCall(self: *Self, plan: *const boxy_call_plan.Plan, out_ptr: u32,
         .desc => |ref| try self.resolveBoxyDesc(ref),
         .opt_desc => |ref| if (ref) |r| try self.resolveBoxyDesc(r) else try self.emitNullPtr(),
         .local_layout => |local| try self.emitI32Const(@intCast(@backingInt(self.procLocalLayoutIdx(local)))),
+        .layout => |layout_idx| try self.emitI32Const(@intCast(@backingInt(layout_idx))),
         .imm32 => |value| try self.emitI32Const(@intCast(value)),
         .imm8 => |value| try self.emitI32Const(value),
     };
@@ -9086,7 +9087,6 @@ fn generatePackedErasedFn(self: *Self, c: anytype) Allocator.Error!void {
 fn emitErasedProcRegistration(self: *Self, proc_id: LIR.LirProcSpecId, table_idx: u32, metadata_offset: u32) Allocator.Error!void {
     const proc_spec = self.store.getProcSpec(proc_id);
     try self.emitFunctionTableIndexConst(table_idx);
-    try self.emitI32Const(@intCast(@backingInt(proc_id)));
     try self.emitI32Const(@intCast(@backingInt(self.runtimeRepresentationLayoutIdx(proc_spec.ret_layout))));
     try self.emitI32Const(@intCast(metadata_offset));
     try self.emitI32Const(@intCast(proc_spec.erased_arg_layouts.start));
